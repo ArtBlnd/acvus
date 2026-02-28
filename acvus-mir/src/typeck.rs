@@ -100,18 +100,17 @@ impl TypeChecker {
             Node::InlineExpr { expr, span } => {
                 let ty = self.check_expr(expr);
                 let resolved = self.subst.resolve(&ty);
-                match &resolved {
-                    Ty::String | Ty::Error => {}
-                    Ty::Var(_) => {
-                        // Try to unify with String.
-                        if self.subst.unify(&ty, &Ty::String).is_err() {
-                            self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
-                        }
-                    }
-                    _ => {
+                if matches!(&resolved, Ty::String | Ty::Error) {
+                    return;
+                }
+                if matches!(&resolved, Ty::Var(_)) {
+                    // Try to unify with String.
+                    if self.subst.unify(&ty, &Ty::String).is_err() {
                         self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
                     }
+                    return;
                 }
+                self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
             }
             Node::MatchBlock(mb) => {
                 self.check_match_block(mb);
@@ -289,16 +288,12 @@ impl TypeChecker {
                         let unified = self.subst.unify(&lt, &rt).is_ok();
                         let rl = self.subst.resolve(&lt);
                         let rr = self.subst.resolve(&rt);
-                        let result = if unified {
-                            match (&rl, &rr) {
-                                (Ty::Int, Ty::Int) => Some(Ty::Int),
-                                (Ty::Float, Ty::Float) => Some(Ty::Float),
-                                (Ty::String, Ty::String) if *op == BinOp::Add => Some(Ty::String),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
+                        let result = unified.then(|| match (&rl, &rr) {
+                            (Ty::Int, Ty::Int) => Some(Ty::Int),
+                            (Ty::Float, Ty::Float) => Some(Ty::Float),
+                            (Ty::String, Ty::String) if *op == BinOp::Add => Some(Ty::String),
+                            _ => None,
+                        }).flatten();
                         result.unwrap_or_else(|| {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
@@ -428,28 +423,27 @@ impl TypeChecker {
                 let ot = self.subst.resolve(&ot_raw);
                 let ty = match &ot {
                     Ty::Error => Ty::Error,
+                    Ty::Object(fields) if fields.contains_key(field) => {
+                        fields[field].clone()
+                    }
                     Ty::Object(fields) => {
-                        if let Some(ft) = fields.get(field) {
-                            ft.clone()
-                        } else {
-                            let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) else {
-                                self.error(
-                                    MirErrorKind::UndefinedField {
-                                        object_ty: ot.clone(),
-                                        field: field.clone(),
-                                    },
-                                    *span,
-                                );
-                                return Ty::Error;
-                            };
-                            // Object came from a Var (partial projection constraint).
-                            // Extend the Object with the new field.
-                            let fresh = self.subst.fresh_var();
-                            let mut new_fields = fields.clone();
-                            new_fields.insert(field.clone(), fresh.clone());
-                            self.subst.rebind(leaf_var, Ty::Object(new_fields));
-                            fresh
-                        }
+                        let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) else {
+                            self.error(
+                                MirErrorKind::UndefinedField {
+                                    object_ty: ot.clone(),
+                                    field: field.clone(),
+                                },
+                                *span,
+                            );
+                            return Ty::Error;
+                        };
+                        // Object came from a Var (partial projection constraint).
+                        // Extend the Object with the new field.
+                        let fresh = self.subst.fresh_var();
+                        let mut new_fields = fields.clone();
+                        new_fields.insert(field.clone(), fresh.clone());
+                        self.subst.rebind(leaf_var, Ty::Object(new_fields));
+                        fresh
                     }
                     Ty::Var(_) => {
                         // Unresolved Var — create partial Object constraint.
@@ -569,11 +563,9 @@ impl TypeChecker {
                     return ty;
                 }
 
-                let elem_ty = if let Some(first) = all_elems.first() {
-                    self.check_expr(first)
-                } else {
-                    // Only `..` with no elements: fresh var.
-                    self.subst.fresh_var()
+                let elem_ty = match all_elems.first() {
+                    Some(first) => self.check_expr(first),
+                    None => self.subst.fresh_var(), // Only `..` with no elements: fresh var.
                 };
 
                 for elem in all_elems.iter().skip(1) {
@@ -643,14 +635,14 @@ impl TypeChecker {
 
             Expr::Group { elements, span } => {
                 // Group is only valid as lambda param list (handled by parser).
-                let ty = if let Some(last) = elements.last() {
-                    for e in &elements[..elements.len() - 1] {
-                        self.check_expr(e);
-                    }
-                    self.check_expr(last)
-                } else {
-                    Ty::Unit
+                let Some(last) = elements.last() else {
+                    self.record(*span, Ty::Unit);
+                    return Ty::Unit;
                 };
+                for e in &elements[..elements.len() - 1] {
+                    self.check_expr(e);
+                }
+                let ty = self.check_expr(last);
                 self.record(*span, ty.clone());
                 ty
             }
@@ -962,15 +954,11 @@ impl TypeChecker {
                     return;
                 }
                 for (i, elem) in elements.iter().enumerate() {
+                    let TuplePatternElem::Pattern(pat) = elem else {
+                        continue; // Wildcard: no binding, skip.
+                    };
                     let resolved_elem = self.subst.resolve(&elem_vars[i]);
-                    match elem {
-                        TuplePatternElem::Pattern(pat) => {
-                            self.check_pattern(pat, &resolved_elem, span);
-                        }
-                        TuplePatternElem::Wildcard(_) => {
-                            // Wildcard: no binding, skip.
-                        }
-                    }
+                    self.check_pattern(pat, &resolved_elem, span);
                 }
             }
         }

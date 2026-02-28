@@ -145,12 +145,11 @@ impl Lowerer {
 
     fn intern_text(&mut self, text: &str) -> usize {
         if let Some(idx) = self.texts.iter().position(|t| t == text) {
-            idx
-        } else {
-            let idx = self.texts.len();
-            self.texts.push(text.to_string());
-            idx
+            return idx;
         }
+        let idx = self.texts.len();
+        self.texts.push(text.to_string());
+        idx
     }
 
     fn emit(&mut self, inst: Inst) {
@@ -288,27 +287,24 @@ impl Lowerer {
                 is_storage_ref,
                 span,
             } => {
+                // Check local scope first for both storage refs and bare names.
+                if let Some(reg) = self.lookup_var(name) {
+                    return reg;
+                }
                 if *is_storage_ref {
-                    // $name: check local scope first, then storage.
-                    if let Some(reg) = self.lookup_var(name) {
-                        reg
-                    } else {
-                        // Storage load.
-                        let dst = self.alloc_val();
-                        let ty = self.type_of_span(*span);
-                        self.set_val_type(dst, ty);
-                        self.set_origin(dst, ValOrigin::Storage(name.clone()));
-                        self.emit_inst(
-                            *span,
-                            InstKind::StorageLoad {
-                                dst,
-                                name: name.clone(),
-                            },
-                        );
-                        dst
-                    }
-                } else if let Some(reg) = self.lookup_var(name) {
-                    reg
+                    // Storage load.
+                    let dst = self.alloc_val();
+                    let ty = self.type_of_span(*span);
+                    self.set_val_type(dst, ty);
+                    self.set_origin(dst, ValOrigin::Storage(name.clone()));
+                    self.emit_inst(
+                        *span,
+                        InstKind::StorageLoad {
+                            dst,
+                            name: name.clone(),
+                        },
+                    );
+                    dst
                 } else {
                     // Unknown variable — emit a placeholder load.
                     // Type checker should have caught this already.
@@ -600,9 +596,7 @@ impl Lowerer {
 
             Expr::Group { elements, span } => {
                 // Should not appear outside lambda params. Lower last element.
-                if let Some(last) = elements.last() {
-                    self.lower_expr(last)
-                } else {
+                let Some(last) = elements.last() else {
                     let dst = self.alloc_val();
                     self.set_val_type(dst, Ty::Unit);
                     self.emit_inst(
@@ -612,83 +606,27 @@ impl Lowerer {
                             value: Literal::Bool(false),
                         },
                     );
-                    dst
-                }
+                    return dst;
+                };
+                self.lower_expr(last)
             }
         }
     }
 
     fn lower_func_call(&mut self, func: &Expr, args: &[Expr], call_span: Span) -> Val {
-        let func_name = match func {
-            Expr::Ident {
-                name,
-                is_storage_ref: false,
-                ..
-            } => Some(name.clone()),
-            _ => None,
-        };
-
         let arg_regs: Vec<Val> = args.iter().map(|a| self.lower_expr(a)).collect();
         let dst = self.alloc_val();
         let ty = self.type_of_span(call_span);
         self.set_val_type(dst, ty);
-        self.set_origin(
-            dst,
-            ValOrigin::Call(func_name.clone().unwrap_or_else(|| "<closure>".into())),
-        );
 
-        if let Some(ref name) = func_name {
-            if self.builtin_names.contains(name.as_str()) {
-                // Builtin: synchronous Call.
-                self.emit_inst(
-                    call_span,
-                    InstKind::Call {
-                        dst,
-                        func: name.clone(),
-                        args: arg_regs,
-                    },
-                );
-                let idx = self.body.insts.len() - 1;
-                self.hints.add(idx, Hint::Pure);
-                return dst;
-            }
+        let func_name = match func {
+            Expr::Ident { name, is_storage_ref: false, .. } => Some(name.clone()),
+            _ => None,
+        };
 
-            // Check if it's a local variable (closure call).
-            if let Some(closure_reg) = self.lookup_var(name) {
-                self.emit_inst(
-                    call_span,
-                    InstKind::CallClosure {
-                        dst,
-                        closure: closure_reg,
-                        args: arg_regs,
-                    },
-                );
-                return dst;
-            }
-
-            // External function: async call + await.
-            let future_reg = self.alloc_val();
-            self.set_val_type(future_reg, Ty::Unit); // placeholder
-            self.emit_inst(
-                call_span,
-                InstKind::AsyncCall {
-                    dst: future_reg,
-                    func: name.clone(),
-                    args: arg_regs,
-                },
-            );
-            let idx = self.body.insts.len() - 1;
-            self.hints.add(idx, Hint::Effectful);
-
-            self.emit_inst(
-                call_span,
-                InstKind::Await {
-                    dst,
-                    src: future_reg,
-                },
-            );
-        } else {
+        let Some(name) = func_name else {
             // Expression call (closure).
+            self.set_origin(dst, ValOrigin::Call("<closure>".into()));
             let func_reg = self.lower_expr(func);
             self.emit_inst(
                 call_span,
@@ -698,7 +636,60 @@ impl Lowerer {
                     args: arg_regs,
                 },
             );
+            return dst;
+        };
+
+        self.set_origin(dst, ValOrigin::Call(name.clone()));
+
+        if self.builtin_names.contains(name.as_str()) {
+            // Builtin: synchronous Call.
+            self.emit_inst(
+                call_span,
+                InstKind::Call {
+                    dst,
+                    func: name.clone(),
+                    args: arg_regs,
+                },
+            );
+            let idx = self.body.insts.len() - 1;
+            self.hints.add(idx, Hint::Pure);
+            return dst;
         }
+
+        // Check if it's a local variable (closure call).
+        if let Some(closure_reg) = self.lookup_var(&name) {
+            self.emit_inst(
+                call_span,
+                InstKind::CallClosure {
+                    dst,
+                    closure: closure_reg,
+                    args: arg_regs,
+                },
+            );
+            return dst;
+        }
+
+        // External function: async call + await.
+        let future_reg = self.alloc_val();
+        self.set_val_type(future_reg, Ty::Unit); // placeholder
+        self.emit_inst(
+            call_span,
+            InstKind::AsyncCall {
+                dst: future_reg,
+                func: name.clone(),
+                args: arg_regs,
+            },
+        );
+        let idx = self.body.insts.len() - 1;
+        self.hints.add(idx, Hint::Effectful);
+
+        self.emit_inst(
+            call_span,
+            InstKind::Await {
+                dst,
+                src: future_reg,
+            },
+        );
 
         dst
     }
@@ -708,30 +699,28 @@ impl Lowerer {
     fn lower_match_block(&mut self, mb: &MatchBlock) {
         // Check for body-less binding shorthand (storage write or variable binding).
         if mb.arms.len() == 1 && mb.arms[0].body.is_empty() {
-            match &mb.arms[0].pattern {
-                Pattern::Binding {
-                    name,
-                    is_storage_ref,
-                    span: pat_span,
-                } => {
-                    let src = self.lower_expr(&mb.source);
-                    if *is_storage_ref {
-                        // Storage write — register name dynamically if needed.
-                        self.storage_names.insert(name.clone());
-                        self.emit_inst(
-                            *pat_span,
-                            InstKind::StorageStore {
-                                name: name.clone(),
-                                src,
-                            },
-                        );
-                    } else {
-                        // Local variable binding.
-                        self.define_var(name, src);
-                    }
-                    return;
+            if let Pattern::Binding {
+                name,
+                is_storage_ref,
+                span: pat_span,
+            } = &mb.arms[0].pattern
+            {
+                let src = self.lower_expr(&mb.source);
+                if *is_storage_ref {
+                    // Storage write — register name dynamically if needed.
+                    self.storage_names.insert(name.clone());
+                    self.emit_inst(
+                        *pat_span,
+                        InstKind::StorageStore {
+                            name: name.clone(),
+                            src,
+                        },
+                    );
+                } else {
+                    // Local variable binding.
+                    self.define_var(name, src);
                 }
-                _ => {}
+                return;
             }
         }
 
@@ -1221,36 +1210,32 @@ impl Lowerer {
                 };
 
                 for (i, elem) in elements.iter().enumerate() {
-                    match elem {
-                        TuplePatternElem::Wildcard(_) => {
-                            // Skip wildcards — no test needed.
-                        }
-                        TuplePatternElem::Pattern(pat) => {
-                            let field_val = self.alloc_val();
-                            self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
-                            self.emit_inst(
-                                span,
-                                InstKind::TupleIndex {
-                                    dst: field_val,
-                                    tuple: src_reg,
-                                    index: i,
-                                },
-                            );
-                            let sub_ok = self.lower_pattern_test(pat, field_val, span);
-                            let combined = self.alloc_val();
-                            self.set_val_type(combined, Ty::Bool);
-                            self.emit_inst(
-                                span,
-                                InstKind::BinOp {
-                                    dst: combined,
-                                    op: acvus_ast::BinOp::And,
-                                    left: all_ok,
-                                    right: sub_ok,
-                                },
-                            );
-                            all_ok = combined;
-                        }
-                    }
+                    let TuplePatternElem::Pattern(pat) = elem else {
+                        continue; // Skip wildcards — no test needed.
+                    };
+                    let field_val = self.alloc_val();
+                    self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
+                    self.emit_inst(
+                        span,
+                        InstKind::TupleIndex {
+                            dst: field_val,
+                            tuple: src_reg,
+                            index: i,
+                        },
+                    );
+                    let sub_ok = self.lower_pattern_test(pat, field_val, span);
+                    let combined = self.alloc_val();
+                    self.set_val_type(combined, Ty::Bool);
+                    self.emit_inst(
+                        span,
+                        InstKind::BinOp {
+                            dst: combined,
+                            op: acvus_ast::BinOp::And,
+                            left: all_ok,
+                            right: sub_ok,
+                        },
+                    );
+                    all_ok = combined;
                 }
 
                 all_ok
@@ -1285,10 +1270,9 @@ impl Lowerer {
                 is_storage_ref,
                 ..
             } => {
-                if *is_storage_ref {
-                    // Storage path — value already stored via pattern_test or body-less binding.
-                    // No local define; lookup will fall through to storage_load.
-                } else {
+                // Storage path — value already stored via pattern_test or body-less binding.
+                // No local define; lookup will fall through to storage_load.
+                if !*is_storage_ref {
                     self.set_origin(src_reg, ValOrigin::Named(name.clone()));
                     self.define_var(name, src_reg);
                 }
@@ -1362,24 +1346,20 @@ impl Lowerer {
 
             Pattern::Tuple { elements, .. } => {
                 for (i, elem) in elements.iter().enumerate() {
-                    match elem {
-                        TuplePatternElem::Wildcard(_) => {
-                            // Skip wildcards — no binding.
-                        }
-                        TuplePatternElem::Pattern(pat) => {
-                            let field_val = self.alloc_val();
-                            self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
-                            self.emit_inst(
-                                span,
-                                InstKind::TupleIndex {
-                                    dst: field_val,
-                                    tuple: src_reg,
-                                    index: i,
-                                },
-                            );
-                            self.lower_pattern_bind(pat, field_val, span);
-                        }
-                    }
+                    let TuplePatternElem::Pattern(pat) = elem else {
+                        continue; // Skip wildcards — no binding.
+                    };
+                    let field_val = self.alloc_val();
+                    self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
+                    self.emit_inst(
+                        span,
+                        InstKind::TupleIndex {
+                            dst: field_val,
+                            tuple: src_reg,
+                            index: i,
+                        },
+                    );
+                    self.lower_pattern_bind(pat, field_val, span);
                 }
             }
         }
@@ -1407,11 +1387,12 @@ impl Lowerer {
                 is_storage_ref: false,
                 ..
             } => {
-                if !bound.contains(name) && !seen.contains(name) {
-                    if self.lookup_var(name).is_some() {
-                        seen.insert(name.clone());
-                        free.push(name.clone());
-                    }
+                if bound.contains(name) || seen.contains(name) {
+                    return;
+                }
+                if self.lookup_var(name).is_some() {
+                    seen.insert(name.clone());
+                    free.push(name.clone());
                 }
             }
             Expr::Ident {
@@ -1468,9 +1449,8 @@ impl Lowerer {
             }
             Expr::Tuple { elements, .. } => {
                 for elem in elements {
-                    if let TupleElem::Expr(e) = elem {
-                        self.collect_free_vars(e, bound, free, seen);
-                    }
+                    let TupleElem::Expr(e) = elem else { continue };
+                    self.collect_free_vars(e, bound, free, seen);
                 }
             }
             Expr::Group { elements, .. } => {
