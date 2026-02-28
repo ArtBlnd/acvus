@@ -4,7 +4,7 @@ pub struct BuiltinFn {
     pub name: &'static str,
     /// Returns (param_types, return_type) with fresh type variables for generics.
     pub signature: fn(&mut TySubst) -> (Vec<Ty>, Ty),
-    pub is_sync: bool,
+    pub is_effectful: bool,
 }
 
 pub fn builtins() -> Vec<BuiltinFn> {
@@ -25,7 +25,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                     Ty::List(Box::new(t)),
                 )
             },
-            is_sync: true,
+            is_effectful: false,
         },
         BuiltinFn {
             name: "map",
@@ -44,7 +44,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                     Ty::List(Box::new(u)),
                 )
             },
-            is_sync: true,
+            is_effectful: false,
         },
         BuiltinFn {
             name: "pmap",
@@ -63,7 +63,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                     Ty::List(Box::new(u)),
                 )
             },
-            is_sync: true,
+            is_effectful: false,
         },
         BuiltinFn {
             name: "to_string",
@@ -72,7 +72,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                 let t = subst.fresh_var();
                 (vec![t], Ty::String)
             },
-            is_sync: true,
+            is_effectful: false,
         },
         BuiltinFn {
             name: "to_float",
@@ -80,7 +80,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                 // to_float: (Int) -> Float
                 (vec![Ty::Int], Ty::Float)
             },
-            is_sync: true,
+            is_effectful: false,
         },
         BuiltinFn {
             name: "to_int",
@@ -88,7 +88,7 @@ pub fn builtins() -> Vec<BuiltinFn> {
                 // to_int: (Float) -> Int
                 (vec![Ty::Float], Ty::Int)
             },
-            is_sync: true,
+            is_effectful: false,
         },
     ]
 }
