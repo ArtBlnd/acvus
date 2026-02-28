@@ -30,8 +30,7 @@ RUN mkdir -p acvus-ast/src acvus-mir/src acvus-mir-cli/src \
 
 # Pre-build deps (cached unless Cargo.toml / Cargo.lock change)
 RUN cargo build --release -p acvus-playground 2>&1 | tail -5 || true
-RUN rm -rf acvus-ast/src acvus-mir/src acvus-mir-cli/src \
-           acvus-mir-test/tests acvus-runtime/src acvus-playground/src
+RUN rm -rf acvus-ast/src acvus-mir/src acvus-runtime/src acvus-playground/src
 
 # Copy real source
 COPY acvus-ast         acvus-ast
