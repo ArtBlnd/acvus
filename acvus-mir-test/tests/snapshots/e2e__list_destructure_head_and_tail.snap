@@ -13,10 +13,10 @@ expression: ir
      4 │ L3:
      5 │   r2 = r0[0]
      6 │   r3 = const true
-     7 │   r4 = r1 == r3
+     7 │   r4 = r1 && r3
      8 │   r5 = r0[-1]
      9 │   r6 = const true
-    10 │   r7 = r4 == r6
+    10 │   r7 = r4 && r6
     11 │   jump L5(r7)
     12 │ L4:
     13 │   r9 = const false

@@ -13,7 +13,7 @@ expression: ir
      3 │   r2 = test has_key(r0, "name")
      4 │   r3 = r0.name
      5 │   r4 = const true
-     6 │   r5 = r1 == r4
+     6 │   r5 = r1 && r4
      7 │   jump_if r5 then L3 else L1
      8 │ L3:
      9 │   r6 = r0.name

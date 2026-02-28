@@ -328,6 +328,29 @@ impl TypeChecker {
                         }
                         Ty::Bool
                     }
+                    BinOp::And | BinOp::Or => {
+                        if !matches!(&lt, Ty::Bool) {
+                            self.error(
+                                MirErrorKind::TypeMismatchBinOp {
+                                    op: op_str(*op),
+                                    left: lt.clone(),
+                                    right: rt.clone(),
+                                },
+                                *span,
+                            );
+                        }
+                        if !matches!(&rt, Ty::Bool) {
+                            self.error(
+                                MirErrorKind::TypeMismatchBinOp {
+                                    op: op_str(*op),
+                                    left: lt,
+                                    right: rt,
+                                },
+                                *span,
+                            );
+                        }
+                        Ty::Bool
+                    }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         // Unify first so type variables resolve before checking.
                         let unified = self.subst.unify(&lt, &rt).is_ok();
@@ -986,6 +1009,8 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::Gt => ">",
         BinOp::Lte => "<=",
         BinOp::Gte => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
     }
 }
 

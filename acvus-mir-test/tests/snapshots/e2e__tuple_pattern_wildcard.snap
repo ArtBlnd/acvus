@@ -8,7 +8,7 @@ expression: ir
      2 │   r1 = const true
      3 │   r2 = r0.0
      4 │   r3 = const true
-     5 │   r4 = r1 == r3
+     5 │   r4 = r1 && r3
      6 │   jump_if r4 then L3 else L1
      7 │ L3:
      8 │   r5 = r0.0

@@ -1066,7 +1066,7 @@ impl Lowerer {
                         span,
                         InstKind::BinOp {
                             dst: combined,
-                            op: acvus_ast::BinOp::Eq,
+                            op: acvus_ast::BinOp::And,
                             left: all_ok,
                             right: elem_ok,
                         },
@@ -1093,7 +1093,7 @@ impl Lowerer {
                         span,
                         InstKind::BinOp {
                             dst: combined,
-                            op: acvus_ast::BinOp::Eq,
+                            op: acvus_ast::BinOp::And,
                             left: all_ok,
                             right: elem_ok,
                         },
@@ -1174,7 +1174,7 @@ impl Lowerer {
                         span,
                         InstKind::BinOp {
                             dst: combined,
-                            op: acvus_ast::BinOp::Eq,
+                            op: acvus_ast::BinOp::And,
                             left: all_ok,
                             right: sub_ok,
                         },
@@ -1243,7 +1243,7 @@ impl Lowerer {
                                 span,
                                 InstKind::BinOp {
                                     dst: combined,
-                                    op: acvus_ast::BinOp::Eq,
+                                    op: acvus_ast::BinOp::And,
                                     left: all_ok,
                                     right: sub_ok,
                                 },

@@ -10,14 +10,14 @@ expression: ir
      4 │   r3 = const true
      5 │   r4 = r2.0
      6 │   r5 = const true
-     7 │   r6 = r3 == r5
+     7 │   r6 = r3 && r5
      8 │   r7 = r2.1
      9 │   r8 = const true
-    10 │   r9 = r6 == r8
-    11 │   r10 = r1 == r9
+    10 │   r9 = r6 && r8
+    11 │   r10 = r1 && r9
     12 │   r11 = r0.1
     13 │   r12 = const true
-    14 │   r13 = r10 == r12
+    14 │   r13 = r10 && r12
     15 │   jump_if r13 then L3 else L1
     16 │ L3:
     17 │   r14 = r0.0

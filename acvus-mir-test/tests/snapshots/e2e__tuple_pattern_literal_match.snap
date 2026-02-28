@@ -15,10 +15,10 @@ expression: ir
      4 │   r3 = const true
      5 │   r4 = r2.0
      6 │   r5 = test r4 == 0
-     7 │   r6 = r3 == r5
+     7 │   r6 = r3 && r5
      8 │   r7 = r2.1
      9 │   r8 = test r7 == 1
-    10 │   r9 = r6 == r8
+    10 │   r9 = r6 && r8
     11 │   jump_if r9 then L4 else L3
     12 │ L4:
     13 │   r10 = r2.0
@@ -29,7 +29,7 @@ expression: ir
     18 │   r12 = const true
     19 │   r13 = r2.0
     20 │   r14 = test r13 == 1
-    21 │   r15 = r12 == r14
+    21 │   r15 = r12 && r14
     22 │   jump_if r15 then L5 else L1
     23 │ L5:
     24 │   r16 = r2.0

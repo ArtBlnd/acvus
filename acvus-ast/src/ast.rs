@@ -309,6 +309,8 @@ pub enum BinOp {
     Gt,
     Lte,
     Gte,
+    And,
+    Or,
 }
 
 /// A unary operator.
