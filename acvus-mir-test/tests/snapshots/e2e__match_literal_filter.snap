@@ -1,0 +1,32 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "admin page"
+  T1 = "guest page"
+
+=== main ===
+     0 │   r0 = storage_load $role
+     1 │   r1 = iter_init r0
+     2 │ L0:
+     3 │   r2, r3 = iter_next r1
+     4 │   jump_if r3 then L2 else L3
+     5 │ L3:
+     6 │ L4:
+     7 │   r4 = test r2 == "admin"
+     8 │   jump_if r4 then L6 else L5
+     9 │ L6:
+    10 │   emit_text T0
+    11 │   jump L0
+    12 │ L5:
+    13 │   jump L0
+    14 │ L2:
+    15 │   emit_text T1
+    16 │ L1:
+
+    ; r0 ($role) : String
+    ; r1 (v1) : Unit
+    ; r2 (v2) : Unit
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool

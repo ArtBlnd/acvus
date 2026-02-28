@@ -1,0 +1,9 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "hello world"
+
+=== main ===
+     0 │   emit_text T0

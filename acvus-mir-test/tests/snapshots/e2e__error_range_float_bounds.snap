@@ -1,0 +1,6 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[7..15] range bounds must be Int, got Float
+[7..15] range bounds must be Int, got Float

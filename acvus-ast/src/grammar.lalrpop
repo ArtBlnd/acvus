@@ -1,0 +1,217 @@
+use crate::ast::*;
+use crate::span::Span;
+use crate::token::Token;
+use crate::error::{ParseError, ParseErrorKind};
+use crate::tag_content::{TagContent, ListElem, expr_to_lambda, build_list};
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = ParseError;
+
+    enum Token {
+        "int" => Token::IntLit(<i64>),
+        "float" => Token::FloatLit(<f64>),
+        "string" => Token::StringLit(<String>),
+        "ident" => Token::Ident(<String>),
+        "$ref" => Token::StorageRef(<String>),
+        "true" => Token::True,
+        "false" => Token::False,
+        "_" => Token::Underscore,
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Star,
+        "/" => Token::Slash,
+        "!" => Token::Bang,
+        "==" => Token::Eq,
+        "!=" => Token::Neq,
+        "<" => Token::Lt,
+        ">" => Token::Gt,
+        "<=" => Token::Lte,
+        ">=" => Token::Gte,
+        "=" => Token::Assign,
+        "->" => Token::Arrow,
+        "..=" => Token::DotDotEq,
+        "=.." => Token::EqDotDot,
+        ".." => Token::DotDot,
+        "." => Token::Dot,
+        "|" => Token::Pipe,
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "[" => Token::LBracket,
+        "]" => Token::RBracket,
+        "{" => Token::LBrace,
+        "}" => Token::RBrace,
+        "," => Token::Comma,
+    }
+}
+
+// ── Top-level rule ─────────────────────────────────────────────────────
+
+pub TagContent: TagContent = {
+    <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>
+        TagContent::Binding { lhs, rhs, span: Span::new(l, r) },
+    <e:Expr> =>
+        TagContent::Expr(e),
+};
+
+// ── Expressions (precedence climbing) ──────────────────────────────────
+
+Expr: Expr = {
+    LambdaExpr,
+};
+
+// Lambda: PipeExpr -> LambdaExpr (right-associative)
+LambdaExpr: Expr = {
+    <l:@L> <params:PipeExpr> "->" <body:LambdaExpr> <r:@R> =>
+        expr_to_lambda(params, body, Span::new(l, r)),
+    PipeExpr,
+};
+
+// Pipe: left-associative
+PipeExpr: Expr = {
+    <l:@L> <left:PipeExpr> "|" <right:CompExpr> <r:@R> =>
+        Expr::Pipe {
+            left: Box::new(left),
+            right: Box::new(right),
+            span: Span::new(l, r),
+        },
+    CompExpr,
+};
+
+// Comparison: ==, !=, <, >, <=, >=
+CompExpr: Expr = {
+    <l:@L> <left:CompExpr> "==" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:CompExpr> "!=" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:CompExpr> "<" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:CompExpr> ">" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:CompExpr> "<=" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:CompExpr> ">=" <right:RangeExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
+    RangeExpr,
+};
+
+// Range: 0..10, 0..=10, 0=..10 (non-associative)
+RangeExpr: Expr = {
+    <l:@L> <start:AddExpr> ".." <end:AddExpr> <r:@R> =>
+        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::Exclusive, span: Span::new(l, r) },
+    <l:@L> <start:AddExpr> "..=" <end:AddExpr> <r:@R> =>
+        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::InclusiveEnd, span: Span::new(l, r) },
+    <l:@L> <start:AddExpr> "=.." <end:AddExpr> <r:@R> =>
+        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::ExclusiveStart, span: Span::new(l, r) },
+    AddExpr,
+};
+
+// Add/Sub: left-associative
+AddExpr: Expr = {
+    <l:@L> <left:AddExpr> "+" <right:MulExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:AddExpr> "-" <right:MulExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span: Span::new(l, r) },
+    MulExpr,
+};
+
+// Mul/Div: left-associative
+MulExpr: Expr = {
+    <l:@L> <left:MulExpr> "*" <right:UnaryExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:MulExpr> "/" <right:UnaryExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
+    UnaryExpr,
+};
+
+// Unary: -x, !x
+UnaryExpr: Expr = {
+    <l:@L> "-" <e:UnaryExpr> <r:@R> =>
+        Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
+    <l:@L> "!" <e:UnaryExpr> <r:@R> =>
+        Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
+    PostfixExpr,
+};
+
+// Postfix: field access `.field` and function call `f(args)`
+PostfixExpr: Expr = {
+    <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
+        Expr::FieldAccess { object: Box::new(obj), field: f, span: Span::new(l, r) },
+    <l:@L> <func:PostfixExpr> "(" <args:CommaSep<Expr>> ")" <r:@R> =>
+        Expr::FuncCall { func: Box::new(func), args, span: Span::new(l, r) },
+    PrimaryExpr,
+};
+
+// Primary expressions
+PrimaryExpr: Expr = {
+    <l:@L> <name:"ident"> <r:@R> =>
+        Expr::Ident { name, is_storage_ref: false, span: Span::new(l, r) },
+    <l:@L> <name:"$ref"> <r:@R> =>
+        Expr::Ident { name, is_storage_ref: true, span: Span::new(l, r) },
+    <l:@L> <n:"int"> <r:@R> =>
+        Expr::Literal { value: Literal::Int(n), span: Span::new(l, r) },
+    <l:@L> <n:"float"> <r:@R> =>
+        Expr::Literal { value: Literal::Float(n), span: Span::new(l, r) },
+    <l:@L> <s:"string"> <r:@R> =>
+        Expr::Literal { value: Literal::String(s), span: Span::new(l, r) },
+    <l:@L> "true" <r:@R> =>
+        Expr::Literal { value: Literal::Bool(true), span: Span::new(l, r) },
+    <l:@L> "false" <r:@R> =>
+        Expr::Literal { value: Literal::Bool(false), span: Span::new(l, r) },
+
+    // Parenthesized expression or group
+    <l:@L> "(" <items:CommaSep<Expr>> ")" <r:@R> => {
+        let span = Span::new(l, r);
+        if items.len() == 1 {
+            Expr::Paren { inner: Box::new(items.into_iter().next().unwrap()), span }
+        } else {
+            Expr::Group { elements: items, span }
+        }
+    },
+
+    // List: [a, b, c], [a, b, ..], [.., a, b], [a, .., b]
+    <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
+        build_list(items, Span::new(l, r)),
+
+    // Object literal: { field1, $field2, } — trailing comma required
+    <l:@L> "{" <fields:(<ObjectField> ",")+> "}" <r:@R> =>
+        Expr::Object { fields, span: Span::new(l, r) },
+};
+
+// List element: an expression or `..`
+ListElem: ListElem = {
+    <e:Expr> => ListElem::Expr(e),
+    <l:@L> ".." <r:@R> => ListElem::Rest(Span::new(l, r)),
+};
+
+// Object field: shorthand `name` or `$name`
+ObjectField: ObjectExprField = {
+    <l:@L> <name:"ident"> <r:@R> => {
+        let span = Span::new(l, r);
+        ObjectExprField {
+            key: name.clone(),
+            value: Expr::Ident { name, is_storage_ref: false, span },
+            span,
+        }
+    },
+    <l:@L> <name:"$ref"> <r:@R> => {
+        let span = Span::new(l, r);
+        ObjectExprField {
+            key: name.clone(),
+            value: Expr::Ident { name, is_storage_ref: true, span },
+            span,
+        }
+    },
+};
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+CommaSep<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => { v.push(e); v }
+    }
+};
+

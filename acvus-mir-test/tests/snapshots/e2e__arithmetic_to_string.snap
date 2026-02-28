@@ -1,0 +1,15 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $a
+     1 │   r1 = storage_load $b
+     2 │   r2 = r0 + r1
+     3 │   r3 = call to_string(r2)
+     4 │   emit r3
+
+    ; r0 ($a) : Int
+    ; r1 ($b) : Int
+    ; r2 (v2) : Int
+    ; r3 (to_string(...)) : String

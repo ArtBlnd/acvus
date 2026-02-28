@@ -1,0 +1,15 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "Hello, "
+  T1 = "!"
+
+=== main ===
+     0 │   emit_text T0
+     1 │   r0 = storage_load $name
+     2 │   emit r0
+     3 │   emit_text T1
+
+    ; r0 ($name) : String

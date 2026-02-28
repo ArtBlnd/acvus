@@ -1,0 +1,9 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $name
+     1 │   emit r0
+
+    ; r0 ($name) : String

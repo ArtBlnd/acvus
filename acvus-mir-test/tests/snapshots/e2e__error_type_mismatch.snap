@@ -1,0 +1,5 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[7..14] type mismatch in `+`: Int vs Float

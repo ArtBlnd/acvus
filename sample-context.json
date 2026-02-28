@@ -1,0 +1,24 @@
+{
+  "storage": {
+    "출력": "int",
+    "초점": "int",
+    "user": "string",
+    "char": "string",
+    "초점커스텀": "string",
+    "세계관": "int",
+    "추적": "int",
+    "사칭": "int",
+    "인칭": "int",
+    "lastmessageid": "int",
+    "짚오일": "int",
+    "시도": "int",
+    "캐릭터": "int",
+    "작가": "string",
+    "전개": "int",
+    "길이": "int",
+    "언어": "int",
+    "잼현실": "int",
+    "침묵": "int",
+    "focus": "string"
+  }
+}

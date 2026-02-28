@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["acvus-core", "acvus-ast", "acvus-mir", "acvus-mir-cli", "acvus-mir-test"]

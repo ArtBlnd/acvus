@@ -1,0 +1,58 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "empty"
+
+=== main ===
+     0 │   r0 = storage_load $items
+     1 │   r1 = iter_init r0
+     2 │ L0:
+     3 │   r2, r3 = iter_next r1
+     4 │   jump_if r3 then L2 else L3
+     5 │ L3:
+     6 │ L4:
+     7 │   r4 = test len(r2) >= 2
+     8 │   jump_if r4 then L6 else L7
+     9 │ L6:
+    10 │   r5 = r2[0]
+    11 │   r6 = const true
+    12 │   r7 = r4 == r6
+    13 │   r8 = r2[1]
+    14 │   r9 = const true
+    15 │   r10 = r7 == r9
+    16 │   jump L8(r10)
+    17 │ L7:
+    18 │   r12 = const false
+    19 │   jump L8(r12)
+    20 │ L8(r11: Bool):
+    21 │   jump_if r11 then L9 else L5
+    22 │ L9:
+    23 │   r13 = r2[0]
+    24 │   r14 = r2[1]
+    25 │   r15 = call to_string(r13)
+    26 │   emit r15
+    27 │   jump L0
+    28 │ L5:
+    29 │   jump L0
+    30 │ L2:
+    31 │   emit_text T0
+    32 │ L1:
+
+    ; r0 ($items) : List<Int>
+    ; r1 (v1) : Unit
+    ; r2 (v2) : Unit
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool
+    ; r5 (v5) : Unit
+    ; r6 (v6) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (v8) : Unit
+    ; r9 (v9) : Bool
+    ; r10 (v10) : Bool
+    ; r11 (v11) : Bool
+    ; r12 (v12) : Bool
+    ; r13 (a) : Unit
+    ; r14 (b) : Unit
+    ; r15 (to_string(...)) : String

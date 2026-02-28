@@ -1,0 +1,40 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "child"
+  T1 = "teen"
+  T2 = "adult"
+
+=== main ===
+     0 │   r0 = storage_load $age
+     1 │   r1 = iter_init r0
+     2 │ L0:
+     3 │   r2, r3 = iter_next r1
+     4 │   jump_if r3 then L2 else L3
+     5 │ L3:
+     6 │ L4:
+     7 │   r4 = test r2 in 0..10
+     8 │   jump_if r4 then L7 else L5
+     9 │ L7:
+    10 │   emit_text T0
+    11 │   jump L0
+    12 │ L5:
+    13 │   r5 = test r2 in 10..=19
+    14 │   jump_if r5 then L8 else L6
+    15 │ L8:
+    16 │   emit_text T1
+    17 │   jump L0
+    18 │ L6:
+    19 │   jump L0
+    20 │ L2:
+    21 │   emit_text T2
+    22 │ L1:
+
+    ; r0 ($age) : Int
+    ; r1 (v1) : Unit
+    ; r2 (v2) : Unit
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool
+    ; r5 (v5) : Bool

@@ -1,0 +1,13 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = const 1
+     1 │   r2 = async_call fetch_user(r0)
+     2 │   r1 = await r2
+     3 │   emit r1
+
+    ; r0 (v0) : Int
+    ; r1 (fetch_user(...)) : String
+    ; r2 (v2) : Unit

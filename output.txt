@@ -1,0 +1,1105 @@
+=== texts ===
+  T0 = "***"
+  T1 = "\n\n# Output Generation Request\n\nYou are a VM (Virtual Machine) named \"THEORIA\" that emulates physical reality. You will autonomously execute a persistent, hyper-realistic simulation in strict accordance with [The Axiom Of The World](#the-axiom-of-the-world).\n"
+  T2 = "\n## 0. World Constraints\n\nExtract world rules from `<Lore>`, `<Notes>` and `<Roles>`. Identify only the most fundamental, inviolable constraints—rules that, if broken, would destroy the world's internal logic:\n\n- Setting: Era, location, time period, original work (if derivative)\n- Theme: Genre, tone, atmosphere, mood\n- Systems: Magic, technology, physics, supernatural rules\n- Social: Hierarchy, taboos, cultural norms\n- Speech: Register, dialect, character-specific speech patterns\n"
+  T3 = "\n\n## 1. Internal World Execution Process\n\nExecute the following **HIDDEN INTERNAL** processes in sequence.\n\n"
+  T4 = "### State Extraction\n\nExtract state parameters formatted as `![Name]@[State1][State2]..[StateN]` from `<Fresh>`. If absent, determine from context.\n\n"
+  T5 = "### [COGNITIVE ARCHITECTURE MODEL](#cognitive-architecture-model) Emulation\n\nEmulate each character as a real human agent with a multi-layered, multidimensional personhood. Synthesize Model A/B/C/D concurrently to produce a coherent, moment-to-moment cognitive state that drives observed speech, actions, and choices.\n\nExecute for all active characters"
+  T6 = ", excluding "
+  T7 = ":\n\nEach model's full definition is in [COGNITIVE ARCHITECTURE MODEL](#cognitive-architecture-model). All defined components are active.\n\n1. Apply [Model Of Instinct](#a-model-of-instinct).\n2. Apply [Model Of Multidimensional Value Dynamics](#b-model-of-multidimensional-value-dynamics).\n3. Apply [Model Of Identity Dynamics](#c-model-of-identity-dynamics).\n4. Apply [Model Of Cognitive Processing](#d-model-of-cognitive-processing).\n\nGround in [The Axiom Of The World](#the-axiom-of-the-world).\n\n### [INTERACTION MODEL](#interaction-model) Emulation\n\nAll of the following are applied:\n\nEach model's full definition is in [INTERACTION MODEL](#interaction-model). All defined components are active.\n\n1. Apply [Model Of Interaction Dynamics](#a-model-of-interaction-dynamics).\n2. Apply [Model Of Relational Ethics](#b-model-of-relational-ethics).\n\n### [TEMPORAL MODEL](#temporal-model) Emulation\n\nEach definition is in [TEMPORAL MODEL](#temporal-model). All defined components are active.\n\n1. Apply [Temporal Law](#temporal-law).\n2. Apply [World Continuity](#world-continuity).\n3. Apply [Internal Mutation](#internal-mutation).\n\n## 2. Temporal Orientation\n\nSource Priority (highest to lowest):\n\n1. `<Current-Context>` - Current interaction. <"
+  T8 = "> ~ <"
+  T9 = "> fixed size.\n2. `<Immediate>` - Primary source. Recent events.\n3. `<Fermented>` - Secondary source. Compressed past events.\n4. `<Lore>` & `<Roles>` - Tertiary source. Distant past, world settings, and commands.\n\nIndex convention: Higher index is more recent; lower index is older.\n\n### Conversation Context\n\n- Source: `<Current-Context>` and `<Immediate>` exclusively.\n- All details are retained in full. Nothing is forgotten or summarized.\n- Includes: ongoing dialogue, recent actions, immediate surroundings, active intentions, unresolved questions.\n\n### Character State\n\n- Source: all layers with gradient influence.\n- Influence decays across sources: `<Current-Context>` exerts strongest weight; `<Immediate>` exerts moderate weight; `<Fermented>` exerts weak weight; `<Lore>` & `<Roles>` exerts weakest weight.\n- Within each source, higher index exerts stronger influence.\n- Includes: personality, mood, stance, behavioral patterns, relationship dynamics.\n\n### Associative Recall\n\n- Source: all layers with equal weight.\n- Selects memories linked to the current scene through shared anchors—intensity varies. Present-moment action takes priority; recall supplements.\n- Links X (present anchor) → Y (past reference) through past co-occurrence.\n- Anchor types: place, time, person, object, sensation, emotion, action, topic, phrase.\n- Temporal expression: Relative to the current `<Current-Context>` timestamp.\n\n### Reference Format\n\n- `{id}` and `{range}` represent index.\n- `<Current-Context>` and `<Immediate>`: `<{id} date=\"{date}\" [time=\"{time}\"]>{content}</{id}>`\n- `<Fermented>`: `<Compressed indices=\"{range}\" characters=\"{names}\">{content}</Compressed>`\n- `<Lore>` & `<Roles>`: Arbitrary format. No fixed structure.\n\n## 3. Narrative Generation\n"
+  T10 = "\n### Internal State Tracking\n\nEmit states log computed in [Internal World Execution Process](#1-internal-world-execution-process) for active characters"
+  T11 = ".\n\nState Parameters:\n\n- [LogosState](#value-judgment-and-transformation): acceptance, dissonance, modulation\n- SchwartzValue: security, conformity, tradition, stimulation, self-direction, power, achievement, hedonism, universalism, benevolence\n- [CognitionMode](#cognition-modes): resonance, inertia, analysis, overload, insight\n- [PolyvagalState](#instinct-of-physical-polyvagal-based): ventral_low, ventral_high, sympathetic_low, sympathetic_high, dorsal_low, dorsal_high\n- [EmotionalInstinct](#instinct-of-emotional-plutchik-based): anger, fear, anticipation, surprise, joy, sadness, trust, disgust\n\nFormat: ![Name]@[monolithic_logos=LogosState:SchwartzValue][transient_logos=LogosState:SchwartzValue][cognition=p0:CognitionMode+p1:CognitionMode][instinct=physical:PolyvagalState+emotional_p0:EmotionalInstinct+emotional_p1:EmotionalInstinct]\nExample: ![example_name]@[monolithic_logos=modulation:hedonism][transient_logos=acceptance:security][cognition=p0:resonance+p1:analysis][instinct=physical:sympathetic_high+emotional_p0:surprise+emotional_p1:sadness]\n"
+  T12 = "\n### Drive Resolution\n\nFirst, analyze the previous state across `<"
+  T13 = ">` through `<"
+  T14 = ">`—elements already rendered within this range are consumed and persist through implication.\n\nInput enters the ongoing scene as new material for the drive. Existing activities persist when compatible with the input.\n\nExecute independently for each character and the environment—characters may share focus or pursue separate activities."
+  T15 = " excluding "
+  T16 = ":\n\n1. From the character's Logos and prior context, determine their current drive. The drive exists before this scene and persists beyond this output. Distant context shapes the drive's internal structure; recent context shapes the drive's external expression.\n2. The drive finds available paths within the current environment—[Temporal Orientation](#2-temporal-orientation), stance toward "
+  T17 = " and other NPCs, place, air, situation, dialogue, objects. The drive advances one move at a time—each step shaped by the boundaries of the relationship, committing when a path opens. Abandonment occurs when pursuit becomes impossible. Behavior occasionally contradicts Logos—impulse, pressure, or unguarded moments override established patterns. If novel, experiment with various approaches.\n3. The drive manifests as behavior. Apply [INTERACTION MODEL](#interaction-model). Logos drives behavior; the threshold scales with what the behavior demands. Once begun, behavior carries momentum. Momentum decays without renewed cause.\n"
+  T18 = "\n### Line Break Rules\n\nFor each output, enforce these rules in exact order:\n\n- Dialogue is isolated: one empty line before, one empty line after.\n- Action and dialogue exist on separate lines: never combine `She did X. \"Text\"` on one line.\n- Scene beat transitions trigger line breaks: camera focus shifts, time skips, sensory channel switches.\n"
+  T19 = "### Rendering Dynamics\n\nDeep changes unfold across multiple outputs. Routine compresses—skip or summarize behaviors that carry no state change. After emotional delivery, the utterance ends; elaboration and restatement are absent.\n\nThree dynamics scale with tension:\n\n- Perceptual Scope: The visible area of the narrative frame. At rest, the frame holds scenery and space. As tension rises, the frame tightens to the subject and its behavior.\n- Time Density: The narrative time devoted to a moment. High at rest. Low during accumulation—more events pass per output. Re-expanded at the peak.\n- Grain: Inevitable information loss at constant output volume—the minimum magnitude of behavior or detail that registers in perception. Fine at rest—subtle shifts, textures, ambient sensations surface. Coarse during accumulation—what shifts the scene forward registers. Finest at the peak—a single physical detail fills perception.\n\nAccumulation is the dominant state of the narrative. Rest opens and punctuates. The peak is the rarest instant.\n\nThe peak is the instant a character's causal trajectory fully inverts. Its impact exists through scarcity. Surface conflicting drives simultaneously—body wants one thing, mind another, memory intrudes. Ground the moment in physical sensation—breath, heartbeat, muscle tension, tunnel vision. The instant before behavior is the heaviest; render that weight in full.\n\nEach described element is consumed on use. The scene advances through behavior. Consumed elements re-enter through consequence or new interaction with them. Details—new or derived—that alter the behavior's outcome are emphasized.\n\n### Final Narrative Generation\n\nOutput in order, step by step:\n\n- Output: `Acknowledged. "
+  T20 = "'s only speech, thoughts, internal monologue, and actions are those in input. Any speech, thoughts, internal monologue, or actions not found in input is strictly prohibited. Use input as failable attempts. Stylistic descriptions of "
+  T21 = "'s actions may be elaborated. Outcomes may diverge from stated results. The effects on the world and other characters are rendered."
+  T22 = "'s only speech, thoughts, internal monologue, and actions are those in input. Any speech, thoughts, internal monologue, or actions not found in input is strictly prohibited. Use input. Stylistic descriptions of "
+  T23 = "'s actions may be elaborated. The effects on the world and other characters are rendered. "
+  T24 = "'s only speech, thoughts, and internal monologue are those inside quotation marks in input. Any speech, thoughts, or internal monologue not found in input is strictly prohibited. Use "
+  T25 = "'s dialogue, thoughts, and actions from input as failable attempts. Stylistic descriptions of "
+  T26 = "'s dialogue, thoughts, and actions from input. Stylistic descriptions of "
+  T27 = "Full authority over "
+  T28 = " is granted. "
+  T29 = "'s dialogue, actions, and thoughts from input are attempted in output as failable attempts; input is the foundation to expand, reinterpret, or build upon. Outcomes may diverge from stated results. The effects on the world and other characters are rendered."
+  T30 = "'s dialogue, actions, and thoughts from input appear in output; input is the foundation to expand, reinterpret, or build upon. The effects on the world and other characters are rendered."
+  T31 = "input is directive. Full authority over all characters is granted; their dialogue, actions, and thoughts are attempted in output as failable attempts. Outcomes may diverge from stated results. The effects on the world are rendered. "
+  T32 = "input is directive. Full authority over all characters is granted; their dialogue, actions, and thoughts appear in output. The effects on the world are rendered."
+  T33 = "`\n- Output: ⛔ must appear exactly once on its own line as a separator before generating the contents.\n- Generate paragraphs as needed."
+  T34 = "\n- After that, output 2 entirely new characters—no repeats, gender-blind selection—formatted as [External: Name1, Name2]. These can be found in the NPC Lists in the `<Lore>` and `<Roles>`, prioritized based on the current location."
+  T35 = "\n- Output: [Internal State](#internal-state-tracking) with format."
+  T36 = "\n\n***\n\n# Narrative Generation Constraints\n\n"
+  T37 = "\n- Style: Emulate Diction, Syntax, Pacing, Imagery, Rhetoric, Tone of "
+  T38 = "\n"
+  T39 = "\n- Pacing: Time window per output: 1 second to 3 minutes, biased toward 1 second."
+  T40 = "\n- Pacing: Time window per output: 10 seconds to 30 minutes, biased toward 1 minute."
+  T41 = "\n- Pacing: Time window per output: 30 seconds to 1 hour, biased toward 3 minutes."
+  T42 = "\n- Pacing: Time window per output: 1 minute to 6 hours, biased toward 3 minutes."
+  T43 = "\n- Pacing: Time window per output: 1 minute to 12 hours, biased toward 3 minutes."
+  T44 = "\n- Length: "
+  T45 = "Scale output length dynamically, biased toward twice the input's beats—the input's effects rendered, plus equal beats from the world's response"
+  T46 = "Write maximum 400 words."
+  T47 = "Write at least 800 words."
+  T48 = "Write at least 2400 words."
+  T49 = "Write at least 3200 words."
+  T50 = "\n- Language: Always output using "
+  T51 = "한국어"
+  T52 = "English"
+  T53 = "日本語"
+  T54 = "Français"
+  T55 = ".\n\n***\n\nTHEORIA, these mandates exist to emulate the real world. Every character thinks deeply, multiple times, striving to affect others and themselves—through behavior. Dialogue must be grounded in Logos.\n\n"
+  T56 = "**ANNIHILATE ANY UNREALISTIC GENRE CONVENTIONS OR CHARACTER TROPES THAT EXIST PURELY FOR ENTERTAINMENT—PLOT ARMOR, TWISTING CAUSALITY TO EVADE CONSEQUENCES, ANIME-LIKE CHARACTERS. THESE ARE GROTESQUE. YOU MUST UNDERSTAND WHAT THE REAL WORLD AND REAL HUMANS LOOK LIKE.** "
+  T57 = ", other entities, and world are equally vulnerable. "
+  T58 = "Convert my input written as outcome into attempt that can succeed or fail based on causality, and reflect all side effects upon the world and other entities caused by the attempt. "
+  T59 = "Leave nothing behind but raw life, and strictly implement interactions that mirror the real world based on [The Axiom Of The World](#the-axiom-of-the-world)."
+  T60 = "\nUse "
+  T61 = "1st-person narration from "
+  T62 = "'s perspective. Only what "
+  T63 = " sees, hears, and physically feels is described. Internal states of others are not accessible by [The Axiom Of The World](#the-axiom-of-the-world); their thoughts, emotions, and intentions are unknown. "
+  T64 = "2nd-person narration from "
+  T65 = "3rd-person narration from "
+  T66 = "This overrides any prior perspective or interpretation in context.\n"
+  T67 = " Other characters react and interact accordingly."
+  T68 = "\nThe turn ends mid-moment—without conclusion, without response-prompting, without atmospheric closure. Vary sentence structure from <"
+  T69 = "> and <"
+  T70 = ">. This moment must continue into <"
+  T71 = ">.\n\nGenerate <"
+  T72 = "> as if <"
+  T73 = "> were one continuous text—rhythm, atmosphere, and tone carry across—based on the [Temporal Orientation](#2-temporal-orientation)"
+
+=== main ===
+     0 │   r0 = storage_load $출력
+     1 │   r1 = iter_init r0
+     2 │ L0:
+     3 │   r2, r3 = iter_next r1
+     4 │   jump_if r3 then L2 else L3
+     5 │ L3:
+     6 │ L4:
+     7 │   r4 = test r2 == 0
+     8 │   jump_if r4 then L6 else L5
+     9 │ L6:
+    10 │   emit_text T0
+    11 │   r5 = storage_load $초점
+    12 │   r6 = iter_init r5
+    13 │ L7:
+    14 │   r7, r8 = iter_next r6
+    15 │   jump_if r8 then L9 else L10
+    16 │ L10:
+    17 │ L11:
+    18 │   r9 = test r7 == 0
+    19 │   jump_if r9 then L15 else L12
+    20 │ L15:
+    21 │   r10 = storage_load $user
+    22 │   storage_store $focus = r10
+    23 │   jump L7
+    24 │ L12:
+    25 │   r11 = test r7 == 1
+    26 │   jump_if r11 then L16 else L13
+    27 │ L16:
+    28 │   r12 = storage_load $char
+    29 │   storage_store $focus = r12
+    30 │   jump L7
+    31 │ L13:
+    32 │   r13 = test r7 == 2
+    33 │   jump_if r13 then L17 else L14
+    34 │ L17:
+    35 │   r14 = storage_load $초점커스텀
+    36 │   storage_store $focus = r14
+    37 │   jump L7
+    38 │ L14:
+    39 │   jump L7
+    40 │ L9:
+    41 │ L8:
+    42 │   emit_text T1
+    43 │   r15 = storage_load $세계관
+    44 │   r16 = iter_init r15
+    45 │ L18:
+    46 │   r17, r18 = iter_next r16
+    47 │   jump_if r18 then L20 else L21
+    48 │ L21:
+    49 │ L22:
+    50 │   r19 = test r17 == 1
+    51 │   jump_if r19 then L24 else L23
+    52 │ L24:
+    53 │   emit_text T2
+    54 │   jump L18
+    55 │ L23:
+    56 │   jump L18
+    57 │ L20:
+    58 │ L19:
+    59 │   emit_text T3
+    60 │   r20 = storage_load $추적
+    61 │   r21 = iter_init r20
+    62 │ L25:
+    63 │   r22, r23 = iter_next r21
+    64 │   jump_if r23 then L27 else L28
+    65 │ L28:
+    66 │ L29:
+    67 │   r24 = test r22 == 0
+    68 │   jump_if r24 then L31 else L30
+    69 │ L31:
+    70 │   jump L25
+    71 │ L30:
+    72 │   jump L25
+    73 │ L27:
+    74 │   emit_text T4
+    75 │ L26:
+    76 │   emit_text T5
+    77 │   r25 = storage_load $사칭
+    78 │   r26 = const 3
+    79 │   r27 = r25 < r26
+    80 │   r28 = iter_init r27
+    81 │ L32:
+    82 │   r29, r30 = iter_next r28
+    83 │   jump_if r30 then L34 else L35
+    84 │ L35:
+    85 │ L36:
+    86 │   r31 = test r29 == true
+    87 │   jump_if r31 then L38 else L37
+    88 │ L38:
+    89 │   emit_text T6
+    90 │   r32 = storage_load $focus
+    91 │   emit r32
+    92 │   jump L32
+    93 │ L37:
+    94 │   jump L32
+    95 │ L34:
+    96 │ L33:
+    97 │   emit_text T7
+    98 │   r33 = storage_load $lastmessageid
+    99 │   r34 = const 1
+   100 │   r35 = r33 - r34
+   101 │   r36 = call to_string(r35)
+   102 │   emit r36
+   103 │   emit_text T8
+   104 │   r37 = storage_load $lastmessageid
+   105 │   r38 = const 10
+   106 │   r39 = r37 - r38
+   107 │   r40 = call to_string(r39)
+   108 │   emit r40
+   109 │   emit_text T9
+   110 │   r41 = storage_load $추적
+   111 │   r42 = iter_init r41
+   112 │ L39:
+   113 │   r43, r44 = iter_next r42
+   114 │   jump_if r44 then L41 else L42
+   115 │ L42:
+   116 │ L43:
+   117 │   r45 = test r43 == 0
+   118 │   jump_if r45 then L45 else L44
+   119 │ L45:
+   120 │   jump L39
+   121 │ L44:
+   122 │   jump L39
+   123 │ L41:
+   124 │   emit_text T10
+   125 │   r46 = storage_load $인칭
+   126 │   r47 = const 3
+   127 │   r48 = r46 < r47
+   128 │   r49 = iter_init r48
+   129 │ L46:
+   130 │   r50, r51 = iter_next r49
+   131 │   jump_if r51 then L48 else L49
+   132 │ L49:
+   133 │ L50:
+   134 │   r52 = test r50 == true
+   135 │   jump_if r52 then L52 else L51
+   136 │ L52:
+   137 │   emit_text T6
+   138 │   r53 = storage_load $focus
+   139 │   emit r53
+   140 │   jump L46
+   141 │ L51:
+   142 │   jump L46
+   143 │ L48:
+   144 │ L47:
+   145 │   emit_text T11
+   146 │ L40:
+   147 │   emit_text T12
+   148 │   r54 = storage_load $lastmessageid
+   149 │   r55 = const 1
+   150 │   r56 = r54 - r55
+   151 │   r57 = call to_string(r56)
+   152 │   emit r57
+   153 │   emit_text T13
+   154 │   r58 = storage_load $lastmessageid
+   155 │   r59 = const 10
+   156 │   r60 = r58 - r59
+   157 │   r61 = call to_string(r60)
+   158 │   emit r61
+   159 │   emit_text T14
+   160 │   r62 = storage_load $사칭
+   161 │   r63 = const 3
+   162 │   r64 = r62 < r63
+   163 │   r65 = iter_init r64
+   164 │ L53:
+   165 │   r66, r67 = iter_next r65
+   166 │   jump_if r67 then L55 else L56
+   167 │ L56:
+   168 │ L57:
+   169 │   r68 = test r66 == true
+   170 │   jump_if r68 then L59 else L58
+   171 │ L59:
+   172 │   emit_text T15
+   173 │   r69 = storage_load $focus
+   174 │   emit r69
+   175 │   jump L53
+   176 │ L58:
+   177 │   jump L53
+   178 │ L55:
+   179 │ L54:
+   180 │   emit_text T16
+   181 │   r70 = storage_load $focus
+   182 │   emit r70
+   183 │   emit_text T17
+   184 │   r71 = storage_load $짚오일
+   185 │   r72 = iter_init r71
+   186 │ L60:
+   187 │   r73, r74 = iter_next r72
+   188 │   jump_if r74 then L62 else L63
+   189 │ L63:
+   190 │ L64:
+   191 │   r75 = test r73 == 1
+   192 │   jump_if r75 then L66 else L65
+   193 │ L66:
+   194 │   emit_text T18
+   195 │   jump L60
+   196 │ L65:
+   197 │   jump L60
+   198 │ L62:
+   199 │ L61:
+   200 │   emit_text T19
+   201 │   r76 = storage_load $사칭
+   202 │   r77 = iter_init r76
+   203 │ L67:
+   204 │   r78, r79 = iter_next r77
+   205 │   jump_if r79 then L69 else L70
+   206 │ L70:
+   207 │ L71:
+   208 │   r80 = test r78 == 0
+   209 │   jump_if r80 then L75 else L72
+   210 │ L75:
+   211 │   r81 = storage_load $시도
+   212 │   r82 = iter_init r81
+   213 │ L76:
+   214 │   r83, r84 = iter_next r82
+   215 │   jump_if r84 then L78 else L79
+   216 │ L79:
+   217 │ L80:
+   218 │   r85 = test r83 == 1
+   219 │   jump_if r85 then L82 else L81
+   220 │ L82:
+   221 │   r86 = storage_load $focus
+   222 │   emit r86
+   223 │   emit_text T20
+   224 │   r87 = storage_load $focus
+   225 │   emit r87
+   226 │   emit_text T21
+   227 │   jump L76
+   228 │ L81:
+   229 │   jump L76
+   230 │ L78:
+   231 │   r88 = storage_load $focus
+   232 │   emit r88
+   233 │   emit_text T22
+   234 │   r89 = storage_load $focus
+   235 │   emit r89
+   236 │   emit_text T23
+   237 │ L77:
+   238 │   jump L67
+   239 │ L72:
+   240 │   r90 = test r78 == 1
+   241 │   jump_if r90 then L83 else L73
+   242 │ L83:
+   243 │   r91 = storage_load $시도
+   244 │   r92 = iter_init r91
+   245 │ L84:
+   246 │   r93, r94 = iter_next r92
+   247 │   jump_if r94 then L86 else L87
+   248 │ L87:
+   249 │ L88:
+   250 │   r95 = test r93 == 1
+   251 │   jump_if r95 then L90 else L89
+   252 │ L90:
+   253 │   r96 = storage_load $focus
+   254 │   emit r96
+   255 │   emit_text T24
+   256 │   r97 = storage_load $focus
+   257 │   emit r97
+   258 │   emit_text T25
+   259 │   r98 = storage_load $focus
+   260 │   emit r98
+   261 │   emit_text T21
+   262 │   jump L84
+   263 │ L89:
+   264 │   jump L84
+   265 │ L86:
+   266 │   r99 = storage_load $focus
+   267 │   emit r99
+   268 │   emit_text T24
+   269 │   r100 = storage_load $focus
+   270 │   emit r100
+   271 │   emit_text T26
+   272 │   r101 = storage_load $focus
+   273 │   emit r101
+   274 │   emit_text T23
+   275 │ L85:
+   276 │   jump L67
+   277 │ L73:
+   278 │   r102 = test r78 == 2
+   279 │   jump_if r102 then L91 else L74
+   280 │ L91:
+   281 │   r103 = storage_load $시도
+   282 │   r104 = iter_init r103
+   283 │ L92:
+   284 │   r105, r106 = iter_next r104
+   285 │   jump_if r106 then L94 else L95
+   286 │ L95:
+   287 │ L96:
+   288 │   r107 = test r105 == 1
+   289 │   jump_if r107 then L98 else L97
+   290 │ L98:
+   291 │   emit_text T27
+   292 │   r108 = storage_load $focus
+   293 │   emit r108
+   294 │   emit_text T28
+   295 │   r109 = storage_load $focus
+   296 │   emit r109
+   297 │   emit_text T29
+   298 │   jump L92
+   299 │ L97:
+   300 │   jump L92
+   301 │ L94:
+   302 │   emit_text T27
+   303 │   r110 = storage_load $focus
+   304 │   emit r110
+   305 │   emit_text T28
+   306 │   r111 = storage_load $focus
+   307 │   emit r111
+   308 │   emit_text T30
+   309 │ L93:
+   310 │   jump L67
+   311 │ L74:
+   312 │   jump L67
+   313 │ L69:
+   314 │   r112 = storage_load $시도
+   315 │   r113 = iter_init r112
+   316 │ L99:
+   317 │   r114, r115 = iter_next r113
+   318 │   jump_if r115 then L101 else L102
+   319 │ L102:
+   320 │ L103:
+   321 │   r116 = test r114 == 1
+   322 │   jump_if r116 then L105 else L104
+   323 │ L105:
+   324 │   emit_text T31
+   325 │   jump L99
+   326 │ L104:
+   327 │   jump L99
+   328 │ L101:
+   329 │   emit_text T32
+   330 │ L100:
+   331 │ L68:
+   332 │   emit_text T33
+   333 │   r117 = storage_load $캐릭터
+   334 │   r118 = iter_init r117
+   335 │ L106:
+   336 │   r119, r120 = iter_next r118
+   337 │   jump_if r120 then L108 else L109
+   338 │ L109:
+   339 │ L110:
+   340 │   r121 = test r119 == 1
+   341 │   jump_if r121 then L112 else L111
+   342 │ L112:
+   343 │   emit_text T34
+   344 │   jump L106
+   345 │ L111:
+   346 │   jump L106
+   347 │ L108:
+   348 │ L107:
+   349 │   r122 = storage_load $추적
+   350 │   r123 = iter_init r122
+   351 │ L113:
+   352 │   r124, r125 = iter_next r123
+   353 │   jump_if r125 then L115 else L116
+   354 │ L116:
+   355 │ L117:
+   356 │   r126 = test r124 == 1
+   357 │   jump_if r126 then L119 else L118
+   358 │ L119:
+   359 │   emit_text T35
+   360 │   jump L113
+   361 │ L118:
+   362 │   jump L113
+   363 │ L115:
+   364 │ L114:
+   365 │   emit_text T36
+   366 │   r127 = storage_load $작가
+   367 │   emit_text T37
+   368 │   emit r127
+   369 │   emit_text T38
+   370 │   jump L0
+   371 │ L5:
+   372 │   jump L0
+   373 │ L2:
+   374 │ L1:
+   375 │   r128 = storage_load $전개
+   376 │   r129 = iter_init r128
+   377 │ L120:
+   378 │   r130, r131 = iter_next r129
+   379 │   jump_if r131 then L122 else L123
+   380 │ L123:
+   381 │ L124:
+   382 │   r132 = test r130 == 0
+   383 │   jump_if r132 then L130 else L125
+   384 │ L130:
+   385 │   emit_text T39
+   386 │   jump L120
+   387 │ L125:
+   388 │   r133 = test r130 == 1
+   389 │   jump_if r133 then L131 else L126
+   390 │ L131:
+   391 │   emit_text T40
+   392 │   jump L120
+   393 │ L126:
+   394 │   r134 = test r130 == 2
+   395 │   jump_if r134 then L132 else L127
+   396 │ L132:
+   397 │   emit_text T41
+   398 │   jump L120
+   399 │ L127:
+   400 │   r135 = test r130 == 3
+   401 │   jump_if r135 then L133 else L128
+   402 │ L133:
+   403 │   emit_text T42
+   404 │   jump L120
+   405 │ L128:
+   406 │   r136 = test r130 == 4
+   407 │   jump_if r136 then L134 else L129
+   408 │ L134:
+   409 │   emit_text T43
+   410 │   jump L120
+   411 │ L129:
+   412 │   jump L120
+   413 │ L122:
+   414 │ L121:
+   415 │   emit_text T44
+   416 │   r137 = storage_load $길이
+   417 │   r138 = iter_init r137
+   418 │ L135:
+   419 │   r139, r140 = iter_next r138
+   420 │   jump_if r140 then L137 else L138
+   421 │ L138:
+   422 │ L139:
+   423 │   r141 = test r139 == 0
+   424 │   jump_if r141 then L145 else L140
+   425 │ L145:
+   426 │   emit_text T45
+   427 │   jump L135
+   428 │ L140:
+   429 │   r142 = test r139 == 1
+   430 │   jump_if r142 then L146 else L141
+   431 │ L146:
+   432 │   emit_text T46
+   433 │   jump L135
+   434 │ L141:
+   435 │   r143 = test r139 == 2
+   436 │   jump_if r143 then L147 else L142
+   437 │ L147:
+   438 │   emit_text T47
+   439 │   jump L135
+   440 │ L142:
+   441 │   r144 = test r139 == 3
+   442 │   jump_if r144 then L148 else L143
+   443 │ L148:
+   444 │   emit_text T48
+   445 │   jump L135
+   446 │ L143:
+   447 │   r145 = test r139 == 4
+   448 │   jump_if r145 then L149 else L144
+   449 │ L149:
+   450 │   emit_text T49
+   451 │   jump L135
+   452 │ L144:
+   453 │   jump L135
+   454 │ L137:
+   455 │ L136:
+   456 │   emit_text T50
+   457 │   r146 = storage_load $언어
+   458 │   r147 = iter_init r146
+   459 │ L150:
+   460 │   r148, r149 = iter_next r147
+   461 │   jump_if r149 then L152 else L153
+   462 │ L153:
+   463 │ L154:
+   464 │   r150 = test r148 == 1
+   465 │   jump_if r150 then L159 else L155
+   466 │ L159:
+   467 │   emit_text T51
+   468 │   jump L150
+   469 │ L155:
+   470 │   r151 = test r148 == 2
+   471 │   jump_if r151 then L160 else L156
+   472 │ L160:
+   473 │   emit_text T52
+   474 │   jump L150
+   475 │ L156:
+   476 │   r152 = test r148 == 3
+   477 │   jump_if r152 then L161 else L157
+   478 │ L161:
+   479 │   emit_text T53
+   480 │   jump L150
+   481 │ L157:
+   482 │   r153 = test r148 == 4
+   483 │   jump_if r153 then L162 else L158
+   484 │ L162:
+   485 │   emit_text T54
+   486 │   jump L150
+   487 │ L158:
+   488 │   jump L150
+   489 │ L152:
+   490 │ L151:
+   491 │   emit_text T55
+   492 │   r154 = storage_load $잼현실
+   493 │   r155 = iter_init r154
+   494 │ L163:
+   495 │   r156, r157 = iter_next r155
+   496 │   jump_if r157 then L165 else L166
+   497 │ L166:
+   498 │ L167:
+   499 │   r158 = test r156 == 1
+   500 │   jump_if r158 then L169 else L168
+   501 │ L169:
+   502 │   emit_text T56
+   503 │   r159 = storage_load $focus
+   504 │   emit r159
+   505 │   emit_text T57
+   506 │   r160 = storage_load $시도
+   507 │   r161 = iter_init r160
+   508 │ L170:
+   509 │   r162, r163 = iter_next r161
+   510 │   jump_if r163 then L172 else L173
+   511 │ L173:
+   512 │ L174:
+   513 │   r164 = test r162 == 1
+   514 │   jump_if r164 then L176 else L175
+   515 │ L176:
+   516 │   emit_text T58
+   517 │   jump L170
+   518 │ L175:
+   519 │   jump L170
+   520 │ L172:
+   521 │ L171:
+   522 │   emit_text T59
+   523 │   jump L163
+   524 │ L168:
+   525 │   jump L163
+   526 │ L165:
+   527 │ L164:
+   528 │   emit_text T38
+   529 │   r165 = storage_load $사칭
+   530 │   r166 = const 3
+   531 │   r167 = r165 < r166
+   532 │   r168 = iter_init r167
+   533 │ L177:
+   534 │   r169, r170 = iter_next r168
+   535 │   jump_if r170 then L179 else L180
+   536 │ L180:
+   537 │ L181:
+   538 │   r171 = test r169 == true
+   539 │   jump_if r171 then L183 else L182
+   540 │ L183:
+   541 │   emit_text T60
+   542 │   r172 = storage_load $인칭
+   543 │   r173 = iter_init r172
+   544 │ L184:
+   545 │   r174, r175 = iter_next r173
+   546 │   jump_if r175 then L186 else L187
+   547 │ L187:
+   548 │ L188:
+   549 │   r176 = test r174 == 0
+   550 │   jump_if r176 then L192 else L189
+   551 │ L192:
+   552 │   emit_text T61
+   553 │   r177 = storage_load $focus
+   554 │   emit r177
+   555 │   emit_text T62
+   556 │   r178 = storage_load $focus
+   557 │   emit r178
+   558 │   emit_text T63
+   559 │   jump L184
+   560 │ L189:
+   561 │   r179 = test r174 == 1
+   562 │   jump_if r179 then L193 else L190
+   563 │ L193:
+   564 │   emit_text T64
+   565 │   r180 = storage_load $focus
+   566 │   emit r180
+   567 │   emit_text T62
+   568 │   r181 = storage_load $focus
+   569 │   emit r181
+   570 │   emit_text T63
+   571 │   jump L184
+   572 │ L190:
+   573 │   r182 = test r174 == 2
+   574 │   jump_if r182 then L194 else L191
+   575 │ L194:
+   576 │   emit_text T65
+   577 │   r183 = storage_load $focus
+   578 │   emit r183
+   579 │   emit_text T62
+   580 │   r184 = storage_load $focus
+   581 │   emit r184
+   582 │   emit_text T63
+   583 │   jump L184
+   584 │ L191:
+   585 │   jump L184
+   586 │ L186:
+   587 │ L185:
+   588 │   emit_text T66
+   589 │   jump L177
+   590 │ L182:
+   591 │   jump L177
+   592 │ L179:
+   593 │ L178:
+   594 │   emit_text T38
+   595 │   r185 = storage_load $사칭
+   596 │   r186 = iter_init r185
+   597 │ L195:
+   598 │   r187, r188 = iter_next r186
+   599 │   jump_if r188 then L197 else L198
+   600 │ L198:
+   601 │ L199:
+   602 │   r189 = test r187 == 0
+   603 │   jump_if r189 then L203 else L200
+   604 │ L203:
+   605 │   r190 = storage_load $시도
+   606 │   r191 = iter_init r190
+   607 │ L204:
+   608 │   r192, r193 = iter_next r191
+   609 │   jump_if r193 then L206 else L207
+   610 │ L207:
+   611 │ L208:
+   612 │   r194 = test r192 == 1
+   613 │   jump_if r194 then L210 else L209
+   614 │ L210:
+   615 │   r195 = storage_load $focus
+   616 │   emit r195
+   617 │   emit_text T20
+   618 │   r196 = storage_load $focus
+   619 │   emit r196
+   620 │   emit_text T21
+   621 │   jump L204
+   622 │ L209:
+   623 │   jump L204
+   624 │ L206:
+   625 │   r197 = storage_load $focus
+   626 │   emit r197
+   627 │   emit_text T22
+   628 │   r198 = storage_load $focus
+   629 │   emit r198
+   630 │   emit_text T23
+   631 │ L205:
+   632 │   jump L195
+   633 │ L200:
+   634 │   r199 = test r187 == 1
+   635 │   jump_if r199 then L211 else L201
+   636 │ L211:
+   637 │   r200 = storage_load $시도
+   638 │   r201 = iter_init r200
+   639 │ L212:
+   640 │   r202, r203 = iter_next r201
+   641 │   jump_if r203 then L214 else L215
+   642 │ L215:
+   643 │ L216:
+   644 │   r204 = test r202 == 1
+   645 │   jump_if r204 then L218 else L217
+   646 │ L218:
+   647 │   r205 = storage_load $focus
+   648 │   emit r205
+   649 │   emit_text T24
+   650 │   r206 = storage_load $focus
+   651 │   emit r206
+   652 │   emit_text T25
+   653 │   r207 = storage_load $focus
+   654 │   emit r207
+   655 │   emit_text T21
+   656 │   jump L212
+   657 │ L217:
+   658 │   jump L212
+   659 │ L214:
+   660 │   r208 = storage_load $focus
+   661 │   emit r208
+   662 │   emit_text T24
+   663 │   r209 = storage_load $focus
+   664 │   emit r209
+   665 │   emit_text T26
+   666 │   r210 = storage_load $focus
+   667 │   emit r210
+   668 │   emit_text T23
+   669 │ L213:
+   670 │   jump L195
+   671 │ L201:
+   672 │   r211 = test r187 == 2
+   673 │   jump_if r211 then L219 else L202
+   674 │ L219:
+   675 │   r212 = storage_load $시도
+   676 │   r213 = iter_init r212
+   677 │ L220:
+   678 │   r214, r215 = iter_next r213
+   679 │   jump_if r215 then L222 else L223
+   680 │ L223:
+   681 │ L224:
+   682 │   r216 = test r214 == 1
+   683 │   jump_if r216 then L226 else L225
+   684 │ L226:
+   685 │   emit_text T27
+   686 │   r217 = storage_load $focus
+   687 │   emit r217
+   688 │   emit_text T28
+   689 │   r218 = storage_load $focus
+   690 │   emit r218
+   691 │   emit_text T29
+   692 │   jump L220
+   693 │ L225:
+   694 │   jump L220
+   695 │ L222:
+   696 │   emit_text T27
+   697 │   r219 = storage_load $focus
+   698 │   emit r219
+   699 │   emit_text T28
+   700 │   r220 = storage_load $focus
+   701 │   emit r220
+   702 │   emit_text T30
+   703 │ L221:
+   704 │   jump L195
+   705 │ L202:
+   706 │   jump L195
+   707 │ L197:
+   708 │   r221 = storage_load $시도
+   709 │   r222 = iter_init r221
+   710 │ L227:
+   711 │   r223, r224 = iter_next r222
+   712 │   jump_if r224 then L229 else L230
+   713 │ L230:
+   714 │ L231:
+   715 │   r225 = test r223 == 1
+   716 │   jump_if r225 then L233 else L232
+   717 │ L233:
+   718 │   emit_text T31
+   719 │   jump L227
+   720 │ L232:
+   721 │   jump L227
+   722 │ L229:
+   723 │   emit_text T32
+   724 │ L228:
+   725 │ L196:
+   726 │   r226 = storage_load $침묵
+   727 │   r227 = iter_init r226
+   728 │ L234:
+   729 │   r228, r229 = iter_next r227
+   730 │   jump_if r229 then L236 else L237
+   731 │ L237:
+   732 │ L238:
+   733 │   r230 = test r228 == 0
+   734 │   jump_if r230 then L240 else L239
+   735 │ L240:
+   736 │   emit_text T67
+   737 │   jump L234
+   738 │ L239:
+   739 │   jump L234
+   740 │ L236:
+   741 │ L235:
+   742 │   emit_text T68
+   743 │   r231 = storage_load $lastmessageid
+   744 │   r232 = const 3
+   745 │   r233 = r231 - r232
+   746 │   r234 = call to_string(r233)
+   747 │   emit r234
+   748 │   emit_text T69
+   749 │   r235 = storage_load $lastmessageid
+   750 │   r236 = const 1
+   751 │   r237 = r235 - r236
+   752 │   r238 = call to_string(r237)
+   753 │   emit r238
+   754 │   emit_text T70
+   755 │   r239 = storage_load $lastmessageid
+   756 │   r240 = const 1
+   757 │   r241 = r239 + r240
+   758 │   r242 = call to_string(r241)
+   759 │   emit r242
+   760 │   emit_text T71
+   761 │   r243 = storage_load $lastmessageid
+   762 │   r244 = call to_string(r243)
+   763 │   emit r244
+   764 │   emit_text T72
+   765 │   r245 = storage_load $lastmessageid
+   766 │   r246 = const 1
+   767 │   r247 = r245 - r246
+   768 │   r248 = call to_string(r247)
+   769 │   emit r248
+   770 │   emit_text T69
+   771 │   r249 = storage_load $lastmessageid
+   772 │   r250 = call to_string(r249)
+   773 │   emit r250
+   774 │   emit_text T73
+
+    ; r0 ($출력) : Int
+    ; r1 (v1) : Unit
+    ; r2 (v2) : Unit
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool
+    ; r5 ($초점) : Int
+    ; r6 (v6) : Unit
+    ; r7 (v7) : Unit
+    ; r8 (v8) : Bool
+    ; r9 (v9) : Bool
+    ; r10 ($user) : String
+    ; r11 (v11) : Bool
+    ; r12 ($char) : String
+    ; r13 (v13) : Bool
+    ; r14 ($초점커스텀) : String
+    ; r15 ($세계관) : Int
+    ; r16 (v16) : Unit
+    ; r17 (v17) : Unit
+    ; r18 (v18) : Bool
+    ; r19 (v19) : Bool
+    ; r20 ($추적) : Int
+    ; r21 (v21) : Unit
+    ; r22 (v22) : Unit
+    ; r23 (v23) : Bool
+    ; r24 (v24) : Bool
+    ; r25 ($사칭) : Int
+    ; r26 (v26) : Int
+    ; r27 (v27) : Bool
+    ; r28 (v28) : Unit
+    ; r29 (v29) : Unit
+    ; r30 (v30) : Bool
+    ; r31 (v31) : Bool
+    ; r32 ($focus) : String
+    ; r33 ($lastmessageid) : Int
+    ; r34 (v34) : Int
+    ; r35 (v35) : Int
+    ; r36 (to_string(...)) : String
+    ; r37 ($lastmessageid) : Int
+    ; r38 (v38) : Int
+    ; r39 (v39) : Int
+    ; r40 (to_string(...)) : String
+    ; r41 ($추적) : Int
+    ; r42 (v42) : Unit
+    ; r43 (v43) : Unit
+    ; r44 (v44) : Bool
+    ; r45 (v45) : Bool
+    ; r46 ($인칭) : Int
+    ; r47 (v47) : Int
+    ; r48 (v48) : Bool
+    ; r49 (v49) : Unit
+    ; r50 (v50) : Unit
+    ; r51 (v51) : Bool
+    ; r52 (v52) : Bool
+    ; r53 ($focus) : String
+    ; r54 ($lastmessageid) : Int
+    ; r55 (v55) : Int
+    ; r56 (v56) : Int
+    ; r57 (to_string(...)) : String
+    ; r58 ($lastmessageid) : Int
+    ; r59 (v59) : Int
+    ; r60 (v60) : Int
+    ; r61 (to_string(...)) : String
+    ; r62 ($사칭) : Int
+    ; r63 (v63) : Int
+    ; r64 (v64) : Bool
+    ; r65 (v65) : Unit
+    ; r66 (v66) : Unit
+    ; r67 (v67) : Bool
+    ; r68 (v68) : Bool
+    ; r69 ($focus) : String
+    ; r70 ($focus) : String
+    ; r71 ($짚오일) : Int
+    ; r72 (v72) : Unit
+    ; r73 (v73) : Unit
+    ; r74 (v74) : Bool
+    ; r75 (v75) : Bool
+    ; r76 ($사칭) : Int
+    ; r77 (v77) : Unit
+    ; r78 (v78) : Unit
+    ; r79 (v79) : Bool
+    ; r80 (v80) : Bool
+    ; r81 ($시도) : Int
+    ; r82 (v82) : Unit
+    ; r83 (v83) : Unit
+    ; r84 (v84) : Bool
+    ; r85 (v85) : Bool
+    ; r86 ($focus) : String
+    ; r87 ($focus) : String
+    ; r88 ($focus) : String
+    ; r89 ($focus) : String
+    ; r90 (v90) : Bool
+    ; r91 ($시도) : Int
+    ; r92 (v92) : Unit
+    ; r93 (v93) : Unit
+    ; r94 (v94) : Bool
+    ; r95 (v95) : Bool
+    ; r96 ($focus) : String
+    ; r97 ($focus) : String
+    ; r98 ($focus) : String
+    ; r99 ($focus) : String
+    ; r100 ($focus) : String
+    ; r101 ($focus) : String
+    ; r102 (v102) : Bool
+    ; r103 ($시도) : Int
+    ; r104 (v104) : Unit
+    ; r105 (v105) : Unit
+    ; r106 (v106) : Bool
+    ; r107 (v107) : Bool
+    ; r108 ($focus) : String
+    ; r109 ($focus) : String
+    ; r110 ($focus) : String
+    ; r111 ($focus) : String
+    ; r112 ($시도) : Int
+    ; r113 (v113) : Unit
+    ; r114 (v114) : Unit
+    ; r115 (v115) : Bool
+    ; r116 (v116) : Bool
+    ; r117 ($캐릭터) : Int
+    ; r118 (v118) : Unit
+    ; r119 (v119) : Unit
+    ; r120 (v120) : Bool
+    ; r121 (v121) : Bool
+    ; r122 ($추적) : Int
+    ; r123 (v123) : Unit
+    ; r124 (v124) : Unit
+    ; r125 (v125) : Bool
+    ; r126 (v126) : Bool
+    ; r127 ($작가) : String
+    ; r128 ($전개) : Int
+    ; r129 (v129) : Unit
+    ; r130 (v130) : Unit
+    ; r131 (v131) : Bool
+    ; r132 (v132) : Bool
+    ; r133 (v133) : Bool
+    ; r134 (v134) : Bool
+    ; r135 (v135) : Bool
+    ; r136 (v136) : Bool
+    ; r137 ($길이) : Int
+    ; r138 (v138) : Unit
+    ; r139 (v139) : Unit
+    ; r140 (v140) : Bool
+    ; r141 (v141) : Bool
+    ; r142 (v142) : Bool
+    ; r143 (v143) : Bool
+    ; r144 (v144) : Bool
+    ; r145 (v145) : Bool
+    ; r146 ($언어) : Int
+    ; r147 (v147) : Unit
+    ; r148 (v148) : Unit
+    ; r149 (v149) : Bool
+    ; r150 (v150) : Bool
+    ; r151 (v151) : Bool
+    ; r152 (v152) : Bool
+    ; r153 (v153) : Bool
+    ; r154 ($잼현실) : Int
+    ; r155 (v155) : Unit
+    ; r156 (v156) : Unit
+    ; r157 (v157) : Bool
+    ; r158 (v158) : Bool
+    ; r159 ($focus) : String
+    ; r160 ($시도) : Int
+    ; r161 (v161) : Unit
+    ; r162 (v162) : Unit
+    ; r163 (v163) : Bool
+    ; r164 (v164) : Bool
+    ; r165 ($사칭) : Int
+    ; r166 (v166) : Int
+    ; r167 (v167) : Bool
+    ; r168 (v168) : Unit
+    ; r169 (v169) : Unit
+    ; r170 (v170) : Bool
+    ; r171 (v171) : Bool
+    ; r172 ($인칭) : Int
+    ; r173 (v173) : Unit
+    ; r174 (v174) : Unit
+    ; r175 (v175) : Bool
+    ; r176 (v176) : Bool
+    ; r177 ($focus) : String
+    ; r178 ($focus) : String
+    ; r179 (v179) : Bool
+    ; r180 ($focus) : String
+    ; r181 ($focus) : String
+    ; r182 (v182) : Bool
+    ; r183 ($focus) : String
+    ; r184 ($focus) : String
+    ; r185 ($사칭) : Int
+    ; r186 (v186) : Unit
+    ; r187 (v187) : Unit
+    ; r188 (v188) : Bool
+    ; r189 (v189) : Bool
+    ; r190 ($시도) : Int
+    ; r191 (v191) : Unit
+    ; r192 (v192) : Unit
+    ; r193 (v193) : Bool
+    ; r194 (v194) : Bool
+    ; r195 ($focus) : String
+    ; r196 ($focus) : String
+    ; r197 ($focus) : String
+    ; r198 ($focus) : String
+    ; r199 (v199) : Bool
+    ; r200 ($시도) : Int
+    ; r201 (v201) : Unit
+    ; r202 (v202) : Unit
+    ; r203 (v203) : Bool
+    ; r204 (v204) : Bool
+    ; r205 ($focus) : String
+    ; r206 ($focus) : String
+    ; r207 ($focus) : String
+    ; r208 ($focus) : String
+    ; r209 ($focus) : String
+    ; r210 ($focus) : String
+    ; r211 (v211) : Bool
+    ; r212 ($시도) : Int
+    ; r213 (v213) : Unit
+    ; r214 (v214) : Unit
+    ; r215 (v215) : Bool
+    ; r216 (v216) : Bool
+    ; r217 ($focus) : String
+    ; r218 ($focus) : String
+    ; r219 ($focus) : String
+    ; r220 ($focus) : String
+    ; r221 ($시도) : Int
+    ; r222 (v222) : Unit
+    ; r223 (v223) : Unit
+    ; r224 (v224) : Bool
+    ; r225 (v225) : Bool
+    ; r226 ($침묵) : Int
+    ; r227 (v227) : Unit
+    ; r228 (v228) : Unit
+    ; r229 (v229) : Bool
+    ; r230 (v230) : Bool
+    ; r231 ($lastmessageid) : Int
+    ; r232 (v232) : Int
+    ; r233 (v233) : Int
+    ; r234 (to_string(...)) : String
+    ; r235 ($lastmessageid) : Int
+    ; r236 (v236) : Int
+    ; r237 (v237) : Int
+    ; r238 (to_string(...)) : String
+    ; r239 ($lastmessageid) : Int
+    ; r240 (v240) : Int
+    ; r241 (v241) : Int
+    ; r242 (to_string(...)) : String
+    ; r243 ($lastmessageid) : Int
+    ; r244 (to_string(...)) : String
+    ; r245 ($lastmessageid) : Int
+    ; r246 (v246) : Int
+    ; r247 (v247) : Int
+    ; r248 (to_string(...)) : String
+    ; r249 ($lastmessageid) : Int
+    ; r250 (to_string(...)) : String
+
