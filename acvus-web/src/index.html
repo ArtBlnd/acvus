@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Acvus Playground</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #1a1a1a;
+      --surface: #222;
+      --border:  #333;
+      --text:    #d4d4d4;
+      --muted:   #555;
+      --accent:  #4ec9b0;
+      --error:   #f48771;
+      --ok:      #89d185;
+      --mono:    'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 9px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+    }
+
+    #status {
+      font-size: 11px;
+      color: var(--muted);
+      transition: color .15s;
+    }
+    #status.ok    { color: var(--ok); }
+    #status.error { color: var(--error); }
+
+    /* ── Main split ── */
+    .split {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Left column: template + context stacked ── */
+    .left-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-right: 1px solid var(--border);
+    }
+
+    .section {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .section.template { flex: 2; border-bottom: 1px solid var(--border); }
+    .section.context  { flex: 1; }
+
+    /* ── Right pane: MIR output ── */
+    .right-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .pane-label {
+      padding: 5px 12px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--muted);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    textarea {
+      flex: 1;
+      background: transparent;
+      color: var(--text);
+      border: none;
+      outline: none;
+      resize: none;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.65;
+      padding: 14px 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      tab-size: 2;
+    }
+
+    pre {
+      flex: 1;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.65;
+      padding: 14px 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      tab-size: 2;
+    }
+
+    pre.is-error { color: var(--error); }
+
+    .hint {
+      padding: 5px 12px 7px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    .hint code {
+      color: var(--accent);
+      font-family: var(--mono);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Acvus Playground</h1>
+  <span id="status">ready</span>
+</header>
+
+<div class="split">
+  <div class="left-col">
+    <div class="section template">
+      <div class="pane-label">Template</div>
+      <textarea id="source" spellcheck="false"
+        placeholder="{{ x in 0..3 }}{{ x | to_string }}{{/}}"></textarea>
+    </div>
+    <div class="section context">
+      <div class="pane-label">Context</div>
+      <textarea id="storage" spellcheck="false"
+        placeholder='{"name": "String", "items": {"List": "Int"}}'></textarea>
+      <div class="hint">
+        <code>"String"</code> <code>"Int"</code> <code>"Float"</code> <code>"Bool"</code>
+        &nbsp;·&nbsp; <code>{"List": "Int"}</code>
+        &nbsp;·&nbsp; <code>{"Object": {"k": "String"}}</code>
+        &nbsp;·&nbsp; <code>{"Tuple": ["String", "Int"]}</code>
+      </div>
+    </div>
+  </div>
+  <div class="right-pane">
+    <div class="pane-label">MIR</div>
+    <pre id="output"></pre>
+  </div>
+</div>
+
+<script>
+  const sourceEl  = document.getElementById('source');
+  const outputEl  = document.getElementById('output');
+  const statusEl  = document.getElementById('status');
+  const storageEl = document.getElementById('storage');
+
+  let timer = null;
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(doCompile, 350);
+  }
+
+  async function doCompile() {
+    const source = sourceEl.value;
+    if (!source.trim()) {
+      outputEl.textContent = '';
+      outputEl.className = '';
+      setStatus('ready', '');
+      return;
+    }
+
+    let storage = {};
+    const raw = storageEl.value.trim();
+    if (raw) {
+      try { storage = JSON.parse(raw); }
+      catch {
+        setStatus('invalid context JSON', 'error');
+        return;
+      }
+    }
+
+    setStatus('compiling…', '');
+    try {
+      const res  = await fetch('/api/compile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, storage }),
+      });
+      const data = await res.json();
+      if (data.ir) {
+        outputEl.textContent = data.ir;
+        outputEl.className = '';
+        setStatus('ok', 'ok');
+      } else {
+        outputEl.textContent = data.error ?? 'unknown error';
+        outputEl.className = 'is-error';
+        setStatus('error', 'error');
+      }
+    } catch (e) {
+      outputEl.textContent = 'server unreachable: ' + e.message;
+      outputEl.className = 'is-error';
+      setStatus('error', 'error');
+    }
+  }
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls;
+  }
+
+  sourceEl.addEventListener('input', schedule);
+  storageEl.addEventListener('input', schedule);
+</script>
+</body>
+</html>

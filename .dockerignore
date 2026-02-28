@@ -1,0 +1,6 @@
+target/
+.git/
+.claude/
+*.md
+wit/
+acvus-mir-test/tests/snapshots/
