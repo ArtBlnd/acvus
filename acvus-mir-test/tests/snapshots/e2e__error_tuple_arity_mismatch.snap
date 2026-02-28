@@ -1,0 +1,7 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 329
+expression: result.unwrap_err()
+---
+[0..23] pattern type (?0, ?1, ?2) incompatible with source type (Int, Int)
+[26..27] undefined variable `a`
