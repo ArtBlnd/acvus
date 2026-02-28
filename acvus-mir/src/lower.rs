@@ -1415,17 +1415,10 @@ impl Lowerer {
                 }
             }
             Expr::Ident {
-                name,
                 is_storage_ref: true,
                 ..
             } => {
-                let scoped = format!("${name}");
-                if !bound.contains(&scoped) && !seen.contains(&scoped) {
-                    if self.lookup_var(&scoped).is_some() {
-                        seen.insert(scoped.clone());
-                        free.push(scoped);
-                    }
-                }
+                // Storage refs resolve via StorageLoad at runtime — no capture needed.
             }
             Expr::BinaryOp { left, right, .. } => {
                 self.collect_free_vars(left, bound, free, seen);
