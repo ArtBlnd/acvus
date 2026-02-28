@@ -1,41 +1,33 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 315
 expression: ir
 ---
 === main ===
      0 │   r0 = storage_load $data
-     1 │   r1 = iter_init r0
-     2 │ L0:
-     3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L2 else L3
-     5 │ L3:
-     6 │ L4:
-     7 │   r4 = const true
-     8 │   r5 = r2.0
-     9 │   r6 = const true
-    10 │   r7 = r4 == r6
-    11 │   r8 = r2.1
-    12 │   r9 = const true
-    13 │   r10 = test has_key(r8, "x")
-    14 │   r11 = r8.x
-    15 │   r12 = const true
-    16 │   r13 = r9 == r12
-    17 │   r14 = r7 == r13
-    18 │   jump_if r14 then L6 else L5
-    19 │ L6:
-    20 │   r15 = r2.0
-    21 │   r16 = r2.1
-    22 │   r17 = r16.x
-    23 │   emit r15
-    24 │   jump L0
-    25 │ L5:
-    26 │   jump L0
-    27 │ L2:
-    28 │ L1:
+     1 │ L2:
+     2 │   r1 = const true
+     3 │   r2 = r0.0
+     4 │   r3 = const true
+     5 │   r4 = r1 == r3
+     6 │   r5 = r0.1
+     7 │   r6 = const true
+     8 │   r7 = test has_key(r5, "x")
+     9 │   r8 = r5.x
+    10 │   r9 = const true
+    11 │   r10 = r6 == r9
+    12 │   r11 = r4 == r10
+    13 │   jump_if r11 then L3 else L1
+    14 │ L3:
+    15 │   r12 = r0.0
+    16 │   r13 = r0.1
+    17 │   r14 = r13.x
+    18 │   emit r12
+    19 │   jump L0
+    20 │ L1:
+    21 │ L0:
 
     ; r0 ($data) : (String, {x: Int})
-    ; r1 (v1) : Unit
+    ; r1 (v1) : Bool
     ; r2 (v2) : Unit
     ; r3 (v3) : Bool
     ; r4 (v4) : Bool
@@ -45,10 +37,7 @@ expression: ir
     ; r8 (v8) : Unit
     ; r9 (v9) : Bool
     ; r10 (v10) : Bool
-    ; r11 (v11) : Unit
-    ; r12 (v12) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (v14) : Bool
-    ; r15 (label) : Unit
-    ; r16 (v16) : Unit
-    ; r17 (x) : Unit
+    ; r11 (v11) : Bool
+    ; r12 (label) : Unit
+    ; r13 (v13) : Unit
+    ; r14 (x) : Unit

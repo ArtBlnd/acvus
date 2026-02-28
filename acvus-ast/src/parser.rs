@@ -53,7 +53,7 @@ enum BodyTerminator {
     CloseBlock(Span, Option<IndentModifier>),
     /// We hit `{{_}}`.
     CatchAll(Span),
-    /// We hit a `{{ pattern }}` multi-arm continuation (detected by `is_pattern_expr`).
+    /// We hit a `{{ pattern = }}` multi-arm continuation.
     MultiArm { expr: Expr, tag_span: Span },
 }
 
@@ -122,22 +122,27 @@ impl<'a> TreeBuilder<'a> {
 
                     match tag_content {
                         TagContent::Expr(expr) => {
-                            // Inside a match block, bare expressions that can
-                            // only be patterns (literals, lists, ranges, objects)
-                            // are continuation arms.
-                            if in_match && is_pattern_expr(&expr) {
-                                return Ok((
-                                    nodes,
-                                    BodyTerminator::MultiArm {
-                                        expr,
-                                        tag_span,
-                                    },
-                                ));
-                            }
                             nodes.push(Node::InlineExpr {
                                 expr,
                                 span: tag_span,
                             });
+                        }
+                        TagContent::ContinuationArm { pattern, .. } => {
+                            if !in_match {
+                                return Err(ParseError::new(
+                                    ParseErrorKind::InvalidPattern(
+                                        "continuation arm `{{ pattern = }}` outside match block".into(),
+                                    ),
+                                    tag_span,
+                                ));
+                            }
+                            return Ok((
+                                nodes,
+                                BodyTerminator::MultiArm {
+                                    expr: pattern,
+                                    tag_span,
+                                },
+                            ));
                         }
                         TagContent::Binding { lhs, rhs, .. } => {
                             let pattern = expr_to_pattern(&lhs)?;
@@ -366,19 +371,6 @@ fn convert_lalrpop_error(
     }
 }
 
-/// Check if an expression can only be a pattern, not an emittable value.
-/// Returns true for literals, lists, ranges, and objects.
-fn is_pattern_expr(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Literal { .. }
-            | Expr::List { .. }
-            | Expr::Range { .. }
-            | Expr::Object { .. }
-            | Expr::Tuple { .. }
-    )
-}
-
 /// Validate that a pattern is irrefutable (always matches).
 /// Only Binding, Object (with irrefutable sub-patterns), and Tuple (with irrefutable sub-patterns)
 /// are allowed. Literals, Ranges, and Lists are refutable.
@@ -558,8 +550,8 @@ mod tests {
 
     #[test]
     fn parse_multi_arm() {
-        // Bare literal inside match block body is a continuation arm.
-        let t = parse(r#"{{ "admin" = role }}admin{{ "user" }}user{{_}}guest{{/}}"#).unwrap();
+        // `{{ pattern = }}` is a continuation arm.
+        let t = parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#).unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 2);

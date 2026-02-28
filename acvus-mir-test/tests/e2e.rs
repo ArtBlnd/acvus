@@ -92,9 +92,8 @@ fn match_literal_filter() {
 #[test]
 fn multi_arm_match() {
     let storage = HashMap::from([("role".into(), Ty::String)]);
-    // Trailing comma for continuation arms: {{ "user", }}
     let ir = compile_to_ir(
-        r#"{{ "admin" = $role }}admin{{ "user" }}user{{_}}guest{{/}}"#,
+        r#"{{ "admin" = $role }}admin{{ "user" = }}user{{_}}guest{{/}}"#,
         storage,
         HashMap::new(),
     )
@@ -106,7 +105,7 @@ fn multi_arm_match() {
 fn iteration_over_list() {
     // Use object destructuring to iterate and extract name.
     let ir = compile_to_ir(
-        r#"{{ { name, } = $users }}{{ name }}{{/}}"#,
+        r#"{{ { name, } in $users }}{{ name }}{{/}}"#,
         users_list_storage(),
         HashMap::new(),
     )
@@ -131,7 +130,7 @@ fn nested_match() {
     )]);
     // Use object destructuring for both outer and inner iterations.
     let ir = compile_to_ir(
-        r#"{{ { name, posts, } = $users }}{{ { title, } = posts }}{{ title }}{{/}}{{/}}"#,
+        r#"{{ { name, posts, } in $users }}{{ { title, } in posts }}{{ title }}{{/}}{{/}}"#,
         storage,
         HashMap::new(),
     )
@@ -190,9 +189,8 @@ fn range_iteration() {
 #[test]
 fn range_pattern() {
     let storage = HashMap::from([("age".into(), Ty::Int)]);
-    // Trailing comma for continuation arms.
     let ir = compile_to_ir(
-        r#"{{ 0..10 = $age }}child{{ 10..=19 }}teen{{_}}adult{{/}}"#,
+        r#"{{ 0..10 = $age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
         storage,
         HashMap::new(),
     )
@@ -299,7 +297,7 @@ fn tuple_pattern_literal_match() {
         ("b".into(), Ty::Int),
     ]);
     let ir = compile_to_ir(
-        r#"{{ (0, 1) = ($a, $b) }}zero-one{{ (1, _) }}one-any{{_}}other{{/}}"#,
+        r#"{{ (0, 1) = ($a, $b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
         storage,
         HashMap::new(),
     )

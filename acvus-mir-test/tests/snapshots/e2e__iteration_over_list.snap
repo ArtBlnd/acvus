@@ -7,31 +7,16 @@ expression: ir
      1 │   r1 = iter_init r0
      2 │ L0:
      3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L2 else L3
+     4 │   jump_if r3 then L1 else L3
      5 │ L3:
-     6 │ L4:
-     7 │   r4 = const true
-     8 │   r5 = test has_key(r2, "name")
-     9 │   r6 = r2.name
-    10 │   r7 = const true
-    11 │   r8 = r4 == r7
-    12 │   jump_if r8 then L6 else L5
-    13 │ L6:
-    14 │   r9 = r2.name
-    15 │   emit r9
-    16 │   jump L0
-    17 │ L5:
-    18 │   jump L0
-    19 │ L2:
-    20 │ L1:
+     6 │   r4 = r2.name
+     7 │   emit r4
+     8 │   jump L0
+     9 │ L1:
+    10 │ L2:
 
     ; r0 ($users) : List<{age: Int, name: String}>
     ; r1 (v1) : Unit
     ; r2 (v2) : Unit
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v5) : Bool
-    ; r6 (v6) : Unit
-    ; r7 (v7) : Bool
-    ; r8 (v8) : Bool
-    ; r9 (name) : Unit
+    ; r4 (name) : Unit

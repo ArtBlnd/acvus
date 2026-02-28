@@ -4,44 +4,34 @@ expression: ir
 ---
 === main ===
      0 │   r0 = storage_load $user
-     1 │   r1 = iter_init r0
-     2 │ L0:
-     3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L2 else L3
-     5 │ L3:
-     6 │ L4:
-     7 │   r4 = const true
-     8 │   r5 = test has_key(r2, "name")
-     9 │   r6 = r2.name
-    10 │   r7 = const true
-    11 │   r8 = r4 == r7
-    12 │   r9 = test has_key(r2, "age")
-    13 │   r10 = r2.age
-    14 │   r11 = const true
-    15 │   r12 = r8 == r11
-    16 │   jump_if r12 then L6 else L5
-    17 │ L6:
-    18 │   r13 = r2.name
-    19 │   r14 = r2.age
-    20 │   emit r13
-    21 │   jump L0
-    22 │ L5:
-    23 │   jump L0
-    24 │ L2:
-    25 │ L1:
+     1 │ L2:
+     2 │   r1 = const true
+     3 │   r2 = test has_key(r0, "name")
+     4 │   r3 = r0.name
+     5 │   r4 = const true
+     6 │   r5 = r1 == r4
+     7 │   r6 = test has_key(r0, "age")
+     8 │   r7 = r0.age
+     9 │   r8 = const true
+    10 │   r9 = r5 == r8
+    11 │   jump_if r9 then L3 else L1
+    12 │ L3:
+    13 │   r10 = r0.name
+    14 │   r11 = r0.age
+    15 │   emit r10
+    16 │   jump L0
+    17 │ L1:
+    18 │ L0:
 
     ; r0 ($user) : {age: Int, email: String, name: String}
-    ; r1 (v1) : Unit
-    ; r2 (v2) : Unit
-    ; r3 (v3) : Bool
+    ; r1 (v1) : Bool
+    ; r2 (v2) : Bool
+    ; r3 (v3) : Unit
     ; r4 (v4) : Bool
     ; r5 (v5) : Bool
-    ; r6 (v6) : Unit
-    ; r7 (v7) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (v7) : Unit
     ; r8 (v8) : Bool
     ; r9 (v9) : Bool
-    ; r10 (v10) : Unit
-    ; r11 (v11) : Bool
-    ; r12 (v12) : Bool
-    ; r13 (name) : Unit
-    ; r14 (age) : Unit
+    ; r10 (name) : Unit
+    ; r11 (age) : Unit

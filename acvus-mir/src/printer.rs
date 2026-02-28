@@ -416,14 +416,14 @@ mod tests {
     #[test]
     fn print_match_block() {
         let storage = HashMap::from([("name".into(), Ty::String)]);
-        // Use a literal pattern to trigger full match block with iteration.
+        // Use a literal pattern to trigger full match block (no iteration).
         let out = compile_and_dump(
             r#"{{ true = $name == "test" }}matched{{/}}"#,
             storage,
             HashMap::new(),
         );
-        assert!(out.contains("iter_init"));
-        assert!(out.contains("iter_next"));
+        assert!(!out.contains("iter_init"));
+        assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
         assert!(out.contains("emit_text T"));
     }
@@ -483,7 +483,7 @@ mod tests {
             ])))),
         )]);
         let out = compile_and_dump(
-            r#"{{ { name, } = $users }}{{ name }}{{/}}"#,
+            r#"{{ { name, } in $users }}{{ name }}{{/}}"#,
             storage,
             HashMap::new(),
         );

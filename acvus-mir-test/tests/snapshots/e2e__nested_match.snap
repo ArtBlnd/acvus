@@ -7,69 +7,31 @@ expression: ir
      1 │   r1 = iter_init r0
      2 │ L0:
      3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L2 else L3
+     4 │   jump_if r3 then L1 else L3
      5 │ L3:
-     6 │ L4:
-     7 │   r4 = const true
-     8 │   r5 = test has_key(r2, "name")
-     9 │   r6 = r2.name
-    10 │   r7 = const true
-    11 │   r8 = r4 == r7
-    12 │   r9 = test has_key(r2, "posts")
-    13 │   r10 = r2.posts
-    14 │   r11 = const true
-    15 │   r12 = r8 == r11
-    16 │   jump_if r12 then L6 else L5
+     6 │   r4 = r2.name
+     7 │   r5 = r2.posts
+     8 │   r6 = iter_init r5
+     9 │ L4:
+    10 │   r7, r8 = iter_next r6
+    11 │   jump_if r8 then L5 else L7
+    12 │ L7:
+    13 │   r9 = r7.title
+    14 │   emit r9
+    15 │   jump L4
+    16 │ L5:
     17 │ L6:
-    18 │   r13 = r2.name
-    19 │   r14 = r2.posts
-    20 │   r15 = iter_init r14
-    21 │ L7:
-    22 │   r16, r17 = iter_next r15
-    23 │   jump_if r17 then L9 else L10
-    24 │ L10:
-    25 │ L11:
-    26 │   r18 = const true
-    27 │   r19 = test has_key(r16, "title")
-    28 │   r20 = r16.title
-    29 │   r21 = const true
-    30 │   r22 = r18 == r21
-    31 │   jump_if r22 then L13 else L12
-    32 │ L13:
-    33 │   r23 = r16.title
-    34 │   emit r23
-    35 │   jump L7
-    36 │ L12:
-    37 │   jump L7
-    38 │ L9:
-    39 │ L8:
-    40 │   jump L0
-    41 │ L5:
-    42 │   jump L0
-    43 │ L2:
-    44 │ L1:
+    18 │   jump L0
+    19 │ L1:
+    20 │ L2:
 
     ; r0 ($users) : List<{name: String, posts: List<{title: String}>}>
     ; r1 (v1) : Unit
     ; r2 (v2) : Unit
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v5) : Bool
+    ; r4 (name) : Unit
+    ; r5 (posts) : Unit
     ; r6 (v6) : Unit
-    ; r7 (v7) : Bool
+    ; r7 (v7) : Unit
     ; r8 (v8) : Bool
-    ; r9 (v9) : Bool
-    ; r10 (v10) : Unit
-    ; r11 (v11) : Bool
-    ; r12 (v12) : Bool
-    ; r13 (name) : Unit
-    ; r14 (posts) : Unit
-    ; r15 (v15) : Unit
-    ; r16 (v16) : Unit
-    ; r17 (v17) : Bool
-    ; r18 (v18) : Bool
-    ; r19 (v19) : Bool
-    ; r20 (v20) : Unit
-    ; r21 (v21) : Bool
-    ; r22 (v22) : Bool
-    ; r23 (title) : Unit
+    ; r9 (title) : Unit

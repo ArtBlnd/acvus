@@ -28,20 +28,26 @@ CloseBlock   = "{{/}}" | "{{/+" DIGITS "}}" | "{{/-" DIGITS "}}"
 Segment 시퀀스에서 AST를 구축한다:
 
 ```
-Node         = Text | Comment | InlineExpr | MatchBlock
+Node         = Text | Comment | InlineExpr | MatchBlock | IterBlock
 
-InlineExpr   = ExprTag where content has no "="
-             = ExprTag where content is not a pattern-only expression
+InlineExpr   = ExprTag where content has no "=" or "in"
 
 MatchBlock   = ExprTag("pattern = expr") Body Arm* CatchAll? CloseBlock
+IterBlock    = ExprTag("pattern in expr") Body CatchAll? CloseBlock
 
-Arm          = ExprTag(pattern-only) Body      ← multi-arm continuation
+Arm          = ExprTag("pattern =") Body       ← multi-arm continuation
 Body         = Node*
 ```
 
-**Multi-arm 감지**: match 블럭 내부에서 `{{ expr }}`이 나타날 때, `expr`이 pattern-only expression이면 continuation arm으로 취급된다. pattern-only expression: 리터럴, 리스트, 레인지, 오브젝트, 튜플.
+**MatchBlock vs IterBlock**:
+- `=` (MatchBlock): 단일 값에 대한 패턴 매칭. 이터레이션 없이 source 값을 직접 패턴에 대조한다.
+- `in` (IterBlock): source를 이터레이터로 변환하여, 각 원소에 대해 바디를 반복 실행한다.
+
+**Multi-arm 감지**: match 블럭 내부에서 `{{ pattern = }}`이 나타나면 continuation arm으로 취급된다. `=` 뒤에 expression이 없으면 continuation arm, 있으면 binding이다. Multi-arm은 `=` (MatchBlock)에서만 사용 가능하다.
 
 **변수 바인딩**: `{{ x = expr }}`에서 LHS가 단순 변수(`Binding` 패턴)이면 body-less — `{{/}}` 불필요.
+
+**Iteration 패턴**: `{{ pattern in expr }}`의 패턴은 irrefutable해야 한다 (변수, 오브젝트 destructuring, 튜플 destructuring 등). 리터럴 패턴은 사용 불가.
 
 ---
 
@@ -50,7 +56,9 @@ Body         = Node*
 LALRPOP 기반. 연산자 우선순위 (낮은 → 높은):
 
 ```
-TagContent   = Expr "=" Expr        ← binding
+TagContent   = Expr "=" Expr        ← binding / pattern matching
+             | Expr "="             ← continuation arm
+             | Expr "in" Expr       ← iteration
              | Expr                  ← inline expression
 
 Expr         = LambdaExpr
@@ -159,6 +167,7 @@ TuplePatternElem = Pattern | "_"           ← wildcard
 | `!` | 논리 부정 |
 | `==` `!=` `<` `>` `<=` `>=` | 비교 연산자 |
 | `=` | 바인딩 (패턴 매칭) |
+| `in` | 이터레이션 |
 | `->` | 람다 화살표 |
 | `..` `..=` `=..` | 레인지 연산자 |
 | `.` | 필드 접근 |

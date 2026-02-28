@@ -53,6 +53,8 @@ extern {
 pub TagContent: TagContent = {
     <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>
         TagContent::Binding { lhs, rhs, span: Span::new(l, r) },
+    <l:@L> <lhs:Expr> "=" <r:@R> =>
+        TagContent::ContinuationArm { pattern: lhs, span: Span::new(l, r) },
     <l:@L> <lhs:Expr> "in" <rhs:Expr> <r:@R> =>
         TagContent::Iteration { lhs, rhs, span: Span::new(l, r) },
     <e:Expr> =>

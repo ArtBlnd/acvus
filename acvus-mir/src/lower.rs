@@ -712,73 +712,31 @@ impl Lowerer {
 
         let source_reg = self.lower_expr(&mb.source);
 
-        // Initialize iterator over the source.
-        let iter_reg = self.alloc_val();
-        self.set_val_type(iter_reg, Ty::Unit);
-        self.emit_inst(
-            mb.span,
-            InstKind::IterInit {
-                dst: iter_reg,
-                src: source_reg,
-            },
-        );
-
-        let loop_label = self.alloc_label();
+        // Match is single-value pattern matching (no iteration).
+        // Try each arm against the source value; first match wins.
         let end_label = self.alloc_label();
         let catch_all_label = self.alloc_label();
 
-        // Loop header.
-        self.emit_inst(mb.span, InstKind::BlockLabel { label: loop_label, params: vec![] });
-
-        let value_reg = self.alloc_val();
-        let done_reg = self.alloc_val();
-        self.set_val_type(value_reg, Ty::Unit);
-        self.set_val_type(done_reg, Ty::Bool);
-        self.emit_inst(
-            mb.span,
-            InstKind::IterNext {
-                dst_value: value_reg,
-                dst_done: done_reg,
-                iter: iter_reg,
-            },
-        );
-
-        // If done, jump to catch-all.
-        let body_start = self.alloc_label();
-        self.emit_inst(
-            mb.span,
-            InstKind::JumpIf {
-                cond: done_reg,
-                then_label: catch_all_label,
-                then_args: vec![],
-                else_label: body_start,
-                else_args: vec![],
-            },
-        );
-        self.emit_inst(mb.span, InstKind::BlockLabel { label: body_start, params: vec![] });
-
-        // Try each arm.
         let mut arm_labels: Vec<Label> = Vec::new();
         for _ in &mb.arms {
             arm_labels.push(self.alloc_label());
         }
-        let next_iter_label = self.alloc_label();
 
         for (i, arm) in mb.arms.iter().enumerate() {
             let arm_label = arm_labels[i];
             let next_label = if i + 1 < arm_labels.len() {
                 arm_labels[i + 1]
             } else {
-                next_iter_label
+                catch_all_label
             };
 
             self.emit_inst(arm.tag_span, InstKind::BlockLabel { label: arm_label, params: vec![] });
             self.push_scope();
 
-            // Test pattern.
-            let matched = self.lower_pattern_test(&arm.pattern, value_reg, arm.tag_span);
+            // Test pattern against source value.
+            let matched = self.lower_pattern_test(&arm.pattern, source_reg, arm.tag_span);
 
-            // If pattern didn't match, try next arm.
+            // If pattern didn't match, try next arm (or catch-all).
             let arm_body_label = self.alloc_label();
             self.emit_inst(
                 arm.tag_span,
@@ -793,7 +751,7 @@ impl Lowerer {
             self.emit_inst(arm.tag_span, InstKind::BlockLabel { label: arm_body_label, params: vec![] });
 
             // Bind pattern variables.
-            self.lower_pattern_bind(&arm.pattern, value_reg, arm.tag_span);
+            self.lower_pattern_bind(&arm.pattern, source_reg, arm.tag_span);
 
             // Lower arm body (use indent-adjusted body if available).
             let body = adjusted_arm_bodies
@@ -805,13 +763,9 @@ impl Lowerer {
             // Hoist body-less variable bindings to the outer scope.
             self.hoist_bodyless_bindings();
             self.pop_scope();
-            // After body, jump back to loop to get next item.
-            self.emit_inst(arm.tag_span, InstKind::Jump { label: loop_label, args: vec![] });
+            // After body, jump to end (no loop).
+            self.emit_inst(arm.tag_span, InstKind::Jump { label: end_label, args: vec![] });
         }
-
-        // No arm matched, go to next iteration.
-        self.emit_inst(mb.span, InstKind::BlockLabel { label: next_iter_label, params: vec![] });
-        self.emit_inst(mb.span, InstKind::Jump { label: loop_label, args: vec![] });
 
         // Catch-all block.
         self.emit_inst(mb.span, InstKind::BlockLabel { label: catch_all_label, params: vec![] });
@@ -1557,19 +1511,26 @@ mod tests {
     #[test]
     fn lower_match_block() {
         let storage = HashMap::from([("name".into(), Ty::String)]);
-        // Use a non-binding pattern to trigger full match block with iteration.
+        // Use a non-binding pattern to trigger full match block (no iteration).
         let module = lower_with(
             r#"{{ true = $name == "test" }}matched{{/}}"#,
             storage,
             HashMap::new(),
         );
-        // Should have IterInit, IterNext, and control flow instructions.
+        // Match block should NOT have IterInit/IterNext — it's single-value matching.
         let has_iter_init = module
             .main
             .insts
             .iter()
             .any(|i| matches!(&i.kind, InstKind::IterInit { .. }));
-        assert!(has_iter_init);
+        assert!(!has_iter_init);
+        // Should have pattern test and conditional jump.
+        let has_jump_if = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::JumpIf { .. }));
+        assert!(has_jump_if);
     }
 
     #[test]

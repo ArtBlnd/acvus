@@ -10,6 +10,8 @@ pub enum TagContent {
     Expr(Expr),
     /// A binding: `{{ lhs = rhs }}`.
     Binding { lhs: Expr, rhs: Expr, span: Span },
+    /// A continuation arm: `{{ pattern = }}`.
+    ContinuationArm { pattern: Expr, span: Span },
     /// An iteration: `{{ lhs in rhs }}`.
     Iteration { lhs: Expr, rhs: Expr, span: Span },
 }
