@@ -1,0 +1,22 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== texts ===
+  T0 = "on"
+  T1 = "off"
+
+=== main ===
+     0 │   r0 = storage_load $flag
+     1 │ L2:
+     2 │   r1 = test r0 == true
+     3 │   jump_if r1 then L3 else L1
+     4 │ L3:
+     5 │   emit_text T0
+     6 │   jump L0
+     7 │ L1:
+     8 │   emit_text T1
+     9 │ L0:
+
+    ; r0 ($flag) : Bool
+    ; r1 (v1) : Bool

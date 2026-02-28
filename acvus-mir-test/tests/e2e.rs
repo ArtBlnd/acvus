@@ -1199,6 +1199,54 @@ fn error_storage_write_type_mismatch() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
+// ── Edge case: float arithmetic in lambda ────────────────────────
+
+#[test]
+fn lambda_float_arithmetic() {
+    let storage = HashMap::from([("vals".into(), Ty::List(Box::new(Ty::Float)))]);
+    let ir = compile_to_ir(
+        r#"{{ x = $vals | map(v -> v * 2.0) }}{{ x | to_string }}"#,
+        storage,
+        HashMap::new(),
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+// ── Edge case: bool literal as match source ─────────────────────
+
+#[test]
+fn match_bool_literal() {
+    let storage = HashMap::from([("flag".into(), Ty::Bool)]);
+    let ir = compile_to_ir(
+        r#"{{ true = $flag }}on{{_}}off{{/}}"#,
+        storage,
+        HashMap::new(),
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+// ── Edge case: nested pipe with filter on object field ──────────
+
+#[test]
+fn filter_object_field_equality() {
+    let storage = HashMap::from([(
+        "users".into(),
+        Ty::List(Box::new(Ty::Object(BTreeMap::from([
+            ("name".into(), Ty::String),
+            ("active".into(), Ty::Bool),
+        ])))),
+    )]);
+    let ir = compile_to_ir(
+        r#"{{ x = $users | filter(u -> u.active) }}{{ x | to_string }}"#,
+        storage,
+        HashMap::new(),
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
 // ── Edge case: extern function with object return ───────────────
 
 #[test]

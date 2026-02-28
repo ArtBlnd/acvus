@@ -1,0 +1,22 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $users
+     1 │   r1 = closure L0 []
+     2 │   r2 = call filter(r0, r1)
+     3 │   r3 = call to_string(r2)
+     4 │   emit r3
+
+    ; r0 ($users) : List<{active: Bool, name: String}>
+    ; r1 (v1) : Fn({active: Bool, name: String}) -> Bool
+    ; r2 (filter(...)) : List<{active: Bool, name: String}>
+    ; r3 (to_string(...)) : String
+
+=== closure L0 (u) ===
+     0 │   r1 = r0.active
+     1 │   return r1
+
+    ; r0 (v0) : {active: Bool, name: String}
+    ; r1 (active) : Bool
