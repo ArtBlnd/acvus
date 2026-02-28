@@ -200,12 +200,40 @@ impl Lowerer {
         self.body.val_types.insert(val, ty);
     }
 
-    fn set_origin(&mut self, val: Val, origin: ValOrigin) {
-        self.body.debug.set(val, origin);
+    fn tuple_elem_type(&self, tuple_val: Val, index: usize) -> Ty {
+        if let Some(Ty::Tuple(elems)) = self.body.val_types.get(&tuple_val) {
+            elems.get(index).cloned().unwrap_or(Ty::Unit)
+        } else {
+            Ty::Unit
+        }
     }
 
-    fn is_storage(&self, name: &str) -> bool {
-        self.storage_names.contains(name)
+    fn list_elem_type(&self, list_val: Val) -> Ty {
+        if let Some(Ty::List(elem)) = self.body.val_types.get(&list_val) {
+            elem.as_ref().clone()
+        } else {
+            Ty::Unit
+        }
+    }
+
+    fn object_field_type(&self, object_val: Val, key: &str) -> Ty {
+        if let Some(Ty::Object(fields)) = self.body.val_types.get(&object_val) {
+            fields.get(key).cloned().unwrap_or(Ty::Unit)
+        } else {
+            Ty::Unit
+        }
+    }
+
+    fn iterable_elem_type(&self, src_val: Val) -> Ty {
+        match self.body.val_types.get(&src_val) {
+            Some(Ty::List(elem)) => elem.as_ref().clone(),
+            Some(Ty::Range) => Ty::Int,
+            _ => Ty::Unit,
+        }
+    }
+
+    fn set_origin(&mut self, val: Val, origin: ValOrigin) {
+        self.body.debug.set(val, origin);
     }
 
     fn type_of_span(&self, span: Span) -> Ty {
@@ -426,6 +454,12 @@ impl Lowerer {
                     let reg = Val(i as u32);
                     sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
                     sub_scopes[0].insert(name.clone(), reg);
+                    // Copy capture type from outer body.
+                    if let Some(outer_reg) = capture_regs.get(i) {
+                        if let Some(ty) = self.body.val_types.get(outer_reg) {
+                            sub_body.val_types.insert(reg, ty.clone());
+                        }
+                    }
                 }
 
                 // Params follow captures.
@@ -435,6 +469,9 @@ impl Lowerer {
                     let reg = Val(param_start + i as u32);
                     sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
                     sub_scopes[0].insert(p.name.clone(), reg);
+                    // Set param type from typeck.
+                    let ty = self.type_of_span(p.span);
+                    sub_body.val_types.insert(reg, ty);
                 }
 
                 // We need to lower the body in context of the sub-body.
@@ -678,8 +715,9 @@ impl Lowerer {
                     span: pat_span,
                 } => {
                     let src = self.lower_expr(&mb.source);
-                    if *is_storage_ref && self.is_storage(name) {
-                        // Storage write.
+                    if *is_storage_ref {
+                        // Storage write — register name dynamically if needed.
+                        self.storage_names.insert(name.clone());
                         self.emit_inst(
                             *pat_span,
                             InstKind::StorageStore {
@@ -825,7 +863,7 @@ impl Lowerer {
 
         let value_reg = self.alloc_val();
         let done_reg = self.alloc_val();
-        self.set_val_type(value_reg, Ty::Unit);
+        self.set_val_type(value_reg, self.iterable_elem_type(source_reg));
         self.set_val_type(done_reg, Ty::Bool);
         self.emit_inst(
             ib.span,
@@ -933,17 +971,15 @@ impl Lowerer {
             } => {
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Bool);
-                if self.is_storage(name) {
-                    // Storage write in pattern position — always matches, store value.
-                    self.emit_inst(
-                        span,
-                        InstKind::StorageStore {
-                            name: name.clone(),
-                            src: src_reg,
-                        },
-                    );
-                }
-                // $name not in storage → local variable, handled in pattern_bind.
+                // Storage write in pattern position — always matches, store value.
+                self.storage_names.insert(name.clone());
+                self.emit_inst(
+                    span,
+                    InstKind::StorageStore {
+                        name: name.clone(),
+                        src: src_reg,
+                    },
+                );
                 // Always matches.
                 self.emit_inst(
                     span,
@@ -1010,9 +1046,10 @@ impl Lowerer {
 
                 // Check each head element.
                 let mut all_ok = len_ok;
+                let elem_ty = self.list_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
                     let elem = self.alloc_val();
-                    self.set_val_type(elem, Ty::Unit);
+                    self.set_val_type(elem, elem_ty.clone());
                     self.emit_inst(
                         span,
                         InstKind::ListIndex {
@@ -1040,7 +1077,7 @@ impl Lowerer {
                 // Check each tail element (indexed from end).
                 for (i, p) in tail.iter().enumerate() {
                     let elem = self.alloc_val();
-                    self.set_val_type(elem, Ty::Unit);
+                    self.set_val_type(elem, elem_ty.clone());
                     self.emit_inst(
                         span,
                         InstKind::ListIndex {
@@ -1117,7 +1154,7 @@ impl Lowerer {
 
                     // Get the field value.
                     let field_val = self.alloc_val();
-                    self.set_val_type(field_val, Ty::Unit);
+                    self.set_val_type(field_val, self.object_field_type(src_reg, key));
                     self.emit_inst(
                         span,
                         InstKind::ObjectGet {
@@ -1190,7 +1227,7 @@ impl Lowerer {
                         }
                         TuplePatternElem::Pattern(pat) => {
                             let field_val = self.alloc_val();
-                            self.set_val_type(field_val, Ty::Unit);
+                            self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
                             self.emit_inst(
                                 span,
                                 InstKind::TupleIndex {
@@ -1248,10 +1285,10 @@ impl Lowerer {
                 is_storage_ref,
                 ..
             } => {
-                if *is_storage_ref && self.is_storage(name) {
-                    self.set_origin(src_reg, ValOrigin::Storage(name.clone()));
+                if *is_storage_ref {
+                    // Storage path — value already stored via pattern_test or body-less binding.
+                    // No local define; lookup will fall through to storage_load.
                 } else {
-                    // Local variable (bare name or $name not in storage).
                     self.set_origin(src_reg, ValOrigin::Named(name.clone()));
                     self.define_var(name, src_reg);
                 }
@@ -1267,9 +1304,10 @@ impl Lowerer {
                 tail,
                 ..
             } => {
+                let elem_ty = self.list_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
                     let elem = self.alloc_val();
-                    self.set_val_type(elem, Ty::Unit);
+                    self.set_val_type(elem, elem_ty.clone());
                     self.emit_inst(
                         span,
                         InstKind::ListIndex {
@@ -1289,7 +1327,7 @@ impl Lowerer {
 
                 for (i, p) in tail.iter().enumerate() {
                     let elem = self.alloc_val();
-                    self.set_val_type(elem, Ty::Unit);
+                    self.set_val_type(elem, elem_ty.clone());
                     self.emit_inst(
                         span,
                         InstKind::ListIndex {
@@ -1305,7 +1343,7 @@ impl Lowerer {
             Pattern::Object { fields, .. } => {
                 for ObjectPatternField { key, pattern, .. } in fields {
                     let field_val = self.alloc_val();
-                    self.set_val_type(field_val, Ty::Unit);
+                    self.set_val_type(field_val, self.object_field_type(src_reg, key));
                     self.emit_inst(
                         span,
                         InstKind::ObjectGet {
@@ -1330,7 +1368,7 @@ impl Lowerer {
                         }
                         TuplePatternElem::Pattern(pat) => {
                             let field_val = self.alloc_val();
-                            self.set_val_type(field_val, Ty::Unit);
+                            self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
                             self.emit_inst(
                                 span,
                                 InstKind::TupleIndex {

@@ -5,31 +5,31 @@ expression: ir
 === main ===
      0 │   r0 = storage_load $items
      1 │   r1 = closure L0 []
-     2 │   r2 = call filter(r0, r1)
+     2 │   r2 = call map(r0, r1)
      3 │   r3 = closure L1 []
-     4 │   r4 = call map(r2, r3)
+     4 │   r4 = call filter(r2, r3)
      5 │   r5 = call to_string(r4)
      6 │   emit r5
 
     ; r0 ($items) : List<Int>
-    ; r1 (v1) : Fn(Int) -> Bool
-    ; r2 (filter(...)) : List<Int>
-    ; r3 (v3) : Fn(Int) -> String
-    ; r4 (map(...)) : List<String>
+    ; r1 (v1) : Fn(Int) -> String
+    ; r2 (map(...)) : List<String>
+    ; r3 (v3) : Fn(String) -> Bool
+    ; r4 (filter(...)) : List<String>
     ; r5 (to_string(...)) : String
 
-=== closure L0 (x) ===
-     0 │   r1 = const 0
-     1 │   r2 = r0 != r1
-     2 │   return r2
-
-    ; r0 (v0) : Int
-    ; r1 (v1) : Int
-    ; r2 (v2) : Bool
-
-=== closure L1 (x) ===
+=== closure L0 (i) ===
      0 │   r1 = call to_string(r0)
      1 │   return r1
 
     ; r0 (v0) : Int
     ; r1 (to_string(...)) : String
+
+=== closure L1 (s) ===
+     0 │   r1 = const "0"
+     1 │   r2 = r0 != r1
+     2 │   return r2
+
+    ; r0 (v0) : String
+    ; r1 (v1) : String
+    ; r2 (v2) : Bool

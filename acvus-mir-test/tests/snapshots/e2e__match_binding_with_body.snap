@@ -2,6 +2,10 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== texts ===
+  T0 = " is here"
+  T1 = "no user"
+
 === main ===
      0 │   r0 = storage_load $user
      1 │ L2:
@@ -10,18 +14,15 @@ expression: ir
      4 │   r3 = r0.name
      5 │   r4 = const true
      6 │   r5 = r1 == r4
-     7 │   r6 = test has_key(r0, "age")
-     8 │   r7 = r0.age
-     9 │   r8 = const true
-    10 │   r9 = r5 == r8
-    11 │   jump_if r9 then L3 else L1
-    12 │ L3:
-    13 │   r10 = r0.name
-    14 │   r11 = r0.age
-    15 │   emit r10
-    16 │   jump L0
-    17 │ L1:
-    18 │ L0:
+     7 │   jump_if r5 then L3 else L1
+     8 │ L3:
+     9 │   r6 = r0.name
+    10 │   emit r6
+    11 │   emit_text T0
+    12 │   jump L0
+    13 │ L1:
+    14 │   emit_text T1
+    15 │ L0:
 
     ; r0 ($user) : {age: Int, email: String, name: String}
     ; r1 (v1) : Bool
@@ -29,9 +30,4 @@ expression: ir
     ; r3 (v3) : String
     ; r4 (v4) : Bool
     ; r5 (v5) : Bool
-    ; r6 (v6) : Bool
-    ; r7 (v7) : Int
-    ; r8 (v8) : Bool
-    ; r9 (v9) : Bool
-    ; r10 (name) : String
-    ; r11 (age) : Int
+    ; r6 (name) : String

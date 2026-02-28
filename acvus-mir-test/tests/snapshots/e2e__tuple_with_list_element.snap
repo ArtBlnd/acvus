@@ -1,0 +1,47 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $data
+     1 │ L2:
+     2 │   r1 = const true
+     3 │   r2 = r0.0
+     4 │   r3 = const true
+     5 │   r4 = r1 == r3
+     6 │   r5 = r0.1
+     7 │   r6 = const true
+     8 │   r7 = r4 == r6
+     9 │   jump_if r7 then L3 else L1
+    10 │ L3:
+    11 │   r8 = r0.0
+    12 │   r9 = r0.1
+    13 │   emit r8
+    14 │   r10 = iter_init r9
+    15 │ L4:
+    16 │   r11, r12 = iter_next r10
+    17 │   jump_if r12 then L5 else L7
+    18 │ L7:
+    19 │   r13 = call to_string(r11)
+    20 │   emit r13
+    21 │   jump L4
+    22 │ L5:
+    23 │ L6:
+    24 │   jump L0
+    25 │ L1:
+    26 │ L0:
+
+    ; r0 ($data) : (String, List<Int>)
+    ; r1 (v1) : Bool
+    ; r2 (v2) : String
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool
+    ; r5 (v5) : List<Int>
+    ; r6 (v6) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (label) : String
+    ; r9 (items) : List<Int>
+    ; r10 (v10) : Unit
+    ; r11 (x) : Int
+    ; r12 (v12) : Bool
+    ; r13 (to_string(...)) : String

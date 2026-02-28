@@ -118,11 +118,50 @@ impl TySubst {
         }
     }
 
+    /// Find the leaf Var in a chain that is bound to a concrete type.
+    /// Returns None if `ty` is not a Var.
+    pub fn find_leaf_var(&self, ty: &Ty) -> Option<TyVar> {
+        match ty {
+            Ty::Var(v) => {
+                if let Some(bound) = self.bindings.get(v) {
+                    match bound {
+                        Ty::Var(_) => self.find_leaf_var(bound),
+                        _ => Some(*v),
+                    }
+                } else {
+                    Some(*v)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Rebind a type variable to a new type, replacing any existing binding.
+    pub fn rebind(&mut self, var: TyVar, ty: Ty) {
+        self.bindings.insert(var, ty);
+    }
+
+    /// Shallow-resolve: follow Var chains but don't recurse into structure.
+    fn shallow_resolve(&self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::Var(v) => {
+                if let Some(bound) = self.bindings.get(v) {
+                    self.shallow_resolve(bound)
+                } else {
+                    Ty::Var(*v)
+                }
+            }
+            other => other.clone(),
+        }
+    }
+
     /// Unify two types. Returns Ok(()) on success, Err with the two conflicting
     /// types (after resolution) on failure.
     pub fn unify(&mut self, a: &Ty, b: &Ty) -> Result<(), (Ty, Ty)> {
-        let a = self.resolve(a);
-        let b = self.resolve(b);
+        let orig_a = a;
+        let orig_b = b;
+        let a = self.shallow_resolve(a);
+        let b = self.shallow_resolve(b);
 
         match (&a, &b) {
             (Ty::Int, Ty::Int)
@@ -158,18 +197,47 @@ impl TySubst {
             (Ty::List(la), Ty::List(lb)) => self.unify(la, lb),
 
             (Ty::Object(fa), Ty::Object(fb)) => {
-                // Both must have the same keys for unification.
-                if fa.len() != fb.len() {
-                    return Err((a.clone(), b.clone()));
-                }
-                for (key, ty_a) in fa {
-                    if let Some(ty_b) = fb.get(key) {
-                        self.unify(ty_a, ty_b)?;
+                if fa.len() == fb.len() {
+                    // Same-size: exact key match.
+                    for (key, ty_a) in fa {
+                        if let Some(ty_b) = fb.get(key) {
+                            self.unify(ty_a, ty_b)?;
+                        } else {
+                            return Err((a.clone(), b.clone()));
+                        }
+                    }
+                    Ok(())
+                } else {
+                    // Different sizes: subset matching.
+                    // The smaller must be a subset of the larger, and must trace
+                    // back to a Var (partial constraint from field projection).
+                    let (smaller, larger, smaller_orig) = if fa.len() < fb.len() {
+                        (fa, fb, orig_a)
                     } else {
-                        return Err((a.clone(), b.clone()));
+                        (fb, fa, orig_b)
+                    };
+
+                    if let Some(leaf_var) = self.find_leaf_var(smaller_orig) {
+                        for (key, ty_s) in smaller {
+                            if let Some(ty_l) = larger.get(key) {
+                                self.unify(ty_s, ty_l)?;
+                            } else {
+                                return Err((a.clone(), b.clone()));
+                            }
+                        }
+                        // Rebind the leaf var to the fully-resolved larger Object.
+                        let larger_resolved = Ty::Object(
+                            larger
+                                .iter()
+                                .map(|(k, v)| (k.clone(), self.resolve(v)))
+                                .collect(),
+                        );
+                        self.bindings.insert(leaf_var, larger_resolved);
+                        Ok(())
+                    } else {
+                        Err((a.clone(), b.clone()))
                     }
                 }
-                Ok(())
             }
 
             (

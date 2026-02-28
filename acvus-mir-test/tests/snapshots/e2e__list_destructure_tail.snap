@@ -11,10 +11,10 @@ expression: ir
      2 │   r1 = test len(r0) >= 2
      3 │   jump_if r1 then L3 else L4
      4 │ L3:
-     5 │   r2 = r0[0]
+     5 │   r2 = r0[-2]
      6 │   r3 = const true
      7 │   r4 = r1 == r3
-     8 │   r5 = r0[1]
+     8 │   r5 = r0[-1]
      9 │   r6 = const true
     10 │   r7 = r4 == r6
     11 │   jump L5(r7)
@@ -24,8 +24,8 @@ expression: ir
     15 │ L5(r8: Bool):
     16 │   jump_if r8 then L6 else L1
     17 │ L6:
-    18 │   r10 = r0[0]
-    19 │   r11 = r0[1]
+    18 │   r10 = r0[-2]
+    19 │   r11 = r0[-1]
     20 │   r12 = call to_string(r10)
     21 │   emit r12
     22 │   jump L0

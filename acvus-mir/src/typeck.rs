@@ -282,22 +282,37 @@ impl TypeChecker {
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                        match (&lt, &rt) {
-                            (Ty::Int, Ty::Int) => Ty::Int,
-                            (Ty::Float, Ty::Float) => Ty::Float,
-                            // String concatenation for Add
-                            (Ty::String, Ty::String) if *op == BinOp::Add => Ty::String,
-                            _ => {
-                                self.error(
-                                    MirErrorKind::TypeMismatchBinOp {
-                                        op: op_str(*op),
-                                        left: lt,
-                                        right: rt,
-                                    },
-                                    *span,
-                                );
-                                Ty::Unit
+                        // Unify first so type variables resolve before checking.
+                        let unified = self.subst.unify(&lt, &rt).is_ok();
+                        let rl = self.subst.resolve(&lt);
+                        let rr = self.subst.resolve(&rt);
+                        if unified {
+                            match (&rl, &rr) {
+                                (Ty::Int, Ty::Int) => Ty::Int,
+                                (Ty::Float, Ty::Float) => Ty::Float,
+                                (Ty::String, Ty::String) if *op == BinOp::Add => Ty::String,
+                                _ => {
+                                    self.error(
+                                        MirErrorKind::TypeMismatchBinOp {
+                                            op: op_str(*op),
+                                            left: rl,
+                                            right: rr,
+                                        },
+                                        *span,
+                                    );
+                                    Ty::Unit
+                                }
                             }
+                        } else {
+                            self.error(
+                                MirErrorKind::TypeMismatchBinOp {
+                                    op: op_str(*op),
+                                    left: rl,
+                                    right: rr,
+                                },
+                                *span,
+                            );
+                            Ty::Unit
                         }
                     }
                     BinOp::Eq | BinOp::Neq => {
@@ -314,18 +329,19 @@ impl TypeChecker {
                         Ty::Bool
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        match (&lt, &rt) {
-                            (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => {}
-                            _ => {
-                                self.error(
-                                    MirErrorKind::TypeMismatchBinOp {
-                                        op: op_str(*op),
-                                        left: lt,
-                                        right: rt,
-                                    },
-                                    *span,
-                                );
-                            }
+                        // Unify first so type variables resolve before checking.
+                        let unified = self.subst.unify(&lt, &rt).is_ok();
+                        let rl = self.subst.resolve(&lt);
+                        let rr = self.subst.resolve(&rt);
+                        if !unified || !matches!((&rl, &rr), (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float)) {
+                            self.error(
+                                MirErrorKind::TypeMismatchBinOp {
+                                    op: op_str(*op),
+                                    left: rl,
+                                    right: rr,
+                                },
+                                *span,
+                            );
                         }
                         Ty::Bool
                     }
@@ -341,6 +357,13 @@ impl TypeChecker {
                     acvus_ast::UnaryOp::Neg => match &ot {
                         Ty::Int => Ty::Int,
                         Ty::Float => Ty::Float,
+                        Ty::Var(_) => {
+                            // Unresolved type variable — try Int first, Float is also valid
+                            // but we can't know yet. Keep as-is (the var will resolve later
+                            // via surrounding context). Return a fresh var that unifies with
+                            // the operand.
+                            ot.clone()
+                        }
                         _ => {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
@@ -354,7 +377,10 @@ impl TypeChecker {
                         }
                     },
                     acvus_ast::UnaryOp::Not => {
-                        if !matches!(&ot, Ty::Bool) {
+                        if matches!(&ot, Ty::Var(_)) {
+                            // Unresolved — unify with Bool.
+                            let _ = self.subst.unify(&ot, &Ty::Bool);
+                        } else if !matches!(&ot, Ty::Bool) {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: "!",
@@ -376,12 +402,20 @@ impl TypeChecker {
                 field,
                 span,
             } => {
-                let ot = self.check_expr(object);
-                let ot = self.subst.resolve(&ot);
+                let ot_raw = self.check_expr(object);
+                let ot = self.subst.resolve(&ot_raw);
                 let ty = match &ot {
                     Ty::Object(fields) => {
                         if let Some(ft) = fields.get(field) {
                             ft.clone()
+                        } else if let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) {
+                            // Object came from a Var (partial projection constraint).
+                            // Extend the Object with the new field.
+                            let fresh = self.subst.fresh_var();
+                            let mut new_fields = fields.clone();
+                            new_fields.insert(field.clone(), fresh.clone());
+                            self.subst.rebind(leaf_var, Ty::Object(new_fields));
+                            fresh
                         } else {
                             self.error(
                                 MirErrorKind::UndefinedField {
@@ -392,6 +426,22 @@ impl TypeChecker {
                             );
                             Ty::Unit
                         }
+                    }
+                    Ty::Var(_) => {
+                        // Unresolved Var — create partial Object constraint.
+                        let fresh = self.subst.fresh_var();
+                        let partial_obj =
+                            Ty::Object(BTreeMap::from([(field.clone(), fresh.clone())]));
+                        if self.subst.unify(&ot_raw, &partial_obj).is_err() {
+                            self.error(
+                                MirErrorKind::UndefinedField {
+                                    object_ty: ot,
+                                    field: field.clone(),
+                                },
+                                *span,
+                            );
+                        }
+                        fresh
                     }
                     _ => {
                         self.error(
@@ -461,6 +511,7 @@ impl TypeChecker {
                 for p in params {
                     let pt = self.subst.fresh_var();
                     self.define_var(&p.name, pt.clone());
+                    self.record(p.span, pt.clone());
                     param_types.push(pt);
                 }
                 let ret = self.check_expr(body);

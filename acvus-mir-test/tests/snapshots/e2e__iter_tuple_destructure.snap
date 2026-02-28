@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 410
 expression: ir
 ---
 === main ===
@@ -18,6 +17,6 @@ expression: ir
 
     ; r0 ($pairs) : List<(String, Int)>
     ; r1 (v1) : Unit
-    ; r2 (v2) : Unit
+    ; r2 (v2) : (String, Int)
     ; r3 (v3) : Bool
-    ; r4 (a) : Unit
+    ; r4 (a) : String

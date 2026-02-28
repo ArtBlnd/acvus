@@ -3,12 +3,12 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === texts ===
-  T0 = "empty"
+  T0 = "wrong length"
 
 === main ===
      0 │   r0 = storage_load $items
      1 │ L2:
-     2 │   r1 = test len(r0) >= 2
+     2 │   r1 = test len(r0) == 2
      3 │   jump_if r1 then L3 else L4
      4 │ L3:
      5 │   r2 = r0[0]

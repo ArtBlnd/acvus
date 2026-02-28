@@ -43,16 +43,16 @@ expression: ir
     ; r1 ($b) : Int
     ; r2 (v2) : (Int, Int)
     ; r3 (v3) : Bool
-    ; r4 (v4) : Unit
+    ; r4 (v4) : Int
     ; r5 (v5) : Bool
     ; r6 (v6) : Bool
-    ; r7 (v7) : Unit
+    ; r7 (v7) : Int
     ; r8 (v8) : Bool
     ; r9 (v9) : Bool
-    ; r10 (v10) : Unit
-    ; r11 (v11) : Unit
+    ; r10 (v10) : Int
+    ; r11 (v11) : Int
     ; r12 (v12) : Bool
-    ; r13 (v13) : Unit
+    ; r13 (v13) : Int
     ; r14 (v14) : Bool
     ; r15 (v15) : Bool
-    ; r16 (v16) : Unit
+    ; r16 (v16) : Int

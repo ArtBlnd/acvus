@@ -8,17 +8,21 @@ expression: ir
      2 │   r2 = call filter(r0, r1)
      3 │   r3 = closure L1 []
      4 │   r4 = call map(r2, r3)
-     5 │   r5 = call to_string(r4)
-     6 │   emit r5
+     5 │   r5 = closure L2 []
+     6 │   r6 = call map(r4, r5)
+     7 │   r7 = call to_string(r6)
+     8 │   emit r7
 
     ; r0 ($items) : List<Int>
     ; r1 (v1) : Fn(Int) -> Bool
     ; r2 (filter(...)) : List<Int>
-    ; r3 (v3) : Fn(Int) -> String
-    ; r4 (map(...)) : List<String>
-    ; r5 (to_string(...)) : String
+    ; r3 (v3) : Fn(Int) -> Int
+    ; r4 (map(...)) : List<Int>
+    ; r5 (v5) : Fn(Int) -> String
+    ; r6 (map(...)) : List<String>
+    ; r7 (to_string(...)) : String
 
-=== closure L0 (x) ===
+=== closure L0 (i) ===
      0 │   r1 = const 0
      1 │   r2 = r0 != r1
      2 │   return r2
@@ -27,7 +31,16 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (v2) : Bool
 
-=== closure L1 (x) ===
+=== closure L1 (i) ===
+     0 │   r1 = const 1
+     1 │   r2 = r0 + r1
+     2 │   return r2
+
+    ; r0 (v0) : Int
+    ; r1 (v1) : Int
+    ; r2 (v2) : Int
+
+=== closure L2 (i) ===
      0 │   r1 = call to_string(r0)
      1 │   return r1
 

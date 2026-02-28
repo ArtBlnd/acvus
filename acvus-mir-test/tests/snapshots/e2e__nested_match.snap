@@ -27,11 +27,11 @@ expression: ir
 
     ; r0 ($users) : List<{name: String, posts: List<{title: String}>}>
     ; r1 (v1) : Unit
-    ; r2 (v2) : Unit
+    ; r2 (v2) : {name: String, posts: List<{title: String}>}
     ; r3 (v3) : Bool
-    ; r4 (name) : Unit
-    ; r5 (posts) : Unit
+    ; r4 (name) : String
+    ; r5 (posts) : List<{title: String}>
     ; r6 (v6) : Unit
-    ; r7 (v7) : Unit
+    ; r7 (v7) : {title: String}
     ; r8 (v8) : Bool
-    ; r9 (title) : Unit
+    ; r9 (title) : String

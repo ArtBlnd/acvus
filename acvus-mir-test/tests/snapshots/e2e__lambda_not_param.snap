@@ -1,0 +1,22 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $flags
+     1 │   r1 = closure L0 []
+     2 │   r2 = call map(r0, r1)
+     3 │   r3 = call to_string(r2)
+     4 │   emit r3
+
+    ; r0 ($flags) : List<Bool>
+    ; r1 (v1) : Fn(Bool) -> Bool
+    ; r2 (map(...)) : List<Bool>
+    ; r3 (to_string(...)) : String
+
+=== closure L0 (i) ===
+     0 │   r1 = !r0
+     1 │   return r1
+
+    ; r0 (v0) : Bool
+    ; r1 (v1) : Bool

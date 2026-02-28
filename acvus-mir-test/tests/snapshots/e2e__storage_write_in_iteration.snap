@@ -2,9 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "empty"
-
 === main ===
      0 │   r0 = storage_load $items
      1 │   r1 = iter_init r0
@@ -12,15 +9,17 @@ expression: ir
      3 │   r2, r3 = iter_next r1
      4 │   jump_if r3 then L1 else L3
      5 │ L3:
-     6 │   r4 = call to_string(r2)
-     7 │   emit r4
-     8 │   jump L0
-     9 │ L1:
-    10 │   emit_text T0
-    11 │ L2:
+     6 │   storage_store $last = r2
+     7 │   jump L0
+     8 │ L1:
+     9 │ L2:
+    10 │   r4 = storage_load $last
+    11 │   r5 = call to_string(r4)
+    12 │   emit r5
 
     ; r0 ($items) : List<Int>
     ; r1 (v1) : Unit
     ; r2 (x) : Int
     ; r3 (v3) : Bool
-    ; r4 (to_string(...)) : String
+    ; r4 ($last) : Int
+    ; r5 (to_string(...)) : String

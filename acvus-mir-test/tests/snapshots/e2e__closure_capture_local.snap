@@ -1,0 +1,25 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = const 5
+     1 │   r1 = storage_load $items
+     2 │   r2 = closure L0 [r0]
+     3 │   r3 = call filter(r1, r2)
+     4 │   r4 = call to_string(r3)
+     5 │   emit r4
+
+    ; r0 (v0) : Int
+    ; r1 ($items) : List<Int>
+    ; r2 (v2) : Fn(Int) -> Bool
+    ; r3 (filter(...)) : List<Int>
+    ; r4 (to_string(...)) : String
+
+=== closure L0 (i) [captures: threshold] ===
+     0 │   r2 = r1 > r0
+     1 │   return r2
+
+    ; r0 (v0) : Int
+    ; r1 (v1) : Int
+    ; r2 (v2) : Bool

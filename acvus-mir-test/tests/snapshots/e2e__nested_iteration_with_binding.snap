@@ -1,0 +1,33 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = storage_load $matrix
+     1 │   r1 = iter_init r0
+     2 │ L0:
+     3 │   r2, r3 = iter_next r1
+     4 │   jump_if r3 then L1 else L3
+     5 │ L3:
+     6 │   r4 = iter_init r2
+     7 │ L4:
+     8 │   r5, r6 = iter_next r4
+     9 │   jump_if r6 then L5 else L7
+    10 │ L7:
+    11 │   r7 = call to_string(r5)
+    12 │   emit r7
+    13 │   jump L4
+    14 │ L5:
+    15 │ L6:
+    16 │   jump L0
+    17 │ L1:
+    18 │ L2:
+
+    ; r0 ($matrix) : List<List<Int>>
+    ; r1 (v1) : Unit
+    ; r2 (row) : List<Int>
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Unit
+    ; r5 (x) : Int
+    ; r6 (v6) : Bool
+    ; r7 (to_string(...)) : String
