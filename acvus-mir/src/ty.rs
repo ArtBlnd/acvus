@@ -21,6 +21,14 @@ pub enum Ty {
     },
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
+    /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
+    Error,
+}
+
+impl Ty {
+    pub fn is_error(&self) -> bool {
+        matches!(self, Ty::Error)
+    }
 }
 
 impl fmt::Display for Ty {
@@ -64,6 +72,7 @@ impl fmt::Display for Ty {
                 write!(f, ") -> {ret}")
             }
             Ty::Var(v) => write!(f, "?{}", v.0),
+            Ty::Error => write!(f, "<error>"),
         }
     }
 }
@@ -164,6 +173,9 @@ impl TySubst {
         let b = self.shallow_resolve(b);
 
         match (&a, &b) {
+            // Error (poison) unifies with anything — suppress cascading errors.
+            (Ty::Error, _) | (_, Ty::Error) => return Ok(()),
+
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
             | (Ty::String, Ty::String)
