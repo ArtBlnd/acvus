@@ -16,6 +16,20 @@
       --error:   #f48771;
       --ok:      #89d185;
       --mono:    'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+      --syn-kw:    #c586c0;
+      --syn-val:   #9cdcfe;
+      --syn-lbl:   #dcdcaa;
+      --syn-str:   #ce9178;
+      --syn-num:   #b5cea8;
+      --syn-bool:  #569cd6;
+      --syn-sto:   #89d185;
+      --syn-cmt:   #6a9955;
+      --syn-ln:    #444;
+      --syn-delim: #569cd6;
+      --syn-pipe:  #dcdcaa;
+      --syn-fn:    #dcdcaa;
+      --syn-op:    #d4d4d4;
     }
 
     body {
@@ -62,7 +76,7 @@
       overflow: hidden;
     }
 
-    /* ── Left column: template + context stacked ── */
+    /* ── Left column ── */
     .left-col {
       flex: 1;
       display: flex;
@@ -79,7 +93,7 @@
     .section.template { flex: 2; border-bottom: 1px solid var(--border); }
     .section.context  { flex: 1; }
 
-    /* ── Right pane: MIR output ── */
+    /* ── Right pane ── */
     .right-pane {
       flex: 1;
       display: flex;
@@ -98,23 +112,61 @@
       flex-shrink: 0;
     }
 
-    textarea {
-      flex: 1;
-      background: transparent;
-      color: var(--text);
-      border: none;
-      outline: none;
-      resize: none;
+    /* ── Shared editor metrics ── */
+    .editor-font {
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.65;
-      padding: 14px 16px;
-      overflow: auto;
       white-space: pre-wrap;
       word-break: break-all;
       tab-size: 2;
+      -moz-tab-size: 2;
     }
 
+    /* ── Editor overlay (template highlighting) ── */
+    .editor-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .editor-wrap .hl-layer {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      padding: 14px 16px;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+      border: none;
+      margin: 0;
+      color: var(--text);
+    }
+
+    .editor-wrap textarea {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      color: transparent;
+      caret-color: var(--text);
+      border: none;
+      outline: none;
+      resize: none;
+      padding: 14px 16px;
+      overflow: auto;
+    }
+
+    .editor-wrap textarea::placeholder {
+      color: var(--muted);
+    }
+
+    .editor-wrap textarea::selection {
+      background: rgba(78, 201, 176, 0.25);
+      color: transparent;
+    }
+
+    /* ── MIR output ── */
     pre {
       flex: 1;
       background: transparent;
@@ -127,6 +179,7 @@
       white-space: pre-wrap;
       word-break: break-all;
       tab-size: 2;
+      -moz-tab-size: 2;
     }
 
     pre.is-error { color: var(--error); }
@@ -144,6 +197,49 @@
       color: var(--accent);
       font-family: var(--mono);
     }
+
+    /* ── MIR syntax colors ── */
+    .m-h    { color: var(--accent); font-weight: 600; }
+    .m-kw   { color: var(--syn-kw); }
+    .m-val  { color: var(--syn-val); }
+    .m-lbl  { color: var(--syn-lbl); }
+    .m-tidx { color: var(--syn-str); }
+    .m-str  { color: var(--syn-str); }
+    .m-num  { color: var(--syn-num); }
+    .m-bool { color: var(--syn-bool); }
+    .m-sto  { color: var(--syn-sto); }
+    .m-cmt  { color: var(--syn-cmt); font-style: italic; }
+    .m-ln   { color: var(--syn-ln); }
+
+    /* ── Template syntax colors ── */
+    .t-delim { color: var(--syn-delim); font-weight: 600; }
+    .t-kw    { color: var(--syn-kw); }
+    .t-sto   { color: var(--syn-sto); }
+    .t-pipe  { color: var(--syn-pipe); font-weight: 600; }
+    .t-str   { color: var(--syn-str); }
+    .t-num   { color: var(--syn-num); }
+    .t-bool  { color: var(--syn-bool); }
+    .t-fn    { color: var(--syn-fn); }
+    .t-op    { color: var(--syn-op); }
+    .t-raw   { color: #888; }
+
+    /* ── Markdown syntax colors ── */
+    .md-h    { color: var(--accent); font-weight: 600; }
+    .md-b    { font-weight: 600; color: var(--text); }
+    .md-i    { font-style: italic; color: var(--text); }
+    .md-c    { color: #e06c75; }
+    .md-link { color: var(--syn-bool); }
+    .md-li   { color: var(--accent); }
+    .md-bq   { color: var(--muted); font-style: italic; }
+    .md-hr   { color: var(--muted); }
+
+    /* ── JSON syntax colors ── */
+    .j-key  { color: var(--syn-val); }
+    .j-str  { color: var(--syn-str); }
+    .j-num  { color: var(--syn-num); }
+    .j-bool { color: var(--syn-bool); }
+    .j-null { color: var(--syn-kw); }
+    .j-brace { color: var(--text); }
   </style>
 </head>
 <body>
@@ -157,18 +253,24 @@
   <div class="left-col">
     <div class="section template">
       <div class="pane-label">Template</div>
-      <textarea id="source" spellcheck="false"
-        placeholder="{{ x in 0..3 }}{{ x | to_string }}{{/}}"></textarea>
+      <div class="editor-wrap">
+        <div class="hl-layer editor-font" id="source-hl" aria-hidden="true"></div>
+        <textarea id="source" class="editor-font" spellcheck="false"
+          placeholder="{{ x in 0..3 }}{{ x | to_string }}{{/}}"></textarea>
+      </div>
     </div>
     <div class="section context">
       <div class="pane-label">Context</div>
-      <textarea id="storage" spellcheck="false"
-        placeholder='{"name": "String", "items": {"List": "Int"}}'></textarea>
+      <div class="editor-wrap">
+        <div class="hl-layer editor-font" id="storage-hl" aria-hidden="true"></div>
+        <textarea id="storage" class="editor-font" spellcheck="false"
+          placeholder='{"name": "string", "items": {"List": "int"}}'></textarea>
+      </div>
       <div class="hint">
-        <code>"String"</code> <code>"Int"</code> <code>"Float"</code> <code>"Bool"</code>
-        &nbsp;·&nbsp; <code>{"List": "Int"}</code>
-        &nbsp;·&nbsp; <code>{"Object": {"k": "String"}}</code>
-        &nbsp;·&nbsp; <code>{"Tuple": ["String", "Int"]}</code>
+        <code>"string"</code> <code>"int"</code> <code>"float"</code> <code>"bool"</code>
+        &nbsp;·&nbsp; <code>{"List": "int"}</code>
+        &nbsp;·&nbsp; <code>{"Object": {"k": "string"}}</code>
+        &nbsp;·&nbsp; <code>{"Tuple": ["string", "int"]}</code>
       </div>
     </div>
   </div>
@@ -183,6 +285,270 @@
   const outputEl  = document.getElementById('output');
   const statusEl  = document.getElementById('status');
   const storageEl = document.getElementById('storage');
+  const sourceHl  = document.getElementById('source-hl');
+  const storageHl = document.getElementById('storage-hl');
+
+  // ── HTML escape ──
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ── Template syntax highlighting ──
+
+  const tmplInnerRules = [
+    [/^\//, 't-delim'],
+    [/^"(?:[^"\\]|\\.)*"/, 't-str'],
+    [/^\$\w+/, 't-sto'],
+    [/^(?:in|match)\b/, 't-kw'],
+    [/^(?:true|false)\b/, 't-bool'],
+    [/^_\b/, 't-kw'],
+    [/^=>/, 't-kw'],
+    [/^\|/, 't-pipe'],
+    [/^\.\.=?/, 't-op'],
+    [/^=\.\./, 't-op'],
+    [/^[=!<>]=/, 't-op'],
+    [/^[+\-*\/<>!]/, 't-op'],
+    [/^\d+(?:\.\d+)?/, 't-num'],
+    [/^[a-zA-Z_]\w*/, 't-fn'],
+    [/^\s+/, null],
+    [/^./, null],
+  ];
+
+  function highlightTmplInner(text) {
+    let result = '';
+    let rest = text;
+    while (rest.length > 0) {
+      let matched = false;
+      for (const [re, cls] of tmplInnerRules) {
+        const m = rest.match(re);
+        if (m) {
+          const tok = esc(m[0]);
+          result += cls ? `<span class="${cls}">${tok}</span>` : tok;
+          rest = rest.slice(m[0].length);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        result += esc(rest[0]);
+        rest = rest.slice(1);
+      }
+    }
+    return result;
+  }
+
+  function highlightTemplate(text) {
+    let result = '';
+    let i = 0;
+    while (i < text.length) {
+      if (text[i] === '{' && text[i + 1] === '{') {
+        result += '<span class="t-delim">{{</span>';
+        i += 2;
+        let inner = '';
+        let depth = 1;
+        while (i < text.length) {
+          if (text[i] === '}' && text[i + 1] === '}') {
+            result += highlightTmplInner(inner);
+            result += '<span class="t-delim">}}</span>';
+            i += 2;
+            break;
+          }
+          inner += text[i];
+          i++;
+        }
+      } else {
+        // Raw text outside {{ }}
+        let raw = '';
+        while (i < text.length && !(text[i] === '{' && text[i + 1] === '{')) {
+          raw += text[i];
+          i++;
+        }
+        result += highlightMarkdown(raw);
+      }
+    }
+    // Trailing newline so highlight layer matches textarea height
+    return result + '\n';
+  }
+
+  // ── Markdown highlighting (raw text outside {{ }}) ──
+
+  const mdLineStartRules = [
+    [/^#{1,6} [^\n]*/, 'md-h'],
+    [/^[-*+] /, 'md-li'],
+    [/^\d+\. /, 'md-li'],
+    [/^> /, 'md-bq'],
+    [/^---+(?=\n|$)/, 'md-hr'],
+  ];
+
+  const mdInlineRules = [
+    [/^`[^`\n]+`/, 'md-c'],
+    [/^\*\*[^*\n]+?\*\*/, 'md-b'],
+    [/^\*(?!\*)[^*\n]+?\*(?!\*)/, 'md-i'],
+    [/^\[[^\]\n]+\]\([^)\n]+\)/, 'md-link'],
+    [/^[^*`\[\n#\->0-9]+/, 't-raw'],
+    [/^\n/, null],
+    [/^./, 't-raw'],
+  ];
+
+  function highlightMarkdown(text) {
+    let result = '';
+    let rest = text;
+    let lineStart = true;
+    while (rest.length > 0) {
+      let matched = false;
+      const rules = lineStart ? [...mdLineStartRules, ...mdInlineRules] : mdInlineRules;
+      for (const [re, cls] of rules) {
+        const m = rest.match(re);
+        if (m) {
+          const tok = esc(m[0]);
+          result += cls ? `<span class="${cls}">${tok}</span>` : tok;
+          lineStart = m[0][m[0].length - 1] === '\n';
+          rest = rest.slice(m[0].length);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        result += '<span class="t-raw">' + esc(rest[0]) + '</span>';
+        lineStart = rest[0] === '\n';
+        rest = rest.slice(1);
+      }
+    }
+    return result;
+  }
+
+  // ── JSON highlighting (context pane) ──
+
+  const jsonRules = [
+    [/^"(?:[^"\\]|\\.)*"\s*(?=:)/, 'j-key'],
+    [/^"(?:[^"\\]|\\.)*"/, 'j-str'],
+    [/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/, 'j-num'],
+    [/^(?:true|false)\b/, 'j-bool'],
+    [/^null\b/, 'j-null'],
+    [/^[{}[\]:,]/, 'j-brace'],
+    [/^\s+/, null],
+    [/^./, null],
+  ];
+
+  function highlightJson(text) {
+    let result = '';
+    let rest = text;
+    while (rest.length > 0) {
+      let matched = false;
+      for (const [re, cls] of jsonRules) {
+        const m = rest.match(re);
+        if (m) {
+          const tok = esc(m[0]);
+          result += cls ? `<span class="${cls}">${tok}</span>` : tok;
+          rest = rest.slice(m[0].length);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        result += esc(rest[0]);
+        rest = rest.slice(1);
+      }
+    }
+    return result + '\n';
+  }
+
+  // ── Sync highlights ──
+
+  function syncSourceHighlight() {
+    sourceHl.innerHTML = highlightTemplate(sourceEl.value);
+  }
+
+  function syncStorageHighlight() {
+    storageHl.innerHTML = highlightJson(storageEl.value);
+  }
+
+  sourceEl.addEventListener('scroll', () => {
+    sourceHl.scrollTop = sourceEl.scrollTop;
+    sourceHl.scrollLeft = sourceEl.scrollLeft;
+  });
+
+  storageEl.addEventListener('scroll', () => {
+    storageHl.scrollTop = storageEl.scrollTop;
+    storageHl.scrollLeft = storageEl.scrollLeft;
+  });
+
+  // ── MIR syntax highlighting ──
+
+  const mirTokenRules = [
+    [/^"(?:[^"\\]|\\.)*"/, 'm-str'],
+    [/^\$\w+/, 'm-sto'],
+    [/^(?:storage_store|storage_load|async_call|call_closure|emit_text|iter_init|iter_next|jump_if|call|await|emit|const|list|object|tuple|closure|jump|return|test|range|nop|then|else|has_key|len|in)\b/, 'm-kw'],
+    [/^(?:true|false)\b/, 'm-bool'],
+    [/^r\d+\b/, 'm-val'],
+    [/^L\d+\b/, 'm-lbl'],
+    [/^T\d+\b/, 'm-tidx'],
+    [/^-?\d+(?:\.\d+)?/, 'm-num'],
+    [/^(?:[=!<>]=|\.\.=?|=\.\.)/, null],
+    [/^[a-zA-Z_]\w*/, null],
+    [/^\s+/, null],
+    [/^./, null],
+  ];
+
+  function mirTokenize(text) {
+    let result = '';
+    let rest = text;
+    while (rest.length > 0) {
+      let matched = false;
+      for (const [re, cls] of mirTokenRules) {
+        const m = rest.match(re);
+        if (m) {
+          const tok = esc(m[0]);
+          result += cls ? `<span class="${cls}">${tok}</span>` : tok;
+          rest = rest.slice(m[0].length);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        result += esc(rest[0]);
+        rest = rest.slice(1);
+      }
+    }
+    return result;
+  }
+
+  function highlightMir(raw) {
+    return raw.split('\n').map(mirLine).join('\n');
+  }
+
+  function mirLine(line) {
+    // Section headers: === ... ===
+    if (line.startsWith('===')) {
+      return '<span class="m-h">' + esc(line) + '</span>';
+    }
+
+    // Comment / type annotation lines: starts with whitespace + ;
+    const cmatch = line.match(/^(\s+)(;.+)$/);
+    if (cmatch) {
+      return cmatch[1] + '<span class="m-cmt">' + esc(cmatch[2]) + '</span>';
+    }
+
+    // Text table entries: "  T0 = "value""
+    const tmatch = line.match(/^(\s+)(T\d+)(\s*=\s*)(".*")$/);
+    if (tmatch) {
+      return tmatch[1]
+        + '<span class="m-tidx">' + esc(tmatch[2]) + '</span>'
+        + esc(tmatch[3])
+        + '<span class="m-str">' + esc(tmatch[4]) + '</span>';
+    }
+
+    // Instruction lines: line-number │ instruction
+    const imatch = line.match(/^(\s*\d+\s*│\s*)(.*)$/);
+    if (imatch) {
+      return '<span class="m-ln">' + esc(imatch[1]) + '</span>' + mirTokenize(imatch[2]);
+    }
+
+    return esc(line);
+  }
+
+  // ── Compilation ──
 
   let timer = null;
   function schedule() {
@@ -193,7 +559,7 @@
   async function doCompile() {
     const source = sourceEl.value;
     if (!source.trim()) {
-      outputEl.textContent = '';
+      outputEl.innerHTML = '';
       outputEl.className = '';
       setStatus('ready', '');
       return;
@@ -220,7 +586,7 @@
       });
       const data = await res.json();
       if (data.ir) {
-        outputEl.textContent = data.ir;
+        outputEl.innerHTML = highlightMir(data.ir);
         outputEl.className = '';
         setStatus('ok', 'ok');
       } else {
@@ -240,8 +606,8 @@
     statusEl.className = cls;
   }
 
-  sourceEl.addEventListener('input', schedule);
-  storageEl.addEventListener('input', schedule);
+  sourceEl.addEventListener('input', () => { syncSourceHighlight(); schedule(); });
+  storageEl.addEventListener('input', () => { syncStorageHighlight(); schedule(); });
 </script>
 </body>
 </html>
