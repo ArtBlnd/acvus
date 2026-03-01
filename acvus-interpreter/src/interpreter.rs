@@ -399,7 +399,8 @@ impl Interpreter {
         output: String,
     ) -> (Self, String, Value) {
         match name {
-            "to_string" | "to_int" | "to_float" | "len" | "reverse" | "join" | "contains" => {
+            "to_string" | "to_int" | "to_float" | "char_to_int" | "int_to_char" | "len"
+            | "reverse" | "join" | "contains" => {
                 (this, output, builtins::call_pure(name, args))
             }
             "filter" => Self::exec_hof_filter(this, args, output).await,
@@ -666,6 +667,26 @@ fn eval_binop(op: BinOp, left: Value, right: Value) -> Value {
             (Value::Int(a), Value::Int(b)) => Value::Int(a / b),
             (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
             (l, r) => panic!("Div: incompatible {l:?} / {r:?}"),
+        },
+        BinOp::Xor => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a ^ b),
+            (l, r) => panic!("Xor: incompatible {l:?} ^ {r:?}"),
+        },
+        BinOp::BitAnd => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
+            (l, r) => panic!("BitAnd: incompatible {l:?} & {r:?}"),
+        },
+        BinOp::BitOr => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
+            (l, r) => panic!("BitOr: incompatible {l:?} | {r:?}"),
+        },
+        BinOp::Shl => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a << b),
+            (l, r) => panic!("Shl: incompatible {l:?} << {r:?}"),
+        },
+        BinOp::Shr => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
+            (l, r) => panic!("Shr: incompatible {l:?} >> {r:?}"),
         },
         BinOp::Eq => Value::Bool(values_equal(&left, &right)),
         BinOp::Neq => Value::Bool(!values_equal(&left, &right)),

@@ -290,7 +290,9 @@ impl TypeChecker {
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if lt.is_error() || rt.is_error() {
                     let ty = match op {
-                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => Ty::Error,
+                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div
+                        | BinOp::Xor | BinOp::BitAnd | BinOp::BitOr
+                        | BinOp::Shl | BinOp::Shr => Ty::Error,
                         _ => Ty::Bool,
                     };
                     self.record(*span, ty.clone());
@@ -349,6 +351,22 @@ impl TypeChecker {
                             );
                         }
                         Ty::Bool
+                    }
+                    BinOp::Xor | BinOp::BitAnd | BinOp::BitOr
+                    | BinOp::Shl | BinOp::Shr => {
+                        let lok = self.subst.unify(&lt, &Ty::Int).is_ok();
+                        let rok = self.subst.unify(&rt, &Ty::Int).is_ok();
+                        if !lok || !rok {
+                            self.error(
+                                MirErrorKind::TypeMismatchBinOp {
+                                    op: op_str(*op),
+                                    left: self.subst.resolve(&lt),
+                                    right: self.subst.resolve(&rt),
+                                },
+                                *span,
+                            );
+                        }
+                        Ty::Int
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         let unified = self.subst.unify(&lt, &rt).is_ok();
@@ -1031,6 +1049,11 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::Gte => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::Xor => "^",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
     }
 }
 

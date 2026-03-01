@@ -1,9 +1,11 @@
 pub mod analysis;
+pub mod obfuscate;
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
-use acvus_mir::ir::MirModule;
+use acvus_mir::ir::{MirBody, MirModule};
 
 /// Analysis result store. Each analysis deposits its output here, keyed by TypeId.
 pub struct PassContext {
@@ -83,6 +85,19 @@ pub trait AnalysisPass {
     fn run(&self, module: &MirModule, deps: Self::Required<'_>) -> Self::Output;
 }
 
+/// A transform pass that rewrites MirModule in-place within the pipeline.
+pub trait TransformPass {
+    type Required<'a>: FromContext<'a>;
+    fn transform(&self, module: MirModule, deps: Self::Required<'_>) -> MirModule;
+}
+
+/// Wrapper to place a TransformPass into a Chain.
+pub struct Transform<P>(pub P);
+
+/// Marker stored in PassContext after a TransformPass runs.
+/// Downstream passes can depend on this to enforce ordering.
+pub struct TransformMarker<P: 'static>(PhantomData<P>);
+
 /// Heterogeneous linked list of passes.
 pub struct Chain<H, T>(pub H, pub T);
 
@@ -91,13 +106,14 @@ pub trait PassSet {
     /// Collect (output_type_id, dep_type_ids, analysis_type_id) for each pass.
     fn collect_deps(&self, out: &mut Vec<(TypeId, Vec<TypeId>, TypeId)>);
 
-    /// Run the pass whose analysis TypeId matches `target`, storing result in ctx.
-    fn run_targeted(&self, target: TypeId, module: &MirModule, ctx: &mut PassContext);
+    /// Run the pass whose TypeId matches `target`, storing result in ctx.
+    /// TransformPass may mutate module in-place.
+    fn run_targeted(&self, target: TypeId, module: &mut MirModule, ctx: &mut PassContext);
 }
 
 impl PassSet for () {
     fn collect_deps(&self, _out: &mut Vec<(TypeId, Vec<TypeId>, TypeId)>) {}
-    fn run_targeted(&self, _target: TypeId, _module: &MirModule, _ctx: &mut PassContext) {}
+    fn run_targeted(&self, _target: TypeId, _module: &mut MirModule, _ctx: &mut PassContext) {}
 }
 
 impl<P, Rest> PassSet for Chain<P, Rest>
@@ -114,11 +130,44 @@ where
         self.1.collect_deps(out);
     }
 
-    fn run_targeted(&self, target: TypeId, module: &MirModule, ctx: &mut PassContext) {
+    fn run_targeted(&self, target: TypeId, module: &mut MirModule, ctx: &mut PassContext) {
         if target == TypeId::of::<P>() {
             let deps = <P::Required<'_>>::from_context(ctx);
             let output = self.0.run(module, deps);
             ctx.insert(output);
+        } else {
+            self.1.run_targeted(target, module, ctx);
+        }
+    }
+}
+
+impl<P, Rest> PassSet for Chain<Transform<P>, Rest>
+where
+    P: TransformPass + 'static,
+    Rest: PassSet,
+{
+    fn collect_deps(&self, out: &mut Vec<(TypeId, Vec<TypeId>, TypeId)>) {
+        out.push((
+            TypeId::of::<TransformMarker<P>>(),
+            <P::Required<'static>>::required_type_ids(),
+            TypeId::of::<Transform<P>>(),
+        ));
+        self.1.collect_deps(out);
+    }
+
+    fn run_targeted(&self, target: TypeId, module: &mut MirModule, ctx: &mut PassContext) {
+        if target == TypeId::of::<Transform<P>>() {
+            let deps = <P::Required<'_>>::from_context(ctx);
+            let old = std::mem::replace(
+                module,
+                MirModule {
+                    main: MirBody::new(),
+                    closures: HashMap::new(),
+                    texts: vec![],
+                },
+            );
+            *module = self.0 .0.transform(old, deps);
+            ctx.insert(TransformMarker::<P>(PhantomData));
         } else {
             self.1.run_targeted(target, module, ctx);
         }
@@ -188,12 +237,12 @@ where
         Self { passes, order }
     }
 
-    pub fn run(&self, module: &MirModule) -> PassContext {
+    pub fn run(&self, mut module: MirModule) -> (MirModule, PassContext) {
         let mut ctx = PassContext::new();
         for &analysis_id in &self.order {
-            self.passes.run_targeted(analysis_id, module, &mut ctx);
+            self.passes.run_targeted(analysis_id, &mut module, &mut ctx);
         }
-        ctx
+        (module, ctx)
     }
 }
 
@@ -247,14 +296,14 @@ mod tests {
     #[test]
     fn single_pass_no_deps() {
         let manager = PassManager::new(Chain(PassA, ()));
-        let ctx = manager.run(&empty_module());
+        let (_, ctx) = manager.run(empty_module());
         assert_eq!(ctx.get::<ResultA>().0, 42);
     }
 
     #[test]
     fn two_passes_with_dependency() {
         let manager = PassManager::new(Chain(PassB, Chain(PassA, ())));
-        let ctx = manager.run(&empty_module());
+        let (_, ctx) = manager.run(empty_module());
         assert_eq!(ctx.get::<ResultA>().0, 42);
         assert_eq!(ctx.get::<ResultB>().0, 43);
     }
@@ -262,7 +311,7 @@ mod tests {
     #[test]
     fn three_passes_dag() {
         let manager = PassManager::new(Chain(PassC, Chain(PassB, Chain(PassA, ()))));
-        let ctx = manager.run(&empty_module());
+        let (_, ctx) = manager.run(empty_module());
         assert_eq!(ctx.get::<ResultA>().0, 42);
         assert_eq!(ctx.get::<ResultB>().0, 43);
         assert_eq!(ctx.get::<ResultC>().0, 85);
@@ -271,7 +320,7 @@ mod tests {
     #[test]
     fn registration_order_independent() {
         let manager = PassManager::new(Chain(PassA, Chain(PassB, ())));
-        let ctx = manager.run(&empty_module());
+        let (_, ctx) = manager.run(empty_module());
         assert_eq!(ctx.get::<ResultB>().0, 43);
     }
 

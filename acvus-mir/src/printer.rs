@@ -35,6 +35,11 @@ fn fmt_binop(op: BinOp) -> &'static str {
         BinOp::Gte => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::Xor => "^",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
     }
 }
 

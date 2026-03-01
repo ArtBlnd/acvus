@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 acvus-mir = { path = "../acvus-mir" }
+acvus-ast = { path = "../acvus-ast" }
+rand = "0.9"
 
 [dev-dependencies]
-acvus-ast = { path = "../acvus-ast" }

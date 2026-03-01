@@ -248,6 +248,24 @@ pub fn builtins() -> Vec<BuiltinFn> {
             constraint: None,
         },
         BuiltinFn {
+            name: "char_to_int",
+            signature: |_| {
+                // char_to_int: (String) -> Int
+                (vec![Ty::String], Ty::Int)
+            },
+            is_effectful: false,
+            constraint: None,
+        },
+        BuiltinFn {
+            name: "int_to_char",
+            signature: |_| {
+                // int_to_char: (Int) -> String
+                (vec![Ty::Int], Ty::String)
+            },
+            is_effectful: false,
+            constraint: None,
+        },
+        BuiltinFn {
             name: "contains",
             signature: |subst| {
                 // contains: (List<T>, T) -> Bool

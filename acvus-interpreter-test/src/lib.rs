@@ -28,6 +28,39 @@ pub async fn run_simple(source: &str) -> String {
     run(source, HashMap::new(), HashMap::new(), ExternFnRegistry::new()).await
 }
 
+/// Parse + compile + obfuscate + execute, returning the output string.
+pub async fn run_obfuscated(
+    source: &str,
+    context_types: HashMap<String, Ty>,
+    context_values: HashMap<String, Value>,
+    extern_fns: ExternFnRegistry,
+) -> String {
+    use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
+    use acvus_mir_pass::TransformPass;
+
+    let template = acvus_ast::parse(source).expect("parse failed");
+    let mir_registry = extern_fns.to_mir_registry();
+    let (module, _hints) =
+        acvus_mir::compile(&template, context_types, &mir_registry).expect("compile failed");
+
+    let module = ObfuscatePass {
+        config: ObfConfig {
+            seed: 12345,
+            ..ObfConfig::default()
+        },
+    }
+    .transform(module, ());
+
+    let interp = Interpreter::new(module, context_values, extern_fns);
+    let (_interp, output) = interp.execute().await;
+    output
+}
+
+/// Simple obfuscated: no context, no extern fns.
+pub async fn run_simple_obfuscated(source: &str) -> String {
+    run_obfuscated(source, HashMap::new(), HashMap::new(), ExternFnRegistry::new()).await
+}
+
 /// With context types + values.
 pub async fn run_with_context(
     source: &str,

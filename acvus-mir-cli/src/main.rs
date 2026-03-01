@@ -55,12 +55,15 @@ impl TypeDef {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let obfuscate = args.iter().any(|a| a == "--obfuscate");
+    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
 
-    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
-        eprintln!("Usage: acvus-mir-cli <template-file> [context.json]");
+    if args.len() < 2 || *args[1] == "--help" || *args[1] == "-h" {
+        eprintln!("Usage: acvus-mir-cli <template-file> [context.json] [--obfuscate]");
         eprintln!();
         eprintln!("  template-file   Path to .acvus template (or - for stdin)");
         eprintln!("  context.json    Optional JSON with context types and extern fns");
+        eprintln!("  --obfuscate     Apply MIR obfuscation pass");
         eprintln!();
         eprintln!("Context JSON format:");
         eprintln!(r#"  {{"#);
@@ -71,7 +74,7 @@ fn main() {
     }
 
     // Read template.
-    let source = if args[1] == "-" {
+    let source = if *args[1] == "-" {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
             eprintln!("error: failed to read stdin: {e}");
@@ -79,14 +82,14 @@ fn main() {
         });
         buf
     } else {
-        fs::read_to_string(&args[1]).unwrap_or_else(|e| {
+        fs::read_to_string(args[1]).unwrap_or_else(|e| {
             eprintln!("error: failed to read {}: {e}", args[1]);
             process::exit(1);
         })
     };
 
     // Read context.
-    let ctx: Context = if let Some(ctx_path) = args.get(2) {
+    let ctx: Context = if let Some(&ctx_path) = args.get(2) {
         let json = fs::read_to_string(ctx_path).unwrap_or_else(|e| {
             eprintln!("error: failed to read {ctx_path}: {e}");
             process::exit(1);
@@ -124,7 +127,16 @@ fn main() {
 
     // Compile.
     match acvus_mir::compile(&template, context_types, &registry) {
-        Ok((module, _hints)) => {
+        Ok((mut module, _hints)) => {
+            if obfuscate {
+                use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
+                let pass = ObfuscatePass {
+                    config: ObfConfig::default(),
+                };
+                module = acvus_mir_pass::TransformPass::transform(
+                    &pass, module, (),
+                );
+            }
             println!("{}", dump(&module));
         }
         Err(errors) => {

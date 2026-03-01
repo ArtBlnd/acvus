@@ -311,6 +311,11 @@ pub enum BinOp {
     Gte,
     And,
     Or,
+    Xor,
+    BitAnd,
+    BitOr,
+    Shl,
+    Shr,
 }
 
 /// A unary operator.

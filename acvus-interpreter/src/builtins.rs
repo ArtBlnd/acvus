@@ -1,7 +1,7 @@
 use crate::value::Value;
 
 pub const BUILTIN_NAMES: &[&str] = &[
-    "to_string", "to_int", "to_float", "filter", "map", "pmap",
+    "to_string", "to_int", "to_float", "char_to_int", "int_to_char", "filter", "map", "pmap",
     "find", "reduce", "fold", "any", "all", "len", "reverse", "join", "contains",
 ];
 
@@ -15,6 +15,8 @@ pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
         "to_string" => call_to_string(args.into_iter().next().unwrap()),
         "to_int" => call_to_int(args.into_iter().next().unwrap()),
         "to_float" => call_to_float(args.into_iter().next().unwrap()),
+        "char_to_int" => call_char_to_int(args.into_iter().next().unwrap()),
+        "int_to_char" => call_int_to_char(args.into_iter().next().unwrap()),
         "len" => call_len(args),
         "reverse" => call_reverse(args),
         "join" => call_join(args),
@@ -40,6 +42,26 @@ fn call_to_float(arg: Value) -> Value {
     match arg {
         Value::Int(n) => Value::Float(n as f64),
         _ => panic!("to_float: expected Int, got {arg:?}"),
+    }
+}
+
+fn call_char_to_int(arg: Value) -> Value {
+    match arg {
+        Value::String(s) => {
+            let ch = s.chars().next().expect("char_to_int: empty string");
+            Value::Int(ch as i64)
+        }
+        _ => panic!("char_to_int: expected String, got {arg:?}"),
+    }
+}
+
+fn call_int_to_char(arg: Value) -> Value {
+    match arg {
+        Value::Int(n) => {
+            let ch = char::from_u32(n as u32).expect("int_to_char: invalid codepoint");
+            Value::String(ch.to_string())
+        }
+        _ => panic!("int_to_char: expected Int, got {arg:?}"),
     }
 }
 

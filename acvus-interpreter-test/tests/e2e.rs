@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use acvus_interpreter::{ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, Value};
 use acvus_interpreter_test::*;
+#[allow(unused_imports)]
+use acvus_interpreter_test::{run_obfuscated, run_simple_obfuscated};
 use acvus_mir::ty::Ty;
 
 // ── Text & literals ──────────────────────────────────────────────
@@ -1418,5 +1420,297 @@ async fn multi_arm_range_and_literal_high() {
         )
         .await,
         "high"
+    );
+}
+
+// ── Obfuscation equivalence ────────────────────────────────────
+
+#[tokio::test]
+async fn obf_text_only() {
+    assert_eq!(run_simple_obfuscated("hello world").await, "hello world");
+}
+
+#[tokio::test]
+async fn obf_string_emit() {
+    assert_eq!(run_simple_obfuscated(r#"{{ "hello" }}"#).await, "hello");
+}
+
+#[tokio::test]
+async fn obf_string_concat() {
+    assert_eq!(
+        run_simple_obfuscated(r#"{{ "hello" + " " + "world" }}"#).await,
+        "hello world"
+    );
+}
+
+#[tokio::test]
+async fn obf_mixed_text_and_expr() {
+    let (ty, val) = string_context("name", "alice");
+    assert_eq!(
+        run_obfuscated("Hello, {{ @name }}!", ty, val, ExternFnRegistry::new()).await,
+        "Hello, alice!"
+    );
+}
+
+#[tokio::test]
+async fn obf_int_arithmetic() {
+    let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let values = HashMap::from([
+        ("a".into(), Value::Int(3)),
+        ("b".into(), Value::Int(7)),
+    ]);
+    assert_eq!(
+        run_obfuscated("{{ @a + @b | to_string }}", types, values, ExternFnRegistry::new()).await,
+        "10"
+    );
+}
+
+#[tokio::test]
+async fn obf_match_literal() {
+    let (ty, val) = int_context("n", 42);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ 42 = @n }}yes{{_}}no{{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "yes"
+    );
+}
+
+#[tokio::test]
+async fn obf_match_string_literal() {
+    let (ty, val) = string_context("name", "alice");
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ "alice" = @name }}found{{_}}nope{{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "found"
+    );
+}
+
+#[tokio::test]
+async fn obf_variable_write_read() {
+    assert_eq!(
+        run_simple_obfuscated("{{ $x = 42 }}{{ $x | to_string }}").await,
+        "42"
+    );
+}
+
+#[tokio::test]
+async fn obf_iteration() {
+    let (ty, val) = items_context(vec![1, 2, 3]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ x in @items }}{{ x | to_string }} {{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "1 2 3 "
+    );
+}
+
+#[tokio::test]
+async fn obf_nested_match_with_variable() {
+    let types = HashMap::from([
+        ("role".into(), Ty::String),
+        ("level".into(), Ty::Int),
+    ]);
+    let values = HashMap::from([
+        ("role".into(), Value::String("admin".into())),
+        ("level".into(), Value::Int(5)),
+    ]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ "admin" = @role }}{{ 0..10 = @level }}{{ $result = "low-admin" }}{{_}}{{ $result = "high-admin" }}{{/}}{{_}}{{ $result = "guest" }}{{/}}{{ $result }}"#,
+            types,
+            values,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "low-admin"
+    );
+}
+
+#[tokio::test]
+async fn obf_lambda_filter_map() {
+    let (ty, val) = items_context(vec![0, 1, 2, 0, 3]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ x = @items | filter(x -> x != 0) | map(x -> x | to_string) }}{{ x | join(", ") }}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "1, 2, 3"
+    );
+}
+
+// ── Complex obfuscation tests ─────────────────────────────────
+
+#[tokio::test]
+async fn obf_variable_accumulate_in_loop() {
+    let (ty, val) = items_context(vec![10, 20, 30]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "60"
+    );
+}
+
+#[tokio::test]
+async fn obf_nested_iteration_with_match() {
+    let ty = HashMap::from([
+        ("rows".into(), Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
+    ]);
+    let val = HashMap::from([(
+        "rows".into(),
+        Value::List(vec![
+            Value::List(vec![Value::Int(1), Value::Int(2)]),
+            Value::List(vec![Value::Int(3), Value::Int(4)]),
+        ]),
+    )]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ row in @rows }}[{{ x in row }}{{ 3 = x }}three{{_}}{{ x | to_string }}{{/}} {{/}}]{{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "[1 2 ][three 4 ]"
+    );
+}
+
+#[tokio::test]
+async fn obf_object_destructure_and_format() {
+    let (ty, val) = users_list_context();
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ { name, age, } in @users }}{{ name }}({{ age | to_string }}) {{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "alice(30) bob(25) "
+    );
+}
+
+#[tokio::test]
+async fn obf_multi_variable_interaction() {
+    assert_eq!(
+        run_simple_obfuscated(
+            r#"{{ $a = 10 }}{{ $b = 20 }}{{ $c = $a + $b }}{{ $a = $c * 2 }}{{ $a | to_string }}-{{ $b | to_string }}-{{ $c | to_string }}"#,
+        )
+        .await,
+        "60-20-30"
+    );
+}
+
+#[tokio::test]
+async fn obf_string_match_multi_arm() {
+    let (ty, val) = string_context("lang", "rust");
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ "go" = @lang }}Go{{ "rust" = }}Rust{{ "python" = }}Python{{_}}Other{{/}}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "Rust"
+    );
+}
+
+#[tokio::test]
+async fn obf_range_pattern_with_variable() {
+    let types = HashMap::from([("score".into(), Ty::Int)]);
+    let values = HashMap::from([("score".into(), Value::Int(85))]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ 90..=100 = @score }}{{ $grade = "A" }}{{ 80..90 = }}{{ $grade = "B" }}{{ 70..80 = }}{{ $grade = "C" }}{{_}}{{ $grade = "F" }}{{/}}{{ $grade }}"#,
+            types,
+            values,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "B"
+    );
+}
+
+#[tokio::test]
+async fn obf_filter_accumulate_complex() {
+    let (ty, val) = items_context(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ $sum = 0 }}{{ x in @items | filter(x -> x > 5) }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
+            ty,
+            val,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "40"
+    );
+}
+
+#[tokio::test]
+async fn obf_pipe_chain_with_context() {
+    let types = HashMap::from([
+        ("names".into(), Ty::List(Box::new(Ty::String))),
+    ]);
+    let values = HashMap::from([(
+        "names".into(),
+        Value::List(vec![
+            Value::String("alice".into()),
+            Value::String("bob".into()),
+            Value::String("charlie".into()),
+        ]),
+    )]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ @names | join(", ") }}"#,
+            types,
+            values,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "alice, bob, charlie"
+    );
+}
+
+#[tokio::test]
+async fn obf_boolean_logic_in_match() {
+    let types = HashMap::from([
+        ("a".into(), Ty::Int),
+        ("b".into(), Ty::Int),
+    ]);
+    let values = HashMap::from([
+        ("a".into(), Value::Int(5)),
+        ("b".into(), Value::Int(10)),
+    ]);
+    assert_eq!(
+        run_obfuscated(
+            r#"{{ $result = "none" }}{{ 1..10 = @a }}{{ 5..15 = @b }}{{ $result = "both" }}{{_}}{{ $result = "a-only" }}{{/}}{{_}}{{ $result = "other" }}{{/}}{{ $result }}"#,
+            types,
+            values,
+            ExternFnRegistry::new(),
+        )
+        .await,
+        "both"
     );
 }
