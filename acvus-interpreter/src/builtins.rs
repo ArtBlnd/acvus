@@ -1,6 +1,9 @@
 use crate::value::Value;
 
-pub const BUILTIN_NAMES: &[&str] = &["to_string", "to_int", "to_float", "filter", "map", "pmap"];
+pub const BUILTIN_NAMES: &[&str] = &[
+    "to_string", "to_int", "to_float", "filter", "map", "pmap",
+    "find", "reduce", "fold", "any", "all", "len", "reverse", "join", "contains",
+];
 
 pub fn is_builtin(name: &str) -> bool {
     BUILTIN_NAMES.contains(&name)
@@ -12,6 +15,10 @@ pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
         "to_string" => call_to_string(args.into_iter().next().unwrap()),
         "to_int" => call_to_int(args.into_iter().next().unwrap()),
         "to_float" => call_to_float(args.into_iter().next().unwrap()),
+        "len" => call_len(args),
+        "reverse" => call_reverse(args),
+        "join" => call_join(args),
+        "contains" => call_contains(args),
         _ => panic!("not a pure builtin: {name}"),
     }
 }
@@ -33,6 +40,63 @@ fn call_to_float(arg: Value) -> Value {
     match arg {
         Value::Int(n) => Value::Float(n as f64),
         _ => panic!("to_float: expected Int, got {arg:?}"),
+    }
+}
+
+fn call_len(args: Vec<Value>) -> Value {
+    match args.into_iter().next().unwrap() {
+        Value::List(items) => Value::Int(items.len() as i64),
+        v => panic!("len: expected List, got {v:?}"),
+    }
+}
+
+fn call_reverse(args: Vec<Value>) -> Value {
+    match args.into_iter().next().unwrap() {
+        Value::List(mut items) => {
+            items.reverse();
+            Value::List(items)
+        }
+        v => panic!("reverse: expected List, got {v:?}"),
+    }
+}
+
+fn call_join(args: Vec<Value>) -> Value {
+    let mut it = args.into_iter();
+    let list = it.next().unwrap();
+    let sep = it.next().unwrap();
+    match (list, sep) {
+        (Value::List(items), Value::String(sep)) => {
+            let strs: Vec<String> = items
+                .into_iter()
+                .map(|v| match v {
+                    Value::String(s) => s,
+                    v => panic!("join: expected List<String>, got element {v:?}"),
+                })
+                .collect();
+            Value::String(strs.join(&sep))
+        }
+        (l, s) => panic!("join: expected (List<String>, String), got ({l:?}, {s:?})"),
+    }
+}
+
+fn call_contains(args: Vec<Value>) -> Value {
+    let mut it = args.into_iter();
+    let list = it.next().unwrap();
+    let target = it.next().unwrap();
+    match list {
+        Value::List(items) => Value::Bool(items.iter().any(|v| values_equal(v, &target))),
+        v => panic!("contains: expected List, got {v:?}"),
+    }
+}
+
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Unit, Value::Unit) => true,
+        _ => false,
     }
 }
 

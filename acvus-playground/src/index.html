@@ -303,6 +303,8 @@
   - {{ name }} ({{ age | to_string }})
 {-{/-2}}
 
+Total age: {{ $users | fold(0, (acc, u) -> acc + u.age) | to_string }}
+
 {{ "admin" = $role }}You are **admin**.{{_}}You are guest.{{/}}</textarea>
       </div>
     </div>

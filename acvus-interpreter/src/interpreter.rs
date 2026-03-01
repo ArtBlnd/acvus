@@ -403,11 +403,16 @@ where
         output: String,
     ) -> (Self, String, Value) {
         match name {
-            "to_string" | "to_int" | "to_float" => {
+            "to_string" | "to_int" | "to_float" | "len" | "reverse" | "join" | "contains" => {
                 (this, output, builtins::call_pure(name, args))
             }
             "filter" => Self::exec_hof_filter(this, args, output).await,
             "map" | "pmap" => Self::exec_hof_map(this, args, output).await,
+            "find" => Self::exec_hof_find(this, args, output).await,
+            "reduce" => Self::exec_hof_reduce(this, args, output).await,
+            "fold" => Self::exec_hof_fold(this, args, output).await,
+            "any" => Self::exec_hof_any(this, args, output).await,
+            "all" => Self::exec_hof_all(this, args, output).await,
             _ => panic!("unknown builtin: {name}"),
         }
     }
@@ -444,6 +449,93 @@ where
             result.push(mapped);
         }
         (this, output, Value::List(result))
+    }
+
+    async fn exec_hof_find(
+        mut this: Self,
+        args: Vec<Value>,
+        mut output: String,
+    ) -> (Self, String, Value) {
+        let (items, fn_val) = extract_list_fn(args, "find");
+        for item in items {
+            let result;
+            (this, output, result) =
+                Self::call_closure(this, fn_val.clone(), vec![item.clone()], output).await;
+            if matches!(result, Value::Bool(true)) {
+                return (this, output, item);
+            }
+        }
+        panic!("find: no element matched the predicate");
+    }
+
+    async fn exec_hof_reduce(
+        mut this: Self,
+        args: Vec<Value>,
+        mut output: String,
+    ) -> (Self, String, Value) {
+        let (items, fn_val) = extract_list_fn(args, "reduce");
+        let mut it = items.into_iter();
+        let mut acc = it.next().expect("reduce: empty list");
+        for item in it {
+            (this, output, acc) =
+                Self::call_closure(this, fn_val.clone(), vec![acc, item], output).await;
+        }
+        (this, output, acc)
+    }
+
+    async fn exec_hof_fold(
+        mut this: Self,
+        args: Vec<Value>,
+        mut output: String,
+    ) -> (Self, String, Value) {
+        let mut it = args.into_iter();
+        let list = it.next().unwrap();
+        let init = it.next().unwrap();
+        let closure = it.next().unwrap();
+        let (items, fn_val) = match (list, closure) {
+            (Value::List(items), Value::Fn(fn_val)) => (items, fn_val),
+            (l, c) => panic!("fold: expected (List, _, Fn), got ({l:?}, _, {c:?})"),
+        };
+        let mut acc = init;
+        for item in items {
+            (this, output, acc) =
+                Self::call_closure(this, fn_val.clone(), vec![acc, item], output).await;
+        }
+        (this, output, acc)
+    }
+
+    async fn exec_hof_any(
+        mut this: Self,
+        args: Vec<Value>,
+        mut output: String,
+    ) -> (Self, String, Value) {
+        let (items, fn_val) = extract_list_fn(args, "any");
+        for item in items {
+            let result;
+            (this, output, result) =
+                Self::call_closure(this, fn_val.clone(), vec![item], output).await;
+            if matches!(result, Value::Bool(true)) {
+                return (this, output, Value::Bool(true));
+            }
+        }
+        (this, output, Value::Bool(false))
+    }
+
+    async fn exec_hof_all(
+        mut this: Self,
+        args: Vec<Value>,
+        mut output: String,
+    ) -> (Self, String, Value) {
+        let (items, fn_val) = extract_list_fn(args, "all");
+        for item in items {
+            let result;
+            (this, output, result) =
+                Self::call_closure(this, fn_val.clone(), vec![item], output).await;
+            if matches!(result, Value::Bool(false)) {
+                return (this, output, Value::Bool(false));
+            }
+        }
+        (this, output, Value::Bool(true))
     }
 
     // -- closure invocation ---------------------------------------------------
