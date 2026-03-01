@@ -31,6 +31,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-mir-pass"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-mir",
+]
+
+[[package]]
 name = "acvus-mir-test"
 version = "0.1.0"
 dependencies = [
