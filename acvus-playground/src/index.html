@@ -186,7 +186,9 @@
       resize: none;
       padding: 14px 16px;
       overflow: auto;
+      scrollbar-width: none;          /* Firefox */
     }
+    .editor-wrap textarea::-webkit-scrollbar { display: none; }
 
     .editor-wrap textarea::placeholder {
       color: var(--muted);
@@ -289,9 +291,17 @@
         <textarea id="source" class="editor-font" spellcheck="false"
           placeholder="{{ x in 0..3 }}{{ x | to_string }}{{/}}">Hello, {{ $name }}!
 
-{{ { name, age, } in $users }}
-- {{ name }} ({{ age | to_string }})
-{{/}}
+{-{ adults = $users | filter(u -> u.age >= 20) }}
+**Adults:**
+{-{ { name, age, } in adults }}
+  - {{ name }} ({{ age | to_string }})
+{-{/-2}}
+
+{-{ teens = $users | filter(u -> u.age >= 13 && u.age < 20) }}
+**Teens:**
+{-{ { name, age, } in teens }}
+  - {{ name }} ({{ age | to_string }})
+{-{/-2}}
 
 {{ "admin" = $role }}You are **admin**.{{_}}You are guest.{{/}}</textarea>
       </div>
@@ -305,7 +315,10 @@
   "name": "alice",
   "users": [
     {"name": "alice", "age": 30},
-    {"name": "bob", "age": 25}
+    {"name": "bob", "age": 17},
+    {"name": "charlie", "age": 25},
+    {"name": "diana", "age": 15},
+    {"name": "eve", "age": 42}
   ],
   "role": "admin"
 }</textarea>
@@ -404,13 +417,25 @@
     let result = '';
     let i = 0;
     while (i < text.length) {
-      if (text[i] === '{' && text[i + 1] === '{') {
-        result += '<span class="t-delim">{{</span>';
-        i += 2;
+      // Detect opening: {-{ or {{
+      let openDelim = null;
+      if (text[i] === '{' && text[i+1] === '-' && text[i+2] === '{') {
+        openDelim = '{-{';
+      } else if (text[i] === '{' && text[i+1] === '{') {
+        openDelim = '{{';
+      }
+      if (openDelim) {
+        result += '<span class="t-delim">' + esc(openDelim) + '</span>';
+        i += openDelim.length;
         let inner = '';
-        let depth = 1;
         while (i < text.length) {
-          if (text[i] === '}' && text[i + 1] === '}') {
+          // Detect closing: }-} or }}
+          if (text[i] === '}' && text[i+1] === '-' && text[i+2] === '}') {
+            result += highlightTmplInner(inner);
+            result += '<span class="t-delim">}-}</span>';
+            i += 3;
+            break;
+          } else if (text[i] === '}' && text[i+1] === '}') {
             result += highlightTmplInner(inner);
             result += '<span class="t-delim">}}</span>';
             i += 2;
@@ -422,7 +447,8 @@
       } else {
         // Raw text outside {{ }}
         let raw = '';
-        while (i < text.length && !(text[i] === '{' && text[i + 1] === '{')) {
+        while (i < text.length) {
+          if (text[i] === '{' && (text[i+1] === '{' || (text[i+1] === '-' && text[i+2] === '{'))) break;
           raw += text[i];
           i++;
         }
