@@ -31,18 +31,12 @@ pub struct Lowerer {
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
-/// Only lines after the first `\n` are affected; the first line is kept as-is.
+/// All lines (including the first) are affected.
 fn adjust_text_indent(text: &str, modifier: &IndentModifier) -> String {
     let mut result = String::with_capacity(text.len());
-    let mut first = true;
-    for line in text.split('\n') {
-        if !first {
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
             result.push('\n');
-        }
-        if first {
-            result.push_str(line);
-            first = false;
-            continue;
         }
         match modifier {
             IndentModifier::Decrease(n) => {
@@ -53,8 +47,10 @@ fn adjust_text_indent(text: &str, modifier: &IndentModifier) -> String {
             }
             IndentModifier::Increase(n) => {
                 let n = *n as usize;
-                for _ in 0..n {
-                    result.push(' ');
+                if !line.is_empty() {
+                    for _ in 0..n {
+                        result.push(' ');
+                    }
                 }
                 result.push_str(line);
             }
@@ -1633,21 +1629,21 @@ mod tests {
     fn adjust_text_indent_increase() {
         let text = "first\nsecond\n  third";
         let result = adjust_text_indent(text, &IndentModifier::Increase(3));
-        assert_eq!(result, "first\n   second\n     third");
+        assert_eq!(result, "   first\n   second\n     third");
     }
 
     #[test]
-    fn adjust_text_indent_first_line_untouched() {
+    fn adjust_text_indent_first_line_also_adjusted() {
         let text = "  first\n  second";
         let result = adjust_text_indent(text, &IndentModifier::Decrease(2));
-        assert_eq!(result, "  first\nsecond");
+        assert_eq!(result, "first\nsecond");
     }
 
     #[test]
     fn adjust_text_indent_no_newline() {
         let text = "  hello";
         let result = adjust_text_indent(text, &IndentModifier::Decrease(2));
-        assert_eq!(result, "  hello");
+        assert_eq!(result, "hello");
     }
 
     #[test]
