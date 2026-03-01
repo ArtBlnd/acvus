@@ -28,8 +28,9 @@ pub async fn run(
             .unwrap();
     }
 
-    let mut interp = Interpreter::new(module, storage, extern_fns);
-    interp.execute().await
+    let interp = Interpreter::new(module, storage, extern_fns);
+    let (_interp, output) = interp.execute().await;
+    output
 }
 
 /// Simple: no storage, no extern fns.

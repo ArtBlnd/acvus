@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
+acvus-interpreter = { path = "../acvus-interpreter" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

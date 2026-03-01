@@ -1,6 +1,4 @@
-use std::ops::AsyncFnMut;
-
-use crate::value::{FnValue, Value};
+use crate::value::Value;
 
 pub const BUILTIN_NAMES: &[&str] = &["to_string", "to_int", "to_float", "filter", "map", "pmap"];
 
@@ -8,19 +6,13 @@ pub fn is_builtin(name: &str) -> bool {
     BUILTIN_NAMES.contains(&name)
 }
 
-/// Dispatch a builtin call.
-/// `call_closure` is injected by the interpreter for HOFs (filter/map/pmap).
-pub async fn call<F>(name: &str, args: Vec<Value>, mut call_closure: F) -> Value
-where
-    F: AsyncFnMut(FnValue, Vec<Value>) -> Value,
-{
+/// Dispatch a pure (non-HOF) builtin.
+pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
     match name {
         "to_string" => call_to_string(args.into_iter().next().unwrap()),
         "to_int" => call_to_int(args.into_iter().next().unwrap()),
         "to_float" => call_to_float(args.into_iter().next().unwrap()),
-        "filter" => call_filter(args, &mut call_closure).await,
-        "map" | "pmap" => call_map(args, &mut call_closure).await,
-        _ => panic!("unknown builtin: {name}"),
+        _ => panic!("not a pure builtin: {name}"),
     }
 }
 
@@ -41,50 +33,6 @@ fn call_to_float(arg: Value) -> Value {
     match arg {
         Value::Int(n) => Value::Float(n as f64),
         _ => panic!("to_float: expected Int, got {arg:?}"),
-    }
-}
-
-// -- HOF builtins -------------------------------------------------------------
-
-async fn call_filter<F>(args: Vec<Value>, call_closure: &mut F) -> Value
-where
-    F: AsyncFnMut(FnValue, Vec<Value>) -> Value,
-{
-    let mut it = args.into_iter();
-    let list = it.next().unwrap();
-    let closure = it.next().unwrap();
-    match (list, closure) {
-        (Value::List(items), Value::Fn(fn_val)) => {
-            let mut result = Vec::new();
-            for item in items {
-                let keep = call_closure(fn_val.clone(), vec![item.clone()]).await;
-                if matches!(keep, Value::Bool(true)) {
-                    result.push(item);
-                }
-            }
-            Value::List(result)
-        }
-        (l, c) => panic!("filter: expected (List, Fn), got ({l:?}, {c:?})"),
-    }
-}
-
-async fn call_map<F>(args: Vec<Value>, call_closure: &mut F) -> Value
-where
-    F: AsyncFnMut(FnValue, Vec<Value>) -> Value,
-{
-    let mut it = args.into_iter();
-    let list = it.next().unwrap();
-    let closure = it.next().unwrap();
-    match (list, closure) {
-        (Value::List(items), Value::Fn(fn_val)) => {
-            let mut result = Vec::new();
-            for item in items {
-                let mapped = call_closure(fn_val.clone(), vec![item]).await;
-                result.push(mapped);
-            }
-            Value::List(result)
-        }
-        (l, c) => panic!("map: expected (List, Fn), got ({l:?}, {c:?})"),
     }
 }
 

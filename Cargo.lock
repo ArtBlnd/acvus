@@ -79,6 +79,7 @@ name = "acvus-playground"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-interpreter",
  "acvus-mir",
  "axum",
  "serde",

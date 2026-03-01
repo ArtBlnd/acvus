@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 
-use axum::{routing::{get, post}, Json, Router};
 use axum::response::Html;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use acvus_mir::extern_module::ExternRegistry;
+use acvus_interpreter::{
+    ExternFnRegistry, InMemoryStorage, Interpreter, PureValue, Storage, StorageKey,
+};
 use acvus_mir::ty::Ty;
 
 // ── Request / Response ────────────────────────────────────────────
@@ -18,69 +21,92 @@ struct CompileRequest {
 
 #[derive(Serialize)]
 struct CompileResponse {
+    output: Option<String>,
     ir: Option<String>,
     error: Option<String>,
 }
 
-// ── Type parser ───────────────────────────────────────────────────
-//
-// JSON type spec:
-//   "String" | "Int" | "Float" | "Bool"
-//   {"List": <type>}
-//   {"Tuple": [<type>, ...]}
-//   {"Object": {<key>: <type>, ...}}
+// ── JSON → Ty / PureValue ────────────────────────────────────────
 
-fn parse_ty(v: &serde_json::Value) -> Result<Ty, String> {
+fn ty_from_json(v: &serde_json::Value) -> Result<Ty, String> {
     match v {
-        serde_json::Value::String(s) => match s.as_str() {
-            "string" => Ok(Ty::String),
-            "int" => Ok(Ty::Int),
-            "float" => Ok(Ty::Float),
-            "bool" => Ok(Ty::Bool),
-            other => Err(format!("unknown primitive type `{other}`")),
-        },
-        serde_json::Value::Object(map) => {
-            if let Some(elem) = map.get("List") {
-                Ok(Ty::List(Box::new(parse_ty(elem)?)))
-            } else if let Some(elems) = map.get("Tuple") {
-                let arr = elems.as_array().ok_or("Tuple value must be an array")?;
-                let types: Result<Vec<Ty>, _> = arr.iter().map(parse_ty).collect();
-                Ok(Ty::Tuple(types?))
-            } else if let Some(fields) = map.get("Object") {
-                let obj = fields.as_object()
-                    .ok_or("Object value must be a JSON object")?;
-                let field_types: Result<BTreeMap<String, Ty>, _> = obj.iter()
-                    .map(|(k, v)| parse_ty(v).map(|t| (k.clone(), t)))
-                    .collect();
-                Ok(Ty::Object(field_types?))
+        serde_json::Value::Number(n) => {
+            if n.is_i64() {
+                Ok(Ty::Int)
             } else {
-                Err("unknown type spec — use \"List\", \"Tuple\", or \"Object\" as key".into())
+                Ok(Ty::Float)
             }
         }
-        _ => Err("type must be a string or object".into()),
+        serde_json::Value::String(_) => Ok(Ty::String),
+        serde_json::Value::Bool(_) => Ok(Ty::Bool),
+        serde_json::Value::Null => Err("null is not a supported type".into()),
+        serde_json::Value::Array(items) => {
+            let elem_ty = items
+                .first()
+                .map(ty_from_json)
+                .ok_or_else(|| "empty array: cannot infer element type".to_string())?;
+            Ok(Ty::List(Box::new(elem_ty?)))
+        }
+        serde_json::Value::Object(fields) => {
+            let field_types: Result<BTreeMap<String, Ty>, String> = fields
+                .iter()
+                .map(|(k, v)| ty_from_json(v).map(|t| (k.clone(), t)))
+                .collect();
+            Ok(Ty::Object(field_types?))
+        }
     }
 }
 
-// ── Compilation ───────────────────────────────────────────────────
+fn pv_from_json(v: &serde_json::Value) -> Result<PureValue, String> {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(PureValue::Int(i))
+            } else {
+                Ok(PureValue::Float(n.as_f64().unwrap()))
+            }
+        }
+        serde_json::Value::String(s) => Ok(PureValue::String(s.clone())),
+        serde_json::Value::Bool(b) => Ok(PureValue::Bool(*b)),
+        serde_json::Value::Null => Err("null is not a supported value".into()),
+        serde_json::Value::Array(items) => {
+            let vals: Result<Vec<PureValue>, String> = items.iter().map(pv_from_json).collect();
+            Ok(PureValue::List(vals?))
+        }
+        serde_json::Value::Object(fields) => {
+            let obj: Result<BTreeMap<String, PureValue>, String> = fields
+                .iter()
+                .map(|(k, v)| pv_from_json(v).map(|pv| (k.clone(), pv)))
+                .collect();
+            Ok(PureValue::Object(obj?))
+        }
+    }
+}
 
-fn compile_inner(
+// ── Compilation + Execution ──────────────────────────────────────
+
+async fn compile_and_run(
     source: &str,
-    storage_spec: HashMap<String, serde_json::Value>,
-) -> Result<String, String> {
-    let template = acvus_ast::parse(source)
-        .map_err(|e| format!("parse error: {e}"))?;
+    storage_json: HashMap<String, serde_json::Value>,
+) -> Result<(String, String), String> {
+    let template =
+        acvus_ast::parse(source).map_err(|e| format!("parse error: {e}"))?;
 
-    let storage_types: Result<HashMap<String, Ty>, _> = storage_spec
-        .iter()
-        .map(|(k, v)| {
-            parse_ty(v)
-                .map(|t| (k.clone(), t))
-                .map_err(|e| format!("storage `{k}`: {e}"))
-        })
-        .collect();
+    let mut storage_types: HashMap<String, Ty> = HashMap::new();
+    let mut storage_values: HashMap<String, PureValue> = HashMap::new();
+
+    for (k, v) in &storage_json {
+        let ty = ty_from_json(v).map_err(|e| format!("storage `{k}`: {e}"))?;
+        let pv = pv_from_json(v).map_err(|e| format!("storage `{k}`: {e}"))?;
+        storage_types.insert(k.clone(), ty);
+        storage_values.insert(k.clone(), pv);
+    }
+
+    let extern_fns = ExternFnRegistry::new();
+    let mir_registry = extern_fns.to_mir_registry();
 
     let (module, _hints) =
-        acvus_mir::compile(&template, storage_types?, &ExternRegistry::new()).map_err(|errors| {
+        acvus_mir::compile(&template, storage_types, &mir_registry).map_err(|errors| {
             errors
                 .iter()
                 .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
@@ -88,15 +114,36 @@ fn compile_inner(
                 .join("\n")
         })?;
 
-    Ok(acvus_mir::printer::dump(&module))
+    let ir = acvus_mir::printer::dump(&module);
+
+    let mut storage = InMemoryStorage::new();
+    for (name, value) in storage_values {
+        storage
+            .set(&StorageKey::root(name), value)
+            .await
+            .map_err(|e| format!("storage init: {e:?}"))?;
+    }
+
+    let interp = Interpreter::new(module, storage, extern_fns);
+    let (_interp, output) = interp.execute().await;
+
+    Ok((output, ir))
 }
 
-// ── Handlers ──────────────────────────────────────────────────────
+// ── Handlers ─────────────────────────────────────────────────────
 
 async fn handle_compile(Json(req): Json<CompileRequest>) -> Json<CompileResponse> {
-    match compile_inner(&req.source, req.storage) {
-        Ok(ir) => Json(CompileResponse { ir: Some(ir), error: None }),
-        Err(e) => Json(CompileResponse { ir: None, error: Some(e) }),
+    match compile_and_run(&req.source, req.storage).await {
+        Ok((output, ir)) => Json(CompileResponse {
+            output: Some(output),
+            ir: Some(ir),
+            error: None,
+        }),
+        Err(e) => Json(CompileResponse {
+            output: None,
+            ir: None,
+            error: Some(e),
+        }),
     }
 }
 
@@ -104,7 +151,7 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("index.html"))
 }
 
-// ── Entry point ───────────────────────────────────────────────────
+// ── Entry point ──────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() {

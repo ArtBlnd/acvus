@@ -112,6 +112,34 @@
       flex-shrink: 0;
     }
 
+    /* ── Tab bar ── */
+    .tab-bar {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tab-bar button {
+      padding: 6px 16px;
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+
+    .tab-bar button:hover { color: var(--text); }
+    .tab-bar button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
     /* ── Shared editor metrics ── */
     .editor-font {
       font-family: var(--mono);
@@ -267,29 +295,47 @@
       <div class="editor-wrap">
         <div class="hl-layer editor-font" id="storage-hl" aria-hidden="true"></div>
         <textarea id="storage" class="editor-font" spellcheck="false"
-          placeholder='{"name": "string", "items": {"List": "int"}}'></textarea>
+          placeholder='{"name": "alice", "items": [1, 2, 3]}'></textarea>
       </div>
       <div class="hint">
-        <code>"string"</code> <code>"int"</code> <code>"float"</code> <code>"bool"</code>
-        &nbsp;·&nbsp; <code>{"List": "int"}</code>
-        &nbsp;·&nbsp; <code>{"Object": {"k": "string"}}</code>
-        &nbsp;·&nbsp; <code>{"Tuple": ["string", "int"]}</code>
+        JSON values — types are inferred.
+        &nbsp;·&nbsp; <code>{"name": "alice"}</code>
+        &nbsp;·&nbsp; <code>{"items": [1, 2]}</code>
+        &nbsp;·&nbsp; <code>{"user": {"age": 30}}</code>
       </div>
     </div>
   </div>
   <div class="right-pane">
-    <div class="pane-label">MIR</div>
-    <pre id="output"></pre>
+    <div class="tab-bar">
+      <button class="active" data-tab="output">Output</button>
+      <button data-tab="mir">MIR</button>
+    </div>
+    <pre id="output-pane"></pre>
+    <pre id="mir-pane" style="display:none"></pre>
   </div>
 </div>
 
 <script>
-  const sourceEl  = document.getElementById('source');
-  const outputEl  = document.getElementById('output');
-  const statusEl  = document.getElementById('status');
-  const storageEl = document.getElementById('storage');
-  const sourceHl  = document.getElementById('source-hl');
-  const storageHl = document.getElementById('storage-hl');
+  const sourceEl    = document.getElementById('source');
+  const outputPane  = document.getElementById('output-pane');
+  const mirPane     = document.getElementById('mir-pane');
+  const statusEl    = document.getElementById('status');
+  const storageEl   = document.getElementById('storage');
+  const sourceHl    = document.getElementById('source-hl');
+  const storageHl   = document.getElementById('storage-hl');
+
+  // ── Tab switching ──
+
+  const tabButtons = document.querySelectorAll('.tab-bar button');
+  tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = btn.dataset.tab;
+      outputPane.style.display = tab === 'output' ? '' : 'none';
+      mirPane.style.display    = tab === 'mir'    ? '' : 'none';
+    });
+  });
 
   // ── HTML escape ──
 
@@ -562,8 +608,10 @@
   async function doCompile() {
     const source = sourceEl.value;
     if (!source.trim()) {
-      outputEl.innerHTML = '';
-      outputEl.className = '';
+      outputPane.innerHTML = '';
+      outputPane.className = '';
+      mirPane.innerHTML = '';
+      mirPane.className = '';
       setStatus('ready', '');
       return;
     }
@@ -588,18 +636,25 @@
         body: JSON.stringify({ source, storage }),
       });
       const data = await res.json();
-      if (data.ir) {
-        outputEl.innerHTML = highlightMir(data.ir);
-        outputEl.className = '';
-        setStatus('ok', 'ok');
-      } else {
-        outputEl.textContent = data.error ?? 'unknown error';
-        outputEl.className = 'is-error';
+      if (data.error) {
+        outputPane.textContent = data.error;
+        outputPane.className = 'is-error';
+        mirPane.textContent = data.error;
+        mirPane.className = 'is-error';
         setStatus('error', 'error');
+      } else {
+        outputPane.textContent = data.output ?? '';
+        outputPane.className = '';
+        mirPane.innerHTML = highlightMir(data.ir ?? '');
+        mirPane.className = '';
+        setStatus('ok', 'ok');
       }
     } catch (e) {
-      outputEl.textContent = 'server unreachable: ' + e.message;
-      outputEl.className = 'is-error';
+      const msg = 'server unreachable: ' + e.message;
+      outputPane.textContent = msg;
+      outputPane.className = 'is-error';
+      mirPane.textContent = msg;
+      mirPane.className = 'is-error';
       setStatus('error', 'error');
     }
   }
