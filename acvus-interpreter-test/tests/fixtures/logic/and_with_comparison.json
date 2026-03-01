@@ -1,0 +1,5 @@
+{
+  "template": "{{ true = $x > 10 && $x < 20 }}in range{{_}}out{{/}}",
+  "storage": { "x": 15 },
+  "expected": "in range"
+}

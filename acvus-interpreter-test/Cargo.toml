@@ -1,0 +1,19 @@
+[package]
+name = "acvus-interpreter-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+acvus-ast = { path = "../acvus-ast" }
+acvus-mir = { path = "../acvus-mir" }
+acvus-interpreter = { path = "../acvus-interpreter" }
+serde_json = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+libtest-mimic = "0.8"
+glob = "0.3"
+
+[[test]]
+name = "fixtures"
+harness = false

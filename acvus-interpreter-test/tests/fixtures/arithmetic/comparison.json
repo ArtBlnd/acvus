@@ -1,0 +1,5 @@
+{
+  "template": "{{ x = $a > $b }}{{ x | to_string }}{{_}}{{/}}",
+  "storage": { "a": 10, "b": 5 },
+  "expected": "true"
+}

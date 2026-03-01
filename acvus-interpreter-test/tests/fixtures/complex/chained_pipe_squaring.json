@@ -1,0 +1,5 @@
+{
+  "template": "{{ x = $nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) }}{{ x | to_string }}",
+  "storage": { "nums": [-5, 0, 3, 7, 12, 20] },
+  "expected": "[9, 49]"
+}

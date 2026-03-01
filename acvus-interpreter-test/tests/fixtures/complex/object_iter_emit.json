@@ -1,0 +1,10 @@
+{
+  "template": "{{ { name, age, } in $users }}{{ name }}({{ age | to_string }}) {{/}}",
+  "storage": {
+    "users": [
+      { "name": "alice", "age": 30 },
+      { "name": "bob", "age": 25 }
+    ]
+  },
+  "expected": "alice(30) bob(25) "
+}

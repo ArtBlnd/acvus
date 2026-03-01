@@ -1,0 +1,5 @@
+{
+  "template": "{{ x in $items }}{{ x | to_string }}{{/}}",
+  "storage": { "items": [1, 2, 3] },
+  "expected": "123"
+}

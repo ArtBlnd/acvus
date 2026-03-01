@@ -293,6 +293,8 @@ impl TypeChecker {
                             (Ty::Int, Ty::Int) => Some(Ty::Int),
                             (Ty::Float, Ty::Float) => Some(Ty::Float),
                             (Ty::String, Ty::String) if *op == BinOp::Add => Some(Ty::String),
+                            // Deferred: both sides unified to same type var — propagate it.
+                            (Ty::Var(_), _) => Some(rl.clone()),
                             _ => None,
                         }).flatten();
                         result.unwrap_or_else(|| {
@@ -321,22 +323,14 @@ impl TypeChecker {
                         Ty::Bool
                     }
                     BinOp::And | BinOp::Or => {
-                        if !matches!(&lt, Ty::Bool) {
+                        let lok = self.subst.unify(&lt, &Ty::Bool).is_ok();
+                        let rok = self.subst.unify(&rt, &Ty::Bool).is_ok();
+                        if !lok || !rok {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: op_str(*op),
-                                    left: lt.clone(),
-                                    right: rt.clone(),
-                                },
-                                *span,
-                            );
-                        }
-                        if !matches!(&rt, Ty::Bool) {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: lt,
-                                    right: rt,
+                                    left: self.subst.resolve(&lt),
+                                    right: self.subst.resolve(&rt),
                                 },
                                 *span,
                             );
@@ -347,7 +341,14 @@ impl TypeChecker {
                         let unified = self.subst.unify(&lt, &rt).is_ok();
                         let rl = self.subst.resolve(&lt);
                         let rr = self.subst.resolve(&rt);
-                        if !unified || !matches!((&rl, &rr), (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float)) {
+                        if !unified
+                            || !matches!(
+                                (&rl, &rr),
+                                (Ty::Int, Ty::Int)
+                                    | (Ty::Float, Ty::Float)
+                                    | (Ty::Var(_), _)
+                            )
+                        {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: op_str(*op),

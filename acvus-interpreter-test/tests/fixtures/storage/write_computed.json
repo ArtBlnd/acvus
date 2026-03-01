@@ -1,0 +1,5 @@
+{
+  "template": "{{ $a = $a + $b }}{{ $a | to_string }}",
+  "storage": { "a": 10, "b": 32 },
+  "expected": "42"
+}

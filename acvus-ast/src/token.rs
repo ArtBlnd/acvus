@@ -61,6 +61,10 @@ pub enum Token {
 
     // ── Two-char operators ──
 
+    #[token("&&")]
+    AndAnd,
+    #[token("||")]
+    OrOr,
     #[token("==")]
     Eq,
     #[token("!=")]
@@ -136,6 +140,8 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Bang => write!(f, "!"),
+            Token::AndAnd => write!(f, "&&"),
+            Token::OrOr => write!(f, "||"),
             Token::Eq => write!(f, "=="),
             Token::Neq => write!(f, "!="),
             Token::Lt => write!(f, "<"),

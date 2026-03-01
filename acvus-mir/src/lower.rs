@@ -7,14 +7,14 @@ use acvus_ast::{
 
 use crate::builtins::builtins;
 use crate::hints::{Hint, HintTable};
-use crate::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, Val, ValOrigin};
+use crate::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValueId, ValOrigin};
 use crate::ty::Ty;
 use crate::typeck::TypeMap;
 
 pub struct Lowerer {
     body: MirBody,
     /// Stack of scopes: variable name → register.
-    scopes: Vec<HashMap<String, Val>>,
+    scopes: Vec<HashMap<String, ValueId>>,
     /// Type map from type checker.
     type_map: TypeMap,
     /// Storage variable names (to distinguish storage from local $-vars).
@@ -131,8 +131,8 @@ impl Lowerer {
         (module, self.hints)
     }
 
-    fn alloc_val(&mut self) -> Val {
-        let r = Val(self.body.val_count);
+    fn alloc_val(&mut self) -> ValueId {
+        let r = ValueId(self.body.val_count);
         self.body.val_count += 1;
         r
     }
@@ -180,13 +180,13 @@ impl Lowerer {
         }
     }
 
-    fn define_var(&mut self, name: &str, reg: Val) {
+    fn define_var(&mut self, name: &str, reg: ValueId) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), reg);
         }
     }
 
-    fn lookup_var(&self, name: &str) -> Option<Val> {
+    fn lookup_var(&self, name: &str) -> Option<ValueId> {
         for scope in self.scopes.iter().rev() {
             if let Some(&reg) = scope.get(name) {
                 return Some(reg);
@@ -195,11 +195,11 @@ impl Lowerer {
         None
     }
 
-    fn set_val_type(&mut self, val: Val, ty: Ty) {
+    fn set_val_type(&mut self, val: ValueId, ty: Ty) {
         self.body.val_types.insert(val, ty);
     }
 
-    fn tuple_elem_type(&self, tuple_val: Val, index: usize) -> Ty {
+    fn tuple_elem_type(&self, tuple_val: ValueId, index: usize) -> Ty {
         if let Some(Ty::Tuple(elems)) = self.body.val_types.get(&tuple_val) {
             elems.get(index).cloned().unwrap_or(Ty::Unit)
         } else {
@@ -207,7 +207,7 @@ impl Lowerer {
         }
     }
 
-    fn list_elem_type(&self, list_val: Val) -> Ty {
+    fn list_elem_type(&self, list_val: ValueId) -> Ty {
         if let Some(Ty::List(elem)) = self.body.val_types.get(&list_val) {
             elem.as_ref().clone()
         } else {
@@ -215,7 +215,7 @@ impl Lowerer {
         }
     }
 
-    fn object_field_type(&self, object_val: Val, key: &str) -> Ty {
+    fn object_field_type(&self, object_val: ValueId, key: &str) -> Ty {
         if let Some(Ty::Object(fields)) = self.body.val_types.get(&object_val) {
             fields.get(key).cloned().unwrap_or(Ty::Unit)
         } else {
@@ -223,7 +223,7 @@ impl Lowerer {
         }
     }
 
-    fn iterable_elem_type(&self, src_val: Val) -> Ty {
+    fn iterable_elem_type(&self, src_val: ValueId) -> Ty {
         match self.body.val_types.get(&src_val) {
             Some(Ty::List(elem)) => elem.as_ref().clone(),
             Some(Ty::Range) => Ty::Int,
@@ -231,7 +231,7 @@ impl Lowerer {
         }
     }
 
-    fn set_origin(&mut self, val: Val, origin: ValOrigin) {
+    fn set_origin(&mut self, val: ValueId, origin: ValOrigin) {
         self.body.debug.set(val, origin);
     }
 
@@ -271,7 +271,7 @@ impl Lowerer {
 
     // --- Expression lowering ---
 
-    fn lower_expr(&mut self, expr: &Expr) -> Val {
+    fn lower_expr(&mut self, expr: &Expr) -> ValueId {
         match expr {
             Expr::Literal { value, span } => {
                 let dst = self.alloc_val();
@@ -432,7 +432,7 @@ impl Lowerer {
                     params.iter().map(|p| p.name.clone()).collect();
                 let free_vars = self.free_vars_in_expr(body, &param_names);
 
-                let capture_regs: Vec<Val> = free_vars
+                let capture_regs: Vec<ValueId> = free_vars
                     .iter()
                     .filter_map(|name| self.lookup_var(name))
                     .collect();
@@ -443,11 +443,11 @@ impl Lowerer {
 
                 // Build the closure body MIR in a sub-lowerer.
                 let mut sub_body = MirBody::new();
-                let mut sub_scopes: Vec<HashMap<String, Val>> = vec![HashMap::new()];
+                let mut sub_scopes: Vec<HashMap<String, ValueId>> = vec![HashMap::new()];
 
                 // Captures become the first registers.
                 for (i, name) in capture_names.iter().enumerate() {
-                    let reg = Val(i as u32);
+                    let reg = ValueId(i as u32);
                     sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
                     sub_scopes[0].insert(name.clone(), reg);
                     // Copy capture type from outer body.
@@ -462,7 +462,7 @@ impl Lowerer {
                 let param_start = capture_names.len() as u32;
                 let param_name_list: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 for (i, p) in params.iter().enumerate() {
-                    let reg = Val(param_start + i as u32);
+                    let reg = ValueId(param_start + i as u32);
                     sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
                     sub_scopes[0].insert(p.name.clone(), reg);
                     // Set param type from typeck.
@@ -512,7 +512,7 @@ impl Lowerer {
                 tail,
                 span,
             } => {
-                let elements: Vec<Val> = head
+                let elements: Vec<ValueId> = head
                     .iter()
                     .chain(tail.iter())
                     .map(|e| self.lower_expr(e))
@@ -525,7 +525,7 @@ impl Lowerer {
             }
 
             Expr::Object { fields, span } => {
-                let field_regs: Vec<(String, Val)> = fields
+                let field_regs: Vec<(String, ValueId)> = fields
                     .iter()
                     .map(|ObjectExprField { key, value, .. }| {
                         let r = self.lower_expr(value);
@@ -568,7 +568,7 @@ impl Lowerer {
             }
 
             Expr::Tuple { elements, span } => {
-                let elem_vals: Vec<Val> = elements
+                let elem_vals: Vec<ValueId> = elements
                     .iter()
                     .map(|elem| match elem {
                         TupleElem::Expr(e) => self.lower_expr(e),
@@ -613,8 +613,8 @@ impl Lowerer {
         }
     }
 
-    fn lower_func_call(&mut self, func: &Expr, args: &[Expr], call_span: Span) -> Val {
-        let arg_regs: Vec<Val> = args.iter().map(|a| self.lower_expr(a)).collect();
+    fn lower_func_call(&mut self, func: &Expr, args: &[Expr], call_span: Span) -> ValueId {
+        let arg_regs: Vec<ValueId> = args.iter().map(|a| self.lower_expr(a)).collect();
         let dst = self.alloc_val();
         let ty = self.type_of_span(call_span);
         self.set_val_type(dst, ty);
@@ -934,7 +934,7 @@ impl Lowerer {
 
     /// Emit instructions that test whether `src_reg` matches `pattern`.
     /// Returns a register holding a Bool (true = match).
-    fn lower_pattern_test(&mut self, pattern: &Pattern, src_reg: Val, span: Span) -> Val {
+    fn lower_pattern_test(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) -> ValueId {
         match pattern {
             Pattern::Binding {
                 is_storage_ref: false,
@@ -1263,7 +1263,7 @@ impl Lowerer {
     }
 
     /// Emit instructions that bind pattern variables from a matched value.
-    fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: Val, span: Span) {
+    fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
             Pattern::Binding {
                 name,

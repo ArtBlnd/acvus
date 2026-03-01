@@ -1,0 +1,13 @@
+{
+  "template": "{{ $data.user.address.city }}",
+  "storage": {
+    "data": {
+      "user": {
+        "address": {
+          "city": "Seoul"
+        }
+      }
+    }
+  },
+  "expected": "Seoul"
+}

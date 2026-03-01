@@ -1,0 +1,7 @@
+{
+  "template": "{{ $user.name }}",
+  "storage": {
+    "user": { "name": "alice", "age": 30, "email": "alice@example.com" }
+  },
+  "expected": "alice"
+}

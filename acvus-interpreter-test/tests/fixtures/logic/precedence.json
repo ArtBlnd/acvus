@@ -1,0 +1,5 @@
+{
+  "template": "{{ true = $a || $b && $c }}yes{{_}}no{{/}}",
+  "storage": { "a": true, "b": false, "c": false },
+  "expected": "yes"
+}

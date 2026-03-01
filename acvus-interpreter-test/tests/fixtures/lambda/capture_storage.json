@@ -1,0 +1,5 @@
+{
+  "template": "{{ x = $items | filter(i -> i > $threshold) }}{{ x | to_string }}",
+  "storage": { "items": [1, 5, 10], "threshold": 3 },
+  "expected": "[5, 10]"
+}

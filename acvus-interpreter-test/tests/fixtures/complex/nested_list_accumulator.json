@@ -1,0 +1,8 @@
+{
+  "template": "{{ row in $matrix }}{{ x in row }}{{ $sum = $sum + x }}{{/}}{{/}}{{ $sum | to_string }}",
+  "storage": {
+    "matrix": [[1, 2], [3, 4], [5, 6]],
+    "sum": 0
+  },
+  "expected": "21"
+}

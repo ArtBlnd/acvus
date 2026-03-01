@@ -1,0 +1,11 @@
+{
+  "template": "{{ x = $products | filter(p -> p.price >= 100) | map(p -> p.name) }}{{ x | to_string }}",
+  "storage": {
+    "products": [
+      { "name": "apple", "price": 100 },
+      { "name": "banana", "price": 50 },
+      { "name": "cherry", "price": 200 }
+    ]
+  },
+  "expected": "[apple, cherry]"
+}

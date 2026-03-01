@@ -1,0 +1,10 @@
+{
+  "template": "{{ { name, } in $users }}{{ name }}{{/}}",
+  "storage": {
+    "users": [
+      { "name": "alice", "age": 30 },
+      { "name": "bob", "age": 25 }
+    ]
+  },
+  "expected": "alicebob"
+}

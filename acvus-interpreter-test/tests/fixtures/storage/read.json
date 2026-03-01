@@ -1,0 +1,5 @@
+{
+  "template": "{{ $count | to_string }}",
+  "storage": { "count": 42 },
+  "expected": "42"
+}

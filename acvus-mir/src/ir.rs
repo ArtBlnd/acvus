@@ -5,7 +5,7 @@ use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
 use crate::ty::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Val(pub u32);
+pub struct ValueId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub u32);
@@ -20,153 +20,153 @@ pub struct Inst {
 pub enum InstKind {
     // Output — index into MirModule::texts
     EmitText(usize),
-    EmitValue(Val),
+    EmitValue(ValueId),
 
     // Constants / variables
-    Const { dst: Val, value: Literal },
-    StorageLoad { dst: Val, name: String },
-    StorageStore { name: String, src: Val },
+    Const { dst: ValueId, value: Literal },
+    StorageLoad { dst: ValueId, name: String },
+    StorageStore { name: String, src: ValueId },
 
     // Arithmetic / logic
     BinOp {
-        dst: Val,
+        dst: ValueId,
         op: BinOp,
-        left: Val,
-        right: Val,
+        left: ValueId,
+        right: ValueId,
     },
     UnaryOp {
-        dst: Val,
+        dst: ValueId,
         op: UnaryOp,
-        operand: Val,
+        operand: ValueId,
     },
     FieldGet {
-        dst: Val,
-        object: Val,
+        dst: ValueId,
+        object: ValueId,
         field: String,
     },
 
     // Calls
     Call {
-        dst: Val,
+        dst: ValueId,
         func: String,
-        args: Vec<Val>,
+        args: Vec<ValueId>,
     },
     AsyncCall {
-        dst: Val,
+        dst: ValueId,
         func: String,
-        args: Vec<Val>,
+        args: Vec<ValueId>,
     },
     Await {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
     },
 
     // Composite constructors
     MakeList {
-        dst: Val,
-        elements: Vec<Val>,
+        dst: ValueId,
+        elements: Vec<ValueId>,
     },
     MakeObject {
-        dst: Val,
-        fields: Vec<(String, Val)>,
+        dst: ValueId,
+        fields: Vec<(String, ValueId)>,
     },
     MakeRange {
-        dst: Val,
-        start: Val,
-        end: Val,
+        dst: ValueId,
+        start: ValueId,
+        end: ValueId,
         kind: RangeKind,
     },
     MakeTuple {
-        dst: Val,
-        elements: Vec<Val>,
+        dst: ValueId,
+        elements: Vec<ValueId>,
     },
     TupleIndex {
-        dst: Val,
-        tuple: Val,
+        dst: ValueId,
+        tuple: ValueId,
         index: usize,
     },
 
     // Pattern matching (decision tree)
     TestLiteral {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
         value: Literal,
     },
     TestListLen {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
         min_len: usize,
         exact: bool,
     },
     TestObjectKey {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
         key: String,
     },
     TestRange {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
         start: i64,
         end: i64,
         kind: RangeKind,
     },
     ListIndex {
-        dst: Val,
-        list: Val,
+        dst: ValueId,
+        list: ValueId,
         index: i32,
     },
     ListSlice {
-        dst: Val,
-        list: Val,
+        dst: ValueId,
+        list: ValueId,
         skip_head: usize,
         skip_tail: usize,
     },
     ObjectGet {
-        dst: Val,
-        object: Val,
+        dst: ValueId,
+        object: ValueId,
         key: String,
     },
 
     // Closures
     MakeClosure {
-        dst: Val,
+        dst: ValueId,
         body: Label,
-        captures: Vec<Val>,
+        captures: Vec<ValueId>,
     },
     CallClosure {
-        dst: Val,
-        closure: Val,
-        args: Vec<Val>,
+        dst: ValueId,
+        closure: ValueId,
+        args: Vec<ValueId>,
     },
 
     // Iteration
     IterInit {
-        dst: Val,
-        src: Val,
+        dst: ValueId,
+        src: ValueId,
     },
     IterNext {
-        dst_value: Val,
-        dst_done: Val,
-        iter: Val,
+        dst_value: ValueId,
+        dst_done: ValueId,
+        iter: ValueId,
     },
 
     // Control flow
     BlockLabel {
         label: Label,
-        params: Vec<Val>,
+        params: Vec<ValueId>,
     },
     Jump {
         label: Label,
-        args: Vec<Val>,
+        args: Vec<ValueId>,
     },
     JumpIf {
-        cond: Val,
+        cond: ValueId,
         then_label: Label,
-        then_args: Vec<Val>,
+        then_args: Vec<ValueId>,
         else_label: Label,
-        else_args: Vec<Val>,
+        else_args: Vec<ValueId>,
     },
-    Return(Val),
+    Return(ValueId),
     Nop,
 }
 
@@ -178,7 +178,7 @@ pub enum ValOrigin {
     /// A storage reference: `$name`.
     Storage(String),
     /// A field access: `user.name` — (object val, field name).
-    Field(Val, String),
+    Field(ValueId, String),
     /// Result of a function call: `to_string(...)`, `fetch(...)`.
     Call(String),
     /// An intermediate/anonymous value (arithmetic, pattern test, etc.).
@@ -187,7 +187,7 @@ pub enum ValOrigin {
 
 #[derive(Debug, Clone)]
 pub struct DebugInfo {
-    pub val_origins: HashMap<Val, ValOrigin>,
+    pub val_origins: HashMap<ValueId, ValOrigin>,
 }
 
 impl DebugInfo {
@@ -197,16 +197,16 @@ impl DebugInfo {
         }
     }
 
-    pub fn set(&mut self, val: Val, origin: ValOrigin) {
+    pub fn set(&mut self, val: ValueId, origin: ValOrigin) {
         self.val_origins.insert(val, origin);
     }
 
-    pub fn get(&self, val: Val) -> Option<&ValOrigin> {
+    pub fn get(&self, val: ValueId) -> Option<&ValOrigin> {
         self.val_origins.get(&val)
     }
 
     /// Human-readable label for a Val.
-    pub fn label(&self, val: Val) -> String {
+    pub fn label(&self, val: ValueId) -> String {
         match self.val_origins.get(&val) {
             Some(ValOrigin::Named(name)) => name.clone(),
             Some(ValOrigin::Storage(name)) => format!("${name}"),
@@ -220,7 +220,7 @@ impl DebugInfo {
 #[derive(Debug, Clone)]
 pub struct MirBody {
     pub insts: Vec<Inst>,
-    pub val_types: HashMap<Val, Ty>,
+    pub val_types: HashMap<ValueId, Ty>,
     pub debug: DebugInfo,
     pub val_count: u32,
     pub label_count: u32,

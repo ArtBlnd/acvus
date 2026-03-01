@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use acvus_mir::hints::InstIdx;
-use acvus_mir::ir::{InstKind, MirModule, Val};
+use acvus_mir::ir::{InstKind, MirModule, ValueId};
 
 use crate::AnalysisPass;
 
 /// Maps each Val to the instruction index that defines it.
 #[derive(Debug, Clone)]
-pub struct ValDefMap(pub HashMap<Val, InstIdx>);
+pub struct ValDefMap(pub HashMap<ValueId, InstIdx>);
 
 pub struct ValDefMapAnalysis;
 
@@ -31,7 +31,7 @@ impl AnalysisPass for ValDefMapAnalysis {
 }
 
 /// Primary destination Val of an instruction, if any.
-fn dst_of(kind: &InstKind) -> Option<Val> {
+fn dst_of(kind: &InstKind) -> Option<ValueId> {
     match kind {
         InstKind::Const { dst, .. }
         | InstKind::StorageLoad { dst, .. }
@@ -75,7 +75,7 @@ fn dst_of(kind: &InstKind) -> Option<Val> {
 }
 
 /// Additional destination Vals beyond the primary one.
-fn extra_dsts(kind: &InstKind) -> Vec<Val> {
+fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::IterNext { dst_done, .. } => vec![*dst_done],
         InstKind::BlockLabel { params, .. } => params.clone(),
@@ -113,58 +113,58 @@ mod tests {
     #[test]
     fn storage_load_mapped() {
         let module = make_module(vec![inst(InstKind::StorageLoad {
-            dst: Val(0),
+            dst: ValueId(0),
             name: "user".into(),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&Val(0)], 0);
+        assert_eq!(result.0[&ValueId(0)], 0);
     }
 
     #[test]
     fn multiple_defs() {
         let module = make_module(vec![
             inst(InstKind::Const {
-                dst: Val(0),
+                dst: ValueId(0),
                 value: acvus_ast::Literal::Int(1),
             }),
             inst(InstKind::Const {
-                dst: Val(1),
+                dst: ValueId(1),
                 value: acvus_ast::Literal::Int(2),
             }),
             inst(InstKind::BinOp {
-                dst: Val(2),
+                dst: ValueId(2),
                 op: acvus_ast::BinOp::Add,
-                left: Val(0),
-                right: Val(1),
+                left: ValueId(0),
+                right: ValueId(1),
             }),
         ]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&Val(0)], 0);
-        assert_eq!(result.0[&Val(1)], 1);
-        assert_eq!(result.0[&Val(2)], 2);
+        assert_eq!(result.0[&ValueId(0)], 0);
+        assert_eq!(result.0[&ValueId(1)], 1);
+        assert_eq!(result.0[&ValueId(2)], 2);
     }
 
     #[test]
     fn iter_next_defines_two_vals() {
         let module = make_module(vec![inst(InstKind::IterNext {
-            dst_value: Val(0),
-            dst_done: Val(1),
-            iter: Val(2),
+            dst_value: ValueId(0),
+            dst_done: ValueId(1),
+            iter: ValueId(2),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&Val(0)], 0);
-        assert_eq!(result.0[&Val(1)], 0);
+        assert_eq!(result.0[&ValueId(0)], 0);
+        assert_eq!(result.0[&ValueId(1)], 0);
     }
 
     #[test]
     fn block_label_params_mapped() {
         let module = make_module(vec![inst(InstKind::BlockLabel {
             label: acvus_mir::ir::Label(0),
-            params: vec![Val(0), Val(1)],
+            params: vec![ValueId(0), ValueId(1)],
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&Val(0)], 0);
-        assert_eq!(result.0[&Val(1)], 0);
+        assert_eq!(result.0[&ValueId(0)], 0);
+        assert_eq!(result.0[&ValueId(1)], 0);
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
             inst(InstKind::EmitText(0)),
             inst(InstKind::StorageStore {
                 name: "x".into(),
-                src: Val(0),
+                src: ValueId(0),
             }),
             inst(InstKind::Nop),
         ]);

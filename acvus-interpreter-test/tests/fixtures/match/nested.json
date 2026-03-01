@@ -1,0 +1,5 @@
+{
+  "template": "{{ \"admin\" = $role }}{{ 1..10 = $level }}low{{_}}high{{/}}{{_}}guest{{/}}",
+  "storage": { "role": "admin", "level": 5 },
+  "expected": "low"
+}

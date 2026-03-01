@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use acvus_mir::ir::Label;
 use serde::{Deserialize, Serialize};
 
 /// Data-only value — no functions, no closures.
@@ -20,6 +21,102 @@ pub enum PureValue {
     List(Vec<PureValue>),
     Object(BTreeMap<String, PureValue>),
     Tuple(Vec<PureValue>),
+}
+
+/// Runtime value — flat enum for fast dispatch.
+/// Includes everything PureValue has, plus Fn for closures.
+#[derive(Debug, Clone)]
+pub enum Value {
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    Unit,
+    Range {
+        start: i64,
+        end: i64,
+        inclusive: bool,
+    },
+    List(Vec<Value>),
+    Object(BTreeMap<String, Value>),
+    Tuple(Vec<Value>),
+    Fn(FnValue),
+}
+
+/// A closure value: label pointing to its body + captured values.
+#[derive(Debug, Clone)]
+pub struct FnValue {
+    pub body: Label,
+    pub captures: Vec<Value>,
+}
+
+impl Value {
+    /// Convert a PureValue into a Value. Infallible.
+    pub fn from_pure(pure: PureValue) -> Self {
+        match pure {
+            PureValue::Int(v) => Value::Int(v),
+            PureValue::Float(v) => Value::Float(v),
+            PureValue::String(v) => Value::String(v),
+            PureValue::Bool(v) => Value::Bool(v),
+            PureValue::Unit => Value::Unit,
+            PureValue::Range {
+                start,
+                end,
+                inclusive,
+            } => Value::Range {
+                start,
+                end,
+                inclusive,
+            },
+            PureValue::List(items) => {
+                Value::List(items.into_iter().map(Value::from_pure).collect())
+            }
+            PureValue::Object(fields) => Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (k, Value::from_pure(v)))
+                    .collect(),
+            ),
+            PureValue::Tuple(elems) => {
+                Value::Tuple(elems.into_iter().map(Value::from_pure).collect())
+            }
+        }
+    }
+
+    /// Convert a Value into a PureValue.
+    /// Panics if the value contains Fn — the type checker guarantees this won't happen
+    /// at storage boundaries.
+    pub fn into_pure(self) -> PureValue {
+        match self {
+            Value::Int(v) => PureValue::Int(v),
+            Value::Float(v) => PureValue::Float(v),
+            Value::String(v) => PureValue::String(v),
+            Value::Bool(v) => PureValue::Bool(v),
+            Value::Unit => PureValue::Unit,
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => PureValue::Range {
+                start,
+                end,
+                inclusive,
+            },
+            Value::List(items) => {
+                PureValue::List(items.into_iter().map(Value::into_pure).collect())
+            }
+            Value::Object(fields) => PureValue::Object(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into_pure()))
+                    .collect(),
+            ),
+            Value::Tuple(elems) => {
+                PureValue::Tuple(elems.into_iter().map(Value::into_pure).collect())
+            }
+            Value::Fn(_) => panic!("cannot convert Fn to PureValue"),
+        }
+    }
 }
 
 /// Hierarchical storage key. Dot-separated, ABI-stable.

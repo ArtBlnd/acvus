@@ -1,0 +1,5 @@
+{
+  "template": "{{ [first, .., last] = $items }}{{ first | to_string }}-{{ last | to_string }}{{_}}empty{{/}}",
+  "storage": { "items": [1, 2, 3, 4, 5] },
+  "expected": "1-5"
+}

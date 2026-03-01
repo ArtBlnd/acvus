@@ -1,0 +1,5 @@
+{
+  "template": "{{ \"admin\" = $role }}admin page{{_}}guest page{{/}}",
+  "storage": { "role": "admin" },
+  "expected": "admin page"
+}

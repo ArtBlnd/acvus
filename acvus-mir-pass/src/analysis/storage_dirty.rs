@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use acvus_mir::hints::InstIdx;
-use acvus_mir::ir::{InstKind, MirModule, Val};
+use acvus_mir::ir::{InstKind, MirModule, ValueId};
 
 use crate::AnalysisPass;
 use crate::analysis::val_def::ValDefMap;
@@ -64,7 +64,7 @@ fn analyze_store(
     insts: &[acvus_mir::ir::Inst],
     val_def: &ValDefMap,
     store_name: &str,
-    src: Val,
+    src: ValueId,
 ) -> FieldStatus {
     // src must be defined by MakeObject, otherwise conservative
     let Some(&src_idx) = val_def.0.get(&src) else {
@@ -96,7 +96,7 @@ fn is_clean_field(
     val_def: &ValDefMap,
     store_name: &str,
     field_name: &str,
-    val: Val,
+    val: ValueId,
 ) -> bool {
     let Some(&def_idx) = val_def.0.get(&val) else {
         return false;
@@ -126,7 +126,7 @@ fn traces_to_storage_load(
     insts: &[acvus_mir::ir::Inst],
     val_def: &ValDefMap,
     expected_name: &str,
-    val: Val,
+    val: ValueId,
 ) -> bool {
     let Some(&def_idx) = val_def.0.get(&val) else {
         return false;
@@ -176,12 +176,12 @@ mod tests {
     fn scalar_store_is_all_dirty() {
         let module = make_module(vec![
             inst(InstKind::Const {
-                dst: Val(0),
+                dst: ValueId(0),
                 value: acvus_ast::Literal::Int(42),
             }),
             inst(InstKind::StorageStore {
                 name: "x".into(),
-                src: Val(0),
+                src: ValueId(0),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -196,30 +196,30 @@ mod tests {
         let module = make_module(vec![
             // v0 = StorageLoad("user")
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "user".into(),
             }),
             // v1 = FieldGet(v0, "name")
             inst(InstKind::FieldGet {
-                dst: Val(1),
-                object: Val(0),
+                dst: ValueId(1),
+                object: ValueId(0),
                 field: "name".into(),
             }),
             // v2 = FieldGet(v0, "age")
             inst(InstKind::FieldGet {
-                dst: Val(2),
-                object: Val(0),
+                dst: ValueId(2),
+                object: ValueId(0),
                 field: "age".into(),
             }),
             // v3 = MakeObject { name: v1, age: v2 }
             inst(InstKind::MakeObject {
-                dst: Val(3),
-                fields: vec![("name".into(), Val(1)), ("age".into(), Val(2))],
+                dst: ValueId(3),
+                fields: vec![("name".into(), ValueId(1)), ("age".into(), ValueId(2))],
             }),
             // StorageStore("user", v3)
             inst(InstKind::StorageStore {
                 name: "user".into(),
-                src: Val(3),
+                src: ValueId(3),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -242,29 +242,29 @@ mod tests {
         let module = make_module(vec![
             // v0 = StorageLoad("user")
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "user".into(),
             }),
             // v1 = FieldGet(v0, "name")  — passthrough
             inst(InstKind::FieldGet {
-                dst: Val(1),
-                object: Val(0),
+                dst: ValueId(1),
+                object: ValueId(0),
                 field: "name".into(),
             }),
             // v2 = Const("new_email")  — new value
             inst(InstKind::Const {
-                dst: Val(2),
+                dst: ValueId(2),
                 value: acvus_ast::Literal::String("new@email.com".into()),
             }),
             // v3 = MakeObject { name: v1, email: v2 }
             inst(InstKind::MakeObject {
-                dst: Val(3),
-                fields: vec![("name".into(), Val(1)), ("email".into(), Val(2))],
+                dst: ValueId(3),
+                fields: vec![("name".into(), ValueId(1)), ("email".into(), ValueId(2))],
             }),
             // StorageStore("user", v3)
             inst(InstKind::StorageStore {
                 name: "user".into(),
-                src: Val(3),
+                src: ValueId(3),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -287,24 +287,24 @@ mod tests {
         let module = make_module(vec![
             // v0 = StorageLoad("other")
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "other".into(),
             }),
             // v1 = FieldGet(v0, "name")  — from "other", not "user"
             inst(InstKind::FieldGet {
-                dst: Val(1),
-                object: Val(0),
+                dst: ValueId(1),
+                object: ValueId(0),
                 field: "name".into(),
             }),
             // v2 = MakeObject { name: v1 }
             inst(InstKind::MakeObject {
-                dst: Val(2),
-                fields: vec![("name".into(), Val(1))],
+                dst: ValueId(2),
+                fields: vec![("name".into(), ValueId(1))],
             }),
             // StorageStore("user", v2)
             inst(InstKind::StorageStore {
                 name: "user".into(),
-                src: Val(2),
+                src: ValueId(2),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -325,14 +325,14 @@ mod tests {
         let module = make_module(vec![
             // v0 = Call("make_user", [])
             inst(InstKind::Call {
-                dst: Val(0),
+                dst: ValueId(0),
                 func: "make_user".into(),
                 args: vec![],
             }),
             // StorageStore("user", v0)
             inst(InstKind::StorageStore {
                 name: "user".into(),
-                src: Val(0),
+                src: ValueId(0),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -345,21 +345,21 @@ mod tests {
     fn object_get_is_clean() {
         let module = make_module(vec![
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "cfg".into(),
             }),
             inst(InstKind::ObjectGet {
-                dst: Val(1),
-                object: Val(0),
+                dst: ValueId(1),
+                object: ValueId(0),
                 key: "mode".into(),
             }),
             inst(InstKind::MakeObject {
-                dst: Val(2),
-                fields: vec![("mode".into(), Val(1))],
+                dst: ValueId(2),
+                fields: vec![("mode".into(), ValueId(1))],
             }),
             inst(InstKind::StorageStore {
                 name: "cfg".into(),
-                src: Val(2),
+                src: ValueId(2),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -379,21 +379,21 @@ mod tests {
     fn block_label_param_is_dirty() {
         let module = make_module(vec![
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "data".into(),
             }),
             // v1 comes from a block param (phi node) — could be anything
             inst(InstKind::BlockLabel {
                 label: acvus_mir::ir::Label(0),
-                params: vec![Val(1)],
+                params: vec![ValueId(1)],
             }),
             inst(InstKind::MakeObject {
-                dst: Val(2),
-                fields: vec![("value".into(), Val(1))],
+                dst: ValueId(2),
+                fields: vec![("value".into(), ValueId(1))],
             }),
             inst(InstKind::StorageStore {
                 name: "data".into(),
-                src: Val(2),
+                src: ValueId(2),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -413,26 +413,26 @@ mod tests {
     fn call_result_is_dirty() {
         let module = make_module(vec![
             inst(InstKind::StorageLoad {
-                dst: Val(0),
+                dst: ValueId(0),
                 name: "user".into(),
             }),
             inst(InstKind::FieldGet {
-                dst: Val(1),
-                object: Val(0),
+                dst: ValueId(1),
+                object: ValueId(0),
                 field: "name".into(),
             }),
             inst(InstKind::Call {
-                dst: Val(2),
+                dst: ValueId(2),
                 func: "uppercase".into(),
-                args: vec![Val(1)],
+                args: vec![ValueId(1)],
             }),
             inst(InstKind::MakeObject {
-                dst: Val(3),
-                fields: vec![("name".into(), Val(2))],
+                dst: ValueId(3),
+                fields: vec![("name".into(), ValueId(2))],
             }),
             inst(InstKind::StorageStore {
                 name: "user".into(),
-                src: Val(3),
+                src: ValueId(3),
             }),
         ]);
         let val_def = build_val_def(&module);

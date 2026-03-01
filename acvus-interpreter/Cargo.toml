@@ -1,9 +1,12 @@
 [package]
-name = "acvus-runtime"
+name = "acvus-interpreter"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+acvus-ast = { path = "../acvus-ast" }
+acvus-mir = { path = "../acvus-mir" }
+futures = "0.3"
 rust_decimal = "1.40.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

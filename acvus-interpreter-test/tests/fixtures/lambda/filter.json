@@ -1,0 +1,5 @@
+{
+  "template": "{{ x = $items | filter(x -> x != 0) }}{{ x | to_string }}",
+  "storage": { "items": [0, 1, 2, 0, 3] },
+  "expected": "[1, 2, 3]"
+}

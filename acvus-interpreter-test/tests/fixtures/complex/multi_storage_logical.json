@@ -1,0 +1,5 @@
+{
+  "template": "{{ filtered = $items | filter(i -> i >= $min && i <= $max) }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}",
+  "storage": { "items": [3, 7, 1, 9, 4], "min": 2, "max": 8, "count": 0 },
+  "expected": "3"
+}

@@ -2,9 +2,9 @@ use std::fmt;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 
-use crate::ir::{ClosureBody, InstKind, Label, MirBody, MirModule, Val};
+use crate::ir::{ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
 
-fn fmt_val(r: Val) -> String {
+fn fmt_val(r: ValueId) -> String {
     format!("r{}", r.0)
 }
 
@@ -53,7 +53,7 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
     }
 }
 
-fn fmt_vals(regs: &[Val]) -> String {
+fn fmt_vals(regs: &[ValueId]) -> String {
     regs.iter()
         .map(|r| fmt_val(*r))
         .collect::<Vec<_>>()

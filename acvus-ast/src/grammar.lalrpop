@@ -25,6 +25,8 @@ extern {
         "*" => Token::Star,
         "/" => Token::Slash,
         "!" => Token::Bang,
+        "&&" => Token::AndAnd,
+        "||" => Token::OrOr,
         "==" => Token::Eq,
         "!=" => Token::Neq,
         "<" => Token::Lt,
@@ -76,12 +78,26 @@ LambdaExpr: Expr = {
 
 // Pipe: left-associative
 PipeExpr: Expr = {
-    <l:@L> <left:PipeExpr> "|" <right:CompExpr> <r:@R> =>
+    <l:@L> <left:PipeExpr> "|" <right:OrExpr> <r:@R> =>
         Expr::Pipe {
             left: Box::new(left),
             right: Box::new(right),
             span: Span::new(l, r),
         },
+    OrExpr,
+};
+
+// Logical Or: left-associative
+OrExpr: Expr = {
+    <l:@L> <left:OrExpr> "||" <right:AndExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
+    AndExpr,
+};
+
+// Logical And: left-associative
+AndExpr: Expr = {
+    <l:@L> <left:AndExpr> "&&" <right:CompExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
     CompExpr,
 };
 

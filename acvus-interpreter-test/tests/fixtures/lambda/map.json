@@ -1,0 +1,5 @@
+{
+  "template": "{{ x = $items | map(i -> i + 1) }}{{ x | to_string }}",
+  "storage": { "items": [1, 2, 3] },
+  "expected": "[2, 3, 4]"
+}
