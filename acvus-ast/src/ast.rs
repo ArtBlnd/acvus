@@ -316,6 +316,7 @@ pub enum BinOp {
     BitOr,
     Shl,
     Shr,
+    Mod,
 }
 
 /// A unary operator.

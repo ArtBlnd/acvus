@@ -119,13 +119,15 @@ fn make_opaque_branch(
     rng: &mut StdRng,
     span: Span,
 ) -> (Vec<Inst>, Vec<Inst>) {
-    let variant = rng.random_range(0u32..5);
+    let variant = rng.random_range(0u32..7);
     let predicate_insts = match variant {
         0 => opaque_consecutive_product(ctx, rng, span),
         1 => opaque_square_nonneg(ctx, rng, span),
         2 => opaque_even_sum(ctx, rng, span),
         3 => opaque_sum_of_squares_positive(ctx, rng, span),
-        _ => opaque_xor_identity(ctx, rng, span),
+        4 => opaque_xor_identity(ctx, rng, span),
+        5 => opaque_cubic_mod(ctx, rng, span),
+        _ => opaque_square_mod4(ctx, rng, span),
     };
 
     let dead = make_dead_block(ctx, rng, span);
@@ -154,8 +156,11 @@ fn opaque_consecutive_product(
     let v_prod = ctx.alloc_val(Ty::Int);
     out.push(Inst { span, kind: InstKind::BinOp { dst: v_prod, op: BinOp::Mul, left: v_x, right: v_x1 } });
 
+    let v_two = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_two, value: Literal::Int(2) } });
+
     let v_mod = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::BitAnd, left: v_prod, right: v_one } });
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::Mod, left: v_prod, right: v_two } });
 
     let v_zero = ctx.alloc_val(Ty::Int);
     out.push(Inst { span, kind: InstKind::Const { dst: v_zero, value: Literal::Int(0) } });
@@ -218,11 +223,11 @@ fn opaque_even_sum(
     let v_sum = ctx.alloc_val(Ty::Int);
     out.push(Inst { span, kind: InstKind::BinOp { dst: v_sum, op: BinOp::Add, left: v_2x, right: v_2y } });
 
-    let v_one = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const { dst: v_one, value: Literal::Int(1) } });
+    let v_mod_divisor = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_mod_divisor, value: Literal::Int(2) } });
 
     let v_mod = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::BitAnd, left: v_sum, right: v_one } });
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::Mod, left: v_sum, right: v_mod_divisor } });
 
     let v_zero = ctx.alloc_val(Ty::Int);
     out.push(Inst { span, kind: InstKind::Const { dst: v_zero, value: Literal::Int(0) } });
@@ -297,6 +302,78 @@ fn opaque_xor_identity(
     out
 }
 
+/// 3*n*(n+1) % 6 == 0 — always true (product of 3 consecutive factors includes 2 and 3).
+fn opaque_cubic_mod(
+    ctx: &mut PassState,
+    rng: &mut StdRng,
+    span: Span,
+) -> Vec<Inst> {
+    let mut out = Vec::new();
+    let n: i64 = rng.random_range(1..10000);
+
+    let v_n = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_n, value: Literal::Int(n) } });
+
+    let v_one = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_one, value: Literal::Int(1) } });
+
+    let v_n1 = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_n1, op: BinOp::Add, left: v_n, right: v_one } });
+
+    let v_three = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_three, value: Literal::Int(3) } });
+
+    let v_3n = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_3n, op: BinOp::Mul, left: v_three, right: v_n } });
+
+    let v_prod = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_prod, op: BinOp::Mul, left: v_3n, right: v_n1 } });
+
+    let v_six = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_six, value: Literal::Int(6) } });
+
+    let v_mod = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::Mod, left: v_prod, right: v_six } });
+
+    let v_zero = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_zero, value: Literal::Int(0) } });
+
+    let v_cond = ctx.alloc_val(Ty::Bool);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_cond, op: BinOp::Eq, left: v_mod, right: v_zero } });
+
+    out
+}
+
+/// n² % 4 != 3 — always true (squares mod 4 are 0 or 1, never 3).
+fn opaque_square_mod4(
+    ctx: &mut PassState,
+    rng: &mut StdRng,
+    span: Span,
+) -> Vec<Inst> {
+    let mut out = Vec::new();
+    let n: i64 = rng.random_range(1..10000);
+
+    let v_n = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_n, value: Literal::Int(n) } });
+
+    let v_sq = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_sq, op: BinOp::Mul, left: v_n, right: v_n } });
+
+    let v_four = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_four, value: Literal::Int(4) } });
+
+    let v_mod = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_mod, op: BinOp::Mod, left: v_sq, right: v_four } });
+
+    let v_three = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_three, value: Literal::Int(3) } });
+
+    let v_cond = ctx.alloc_val(Ty::Bool);
+    out.push(Inst { span, kind: InstKind::BinOp { dst: v_cond, op: BinOp::Neq, left: v_mod, right: v_three } });
+
+    out
+}
+
 fn find_last_defined_val(insts: &[Inst]) -> Option<ValueId> {
     for inst in insts.iter().rev() {
         let val = match &inst.kind {
@@ -313,57 +390,57 @@ fn find_last_defined_val(insts: &[Inst]) -> Option<ValueId> {
     None
 }
 
-/// Generate dead block contents: diverse garbage instructions.
+/// Generate dead block contents: emit garbage strings so fake paths look like
+/// real output paths. A static analyzer cannot distinguish these from genuine
+/// emit instructions without proving the branch is unreachable.
 fn make_dead_block(
     ctx: &mut PassState,
     rng: &mut StdRng,
     span: Span,
 ) -> Vec<Inst> {
     let mut out = Vec::new();
-    let count = rng.random_range(3..8);
+    let count = rng.random_range(1..4);
 
     for _ in 0..count {
-        match rng.random_range(0u32..5) {
-            0 => {
-                let v = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const {
-                    dst: v, value: Literal::Int(rng.random_range(-999999..999999)),
-                }});
-            }
-            1 => {
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_b = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::Const { dst: v_b, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::BinOp { dst: v_r, op: BinOp::Mul, left: v_a, right: v_b } });
-            }
-            2 => {
-                // Shl/Shr chain in dead block.
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_s = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::Const { dst: v_s, value: Literal::Int(rng.random_range(1..8)) } });
-                out.push(Inst { span, kind: InstKind::BinOp { dst: v_r, op: BinOp::Shl, left: v_a, right: v_s } });
-            }
-            3 => {
-                // Multi-BinOp chain: a + b * c.
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_b = ctx.alloc_val(Ty::Int);
-                let v_c = ctx.alloc_val(Ty::Int);
-                let v_bc = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::Const { dst: v_b, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::Const { dst: v_c, value: Literal::Int(rng.random_range(1..9999)) } });
-                out.push(Inst { span, kind: InstKind::BinOp { dst: v_bc, op: BinOp::Mul, left: v_b, right: v_c } });
-                out.push(Inst { span, kind: InstKind::BinOp { dst: v_r, op: BinOp::Add, left: v_a, right: v_bc } });
-            }
-            _ => {
-                out.push(Inst { span, kind: InstKind::Nop });
-            }
+        // Build a garbage string via XOR-encrypted char codes + int_to_char,
+        // then emit it — mirrors real string-construction patterns.
+        let len = rng.random_range(2..6);
+        let mut v_accum: Option<ValueId> = None;
+
+        for _ in 0..len {
+            let code: i64 = rng.random_range(32..127); // printable ASCII
+            let key: i64 = rng.random_range(1..256);
+            let encrypted = code ^ key;
+
+            let v_enc = ctx.alloc_val(Ty::Int);
+            out.push(Inst { span, kind: InstKind::Const { dst: v_enc, value: Literal::Int(encrypted) } });
+
+            let v_key = ctx.alloc_val(Ty::Int);
+            out.push(Inst { span, kind: InstKind::Const { dst: v_key, value: Literal::Int(key) } });
+
+            let v_dec = ctx.alloc_val(Ty::Int);
+            out.push(Inst { span, kind: InstKind::BinOp {
+                dst: v_dec, op: BinOp::Xor, left: v_enc, right: v_key,
+            }});
+
+            let v_char = ctx.alloc_val(Ty::String);
+            out.push(Inst { span, kind: InstKind::Call {
+                dst: v_char, func: "int_to_char".into(), args: vec![v_dec],
+            }});
+
+            v_accum = Some(match v_accum {
+                None => v_char,
+                Some(prev) => {
+                    let v_concat = ctx.alloc_val(Ty::String);
+                    out.push(Inst { span, kind: InstKind::BinOp {
+                        dst: v_concat, op: BinOp::Add, left: prev, right: v_char,
+                    }});
+                    v_concat
+                }
+            });
         }
+
+        out.push(Inst { span, kind: InstKind::EmitValue(v_accum.unwrap()) });
     }
 
     out

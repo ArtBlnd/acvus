@@ -40,6 +40,7 @@ fn fmt_binop(op: BinOp) -> &'static str {
         BinOp::BitOr => "|",
         BinOp::Shl => "<<",
         BinOp::Shr => ">>",
+        BinOp::Mod => "%",
     }
 }
 
@@ -208,6 +209,9 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
             )?,
             InstKind::ListIndex { dst, list, index } => {
                 writeln!(f, "{} = {}[{index}]", fmt_val(*dst), fmt_val(*list))?
+            }
+            InstKind::ListGet { dst, list, index } => {
+                writeln!(f, "{} = {}[{}]", fmt_val(*dst), fmt_val(*list), fmt_val(*index))?
             }
             InstKind::ListSlice {
                 dst,

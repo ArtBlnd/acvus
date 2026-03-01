@@ -278,6 +278,11 @@ impl Interpreter {
                     };
                     frame.set(*dst, items[i].clone());
                 }
+                InstKind::ListGet { dst, list, index } => {
+                    let items = expect_list(frame.get(*list), "ListGet");
+                    let idx = expect_int(frame.get(*index), "ListGet index");
+                    frame.set(*dst, items[idx as usize].clone());
+                }
                 InstKind::ListSlice { dst, list, skip_head, skip_tail } => {
                     let items = expect_list(frame.get(*list), "ListSlice");
                     let end = items.len() - *skip_tail;
@@ -667,6 +672,11 @@ fn eval_binop(op: BinOp, left: Value, right: Value) -> Value {
             (Value::Int(a), Value::Int(b)) => Value::Int(a / b),
             (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
             (l, r) => panic!("Div: incompatible {l:?} / {r:?}"),
+        },
+        BinOp::Mod => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a % b),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a % b),
+            (l, r) => panic!("Mod: incompatible {l:?} % {r:?}"),
         },
         BinOp::Xor => match (left, right) {
             (Value::Int(a), Value::Int(b)) => Value::Int(a ^ b),

@@ -1,7 +1,6 @@
 mod cff;
 mod config;
 mod const_obf;
-mod mba;
 mod opaque;
 mod rewriter;
 mod scheduler;

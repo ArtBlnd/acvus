@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use acvus_ast::{BinOp, Literal, Span};
+use acvus_ast::{Literal, Span};
 use acvus_mir::ir::{
     DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
@@ -11,7 +11,6 @@ use rand::SeedableRng;
 use super::cff;
 use super::config::ObfConfig;
 use super::const_obf;
-use super::mba;
 use super::opaque;
 use super::scheduler;
 use super::text_obf;
@@ -25,11 +24,11 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
         None
     };
 
-    module.main = rewrite_body(module.main, config, &text_map, &mut rng);
+    module.main = rewrite_body(module.main, config, &text_map, &module.texts, &mut rng);
     let closure_labels: Vec<Label> = module.closures.keys().copied().collect();
     for label in closure_labels {
         let mut closure = module.closures.remove(&label).unwrap();
-        closure.body = rewrite_body(closure.body, config, &text_map, &mut rng);
+        closure.body = rewrite_body(closure.body, config, &text_map, &module.texts, &mut rng);
         module.closures.insert(label, closure);
     }
 
@@ -44,41 +43,30 @@ fn rewrite_body(
     body: MirBody,
     config: &ObfConfig,
     text_map: &Option<Vec<text_obf::EncryptedText>>,
+    texts: &[String],
     rng: &mut StdRng,
 ) -> MirBody {
     let mut ctx = PassState::from_body(&body);
 
-    // Phase 1: Instruction-level transforms (const, string, text, TestLiteral).
-    phase_instruction_transform(&mut ctx, &body.insts, config, text_map, rng);
+    // Phase 1: Instruction-level transforms (text, hash predicate).
+    phase_instruction_transform(&mut ctx, &body.insts, config, text_map, texts, rng);
 
-    // Phase 2: MBA — replace XOR/BitAnd with algebraic equivalents.
-    if config.mba {
-        let insts = std::mem::take(&mut ctx.insts);
-        ctx.insts = mba::apply(insts, &mut ctx, rng);
-    }
-
-    // Phase 3: Instruction scheduling — reorder within basic blocks.
+    // Phase 2: Instruction scheduling — reorder within basic blocks.
     if config.scheduling {
         let insts = std::mem::take(&mut ctx.insts);
         ctx.insts = scheduler::reorder(insts, rng);
     }
 
-    // Phase 4: Control flow flattening — split blocks + shuffle / dispatcher.
+    // Phase 3: Control flow flattening — split blocks + shuffle / dispatcher.
     if config.control_flow_flatten {
         let insts = std::mem::take(&mut ctx.insts);
         ctx.insts = cff::flatten(insts, &mut ctx, rng);
     }
 
-    // Phase 5: Opaque predicates — fake branches with dead blocks.
+    // Phase 4: Opaque predicates — fake branches with garbage emit.
     if config.opaque_predicates {
         let insts = std::mem::take(&mut ctx.insts);
         ctx.insts = opaque::insert(insts, &mut ctx, rng);
-    }
-
-    // Phase 6: Dead code — noise instructions.
-    if config.dead_code {
-        let insts = std::mem::take(&mut ctx.insts);
-        ctx.insts = dead_code_insert(insts, &mut ctx, rng);
     }
 
     ctx.into_body()
@@ -89,137 +77,45 @@ fn phase_instruction_transform(
     original: &[Inst],
     config: &ObfConfig,
     text_map: &Option<Vec<text_obf::EncryptedText>>,
+    texts: &[String],
     rng: &mut StdRng,
 ) {
+    // Hash predicate state: tracks compile_key from most recent hash_test_literal.
+    let mut active_hash_key: Option<i64> = None;
+    let mut blocks_since_hash: u32 = 0;
+
     for inst in original {
         match &inst.kind {
-            InstKind::Const { dst, value } => match value {
-                Literal::String(_) if config.string_encryption => {
-                    const_obf::obfuscate_string(ctx, rng, inst.span, *dst, value);
-                    continue;
+            InstKind::BlockLabel { .. } => {
+                blocks_since_hash += 1;
+                if blocks_since_hash >= 2 {
+                    active_hash_key = None;
                 }
-                Literal::Int(_) if config.numeric_split => {
-                    const_obf::obfuscate_int(ctx, rng, inst.span, *dst, value);
-                    continue;
-                }
-                Literal::Float(_) if config.numeric_split => {
-                    const_obf::obfuscate_float(ctx, rng, inst.span, *dst, value);
-                    continue;
-                }
-                Literal::Bool(_) if config.numeric_split => {
-                    const_obf::obfuscate_bool(ctx, rng, inst.span, *dst, value);
-                    continue;
-                }
-                _ => {}
-            },
+            }
             InstKind::EmitText(idx) => {
-                if let Some(texts) = text_map {
-                    text_obf::emit_encrypted_text(ctx, rng, inst.span, &texts[*idx]);
+                if let Some(key) = active_hash_key.take() {
+                    text_obf::emit_hashed_text(ctx, rng, inst.span, &texts[*idx], key);
+                    continue;
+                }
+                if let Some(enc_texts) = text_map {
+                    text_obf::emit_encrypted_text(ctx, rng, inst.span, &enc_texts[*idx]);
                     continue;
                 }
             }
-            InstKind::TestLiteral { dst, src, value } if config.test_literal_decompose => {
-                const_obf::decompose_test_literal(ctx, rng, inst.span, *dst, *src, value, config);
+            InstKind::TestLiteral { dst, src, value }
+                if config.hash_predicate && matches!(value, Literal::Int(_)) =>
+            {
+                let key = const_obf::hash_test_literal(
+                    ctx, rng, inst.span, *dst, *src, value,
+                );
+                active_hash_key = Some(key);
+                blocks_since_hash = 0;
                 continue;
             }
             _ => {}
         }
         ctx.emit(inst.span, inst.kind.clone());
     }
-}
-
-fn dead_code_insert(
-    mut insts: Vec<Inst>,
-    ctx: &mut PassState,
-    rng: &mut StdRng,
-) -> Vec<Inst> {
-    use rand::Rng;
-
-    let count = rng.random_range(8..20);
-    for _ in 0..count {
-        if insts.is_empty() {
-            break;
-        }
-        let pos = rng.random_range(0..insts.len());
-        let span = insts[pos].span;
-
-        match rng.random_range(0u32..6) {
-            0 => {
-                insts.insert(pos, Inst { span, kind: InstKind::Nop });
-            }
-            1 => {
-                let v = ctx.alloc_val(Ty::Int);
-                insts.insert(pos, Inst {
-                    span,
-                    kind: InstKind::Const { dst: v, value: Literal::Int(rng.random_range(-999999..999999)) },
-                });
-            }
-            2 => {
-                // Dead computation: a & b where a, b are random consts.
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_b = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                let a: i64 = rng.random_range(1..999999);
-                let b: i64 = rng.random_range(1..999999);
-                insts.insert(pos, Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(a) } });
-                insts.insert(pos + 1, Inst { span, kind: InstKind::Const { dst: v_b, value: Literal::Int(b) } });
-                insts.insert(pos + 2, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_r, op: BinOp::BitAnd, left: v_a, right: v_b },
-                });
-            }
-            3 => {
-                // Dead MBA-like: (a + b) - (a + b) = 0, unused.
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_b = ctx.alloc_val(Ty::Int);
-                let v_sum = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                let a: i64 = rng.random_range(1..999999);
-                let b: i64 = rng.random_range(1..999999);
-                insts.insert(pos, Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(a) } });
-                insts.insert(pos + 1, Inst { span, kind: InstKind::Const { dst: v_b, value: Literal::Int(b) } });
-                insts.insert(pos + 2, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_sum, op: BinOp::Add, left: v_a, right: v_b },
-                });
-                insts.insert(pos + 3, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_r, op: BinOp::Sub, left: v_sum, right: v_sum },
-                });
-            }
-            4 => {
-                // Shl/Shr chain: a << s >> s (identity for small s).
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_s = ctx.alloc_val(Ty::Int);
-                let v_shl = ctx.alloc_val(Ty::Int);
-                let v_shr = ctx.alloc_val(Ty::Int);
-                let a: i64 = rng.random_range(1..999999);
-                let s: i64 = rng.random_range(1..8);
-                insts.insert(pos, Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(a) } });
-                insts.insert(pos + 1, Inst { span, kind: InstKind::Const { dst: v_s, value: Literal::Int(s) } });
-                insts.insert(pos + 2, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_shl, op: BinOp::Shl, left: v_a, right: v_s },
-                });
-                insts.insert(pos + 3, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_shr, op: BinOp::Shr, left: v_shl, right: v_s },
-                });
-            }
-            _ => {
-                // Xor identity: a ^ a = 0, unused.
-                let v_a = ctx.alloc_val(Ty::Int);
-                let v_r = ctx.alloc_val(Ty::Int);
-                let a: i64 = rng.random_range(1..999999);
-                insts.insert(pos, Inst { span, kind: InstKind::Const { dst: v_a, value: Literal::Int(a) } });
-                insts.insert(pos + 1, Inst {
-                    span,
-                    kind: InstKind::BinOp { dst: v_r, op: BinOp::Xor, left: v_a, right: v_a },
-                });
-            }
-        }
-    }
-    insts
 }
 
 // ── Shared pass state ──────────────────────────────────────────

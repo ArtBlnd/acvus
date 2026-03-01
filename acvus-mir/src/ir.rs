@@ -116,6 +116,11 @@ pub enum InstKind {
         list: ValueId,
         index: i32,
     },
+    ListGet {
+        dst: ValueId,
+        list: ValueId,
+        index: ValueId,
+    },
     ListSlice {
         dst: ValueId,
         list: ValueId,

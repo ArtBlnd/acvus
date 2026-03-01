@@ -52,6 +52,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::TestObjectKey { dst, .. }
         | InstKind::TestRange { dst, .. }
         | InstKind::ListIndex { dst, .. }
+        | InstKind::ListGet { dst, .. }
         | InstKind::ListSlice { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }

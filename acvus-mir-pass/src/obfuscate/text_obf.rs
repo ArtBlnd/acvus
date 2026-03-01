@@ -207,6 +207,96 @@ pub fn emit_encrypted_text(
     }
 }
 
+/// Emit hash-key-based text decryption (branchless / straight-line).
+///
+/// Compile-time: encrypt each char as `char_code ^ (((key + i) % 256 + 256) % 256)`.
+///
+/// Runtime MIR (no control flow — CFF safe):
+///   v_key = VarLoad("__obf_key")
+///   per-char: Const(encrypted) XOR (((key + i) % 256 + 256) % 256) → int_to_char → concat
+///   EmitValue(accum)
+///
+/// This is always inside the then-branch of a hash-predicate JumpIf,
+/// so the key is guaranteed correct — no checksum needed here.
+pub fn emit_hashed_text(
+    ctx: &mut PassState,
+    _rng: &mut StdRng,
+    span: Span,
+    text: &str,
+    compile_key: i64,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    // Compile-time: encrypt chars.
+    let chars: Vec<char> = text.chars().collect();
+    let encrypted: Vec<i64> = chars
+        .iter()
+        .enumerate()
+        .map(|(i, &ch)| {
+            let k = (((compile_key + i as i64) % 256) + 256) % 256;
+            (ch as i64) ^ k
+        })
+        .collect();
+
+    // Runtime: load key from variable.
+    let v_key = ctx.alloc_val(Ty::Int);
+    ctx.emit(span, InstKind::VarLoad {
+        dst: v_key,
+        name: "__obf_key".into(),
+    });
+
+    let v_256 = ctx.alloc_val(Ty::Int);
+    ctx.emit(span, InstKind::Const { dst: v_256, value: Literal::Int(256) });
+
+    let mut v_accum: Option<ValueId> = None;
+
+    for (i, &enc_code) in encrypted.iter().enumerate() {
+        let v_enc = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::Const { dst: v_enc, value: Literal::Int(enc_code) });
+
+        let v_i = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::Const { dst: v_i, value: Literal::Int(i as i64) });
+
+        let v_ki = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::BinOp { dst: v_ki, op: BinOp::Add, left: v_key, right: v_i });
+
+        let v_m1 = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::BinOp { dst: v_m1, op: BinOp::Mod, left: v_ki, right: v_256 });
+
+        let v_a1 = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::BinOp { dst: v_a1, op: BinOp::Add, left: v_m1, right: v_256 });
+
+        let v_k = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::BinOp { dst: v_k, op: BinOp::Mod, left: v_a1, right: v_256 });
+
+        let v_dec = ctx.alloc_val(Ty::Int);
+        ctx.emit(span, InstKind::BinOp { dst: v_dec, op: BinOp::Xor, left: v_enc, right: v_k });
+
+        let v_char = ctx.alloc_val(Ty::String);
+        ctx.emit(span, InstKind::Call { dst: v_char, func: "int_to_char".into(), args: vec![v_dec] });
+
+        v_accum = Some(match v_accum {
+            None => v_char,
+            Some(prev) => {
+                let v_concat = ctx.alloc_val(Ty::String);
+                ctx.emit(span, InstKind::BinOp {
+                    dst: v_concat,
+                    op: BinOp::Add,
+                    left: prev,
+                    right: v_char,
+                });
+                v_concat
+            }
+        });
+    }
+
+    if let Some(v) = v_accum {
+        ctx.emit(span, InstKind::EmitValue(v));
+    }
+}
+
 /// Helper: decrypt a fragment at compile time to get plaintext char codes.
 fn decrypt_fragment_plain(frag: &EncryptedFragment, initial_key: &i64) -> Vec<i64> {
     let mut result = Vec::new();

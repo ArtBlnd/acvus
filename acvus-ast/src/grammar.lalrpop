@@ -25,6 +25,7 @@ extern {
         "-" => Token::Minus,
         "*" => Token::Star,
         "/" => Token::Slash,
+        "%" => Token::Percent,
         "!" => Token::Bang,
         "&&" => Token::AndAnd,
         "||" => Token::OrOr,
@@ -148,6 +149,8 @@ MulExpr: Expr = {
         Expr::BinaryOp { left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:MulExpr> "/" <right:UnaryExpr> <r:@R> =>
         Expr::BinaryOp { left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
+    <l:@L> <left:MulExpr> "%" <right:UnaryExpr> <r:@R> =>
+        Expr::BinaryOp { left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
     UnaryExpr,
 };
 

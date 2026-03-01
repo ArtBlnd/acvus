@@ -290,7 +290,7 @@ impl TypeChecker {
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if lt.is_error() || rt.is_error() {
                     let ty = match op {
-                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div
+                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
                         | BinOp::Xor | BinOp::BitAnd | BinOp::BitOr
                         | BinOp::Shl | BinOp::Shr => Ty::Error,
                         _ => Ty::Bool,
@@ -300,7 +300,7 @@ impl TypeChecker {
                 }
 
                 let ty = match op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         let unified = self.subst.unify(&lt, &rt).is_ok();
                         let rl = self.subst.resolve(&lt);
                         let rr = self.subst.resolve(&rt);
@@ -1054,6 +1054,7 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::BitOr => "|",
         BinOp::Shl => "<<",
         BinOp::Shr => ">>",
+        BinOp::Mod => "%",
     }
 }
 

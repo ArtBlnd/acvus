@@ -88,9 +88,10 @@ fn flatten_shuffle(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -> V
     out
 }
 
-/// Dispatcher pattern: all chunks routed through a central dispatcher.
+/// Dispatcher pattern: all chunks routed through a central dispatcher with
+/// a transition table. State IDs are a random permutation; transitions are
+/// looked up via `ListGet(table, state)`.
 fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -> Vec<Inst> {
-    // Split into chunks.
     let chunk_size = rng.random_range(CHUNK_MIN..=CHUNK_MAX);
     let raw_chunks: Vec<Vec<Inst>> = insts.chunks(chunk_size).map(|c| c.to_vec()).collect();
 
@@ -100,15 +101,26 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
 
     let num_chunks = raw_chunks.len();
 
-    // Assign a unique integer ID to each chunk.
-    let chunk_ids: Vec<i64> = (0..num_chunks as i64).collect();
+    // Random permutation of state IDs (0..num_chunks shuffled).
+    let mut state_ids: Vec<i64> = (0..num_chunks as i64).collect();
+    for i in (1..state_ids.len()).rev() {
+        let j = rng.random_range(0..=i);
+        state_ids.swap(i, j);
+    }
 
-    // Allocate labels for each chunk and the dispatcher.
+    // Build transition table: transition[state_ids[i]] = state_ids[i+1].
+    // Last chunk has no successor — use a sentinel (0, won't be read).
+    let mut transition = vec![0i64; num_chunks];
+    for i in 0..num_chunks - 1 {
+        transition[state_ids[i] as usize] = state_ids[i + 1];
+    }
+
+    // Allocate labels.
     let dispatcher_label = ctx.alloc_label();
     let exit_label = ctx.alloc_label();
     let chunk_labels: Vec<Label> = (0..num_chunks).map(|_| ctx.alloc_label()).collect();
 
-    // Shuffle chunk order for emission.
+    // Shuffle chunk emission order.
     let mut emission_order: Vec<usize> = (0..num_chunks).collect();
     for i in (1..emission_order.len()).rev() {
         let j = rng.random_range(0..=i);
@@ -116,47 +128,54 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
     }
 
     let span = raw_chunks[0].first().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+    let state_var = "__cff_state".to_string();
 
     let mut out = Vec::new();
 
-    // Initialize state to the first chunk's ID.
-    let v_state = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const {
-        dst: v_state,
-        value: Literal::Int(chunk_ids[0]),
-    }});
+    // Build transition table as MakeList.
+    let mut table_element_vals = Vec::new();
+    for &t in &transition {
+        let v = ctx.alloc_val(Ty::Int);
+        out.push(Inst { span, kind: InstKind::Const { dst: v, value: Literal::Int(t) } });
+        table_element_vals.push(v);
+    }
+    let v_table = ctx.alloc_val(Ty::List(Box::new(Ty::Int)));
+    out.push(Inst { span, kind: InstKind::MakeList { dst: v_table, elements: table_element_vals } });
+
+    // Initialize state to state_ids[0].
+    let v_init = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::Const { dst: v_init, value: Literal::Int(state_ids[0]) } });
+    out.push(Inst { span, kind: InstKind::VarStore { name: state_var.clone(), src: v_init } });
     out.push(Inst { span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
 
-    // Emit dispatcher: chain of JumpIf comparing v_state to each chunk ID.
+    // Dispatcher: load state, lookup next via ListGet, store next, then JumpIf chain.
     out.push(Inst { span, kind: InstKind::BlockLabel { label: dispatcher_label, params: vec![] } });
 
-    for (idx, &chunk_id) in chunk_ids.iter().enumerate() {
-        if idx == num_chunks - 1 {
-            // Last chunk: unconditional jump (default case).
-            out.push(Inst { span, kind: InstKind::Jump { label: chunk_labels[idx], args: vec![] } });
+    let v_state = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::VarLoad { dst: v_state, name: state_var.clone() } });
+
+    let v_next = ctx.alloc_val(Ty::Int);
+    out.push(Inst { span, kind: InstKind::ListGet { dst: v_next, list: v_table, index: v_state } });
+    out.push(Inst { span, kind: InstKind::VarStore { name: state_var.clone(), src: v_next } });
+
+    // JumpIf chain: v_state → chunk labels.
+    for (chunk_idx, &sid) in state_ids.iter().enumerate() {
+        if chunk_idx == num_chunks - 1 {
+            out.push(Inst { span, kind: InstKind::Jump { label: chunk_labels[chunk_idx], args: vec![] } });
         } else {
             let v_id = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_id,
-                value: Literal::Int(chunk_id),
-            }});
+            out.push(Inst { span, kind: InstKind::Const { dst: v_id, value: Literal::Int(sid) } });
             let v_cmp = ctx.alloc_val(Ty::Bool);
             out.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_cmp,
-                op: BinOp::Eq,
-                left: v_state,
-                right: v_id,
+                dst: v_cmp, op: BinOp::Eq, left: v_state, right: v_id,
             }});
-
-            let next_check_label = ctx.alloc_label();
+            let next_check = ctx.alloc_label();
             out.push(Inst { span, kind: InstKind::JumpIf {
                 cond: v_cmp,
-                then_label: chunk_labels[idx],
-                then_args: vec![],
-                else_label: next_check_label,
-                else_args: vec![],
+                then_label: chunk_labels[chunk_idx], then_args: vec![],
+                else_label: next_check, else_args: vec![],
             }});
-            out.push(Inst { span, kind: InstKind::BlockLabel { label: next_check_label, params: vec![] } });
+            out.push(Inst { span, kind: InstKind::BlockLabel { label: next_check, params: vec![] } });
         }
     }
 
@@ -167,113 +186,15 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
         out.extend(raw_chunks[idx].iter().cloned());
 
         if idx + 1 < num_chunks {
-            // Update state to next chunk ID and jump back to dispatcher.
-            // Reuse v_state by creating a new val for the assignment.
-            let v_next = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span: chunk_span, kind: InstKind::Const {
-                dst: v_next,
-                value: Literal::Int(chunk_ids[idx + 1]),
-            }});
-            // Store the new state. We use VarStore with a dedicated variable name
-            // so the dispatcher can read it. But since we're using SSA, we need
-            // to use VarStore/VarLoad to thread state.
-            //
-            // Simpler approach: emit a VarStore + VarLoad pair for the state variable.
-            let state_var = "__cff_state".to_string();
-            out.push(Inst { span: chunk_span, kind: InstKind::VarStore {
-                name: state_var.clone(),
-                src: v_next,
-            }});
+            // Jump back to dispatcher (next state already stored).
             out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
         } else {
-            // Last chunk: jump to exit.
             out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: exit_label, args: vec![] } });
         }
     }
 
     out.push(Inst { span, kind: InstKind::BlockLabel { label: exit_label, params: vec![] } });
-
-    // Fix: the dispatcher needs to read the state variable instead of the initial const.
-    // Re-emit the dispatcher to use VarLoad.
-    // Actually, let's restructure: use VarStore for initial state too, then VarLoad in dispatcher.
-    let mut fixed_out = Vec::new();
-    let state_var = "__cff_state".to_string();
-
-    // Initial state store.
-    let v_init = ctx.alloc_val(Ty::Int);
-    fixed_out.push(Inst { span, kind: InstKind::Const {
-        dst: v_init,
-        value: Literal::Int(chunk_ids[0]),
-    }});
-    fixed_out.push(Inst { span, kind: InstKind::VarStore {
-        name: state_var.clone(),
-        src: v_init,
-    }});
-    fixed_out.push(Inst { span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
-
-    // Dispatcher with VarLoad.
-    fixed_out.push(Inst { span, kind: InstKind::BlockLabel { label: dispatcher_label, params: vec![] } });
-    let v_loaded_state = ctx.alloc_val(Ty::Int);
-    fixed_out.push(Inst { span, kind: InstKind::VarLoad {
-        dst: v_loaded_state,
-        name: state_var,
-    }});
-
-    for (idx, &chunk_id) in chunk_ids.iter().enumerate() {
-        if idx == num_chunks - 1 {
-            fixed_out.push(Inst { span, kind: InstKind::Jump { label: chunk_labels[idx], args: vec![] } });
-        } else {
-            let v_id = ctx.alloc_val(Ty::Int);
-            fixed_out.push(Inst { span, kind: InstKind::Const {
-                dst: v_id,
-                value: Literal::Int(chunk_id),
-            }});
-            let v_cmp = ctx.alloc_val(Ty::Bool);
-            fixed_out.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_cmp,
-                op: BinOp::Eq,
-                left: v_loaded_state,
-                right: v_id,
-            }});
-
-            let next_check_label = ctx.alloc_label();
-            fixed_out.push(Inst { span, kind: InstKind::JumpIf {
-                cond: v_cmp,
-                then_label: chunk_labels[idx],
-                then_args: vec![],
-                else_label: next_check_label,
-                else_args: vec![],
-            }});
-            fixed_out.push(Inst { span, kind: InstKind::BlockLabel { label: next_check_label, params: vec![] } });
-        }
-    }
-
-    // Copy chunk emissions from `out` (skip the initial setup and old dispatcher).
-    // Find where chunks start in `out`.
-    for &idx in &emission_order {
-        let chunk_span = raw_chunks[idx].first().map(|i| i.span).unwrap_or(span);
-        fixed_out.push(Inst { span: chunk_span, kind: InstKind::BlockLabel { label: chunk_labels[idx], params: vec![] } });
-        fixed_out.extend(raw_chunks[idx].iter().cloned());
-
-        if idx + 1 < num_chunks {
-            let v_next = ctx.alloc_val(Ty::Int);
-            fixed_out.push(Inst { span: chunk_span, kind: InstKind::Const {
-                dst: v_next,
-                value: Literal::Int(chunk_ids[idx + 1]),
-            }});
-            fixed_out.push(Inst { span: chunk_span, kind: InstKind::VarStore {
-                name: "__cff_state".to_string(),
-                src: v_next,
-            }});
-            fixed_out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
-        } else {
-            fixed_out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: exit_label, args: vec![] } });
-        }
-    }
-
-    fixed_out.push(Inst { span, kind: InstKind::BlockLabel { label: exit_label, params: vec![] } });
-
-    fixed_out
+    out
 }
 
 fn emit_chunk(out: &mut Vec<Inst>, chunk: Chunk) {

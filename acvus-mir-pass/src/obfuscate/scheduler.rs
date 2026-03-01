@@ -173,6 +173,7 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         InstKind::TestObjectKey { src, .. } => vec![*src],
         InstKind::TestRange { src, .. } => vec![*src],
         InstKind::ListIndex { list, .. } => vec![*list],
+        InstKind::ListGet { list, index, .. } => vec![*list, *index],
         InstKind::ListSlice { list, .. } => vec![*list],
         InstKind::ObjectGet { object, .. } => vec![*object],
         InstKind::MakeClosure { captures, .. } => captures.clone(),
@@ -223,6 +224,7 @@ fn defined_val(kind: &InstKind) -> Option<ValueId> {
         | InstKind::TestObjectKey { dst, .. }
         | InstKind::TestRange { dst, .. }
         | InstKind::ListIndex { dst, .. }
+        | InstKind::ListGet { dst, .. }
         | InstKind::ListSlice { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
