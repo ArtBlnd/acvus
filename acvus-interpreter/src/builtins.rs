@@ -136,6 +136,7 @@ fn value_to_string(v: Value) -> String {
             format!("({})", inner.join(", "))
         }
         Value::Fn(_) => panic!("cannot convert Fn to string"),
+        Value::Opaque(o) => panic!("cannot convert Opaque<{}> to string", o.type_name),
     }
 }
 

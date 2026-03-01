@@ -19,6 +19,8 @@ pub enum Ty {
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
+    /// Opaque type: user-defined, identified by name. No internal structure.
+    Opaque(String),
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
     /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
@@ -71,6 +73,7 @@ impl fmt::Display for Ty {
                 }
                 write!(f, ") -> {ret}")
             }
+            Ty::Opaque(name) => write!(f, "{name}"),
             Ty::Var(v) => write!(f, "?{}", v.0),
             Ty::Error => write!(f, "<error>"),
         }
@@ -188,6 +191,8 @@ impl TySubst {
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Range, Ty::Range) => Ok(()),
+
+            (Ty::Opaque(a), Ty::Opaque(b)) if a == b => Ok(()),
 
             (Ty::Var(v), other) | (other, Ty::Var(v)) => {
                 if let Ty::Var(v2) = other

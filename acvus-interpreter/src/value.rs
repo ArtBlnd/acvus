@@ -1,5 +1,7 @@
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use acvus_mir::ir::Label;
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,37 @@ pub enum Value {
     Object(BTreeMap<String, Value>),
     Tuple(Vec<Value>),
     Fn(FnValue),
+    Opaque(OpaqueValue),
+}
+
+/// An opaque value: carries a type name and an arbitrary payload.
+/// Templates cannot inspect or destructure this — only pass it between extern functions.
+#[derive(Clone)]
+pub struct OpaqueValue {
+    pub type_name: String,
+    inner: Arc<dyn Any + Send + Sync>,
+}
+
+impl OpaqueValue {
+    pub fn new<T>(type_name: impl Into<String>, value: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        Self {
+            type_name: type_name.into(),
+            inner: Arc::new(value),
+        }
+    }
+
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.inner.downcast_ref()
+    }
+}
+
+impl fmt::Debug for OpaqueValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Opaque<{}>", self.type_name)
+    }
 }
 
 /// A closure value: label pointing to its body + captured values.
@@ -115,6 +148,7 @@ impl Value {
                 PureValue::Tuple(elems.into_iter().map(Value::into_pure).collect())
             }
             Value::Fn(_) => panic!("cannot convert Fn to PureValue"),
+            Value::Opaque(o) => panic!("cannot convert Opaque<{}> to PureValue", o.type_name),
         }
     }
 }

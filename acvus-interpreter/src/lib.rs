@@ -8,4 +8,4 @@ mod value;
 pub use extern_fn::{ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig};
 pub use interpreter::Interpreter;
 pub use storage::{InMemoryStorage, Storage};
-pub use value::{FnValue, PureValue, StorageKey, Value};
+pub use value::{FnValue, OpaqueValue, PureValue, StorageKey, Value};

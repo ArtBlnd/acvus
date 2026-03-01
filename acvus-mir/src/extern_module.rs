@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ty::Ty;
 
@@ -15,6 +15,7 @@ pub struct ExternFnDef {
 pub struct ExternModule {
     pub name: String,
     fns: HashMap<String, ExternFnDef>,
+    opaque_types: HashSet<String>,
 }
 
 impl ExternModule {
@@ -22,7 +23,22 @@ impl ExternModule {
         Self {
             name: name.into(),
             fns: HashMap::new(),
+            opaque_types: HashSet::new(),
         }
+    }
+
+    pub fn add_opaque(&mut self, name: impl Into<String>) -> &mut Self {
+        let name = name.into();
+        assert!(
+            self.opaque_types.insert(name.clone()),
+            "duplicate opaque type in ExternModule '{}': {name}",
+            self.name,
+        );
+        self
+    }
+
+    pub fn opaque_types(&self) -> &HashSet<String> {
+        &self.opaque_types
     }
 
     pub fn add_fn(
@@ -56,6 +72,7 @@ impl ExternModule {
 #[derive(Debug, Clone)]
 pub struct ExternRegistry {
     fns: HashMap<String, ExternFnDef>,
+    opaque_types: HashSet<String>,
 }
 
 impl Default for ExternRegistry {
@@ -68,10 +85,18 @@ impl ExternRegistry {
     pub fn new() -> Self {
         Self {
             fns: HashMap::new(),
+            opaque_types: HashSet::new(),
         }
     }
 
     pub fn register(&mut self, module: &ExternModule) -> &mut Self {
+        for name in &module.opaque_types {
+            assert!(
+                self.opaque_types.insert(name.clone()),
+                "duplicate opaque type '{name}' (from module '{}')",
+                module.name,
+            );
+        }
         for (name, def) in &module.fns {
             assert!(
                 !self.fns.contains_key(name),
@@ -85,6 +110,10 @@ impl ExternRegistry {
 
     pub fn get(&self, name: &str) -> Option<&ExternFnDef> {
         self.fns.get(name)
+    }
+
+    pub fn has_opaque(&self, name: &str) -> bool {
+        self.opaque_types.contains(name)
     }
 
     pub fn fns(&self) -> &HashMap<String, ExternFnDef> {
