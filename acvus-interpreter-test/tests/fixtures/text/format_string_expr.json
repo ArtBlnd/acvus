@@ -1,0 +1,4 @@
+{
+  "template": "{{ \"sum: {{ 1 + 2 | to_string }}\" }}",
+  "expected": "sum: 3"
+}

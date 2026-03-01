@@ -1,0 +1,5 @@
+{
+  "template": "hello  \n  {-{ $name }-}  \n  world",
+  "storage": { "name": "," },
+  "expected": "hello  ,  world"
+}

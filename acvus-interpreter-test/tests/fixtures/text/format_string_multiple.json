@@ -1,0 +1,5 @@
+{
+  "template": "{{ \"{{ $first }} and {{ $second }}\" }}",
+  "storage": { "first": "A", "second": "B" },
+  "expected": "A and B"
+}

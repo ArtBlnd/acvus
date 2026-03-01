@@ -1,0 +1,5 @@
+{
+  "template": "{{ \"hello {{ $name }}!\" }}",
+  "storage": { "name": "alice" },
+  "expected": "hello alice!"
+}

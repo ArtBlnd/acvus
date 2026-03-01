@@ -66,7 +66,13 @@ Expr         = LambdaExpr
 LambdaExpr   = PipeExpr "->" LambdaExpr    ← right-associative
              | PipeExpr
 
-PipeExpr     = PipeExpr "|" CompExpr       ← left-associative
+PipeExpr     = PipeExpr "|" OrExpr         ← left-associative
+             | OrExpr
+
+OrExpr       = OrExpr "||" AndExpr        ← left-associative
+             | AndExpr
+
+AndExpr      = AndExpr "&&" CompExpr      ← left-associative
              | CompExpr
 
 CompExpr     = CompExpr CompOp RangeExpr   ← left-associative
@@ -102,6 +108,7 @@ PrimaryExpr  = IDENT                       ← identifier
              | INT                         ← integer literal
              | FLOAT                       ← float literal
              | STRING                      ← string literal
+             | FORMAT_STRING               ← format string (see below)
              | "true" | "false"            ← boolean literal
              | "(" CommaSep<TupleElem> ")" ← paren / tuple (see below)
              | "[" CommaSep<ListElem> "]"  ← list
@@ -111,6 +118,13 @@ TupleElem    = Expr | "_"
 ListElem     = Expr | ".."
 ObjectField  = IDENT | "$" IDENT
 ```
+
+**Format String**:
+- `"hello {{ name }}!"` → `"hello " + name + "!"`
+- `{{ }}` 안에 임의의 expression 사용 가능: `"sum: {{ a + b | to_string }}"`
+- Grammar-level desugaring — `BinOp::Add` 체인으로 변환. 새 AST variant 없음.
+- **String 타입만 허용** — auto `to_string` 없음. 비-String 표현식은 `| to_string` 파이프 필요.
+- 빈 텍스트 세그먼트(`""`)는 체인에서 제외.
 
 **Tuple vs Paren 구분**:
 - 1개 원소 (non-wildcard): `(expr)` → 괄호 그룹 (Paren)
@@ -161,10 +175,12 @@ TuplePatternElem = Pattern | "_"           ← wildcard
 | `INT` | `0`, `42`, `-1` |
 | `FLOAT` | `3.14`, `0.0` |
 | `STRING` | `"hello"`, `"world"` |
+| `FORMAT_STRING` | `"hello {{ name }}!"` (lexer가 `FmtStringStart`/`Mid`/`End`로 분할) |
 | `true` `false` | boolean literals |
 | `_` | wildcard (tuple 패턴 내부) |
 | `+` `-` `*` `/` | 산술 연산자 |
 | `!` | 논리 부정 |
+| `&&` `\|\|` | 논리 AND / OR |
 | `==` `!=` `<` `>` `<=` `>=` | 비교 연산자 |
 | `=` | 바인딩 (패턴 매칭) |
 | `in` | 이터레이션 |
@@ -181,9 +197,11 @@ TuplePatternElem = Pattern | "_"           ← wildcard
 |---------|--------|-----------|
 | 1 | `->` (lambda) | right |
 | 2 | `\|` (pipe) | left |
-| 3 | `==` `!=` `<` `>` `<=` `>=` | left |
-| 4 | `..` `..=` `=..` (range) | non-assoc |
-| 5 | `+` `-` | left |
-| 6 | `*` `/` | left |
-| 7 | `-` `!` (unary) | prefix |
-| 8 | `.` `()` (postfix) | left |
+| 3 | `\|\|` (logical or) | left |
+| 4 | `&&` (logical and) | left |
+| 5 | `==` `!=` `<` `>` `<=` `>=` | left |
+| 6 | `..` `..=` `=..` (range) | non-assoc |
+| 7 | `+` `-` | left |
+| 8 | `*` `/` | left |
+| 9 | `-` `!` (unary) | prefix |
+| 10 | `.` `()` (postfix) | left |

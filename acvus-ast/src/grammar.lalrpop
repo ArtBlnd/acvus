@@ -47,6 +47,9 @@ extern {
         "{" => Token::LBrace,
         "}" => Token::RBrace,
         "," => Token::Comma,
+        "fmt_start" => Token::FmtStringStart(<String>),
+        "fmt_mid" => Token::FmtStringMid(<String>),
+        "fmt_end" => Token::FmtStringEnd(<String>),
     }
 }
 
@@ -203,6 +206,45 @@ PrimaryExpr: Expr = {
     // Object literal: { field1, $field2, } — trailing comma required
     <l:@L> "{" <fields:(<ObjectField> ",")+> "}" <r:@R> =>
         Expr::Object { fields, span: Span::new(l, r) },
+
+    // Format string: "hello {{ name }}, age {{ age | to_string }}"
+    // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)
+    <l:@L> <start:"fmt_start"> <first:Expr> <rest:("fmt_mid" Expr)*> <end:"fmt_end"> <r:@R> => {
+        let span = Span::new(l, r);
+        let mut parts: Vec<Expr> = Vec::new();
+
+        // Start text segment
+        if !start.is_empty() {
+            parts.push(Expr::Literal { value: Literal::String(start), span });
+        }
+        parts.push(first);
+
+        // Mid text + expr pairs
+        for (mid, expr) in rest {
+            if !mid.is_empty() {
+                parts.push(Expr::Literal { value: Literal::String(mid), span });
+            }
+            parts.push(expr);
+        }
+
+        // End text segment
+        if !end.is_empty() {
+            parts.push(Expr::Literal { value: Literal::String(end), span });
+        }
+
+        // Fold into BinOp::Add chain
+        let mut iter = parts.into_iter();
+        let mut acc = iter.next().unwrap();
+        for part in iter {
+            acc = Expr::BinaryOp {
+                left: Box::new(acc),
+                op: BinOp::Add,
+                right: Box::new(part),
+                span,
+            };
+        }
+        acc
+    },
 };
 
 // Tuple element: an expression or `_`
