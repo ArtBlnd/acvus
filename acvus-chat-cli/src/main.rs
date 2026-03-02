@@ -10,7 +10,7 @@ use acvus_interpreter::ExternFnRegistry;
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
-    compile_nodes, ApiKind, Fetch, HashMapStorage, HttpRequest, NodeSpec,
+    compile_nodes, resolve_template, ApiKind, Fetch, HashMapStorage, HttpRequest, NodeSpec,
     ProviderConfig,
 };
 use project::{toml_to_ty, ProjectSpec};
@@ -137,8 +137,28 @@ async fn main() {
 
     let fetch = HttpFetch { client: reqwest::Client::new() };
 
+    // Compile output template if specified in project.toml
+    let output_module = if spec.output.is_some() || spec.inline_output.is_some() {
+        match resolve_template(
+            &project_dir,
+            spec.output.as_deref(),
+            spec.inline_output.as_deref(),
+            0,
+            &context_types,
+            &registry,
+        ) {
+            Ok(block) => Some(block),
+            Err(e) => {
+                eprintln!("output template error: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     let extern_fns = ExternFnRegistry::new();
-    let mut engine = ChatEngine::new(compiled_nodes, providers, fetch, extern_fns, storage).await;
+    let mut engine = ChatEngine::new(compiled_nodes, providers, fetch, extern_fns, storage, output_module).await;
 
     if context_args.is_empty() {
         // Interactive mode: prompt per-turn keys from stdin

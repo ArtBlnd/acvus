@@ -2,6 +2,8 @@ mod openai;
 mod anthropic;
 mod google;
 
+use std::collections::HashMap;
+
 use crate::dsl::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolSpec};
 
@@ -37,11 +39,35 @@ pub fn build_request(
     messages: &[Message],
     tools: &[ToolSpec],
     generation: &GenerationParams,
+    cached_content: Option<&str>,
 ) -> HttpRequest {
     match config.api {
         ApiKind::OpenAI => openai::build_request(config, model, messages, tools, generation),
         ApiKind::Anthropic => anthropic::build_request(config, model, messages, tools, generation),
-        ApiKind::Google => google::build_request(config, model, messages, tools, generation),
+        ApiKind::Google => google::build_request(config, model, messages, tools, generation, cached_content),
+    }
+}
+
+pub fn build_cache_request(
+    config: &ProviderConfig,
+    model: &str,
+    messages: &[Message],
+    ttl: &str,
+    cache_config: &HashMap<String, serde_json::Value>,
+) -> HttpRequest {
+    match config.api {
+        ApiKind::Google => google::build_cache_request(config, model, messages, ttl, cache_config),
+        _ => panic!("context caching not supported for {:?}", config.api),
+    }
+}
+
+pub fn parse_cache_response(
+    api: &ApiKind,
+    json: &serde_json::Value,
+) -> Result<String, String> {
+    match api {
+        ApiKind::Google => google::parse_cache_response(json),
+        _ => Err("context caching not supported".into()),
     }
 }
 

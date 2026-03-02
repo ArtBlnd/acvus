@@ -311,7 +311,7 @@ where
         .collect();
 
     consume_fuel(&fuel, fuel_limit)?;
-    let http_request = build_request(&provider_config, &node.model, &messages, &tools, &node.generation);
+    let http_request = build_request(&provider_config, &node.model, &messages, &tools, &node.generation, None);
     let json = fetch
         .fetch(&http_request)
         .await
@@ -340,7 +340,7 @@ where
             });
         }
 
-        let http_request = build_request(&provider_config, &node.model, &all_messages, &tools, &node.generation);
+        let http_request = build_request(&provider_config, &node.model, &all_messages, &tools, &node.generation, None);
         let json = fetch
             .fetch(&http_request)
             .await

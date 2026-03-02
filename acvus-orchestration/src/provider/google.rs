@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::dsl::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolCall, ToolSpec};
 
@@ -9,8 +11,12 @@ pub fn build_request(
     messages: &[Message],
     tools: &[ToolSpec],
     generation: &GenerationParams,
+    cached_content: Option<&str>,
 ) -> HttpRequest {
-    let body = format_body(messages, tools, generation);
+    let body = match cached_content {
+        Some(cache_name) => format_cached_body(messages, tools, generation, cache_name),
+        None => format_body(messages, tools, generation),
+    };
     let url = format!(
         "{}/v1beta/models/{}:generateContent",
         config.endpoint, model
@@ -23,6 +29,119 @@ pub fn build_request(
         ],
         body,
     }
+}
+
+pub fn build_cache_request(
+    config: &ProviderConfig,
+    model: &str,
+    messages: &[Message],
+    ttl: &str,
+    cache_config: &HashMap<String, serde_json::Value>,
+) -> HttpRequest {
+    let mut system_text = String::new();
+    let mut contents = Vec::new();
+
+    for m in messages {
+        if m.role == "system" {
+            if !system_text.is_empty() {
+                system_text.push('\n');
+            }
+            system_text.push_str(&m.content);
+        } else {
+            contents.push(format_content(m));
+        }
+    }
+
+    let mut body = serde_json::json!({
+        "model": format!("models/{model}"),
+        "contents": contents,
+        "ttl": ttl,
+    });
+
+    if !system_text.is_empty() {
+        body["systemInstruction"] = serde_json::json!({
+            "parts": [{ "text": system_text }]
+        });
+    }
+
+    // Pass through provider-specific fields (e.g. display_name)
+    for (k, v) in cache_config {
+        body[k] = v.clone();
+    }
+
+    let url = format!("{}/v1beta/cachedContents", config.endpoint);
+    HttpRequest {
+        url,
+        headers: vec![
+            ("x-goog-api-key".into(), config.api_key.clone()),
+            ("content-type".into(), "application/json".into()),
+        ],
+        body,
+    }
+}
+
+pub fn parse_cache_response(json: &serde_json::Value) -> Result<String, String> {
+    json.get("name")
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "missing 'name' in cache response".into())
+}
+
+fn format_cached_body(
+    messages: &[Message],
+    tools: &[ToolSpec],
+    generation: &GenerationParams,
+    cache_name: &str,
+) -> serde_json::Value {
+    let contents: Vec<serde_json::Value> = messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(format_content)
+        .collect();
+
+    let mut body = serde_json::json!({
+        "cachedContent": cache_name,
+        "contents": contents,
+    });
+
+    let mut gen_config = serde_json::Map::new();
+    if let Some(t) = generation.temperature { gen_config.insert("temperature".into(), serde_json::json!(t)); }
+    if let Some(p) = generation.top_p { gen_config.insert("topP".into(), serde_json::json!(p)); }
+    if let Some(k) = generation.top_k { gen_config.insert("topK".into(), serde_json::json!(k)); }
+    if let Some(m) = generation.max_tokens { gen_config.insert("maxOutputTokens".into(), serde_json::json!(m)); }
+    if !gen_config.is_empty() {
+        body["generationConfig"] = serde_json::Value::Object(gen_config);
+    }
+
+    if !tools.is_empty() {
+        let declarations: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| {
+                let properties: serde_json::Map<String, serde_json::Value> = t
+                    .params
+                    .iter()
+                    .map(|(name, type_name)| {
+                        (name.clone(), serde_json::json!({ "type": type_name }))
+                    })
+                    .collect();
+
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                    }
+                })
+            })
+            .collect();
+
+        body["tools"] = serde_json::json!([{
+            "function_declarations": declarations,
+        }]);
+    }
+
+    body
 }
 
 fn format_body(messages: &[Message], tools: &[ToolSpec], generation: &GenerationParams) -> serde_json::Value {

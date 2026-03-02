@@ -2,17 +2,45 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+/// A context reference like `"@node-name"`. Strips the `@` prefix on deserialization.
+#[derive(Debug, Clone)]
+pub struct ContextRef(pub String);
+
+impl<'de> Deserialize<'de> for ContextRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.strip_prefix('@') {
+            Some(name) => Ok(ContextRef(name.to_string())),
+            None => Err(serde::de::Error::custom(format!(
+                "context reference must start with '@', got: {s}"
+            ))),
+        }
+    }
+}
+
 /// Node kind — determines how the node is executed.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+/// Config specific to each kind lives inside the variant.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum NodeKind {
     Llm,
+    LlmCache {
+        /// TTL string, e.g. "300s", "1h".
+        ttl: String,
+        /// Provider-specific cache config (e.g. display_name for Gemini).
+        #[serde(default)]
+        cache_config: HashMap<String, serde_json::Value>,
+    },
 }
 
 /// Node specification parsed from TOML.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodeSpec {
     pub name: String,
+    #[serde(flatten)]
     pub kind: NodeKind,
     pub provider: String,
     pub model: String,
@@ -23,10 +51,7 @@ pub struct NodeSpec {
     pub strategy: Strategy,
     #[serde(default)]
     pub generation: GenerationParams,
-    /// Output template file path — rendered after the model responds.
-    pub output: Option<String>,
-    /// Inline output template.
-    pub inline_output: Option<String>,
+    pub cache_key: Option<ContextRef>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -52,7 +77,7 @@ pub enum StrategyMode {
 #[serde(untagged)]
 pub enum MessageSpec {
     Iterator {
-        iterator: String,
+        iterator: ContextRef,
         template: Option<String>,
         inline_template: Option<String>,
         /// Python-style slice: `[start]` or `[start, end]`. Negative = from end.

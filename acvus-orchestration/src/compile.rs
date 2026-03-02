@@ -23,7 +23,7 @@ pub struct CompiledNode {
     pub strategy: Strategy,
     pub generation: GenerationParams,
     pub key_module: Option<CompiledBlock>,
-    pub output_module: Option<CompiledBlock>,
+    pub cache_key: Option<String>,
 }
 
 /// A compiled message entry.
@@ -81,7 +81,7 @@ pub fn compile_node(
                 }
             }
             MessageSpec::Iterator { iterator, template, inline_template, slice, bind, role } => {
-                let key = iterator.trim_start_matches('@').to_string();
+                let key = iterator.0.clone();
 
                 let tmpl_source = template.as_deref().or(inline_template.as_deref());
                 let block = if tmpl_source.is_some() {
@@ -146,20 +146,10 @@ pub fn compile_node(
             None
         };
 
-    let output_module = if spec.output.is_some() || spec.inline_output.is_some() {
-        match resolve_template(
-            base_dir, spec.output.as_deref(), spec.inline_output.as_deref(),
-            0, context_types, registry,
-        ) {
-            Ok(block) => {
-                all_context_keys.extend(block.context_keys.iter().cloned());
-                Some(block)
-            }
-            Err(e) => return Err(vec![e]),
-        }
-    } else {
-        None
-    };
+    let cache_key = spec.cache_key.as_ref().map(|r| {
+        all_context_keys.insert(r.0.clone());
+        r.0.clone()
+    });
 
     Ok(CompiledNode {
         name: spec.name.clone(),
@@ -172,12 +162,12 @@ pub fn compile_node(
         strategy: spec.strategy.clone(),
         generation: spec.generation.clone(),
         key_module,
-        output_module,
+        cache_key,
     })
 }
 
 /// Resolve a template from either a file path or inline source.
-fn resolve_template(
+pub fn resolve_template(
     base_dir: &Path,
     file: Option<&str>,
     inline: Option<&str>,

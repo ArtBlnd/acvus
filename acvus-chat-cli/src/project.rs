@@ -9,6 +9,10 @@ pub struct ProjectSpec {
     #[serde(default = "default_fuel_limit")]
     pub fuel_limit: u64,
     pub nodes: Vec<String>,
+    /// Output template file path — rendered after the main model responds.
+    pub output: Option<String>,
+    /// Inline output template.
+    pub inline_output: Option<String>,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]

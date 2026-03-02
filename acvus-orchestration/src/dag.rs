@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::compile::CompiledNode;
-use crate::dsl::NodeKind;
 use crate::error::{OrchError, OrchErrorKind};
 
 /// Dependency graph for orchestration nodes.
@@ -90,7 +89,7 @@ mod tests {
             strategy: Default::default(),
             generation: Default::default(),
             key_module: None,
-            output_module: None,
+            cache_key: None,
         }
     }
 

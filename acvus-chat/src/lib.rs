@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use acvus_interpreter::{ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value};
 use acvus_orchestration::{
-    build_request, output_to_value, parse_response,
-    CompiledBlock, CompiledMessage, CompiledNode, Fetch, HashMapStorage,
-    Message, ModelResponse, Output, ProviderConfig, Storage, StrategyMode, ToolSpec,
+    build_cache_request, build_request, output_to_value, parse_cache_response, parse_response,
+    CompiledBlock, CompiledMessage, CompiledNode, Fetch, HashMapStorage, Message, ModelResponse,
+    NodeKind, Output, ProviderConfig, Storage, StrategyMode, ToolSpec,
 };
 use futures::future::BoxFuture;
 
@@ -153,31 +153,50 @@ where
             .unwrap_or_else(|| panic!("unknown provider: {}", node.provider))
             .clone();
 
-        let tools: Vec<ToolSpec> = node
-            .tools
-            .iter()
-            .map(|t| ToolSpec {
-                name: t.name.clone(),
-                description: String::new(),
-                params: t.params.clone(),
-            })
-            .collect();
-
-        let request = build_request(&provider_config, &node.model, &messages, &tools, &node.generation);
-        let json = ctx
-            .fetch
-            .fetch(&request)
-            .await
-            .unwrap_or_else(|e| panic!("fetch error for node {}: {e}", node.name));
-        let response = parse_response(&provider_config.api, &json)
-            .unwrap_or_else(|e| panic!("parse error for node {}: {e}", node.name));
-
-        match response {
-            ModelResponse::Text(text) => {
-                storage.set(node.name.clone(), Output::Text(text));
+        match node.kind {
+            NodeKind::LlmCache { ref ttl, ref cache_config } => {
+                let request = build_cache_request(
+                    &provider_config, &node.model, &messages, ttl, cache_config,
+                );
+                let json = ctx
+                    .fetch
+                    .fetch(&request)
+                    .await
+                    .unwrap_or_else(|e| panic!("cache creation error for node {}: {e}", node.name));
+                let cache_name = parse_cache_response(&provider_config.api, &json)
+                    .unwrap_or_else(|e| panic!("cache parse error for node {}: {e}", node.name));
+                storage.set(node.name.clone(), Output::Text(cache_name));
             }
-            ModelResponse::ToolCalls(_) => {
-                panic!("tool calls in dependency node {} not supported", node.name);
+            NodeKind::Llm => {
+                let tools: Vec<ToolSpec> = node
+                    .tools
+                    .iter()
+                    .map(|t| ToolSpec {
+                        name: t.name.clone(),
+                        description: String::new(),
+                        params: t.params.clone(),
+                    })
+                    .collect();
+
+                let request = build_request(
+                    &provider_config, &node.model, &messages, &tools, &node.generation, None,
+                );
+                let json = ctx
+                    .fetch
+                    .fetch(&request)
+                    .await
+                    .unwrap_or_else(|e| panic!("fetch error for node {}: {e}", node.name));
+                let response = parse_response(&provider_config.api, &json)
+                    .unwrap_or_else(|e| panic!("parse error for node {}: {e}", node.name));
+
+                match response {
+                    ModelResponse::Text(text) => {
+                        storage.set(node.name.clone(), Output::Text(text));
+                    }
+                    ModelResponse::ToolCalls(_) => {
+                        panic!("tool calls in dependency node {} not supported", node.name);
+                    }
+                }
             }
         }
     })
@@ -266,6 +285,7 @@ pub struct ChatEngine<F> {
     iterator_keys: Vec<String>,
     provider_config: ProviderConfig,
     tools: Vec<ToolSpec>,
+    output_module: Option<CompiledBlock>,
 }
 
 impl<F> ChatEngine<F>
@@ -278,6 +298,7 @@ where
         fetch: F,
         extern_fns: ExternFnRegistry,
         mut storage: HashMapStorage,
+        output_module: Option<CompiledBlock>,
     ) -> Self {
         let name_to_idx: HashMap<String, usize> = nodes
             .iter()
@@ -373,6 +394,7 @@ where
             iterator_keys,
             provider_config,
             tools,
+            output_module,
         }
     }
 
@@ -402,6 +424,21 @@ where
         let key_cache = &mut self.key_cache;
 
         let ctx = RenderCtx { nodes, name_to_idx, providers, fetch, extern_fns };
+
+        // Resolve cache_key through context system
+        let cached_content = if let Some(ref cache_key) = nodes[0].cache_key {
+            if storage.get(cache_key).is_none() {
+                if let Some(&idx) = name_to_idx.get(cache_key.as_str()) {
+                    resolve_node(idx, storage, &ctx, HashMap::new(), key_cache).await;
+                }
+            }
+            match storage.get(cache_key) {
+                Some(Output::Text(s)) => Some(s),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         let mut messages = self.static_messages.clone();
         let mut new_messages: Vec<Message> = Vec::new();
@@ -439,6 +476,7 @@ where
             &messages,
             &self.tools,
             &nodes[0].generation,
+            cached_content.as_deref(),
         );
         let json = fetch
             .fetch(&request)
@@ -467,7 +505,7 @@ where
             );
         }
 
-        let final_output = if let Some(output_block) = &nodes[0].output_module {
+        let final_output = if let Some(output_block) = &self.output_module {
             storage.set(nodes[0].name.clone(), Output::Text(response_text));
             let rendered =
                 render_with_deps(output_block, storage, HashMap::new(), &ctx, key_cache).await;
