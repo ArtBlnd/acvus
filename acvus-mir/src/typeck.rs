@@ -103,24 +103,18 @@ impl TypeChecker {
             Node::InlineExpr { expr, span } => {
                 let ty = self.check_expr(expr);
                 let resolved = self.subst.resolve(&ty);
-                if matches!(&resolved, Ty::String | Ty::Error) {
-                    return;
-                }
-                if matches!(&resolved, Ty::Var(_)) {
-                    // Try to unify with String.
-                    if self.subst.unify(&ty, &Ty::String).is_err() {
-                        self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
+                match &resolved {
+                    Ty::String | Ty::Error => {}
+                    Ty::Var(_) => {
+                        if self.subst.unify(&ty, &Ty::String).is_err() {
+                            self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
+                        }
                     }
-                    return;
+                    _ => self.error(MirErrorKind::EmitNotString { actual: resolved }, *span),
                 }
-                self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
             }
-            Node::MatchBlock(mb) => {
-                self.check_match_block(mb);
-            }
-            Node::IterBlock(ib) => {
-                self.check_iter_block(ib);
-            }
+            Node::MatchBlock(mb) => self.check_match_block(mb),
+            Node::IterBlock(ib) => self.check_iter_block(ib),
         }
     }
 
@@ -447,17 +441,17 @@ impl TypeChecker {
                         }
                     },
                     acvus_ast::UnaryOp::Not => {
-                        if matches!(&ot, Ty::Var(_)) {
-                            let _ = self.subst.unify(&ot, &Ty::Bool);
-                        } else if !matches!(&ot, Ty::Bool) {
-                            self.error(
+                        match &ot {
+                            Ty::Bool => {}
+                            Ty::Var(_) => { let _ = self.subst.unify(&ot, &Ty::Bool); }
+                            _ => self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: "!",
                                     left: ot,
                                     right: Ty::Error,
                                 },
                                 *span,
-                            );
+                            ),
                         }
                         Ty::Bool
                     }
@@ -623,12 +617,10 @@ impl TypeChecker {
                 for elem in all_elems.iter().skip(1) {
                     let et = self.check_expr(elem);
                     if self.subst.unify(&elem_ty, &et).is_err() {
-                        let resolved_expected = self.subst.resolve(&elem_ty);
-                        let resolved_got = self.subst.resolve(&et);
                         self.error(
                             MirErrorKind::HeterogeneousList {
-                                expected: resolved_expected,
-                                got: resolved_got,
+                                expected: self.subst.resolve(&elem_ty),
+                                got: self.subst.resolve(&et),
                             },
                             *span,
                         );
@@ -721,46 +713,46 @@ impl TypeChecker {
 
         // Check builtins first.
         for b in builtins() {
-            if b.name == name {
-                let (param_tys, ret_ty) = (b.signature)(&mut self.subst);
-                let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
+            if b.name != name {
+                continue;
+            }
 
-                if arg_types.len() != param_tys.len() {
+            let (param_tys, ret_ty) = (b.signature)(&mut self.subst);
+            let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
+
+            if arg_types.len() != param_tys.len() {
+                self.error(
+                    MirErrorKind::ArityMismatch {
+                        func: name.to_string(),
+                        expected: param_tys.len(),
+                        got: arg_types.len(),
+                    },
+                    call_span,
+                );
+                return Ty::Error;
+            }
+
+            for (at, pt) in arg_types.iter().zip(param_tys.iter()) {
+                if self.subst.unify(at, pt).is_err() {
                     self.error(
-                        MirErrorKind::ArityMismatch {
-                            func: name.to_string(),
-                            expected: param_tys.len(),
-                            got: arg_types.len(),
+                        MirErrorKind::UnificationFailure {
+                            expected: self.subst.resolve(pt),
+                            got: self.subst.resolve(at),
                         },
                         call_span,
                     );
-                    return Ty::Error;
                 }
-
-                for (at, pt) in arg_types.iter().zip(param_tys.iter()) {
-                    if self.subst.unify(at, pt).is_err() {
-                        let ra = self.subst.resolve(at);
-                        let rp = self.subst.resolve(pt);
-                        self.error(
-                            MirErrorKind::UnificationFailure {
-                                expected: rp,
-                                got: ra,
-                            },
-                            call_span,
-                        );
-                    }
-                }
-
-                if let Some(check) = b.constraint {
-                    let resolved_args: Vec<Ty> =
-                        arg_types.iter().map(|t| self.subst.resolve(t)).collect();
-                    if let Some(msg) = check(&resolved_args) {
-                        self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
-                    }
-                }
-
-                return self.subst.resolve(&ret_ty);
             }
+
+            if let Some(check) = b.constraint {
+                let resolved_args: Vec<Ty> =
+                    arg_types.iter().map(|t| self.subst.resolve(t)).collect();
+                if let Some(msg) = check(&resolved_args) {
+                    self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
+                }
+            }
+
+            return self.subst.resolve(&ret_ty);
         }
 
         // Check extern functions.
@@ -794,12 +786,10 @@ impl TypeChecker {
 
         for (at, pt) in arg_types.iter().zip(def.params.iter()) {
             if self.subst.unify(at, pt).is_err() {
-                let ra = self.subst.resolve(at);
-                let rp = self.subst.resolve(pt);
                 self.error(
                     MirErrorKind::UnificationFailure {
-                        expected: rp,
-                        got: ra,
+                        expected: self.subst.resolve(pt),
+                        got: self.subst.resolve(at),
                     },
                     call_span,
                 );
@@ -826,12 +816,10 @@ impl TypeChecker {
                 }
                 for (at, pt) in arg_types.iter().zip(params.iter()) {
                     if self.subst.unify(at, pt).is_err() {
-                        let ra = self.subst.resolve(at);
-                        let rp = self.subst.resolve(pt);
                         self.error(
                             MirErrorKind::UnificationFailure {
-                                expected: rp,
-                                got: ra,
+                                expected: self.subst.resolve(pt),
+                                got: self.subst.resolve(at),
                             },
                             call_span,
                         );
