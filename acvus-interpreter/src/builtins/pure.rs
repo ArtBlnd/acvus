@@ -34,15 +34,8 @@ pub(crate) fn builtin_reverse(items: Vec<Value>) -> Value {
     Value::List(items)
 }
 
-pub(crate) fn builtin_join(items: Vec<Value>, sep: String) -> String {
-    let strs: Vec<String> = items
-        .into_iter()
-        .map(|v| match v {
-            Value::String(s) => s,
-            v => unreachable!("join: expected List<String>, got element {v:?}"),
-        })
-        .collect();
-    strs.join(&sep)
+pub(crate) fn builtin_join(items: Vec<String>, sep: String) -> String {
+    items.join(&sep)
 }
 
 pub(crate) fn builtin_contains(items: Vec<Value>, target: Value) -> bool {
@@ -61,25 +54,11 @@ pub(crate) fn builtin_to_bytes(s: String) -> Value {
     Value::List(s.into_bytes().into_iter().map(Value::Byte).collect())
 }
 
-pub(crate) fn builtin_to_utf8(items: Vec<Value>) -> String {
-    let bytes: Vec<u8> = items
-        .into_iter()
-        .map(|v| match v {
-            Value::Byte(b) => b,
-            v => unreachable!("to_utf8: expected List<Byte>, got element {v:?}"),
-        })
-        .collect();
+pub(crate) fn builtin_to_utf8(bytes: Vec<u8>) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
-pub(crate) fn builtin_to_utf8_lossy(items: Vec<Value>) -> String {
-    let bytes: Vec<u8> = items
-        .into_iter()
-        .map(|v| match v {
-            Value::Byte(b) => b,
-            v => unreachable!("to_utf8_lossy: expected List<Byte>, got element {v:?}"),
-        })
-        .collect();
+pub(crate) fn builtin_to_utf8_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 

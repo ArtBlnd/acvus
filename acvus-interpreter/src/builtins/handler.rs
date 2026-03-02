@@ -55,11 +55,14 @@ impl FromValue for u8 {
     }
 }
 
-impl FromValue for Vec<Value> {
+impl<T> FromValue for Vec<T>
+where
+    T: FromValue,
+{
     fn from_value(v: Value) -> Self {
         match v {
-            Value::List(items) => items,
-            _ => unreachable!("FromValue<Vec<Value>>: expected List, got {v:?}"),
+            Value::List(items) => items.into_iter().map(T::from_value).collect(),
+            _ => unreachable!("FromValue<Vec<T>>: expected List, got {v:?}"),
         }
     }
 }
