@@ -13,9 +13,10 @@ pub struct NodeSpec {
     #[serde(default)]
     pub messages: Vec<MessageSpec>,
     pub strategy: Strategy,
-    /// Output template — rendered after the model responds.
-    /// Used to post-process the result through downstream nodes.
+    /// Output template file path — rendered after the model responds.
     pub output: Option<String>,
+    /// Inline output template.
+    pub inline_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -43,6 +44,7 @@ pub enum MessageSpec {
     Iterator {
         iterator: String,
         template: Option<String>,
+        inline_template: Option<String>,
         /// Python-style slice: `[start]` or `[start, end]`. Negative = from end.
         #[serde(default)]
         slice: Option<Vec<i64>>,
@@ -52,7 +54,11 @@ pub enum MessageSpec {
         /// Override the role for all messages from this iterator.
         role: Option<String>,
     },
-    Block { role: String, template: String },
+    Block {
+        role: String,
+        template: Option<String>,
+        inline_template: Option<String>,
+    },
 }
 
 /// Tool declaration.

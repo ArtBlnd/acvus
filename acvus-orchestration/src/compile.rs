@@ -62,8 +62,12 @@ pub fn compile_node(
 
     for (i, msg) in spec.messages.iter().enumerate() {
         match msg {
-            MessageSpec::Block { role, template } => {
-                match compile_template(base_dir, template, i, context_types, registry) {
+            MessageSpec::Block { role, template, inline_template } => {
+                let result = resolve_template(
+                    base_dir, template.as_deref(), inline_template.as_deref(),
+                    i, context_types, registry,
+                );
+                match result {
                     Ok(block) => {
                         all_context_keys.extend(block.context_keys.iter().cloned());
                         compiled_messages.push(CompiledMessage::Block(CompiledBlock {
@@ -74,13 +78,13 @@ pub fn compile_node(
                     Err(e) => errors.push(e),
                 }
             }
-            MessageSpec::Iterator { iterator, template, slice, bind, role } => {
+            MessageSpec::Iterator { iterator, template, inline_template, slice, bind, role } => {
                 let key = iterator.trim_start_matches('@').to_string();
 
-                let block = if let Some(tmpl) = template {
+                let tmpl_source = template.as_deref().or(inline_template.as_deref());
+                let block = if tmpl_source.is_some() {
                     let mut iter_types = context_types.clone();
                     if let Some(bind_name) = bind {
-                        // bind → inject whole item as Object { type: String, text: String }
                         iter_types.insert(
                             bind_name.clone(),
                             Ty::Object(BTreeMap::from([
@@ -89,12 +93,15 @@ pub fn compile_node(
                             ])),
                         );
                     } else {
-                        // legacy: inject @type and @text separately
                         iter_types.insert("type".into(), Ty::String);
                         iter_types.insert("text".into(), Ty::String);
                     }
 
-                    match compile_template(base_dir, tmpl, i, &iter_types, registry) {
+                    let result = resolve_template(
+                        base_dir, template.as_deref(), inline_template.as_deref(),
+                        i, &iter_types, registry,
+                    );
+                    match result {
                         Ok(block) => Some(block),
                         Err(e) => {
                             errors.push(e);
@@ -137,8 +144,11 @@ pub fn compile_node(
             None
         };
 
-    let output_module = if let Some(output_tmpl) = &spec.output {
-        match compile_template(base_dir, output_tmpl, 0, context_types, registry) {
+    let output_module = if spec.output.is_some() || spec.inline_output.is_some() {
+        match resolve_template(
+            base_dir, spec.output.as_deref(), spec.inline_output.as_deref(),
+            0, context_types, registry,
+        ) {
             Ok(block) => {
                 all_context_keys.extend(block.context_keys.iter().cloned());
                 Some(block)
@@ -162,6 +172,25 @@ pub fn compile_node(
     })
 }
 
+/// Resolve a template from either a file path or inline source.
+fn resolve_template(
+    base_dir: &Path,
+    file: Option<&str>,
+    inline: Option<&str>,
+    block_idx: usize,
+    context_types: &HashMap<String, Ty>,
+    registry: &ExternRegistry,
+) -> Result<CompiledBlock, OrchError> {
+    match (file, inline) {
+        (Some(path), _) => compile_template(base_dir, path, block_idx, context_types, registry),
+        (None, Some(src)) => compile_source(src, block_idx, context_types, registry),
+        (None, None) => Err(OrchError::new(OrchErrorKind::TemplateParse {
+            block: block_idx,
+            error: "no template or inline_template provided".into(),
+        })),
+    }
+}
+
 fn compile_template(
     base_dir: &Path,
     template: &str,
@@ -176,8 +205,16 @@ fn compile_template(
             error: e.to_string(),
         })
     })?;
+    compile_source(&source, block_idx, context_types, registry)
+}
 
-    let ast = acvus_ast::parse(&source).map_err(|e| {
+fn compile_source(
+    source: &str,
+    block_idx: usize,
+    context_types: &HashMap<String, Ty>,
+    registry: &ExternRegistry,
+) -> Result<CompiledBlock, OrchError> {
+    let ast = acvus_ast::parse(source).map_err(|e| {
         OrchError::new(OrchErrorKind::TemplateParse {
             block: block_idx,
             error: format!("{e:?}"),

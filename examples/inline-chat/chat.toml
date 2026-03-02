@@ -1,0 +1,17 @@
+name = "chat"
+provider = "gemini"
+model = "gemini-2.5-flash"
+
+[strategy]
+mode = "always"
+
+[[messages]]
+role = "system"
+inline_template = "You are a helpful assistant. Answer concisely."
+
+[[messages]]
+iterator = "@context.chat.histories"
+
+[[messages]]
+role = "user"
+inline_template = "{{ @input }}"
