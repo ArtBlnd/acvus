@@ -11,7 +11,8 @@ enum LiteralKey {
     Float(u64),
     String(String),
     Bool(bool),
-    Bytes(Vec<u8>),
+    Byte(u8),
+    List(Vec<LiteralKey>),
 }
 
 impl LiteralKey {
@@ -21,7 +22,10 @@ impl LiteralKey {
             Literal::Float(v) => LiteralKey::Float(v.to_bits()),
             Literal::String(v) => LiteralKey::String(v.clone()),
             Literal::Bool(v) => LiteralKey::Bool(*v),
-            Literal::Bytes(v) => LiteralKey::Bytes(v.clone()),
+            Literal::Byte(v) => LiteralKey::Byte(*v),
+            Literal::List(elems) => {
+                LiteralKey::List(elems.iter().map(LiteralKey::from_literal).collect())
+            }
         }
     }
 }

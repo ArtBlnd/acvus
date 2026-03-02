@@ -38,7 +38,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
         let dt = decrypt_table.as_ref().unwrap();
         let stage_a_fn_ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Int) };
         let stage_b_fn_ty = Ty::Fn { params: vec![Ty::Int, Ty::Int], ret: Box::new(Ty::Int) };
-        let stage_c_fn_ty = Ty::Fn { params: vec![Ty::Bytes, Ty::Int], ret: Box::new(Ty::String) };
+        let stage_c_fn_ty = Ty::Fn { params: vec![Ty::bytes(), Ty::Int], ret: Box::new(Ty::String) };
 
         let fa = text_obf::register_factory_closures(&mut module, &dt.stage_a, &stage_a_fn_ty, "factory_a");
         registered.all.extend(text_obf::all_factory_labels(&fa));
@@ -147,7 +147,7 @@ fn rewrite_body(
     let meta_tables = if let (Some(dt), Some((fa, fb, fc))) = (decrypt_table, factory_tables) {
         let stage_a_fn_ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Int) };
         let stage_b_fn_ty = Ty::Fn { params: vec![Ty::Int, Ty::Int], ret: Box::new(Ty::Int) };
-        let stage_c_fn_ty = Ty::Fn { params: vec![Ty::Bytes, Ty::Int], ret: Box::new(Ty::String) };
+        let stage_c_fn_ty = Ty::Fn { params: vec![Ty::bytes(), Ty::Int], ret: Box::new(Ty::String) };
 
         let meta_a = text_obf::emit_factory_dispatch_setup(&mut ctx, span, &dt.stage_a, fa, &stage_a_fn_ty);
         let meta_b = text_obf::emit_factory_dispatch_setup(&mut ctx, span, &dt.stage_b, fb, &stage_b_fn_ty);

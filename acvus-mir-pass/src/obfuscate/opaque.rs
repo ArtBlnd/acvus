@@ -457,9 +457,9 @@ fn make_dead_block(
             let factory_idx_val = rng.random_range(0i64..4);
             let inner_idx_val = rng.random_range(0i64..4);
 
-            let v_bytes = ctx.alloc_val(Ty::Bytes);
+            let v_bytes = ctx.alloc_val(Ty::bytes());
             out.push(Inst { span, kind: InstKind::Const {
-                dst: v_bytes, value: Literal::Bytes(garbage),
+                dst: v_bytes, value: Literal::List(garbage.iter().map(|b| Literal::Byte(*b)).collect()),
             }});
 
             let v_key = ctx.alloc_val(Ty::Int);
@@ -474,7 +474,7 @@ fn make_dead_block(
 
             // 2-level dispatch: ListGet factory → CallClosure → ListGet inner → CallClosure
             let inner_fn_ty = Ty::Fn {
-                params: vec![Ty::Bytes, Ty::Int],
+                params: vec![Ty::bytes(), Ty::Int],
                 ret: Box::new(Ty::String),
             };
             let factory_fn_ty = Ty::Fn {

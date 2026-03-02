@@ -3,7 +3,7 @@ use crate::value::Value;
 pub const BUILTIN_NAMES: &[&str] = &[
     "to_string", "to_int", "to_float", "char_to_int", "int_to_char", "filter", "map", "pmap",
     "find", "reduce", "fold", "any", "all", "len", "reverse", "join", "contains", "substring",
-    "bytes_len", "bytes_get",
+    "len_str", "to_bytes", "to_utf8", "to_utf8_lossy",
 ];
 
 pub fn is_builtin(name: &str) -> bool {
@@ -23,8 +23,10 @@ pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
         "join" => call_join(args),
         "contains" => call_contains(args),
         "substring" => call_substring(args),
-        "bytes_len" => call_bytes_len(args),
-        "bytes_get" => call_bytes_get(args),
+        "len_str" => call_len_str(args),
+        "to_bytes" => call_to_bytes(args),
+        "to_utf8" => call_to_utf8(args),
+        "to_utf8_lossy" => call_to_utf8_lossy(args),
         _ => panic!("not a pure builtin: {name}"),
     }
 }
@@ -38,14 +40,15 @@ fn call_to_string(arg: Value) -> Value {
 fn call_to_int(arg: Value) -> Value {
     match arg {
         Value::Float(f) => Value::Int(f as i64),
-        _ => panic!("to_int: expected Float, got {arg:?}"),
+        Value::Byte(b) => Value::Int(b as i64),
+        _ => unreachable!("to_int: expected Float or Byte, got {arg:?}"),
     }
 }
 
 fn call_to_float(arg: Value) -> Value {
     match arg {
         Value::Int(n) => Value::Float(n as f64),
-        _ => panic!("to_float: expected Int, got {arg:?}"),
+        _ => unreachable!("to_float: expected Int, got {arg:?}"),
     }
 }
 
@@ -55,7 +58,7 @@ fn call_char_to_int(arg: Value) -> Value {
             let ch = s.chars().next().expect("char_to_int: empty string");
             Value::Int(ch as i64)
         }
-        _ => panic!("char_to_int: expected String, got {arg:?}"),
+        _ => unreachable!("char_to_int: expected String, got {arg:?}"),
     }
 }
 
@@ -65,14 +68,14 @@ fn call_int_to_char(arg: Value) -> Value {
             let ch = char::from_u32(n as u32).expect("int_to_char: invalid codepoint");
             Value::String(ch.to_string())
         }
-        _ => panic!("int_to_char: expected Int, got {arg:?}"),
+        _ => unreachable!("int_to_char: expected Int, got {arg:?}"),
     }
 }
 
 fn call_len(args: Vec<Value>) -> Value {
     match args.into_iter().next().unwrap() {
         Value::List(items) => Value::Int(items.len() as i64),
-        v => panic!("len: expected List, got {v:?}"),
+        v => unreachable!("len: expected List, got {v:?}"),
     }
 }
 
@@ -82,7 +85,7 @@ fn call_reverse(args: Vec<Value>) -> Value {
             items.reverse();
             Value::List(items)
         }
-        v => panic!("reverse: expected List, got {v:?}"),
+        v => unreachable!("reverse: expected List, got {v:?}"),
     }
 }
 
@@ -96,12 +99,12 @@ fn call_join(args: Vec<Value>) -> Value {
                 .into_iter()
                 .map(|v| match v {
                     Value::String(s) => s,
-                    v => panic!("join: expected List<String>, got element {v:?}"),
+                    v => unreachable!("join: expected List<String>, got element {v:?}"),
                 })
                 .collect();
             Value::String(strs.join(&sep))
         }
-        (l, s) => panic!("join: expected (List<String>, String), got ({l:?}, {s:?})"),
+        (l, s) => unreachable!("join: expected (List<String>, String), got ({l:?}, {s:?})"),
     }
 }
 
@@ -111,7 +114,7 @@ fn call_contains(args: Vec<Value>) -> Value {
     let target = it.next().unwrap();
     match list {
         Value::List(items) => Value::Bool(items.iter().any(|v| values_equal(v, &target))),
-        v => panic!("contains: expected List, got {v:?}"),
+        v => unreachable!("contains: expected List, got {v:?}"),
     }
 }
 
@@ -127,24 +130,55 @@ fn call_substring(args: Vec<Value>) -> Value {
             let result: String = s.chars().skip(start).take(len).collect();
             Value::String(result)
         }
-        (s, start, len) => panic!("substring: expected (String, Int, Int), got ({s:?}, {start:?}, {len:?})"),
+        (s, start, len) => unreachable!("substring: expected (String, Int, Int), got ({s:?}, {start:?}, {len:?})"),
     }
 }
 
-fn call_bytes_len(args: Vec<Value>) -> Value {
+fn call_len_str(args: Vec<Value>) -> Value {
     match args.into_iter().next().unwrap() {
-        Value::Bytes(b) => Value::Int(b.len() as i64),
-        v => panic!("bytes_len: expected Bytes, got {v:?}"),
+        Value::String(s) => Value::Int(s.chars().count() as i64),
+        v => unreachable!("len_str: expected String, got {v:?}"),
     }
 }
 
-fn call_bytes_get(args: Vec<Value>) -> Value {
-    let mut it = args.into_iter();
-    let bytes = it.next().unwrap();
-    let index = it.next().unwrap();
-    match (bytes, index) {
-        (Value::Bytes(b), Value::Int(i)) => Value::Int(b[i as usize] as i64),
-        (b, i) => panic!("bytes_get: expected (Bytes, Int), got ({b:?}, {i:?})"),
+fn call_to_bytes(args: Vec<Value>) -> Value {
+    match args.into_iter().next().unwrap() {
+        Value::String(s) => Value::List(
+            s.into_bytes().into_iter().map(Value::Byte).collect(),
+        ),
+        v => unreachable!("to_bytes: expected String, got {v:?}"),
+    }
+}
+
+fn call_to_utf8(args: Vec<Value>) -> Value {
+    match args.into_iter().next().unwrap() {
+        Value::List(items) => {
+            let bytes: Vec<u8> = items
+                .into_iter()
+                .map(|v| match v {
+                    Value::Byte(b) => b,
+                    v => unreachable!("to_utf8: expected List<Byte>, got element {v:?}"),
+                })
+                .collect();
+            Value::String(String::from_utf8(bytes).unwrap())
+        }
+        v => unreachable!("to_utf8: expected List<Byte>, got {v:?}"),
+    }
+}
+
+fn call_to_utf8_lossy(args: Vec<Value>) -> Value {
+    match args.into_iter().next().unwrap() {
+        Value::List(items) => {
+            let bytes: Vec<u8> = items
+                .into_iter()
+                .map(|v| match v {
+                    Value::Byte(b) => b,
+                    v => unreachable!("to_utf8_lossy: expected List<Byte>, got element {v:?}"),
+                })
+                .collect();
+            Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        v => unreachable!("to_utf8_lossy: expected List<Byte>, got {v:?}"),
     }
 }
 
@@ -154,8 +188,9 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Byte(a), Value::Byte(b)) => a == b,
         (Value::Unit, Value::Unit) => true,
-        _ => false,
+        _ => unreachable!("values_equal: unsupported types ({a:?}, {b:?})"),
     }
 }
 
@@ -167,39 +202,9 @@ fn value_to_string(v: Value) -> String {
         Value::Float(f) => f.to_string(),
         Value::String(s) => s,
         Value::Bool(b) => b.to_string(),
+        Value::Byte(b) => b.to_string(),
         Value::Unit => "()".to_string(),
-        Value::Range {
-            start,
-            end,
-            inclusive,
-        } => {
-            if inclusive {
-                format!("{start}..={end}")
-            } else {
-                format!("{start}..{end}")
-            }
-        }
-        Value::List(items) => {
-            let inner: Vec<String> = items.into_iter().map(value_to_string).collect();
-            format!("[{}]", inner.join(", "))
-        }
-        Value::Object(fields) => {
-            let inner: Vec<String> = fields
-                .into_iter()
-                .map(|(k, v)| format!("{k}: {}", value_to_string(v)))
-                .collect();
-            format!("{{{}}}", inner.join(", "))
-        }
-        Value::Tuple(elems) => {
-            let inner: Vec<String> = elems.into_iter().map(value_to_string).collect();
-            format!("({})", inner.join(", "))
-        }
-        Value::Bytes(b) => {
-            let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!("0x{hex}")
-        }
-        Value::Fn(_) => panic!("cannot convert Fn to string"),
-        Value::Opaque(o) => panic!("cannot convert Opaque<{}> to string", o.type_name),
+        _ => unreachable!("to_string: expected scalar or Unit, got {v:?}"),
     }
 }
 
@@ -232,15 +237,15 @@ mod tests {
     }
 
     #[test]
-    fn to_string_list() {
-        let v = Value::List(vec![Value::Int(1), Value::Int(2)]);
-        assert!(matches!(call_to_string(v), Value::String(s) if s == "[1, 2]"));
+    #[should_panic(expected = "to_string: expected scalar or Unit, got")]
+    fn to_string_list_panics() {
+        call_to_string(Value::List(vec![Value::Int(1), Value::Int(2)]));
     }
 
     #[test]
-    fn to_string_object() {
-        let v = Value::Object(BTreeMap::from([("a".into(), Value::Int(1))]));
-        assert!(matches!(call_to_string(v), Value::String(s) if s == "{a: 1}"));
+    #[should_panic(expected = "to_string: expected scalar or Unit, got")]
+    fn to_string_object_panics() {
+        call_to_string(Value::Object(BTreeMap::from([("a".into(), Value::Int(1))])));
     }
 
     #[test]

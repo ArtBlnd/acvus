@@ -13,7 +13,7 @@ pub struct BuiltinFn {
 }
 
 fn is_scalar(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int | Ty::Float | Ty::String | Ty::Bool)
+    matches!(ty, Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Byte)
 }
 
 fn require_scalar(args: &[Ty]) -> Option<String> {
@@ -21,7 +21,17 @@ fn require_scalar(args: &[Ty]) -> Option<String> {
         ty if is_scalar(ty) => None,
         Ty::Var(_) | Ty::Error => None, // not yet resolved or error — skip
         ty => Some(format!(
-            "`to_string` requires a scalar type (Int, Float, Bool, String), got {ty}",
+            "`to_string` requires a scalar type (Int, Float, Bool, String, Byte), got {ty}",
+        )),
+    }
+}
+
+fn require_to_int(args: &[Ty]) -> Option<String> {
+    match &args[0] {
+        Ty::Float | Ty::Byte => None,
+        Ty::Var(_) | Ty::Error => None,
+        ty => Some(format!(
+            "`to_int` requires Float or Byte, got {ty}",
         )),
     }
 }
@@ -108,12 +118,13 @@ pub fn builtins() -> Vec<BuiltinFn> {
         },
         BuiltinFn {
             name: "to_int",
-            signature: |_| {
-                // to_int: (Float) -> Int
-                (vec![Ty::Float], Ty::Int)
+            signature: |subst| {
+                // to_int: (Float | Byte) -> Int
+                let t = subst.fresh_var();
+                (vec![t], Ty::Int)
             },
             is_effectful: false,
-            constraint: None,
+            constraint: Some(require_to_int),
         },
         BuiltinFn {
             name: "find",
@@ -288,19 +299,37 @@ pub fn builtins() -> Vec<BuiltinFn> {
             constraint: None,
         },
         BuiltinFn {
-            name: "bytes_len",
+            name: "len_str",
             signature: |_| {
-                // bytes_len: (Bytes) -> Int
-                (vec![Ty::Bytes], Ty::Int)
+                // len_str: (String) -> Int
+                (vec![Ty::String], Ty::Int)
             },
             is_effectful: false,
             constraint: None,
         },
         BuiltinFn {
-            name: "bytes_get",
+            name: "to_bytes",
             signature: |_| {
-                // bytes_get: (Bytes, Int) -> Int
-                (vec![Ty::Bytes, Ty::Int], Ty::Int)
+                // to_bytes: (String) -> List<Byte>
+                (vec![Ty::String], Ty::bytes())
+            },
+            is_effectful: false,
+            constraint: None,
+        },
+        BuiltinFn {
+            name: "to_utf8",
+            signature: |_| {
+                // to_utf8: (List<Byte>) -> String
+                (vec![Ty::bytes()], Ty::String)
+            },
+            is_effectful: false,
+            constraint: None,
+        },
+        BuiltinFn {
+            name: "to_utf8_lossy",
+            signature: |_| {
+                // to_utf8_lossy: (List<Byte>) -> String
+                (vec![Ty::bytes()], Ty::String)
             },
             is_effectful: false,
             constraint: None,

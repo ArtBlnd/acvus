@@ -296,7 +296,7 @@ pub fn stage_b_combine(variant: u32, subkey: i64, key: i64) -> i64 {
 }
 
 // ── Stage C: decrypt_final ───────────────────────────────────────
-// (Bytes, Int) → String — final decryption using combined_key
+// (List<Byte>, Int) → String — final decryption using combined_key
 
 fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     let mut body = MirBody::new();
@@ -305,7 +305,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     let v_bytes = ValueId(0);
     let v_key = ValueId(1);  // combined_key
     body.val_count = 2;
-    body.val_types.insert(v_bytes, Ty::Bytes);
+    body.val_types.insert(v_bytes, Ty::bytes());
     body.val_types.insert(v_key, Ty::Int);
     debug.set(v_bytes, ValOrigin::Named("bytes".into()));
     debug.set(v_key, ValOrigin::Named("key".into()));
@@ -329,7 +329,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     let mut insts = Vec::new();
 
     insts.push(Inst { span, kind: InstKind::Call {
-        dst: v_len, func: "bytes_len".into(), args: vec![v_bytes],
+        dst: v_len, func: "len".into(), args: vec![v_bytes],
     }});
     insts.push(Inst { span, kind: InstKind::Const { dst: v_zero, value: Literal::Int(0) }});
     insts.push(Inst { span, kind: InstKind::Const { dst: v_empty, value: Literal::String(String::new()) }});
@@ -370,9 +370,13 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
         label: l_body, params: vec![v_body_i, v_body_accum],
     }});
 
+    let v_byte_raw = alloc(Ty::Byte);
+    insts.push(Inst { span, kind: InstKind::ListGet {
+        dst: v_byte_raw, list: v_bytes, index: v_body_i,
+    }});
     let v_byte = alloc(Ty::Int);
     insts.push(Inst { span, kind: InstKind::Call {
-        dst: v_byte, func: "bytes_get".into(), args: vec![v_bytes, v_body_i],
+        dst: v_byte, func: "to_int".into(), args: vec![v_byte_raw],
     }});
 
     // Same decrypt algorithms as before, but now operating on combined_key
@@ -836,9 +840,9 @@ fn emit_multistage_decrypt_call(
     v_four: ValueId,
     use_entangle: bool,
 ) -> ValueId {
-    let v_bytes = ctx.alloc_val(Ty::Bytes);
+    let v_bytes = ctx.alloc_val(Ty::bytes());
     ctx.emit(span, InstKind::Const {
-        dst: v_bytes, value: Literal::Bytes(bytes.to_vec()),
+        dst: v_bytes, value: Literal::List(bytes.iter().map(|b| Literal::Byte(*b)).collect()),
     });
 
     let v_key = ctx.alloc_val(Ty::Int);
@@ -942,7 +946,7 @@ fn emit_multistage_decrypt_call(
         dst: v_inner_c, value: Literal::Int(inner_idx_c as i64),
     });
 
-    let stage_c_fn_ty = Ty::Fn { params: vec![Ty::Bytes, Ty::Int], ret: Box::new(Ty::String) };
+    let stage_c_fn_ty = Ty::Fn { params: vec![Ty::bytes(), Ty::Int], ret: Box::new(Ty::String) };
     emit_two_level_dispatch(
         ctx, span, meta_c, v_idx_c, v_seed, v_inner_c,
         &stage_c_fn_ty, vec![v_bytes, v_combined], &Ty::String,

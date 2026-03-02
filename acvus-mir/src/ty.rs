@@ -19,7 +19,7 @@ pub enum Ty {
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
-    Bytes,
+    Byte,
     /// Opaque type: user-defined, identified by name. No internal structure.
     Opaque(String),
     /// Unification variable. Must not appear in final resolved types.
@@ -32,6 +32,11 @@ impl Ty {
     pub fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
     }
+
+    /// Convenience: `List<Byte>` (replaces the old `Ty::Bytes`).
+    pub fn bytes() -> Ty {
+        Ty::List(Box::new(Ty::Byte))
+    }
 }
 
 impl fmt::Display for Ty {
@@ -43,7 +48,7 @@ impl fmt::Display for Ty {
             Ty::Bool => write!(f, "Bool"),
             Ty::Unit => write!(f, "Unit"),
             Ty::Range => write!(f, "Range"),
-            Ty::Bytes => write!(f, "Bytes"),
+            Ty::Byte => write!(f, "Byte"),
             Ty::List(inner) => write!(f, "List<{inner}>"),
             Ty::Object(fields) => {
                 write!(f, "{{")?;
@@ -193,7 +198,7 @@ impl TySubst {
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Range, Ty::Range)
-            | (Ty::Bytes, Ty::Bytes) => Ok(()),
+            | (Ty::Byte, Ty::Byte) => Ok(()),
 
             (Ty::Opaque(a), Ty::Opaque(b)) if a == b => Ok(()),
 

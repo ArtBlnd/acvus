@@ -18,9 +18,10 @@ fn fmt_literal(lit: &Literal) -> String {
         Literal::Float(f) => format!("{f:?}"),
         Literal::String(s) => format!("{s:?}"),
         Literal::Bool(b) => b.to_string(),
-        Literal::Bytes(bytes) => {
-            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("0x{hex}")
+        Literal::Byte(b) => format!("0x{b:02x}"),
+        Literal::List(elems) => {
+            let items: Vec<String> = elems.iter().map(fmt_literal).collect();
+            format!("[{}]", items.join(", "))
         }
     }
 }

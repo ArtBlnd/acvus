@@ -48,17 +48,16 @@ impl TypeChecker {
 
     pub fn check_template(mut self, template: &Template) -> Result<TypeMap, Vec<MirError>> {
         self.check_nodes(&template.body);
-        if self.errors.is_empty() {
-            // Resolve all types in the type map.
-            let resolved: TypeMap = self
-                .type_map
-                .iter()
-                .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-                .collect();
-            Ok(resolved)
-        } else {
-            Err(self.errors)
+        if !self.errors.is_empty() {
+            return Err(self.errors);
         }
+        // Resolve all types in the type map.
+        let resolved: TypeMap = self
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .collect();
+        Ok(resolved)
     }
 
     fn push_scope(&mut self) {
@@ -236,7 +235,28 @@ impl TypeChecker {
                     Literal::Float(_) => Ty::Float,
                     Literal::String(_) => Ty::String,
                     Literal::Bool(_) => Ty::Bool,
-                    Literal::Bytes(_) => Ty::Bytes,
+                    Literal::Byte(_) => Ty::Byte,
+                    Literal::List(elems) => {
+                        if elems.is_empty() {
+                            let elem = self.subst.fresh_var();
+                            Ty::List(Box::new(elem))
+                        } else {
+                            let first_ty = self.literal_ty(&elems[0]);
+                            for elem in &elems[1..] {
+                                let elem_ty = self.literal_ty(elem);
+                                if self.subst.unify(&first_ty, &elem_ty).is_err() {
+                                    self.error(
+                                        MirErrorKind::HeterogeneousList {
+                                            expected: self.subst.resolve(&first_ty),
+                                            got: self.subst.resolve(&elem_ty),
+                                        },
+                                        *span,
+                                    );
+                                }
+                            }
+                            Ty::List(Box::new(self.subst.resolve(&first_ty)))
+                        }
+                    },
                 };
                 self.record(*span, ty.clone());
                 ty
@@ -248,30 +268,27 @@ impl TypeChecker {
                 span,
             } => {
                 let ty = match ref_kind {
-                    RefKind::Context => {
-                        self.context_types
-                            .get(name)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                self.error(MirErrorKind::UndefinedContext(name.clone()), *span);
-                                Ty::Error
-                            })
-                    }
-                    RefKind::Variable => {
-                        self.variable_types
-                            .get(name)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                self.error(MirErrorKind::UndefinedVariable(format!("${name}")), *span);
-                                Ty::Error
-                            })
-                    }
-                    RefKind::Value => {
-                        self.lookup_var(name).unwrap_or_else(|| {
+                    RefKind::Context => match self.context_types.get(name) {
+                        Some(ty) => ty.clone(),
+                        None => {
+                            self.error(MirErrorKind::UndefinedContext(name.clone()), *span);
+                            Ty::Error
+                        }
+                    },
+                    RefKind::Variable => match self.variable_types.get(name) {
+                        Some(ty) => ty.clone(),
+                        None => {
+                            self.error(MirErrorKind::UndefinedVariable(format!("${name}")), *span);
+                            Ty::Error
+                        }
+                    },
+                    RefKind::Value => match self.lookup_var(name) {
+                        Some(ty) => ty,
+                        None => {
                             self.error(MirErrorKind::UndefinedVariable(name.clone()), *span);
                             Ty::Error
-                        })
-                    }
+                        }
+                    },
                 };
                 self.record(*span, ty.clone());
                 ty
@@ -302,28 +319,34 @@ impl TypeChecker {
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        let unified = self.subst.unify(&lt, &rt).is_ok();
-                        let rl = self.subst.resolve(&lt);
-                        let rr = self.subst.resolve(&rt);
-                        let result = unified.then(|| match (&rl, &rr) {
-                            (Ty::Int, Ty::Int) => Some(Ty::Int),
-                            (Ty::Float, Ty::Float) => Some(Ty::Float),
-                            (Ty::String, Ty::String) if *op == BinOp::Add => Some(Ty::String),
-                            // Deferred: both sides unified to same type var — propagate it.
-                            (Ty::Var(_), _) => Some(rl.clone()),
-                            _ => None,
-                        }).flatten();
-                        result.unwrap_or_else(|| {
+                        if self.subst.unify(&lt, &rt).is_err() {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: op_str(*op),
-                                    left: rl,
-                                    right: rr,
+                                    left: self.subst.resolve(&lt),
+                                    right: self.subst.resolve(&rt),
                                 },
                                 *span,
                             );
                             Ty::Error
-                        })
+                        } else {
+                            let rl = self.subst.resolve(&lt);
+                            match &rl {
+                                Ty::Int | Ty::Float | Ty::Var(_) => rl,
+                                Ty::String if *op == BinOp::Add => Ty::String,
+                                _ => {
+                                    self.error(
+                                        MirErrorKind::TypeMismatchBinOp {
+                                            op: op_str(*op),
+                                            left: rl,
+                                            right: self.subst.resolve(&rt),
+                                        },
+                                        *span,
+                                    );
+                                    Ty::Error
+                                }
+                            }
+                        }
                     }
                     BinOp::Eq | BinOp::Neq => {
                         if self.subst.unify(&lt, &rt).is_err() {
@@ -370,22 +393,17 @@ impl TypeChecker {
                         Ty::Int
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        let unified = self.subst.unify(&lt, &rt).is_ok();
-                        let rl = self.subst.resolve(&lt);
-                        let rr = self.subst.resolve(&rt);
-                        if !unified
-                            || !matches!(
-                                (&rl, &rr),
-                                (Ty::Int, Ty::Int)
-                                    | (Ty::Float, Ty::Float)
-                                    | (Ty::Var(_), _)
-                            )
-                        {
+                        let ok = self.subst.unify(&lt, &rt).is_ok()
+                            && matches!(
+                                self.subst.resolve(&lt),
+                                Ty::Int | Ty::Float | Ty::Var(_)
+                            );
+                        if !ok {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: op_str(*op),
-                                    left: rl,
-                                    right: rr,
+                                    left: self.subst.resolve(&lt),
+                                    right: self.subst.resolve(&rt),
                                 },
                                 *span,
                             );
@@ -862,43 +880,33 @@ impl TypeChecker {
                 name,
                 ref_kind,
                 span: _,
-            } => {
-                match ref_kind {
-                    RefKind::Context => {
-                        // Context is read-only — cannot assign.
-                        self.error(MirErrorKind::ContextWriteAttempt(name.clone()), span);
-                    }
-                    RefKind::Variable => {
-                        // $name: if already typed, unify; else register.
-                        if let Some(existing_ty) = self.variable_types.get(name).cloned() {
-                            if self.subst.unify(&source_resolved, &existing_ty).is_err() {
-                                self.error(
-                                    MirErrorKind::PatternTypeMismatch {
-                                        pattern_ty: existing_ty,
-                                        source_ty: source_resolved,
-                                    },
-                                    span,
-                                );
-                            }
-                        } else {
-                            self.variable_types.insert(name.clone(), source_resolved);
+            } => match ref_kind {
+                RefKind::Context => {
+                    self.error(MirErrorKind::ContextWriteAttempt(name.clone()), span);
+                }
+                RefKind::Variable => match self.variable_types.get(name).cloned() {
+                    Some(existing_ty) => {
+                        if self.subst.unify(&source_resolved, &existing_ty).is_err() {
+                            self.error(
+                                MirErrorKind::PatternTypeMismatch {
+                                    pattern_ty: existing_ty,
+                                    source_ty: source_resolved,
+                                },
+                                span,
+                            );
                         }
                     }
-                    RefKind::Value => {
-                        // Bare name capture: bind to source type.
-                        self.define_var(name, source_resolved);
+                    None => {
+                        self.variable_types.insert(name.clone(), source_resolved);
                     }
+                },
+                RefKind::Value => {
+                    self.define_var(name, source_resolved);
                 }
             }
 
             Pattern::Literal { value, .. } => {
-                let pat_ty = match value {
-                    Literal::Int(_) => Ty::Int,
-                    Literal::Float(_) => Ty::Float,
-                    Literal::String(_) => Ty::String,
-                    Literal::Bool(_) => Ty::Bool,
-                    Literal::Bytes(_) => Ty::Bytes,
-                };
+                let pat_ty = self.literal_ty(value);
                 if self.subst.unify(&source_resolved, &pat_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
@@ -1012,6 +1020,20 @@ impl TypeChecker {
         }
     }
 
+    fn literal_ty(&self, lit: &Literal) -> Ty {
+        match lit {
+            Literal::Int(_) => Ty::Int,
+            Literal::Float(_) => Ty::Float,
+            Literal::String(_) => Ty::String,
+            Literal::Bool(_) => Ty::Bool,
+            Literal::Byte(_) => Ty::Byte,
+            Literal::List(elems) => match elems.first() {
+                Some(first) => Ty::List(Box::new(self.literal_ty(first))),
+                None => Ty::List(Box::new(Ty::Error)),
+            },
+        }
+    }
+
     fn check_pattern_is_int(&mut self, pat: &Pattern, span: Span) {
         match pat {
             Pattern::Literal {
@@ -1019,13 +1041,7 @@ impl TypeChecker {
                 ..
             } => {}
             Pattern::Literal { value, .. } => {
-                let ty = match value {
-                    Literal::Float(_) => Ty::Float,
-                    Literal::String(_) => Ty::String,
-                    Literal::Bool(_) => Ty::Bool,
-                    Literal::Int(_) => unreachable!(),
-                    Literal::Bytes(_) => Ty::Bytes,
-                };
+                let ty = self.literal_ty(value);
                 self.error(MirErrorKind::RangeBoundsNotInt { actual: ty }, span);
             }
             _ => {

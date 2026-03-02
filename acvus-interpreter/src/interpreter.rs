@@ -405,7 +405,8 @@ impl Interpreter {
     ) -> (Self, String, Value) {
         match name {
             "to_string" | "to_int" | "to_float" | "char_to_int" | "int_to_char" | "len"
-            | "reverse" | "join" | "contains" | "substring" | "bytes_len" | "bytes_get" => {
+            | "reverse" | "join" | "contains" | "substring" | "len_str" | "to_bytes"
+            | "to_utf8" | "to_utf8_lossy" => {
                 (this, output, builtins::call_pure(name, args))
             }
             "filter" => Self::exec_hof_filter(this, args, output).await,
@@ -630,7 +631,8 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Float(f) => Value::Float(*f),
         Literal::String(s) => Value::String(s.clone()),
         Literal::Bool(b) => Value::Bool(*b),
-        Literal::Bytes(b) => Value::Bytes(b.clone()),
+        Literal::Byte(b) => Value::Byte(*b),
+        Literal::List(elems) => Value::List(elems.iter().map(literal_to_value).collect()),
     }
 }
 
@@ -640,8 +642,8 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Byte(a), Value::Byte(b)) => a == b,
         (Value::Unit, Value::Unit) => true,
-        (Value::Bytes(a), Value::Bytes(b)) => a == b,
         _ => false,
     }
 }
