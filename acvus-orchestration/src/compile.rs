@@ -4,11 +4,15 @@ use std::path::Path;
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
+use acvus_ast::Literal;
 use acvus_mir_pass::AnalysisPass;
+use acvus_mir_pass::analysis::reachable_context::reachable_context_keys;
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 
 use crate::dsl::{GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolDecl};
 use crate::error::{OrchError, OrchErrorKind};
+use crate::executor::output_to_literal;
+use crate::storage::Storage;
 
 /// A compiled orchestration node.
 #[derive(Debug, Clone)]
@@ -46,6 +50,71 @@ pub struct CompiledBlock {
     pub module: MirModule,
     pub context_keys: HashSet<String>,
     pub val_def: ValDefMap,
+}
+
+impl CompiledBlock {
+    /// Context keys still needed on live execution paths, given known values.
+    ///
+    /// Uses dead branch pruning: if a known value resolves a branch condition,
+    /// context loads in the dead branch are excluded.
+    pub fn required_context_keys(&self, known: &HashMap<String, Literal>) -> HashSet<String> {
+        reachable_context_keys(&self.module, known, &self.val_def)
+    }
+}
+
+impl CompiledNode {
+    /// Context keys still needed across all blocks in this node, given known values.
+    ///
+    /// Aggregates results from all message blocks and the key module (if present).
+    /// Keys in `resolvable` (e.g. dependency node names) are excluded.
+    pub fn required_context_keys(
+        &self,
+        known: &HashMap<String, Literal>,
+        resolvable: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut needed = HashSet::new();
+        for msg in &self.messages {
+            match msg {
+                CompiledMessage::Block(block) => {
+                    needed.extend(block.required_context_keys(known));
+                }
+                CompiledMessage::Iterator { block: Some(block), .. } => {
+                    needed.extend(block.required_context_keys(known));
+                }
+                _ => {}
+            }
+        }
+        if let Some(key_block) = &self.key_module {
+            needed.extend(key_block.required_context_keys(known));
+        }
+        needed.retain(|k| !resolvable.contains(k));
+        needed
+    }
+
+    /// Context keys that must be provided externally.
+    ///
+    /// Reads already-resolved values from `storage` for dead branch pruning,
+    /// and excludes keys in `resolvable` (dependency nodes that auto-resolve).
+    pub fn required_external_keys<S>(
+        &self,
+        storage: &S,
+        resolvable: &HashSet<String>,
+    ) -> HashSet<String>
+    where
+        S: Storage,
+    {
+        let known: HashMap<String, Literal> = self
+            .all_context_keys
+            .iter()
+            .filter_map(|k| {
+                let output = storage.get(k)?;
+                let lit = output_to_literal(&output)?;
+                Some((k.clone(), lit))
+            })
+            .collect();
+
+        self.required_context_keys(&known, resolvable)
+    }
 }
 
 /// Compile a node spec into a `CompiledNode`.

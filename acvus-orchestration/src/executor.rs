@@ -405,7 +405,7 @@ where
 // Output → Literal conversion (for reachable_context_keys analysis)
 // ---------------------------------------------------------------------------
 
-fn output_to_literal(output: &Output) -> Option<Literal> {
+pub fn output_to_literal(output: &Output) -> Option<Literal> {
     match output {
         Output::Text(s) => Some(Literal::String(s.clone())),
         Output::Json(v) => json_to_literal(v),

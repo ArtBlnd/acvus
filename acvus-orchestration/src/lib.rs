@@ -14,4 +14,4 @@ pub use storage::{Storage, HashMapStorage};
 pub use message::{Message, ToolCall, ToolResult, ModelResponse, ToolSpec, Output};
 pub use provider::{Fetch, HttpRequest, ApiKind, ProviderConfig, build_request, build_cache_request, parse_cache_response, parse_response};
 pub use dag::{build_dag, Dag};
-pub use executor::{Executor, output_to_value};
+pub use executor::{Executor, output_to_value, output_to_literal};
