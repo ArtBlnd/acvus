@@ -82,7 +82,7 @@ impl fmt::Debug for OpaqueValue {
 #[derive(Debug, Clone)]
 pub struct FnValue {
     pub body: Label,
-    pub captures: Vec<Value>,
+    pub captures: Vec<Arc<Value>>,
 }
 
 impl Value {

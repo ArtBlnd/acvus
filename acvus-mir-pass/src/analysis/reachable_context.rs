@@ -5,6 +5,15 @@ use acvus_mir::ir::{InstKind, Label, MirModule, ValueId};
 
 use crate::analysis::val_def::ValDefMap;
 
+/// Context keys partitioned by reachability confidence.
+#[derive(Debug, Clone, Default)]
+pub struct ContextKeyPartition {
+    /// Keys on unconditionally reachable paths — fetch upfront.
+    pub eager: HashSet<String>,
+    /// Keys behind unknown branch conditions — resolve lazily via coroutine.
+    pub lazy: HashSet<String>,
+}
+
 /// Determine which context keys are actually needed by a MIR module,
 /// given a set of already-known context values.
 ///
@@ -20,22 +29,42 @@ pub fn reachable_context_keys(
     known: &HashMap<String, Literal>,
     val_def: &ValDefMap,
 ) -> HashSet<String> {
-    let mut needed = HashSet::new();
+    let p = partition_context_keys(module, known, val_def);
+    let mut all = p.eager;
+    all.extend(p.lazy);
+    all
+}
 
-    collect_from_body(&module.main.insts, known, val_def, &mut needed);
+/// Partition context keys into eager (definitely needed) and lazy
+/// (conditionally needed behind unknown branches).
+///
+/// - **eager**: on paths reachable through unconditional jumps or known
+///   branch conditions — safe to pre-fetch.
+/// - **lazy**: on paths reachable only through unknown branch conditions
+///   — resolve on-demand via coroutine.
+pub fn partition_context_keys(
+    module: &MirModule,
+    known: &HashMap<String, Literal>,
+    val_def: &ValDefMap,
+) -> ContextKeyPartition {
+    let mut partition = ContextKeyPartition::default();
 
-    // Closures: conservatively treat all context loads as needed
+    partition_from_body(&module.main.insts, known, val_def, &mut partition);
+
+    // Closures: conservatively treat all context loads as lazy
     for closure in module.closures.values() {
         for inst in &closure.body.insts {
             if let InstKind::ContextLoad { name, .. } = &inst.kind {
                 if !known.contains_key(name) {
-                    needed.insert(name.clone());
+                    partition.lazy.insert(name.clone());
                 }
             }
         }
     }
 
-    needed
+    // eager wins over lazy
+    partition.lazy.retain(|k| !partition.eager.contains(k));
+    partition
 }
 
 /// Block in the linear instruction stream.
@@ -122,11 +151,21 @@ fn build_blocks(insts: &[acvus_mir::ir::Inst]) -> Vec<Block> {
     blocks
 }
 
-fn collect_from_body(
+/// Reachability level for a block.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reach {
+    Unreachable,
+    /// Reachable only through unknown branch conditions.
+    Conditional,
+    /// Reachable through unconditional jumps or known branch conditions.
+    Definite,
+}
+
+fn partition_from_body(
     insts: &[acvus_mir::ir::Inst],
     known: &HashMap<String, Literal>,
     val_def: &ValDefMap,
-    needed: &mut HashSet<String>,
+    partition: &mut ContextKeyPartition,
 ) {
     let blocks = build_blocks(insts);
     if blocks.is_empty() {
@@ -141,41 +180,39 @@ fn collect_from_body(
         .collect();
 
     // Forward reachability from entry block (index 0)
-    let mut live = vec![false; blocks.len()];
+    let mut reach = vec![Reach::Unreachable; blocks.len()];
     let mut queue = VecDeque::new();
-    live[0] = true;
+    reach[0] = Reach::Definite;
     queue.push_back(0);
 
     while let Some(idx) = queue.pop_front() {
         let block = &blocks[idx];
+        let block_reach = reach[idx];
 
         match &block.terminator {
             Term::Jump(target) => {
-                enqueue_label(*target, &label_to_block, &mut live, &mut queue);
+                enqueue_reach(*target, block_reach, &label_to_block, &mut reach, &mut queue);
             }
             Term::JumpIf {
                 cond,
                 then_label,
                 else_label,
-            } => {
-                match try_eval_condition(*cond, insts, val_def, known) {
-                    Some(true) => {
-                        enqueue_label(*then_label, &label_to_block, &mut live, &mut queue);
-                    }
-                    Some(false) => {
-                        enqueue_label(*else_label, &label_to_block, &mut live, &mut queue);
-                    }
-                    None => {
-                        // Can't evaluate — both branches are live
-                        enqueue_label(*then_label, &label_to_block, &mut live, &mut queue);
-                        enqueue_label(*else_label, &label_to_block, &mut live, &mut queue);
-                    }
+            } => match try_eval_condition(*cond, insts, val_def, known) {
+                Some(true) => {
+                    enqueue_reach(*then_label, block_reach, &label_to_block, &mut reach, &mut queue);
                 }
-            }
+                Some(false) => {
+                    enqueue_reach(*else_label, block_reach, &label_to_block, &mut reach, &mut queue);
+                }
+                None => {
+                    enqueue_reach(*then_label, Reach::Conditional, &label_to_block, &mut reach, &mut queue);
+                    enqueue_reach(*else_label, Reach::Conditional, &label_to_block, &mut reach, &mut queue);
+                }
+            },
             Term::Fallthrough => {
                 let next = idx + 1;
-                if next < blocks.len() && !live[next] {
-                    live[next] = true;
+                if next < blocks.len() && block_reach > reach[next] {
+                    reach[next] = block_reach;
                     queue.push_back(next);
                 }
             }
@@ -183,30 +220,33 @@ fn collect_from_body(
         }
     }
 
-    // Collect ContextLoads from live blocks
+    // Collect ContextLoads by reach level
     for (i, block) in blocks.iter().enumerate() {
-        if !live[i] {
-            continue;
-        }
+        let target = match reach[i] {
+            Reach::Definite => &mut partition.eager,
+            Reach::Conditional => &mut partition.lazy,
+            Reach::Unreachable => continue,
+        };
         for &inst_idx in &block.insts {
             if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind {
                 if !known.contains_key(name) {
-                    needed.insert(name.clone());
+                    target.insert(name.clone());
                 }
             }
         }
     }
 }
 
-fn enqueue_label(
+fn enqueue_reach(
     label: Label,
+    new_reach: Reach,
     label_to_block: &HashMap<Label, usize>,
-    live: &mut [bool],
+    reach: &mut [Reach],
     queue: &mut VecDeque<usize>,
 ) {
     if let Some(&idx) = label_to_block.get(&label) {
-        if !live[idx] {
-            live[idx] = true;
+        if new_reach > reach[idx] {
+            reach[idx] = new_reach;
             queue.push_back(idx);
         }
     }

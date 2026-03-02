@@ -15,7 +15,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use crate::compile::{CompiledMessage, CompiledNode};
 use crate::dag::Dag;
 use crate::error::{OrchError, OrchErrorKind};
-use crate::message::{Message, ModelResponse, Output, ToolCall, ToolResult, ToolSpec};
+use crate::message::{Message, ModelResponse, ToolCall, ToolResult, ToolSpec};
 use crate::provider::{build_request, parse_response, Fetch, ProviderConfig};
 use crate::storage::Storage;
 
@@ -72,7 +72,7 @@ where
             .map(|(i, n)| (n.name.as_str(), i))
             .collect();
 
-        let mut running: FuturesUnordered<BoxFuture<'static, Result<(usize, Output), OrchError>>> =
+        let mut running: FuturesUnordered<BoxFuture<'static, Result<(usize, Value), OrchError>>> =
             FuturesUnordered::new();
 
         // Launch initially ready nodes (prefetch via static analysis)
@@ -164,8 +164,8 @@ where
                 if let Some(state) = &mut node_states[i] {
                     if state.waiting_for.as_deref() == Some(completed_name.as_str()) {
                         let need = state.pending_need.take().unwrap();
-                        let output_val = storage.get(completed_name).unwrap();
-                        state.resume_key = Some(need.into_key(output_to_value(&output_val)));
+                        let arc = storage.get(completed_name).unwrap();
+                        state.resume_key = Some(need.into_key(Arc::unwrap_or_clone(arc)));
                         state.waiting_for = None;
                     }
                 }
@@ -264,8 +264,8 @@ where
                     panic!("context call with bindings not supported in DAG executor");
                 }
                 let name = need.name().to_string();
-                if let Some(output) = storage.get(&name) {
-                    state.resume_key = Some(need.into_key(output_to_value(&output)));
+                if let Some(arc) = storage.get(&name) {
+                    state.resume_key = Some(need.into_key(Arc::unwrap_or_clone(arc)));
                 } else {
                     state.pending_need = Some(need);
                     state.waiting_for = Some(name.clone());
@@ -296,7 +296,7 @@ async fn call_model<F>(
     fetch: Arc<F>,
     fuel: Arc<AtomicU64>,
     fuel_limit: u64,
-) -> Result<(usize, Output), OrchError>
+) -> Result<(usize, Value), OrchError>
 where
     F: Fetch,
 {
@@ -350,7 +350,7 @@ where
     }
 
     match response {
-        ModelResponse::Text(text) => Ok((idx, Output::Text(text))),
+        ModelResponse::Text(text) => Ok((idx, Value::String(text))),
         ModelResponse::ToolCalls(_) => unreachable!(),
     }
 }
@@ -374,8 +374,8 @@ where
 
     let mut known = HashMap::new();
     for key in &node.all_context_keys {
-        if let Some(output) = storage.get(key) {
-            if let Some(lit) = output_to_literal(&output) {
+        if let Some(value) = storage.get(key) {
+            if let Some(lit) = value_to_literal(&value) {
                 known.insert(key.clone(), lit);
             }
         }
@@ -402,30 +402,15 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Output → Literal conversion (for reachable_context_keys analysis)
+// Value → Literal conversion (for reachable_context_keys analysis)
 // ---------------------------------------------------------------------------
 
-pub fn output_to_literal(output: &Output) -> Option<Literal> {
-    match output {
-        Output::Text(s) => Some(Literal::String(s.clone())),
-        Output::Json(v) => json_to_literal(v),
-        Output::Image(_) => None,
-    }
-}
-
-fn json_to_literal(v: &serde_json::Value) -> Option<Literal> {
-    match v {
-        serde_json::Value::String(s) => Some(Literal::String(s.clone())),
-        serde_json::Value::Bool(b) => Some(Literal::Bool(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(Literal::Int(i))
-            } else if let Some(f) = n.as_f64() {
-                Some(Literal::Float(f))
-            } else {
-                None
-            }
-        }
+pub fn value_to_literal(value: &Value) -> Option<Literal> {
+    match value {
+        Value::String(s) => Some(Literal::String(s.clone())),
+        Value::Bool(b) => Some(Literal::Bool(*b)),
+        Value::Int(i) => Some(Literal::Int(*i)),
+        Value::Float(f) => Some(Literal::Float(*f)),
         _ => None,
     }
 }
@@ -450,39 +435,6 @@ fn handle_tool_calls(calls: &[ToolCall]) -> Vec<ToolResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Output → Value conversion (for interpreter context injection)
-// ---------------------------------------------------------------------------
-
-pub fn output_to_value(output: &Output) -> Value {
-    match output {
-        Output::Text(s) => Value::String(s.clone()),
-        Output::Json(v) => json_to_value(v),
-        Output::Image(bytes) => Value::List(bytes.iter().map(|&b| Value::Byte(b)).collect()),
-    }
-}
-
-fn json_to_value(v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Null => Value::Unit,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::Unit
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
-        serde_json::Value::Object(obj) => {
-            Value::Object(obj.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect())
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -491,68 +443,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn output_to_value_text() {
-        let v = output_to_value(&Output::Text("hello".into()));
-        assert!(matches!(v, Value::String(ref s) if s == "hello"));
-    }
-
-    #[test]
-    fn output_to_value_json() {
-        let v = output_to_value(&Output::Json(serde_json::json!({"name": "alice", "age": 30})));
-        match v {
-            Value::Object(obj) => {
-                assert!(matches!(obj.get("name"), Some(Value::String(s)) if s == "alice"));
-                assert!(matches!(obj.get("age"), Some(Value::Int(30))));
-            }
-            _ => panic!("expected Object"),
-        }
-    }
-
-    #[test]
-    fn output_to_value_image() {
-        let v = output_to_value(&Output::Image(vec![0xff, 0x00]));
-        match v {
-            Value::List(items) => {
-                assert_eq!(items.len(), 2);
-                assert!(matches!(items[0], Value::Byte(0xff)));
-            }
-            _ => panic!("expected List"),
-        }
-    }
-
-    #[test]
-    fn output_to_literal_text() {
-        let lit = output_to_literal(&Output::Text("hello".into()));
+    fn value_to_literal_string() {
+        let lit = value_to_literal(&Value::String("hello".into()));
         assert_eq!(lit, Some(Literal::String("hello".into())));
     }
 
     #[test]
-    fn output_to_literal_json_string() {
-        let lit = output_to_literal(&Output::Json(serde_json::json!("world")));
-        assert_eq!(lit, Some(Literal::String("world".into())));
-    }
-
-    #[test]
-    fn output_to_literal_json_int() {
-        let lit = output_to_literal(&Output::Json(serde_json::json!(42)));
+    fn value_to_literal_int() {
+        let lit = value_to_literal(&Value::Int(42));
         assert_eq!(lit, Some(Literal::Int(42)));
     }
 
     #[test]
-    fn output_to_literal_json_bool() {
-        let lit = output_to_literal(&Output::Json(serde_json::json!(true)));
+    fn value_to_literal_bool() {
+        let lit = value_to_literal(&Value::Bool(true));
         assert_eq!(lit, Some(Literal::Bool(true)));
     }
 
     #[test]
-    fn output_to_literal_image_none() {
-        let lit = output_to_literal(&Output::Image(vec![0xff]));
-        assert!(lit.is_none());
+    fn value_to_literal_float() {
+        let lit = value_to_literal(&Value::Float(3.14));
+        assert_eq!(lit, Some(Literal::Float(3.14)));
     }
 
     #[test]
-    fn output_to_literal_json_object_none() {
-        let lit = output_to_literal(&Output::Json(serde_json::json!({"key": "val"})));
+    fn value_to_literal_object_none() {
+        let lit = value_to_literal(&Value::Object(Default::default()));
         assert!(lit.is_none());
     }
 }

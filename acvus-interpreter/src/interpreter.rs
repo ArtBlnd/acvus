@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
@@ -13,7 +14,7 @@ use crate::yielder::{self, Coroutine, ResumeKey, Stepped, YieldHandle};
 
 pub struct Interpreter {
     module: MirModule,
-    variables: HashMap<String, Value>,
+    variables: HashMap<String, Arc<Value>>,
     extern_fns: ExternFnRegistry,
 }
 
@@ -22,7 +23,7 @@ pub struct Interpreter {
 // ---------------------------------------------------------------------------
 
 struct Frame {
-    vals: Vec<Option<Value>>,
+    vals: Vec<Option<Arc<Value>>>,
     label_map: HashMap<Label, usize>,
     iters: HashMap<ValueId, IterState>,
 }
@@ -41,21 +42,37 @@ impl Frame {
         }
     }
 
-    fn set(&mut self, id: ValueId, value: Value) {
+    fn set(&mut self, id: ValueId, value: Arc<Value>) {
         self.vals[id.0 as usize] = Some(value);
+    }
+
+    fn set_new(&mut self, id: ValueId, value: Value) {
+        self.vals[id.0 as usize] = Some(Arc::new(value));
     }
 
     fn get(&self, id: ValueId) -> &Value {
         self.vals[id.0 as usize]
-            .as_ref()
+            .as_deref()
             .unwrap_or_else(|| panic!("Val({}) not yet defined", id.0))
     }
 
-    fn take(&mut self, id: ValueId) -> Value {
-        self.get(id).clone()
+    fn take(&self, id: ValueId) -> Arc<Value> {
+        Arc::clone(
+            self.vals[id.0 as usize]
+                .as_ref()
+                .unwrap_or_else(|| panic!("Val({}) not yet defined", id.0)),
+        )
     }
 
-    fn collect_args(&mut self, args: &[ValueId]) -> Vec<Value> {
+    fn take_owned(&self, id: ValueId) -> Value {
+        Arc::unwrap_or_clone(self.take(id))
+    }
+
+    fn collect_args(&self, args: &[ValueId]) -> Vec<Value> {
+        args.iter().map(|v| self.take_owned(*v)).collect()
+    }
+
+    fn collect_args_arc(&self, args: &[ValueId]) -> Vec<Arc<Value>> {
         args.iter().map(|v| self.take(*v)).collect()
     }
 
@@ -93,7 +110,7 @@ impl Frame {
 
     fn bind_block_params(&mut self, insts: &[Inst], target: usize, args: &[ValueId]) {
         if let InstKind::BlockLabel { params, .. } = &insts[target].kind {
-            let arg_values = self.collect_args(args);
+            let arg_values = self.collect_args_arc(args);
             for (param, val) in params.iter().zip(arg_values) {
                 self.set(*param, val);
             }
@@ -103,7 +120,7 @@ impl Frame {
     // -- iteration ------------------------------------------------------------
 
     fn iter_init(&mut self, dst: ValueId, src: ValueId) {
-        let state = match self.get(src).clone() {
+        let state = match self.take_owned(src) {
             Value::List(items) => IterState::List { items, pos: 0 },
             Value::Range { start, end, inclusive } => {
                 IterState::Range { current: start, end, inclusive }
@@ -111,7 +128,7 @@ impl Frame {
             v => panic!("IterInit: expected List or Range, got {v:?}"),
         };
         self.iters.insert(dst, state);
-        self.set(dst, Value::Unit);
+        self.set_new(dst, Value::Unit);
     }
 
     fn iter_next(&mut self, dst_value: ValueId, dst_done: ValueId, iter: ValueId) {
@@ -137,8 +154,8 @@ impl Frame {
             IterState::Range { .. } => (Value::Unit, true),
         };
 
-        self.set(dst_value, value);
-        self.set(dst_done, Value::Bool(done));
+        self.set_new(dst_value, value);
+        self.set_new(dst_done, Value::Bool(done));
     }
 }
 
@@ -227,27 +244,27 @@ impl Interpreter {
             match &insts[pc].kind {
                 // -- yield --
                 InstKind::Yield(v) => {
-                    let val = frame.take(*v);
+                    let val = frame.take_owned(*v);
                     handle.yield_val(val).await;
                 }
 
                 // -- constants / constructors --
                 InstKind::Const { dst, value } => {
-                    frame.set(*dst, literal_to_value(value));
+                    frame.set_new(*dst, literal_to_value(value));
                 }
                 InstKind::MakeList { dst, elements } => {
                     let items = frame.collect_args(elements);
-                    frame.set(*dst, Value::List(items));
+                    frame.set_new(*dst, Value::List(items));
                 }
                 InstKind::MakeObject { dst, fields } => {
                     let obj: BTreeMap<String, Value> =
-                        fields.iter().map(|(k, v)| (k.clone(), frame.take(*v))).collect();
-                    frame.set(*dst, Value::Object(obj));
+                        fields.iter().map(|(k, v)| (k.clone(), frame.take_owned(*v))).collect();
+                    frame.set_new(*dst, Value::Object(obj));
                 }
                 InstKind::MakeRange { dst, start, end, kind } => {
                     let (s, e) = (frame.get(*start), frame.get(*end));
                     match (s, e) {
-                        (Value::Int(s), Value::Int(e)) => frame.set(
+                        (Value::Int(s), Value::Int(e)) => frame.set_new(
                             *dst,
                             Value::Range {
                                 start: *s,
@@ -260,21 +277,20 @@ impl Interpreter {
                 }
                 InstKind::MakeTuple { dst, elements } => {
                     let items = frame.collect_args(elements);
-                    frame.set(*dst, Value::Tuple(items));
+                    frame.set_new(*dst, Value::Tuple(items));
                 }
                 InstKind::MakeClosure { dst, body, captures } => {
-                    let captured = frame.collect_args(captures);
-                    frame.set(*dst, Value::Fn(FnValue { body: *body, captures: captured }));
+                    let captured = frame.collect_args_arc(captures);
+                    frame.set_new(*dst, Value::Fn(FnValue { body: *body, captures: captured }));
                 }
 
                 // -- arithmetic / logic --
                 InstKind::BinOp { dst, op, left, right } => {
-                    let (l, r) = (frame.take(*left), frame.take(*right));
-                    frame.set(*dst, eval_binop(*op, l, r));
+                    let result = eval_binop(*op, frame.get(*left), frame.get(*right));
+                    frame.set_new(*dst, result);
                 }
                 InstKind::UnaryOp { dst, op, operand } => {
-                    let v = frame.take(*operand);
-                    frame.set(*dst, eval_unaryop(*op, v));
+                    frame.set_new(*dst, eval_unaryop(*op, frame.get(*operand)));
                 }
 
                 // -- access --
@@ -283,18 +299,18 @@ impl Interpreter {
                         .get(field.as_str())
                         .unwrap_or_else(|| panic!("FieldGet: key '{field}' not found"))
                         .clone();
-                    frame.set(*dst, v);
+                    frame.set_new(*dst, v);
                 }
                 InstKind::ObjectGet { dst, object, key } => {
                     let v = expect_object(frame.get(*object), "ObjectGet")
                         .get(key.as_str())
                         .unwrap_or_else(|| panic!("ObjectGet: key '{key}' not found"))
                         .clone();
-                    frame.set(*dst, v);
+                    frame.set_new(*dst, v);
                 }
                 InstKind::TupleIndex { dst, tuple, index } => {
                     let v = expect_tuple(frame.get(*tuple), "TupleIndex")[*index].clone();
-                    frame.set(*dst, v);
+                    frame.set_new(*dst, v);
                 }
                 InstKind::ListIndex { dst, list, index } => {
                     let items = expect_list(frame.get(*list), "ListIndex");
@@ -303,32 +319,32 @@ impl Interpreter {
                     } else {
                         (items.len() as i32 + *index) as usize
                     };
-                    frame.set(*dst, items[i].clone());
+                    frame.set_new(*dst, items[i].clone());
                 }
                 InstKind::ListGet { dst, list, index } => {
                     let items = expect_list(frame.get(*list), "ListGet");
                     let idx = expect_int(frame.get(*index), "ListGet index");
-                    frame.set(*dst, items[idx as usize].clone());
+                    frame.set_new(*dst, items[idx as usize].clone());
                 }
                 InstKind::ListSlice { dst, list, skip_head, skip_tail } => {
                     let items = expect_list(frame.get(*list), "ListSlice");
                     let end = items.len() - *skip_tail;
-                    frame.set(*dst, Value::List(items[*skip_head..end].to_vec()));
+                    frame.set_new(*dst, Value::List(items[*skip_head..end].to_vec()));
                 }
 
                 // -- pattern testing --
                 InstKind::TestLiteral { dst, src, value } => {
                     let eq = values_equal(frame.get(*src), &literal_to_value(value));
-                    frame.set(*dst, Value::Bool(eq));
+                    frame.set_new(*dst, Value::Bool(eq));
                 }
                 InstKind::TestListLen { dst, src, min_len, exact } => {
                     let items = expect_list(frame.get(*src), "TestListLen");
                     let ok = if *exact { items.len() == *min_len } else { items.len() >= *min_len };
-                    frame.set(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
                     let ok = expect_object(frame.get(*src), "TestObjectKey").contains_key(key.as_str());
-                    frame.set(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestRange { dst, src, start, end, kind } => {
                     let n = expect_int(frame.get(*src), "TestRange");
@@ -337,7 +353,7 @@ impl Interpreter {
                         RangeKind::InclusiveEnd => n >= *start && n <= *end,
                         RangeKind::ExclusiveStart => n > *start && n <= *end,
                     };
-                    frame.set(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::Bool(ok));
                 }
 
                 // -- iteration --
@@ -350,25 +366,23 @@ impl Interpreter {
                 InstKind::ContextLoad { dst, name, bindings } => {
                     if bindings.is_empty() {
                         let v = handle.request_context(name.clone()).await;
-                        frame.set(*dst, v);
+                        frame.set_new(*dst, v);
                     } else {
                         let binding_values: HashMap<String, Value> = bindings
                             .iter()
                             .map(|(k, vid)| (k.clone(), frame.get(*vid).clone()))
                             .collect();
                         let v = handle.request_context_with(name.clone(), binding_values).await;
-                        frame.set(*dst, v);
+                        frame.set_new(*dst, v);
                     }
                 }
                 InstKind::VarLoad { dst, name } => {
                     let v = this.variables.get(name)
-                        .unwrap_or_else(|| panic!("VarLoad: undefined variable ${name}"))
-                        .clone();
-                    frame.set(*dst, v);
+                        .unwrap_or_else(|| panic!("VarLoad: undefined variable ${name}"));
+                    frame.set(*dst, Arc::clone(v));
                 }
                 InstKind::VarStore { name, src } => {
-                    let v = frame.take(*src);
-                    this.variables.insert(name.clone(), v);
+                    this.variables.insert(name.clone(), frame.take(*src));
                 }
 
                 // -- calls (async, ownership-passing) --
@@ -383,25 +397,24 @@ impl Interpreter {
                             .unwrap_or_else(|| panic!("unknown function: {func}"));
                         result = f.call(arg_values).await;
                     }
-                    frame.set(*dst, result);
+                    frame.set_new(*dst, result);
                 }
                 InstKind::AsyncCall { dst, func, args } => {
                     let arg_values = frame.collect_args(args);
                     let f = this.extern_fns.get(func)
                         .unwrap_or_else(|| panic!("unknown async function: {func}"));
-                    frame.set(*dst, f.call(arg_values).await);
+                    frame.set_new(*dst, f.call(arg_values).await);
                 }
                 InstKind::CallClosure { dst, closure, args } => {
-                    let fn_val = expect_fn(frame.get(*closure).clone(), "CallClosure");
-                    let arg_values = frame.collect_args(args);
+                    let fn_val = expect_fn(frame.take_owned(*closure), "CallClosure");
+                    let arg_values = frame.collect_args_arc(args);
                     let result;
                     (this, result) =
                         Self::call_closure(this, fn_val, arg_values, handle).await;
-                    frame.set(*dst, result);
+                    frame.set_new(*dst, result);
                 }
                 InstKind::Await { dst, src } => {
-                    let v = frame.take(*src);
-                    frame.set(*dst, v);
+                    frame.set(*dst, frame.take(*src));
                 }
 
                 // -- control flow --
@@ -419,7 +432,7 @@ impl Interpreter {
                     continue;
                 }
                 InstKind::Return(val) => {
-                    let v = frame.take(*val);
+                    let v = frame.take_owned(*val);
                     return (this, frame, Some(v));
                 }
                 InstKind::Nop => {}
@@ -462,11 +475,12 @@ impl Interpreter {
         let (items, fn_val) = extract_list_fn(args, "filter");
         let mut result = Vec::new();
         for item in items {
+            let arc_item = Arc::new(item);
             let keep;
             (this, keep) =
-                Self::call_closure(this, fn_val.clone(), vec![item.clone()], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::clone(&arc_item)], handle).await;
             if matches!(keep, Value::Bool(true)) {
-                result.push(item);
+                result.push(Arc::unwrap_or_clone(arc_item));
             }
         }
         (this, Value::List(result))
@@ -482,7 +496,7 @@ impl Interpreter {
         for item in items {
             let mapped;
             (this, mapped) =
-                Self::call_closure(this, fn_val.clone(), vec![item], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await;
             result.push(mapped);
         }
         (this, Value::List(result))
@@ -495,11 +509,12 @@ impl Interpreter {
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "find");
         for item in items {
-            let result;
-            (this, result) =
-                Self::call_closure(this, fn_val.clone(), vec![item.clone()], handle).await;
-            if matches!(result, Value::Bool(true)) {
-                return (this, item);
+            let arc_item = Arc::new(item);
+            let matched;
+            (this, matched) =
+                Self::call_closure(this, fn_val.clone(), vec![Arc::clone(&arc_item)], handle).await;
+            if matches!(matched, Value::Bool(true)) {
+                return (this, Arc::unwrap_or_clone(arc_item));
             }
         }
         panic!("find: no element matched the predicate");
@@ -515,7 +530,7 @@ impl Interpreter {
         let mut acc = it.next().expect("reduce: empty list");
         for item in it {
             (this, acc) =
-                Self::call_closure(this, fn_val.clone(), vec![acc, item], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::new(acc), Arc::new(item)], handle).await;
         }
         (this, acc)
     }
@@ -536,7 +551,7 @@ impl Interpreter {
         let mut acc = init;
         for item in items {
             (this, acc) =
-                Self::call_closure(this, fn_val.clone(), vec![acc, item], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::new(acc), Arc::new(item)], handle).await;
         }
         (this, acc)
     }
@@ -550,7 +565,7 @@ impl Interpreter {
         for item in items {
             let result;
             (this, result) =
-                Self::call_closure(this, fn_val.clone(), vec![item], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await;
             if matches!(result, Value::Bool(true)) {
                 return (this, Value::Bool(true));
             }
@@ -567,7 +582,7 @@ impl Interpreter {
         for item in items {
             let result;
             (this, result) =
-                Self::call_closure(this, fn_val.clone(), vec![item], handle).await;
+                Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await;
             if matches!(result, Value::Bool(false)) {
                 return (this, Value::Bool(false));
             }
@@ -580,7 +595,7 @@ impl Interpreter {
     async fn call_closure<'a>(
         this: Self,
         fn_val: FnValue,
-        args: Vec<Value>,
+        args: Vec<Arc<Value>>,
         handle: &'a YieldHandle,
     ) -> (Self, Value) {
         let closure_body = this
@@ -594,7 +609,7 @@ impl Interpreter {
 
         let n_captures = fn_val.captures.len();
         for (i, cap) in fn_val.captures.iter().enumerate() {
-            frame.set(ValueId(i as u32), cap.clone());
+            frame.set(ValueId(i as u32), Arc::clone(cap));
         }
         for (i, arg) in args.into_iter().enumerate() {
             frame.set(ValueId((n_captures + i) as u32), arg);
@@ -682,7 +697,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn eval_binop(op: BinOp, left: Value, right: Value) -> Value {
+fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
     match op {
         BinOp::And => Value::Bool(
             matches!(left, Value::Bool(true)) && matches!(right, Value::Bool(true)),
@@ -691,18 +706,22 @@ fn eval_binop(op: BinOp, left: Value, right: Value) -> Value {
             matches!(left, Value::Bool(true)) || matches!(right, Value::Bool(true)),
         ),
         BinOp::Add => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(b)),
+            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            (Value::String(a), Value::String(b)) => Value::String(a + &b),
+            (Value::String(a), Value::String(b)) => {
+                let mut s = a.clone();
+                s.push_str(b);
+                Value::String(s)
+            }
             (l, r) => panic!("Add: incompatible {l:?} + {r:?}"),
         },
         BinOp::Sub => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(b)),
+            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(*b)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
             (l, r) => panic!("Sub: incompatible {l:?} - {r:?}"),
         },
         BinOp::Mul => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(b)),
+            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(*b)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
             (l, r) => panic!("Mul: incompatible {l:?} * {r:?}"),
         },
@@ -736,12 +755,12 @@ fn eval_binop(op: BinOp, left: Value, right: Value) -> Value {
             (Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
             (l, r) => panic!("Shr: incompatible {l:?} >> {r:?}"),
         },
-        BinOp::Eq => Value::Bool(values_equal(&left, &right)),
-        BinOp::Neq => Value::Bool(!values_equal(&left, &right)),
-        BinOp::Lt => cmp_values(&left, &right, Ordering::is_lt),
-        BinOp::Gt => cmp_values(&left, &right, Ordering::is_gt),
-        BinOp::Lte => cmp_values(&left, &right, Ordering::is_le),
-        BinOp::Gte => cmp_values(&left, &right, Ordering::is_ge),
+        BinOp::Eq => Value::Bool(values_equal(left, right)),
+        BinOp::Neq => Value::Bool(!values_equal(left, right)),
+        BinOp::Lt => cmp_values(left, right, Ordering::is_lt),
+        BinOp::Gt => cmp_values(left, right, Ordering::is_gt),
+        BinOp::Lte => cmp_values(left, right, Ordering::is_le),
+        BinOp::Gte => cmp_values(left, right, Ordering::is_ge),
     }
 }
 
@@ -755,7 +774,7 @@ fn cmp_values(left: &Value, right: &Value, f: fn(Ordering) -> bool) -> Value {
     Value::Bool(f(ord))
 }
 
-fn eval_unaryop(op: UnaryOp, operand: Value) -> Value {
+fn eval_unaryop(op: UnaryOp, operand: &Value) -> Value {
     match op {
         UnaryOp::Neg => match operand {
             Value::Int(n) => Value::Int(-n),

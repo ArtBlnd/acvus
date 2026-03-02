@@ -1,12 +1,11 @@
 mod project;
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process;
 
 use acvus_chat::ChatEngine;
-use acvus_interpreter::ExternFnRegistry;
+use acvus_interpreter::{ExternFnRegistry, Value};
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
@@ -161,25 +160,28 @@ async fn main() {
     let mut engine = ChatEngine::new(compiled_nodes, providers, fetch, extern_fns, storage, output_module).await;
 
     if context_args.is_empty() {
-        // Interactive mode: prompt per-turn keys from stdin
-        loop {
-            let mut per_turn = HashMap::new();
-            for key in engine.per_turn_keys() {
-                eprint!("{key}: ");
-                std::io::stderr().flush().ok();
-                let mut input = String::new();
-                if std::io::stdin().read_line(&mut input).unwrap() == 0 {
-                    return;
-                }
-                per_turn.insert(key.clone(), input.trim_end().to_string());
-            }
+        // Interactive mode: resolve context keys from stdin on demand
+        let resolver = |name: String| async move {
+            eprint!("{name}: ");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+            Value::String(input.trim_end().to_string())
+        };
 
-            let response = engine.turn(per_turn).await;
+        loop {
+            let response = engine.turn(&resolver).await;
             println!("{response}");
         }
     } else {
-        // One-shot: use CLI args, run one turn
-        let response = engine.turn(context_args).await;
+        // One-shot: resolve from CLI args
+        let resolver = |name: String| {
+            let value = context_args
+                .get(&name)
+                .unwrap_or_else(|| panic!("unresolved context: @{name}"))
+                .clone();
+            async move { Value::String(value) }
+        };
+        let response = engine.turn(&resolver).await;
         println!("{response}");
     }
 }

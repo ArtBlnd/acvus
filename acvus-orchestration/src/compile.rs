@@ -6,12 +6,12 @@ use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
 use acvus_ast::Literal;
 use acvus_mir_pass::AnalysisPass;
-use acvus_mir_pass::analysis::reachable_context::reachable_context_keys;
+use acvus_mir_pass::analysis::reachable_context::{ContextKeyPartition, partition_context_keys, reachable_context_keys};
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 
 use crate::dsl::{GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolDecl};
 use crate::error::{OrchError, OrchErrorKind};
-use crate::executor::output_to_literal;
+use crate::executor::value_to_literal;
 use crate::storage::Storage;
 
 /// A compiled orchestration node.
@@ -103,17 +103,59 @@ impl CompiledNode {
     where
         S: Storage,
     {
-        let known: HashMap<String, Literal> = self
-            .all_context_keys
+        let known = self.known_from_storage(storage);
+        self.required_context_keys(&known, resolvable)
+    }
+
+    /// Partition context keys into eager (definitely needed) and lazy
+    /// (conditionally needed), excluding resolvable dependency nodes.
+    pub fn partition_external_keys<S>(
+        &self,
+        storage: &S,
+        resolvable: &HashSet<String>,
+    ) -> ContextKeyPartition
+    where
+        S: Storage,
+    {
+        let known = self.known_from_storage(storage);
+        let mut merged = ContextKeyPartition::default();
+        for msg in &self.messages {
+            match msg {
+                CompiledMessage::Block(block) => {
+                    let p = partition_context_keys(&block.module, &known, &block.val_def);
+                    merged.eager.extend(p.eager);
+                    merged.lazy.extend(p.lazy);
+                }
+                CompiledMessage::Iterator { block: Some(block), .. } => {
+                    let p = partition_context_keys(&block.module, &known, &block.val_def);
+                    merged.eager.extend(p.eager);
+                    merged.lazy.extend(p.lazy);
+                }
+                _ => {}
+            }
+        }
+        if let Some(key_block) = &self.key_module {
+            let p = partition_context_keys(&key_block.module, &known, &key_block.val_def);
+            merged.eager.extend(p.eager);
+            merged.lazy.extend(p.lazy);
+        }
+        merged.eager.retain(|k| !resolvable.contains(k));
+        merged.lazy.retain(|k| !resolvable.contains(k) && !merged.eager.contains(k));
+        merged
+    }
+
+    fn known_from_storage<S>(&self, storage: &S) -> HashMap<String, Literal>
+    where
+        S: Storage,
+    {
+        self.all_context_keys
             .iter()
             .filter_map(|k| {
-                let output = storage.get(k)?;
-                let lit = output_to_literal(&output)?;
+                let value = storage.get(k)?;
+                let lit = value_to_literal(&value)?;
                 Some((k.clone(), lit))
             })
-            .collect();
-
-        self.required_context_keys(&known, resolvable)
+            .collect()
     }
 }
 
