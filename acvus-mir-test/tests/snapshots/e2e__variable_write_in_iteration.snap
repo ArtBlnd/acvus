@@ -15,7 +15,7 @@ expression: ir
      9 │ L2:
     10 │   r4 = var_load $last
     11 │   r5 = call to_string(r4)
-    12 │   emit r5
+    12 │   yield r5
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Unit

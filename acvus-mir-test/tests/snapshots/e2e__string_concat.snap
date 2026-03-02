@@ -8,7 +8,7 @@ expression: ir
      2 │   r2 = r0 + r1
      3 │   r3 = const "world"
      4 │   r4 = r2 + r3
-     5 │   emit r4
+     5 │   yield r4
 
     ; r0 (v0) : String
     ; r1 (v1) : String

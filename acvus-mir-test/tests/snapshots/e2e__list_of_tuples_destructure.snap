@@ -11,7 +11,7 @@ expression: ir
      5 │ L3:
      6 │   r4 = r2.0
      7 │   r5 = r2.1
-     8 │   emit r4
+     8 │   yield r4
      9 │   jump L0
     10 │ L1:
     11 │ L2:

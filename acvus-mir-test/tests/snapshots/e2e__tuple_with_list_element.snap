@@ -16,14 +16,14 @@ expression: ir
     10 │ L3:
     11 │   r8 = r0.0
     12 │   r9 = r0.1
-    13 │   emit r8
+    13 │   yield r8
     14 │   r10 = iter_init r9
     15 │ L4:
     16 │   r11, r12 = iter_next r10
     17 │   jump_if r12 then L5 else L7
     18 │ L7:
     19 │   r13 = call to_string(r11)
-    20 │   emit r13
+    20 │   yield r13
     21 │   jump L4
     22 │ L5:
     23 │ L6:

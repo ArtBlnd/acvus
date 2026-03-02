@@ -83,8 +83,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
 
         match &inst.kind {
             // Output
-            InstKind::EmitText(idx) => writeln!(f, "emit_text T{idx}")?,
-            InstKind::EmitValue(r) => writeln!(f, "emit {}", fmt_val(*r))?,
+            InstKind::Yield(r) => writeln!(f, "yield {}", fmt_val(*r))?,
 
             // Constants / variables
             InstKind::Const { dst, value } => {
@@ -338,15 +337,6 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
 
 impl fmt::Display for MirModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Text constants table.
-        if !self.texts.is_empty() {
-            writeln!(f, "=== texts ===")?;
-            for (i, text) in self.texts.iter().enumerate() {
-                writeln!(f, "  T{i} = {text:?}")?;
-            }
-            writeln!(f)?;
-        }
-
         writeln!(f, "=== main ===")?;
         write_body(f, &self.main, "  ")?;
 
@@ -410,15 +400,15 @@ mod tests {
     #[test]
     fn print_text_only() {
         let out = compile_and_dump("hello world", HashMap::new(), &ExternRegistry::new());
-        assert!(out.contains("T0 = \"hello world\""));
-        assert!(out.contains("emit_text T0"));
+        assert!(out.contains("const \"hello world\""));
+        assert!(out.contains("yield r"));
     }
 
     #[test]
     fn print_string_emit() {
         let out = compile_and_dump(r#"{{ "hello" }}"#, HashMap::new(), &ExternRegistry::new());
         assert!(out.contains("r0 = const \"hello\""));
-        assert!(out.contains("emit r0"));
+        assert!(out.contains("yield r0"));
     }
 
     #[test]
@@ -444,7 +434,7 @@ mod tests {
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
-        assert!(out.contains("emit_text T"));
+        assert!(out.contains("yield r"));
     }
 
     #[test]
@@ -510,6 +500,6 @@ mod tests {
         );
         assert!(out.contains("=== main ==="));
         assert!(out.contains("iter_init"));
-        assert!(out.contains("emit"));
+        assert!(out.contains("yield"));
     }
 }

@@ -8,7 +8,7 @@ expression: ir
      2 │   r2 = call pmap(r0, r1)
      3 │   r3 = call len(r2)
      4 │   r4 = call to_string(r3)
-     5 │   emit r4
+     5 │   yield r4
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Fn(Int) -> Int

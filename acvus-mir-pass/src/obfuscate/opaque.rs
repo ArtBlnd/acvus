@@ -512,7 +512,7 @@ fn make_dead_block(
                 dst: v_result, closure: v_fn, args: vec![v_bytes, v_key],
             }});
 
-            out.push(Inst { span, kind: InstKind::EmitValue(v_result) });
+            out.push(Inst { span, kind: InstKind::Yield(v_result) });
         } else {
             let len = rng.random_range(2..6);
             let mut v_accum: Option<ValueId> = None;
@@ -550,7 +550,7 @@ fn make_dead_block(
                 });
             }
 
-            out.push(Inst { span, kind: InstKind::EmitValue(v_accum.unwrap()) });
+            out.push(Inst { span, kind: InstKind::Yield(v_accum.unwrap()) });
         }
     }
 

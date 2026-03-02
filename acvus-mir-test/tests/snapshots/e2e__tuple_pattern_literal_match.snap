@@ -2,11 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "zero-one"
-  T1 = "one-any"
-  T2 = "other"
-
 === main ===
      0 │   r0 = context_load @a
      1 │   r1 = context_load @b
@@ -23,21 +18,24 @@ expression: ir
     12 │ L4:
     13 │   r10 = r2.0
     14 │   r11 = r2.1
-    15 │   emit_text T0
-    16 │   jump L0
-    17 │ L3:
-    18 │   r12 = const true
-    19 │   r13 = r2.0
-    20 │   r14 = test r13 == 1
-    21 │   r15 = r12 && r14
-    22 │   jump_if r15 then L5 else L1
-    23 │ L5:
-    24 │   r16 = r2.0
-    25 │   emit_text T1
-    26 │   jump L0
-    27 │ L1:
-    28 │   emit_text T2
-    29 │ L0:
+    15 │   r12 = const "zero-one"
+    16 │   yield r12
+    17 │   jump L0
+    18 │ L3:
+    19 │   r13 = const true
+    20 │   r14 = r2.0
+    21 │   r15 = test r14 == 1
+    22 │   r16 = r13 && r15
+    23 │   jump_if r16 then L5 else L1
+    24 │ L5:
+    25 │   r17 = r2.0
+    26 │   r18 = const "one-any"
+    27 │   yield r18
+    28 │   jump L0
+    29 │ L1:
+    30 │   r19 = const "other"
+    31 │   yield r19
+    32 │ L0:
 
     ; r0 (@a) : Int
     ; r1 (@b) : Int
@@ -51,8 +49,11 @@ expression: ir
     ; r9 (v9) : Bool
     ; r10 (v10) : Int
     ; r11 (v11) : Int
-    ; r12 (v12) : Bool
-    ; r13 (v13) : Int
-    ; r14 (v14) : Bool
+    ; r12 (v12) : String
+    ; r13 (v13) : Bool
+    ; r14 (v14) : Int
     ; r15 (v15) : Bool
-    ; r16 (v16) : Int
+    ; r16 (v16) : Bool
+    ; r17 (v17) : Int
+    ; r18 (v18) : String
+    ; r19 (v19) : String

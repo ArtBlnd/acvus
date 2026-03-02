@@ -12,7 +12,7 @@ expression: ir
      6 │   r6 = call map(r4, r5)
      7 │   r7 = call len(r6)
      8 │   r8 = call to_string(r7)
-     9 │   emit r8
+     9 │   yield r8
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Fn(Int) -> Bool

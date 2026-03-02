@@ -26,8 +26,6 @@ pub struct Lowerer {
     hints: HintTable,
     /// Set of builtin function names (sync calls).
     builtin_names: HashSet<String>,
-    /// Interned text constants pool.
-    texts: Vec<String>,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -114,7 +112,6 @@ impl Lowerer {
             closures: HashMap::new(),
             hints: HintTable::new(),
             builtin_names,
-            texts: Vec::new(),
         }
     }
 
@@ -123,7 +120,6 @@ impl Lowerer {
         let module = MirModule {
             main: self.body,
             closures: self.closures,
-            texts: self.texts,
         };
         (module, self.hints)
     }
@@ -138,15 +134,6 @@ impl Lowerer {
         let l = Label(self.body.label_count);
         self.body.label_count += 1;
         l
-    }
-
-    fn intern_text(&mut self, text: &str) -> usize {
-        if let Some(idx) = self.texts.iter().position(|t| t == text) {
-            return idx;
-        }
-        let idx = self.texts.len();
-        self.texts.push(text.to_string());
-        idx
     }
 
     fn emit(&mut self, inst: Inst) {
@@ -247,15 +234,18 @@ impl Lowerer {
     fn lower_node(&mut self, node: &Node) {
         match node {
             Node::Text { value, span } => {
-                let idx = self.intern_text(value);
-                self.emit_inst(*span, InstKind::EmitText(idx));
+                let dst = self.alloc_val();
+                self.set_val_type(dst, Ty::String);
+                self.set_origin(dst, ValOrigin::Expr);
+                self.emit_inst(*span, InstKind::Const { dst, value: Literal::String(value.clone()) });
+                self.emit_inst(*span, InstKind::Yield(dst));
             }
             Node::Comment { .. } => {
                 // Comments produce no instructions.
             }
             Node::InlineExpr { expr, span } => {
                 let reg = self.lower_expr(expr);
-                self.emit_inst(*span, InstKind::EmitValue(reg));
+                self.emit_inst(*span, InstKind::Yield(reg));
             }
             Node::MatchBlock(mb) => {
                 self.lower_match_block(mb);
@@ -1522,12 +1512,12 @@ mod tests {
     #[test]
     fn lower_text_node() {
         let module = lower("hello world");
-        assert_eq!(module.main.insts.len(), 1);
+        assert_eq!(module.main.insts.len(), 2);
         assert!(matches!(
             &module.main.insts[0].kind,
-            InstKind::EmitText(0)
+            InstKind::Const { value: Literal::String(s), .. } if s == "hello world"
         ));
-        assert_eq!(module.texts[0], "hello world");
+        assert!(matches!(&module.main.insts[1].kind, InstKind::Yield(_)));
     }
 
     #[test]
@@ -1537,7 +1527,7 @@ mod tests {
         assert!(matches!(&module.main.insts[0].kind, InstKind::Const { .. }));
         assert!(matches!(
             &module.main.insts[1].kind,
-            InstKind::EmitValue(_)
+            InstKind::Yield(_)
         ));
     }
 
@@ -1651,13 +1641,12 @@ mod tests {
         let context = HashMap::from([("name".into(), Ty::String)]);
         let source = "{{ true = @name == \"test\" }}\n    matched\n    here{{/-2}}";
         let module = lower_with(source, context, &ExternRegistry::new());
-        // Find EmitText instructions and verify the text was adjusted.
         let texts: Vec<&str> = module
             .main
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::EmitText(idx) => Some(module.texts[*idx].as_str()),
+                InstKind::Const { value: Literal::String(s), .. } => Some(s.as_str()),
                 _ => None,
             })
             .collect();
@@ -1674,7 +1663,7 @@ mod tests {
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::EmitText(idx) => Some(module.texts[*idx].as_str()),
+                InstKind::Const { value: Literal::String(s), .. } => Some(s.as_str()),
                 _ => None,
             })
             .collect();

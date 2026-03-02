@@ -154,7 +154,6 @@ mod tests {
                 label_count: 0,
             },
             closures: HashMap::new(),
-            texts: vec![],
         }
     }
 

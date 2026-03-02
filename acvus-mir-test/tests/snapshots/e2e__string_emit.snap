@@ -4,6 +4,6 @@ expression: ir
 ---
 === main ===
      0 │   r0 = const "hello"
-     1 │   emit r0
+     1 │   yield r0
 
     ; r0 (v0) : String

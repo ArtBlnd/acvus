@@ -10,7 +10,7 @@ expression: ir
      4 │   r4 = call map(r2, r3)
      5 │   r5 = const ","
      6 │   r6 = call join(r4, r5)
-     7 │   emit r6
+     7 │   yield r6
 
     ; r0 (@users) : List<{age: Int, name: String}>
     ; r1 (v1) : Fn({age: Int, name: String}) -> Bool

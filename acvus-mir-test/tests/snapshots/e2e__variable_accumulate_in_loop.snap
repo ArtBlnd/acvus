@@ -19,7 +19,7 @@ expression: ir
     13 │ L2:
     14 │   r7 = var_load $sum
     15 │   r8 = call to_string(r7)
-    16 │   emit r8
+    16 │   yield r8
 
     ; r0 (v0) : Int
     ; r1 (@items) : List<Int>

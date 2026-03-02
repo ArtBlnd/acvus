@@ -7,7 +7,7 @@ expression: ir
      1 │   r1 = const 3
      2 │   r2 = call contains(r0, r1)
      3 │   r3 = call to_string(r2)
-     4 │   emit r3
+     4 │   yield r3
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Int

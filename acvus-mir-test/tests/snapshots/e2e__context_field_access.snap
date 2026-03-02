@@ -5,7 +5,7 @@ expression: ir
 === main ===
      0 │   r0 = context_load @user
      1 │   r1 = r0.name
-     2 │   emit r1
+     2 │   yield r1
 
     ; r0 (@user) : {age: Int, email: String, name: String}
     ; r1 (name) : String

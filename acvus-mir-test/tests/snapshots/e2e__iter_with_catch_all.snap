@@ -2,9 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "empty"
-
 === main ===
      0 │   r0 = context_load @items
      1 │   r1 = iter_init r0
@@ -13,14 +10,16 @@ expression: ir
      4 │   jump_if r3 then L1 else L3
      5 │ L3:
      6 │   r4 = call to_string(r2)
-     7 │   emit r4
+     7 │   yield r4
      8 │   jump L0
      9 │ L1:
-    10 │   emit_text T0
-    11 │ L2:
+    10 │   r5 = const "empty"
+    11 │   yield r5
+    12 │ L2:
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Unit
     ; r2 (x) : Int
     ; r3 (v3) : Bool
     ; r4 (to_string(...)) : String
+    ; r5 (v5) : String

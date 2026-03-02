@@ -63,8 +63,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         InstKind::IterNext { dst_value, .. } => Some(*dst_value),
 
         // These don't define a new Val
-        InstKind::EmitText(_)
-        | InstKind::EmitValue(_)
+        InstKind::Yield(_)
         | InstKind::VarStore { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
@@ -101,7 +100,6 @@ mod tests {
                 label_count: 0,
             },
             closures: HashMap::new(),
-            texts: vec![],
         }
     }
 
@@ -182,7 +180,7 @@ mod tests {
     #[test]
     fn non_defining_insts_skipped() {
         let module = make_module(vec![
-            inst(InstKind::EmitText(0)),
+            inst(InstKind::Yield(ValueId(99))),
             inst(InstKind::VarStore {
                 name: "x".into(),
                 src: ValueId(0),

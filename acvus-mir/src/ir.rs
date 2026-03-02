@@ -18,9 +18,8 @@ pub struct Inst {
 
 #[derive(Debug, Clone)]
 pub enum InstKind {
-    // Output — index into MirModule::texts
-    EmitText(usize),
-    EmitValue(ValueId),
+    // Output
+    Yield(ValueId),
 
     // Constants / variables
     Const { dst: ValueId, value: Literal },
@@ -270,5 +269,4 @@ pub struct ClosureBody {
 pub struct MirModule {
     pub main: MirBody,
     pub closures: HashMap<Label, ClosureBody>,
-    pub texts: Vec<String>,
 }

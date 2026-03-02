@@ -19,6 +19,7 @@ dependencies = [
  "acvus-ast",
  "acvus-mir",
  "futures",
+ "parking_lot",
  "rust_decimal",
  "serde",
  "tokio",
@@ -73,6 +74,18 @@ dependencies = [
  "acvus-ast",
  "acvus-mir",
  "insta",
+]
+
+[[package]]
+name = "acvus-orchestration"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-interpreter",
+ "acvus-mir",
+ "futures",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

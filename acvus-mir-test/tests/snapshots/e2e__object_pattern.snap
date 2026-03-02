@@ -18,7 +18,7 @@ expression: ir
     12 │ L3:
     13 │   r10 = r0.name
     14 │   r11 = r0.age
-    15 │   emit r10
+    15 │   yield r10
     16 │   jump L0
     17 │ L1:
     18 │ L0:

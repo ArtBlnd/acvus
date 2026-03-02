@@ -2,9 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "wrong length"
-
 === main ===
      0 │   r0 = context_load @items
      1 │ L2:
@@ -27,11 +24,12 @@ expression: ir
     18 │   r10 = r0[0]
     19 │   r11 = r0[1]
     20 │   r12 = call to_string(r10)
-    21 │   emit r12
+    21 │   yield r12
     22 │   jump L0
     23 │ L1:
-    24 │   emit_text T0
-    25 │ L0:
+    24 │   r13 = const "wrong length"
+    25 │   yield r13
+    26 │ L0:
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : Bool
@@ -46,3 +44,4 @@ expression: ir
     ; r10 (a) : Int
     ; r11 (b) : Int
     ; r12 (to_string(...)) : String
+    ; r13 (v13) : String

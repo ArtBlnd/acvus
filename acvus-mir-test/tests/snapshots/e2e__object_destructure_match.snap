@@ -2,9 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "none"
-
 === main ===
      0 │   r0 = context_load @user
      1 │ L2:
@@ -21,13 +18,14 @@ expression: ir
     12 │ L3:
     13 │   r10 = r0.name
     14 │   r11 = r0.age
-    15 │   emit r10
+    15 │   yield r10
     16 │   r12 = call to_string(r11)
-    17 │   emit r12
+    17 │   yield r12
     18 │   jump L0
     19 │ L1:
-    20 │   emit_text T0
-    21 │ L0:
+    20 │   r13 = const "none"
+    21 │   yield r13
+    22 │ L0:
 
     ; r0 (@user) : {age: Int, email: String, name: String}
     ; r1 (v1) : Bool
@@ -42,3 +40,4 @@ expression: ir
     ; r10 (name) : String
     ; r11 (age) : Int
     ; r12 (to_string(...)) : String
+    ; r13 (v13) : String

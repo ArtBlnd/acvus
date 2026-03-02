@@ -17,7 +17,7 @@ expression: ir
     11 │   jump_if r8 then L5 else L7
     12 │ L7:
     13 │   r9 = r7.title
-    14 │   emit r9
+    14 │   yield r9
     15 │   jump L4
     16 │ L5:
     17 │ L6:

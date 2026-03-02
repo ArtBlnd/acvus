@@ -6,7 +6,7 @@ expression: ir
      0 │   r0 = context_load @items
      1 │   r1 = call len(r0)
      2 │   r2 = call to_string(r1)
-     3 │   emit r2
+     3 │   yield r2
 
     ; r0 (@items) : List<Int>
     ; r1 (len(...)) : Int

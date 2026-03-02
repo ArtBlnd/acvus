@@ -2,10 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "equal"
-  T1 = "not equal"
-
 === main ===
      0 │   r0 = context_load @a
      1 │   r1 = context_load @b
@@ -14,13 +10,17 @@ expression: ir
      4 │   r3 = test r2 == true
      5 │   jump_if r3 then L3 else L1
      6 │ L3:
-     7 │   emit_text T0
-     8 │   jump L0
-     9 │ L1:
-    10 │   emit_text T1
-    11 │ L0:
+     7 │   r4 = const "equal"
+     8 │   yield r4
+     9 │   jump L0
+    10 │ L1:
+    11 │   r5 = const "not equal"
+    12 │   yield r5
+    13 │ L0:
 
     ; r0 (@a) : Int
     ; r1 (@b) : Int
     ; r2 (v2) : Bool
     ; r3 (v3) : Bool
+    ; r4 (v4) : String
+    ; r5 (v5) : String

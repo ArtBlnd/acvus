@@ -10,7 +10,7 @@ expression: ir
      4 │   r3 = call filter(r1, r2)
      5 │   r4 = call len(r3)
      6 │   r5 = call to_string(r4)
-     7 │   emit r5
+     7 │   yield r5
 
     ; r0 (v0) : Int
     ; r1 (@items) : List<Int>

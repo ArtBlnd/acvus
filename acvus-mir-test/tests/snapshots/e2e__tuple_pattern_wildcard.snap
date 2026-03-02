@@ -12,7 +12,7 @@ expression: ir
      6 │   jump_if r4 then L3 else L1
      7 │ L3:
      8 │   r5 = r0.0
-     9 │   emit r5
+     9 │   yield r5
     10 │   jump L0
     11 │ L1:
     12 │ L0:

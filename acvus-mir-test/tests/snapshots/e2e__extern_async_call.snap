@@ -6,7 +6,7 @@ expression: ir
      0 │   r0 = const 1
      1 │   r2 = async_call fetch_user(r0)
      2 │   r1 = await r2
-     3 │   emit r1
+     3 │   yield r1
 
     ; r0 (v0) : Int
     ; r1 (fetch_user(...)) : String

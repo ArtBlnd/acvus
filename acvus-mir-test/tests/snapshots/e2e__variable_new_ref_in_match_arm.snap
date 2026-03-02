@@ -16,7 +16,7 @@ expression: ir
     10 │   var_store $selected = r3
     11 │ L0:
     12 │   r4 = var_load $selected
-    13 │   emit r4
+    13 │   yield r4
 
     ; r0 (@role) : String
     ; r1 (v1) : Bool

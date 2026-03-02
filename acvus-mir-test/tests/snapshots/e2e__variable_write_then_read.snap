@@ -7,7 +7,7 @@ expression: ir
      1 │   var_store $x = r0
      2 │   r1 = var_load $x
      3 │   r2 = call to_string(r1)
-     4 │   emit r2
+     4 │   yield r2
 
     ; r0 (v0) : Int
     ; r1 ($x) : Int

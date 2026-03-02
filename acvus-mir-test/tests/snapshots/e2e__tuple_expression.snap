@@ -19,8 +19,8 @@ expression: ir
     13 │   r10 = r2.0
     14 │   r11 = r2.1
     15 │   r12 = call to_string(r10)
-    16 │   emit r12
-    17 │   emit r11
+    16 │   yield r12
+    17 │   yield r11
     18 │   jump L0
     19 │ L1:
     20 │ L0:

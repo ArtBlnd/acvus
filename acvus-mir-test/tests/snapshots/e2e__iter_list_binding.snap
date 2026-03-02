@@ -10,7 +10,7 @@ expression: ir
      4 │   jump_if r3 then L1 else L3
      5 │ L3:
      6 │   r4 = call to_string(r2)
-     7 │   emit r4
+     7 │   yield r4
      8 │   jump L0
      9 │ L1:
     10 │ L2:

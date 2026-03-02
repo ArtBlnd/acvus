@@ -8,7 +8,7 @@ expression: ir
      2 │   r2 = call map(r0, r1)
      3 │   r3 = const ","
      4 │   r4 = call join(r2, r3)
-     5 │   emit r4
+     5 │   yield r4
 
     ; r0 (@users) : List<{age: Int, name: String}>
     ; r1 (v1) : Fn({age: Int, name: String}) -> String

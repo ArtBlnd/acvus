@@ -13,7 +13,7 @@ expression: ir
      7 │ L3:
      8 │   r5 = r0.0
      9 │   r6 = r5.name
-    10 │   emit r6
+    10 │   yield r6
     11 │   jump L0
     12 │ L1:
     13 │ L0:

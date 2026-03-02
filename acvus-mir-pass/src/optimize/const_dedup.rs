@@ -110,15 +110,14 @@ fn remap_vec(vs: &mut Vec<ValueId>, remap: &HashMap<ValueId, ValueId>) {
 fn remap_uses(kind: &mut InstKind, remap: &HashMap<ValueId, ValueId>) {
     match kind {
         // No uses
-        InstKind::EmitText(_)
-        | InstKind::Const { .. }
+        InstKind::Const { .. }
         | InstKind::ContextLoad { .. }
         | InstKind::VarLoad { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop => {}
 
         // Single use
-        InstKind::EmitValue(v) | InstKind::Return(v) => remap_val(v, remap),
+        InstKind::Yield(v) | InstKind::Return(v) => remap_val(v, remap),
 
         InstKind::VarStore { src, .. } => remap_val(src, remap),
 
@@ -286,7 +285,7 @@ mod tests {
     fn dedup_no_change_when_no_duplicates() {
         let body = make_body(vec![
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(0)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
         ]);
 
         let result = dedup_body(body);
@@ -298,14 +297,14 @@ mod tests {
         let body = make_body(vec![
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::String("hello".into()) } },
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::String("hello".into()) } },
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(1)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(1)) },
         ]);
 
         let result = dedup_body(body);
         assert_eq!(result.insts.len(), 2);
         match &result.insts[1].kind {
-            InstKind::EmitValue(v) => assert_eq!(*v, ValueId(0)),
-            other => panic!("expected EmitValue, got {other:?}"),
+            InstKind::Yield(v) => assert_eq!(*v, ValueId(0)),
+            other => panic!("expected Yield, got {other:?}"),
         }
     }
 
@@ -313,14 +312,14 @@ mod tests {
     fn dedup_hoists_canonical_to_top() {
         let body = make_body(vec![
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(0)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(256) } },
             Inst { span: span(), kind: InstKind::Const { dst: ValueId(2), value: Literal::Int(256) } },
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(2)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(2)) },
         ]);
 
         let result = dedup_body(body);
-        // 2 canonical Consts hoisted, then 2 EmitValues
+        // 2 canonical Consts hoisted, then 2 Yields
         assert_eq!(result.insts.len(), 4);
         assert!(matches!(result.insts[0].kind, InstKind::Const { .. }));
         assert!(matches!(result.insts[1].kind, InstKind::Const { .. }));

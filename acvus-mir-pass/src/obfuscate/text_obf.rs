@@ -986,7 +986,7 @@ pub fn emit_encrypted_text(
         });
     }
 
-    ctx.emit(span, InstKind::EmitValue(v_accum.unwrap()));
+    ctx.emit(span, InstKind::Yield(v_accum.unwrap()));
 }
 
 /// Emit hash-key-based text decryption with 3-stage multi-stage pipeline.
@@ -1055,7 +1055,7 @@ pub fn emit_hashed_text(
         offset += chunk_size;
     }
 
-    ctx.emit(span, InstKind::EmitValue(v_accum.unwrap()));
+    ctx.emit(span, InstKind::Yield(v_accum.unwrap()));
 }
 
 // ── Tests ────────────────────────────────────────────────────────

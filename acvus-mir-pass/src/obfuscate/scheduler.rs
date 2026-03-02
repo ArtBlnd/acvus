@@ -88,7 +88,7 @@ fn schedule_block(block: Vec<Inst>, rng: &mut StdRng) -> Vec<Inst> {
             }
         }
 
-        // Side-effect ordering: EmitText, EmitValue, VarStore, Call must preserve order.
+        // Side-effect ordering: Yield, VarStore, Call must preserve order.
         if has_side_effect(&inst.kind) {
             if let Some(prev) = last_side_effect {
                 deps[i].insert(prev);
@@ -157,7 +157,7 @@ fn schedule_block(block: Vec<Inst>, rng: &mut StdRng) -> Vec<Inst> {
 /// Extract ValueIds read by an instruction.
 fn used_vals(kind: &InstKind) -> Vec<ValueId> {
     match kind {
-        InstKind::EmitValue(v) => vec![*v],
+        InstKind::Yield(v) => vec![*v],
         InstKind::BinOp { left, right, .. } => vec![*left, *right],
         InstKind::UnaryOp { operand, .. } => vec![*operand],
         InstKind::FieldGet { object, .. } => vec![*object],
@@ -196,7 +196,6 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         InstKind::Const { .. }
         | InstKind::ContextLoad { .. }
         | InstKind::VarLoad { .. }
-        | InstKind::EmitText(_)
         | InstKind::BlockLabel { .. }
         | InstKind::Nop => vec![],
     }
@@ -238,8 +237,7 @@ fn defined_val(kind: &InstKind) -> Option<ValueId> {
 fn has_side_effect(kind: &InstKind) -> bool {
     matches!(
         kind,
-        InstKind::EmitText(_)
-            | InstKind::EmitValue(_)
+        InstKind::Yield(_)
             | InstKind::VarStore { .. }
             | InstKind::VarLoad { .. }
             | InstKind::Call { .. }
@@ -282,14 +280,14 @@ mod tests {
     fn preserves_side_effect_order() {
         let mut rng = StdRng::seed_from_u64(99);
         let insts = vec![
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(0)) },
-            Inst { span: span(), kind: InstKind::EmitValue(ValueId(1)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
+            Inst { span: span(), kind: InstKind::Yield(ValueId(1)) },
         ];
 
         for _ in 0..20 {
             let result = reorder(insts.clone(), &mut rng);
-            // First EmitValue(0) must come before EmitValue(1).
-            assert!(matches!(result[0].kind, InstKind::EmitValue(ValueId(0))));
+            // First Yield(0) must come before Yield(1).
+            assert!(matches!(result[0].kind, InstKind::Yield(ValueId(0))));
         }
     }
 }

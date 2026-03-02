@@ -7,7 +7,7 @@ expression: ir
      1 │   r1 = r0.user
      2 │   r2 = r1.address
      3 │   r3 = r2.city
-     4 │   emit r3
+     4 │   yield r3
 
     ; r0 (@data) : {user: {address: {city: String}}}
     ; r1 (user) : {address: {city: String}}

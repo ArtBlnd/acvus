@@ -9,7 +9,7 @@ expression: ir
      3 │   var_store $result = r2
      4 │   r3 = var_load $result
      5 │   r4 = call to_string(r3)
-     6 │   emit r4
+     6 │   yield r4
 
     ; r0 (@a) : Int
     ; r1 (@b) : Int

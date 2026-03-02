@@ -1,0 +1,14 @@
+[package]
+name = "acvus-orchestration"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+acvus-ast = { path = "../acvus-ast" }
+acvus-mir = { path = "../acvus-mir" }
+acvus-interpreter = { path = "../acvus-interpreter" }
+serde_json = "1"
+futures = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

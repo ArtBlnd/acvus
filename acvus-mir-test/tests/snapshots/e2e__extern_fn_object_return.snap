@@ -7,7 +7,7 @@ expression: ir
      1 │   r2 = async_call get_user(r0)
      2 │   r1 = await r2
      3 │   r3 = r1.name
-     4 │   emit r3
+     4 │   yield r3
 
     ; r0 (v0) : Int
     ; r1 (get_user(...)) : {age: Int, name: String}

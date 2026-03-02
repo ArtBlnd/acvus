@@ -2,11 +2,6 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "low"
-  T1 = "high"
-  T2 = "guest"
-
 === main ===
      0 │   r0 = context_load @role
      1 │ L2:
@@ -18,17 +13,23 @@ expression: ir
      7 │   r3 = test r2 in 1..10
      8 │   jump_if r3 then L7 else L5
      9 │ L7:
-    10 │   emit_text T0
-    11 │   jump L4
-    12 │ L5:
-    13 │   emit_text T1
-    14 │ L4:
-    15 │   jump L0
-    16 │ L1:
-    17 │   emit_text T2
-    18 │ L0:
+    10 │   r4 = const "low"
+    11 │   yield r4
+    12 │   jump L4
+    13 │ L5:
+    14 │   r5 = const "high"
+    15 │   yield r5
+    16 │ L4:
+    17 │   jump L0
+    18 │ L1:
+    19 │   r6 = const "guest"
+    20 │   yield r6
+    21 │ L0:
 
     ; r0 (@role) : String
     ; r1 (v1) : Bool
     ; r2 (@level) : Int
     ; r3 (v3) : Bool
+    ; r4 (v4) : String
+    ; r5 (v5) : String
+    ; r6 (v6) : String

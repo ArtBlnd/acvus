@@ -19,7 +19,7 @@ pub async fn run(
         acvus_mir::compile(&template, context_types, &mir_registry).expect("compile failed");
 
     let interp = Interpreter::new(module, context_values, extern_fns);
-    let (_interp, output) = interp.execute().await;
+    let output = interp.execute_to_string().await;
     output
 }
 
@@ -52,7 +52,7 @@ pub async fn run_obfuscated(
     .transform(module, ());
 
     let interp = Interpreter::new(module, context_values, extern_fns);
-    let (_interp, output) = interp.execute().await;
+    let output = interp.execute_to_string().await;
     output
 }
 

@@ -5,7 +5,7 @@ expression: ir
 === main ===
      0 │   r0 = const "outer"
      1 │   r1 = context_load @name
-     2 │   emit r1
+     2 │   yield r1
 
     ; r0 (v0) : String
     ; r1 (@name) : String

@@ -2,8 +2,8 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "hello world"
-
 === main ===
-     0 │   emit_text T0
+     0 │   r0 = const "hello world"
+     1 │   yield r0
+
+    ; r0 (v0) : String

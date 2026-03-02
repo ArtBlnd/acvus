@@ -164,7 +164,6 @@ where
                 MirModule {
                     main: MirBody::new(),
                     closures: HashMap::new(),
-                    texts: vec![],
                 },
             );
             *module = self.0 .0.transform(old, deps);
@@ -290,7 +289,6 @@ mod tests {
         MirModule {
             main: MirBody::new(),
             closures: HashMap::new(),
-            texts: vec![],
         }
     }
 

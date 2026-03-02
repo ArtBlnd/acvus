@@ -69,14 +69,15 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
         None
     };
 
+    let texts = collect_yield_texts(&module.main.insts);
     let text_map = if config.text_encryption {
-        Some(text_obf::encrypt_texts(&module.texts, &mut rng))
+        Some(text_obf::encrypt_texts(&texts, &mut rng))
     } else {
         None
     };
 
     module.main = rewrite_body(
-        module.main, config, &text_map, &module.texts,
+        module.main, config, &text_map,
         &decrypt_table, &factory_tables, &opaque_table, &mut rng,
     );
 
@@ -96,14 +97,10 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
     for label in closure_labels {
         let mut closure = module.closures.remove(&label).unwrap();
         closure.body = rewrite_body(
-            closure.body, &closure_config, &None, &module.texts,
+            closure.body, &closure_config, &None,
             &None, &None, &opaque_table, &mut rng,
         );
         module.closures.insert(label, closure);
-    }
-
-    if config.text_encryption {
-        module.texts.clear();
     }
 
     module
@@ -113,7 +110,6 @@ fn rewrite_body(
     body: MirBody,
     config: &ObfConfig,
     text_map: &Option<Vec<text_obf::EncryptedText>>,
-    texts: &[String],
     decrypt_table: &Option<text_obf::MultiStageDecryptTable>,
     factory_tables: &Option<(text_obf::FactoryTable, text_obf::FactoryTable, text_obf::FactoryTable)>,
     opaque_table: &Option<(opaque::OpaqueTable, text_obf::FactoryTable)>,
@@ -167,7 +163,7 @@ fn rewrite_body(
 
     // Phase 1: Instruction-level transforms (text, hash predicate).
     phase_instruction_transform(
-        &mut ctx, &body.insts, config, text_map, texts,
+        &mut ctx, &body.insts, config, text_map,
         meta_tables, v_four, use_entangle, rng,
     );
 
@@ -207,12 +203,34 @@ fn rewrite_body(
     ctx.into_body()
 }
 
+/// Collect text strings from Const(String)+Yield pairs (text nodes).
+/// Returns a Vec of strings in the order they appear, matching the indices
+/// used by the text encryption map.
+fn collect_yield_texts(insts: &[Inst]) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut i = 0;
+    while i < insts.len() {
+        if let InstKind::Const { dst, value: Literal::String(s) } = &insts[i].kind {
+            if i + 1 < insts.len() {
+                if let InstKind::Yield(v) = &insts[i + 1].kind {
+                    if v == dst {
+                        texts.push(s.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    texts
+}
+
 fn phase_instruction_transform(
     ctx: &mut PassState,
     original: &[Inst],
     config: &ObfConfig,
     text_map: &Option<Vec<text_obf::EncryptedText>>,
-    texts: &[String],
     meta_tables: Option<(ValueId, ValueId, ValueId)>,
     v_four: Option<ValueId>,
     use_entangle: bool,
@@ -221,43 +239,65 @@ fn phase_instruction_transform(
     // Hash predicate state: tracks compile_key from most recent hash_test_literal.
     let mut active_hash_key: Option<i64> = None;
     let mut blocks_since_hash: u32 = 0;
+    // Index into the collected yield-texts (for text_map lookup).
+    let mut text_idx: usize = 0;
 
-    for inst in original {
+    let mut i = 0;
+    while i < original.len() {
+        let inst = &original[i];
+
+        // Detect Const(String) + Yield(dst) pair = text node.
+        if let InstKind::Const { dst, value: Literal::String(text) } = &inst.kind {
+            if i + 1 < original.len() {
+                if let InstKind::Yield(v) = &original[i + 1].kind {
+                    if v == dst {
+                        // This is a text node. Try text encryption.
+                        let cur_text_idx = text_idx;
+                        text_idx += 1;
+
+                        if let (Some((ma, mb, mc)), Some(_vf)) = (meta_tables, v_four) {
+                            let meta_a = ctx.alloc_val(ctx.val_types[&ma].clone());
+                            ctx.emit(inst.span, InstKind::VarLoad { dst: meta_a, name: "__decrypt_meta_a".into() });
+                            let meta_b = ctx.alloc_val(ctx.val_types[&mb].clone());
+                            ctx.emit(inst.span, InstKind::VarLoad { dst: meta_b, name: "__decrypt_meta_b".into() });
+                            let meta_c = ctx.alloc_val(ctx.val_types[&mc].clone());
+                            ctx.emit(inst.span, InstKind::VarLoad { dst: meta_c, name: "__decrypt_meta_c".into() });
+
+                            let v_four_local = ctx.alloc_val(Ty::Int);
+                            ctx.emit(inst.span, InstKind::Const { dst: v_four_local, value: Literal::Int(4) });
+
+                            if let Some(key) = active_hash_key.take() {
+                                text_obf::emit_hashed_text(
+                                    ctx, rng, inst.span, text, key,
+                                    meta_a, meta_b, meta_c, v_four_local, use_entangle,
+                                );
+                                i += 2;
+                                continue;
+                            }
+                            if let Some(enc_texts) = text_map {
+                                text_obf::emit_encrypted_text(
+                                    ctx, inst.span, &enc_texts[cur_text_idx],
+                                    meta_a, meta_b, meta_c, v_four_local, use_entangle,
+                                );
+                                i += 2;
+                                continue;
+                            }
+                        }
+                        // No encryption — emit the Const+Yield pair as-is.
+                        ctx.emit(inst.span, inst.kind.clone());
+                        ctx.emit(original[i + 1].span, original[i + 1].kind.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+
         match &inst.kind {
             InstKind::BlockLabel { .. } => {
                 blocks_since_hash += 1;
                 if blocks_since_hash >= 2 {
                     active_hash_key = None;
-                }
-            }
-            InstKind::EmitText(idx) => {
-                if let (Some((ma, mb, mc)), Some(_vf)) = (meta_tables, v_four) {
-                    // Load meta tables from variables (safe across CFF blocks).
-                    let meta_a = ctx.alloc_val(ctx.val_types[&ma].clone());
-                    ctx.emit(inst.span, InstKind::VarLoad { dst: meta_a, name: "__decrypt_meta_a".into() });
-                    let meta_b = ctx.alloc_val(ctx.val_types[&mb].clone());
-                    ctx.emit(inst.span, InstKind::VarLoad { dst: meta_b, name: "__decrypt_meta_b".into() });
-                    let meta_c = ctx.alloc_val(ctx.val_types[&mc].clone());
-                    ctx.emit(inst.span, InstKind::VarLoad { dst: meta_c, name: "__decrypt_meta_c".into() });
-
-                    // Need fresh v_four per usage site (CFF safety).
-                    let v_four_local = ctx.alloc_val(Ty::Int);
-                    ctx.emit(inst.span, InstKind::Const { dst: v_four_local, value: Literal::Int(4) });
-
-                    if let Some(key) = active_hash_key.take() {
-                        text_obf::emit_hashed_text(
-                            ctx, rng, inst.span, &texts[*idx], key,
-                            meta_a, meta_b, meta_c, v_four_local, use_entangle,
-                        );
-                        continue;
-                    }
-                    if let Some(enc_texts) = text_map {
-                        text_obf::emit_encrypted_text(
-                            ctx, inst.span, &enc_texts[*idx],
-                            meta_a, meta_b, meta_c, v_four_local, use_entangle,
-                        );
-                        continue;
-                    }
                 }
             }
             InstKind::TestLiteral { dst, src, value }
@@ -268,11 +308,13 @@ fn phase_instruction_transform(
                 );
                 active_hash_key = Some(key);
                 blocks_since_hash = 0;
+                i += 1;
                 continue;
             }
             _ => {}
         }
         ctx.emit(inst.span, inst.kind.clone());
+        i += 1;
     }
 }
 
@@ -337,7 +379,7 @@ mod tests {
         }
     }
 
-    fn make_module(insts: Vec<Inst>, texts: Vec<String>) -> MirModule {
+    fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
             main: MirBody {
                 insts,
@@ -347,7 +389,6 @@ mod tests {
                 label_count: 0,
             },
             closures: HashMap::new(),
-            texts,
         }
     }
 
@@ -358,7 +399,6 @@ mod tests {
                 span: Span { start: 0, end: 0 },
                 kind: InstKind::Nop,
             }],
-            vec![],
         );
         let result = obfuscate(module, &default_config());
         assert!(result.main.insts.iter().any(|i| matches!(i.kind, InstKind::Nop)));

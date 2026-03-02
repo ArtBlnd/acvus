@@ -2,14 +2,14 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== texts ===
-  T0 = "Hello, "
-  T1 = "!"
-
 === main ===
-     0 │   emit_text T0
-     1 │   r0 = context_load @name
-     2 │   emit r0
-     3 │   emit_text T1
+     0 │   r0 = const "Hello, "
+     1 │   yield r0
+     2 │   r1 = context_load @name
+     3 │   yield r1
+     4 │   r2 = const "!"
+     5 │   yield r2
 
-    ; r0 (@name) : String
+    ; r0 (v0) : String
+    ; r1 (@name) : String
+    ; r2 (v2) : String
