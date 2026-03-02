@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// A chat message with role and content.
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -32,7 +34,7 @@ pub enum ModelResponse {
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
-    pub params: Vec<(String, String)>,
+    pub params: HashMap<String, String>,
 }
 
 /// Node output stored in storage.

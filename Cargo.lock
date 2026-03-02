@@ -84,6 +84,7 @@ dependencies = [
  "acvus-interpreter",
  "acvus-mir",
  "futures",
+ "serde",
  "serde_json",
  "tokio",
 ]

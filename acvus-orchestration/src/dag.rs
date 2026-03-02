@@ -14,15 +14,16 @@ pub struct Dag {
 
 /// Build a DAG from compiled nodes.
 ///
-/// Dependencies are inferred from input mappings: if node A's input references
-/// a storage key that matches node B's name, then A depends on B.
+/// Dependencies are inferred from context keys: if node A references a context
+/// key that matches node B's name, then A depends on B.
+/// External keys (not produced by any node) are allowed.
 ///
 /// Uses Kahn's algorithm for topological sort + cycle detection.
 pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
     let name_to_idx: HashMap<String, usize> = nodes
         .iter()
         .enumerate()
-        .map(|(i, n)| (n.config.name.clone(), i))
+        .map(|(i, n)| (n.name.clone(), i))
         .collect();
 
     let n = nodes.len();
@@ -30,15 +31,13 @@ pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
     let mut rdeps: Vec<HashSet<usize>> = vec![HashSet::new(); n];
 
     for (i, node) in nodes.iter().enumerate() {
-        for (_, storage_ref) in &node.config.inputs {
-            let key = storage_ref.strip_prefix('@').unwrap_or(storage_ref);
+        for key in &node.all_context_keys {
             if let Some(&j) = name_to_idx.get(key) {
                 if j != i {
                     deps[i].insert(j);
                     rdeps[j].insert(i);
                 }
             }
-            // External keys (not produced by any node) are fine — caller seeds them
         }
     }
 
@@ -66,7 +65,7 @@ pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
     if topo_order.len() != n {
         let in_cycle: Vec<String> = (0..n)
             .filter(|i| in_degree[*i] > 0)
-            .map(|i| nodes[i].config.name.clone())
+            .map(|i| nodes[i].name.clone())
             .collect();
         return Err(vec![OrchError::new(OrchErrorKind::CycleDetected { nodes: in_cycle })]);
     }
@@ -77,19 +76,15 @@ pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ConfigBlock;
-    use std::collections::HashSet;
 
-    fn make_node(name: &str, inputs: Vec<(&str, &str)>) -> CompiledNode {
+    fn make_node(name: &str, context_keys: Vec<&str>) -> CompiledNode {
         CompiledNode {
-            config: ConfigBlock {
-                name: name.into(),
-                model: "m".into(),
-                inputs: inputs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
-                tools: vec![],
-            },
+            name: name.into(),
+            provider: "test".into(),
+            model: "m".into(),
+            tools: vec![],
             blocks: vec![],
-            all_context_keys: HashSet::new(),
+            all_context_keys: context_keys.into_iter().map(Into::into).collect(),
         }
     }
 
@@ -98,12 +93,11 @@ mod tests {
         // A -> B -> C
         let nodes = vec![
             make_node("A", vec![]),
-            make_node("B", vec![("a", "@A")]),
-            make_node("C", vec![("b", "@B")]),
+            make_node("B", vec!["A"]),
+            make_node("C", vec!["B"]),
         ];
         let dag = build_dag(&nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 3);
-        // A must come before B, B before C
         let pos_a = dag.topo_order.iter().position(|&i| i == 0).unwrap();
         let pos_b = dag.topo_order.iter().position(|&i| i == 1).unwrap();
         let pos_c = dag.topo_order.iter().position(|&i| i == 2).unwrap();
@@ -113,16 +107,11 @@ mod tests {
 
     #[test]
     fn diamond_dag() {
-        //   A
-        //  / \
-        // B   C
-        //  \ /
-        //   D
         let nodes = vec![
             make_node("A", vec![]),
-            make_node("B", vec![("a", "@A")]),
-            make_node("C", vec![("a", "@A")]),
-            make_node("D", vec![("b", "@B"), ("c", "@C")]),
+            make_node("B", vec!["A"]),
+            make_node("C", vec!["A"]),
+            make_node("D", vec!["B", "C"]),
         ];
         let dag = build_dag(&nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 4);
@@ -138,10 +127,9 @@ mod tests {
 
     #[test]
     fn cycle_detected() {
-        // A -> B -> A
         let nodes = vec![
-            make_node("A", vec![("b", "@B")]),
-            make_node("B", vec![("a", "@A")]),
+            make_node("A", vec!["B"]),
+            make_node("B", vec!["A"]),
         ];
         let err = build_dag(&nodes).unwrap_err();
         assert!(matches!(err[0].kind, OrchErrorKind::CycleDetected { .. }));
@@ -159,13 +147,12 @@ mod tests {
 
     #[test]
     fn external_key_ignored() {
-        // B depends on "@ext" which is not a node — should not cause error
         let nodes = vec![
             make_node("A", vec![]),
-            make_node("B", vec![("ext", "@ext")]),
+            make_node("B", vec!["ext"]),
         ];
         let dag = build_dag(&nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 2);
-        assert!(dag.deps[1].is_empty()); // B has no deps on other nodes
+        assert!(dag.deps[1].is_empty());
     }
 }

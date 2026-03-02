@@ -1,46 +1,29 @@
-/// Parsed DSL file representation.
-#[derive(Debug, Clone)]
-pub struct DslFile {
-    pub config: ConfigBlock,
-    pub blocks: Vec<MessageBlock>,
-}
+use std::collections::HashMap;
 
-/// Configuration section from `#![configs]`.
-#[derive(Debug, Clone)]
-pub struct ConfigBlock {
+use serde::Deserialize;
+
+/// Node specification parsed from TOML.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodeSpec {
     pub name: String,
+    pub provider: String,
     pub model: String,
-    pub inputs: Vec<(String, String)>,
+    #[serde(default)]
     pub tools: Vec<ToolDecl>,
+    pub messages: Vec<MessageSpec>,
 }
 
-/// A single message block.
-#[derive(Debug, Clone)]
-pub struct MessageBlock {
-    pub format: String,
-    pub attrs: BlockAttrs,
-    pub template_source: String,
+/// A single message entry referencing an external template file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MessageSpec {
+    pub role: String,
+    pub template: String,
 }
 
-/// Attributes of a message block.
-#[derive(Debug, Clone)]
-pub struct BlockAttrs {
-    pub role: RoleSpec,
-    pub bind: Option<String>,
-}
-
-/// Role specification: literal string or context reference.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RoleSpec {
-    /// Literal role name, e.g. `"system"`.
-    Literal(String),
-    /// Context reference, e.g. `"@type"` → Ref("type").
-    Ref(String),
-}
-
-/// Tool declaration in config.
-#[derive(Debug, Clone)]
+/// Tool declaration.
+#[derive(Debug, Clone, Deserialize)]
 pub struct ToolDecl {
     pub name: String,
-    pub params: Vec<(String, String)>,
+    #[serde(default)]
+    pub params: HashMap<String, String>,
 }

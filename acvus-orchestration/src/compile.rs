@@ -1,16 +1,20 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
 
-use crate::dsl::{BlockAttrs, ConfigBlock, DslFile};
+use crate::dsl::{NodeSpec, ToolDecl};
 use crate::error::{OrchError, OrchErrorKind};
 
-/// A compiled orchestration node (one DSL file).
+/// A compiled orchestration node.
 #[derive(Debug, Clone)]
 pub struct CompiledNode {
-    pub config: ConfigBlock,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub tools: Vec<ToolDecl>,
     pub blocks: Vec<CompiledBlock>,
     pub all_context_keys: HashSet<String>,
 }
@@ -18,18 +22,18 @@ pub struct CompiledNode {
 /// A compiled message block within a node.
 #[derive(Debug, Clone)]
 pub struct CompiledBlock {
-    pub format: String,
-    pub attrs: BlockAttrs,
+    pub role: String,
     pub module: MirModule,
     pub context_keys: HashSet<String>,
 }
 
-/// Compile a parsed DSL file into a `CompiledNode`.
+/// Compile a node spec into a `CompiledNode`.
 ///
-/// Each message block's template is parsed and compiled via acvus-ast/mir.
+/// Each message's template file is loaded from `base_dir`, parsed, and compiled.
 /// Context keys are extracted from MIR `ContextLoad` instructions.
-pub fn compile_dsl(
-    dsl: &DslFile,
+pub fn compile_node(
+    spec: &NodeSpec,
+    base_dir: &Path,
     context_types: &HashMap<String, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledNode, Vec<OrchError>> {
@@ -37,8 +41,20 @@ pub fn compile_dsl(
     let mut all_context_keys = HashSet::new();
     let mut errors = Vec::new();
 
-    for (i, block) in dsl.blocks.iter().enumerate() {
-        let template = match acvus_ast::parse(&block.template_source) {
+    for (i, msg) in spec.messages.iter().enumerate() {
+        let path = base_dir.join(&msg.template);
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                errors.push(OrchError::new(OrchErrorKind::TemplateLoad {
+                    path: path.display().to_string(),
+                    error: e.to_string(),
+                }));
+                continue;
+            }
+        };
+
+        let template = match acvus_ast::parse(&source) {
             Ok(t) => t,
             Err(e) => {
                 errors.push(OrchError::new(OrchErrorKind::TemplateParse {
@@ -65,8 +81,7 @@ pub fn compile_dsl(
         all_context_keys.extend(context_keys.iter().cloned());
 
         compiled_blocks.push(CompiledBlock {
-            format: block.format.clone(),
-            attrs: block.attrs.clone(),
+            role: msg.role.clone(),
             module,
             context_keys,
         });
@@ -77,7 +92,10 @@ pub fn compile_dsl(
     }
 
     Ok(CompiledNode {
-        config: dsl.config.clone(),
+        name: spec.name.clone(),
+        provider: spec.provider.clone(),
+        model: spec.model.clone(),
+        tools: spec.tools.clone(),
         blocks: compiled_blocks,
         all_context_keys,
     })
@@ -102,51 +120,4 @@ fn extract_context_keys(module: &MirModule) -> HashSet<String> {
     }
 
     keys
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compile_simple_template() {
-        let dsl = crate::parse::parse_dsl(
-            r#"
-#![configs]
-name = "out"
-model = "m"
-
-#![fmt(type = "user")]
-Hello world!
-"#,
-        )
-        .unwrap();
-
-        let registry = ExternRegistry::new();
-        let node = compile_dsl(&dsl, &HashMap::new(), &registry).unwrap();
-        assert_eq!(node.blocks.len(), 1);
-        assert!(node.all_context_keys.is_empty());
-    }
-
-    #[test]
-    fn extract_context_keys_from_template() {
-        let dsl = crate::parse::parse_dsl(
-            r#"
-#![configs]
-name = "out"
-text = "@text"
-model = "m"
-
-#![fmt(type = "user")]
-{{ @text }}
-"#,
-        )
-        .unwrap();
-
-        let mut ctx = HashMap::new();
-        ctx.insert("text".into(), Ty::String);
-        let registry = ExternRegistry::new();
-        let node = compile_dsl(&dsl, &ctx, &registry).unwrap();
-        assert!(node.all_context_keys.contains("text"));
-    }
 }

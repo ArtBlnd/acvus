@@ -5,7 +5,6 @@ use acvus_mir::extern_module::ExternRegistry;
 
 use crate::compile::CompiledNode;
 use crate::dag::Dag;
-use crate::dsl::RoleSpec;
 use crate::error::{OrchError, OrchErrorKind};
 use crate::message::{Message, ModelResponse, Output, ToolCall, ToolResult, ToolSpec};
 use crate::provider::Fetch;
@@ -59,17 +58,15 @@ where
     }
 
     async fn execute_node(&mut self, idx: usize) -> Result<(), OrchError> {
-        // Clone what we need from the node upfront to avoid borrow conflicts.
         let node = &self.nodes[idx];
-        let model = node.config.model.clone();
-        let node_name = node.config.name.clone();
+        let model = node.model.clone();
+        let node_name = node.name.clone();
         let blocks: Vec<_> = node
             .blocks
             .iter()
-            .map(|b| (b.module.clone(), b.attrs.clone(), b.context_keys.clone()))
+            .map(|b| (b.module.clone(), b.role.clone(), b.context_keys.clone()))
             .collect();
         let tools: Vec<ToolSpec> = node
-            .config
             .tools
             .iter()
             .map(|t| ToolSpec {
@@ -79,12 +76,12 @@ where
             })
             .collect();
 
-        // Build context from storage based on input mappings
+        // Build context from storage based on context keys
         let context = self.build_context(idx);
 
         // Render each block into a message
         let mut messages = Vec::new();
-        for (module, attrs, _context_keys) in &blocks {
+        for (module, role, _context_keys) in &blocks {
             let context_values: HashMap<String, Value> = context
                 .iter()
                 .map(|(k, v)| (k.clone(), output_to_value(v)))
@@ -94,18 +91,7 @@ where
                 Interpreter::new(module.clone(), context_values, ExternFnRegistry::new());
             let output = interp.execute_to_string().await;
 
-            let role = match &attrs.role {
-                RoleSpec::Literal(s) => s.clone(),
-                RoleSpec::Ref(key) => context
-                    .get(key)
-                    .and_then(|v| match v {
-                        Output::Text(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| "user".to_string()),
-            };
-
-            messages.push(Message { role, content: output });
+            messages.push(Message { role: role.clone(), content: output });
         }
 
         // Format request, call fetch, parse response
@@ -163,14 +149,11 @@ where
     fn build_context(&self, idx: usize) -> HashMap<String, Output> {
         let node = &self.nodes[idx];
         let mut context = HashMap::new();
-
-        for (key, storage_ref) in &node.config.inputs {
-            let storage_key = storage_ref.strip_prefix('@').unwrap_or(storage_ref);
-            if let Some(value) = self.storage.get(storage_key) {
+        for key in &node.all_context_keys {
+            if let Some(value) = self.storage.get(key) {
                 context.insert(key.clone(), value);
             }
         }
-
         context
     }
 
@@ -184,8 +167,6 @@ where
     }
 
     fn handle_tool_calls(&self, calls: &[ToolCall]) -> Result<Vec<ToolResult>, OrchError> {
-        // For now, tool calls are placeholders.
-        // In full implementation: tool name → find handler template → execute → return result.
         let mut results = Vec::new();
         for call in calls {
             results.push(ToolResult {
@@ -198,7 +179,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Output → Value conversion (for interpreter context injection)
+// Output -> Value conversion
 // ---------------------------------------------------------------------------
 
 fn output_to_value(output: &Output) -> Value {
@@ -399,7 +380,7 @@ mod tests {
         let tools = vec![ToolSpec {
             name: "search".into(),
             description: "Search the web".into(),
-            params: vec![("query".into(), "string".into())],
+            params: HashMap::from([("query".into(), "string".into())]),
         }];
         let body = format_request(&messages, &tools, "gpt-4");
         let tools_arr = body["tools"].as_array().unwrap();

@@ -9,10 +9,11 @@ pub struct OrchError {
 
 #[derive(Debug)]
 pub enum OrchErrorKind {
-    // Parse
-    UnexpectedEof,
+    // Config
     InvalidConfig(String),
-    InvalidBlockAttr(String),
+
+    // Template loading
+    TemplateLoad { path: String, error: String },
 
     // Compile
     TemplateParse { block: usize, error: String },
@@ -37,9 +38,10 @@ impl OrchError {
 impl fmt::Display for OrchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            OrchErrorKind::UnexpectedEof => write!(f, "unexpected end of file"),
             OrchErrorKind::InvalidConfig(msg) => write!(f, "invalid config: {msg}"),
-            OrchErrorKind::InvalidBlockAttr(msg) => write!(f, "invalid block attribute: {msg}"),
+            OrchErrorKind::TemplateLoad { path, error } => {
+                write!(f, "failed to load template '{path}': {error}")
+            }
             OrchErrorKind::TemplateParse { block, error } => {
                 write!(f, "template parse error in block {block}: {error}")
             }
