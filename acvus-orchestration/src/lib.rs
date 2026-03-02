@@ -8,7 +8,7 @@ mod dag;
 mod executor;
 
 pub use error::{OrchError, OrchErrorKind};
-pub use dsl::{NodeSpec, MessageSpec, ToolDecl};
+pub use dsl::{NodeSpec, MessageSpec, Strategy, StrategyMode, ToolDecl};
 pub use compile::{compile_node, compile_nodes, CompiledNode, CompiledBlock, CompiledMessage};
 pub use storage::{Storage, HashMapStorage};
 pub use message::{Message, ToolCall, ToolResult, ModelResponse, ToolSpec, Output};

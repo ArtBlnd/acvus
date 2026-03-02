@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use acvus_mir::ty::Ty;
-use acvus_orchestration::Output;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -24,17 +23,8 @@ fn default_fuel_limit() -> u64 {
 pub struct ProviderConfig {
     pub api: String,
     pub endpoint: String,
-    pub api_key_env: String,
-}
-
-/// Check if a TOML string value is a type declaration (e.g. "string", "int").
-pub fn is_type_decl(value: &toml::Value) -> bool {
-    match value {
-        toml::Value::String(s) => {
-            matches!(s.as_str(), "string" | "int" | "float" | "bool")
-        }
-        _ => false,
-    }
+    pub api_key_env: Option<String>,
+    pub api_key: Option<String>,
 }
 
 /// Resolve a `Ty` from a TOML value.
@@ -62,31 +52,6 @@ pub fn toml_to_ty(value: &toml::Value) -> Ty {
             Ty::Object(fields)
         }
         toml::Value::Datetime(_) => Ty::String,
-    }
-}
-
-/// Convert a TOML value to an `Output`.
-pub fn toml_to_output(value: &toml::Value) -> Output {
-    match value {
-        toml::Value::String(s) => Output::Text(s.clone()),
-        _ => Output::Json(toml_to_json(value)),
-    }
-}
-
-fn toml_to_json(value: &toml::Value) -> serde_json::Value {
-    match value {
-        toml::Value::String(s) => serde_json::Value::String(s.clone()),
-        toml::Value::Integer(i) => serde_json::json!(*i),
-        toml::Value::Float(f) => serde_json::json!(*f),
-        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
-        toml::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(toml_to_json).collect())
-        }
-        toml::Value::Table(table) => {
-            let map = table.iter().map(|(k, v)| (k.clone(), toml_to_json(v))).collect();
-            serde_json::Value::Object(map)
-        }
-        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
     }
 }
 
@@ -127,26 +92,6 @@ mod tests {
             ("name".into(), Ty::String),
         ]));
         assert_eq!(ty, expected);
-    }
-
-    #[test]
-    fn toml_to_output_string() {
-        let out = toml_to_output(&toml::Value::String("hello".into()));
-        assert!(matches!(out, Output::Text(ref s) if s == "hello"));
-    }
-
-    #[test]
-    fn toml_to_output_int() {
-        let out = toml_to_output(&toml::Value::Integer(42));
-        assert!(matches!(out, Output::Json(ref v) if v == &serde_json::json!(42)));
-    }
-
-    #[test]
-    fn toml_to_output_table() {
-        let mut table = toml::Table::new();
-        table.insert("x".into(), toml::Value::Integer(1));
-        let out = toml_to_output(&toml::Value::Table(table));
-        assert!(matches!(out, Output::Json(ref v) if v == &serde_json::json!({"x": 1})));
     }
 
     #[test]

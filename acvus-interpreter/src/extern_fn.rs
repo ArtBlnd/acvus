@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
@@ -7,14 +8,16 @@ use acvus_mir::ty::Ty;
 
 use crate::value::Value;
 
+#[derive(Clone)]
 pub struct ExternFnSig {
     pub params: Vec<Ty>,
     pub ret: Ty,
     pub effectful: bool,
 }
 
+#[derive(Clone)]
 pub struct ExternFnBody(
-    Box<dyn Fn(Vec<Value>) -> BoxFuture<'static, Value> + Send + Sync>,
+    Arc<dyn Fn(Vec<Value>) -> BoxFuture<'static, Value> + Send + Sync>,
 );
 
 impl ExternFnBody {
@@ -23,7 +26,7 @@ impl ExternFnBody {
         F: Fn(Vec<Value>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Value> + Send + 'static,
     {
-        Self(Box::new(move |args| Box::pin(f(args))))
+        Self(Arc::new(move |args| Box::pin(f(args))))
     }
 
     pub async fn call(&self, args: Vec<Value>) -> Value {
@@ -37,6 +40,7 @@ pub trait ExternFn: Send + Sync + 'static {
     fn into_body(self) -> ExternFnBody;
 }
 
+#[derive(Clone)]
 pub struct ExternFnRegistry {
     fns: HashMap<String, (ExternFnSig, ExternFnBody)>,
 }

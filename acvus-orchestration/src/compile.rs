@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use acvus_mir::extern_module::ExternRegistry;
@@ -7,7 +7,7 @@ use acvus_mir::ty::Ty;
 use acvus_mir_pass::AnalysisPass;
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 
-use crate::dsl::{MessageSpec, NodeSpec, ToolDecl};
+use crate::dsl::{MessageSpec, NodeSpec, Strategy, StrategyMode, ToolDecl};
 use crate::error::{OrchError, OrchErrorKind};
 
 /// A compiled orchestration node.
@@ -19,6 +19,8 @@ pub struct CompiledNode {
     pub tools: Vec<ToolDecl>,
     pub messages: Vec<CompiledMessage>,
     pub all_context_keys: HashSet<String>,
+    pub strategy: Strategy,
+    pub key_module: Option<CompiledBlock>,
 }
 
 /// A compiled message entry.
@@ -28,6 +30,9 @@ pub enum CompiledMessage {
     Iterator {
         key: String,
         block: Option<CompiledBlock>,
+        slice: Option<Vec<i64>>,
+        bind: Option<String>,
+        role: Option<String>,
     },
 }
 
@@ -68,14 +73,25 @@ pub fn compile_node(
                     Err(e) => errors.push(e),
                 }
             }
-            MessageSpec::Iterator { iterator, template } => {
+            MessageSpec::Iterator { iterator, template, slice, bind, role } => {
                 let key = iterator.trim_start_matches('@').to_string();
 
                 let block = if let Some(tmpl) = template {
-                    // Iterator template receives @type and @text from each item
                     let mut iter_types = context_types.clone();
-                    iter_types.insert("type".into(), Ty::String);
-                    iter_types.insert("text".into(), Ty::String);
+                    if let Some(bind_name) = bind {
+                        // bind → inject whole item as Object { type: String, text: String }
+                        iter_types.insert(
+                            bind_name.clone(),
+                            Ty::Object(BTreeMap::from([
+                                ("type".into(), Ty::String),
+                                ("text".into(), Ty::String),
+                            ])),
+                        );
+                    } else {
+                        // legacy: inject @type and @text separately
+                        iter_types.insert("type".into(), Ty::String);
+                        iter_types.insert("text".into(), Ty::String);
+                    }
 
                     match compile_template(base_dir, tmpl, i, &iter_types, registry) {
                         Ok(block) => Some(block),
@@ -88,7 +104,13 @@ pub fn compile_node(
                     None
                 };
 
-                compiled_messages.push(CompiledMessage::Iterator { key, block });
+                compiled_messages.push(CompiledMessage::Iterator {
+                    key,
+                    block,
+                    slice: slice.clone(),
+                    bind: bind.clone(),
+                    role: role.clone(),
+                });
             }
         }
     }
@@ -97,6 +119,23 @@ pub fn compile_node(
         return Err(errors);
     }
 
+    // Compile key template for if-modified strategy
+    let key_module =
+        if matches!(spec.strategy.mode, StrategyMode::IfModified) {
+            if let Some(key_tmpl) = &spec.strategy.key {
+                match compile_template(base_dir, key_tmpl, 0, context_types, registry) {
+                    Ok(block) => Some(block),
+                    Err(e) => {
+                        return Err(vec![e]);
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
     Ok(CompiledNode {
         name: spec.name.clone(),
         provider: spec.provider.clone(),
@@ -104,6 +143,8 @@ pub fn compile_node(
         tools: spec.tools.clone(),
         messages: compiled_messages,
         all_context_keys,
+        strategy: spec.strategy.clone(),
+        key_module,
     })
 }
 

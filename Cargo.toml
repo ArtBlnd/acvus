@@ -1,3 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["acvus-interpreter", "acvus-interpreter-test", "acvus-ast", "acvus-mir", "acvus-mir-pass", "acvus-mir-cli", "acvus-mir-test", "acvus-playground", "acvus-orchestration", "acvus-cli"]
+members = [
+    "acvus-interpreter", 
+    "acvus-interpreter-test", 
+    "acvus-ast", 
+    "acvus-mir", 
+    "acvus-mir-pass", 
+    "acvus-mir-cli", 
+    "acvus-mir-test", 
+    "acvus-playground", 
+    "acvus-orchestration", 
+    "acvus-chat", 
+    "acvus-chat-cli"]

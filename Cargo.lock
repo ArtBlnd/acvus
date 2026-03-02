@@ -13,10 +13,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "acvus-cli"
+name = "acvus-chat"
 version = "0.1.0"
 dependencies = [
- "acvus-ast",
+ "acvus-interpreter",
+ "acvus-orchestration",
+ "futures",
+ "serde_json",
+]
+
+[[package]]
+name = "acvus-chat-cli"
+version = "0.1.0"
+dependencies = [
+ "acvus-chat",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-orchestration",
@@ -104,6 +114,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "trait-variant",
 ]
 
 [[package]]
@@ -2368,6 +2379,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "trait-variant"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

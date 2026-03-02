@@ -11,6 +11,7 @@ acvus-mir-pass = { path = "../acvus-mir-pass" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures = "0.3"
+trait-variant = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

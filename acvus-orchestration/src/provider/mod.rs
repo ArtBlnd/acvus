@@ -2,8 +2,6 @@ mod openai;
 mod anthropic;
 mod google;
 
-use futures::future::BoxFuture;
-
 use crate::message::{Message, ModelResponse, ToolSpec};
 
 #[derive(Debug, Clone)]
@@ -27,11 +25,9 @@ pub struct HttpRequest {
 }
 
 /// Raw HTTP fetch — implementors only handle transport.
-pub trait Fetch: Send + Sync {
-    fn fetch<'a>(
-        &'a self,
-        request: &'a HttpRequest,
-    ) -> BoxFuture<'a, Result<serde_json::Value, String>>;
+#[trait_variant::make(Send)]
+pub trait Fetch: Sync {
+    async fn fetch(&self, request: &HttpRequest) -> Result<serde_json::Value, String>;
 }
 
 pub fn build_request(

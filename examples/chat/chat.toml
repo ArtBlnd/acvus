@@ -2,6 +2,9 @@ name = "chat"
 provider = "gemini"
 model = "gemini-2.5-flash"
 
+[strategy]
+mode = "always"
+
 [[messages]]
 role = "system"
 template = "system.acvus"
