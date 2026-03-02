@@ -2,11 +2,15 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "Hello, "
+  T1 = "!"
+
 === main ===
-     1 │   yield "Hello, " (r0)
+     1 │   yield T0
      2 │   r1 = context_load @name
      3 │   yield r1
-     5 │   yield "!" (r2)
+     5 │   yield T1
 
     ; r0 (v0) : String
     ; r1 (@name) : String

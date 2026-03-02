@@ -2,6 +2,10 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "equal"
+  T1 = "not equal"
+
 === main ===
      0 │   r0 = context_load @a
      1 │   r1 = context_load @b
@@ -10,10 +14,10 @@ expression: ir
      4 │   r3 = test r2 == true
      5 │   jump_if r3 then L3 else L1
      6 │ L3:
-     8 │   yield "equal" (r4)
+     8 │   yield T0
      9 │   jump L0
     10 │ L1:
-    12 │   yield "not equal" (r5)
+    12 │   yield T1
     13 │ L0:
 
     ; r0 (@a) : Int

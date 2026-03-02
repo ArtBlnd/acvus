@@ -2,22 +2,27 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "child"
+  T1 = "teen"
+  T2 = "adult"
+
 === main ===
      0 │   r0 = context_load @age
      1 │ L2:
      2 │   r1 = test r0 in 0..10
      3 │   jump_if r1 then L4 else L3
      4 │ L4:
-     6 │   yield "child" (r2)
+     6 │   yield T0
      7 │   jump L0
      8 │ L3:
      9 │   r3 = test r0 in 10..=19
     10 │   jump_if r3 then L5 else L1
     11 │ L5:
-    13 │   yield "teen" (r4)
+    13 │   yield T1
     14 │   jump L0
     15 │ L1:
-    17 │   yield "adult" (r5)
+    17 │   yield T2
     18 │ L0:
 
     ; r0 (@age) : Int

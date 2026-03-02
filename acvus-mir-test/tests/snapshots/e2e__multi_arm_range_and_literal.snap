@@ -2,28 +2,34 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "zero"
+  T1 = "low"
+  T2 = "high"
+  T3 = "other"
+
 === main ===
      0 │   r0 = context_load @score
      1 │ L2:
      2 │   r1 = test r0 == 0
      3 │   jump_if r1 then L5 else L3
      4 │ L5:
-     6 │   yield "zero" (r2)
+     6 │   yield T0
      7 │   jump L0
      8 │ L3:
      9 │   r3 = test r0 in 1..10
     10 │   jump_if r3 then L6 else L4
     11 │ L6:
-    13 │   yield "low" (r4)
+    13 │   yield T1
     14 │   jump L0
     15 │ L4:
     16 │   r5 = test r0 in 10..=100
     17 │   jump_if r5 then L7 else L1
     18 │ L7:
-    20 │   yield "high" (r6)
+    20 │   yield T2
     21 │   jump L0
     22 │ L1:
-    24 │   yield "other" (r7)
+    24 │   yield T3
     25 │ L0:
 
     ; r0 (@score) : Int

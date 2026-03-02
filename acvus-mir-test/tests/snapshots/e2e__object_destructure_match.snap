@@ -2,6 +2,9 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "none"
+
 === main ===
      0 │   r0 = context_load @user
      1 │ L2:
@@ -20,7 +23,7 @@ expression: ir
     17 │   yield r12
     18 │   jump L0
     19 │ L1:
-    21 │   yield "none" (r13)
+    21 │   yield T0
     22 │ L0:
 
     ; r0 (@user) : {age: Int, email: String, name: String}

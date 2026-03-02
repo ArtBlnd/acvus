@@ -2,16 +2,20 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "admin page"
+  T1 = "guest page"
+
 === main ===
      0 │   r0 = context_load @role
      1 │ L2:
      2 │   r1 = test r0 == "admin"
      3 │   jump_if r1 then L3 else L1
      4 │ L3:
-     6 │   yield "admin page" (r2)
+     6 │   yield T0
      7 │   jump L0
      8 │ L1:
-    10 │   yield "guest page" (r3)
+    10 │   yield T1
     11 │ L0:
 
     ; r0 (@role) : String

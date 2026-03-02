@@ -2,11 +2,14 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ","
+
 === main ===
      0 │   r0 = context_load @users
      1 │   r1 = closure L0 []
      2 │   r2 = call map(r0, r1)
-     4 │   r4 = call join(r2, "," (r3))
+     4 │   r4 = call join(r2, T0)
      5 │   yield r4
 
     ; r0 (@users) : List<{address: {city: String}}>

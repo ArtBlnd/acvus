@@ -2,16 +2,20 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "on"
+  T1 = "off"
+
 === main ===
      0 │   r0 = context_load @flag
      1 │ L2:
      2 │   r1 = test r0 == true
      3 │   jump_if r1 then L3 else L1
      4 │ L3:
-     6 │   yield "on" (r2)
+     6 │   yield T0
      7 │   jump L0
      8 │ L1:
-    10 │   yield "off" (r3)
+    10 │   yield T1
     11 │ L0:
 
     ; r0 (@flag) : Bool

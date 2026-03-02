@@ -2,6 +2,9 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "outer"
+
 === main ===
      1 │   r1 = context_load @name
      2 │   yield r1

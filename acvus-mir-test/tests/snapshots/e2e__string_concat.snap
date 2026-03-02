@@ -2,9 +2,14 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "hello"
+  T1 = " "
+  T2 = "world"
+
 === main ===
-     2 │   r2 = "hello" (r0) + " " (r1)
-     4 │   r4 = r2 + "world" (r3)
+     2 │   r2 = T0 + T1
+     4 │   r4 = r2 + T2
      5 │   yield r4
 
     ; r0 (v0) : String

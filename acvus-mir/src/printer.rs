@@ -65,32 +65,87 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
     }
 }
 
-fn fmt_use(r: ValueId, consts: &HashMap<ValueId, &Literal>) -> String {
+fn fmt_use(
+    r: ValueId,
+    consts: &HashMap<ValueId, &Literal>,
+    texts: &HashMap<ValueId, usize>,
+) -> String {
+    if let Some(tidx) = texts.get(&r) {
+        return format!("T{tidx}");
+    }
     match consts.get(&r) {
         Some(lit) => format!("{} ({})", fmt_literal(lit), fmt_val(r)),
         None => fmt_val(r),
     }
 }
 
-fn fmt_uses(regs: &[ValueId], consts: &HashMap<ValueId, &Literal>) -> String {
+fn fmt_uses(
+    regs: &[ValueId],
+    consts: &HashMap<ValueId, &Literal>,
+    texts: &HashMap<ValueId, usize>,
+) -> String {
     regs.iter()
-        .map(|r| fmt_use(*r, consts))
+        .map(|r| fmt_use(*r, consts, texts))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::Result {
+/// Collect unique String/List literals from a body and register them into the text table.
+fn collect_texts_from_body(
+    body: &MirBody,
+    lit_to_tidx: &mut HashMap<String, usize>,
+    text_entries: &mut Vec<String>,
+) {
+    for inst in &body.insts {
+        if let InstKind::Const { value, .. } = &inst.kind {
+            if matches!(value, Literal::String(_) | Literal::List(_)) {
+                let key = fmt_literal(value);
+                if !lit_to_tidx.contains_key(&key) {
+                    let idx = text_entries.len();
+                    lit_to_tidx.insert(key.clone(), idx);
+                    text_entries.push(key);
+                }
+            }
+        }
+    }
+}
+
+fn write_body(
+    f: &mut fmt::Formatter<'_>,
+    body: &MirBody,
+    indent: &str,
+    lit_to_tidx: &HashMap<String, usize>,
+) -> fmt::Result {
+    // Small constants (Int, Float, Bool, Byte) → inline at use sites.
     let consts: HashMap<ValueId, &Literal> = body
         .insts
         .iter()
         .filter_map(|inst| match &inst.kind {
-            InstKind::Const { dst, value } => Some((*dst, value)),
+            InstKind::Const { dst, value }
+                if !matches!(value, Literal::String(_) | Literal::List(_)) =>
+            {
+                Some((*dst, value))
+            }
+            _ => None,
+        })
+        .collect();
+
+    // String/List constants → T-indexed references.
+    let texts: HashMap<ValueId, usize> = body
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::Const { dst, value }
+                if matches!(value, Literal::String(_) | Literal::List(_)) =>
+            {
+                lit_to_tidx.get(&fmt_literal(value)).map(|&tidx| (*dst, tidx))
+            }
             _ => None,
         })
         .collect();
 
     for (i, inst) in body.insts.iter().enumerate() {
-        // Constants are shown inline at use sites; skip their definition lines.
+        // All constants are represented elsewhere: small ones inline, String/List in texts section.
         if matches!(&inst.kind, InstKind::Const { .. }) {
             continue;
         }
@@ -105,9 +160,9 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
 
         match &inst.kind {
             // Output
-            InstKind::Yield(r) => writeln!(f, "yield {}", fmt_use(*r, &consts))?,
+            InstKind::Yield(r) => writeln!(f, "yield {}", fmt_use(*r, &consts, &texts))?,
 
-            // Constants / variables
+            // Constants — all skipped above, unreachable here.
             InstKind::Const { .. } => unreachable!(),
             InstKind::ContextLoad { dst, name } => {
                 writeln!(f, "{} = context_load @{name}", fmt_val(*dst))?
@@ -116,7 +171,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 writeln!(f, "{} = var_load ${name}", fmt_val(*dst))?
             }
             InstKind::VarStore { name, src } => {
-                writeln!(f, "var_store ${name} = {}", fmt_use(*src, &consts))?
+                writeln!(f, "var_store ${name} = {}", fmt_use(*src, &consts, &texts))?
             }
 
             // Arithmetic / logic
@@ -129,19 +184,24 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 f,
                 "{} = {} {} {}",
                 fmt_val(*dst),
-                fmt_use(*left, &consts),
+                fmt_use(*left, &consts, &texts),
                 fmt_binop(*op),
-                fmt_use(*right, &consts)
+                fmt_use(*right, &consts, &texts)
             )?,
             InstKind::UnaryOp { dst, op, operand } => writeln!(
                 f,
                 "{} = {}{}",
                 fmt_val(*dst),
                 fmt_unaryop(*op),
-                fmt_use(*operand, &consts)
+                fmt_use(*operand, &consts, &texts)
             )?,
             InstKind::FieldGet { dst, object, field } => {
-                writeln!(f, "{} = {}.{field}", fmt_val(*dst), fmt_use(*object, &consts))?
+                writeln!(
+                    f,
+                    "{} = {}.{field}",
+                    fmt_val(*dst),
+                    fmt_use(*object, &consts, &texts)
+                )?
             }
 
             // Calls
@@ -150,17 +210,22 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = call {func}({})",
                     fmt_val(*dst),
-                    fmt_uses(args, &consts)
+                    fmt_uses(args, &consts, &texts)
                 )?
             }
             InstKind::AsyncCall { dst, func, args } => writeln!(
                 f,
                 "{} = async_call {func}({})",
                 fmt_val(*dst),
-                fmt_uses(args, &consts)
+                fmt_uses(args, &consts, &texts)
             )?,
             InstKind::Await { dst, src } => {
-                writeln!(f, "{} = await {}", fmt_val(*dst), fmt_use(*src, &consts))?
+                writeln!(
+                    f,
+                    "{} = await {}",
+                    fmt_val(*dst),
+                    fmt_use(*src, &consts, &texts)
+                )?
             }
 
             // Composite constructors
@@ -169,13 +234,13 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = list [{}]",
                     fmt_val(*dst),
-                    fmt_uses(elements, &consts)
+                    fmt_uses(elements, &consts, &texts)
                 )?
             }
             InstKind::MakeObject { dst, fields } => {
                 let fields_str: String = fields
                     .iter()
-                    .map(|(k, r)| format!("{k}: {}", fmt_use(*r, &consts)))
+                    .map(|(k, r)| format!("{k}: {}", fmt_use(*r, &consts, &texts)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 writeln!(f, "{} = object {{{fields_str}}}", fmt_val(*dst))?
@@ -185,7 +250,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = tuple ({})",
                     fmt_val(*dst),
-                    fmt_uses(elements, &consts)
+                    fmt_uses(elements, &consts, &texts)
                 )?
             }
             InstKind::TupleIndex { dst, tuple, index } => {
@@ -193,7 +258,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = {}.{index}",
                     fmt_val(*dst),
-                    fmt_use(*tuple, &consts)
+                    fmt_use(*tuple, &consts, &texts)
                 )?
             }
             InstKind::MakeRange {
@@ -205,9 +270,9 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 f,
                 "{} = range {}{}{}",
                 fmt_val(*dst),
-                fmt_use(*start, &consts),
+                fmt_use(*start, &consts, &texts),
                 fmt_range_kind(*kind),
-                fmt_use(*end, &consts)
+                fmt_use(*end, &consts, &texts)
             )?,
 
             // Pattern matching
@@ -215,7 +280,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 f,
                 "{} = test {} == {}",
                 fmt_val(*dst),
-                fmt_use(*src, &consts),
+                fmt_use(*src, &consts, &texts),
                 fmt_literal(value)
             )?,
             InstKind::TestListLen {
@@ -229,14 +294,14 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = test len({}) {op} {min_len}",
                     fmt_val(*dst),
-                    fmt_use(*src, &consts)
+                    fmt_use(*src, &consts, &texts)
                 )?
             }
             InstKind::TestObjectKey { dst, src, key } => writeln!(
                 f,
                 "{} = test has_key({}, {key:?})",
                 fmt_val(*dst),
-                fmt_use(*src, &consts)
+                fmt_use(*src, &consts, &texts)
             )?,
             InstKind::TestRange {
                 dst,
@@ -248,7 +313,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 f,
                 "{} = test {} in {start}{}{end}",
                 fmt_val(*dst),
-                fmt_use(*src, &consts),
+                fmt_use(*src, &consts, &texts),
                 fmt_range_kind(*kind)
             )?,
             InstKind::ListIndex { dst, list, index } => {
@@ -256,15 +321,15 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = {}[{index}]",
                     fmt_val(*dst),
-                    fmt_use(*list, &consts)
+                    fmt_use(*list, &consts, &texts)
                 )?
             }
             InstKind::ListGet { dst, list, index } => writeln!(
                 f,
                 "{} = {}[{}]",
                 fmt_val(*dst),
-                fmt_use(*list, &consts),
-                fmt_use(*index, &consts)
+                fmt_use(*list, &consts, &texts),
+                fmt_use(*index, &consts, &texts)
             )?,
             InstKind::ListSlice {
                 dst,
@@ -275,14 +340,14 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 f,
                 "{} = {}[{skip_head}..-{skip_tail}]",
                 fmt_val(*dst),
-                fmt_use(*list, &consts)
+                fmt_use(*list, &consts, &texts)
             )?,
             InstKind::ObjectGet { dst, object, key } => {
                 writeln!(
                     f,
                     "{} = {}.{key}",
                     fmt_val(*dst),
-                    fmt_use(*object, &consts)
+                    fmt_use(*object, &consts, &texts)
                 )?
             }
 
@@ -296,14 +361,14 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 "{} = closure {} [{}]",
                 fmt_val(*dst),
                 fmt_label(*body),
-                fmt_uses(captures, &consts)
+                fmt_uses(captures, &consts, &texts)
             )?,
             InstKind::CallClosure { dst, closure, args } => writeln!(
                 f,
                 "{} = call_closure {}({})",
                 fmt_val(*dst),
-                fmt_use(*closure, &consts),
-                fmt_uses(args, &consts)
+                fmt_use(*closure, &consts, &texts),
+                fmt_uses(args, &consts, &texts)
             )?,
 
             // Iteration
@@ -312,7 +377,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     f,
                     "{} = iter_init {}",
                     fmt_val(*dst),
-                    fmt_use(*src, &consts)
+                    fmt_use(*src, &consts, &texts)
                 )?
             }
             InstKind::IterNext {
@@ -324,7 +389,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                 "{}, {} = iter_next {}",
                 fmt_val(*dst_value),
                 fmt_val(*dst_done),
-                fmt_use(*iter, &consts)
+                fmt_use(*iter, &consts, &texts)
             )?,
 
             // Control flow
@@ -355,7 +420,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                         f,
                         "jump {}({})",
                         fmt_label(*label),
-                        fmt_uses(args, &consts)
+                        fmt_uses(args, &consts, &texts)
                     )?
                 }
             }
@@ -372,7 +437,7 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     format!(
                         "{}({})",
                         fmt_label(*then_label),
-                        fmt_uses(then_args, &consts)
+                        fmt_uses(then_args, &consts, &texts)
                     )
                 };
                 let else_str = if else_args.is_empty() {
@@ -381,18 +446,18 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
                     format!(
                         "{}({})",
                         fmt_label(*else_label),
-                        fmt_uses(else_args, &consts)
+                        fmt_uses(else_args, &consts, &texts)
                     )
                 };
                 writeln!(
                     f,
                     "jump_if {} then {} else {}",
-                    fmt_use(*cond, &consts),
+                    fmt_use(*cond, &consts, &texts),
                     then_str,
                     else_str
                 )?
             }
-            InstKind::Return(r) => writeln!(f, "return {}", fmt_use(*r, &consts))?,
+            InstKind::Return(r) => writeln!(f, "return {}", fmt_use(*r, &consts, &texts))?,
             InstKind::Nop => writeln!(f, "nop")?,
         }
     }
@@ -413,21 +478,43 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &MirBody, indent: &str) -> fmt::
 
 impl fmt::Display for MirModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "=== main ===")?;
-        write_body(f, &self.main, "  ")?;
+        // Collect unique String/List literals across all bodies → text table.
+        let mut lit_to_tidx: HashMap<String, usize> = HashMap::new();
+        let mut text_entries: Vec<String> = Vec::new();
 
+        collect_texts_from_body(&self.main, &mut lit_to_tidx, &mut text_entries);
         let mut labels: Vec<_> = self.closures.keys().collect();
         labels.sort_by_key(|l| l.0);
-        for label in labels {
+        for label in &labels {
+            collect_texts_from_body(&self.closures[label].body, &mut lit_to_tidx, &mut text_entries);
+        }
+
+        if !text_entries.is_empty() {
+            writeln!(f, "=== literals ===")?;
+            for (idx, lit) in text_entries.iter().enumerate() {
+                writeln!(f, "  T{idx} = {lit}")?;
+            }
+            writeln!(f)?;
+        }
+
+        writeln!(f, "=== main ===")?;
+        write_body(f, &self.main, "  ", &lit_to_tidx)?;
+
+        for label in &labels {
             let closure = &self.closures[label];
-            write_closure(f, *label, closure)?;
+            write_closure(f, **label, closure, &lit_to_tidx)?;
         }
 
         Ok(())
     }
 }
 
-fn write_closure(f: &mut fmt::Formatter<'_>, label: Label, closure: &ClosureBody) -> fmt::Result {
+fn write_closure(
+    f: &mut fmt::Formatter<'_>,
+    label: Label,
+    closure: &ClosureBody,
+    lit_to_tidx: &HashMap<String, usize>,
+) -> fmt::Result {
     writeln!(f)?;
     write!(f, "=== closure {} (", fmt_label(label))?;
     for (i, name) in closure.param_names.iter().enumerate() {
@@ -441,13 +528,13 @@ fn write_closure(f: &mut fmt::Formatter<'_>, label: Label, closure: &ClosureBody
         write!(f, " [captures: {}]", closure.capture_names.join(", "))?;
     }
     writeln!(f, " ===")?;
-    write_body(f, &closure.body, "  ")?;
+    write_body(f, &closure.body, "  ", lit_to_tidx)?;
     Ok(())
 }
 
 impl fmt::Display for MirBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_body(f, self, "")
+        write_body(f, self, "", &HashMap::new())
     }
 }
 
@@ -476,15 +563,16 @@ mod tests {
     #[test]
     fn print_text_only() {
         let out = compile_and_dump("hello world", HashMap::new(), &ExternRegistry::new());
-        assert!(!out.contains("const"));
-        assert!(out.contains("yield \"hello world\" (r"));
+        assert!(out.contains("=== literals ==="));
+        assert!(out.contains("T0 = \"hello world\""));
+        assert!(out.contains("yield T0"));
     }
 
     #[test]
     fn print_string_emit() {
         let out = compile_and_dump(r#"{{ "hello" }}"#, HashMap::new(), &ExternRegistry::new());
-        assert!(!out.contains("const"));
-        assert!(out.contains("yield \"hello\" (r0)"));
+        assert!(out.contains("T0 = \"hello\""));
+        assert!(out.contains("yield T0"));
     }
 
     #[test]
@@ -510,7 +598,7 @@ mod tests {
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
-        assert!(out.contains("yield"));
+        assert!(out.contains("yield T"));
     }
 
     #[test]
@@ -577,5 +665,17 @@ mod tests {
         assert!(out.contains("=== main ==="));
         assert!(out.contains("iter_init"));
         assert!(out.contains("yield"));
+    }
+
+    #[test]
+    fn print_text_dedup() {
+        let out = compile_and_dump(
+            r#"{{ "hello" }}{{ "hello" }}"#,
+            HashMap::new(),
+            &ExternRegistry::new(),
+        );
+        // Same literal should share one T-index.
+        assert!(out.contains("T0 = \"hello\""));
+        assert!(!out.contains("T1"));
     }
 }

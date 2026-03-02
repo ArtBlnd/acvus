@@ -2,6 +2,10 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = " is here"
+  T1 = "no user"
+
 === main ===
      0 │   r0 = context_load @user
      1 │ L2:
@@ -12,10 +16,10 @@ expression: ir
      8 │ L3:
      9 │   r6 = r0.name
     10 │   yield r6
-    12 │   yield " is here" (r7)
+    12 │   yield T0
     13 │   jump L0
     14 │ L1:
-    16 │   yield "no user" (r8)
+    16 │   yield T1
     17 │ L0:
 
     ; r0 (@user) : {age: Int, email: String, name: String}

@@ -2,6 +2,9 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "empty"
+
 === main ===
      0 │   r0 = context_load @items
      1 │   r1 = iter_init r0
@@ -13,7 +16,7 @@ expression: ir
      7 │   yield r4
      8 │   jump L0
      9 │ L1:
-    11 │   yield "empty" (r5)
+    11 │   yield T0
     12 │ L2:
 
     ; r0 (@items) : List<Int>

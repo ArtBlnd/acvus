@@ -2,6 +2,11 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "zero-one"
+  T1 = "one-any"
+  T2 = "other"
+
 === main ===
      0 │   r0 = context_load @a
      1 │   r1 = context_load @b
@@ -17,7 +22,7 @@ expression: ir
     12 │ L4:
     13 │   r10 = r2.0
     14 │   r11 = r2.1
-    16 │   yield "zero-one" (r12)
+    16 │   yield T0
     17 │   jump L0
     18 │ L3:
     20 │   r14 = r2.0
@@ -26,10 +31,10 @@ expression: ir
     23 │   jump_if r16 then L5 else L1
     24 │ L5:
     25 │   r17 = r2.0
-    27 │   yield "one-any" (r18)
+    27 │   yield T1
     28 │   jump L0
     29 │ L1:
-    31 │   yield "other" (r19)
+    31 │   yield T2
     32 │ L0:
 
     ; r0 (@a) : Int

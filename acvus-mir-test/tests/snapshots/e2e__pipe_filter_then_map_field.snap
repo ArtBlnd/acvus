@@ -2,13 +2,16 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ","
+
 === main ===
      0 │   r0 = context_load @users
      1 │   r1 = closure L0 []
      2 │   r2 = call filter(r0, r1)
      3 │   r3 = closure L1 []
      4 │   r4 = call map(r2, r3)
-     6 │   r6 = call join(r4, "," (r5))
+     6 │   r6 = call join(r4, T0)
      7 │   yield r6
 
     ; r0 (@users) : List<{age: Int, name: String}>

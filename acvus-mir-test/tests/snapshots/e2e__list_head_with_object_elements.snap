@@ -2,6 +2,9 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = "empty"
+
 === main ===
      0 │   r0 = context_load @users
      1 │ L2:
@@ -21,7 +24,7 @@ expression: ir
     17 │   yield r8
     18 │   jump L0
     19 │ L1:
-    21 │   yield "empty" (r9)
+    21 │   yield T0
     22 │ L0:
 
     ; r0 (@users) : List<{name: String}>
