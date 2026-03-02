@@ -8,26 +8,22 @@ expression: ir
      2 │   r1 = test r0 == 0
      3 │   jump_if r1 then L5 else L3
      4 │ L5:
-     5 │   r2 = const "zero"
-     6 │   yield r2
+     6 │   yield "zero" (r2)
      7 │   jump L0
      8 │ L3:
      9 │   r3 = test r0 in 1..10
     10 │   jump_if r3 then L6 else L4
     11 │ L6:
-    12 │   r4 = const "low"
-    13 │   yield r4
+    13 │   yield "low" (r4)
     14 │   jump L0
     15 │ L4:
     16 │   r5 = test r0 in 10..=100
     17 │   jump_if r5 then L7 else L1
     18 │ L7:
-    19 │   r6 = const "high"
-    20 │   yield r6
+    20 │   yield "high" (r6)
     21 │   jump L0
     22 │ L1:
-    23 │   r7 = const "other"
-    24 │   yield r7
+    24 │   yield "other" (r7)
     25 │ L0:
 
     ; r0 (@score) : Int

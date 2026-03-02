@@ -4,8 +4,7 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @names
-     1 │   r1 = const ", "
-     2 │   r2 = call join(r0, r1)
+     2 │   r2 = call join(r0, ", " (r1))
      3 │   yield r2
 
     ; r0 (@names) : List<String>

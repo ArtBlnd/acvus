@@ -8,12 +8,10 @@ expression: ir
      2 │   r1 = test r0 == "admin"
      3 │   jump_if r1 then L3 else L1
      4 │ L3:
-     5 │   r2 = const "yes"
-     6 │   var_store $selected = r2
+     6 │   var_store $selected = "yes" (r2)
      7 │   jump L0
      8 │ L1:
-     9 │   r3 = const "no"
-    10 │   var_store $selected = r3
+    10 │   var_store $selected = "no" (r3)
     11 │ L0:
     12 │   r4 = var_load $selected
     13 │   yield r4

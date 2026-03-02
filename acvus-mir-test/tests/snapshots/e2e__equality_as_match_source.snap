@@ -10,12 +10,10 @@ expression: ir
      4 │   r3 = test r2 == true
      5 │   jump_if r3 then L3 else L1
      6 │ L3:
-     7 │   r4 = const "equal"
-     8 │   yield r4
+     8 │   yield "equal" (r4)
      9 │   jump L0
     10 │ L1:
-    11 │   r5 = const "not equal"
-    12 │   yield r5
+    12 │   yield "not equal" (r5)
     13 │ L0:
 
     ; r0 (@a) : Int

@@ -4,8 +4,7 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     1 │   r1 = const 3
-     2 │   r2 = call contains(r0, r1)
+     2 │   r2 = call contains(r0, 3 (r1))
      3 │   r3 = call to_string(r2)
      4 │   yield r3
 

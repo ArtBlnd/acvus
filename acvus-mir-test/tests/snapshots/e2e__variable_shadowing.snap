@@ -3,7 +3,6 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const "outer"
      1 │   r1 = context_load @name
      2 │   yield r1
 

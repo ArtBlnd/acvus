@@ -3,8 +3,7 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 1
-     1 │   r2 = async_call fetch_user(r0)
+     1 │   r2 = async_call fetch_user(1 (r0))
      2 │   r1 = await r2
      3 │   yield r1
 

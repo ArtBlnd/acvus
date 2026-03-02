@@ -4,9 +4,8 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     1 │   r1 = const 0
      2 │   r2 = closure L0 []
-     3 │   r3 = call fold(r0, r1, r2)
+     3 │   r3 = call fold(r0, 0 (r1), r2)
      4 │   r4 = call to_string(r3)
      5 │   yield r4
 

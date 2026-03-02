@@ -6,8 +6,7 @@ expression: ir
      0 │   r0 = context_load @names
      1 │   r1 = closure L0 []
      2 │   r2 = call map(r0, r1)
-     3 │   r3 = const ","
-     4 │   r4 = call join(r2, r3)
+     4 │   r4 = call join(r2, "," (r3))
      5 │   yield r4
 
     ; r0 (@names) : List<String>
@@ -17,8 +16,7 @@ expression: ir
     ; r4 (join(...)) : String
 
 === closure L0 (n) ===
-     0 │   r1 = const "!"
-     1 │   r2 = r0 + r1
+     1 │   r2 = r0 + "!" (r1)
      2 │   return r2
 
     ; r0 (v0) : String

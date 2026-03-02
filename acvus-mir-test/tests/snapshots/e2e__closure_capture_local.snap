@@ -3,9 +3,8 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 5
      1 │   r1 = context_load @items
-     2 │   r2 = closure L0 [r0]
+     2 │   r2 = closure L0 [5 (r0)]
      3 │   r3 = call filter(r1, r2)
      4 │   r4 = call len(r3)
      5 │   r5 = call to_string(r4)

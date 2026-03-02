@@ -3,10 +3,7 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 1
-     1 │   r1 = const 2
-     2 │   r2 = const 3
-     3 │   r3 = list [r0, r1, r2]
+     3 │   r3 = list [1 (r0), 2 (r1), 3 (r2)]
      4 │   r4 = call len(r3)
      5 │   r5 = call to_string(r4)
      6 │   yield r5

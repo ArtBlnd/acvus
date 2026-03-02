@@ -5,21 +5,17 @@ expression: ir
 === main ===
      0 │   r0 = context_load @user
      1 │ L2:
-     2 │   r1 = const true
      3 │   r2 = test has_key(r0, "name")
      4 │   r3 = r0.name
-     5 │   r4 = const true
-     6 │   r5 = r1 && r4
+     6 │   r5 = true (r1) && true (r4)
      7 │   jump_if r5 then L3 else L1
      8 │ L3:
      9 │   r6 = r0.name
     10 │   yield r6
-    11 │   r7 = const " is here"
-    12 │   yield r7
+    12 │   yield " is here" (r7)
     13 │   jump L0
     14 │ L1:
-    15 │   r8 = const "no user"
-    16 │   yield r8
+    16 │   yield "no user" (r8)
     17 │ L0:
 
     ; r0 (@user) : {age: Int, email: String, name: String}

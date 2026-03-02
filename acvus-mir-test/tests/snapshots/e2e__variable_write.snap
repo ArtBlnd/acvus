@@ -3,7 +3,6 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 42
-     1 │   var_store $count = r0
+     1 │   var_store $count = 42 (r0)
 
     ; r0 (v0) : Int

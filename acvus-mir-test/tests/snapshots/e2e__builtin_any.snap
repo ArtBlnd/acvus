@@ -15,8 +15,7 @@ expression: ir
     ; r3 (to_string(...)) : String
 
 === closure L0 (x) ===
-     0 │   r1 = const 10
-     1 │   r2 = r0 > r1
+     1 │   r2 = r0 > 10 (r1)
      2 │   return r2
 
     ; r0 (v0) : Int

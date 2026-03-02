@@ -3,9 +3,7 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 0
-     1 │   r1 = const 3
-     2 │   r2 = range r0..=r1
+     2 │   r2 = range 0 (r0)..=3 (r1)
      3 │   r3 = iter_init r2
      4 │ L0:
      5 │   r4, r5 = iter_next r3

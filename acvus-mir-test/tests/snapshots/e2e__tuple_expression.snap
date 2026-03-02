@@ -7,13 +7,10 @@ expression: ir
      1 │   r1 = context_load @b
      2 │   r2 = tuple (r0, r1)
      3 │ L2:
-     4 │   r3 = const true
      5 │   r4 = r2.0
-     6 │   r5 = const true
-     7 │   r6 = r3 && r5
+     7 │   r6 = true (r3) && true (r5)
      8 │   r7 = r2.1
-     9 │   r8 = const true
-    10 │   r9 = r6 && r8
+    10 │   r9 = r6 && true (r8)
     11 │   jump_if r9 then L3 else L1
     12 │ L3:
     13 │   r10 = r2.0

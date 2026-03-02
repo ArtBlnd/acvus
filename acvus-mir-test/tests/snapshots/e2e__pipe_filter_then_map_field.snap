@@ -8,8 +8,7 @@ expression: ir
      2 │   r2 = call filter(r0, r1)
      3 │   r3 = closure L1 []
      4 │   r4 = call map(r2, r3)
-     5 │   r5 = const ","
-     6 │   r6 = call join(r4, r5)
+     6 │   r6 = call join(r4, "," (r5))
      7 │   yield r6
 
     ; r0 (@users) : List<{age: Int, name: String}>
@@ -22,8 +21,7 @@ expression: ir
 
 === closure L0 (u) ===
      0 │   r1 = r0.age
-     1 │   r2 = const 18
-     2 │   r3 = r1 > r2
+     2 │   r3 = r1 > 18 (r2)
      3 │   return r3
 
     ; r0 (v0) : {age: Int, name: String}

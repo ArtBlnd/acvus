@@ -8,19 +8,16 @@ expression: ir
      2 │   r1 = test r0 == "admin"
      3 │   jump_if r1 then L4 else L3
      4 │ L4:
-     5 │   r2 = const "admin"
-     6 │   yield r2
+     6 │   yield "admin" (r2)
      7 │   jump L0
      8 │ L3:
      9 │   r3 = test r0 == "user"
     10 │   jump_if r3 then L5 else L1
     11 │ L5:
-    12 │   r4 = const "user"
-    13 │   yield r4
+    13 │   yield "user" (r4)
     14 │   jump L0
     15 │ L1:
-    16 │   r5 = const "guest"
-    17 │   yield r5
+    17 │   yield "guest" (r5)
     18 │ L0:
 
     ; r0 (@role) : String

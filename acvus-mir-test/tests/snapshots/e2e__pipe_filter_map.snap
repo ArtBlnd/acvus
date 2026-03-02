@@ -21,8 +21,7 @@ expression: ir
     ; r6 (to_string(...)) : String
 
 === closure L0 (x) ===
-     0 │   r1 = const 0
-     1 │   r2 = r0 != r1
+     1 │   r2 = r0 != 0 (r1)
      2 │   return r2
 
     ; r0 (v0) : Int
@@ -30,8 +29,7 @@ expression: ir
     ; r2 (v2) : Bool
 
 === closure L1 (x) ===
-     0 │   r1 = const 1
-     1 │   r2 = r0 + r1
+     1 │   r2 = r0 + 1 (r1)
      2 │   return r2
 
     ; r0 (v0) : Int

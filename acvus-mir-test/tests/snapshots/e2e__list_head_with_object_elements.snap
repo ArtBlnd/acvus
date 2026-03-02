@@ -9,12 +9,10 @@ expression: ir
      3 │   jump_if r1 then L3 else L4
      4 │ L3:
      5 │   r2 = r0[0]
-     6 │   r3 = const true
-     7 │   r4 = r1 && r3
+     7 │   r4 = r1 && true (r3)
      8 │   jump L5(r4)
      9 │ L4:
-    10 │   r6 = const false
-    11 │   jump L5(r6)
+    11 │   jump L5(false (r6))
     12 │ L5(r5: Bool):
     13 │   jump_if r5 then L6 else L1
     14 │ L6:
@@ -23,8 +21,7 @@ expression: ir
     17 │   yield r8
     18 │   jump L0
     19 │ L1:
-    20 │   r9 = const "empty"
-    21 │   yield r9
+    21 │   yield "empty" (r9)
     22 │ L0:
 
     ; r0 (@users) : List<{name: String}>

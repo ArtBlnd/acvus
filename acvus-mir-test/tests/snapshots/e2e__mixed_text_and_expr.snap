@@ -3,12 +3,10 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const "Hello, "
-     1 │   yield r0
+     1 │   yield "Hello, " (r0)
      2 │   r1 = context_load @name
      3 │   yield r1
-     4 │   r2 = const "!"
-     5 │   yield r2
+     5 │   yield "!" (r2)
 
     ; r0 (v0) : String
     ; r1 (@name) : String

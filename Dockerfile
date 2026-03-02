@@ -18,12 +18,15 @@ COPY acvus-interpreter/Cargo.toml      acvus-interpreter/Cargo.toml
 COPY acvus-interpreter-test/Cargo.toml acvus-interpreter-test/Cargo.toml
 COPY acvus-mir-pass/Cargo.toml         acvus-mir-pass/Cargo.toml
 COPY acvus-playground/Cargo.toml       acvus-playground/Cargo.toml
+COPY acvus-orchestration/Cargo.toml   acvus-orchestration/Cargo.toml
+COPY acvus-cli/Cargo.toml             acvus-cli/Cargo.toml
 
 # Stub source files so `cargo fetch` / dep compilation succeeds
 RUN mkdir -p acvus-ast/src acvus-mir/src acvus-mir-cli/src \
              acvus-mir-test/tests acvus-mir-pass/src \
              acvus-interpreter/src acvus-interpreter-test/src \
              acvus-interpreter-test/tests \
+             acvus-orchestration/src acvus-cli/src \
              acvus-playground/src && \
     echo 'fn main(){}' > acvus-ast/src/lib.rs && \
     echo 'fn main(){}' > acvus-mir/src/lib.rs && \
@@ -33,6 +36,8 @@ RUN mkdir -p acvus-ast/src acvus-mir/src acvus-mir-cli/src \
     echo 'fn main(){}' > acvus-interpreter/src/lib.rs && \
     echo 'fn main(){}' > acvus-interpreter-test/src/lib.rs && \
     echo 'fn main(){}' > acvus-interpreter-test/tests/fixtures.rs && \
+    echo 'fn main(){}' > acvus-orchestration/src/lib.rs && \
+    echo 'fn main(){}' > acvus-cli/src/main.rs && \
     echo 'fn main(){}' > acvus-playground/src/main.rs && \
     touch acvus-playground/src/index.html
 

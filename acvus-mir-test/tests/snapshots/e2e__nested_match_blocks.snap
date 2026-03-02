@@ -13,17 +13,14 @@ expression: ir
      7 │   r3 = test r2 in 1..10
      8 │   jump_if r3 then L7 else L5
      9 │ L7:
-    10 │   r4 = const "low"
-    11 │   yield r4
+    11 │   yield "low" (r4)
     12 │   jump L4
     13 │ L5:
-    14 │   r5 = const "high"
-    15 │   yield r5
+    15 │   yield "high" (r5)
     16 │ L4:
     17 │   jump L0
     18 │ L1:
-    19 │   r6 = const "guest"
-    20 │   yield r6
+    20 │   yield "guest" (r6)
     21 │ L0:
 
     ; r0 (@role) : String

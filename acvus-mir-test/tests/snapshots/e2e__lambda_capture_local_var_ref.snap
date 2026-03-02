@@ -3,8 +3,7 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const 10
-     1 │   var_store $offset = r0
+     1 │   var_store $offset = 10 (r0)
      2 │   r1 = context_load @items
      3 │   r2 = closure L0 []
      4 │   r3 = call filter(r1, r2)

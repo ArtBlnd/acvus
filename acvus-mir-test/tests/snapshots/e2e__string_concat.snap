@@ -3,11 +3,8 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const "hello"
-     1 │   r1 = const " "
-     2 │   r2 = r0 + r1
-     3 │   r3 = const "world"
-     4 │   r4 = r2 + r3
+     2 │   r2 = "hello" (r0) + " " (r1)
+     4 │   r4 = r2 + "world" (r3)
      5 │   yield r4
 
     ; r0 (v0) : String

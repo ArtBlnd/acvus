@@ -5,13 +5,10 @@ expression: ir
 === main ===
      0 │   r0 = context_load @pair
      1 │ L2:
-     2 │   r1 = const true
      3 │   r2 = r0.0
-     4 │   r3 = const true
-     5 │   r4 = r1 && r3
+     5 │   r4 = true (r1) && true (r3)
      6 │   r5 = r0.1
-     7 │   r6 = const true
-     8 │   r7 = r4 && r6
+     8 │   r7 = r4 && true (r6)
      9 │   jump_if r7 then L3 else L1
     10 │ L3:
     11 │   r8 = r0.0

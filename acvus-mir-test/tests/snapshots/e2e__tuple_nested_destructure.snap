@@ -5,16 +5,12 @@ expression: ir
 === main ===
      0 │   r0 = context_load @data
      1 │ L2:
-     2 │   r1 = const true
      3 │   r2 = r0.0
-     4 │   r3 = const true
-     5 │   r4 = r1 && r3
+     5 │   r4 = true (r1) && true (r3)
      6 │   r5 = r0.1
-     7 │   r6 = const true
      8 │   r7 = test has_key(r5, "x")
      9 │   r8 = r5.x
-    10 │   r9 = const true
-    11 │   r10 = r6 && r9
+    11 │   r10 = true (r6) && true (r9)
     12 │   r11 = r4 && r10
     13 │   jump_if r11 then L3 else L1
     14 │ L3:

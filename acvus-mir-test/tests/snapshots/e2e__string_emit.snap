@@ -3,7 +3,6 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = const "hello"
-     1 │   yield r0
+     1 │   yield "hello" (r0)
 
     ; r0 (v0) : String

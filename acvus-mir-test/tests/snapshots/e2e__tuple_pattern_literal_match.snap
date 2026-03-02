@@ -7,10 +7,9 @@ expression: ir
      1 │   r1 = context_load @b
      2 │   r2 = tuple (r0, r1)
      3 │ L2:
-     4 │   r3 = const true
      5 │   r4 = r2.0
      6 │   r5 = test r4 == 0
-     7 │   r6 = r3 && r5
+     7 │   r6 = true (r3) && r5
      8 │   r7 = r2.1
      9 │   r8 = test r7 == 1
     10 │   r9 = r6 && r8
@@ -18,23 +17,19 @@ expression: ir
     12 │ L4:
     13 │   r10 = r2.0
     14 │   r11 = r2.1
-    15 │   r12 = const "zero-one"
-    16 │   yield r12
+    16 │   yield "zero-one" (r12)
     17 │   jump L0
     18 │ L3:
-    19 │   r13 = const true
     20 │   r14 = r2.0
     21 │   r15 = test r14 == 1
-    22 │   r16 = r13 && r15
+    22 │   r16 = true (r13) && r15
     23 │   jump_if r16 then L5 else L1
     24 │ L5:
     25 │   r17 = r2.0
-    26 │   r18 = const "one-any"
-    27 │   yield r18
+    27 │   yield "one-any" (r18)
     28 │   jump L0
     29 │ L1:
-    30 │   r19 = const "other"
-    31 │   yield r19
+    31 │   yield "other" (r19)
     32 │ L0:
 
     ; r0 (@a) : Int
