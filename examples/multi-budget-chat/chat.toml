@@ -1,0 +1,30 @@
+name = "chat"
+kind = "llm"
+provider = "gemini"
+model = "gemini-2.5-flash"
+# Total token pool: 16000 tokens shared across all budgeted iterators.
+max_tokens = 16000
+
+[strategy]
+mode = "always"
+
+[[messages]]
+role = "system"
+template = "system.acvus"
+
+# Reference documents — priority 0 (fills first), min 2000 guaranteed, max 6000 cap.
+[[messages]]
+iterator = "@context.documents"
+template = "doc.acvus"
+bind = "doc"
+role = "user"
+token_budget = { priority = 0, min = 2000, max = 6000 }
+
+# Chat history — priority 1 (fills after documents), no max (consumes remaining pool).
+[[messages]]
+iterator = "@context.chat.histories"
+token_budget = { priority = 1 }
+
+[[messages]]
+role = "user"
+template = "user.acvus"
