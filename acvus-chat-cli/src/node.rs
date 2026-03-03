@@ -42,6 +42,8 @@ pub struct NodeDef {
     #[serde(default)]
     generation: GenerationParamsDef,
     cache_key: Option<String>,
+    #[serde(default)]
+    history: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -224,5 +226,6 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
         name: def.name,
         kind,
         strategy,
+        history: def.history,
     })
 }

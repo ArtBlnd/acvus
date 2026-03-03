@@ -63,6 +63,7 @@ pub struct CompiledNode {
     pub all_context_keys: HashSet<String>,
     pub strategy: Strategy,
     pub bind_module: Option<CompiledScript>,
+    pub history: bool,
 }
 
 /// Compiled expression (Script → MIR).
@@ -449,6 +450,7 @@ pub fn compile_node(
         all_context_keys,
         strategy: spec.strategy.clone(),
         bind_module,
+        history: spec.history,
     })
 }
 

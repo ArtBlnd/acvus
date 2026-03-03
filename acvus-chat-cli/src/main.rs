@@ -148,7 +148,6 @@ async fn main() {
     let extern_fns = ExternFnRegistry::new();
     let mut engine = ChatEngine::new(
         compiled_nodes, providers, fetch, extern_fns, storage, &spec.entrypoint,
-        spec.history.as_deref(),
     )
     .await
     .unwrap_or_else(|e| {

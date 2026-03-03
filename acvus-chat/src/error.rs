@@ -5,8 +5,11 @@ pub enum ChatError {
     #[error("entrypoint not found: {0}")]
     EntrypointNotFound(String),
 
-    #[error("history node not found: {0}")]
-    HistoryNodeNotFound(String),
+    #[error("history node unreachable from entrypoint: {0}")]
+    HistoryNodeUnreachable(String),
+
+    #[error("history node cannot use if-modified strategy: {0}")]
+    HistoryNodeIfModified(String),
 
     #[error("unknown provider: {0}")]
     UnknownProvider(String),

@@ -2,13 +2,14 @@ name = "chat"
 kind = "llm"
 provider = "gemini"
 model = "gemini-2.5-flash"
+history = true
 
 [[messages]]
 role = "system"
 inline_template = "You are a helpful assistant. Answer concisely."
 
 [[messages]]
-iterator = "@history"
+iterator = "@history.chat"
 
 [[messages]]
 role = "user"

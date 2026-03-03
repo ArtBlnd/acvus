@@ -2,7 +2,7 @@ mod error;
 
 pub use error::ChatError;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,7 +30,6 @@ struct RenderCtx<'a, F, R> {
     fetch: &'a F,
     extern_fns: &'a ExternFnRegistry,
     resolver: &'a R,
-    history_node: &'a Option<String>,
 }
 
 enum BlockDriveResult {
@@ -145,27 +144,33 @@ fn item_fields(item: &Value) -> (&str, &str) {
 
 fn update_history(
     storage: &mut HashMapStorage,
+    node_name: &str,
     new_messages: &[Message],
     response_text: &str,
 ) {
-    let histories = match storage.get_mut("history") {
+    let obj = match storage.get_mut("history") {
+        Some(Value::Object(obj)) => obj,
+        _ => return,
+    };
+    let list = match obj.get_mut(node_name) {
         Some(Value::List(list)) => list,
         _ => return,
     };
 
     for msg in new_messages {
-        histories.push(Value::Object(BTreeMap::from([
+        list.push(Value::Object(BTreeMap::from([
             ("type".into(), Value::String(msg.role.clone())),
             ("text".into(), Value::String(msg.content.clone())),
         ])));
     }
-    histories.push(Value::Object(BTreeMap::from([
+    list.push(Value::Object(BTreeMap::from([
         ("type".into(), Value::String("assistant".into())),
         ("text".into(), Value::String(response_text.to_string())),
     ])));
 }
 
 struct HistoryUpdate {
+    node_name: String,
     messages: Vec<Message>,
     response_text: String,
 }
@@ -538,9 +543,10 @@ where
                                 .push(((*bind_val).clone(), Arc::new(output.clone())));
                         }
                     }
-                    // History: push update if this is the designated history node
-                    if self.history_node.as_deref() == Some(node.name.as_str()) {
+                    // History: push update if this node has history enabled
+                    if node.history {
                         pending_updates.push(HistoryUpdate {
+                            node_name: node.name.clone(),
                             messages: new_turn_messages,
                             response_text: text.clone(),
                         });
@@ -836,7 +842,9 @@ pub struct ChatEngine<F> {
     storage: HashMapStorage,
     bind_cache: HashMap<String, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
-    history_node: Option<String>,
+    history_nodes: Vec<String>,
+    turn_count: usize,
+    llm_turn_sizes: HashMap<String, Vec<usize>>,
 }
 
 impl<F> ChatEngine<F>
@@ -850,7 +858,6 @@ where
         extern_fns: ExternFnRegistry,
         mut storage: HashMapStorage,
         entrypoint: &str,
-        history: Option<&str>,
     ) -> Result<Self, ChatError> {
         let name_to_idx: HashMap<String, usize> = nodes
             .iter()
@@ -862,9 +869,50 @@ where
             .get(entrypoint)
             .ok_or_else(|| ChatError::EntrypointNotFound(entrypoint.to_string()))?;
 
-        if let Some(h) = history {
-            if !name_to_idx.contains_key(h) {
-                return Err(ChatError::HistoryNodeNotFound(h.to_string()));
+        // Collect history nodes
+        let history_nodes: Vec<String> = nodes
+            .iter()
+            .filter(|n| n.history)
+            .map(|n| n.name.clone())
+            .collect();
+
+        // Validate: history + IfModified is not allowed
+        for name in &history_nodes {
+            let idx = name_to_idx[name];
+            if matches!(nodes[idx].strategy.mode, StrategyMode::IfModified) {
+                return Err(ChatError::HistoryNodeIfModified(name.clone()));
+            }
+        }
+
+        // Validate: history nodes must be reachable from entrypoint via BFS
+        // Tool targets are implicitly reachable (called on demand), so we
+        // collect all tool target nodes as well.
+        let mut reachable = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(entrypoint_idx);
+        reachable.insert(entrypoint_idx);
+        while let Some(idx) = queue.pop_front() {
+            for key in &nodes[idx].all_context_keys {
+                if let Some(&dep_idx) = name_to_idx.get(key) {
+                    if reachable.insert(dep_idx) {
+                        queue.push_back(dep_idx);
+                    }
+                }
+            }
+            // Tool targets are also reachable
+            if let CompiledNodeKind::Llm { tools, .. } = &nodes[idx].kind {
+                for tool in tools {
+                    if let Some(&dep_idx) = name_to_idx.get(&tool.node) {
+                        if reachable.insert(dep_idx) {
+                            queue.push_back(dep_idx);
+                        }
+                    }
+                }
+            }
+        }
+        for name in &history_nodes {
+            if !reachable.contains(&name_to_idx[name]) {
+                return Err(ChatError::HistoryNodeUnreachable(name.clone()));
             }
         }
 
@@ -885,9 +933,13 @@ where
             storage.set("context".into(), Value::Object(context_obj));
         }
 
-        // Seed empty history list
-        if history.is_some() {
-            storage.set("history".into(), Value::List(Vec::new()));
+        // Seed history as Object with per-node empty lists
+        if !history_nodes.is_empty() {
+            let mut history_obj = BTreeMap::new();
+            for name in &history_nodes {
+                history_obj.insert(name.clone(), Value::List(Vec::new()));
+            }
+            storage.set("history".into(), Value::Object(history_obj));
         }
 
         Ok(Self {
@@ -899,7 +951,9 @@ where
             storage,
             bind_cache: HashMap::new(),
             entrypoint_idx,
-            history_node: history.map(|s| s.to_string()),
+            history_nodes,
+            turn_count: 0,
+            llm_turn_sizes: HashMap::new(),
         })
     }
 
@@ -927,7 +981,6 @@ where
             fetch: &self.fetch,
             extern_fns: &self.extern_fns,
             resolver,
-            history_node: &self.history_node,
         };
 
         ctx.resolve_node(
@@ -940,10 +993,41 @@ where
         )
         .await?;
 
-        // Apply deferred history updates after all coroutines are dropped
+        // Apply deferred LLM history updates
+        let llm_updated: HashSet<String> = pending_updates
+            .iter()
+            .map(|u| u.node_name.clone())
+            .collect();
         for update in pending_updates {
-            update_history(&mut self.storage, &update.messages, &update.response_text);
+            let msg_count = update.messages.len() + 1; // +1 for assistant response
+            update_history(
+                &mut self.storage,
+                &update.node_name,
+                &update.messages,
+                &update.response_text,
+            );
+            self.llm_turn_sizes
+                .entry(update.node_name)
+                .or_default()
+                .push(msg_count);
         }
+
+        // Non-LLM history nodes: append this turn's output
+        for name in &self.history_nodes {
+            if llm_updated.contains(name) {
+                continue;
+            }
+            let output = self.storage.get(name).map(|arc| (*arc).clone());
+            if let Some(output) = output {
+                if let Some(Value::Object(obj)) = self.storage.get_mut("history") {
+                    if let Some(Value::List(list)) = obj.get_mut(name) {
+                        list.push(output);
+                    }
+                }
+            }
+        }
+
+        self.turn_count += 1;
 
         let name = &self.nodes[self.entrypoint_idx].name;
         let result = self
@@ -957,19 +1041,27 @@ where
     }
 
     pub fn history_len(&self) -> usize {
-        match self.storage.get("history") {
-            Some(arc) => match &*arc {
-                Value::List(list) => list.len(),
-                _ => 0,
-            },
-            None => 0,
-        }
+        self.turn_count
     }
 
-    pub fn history_pop(&mut self) -> Option<Value> {
-        match self.storage.get_mut("history") {
-            Some(Value::List(list)) => list.pop(),
-            _ => None,
+    pub fn history_pop(&mut self) {
+        if self.turn_count == 0 {
+            return;
+        }
+        self.turn_count -= 1;
+        if let Some(Value::Object(obj)) = self.storage.get_mut("history") {
+            for name in &self.history_nodes {
+                if let Some(Value::List(list)) = obj.get_mut(name) {
+                    if let Some(sizes) = self.llm_turn_sizes.get_mut(name) {
+                        // LLM node: pop turn_size entries
+                        let n = sizes.pop().unwrap_or(0);
+                        list.truncate(list.len().saturating_sub(n));
+                    } else {
+                        // Non-LLM node: pop 1 entry
+                        list.pop();
+                    }
+                }
+            }
         }
     }
 
@@ -977,12 +1069,26 @@ where
     where
         R: AsyncFn(String) -> Value + Sync,
     {
-        let len = self.history_len();
-        assert!(index <= len, "re_execute index out of bounds: {index} > {len}");
-        match self.storage.get_mut("history") {
-            Some(Value::List(list)) => list.truncate(index),
-            _ => panic!("re_execute called without history"),
+        assert!(
+            index <= self.turn_count,
+            "re_execute index out of bounds: {index} > {}",
+            self.turn_count,
+        );
+        // Truncate all history nodes to `index` turns
+        if let Some(Value::Object(obj)) = self.storage.get_mut("history") {
+            for name in &self.history_nodes {
+                if let Some(Value::List(list)) = obj.get_mut(name) {
+                    if let Some(sizes) = self.llm_turn_sizes.get_mut(name) {
+                        let keep: usize = sizes[..index].iter().sum();
+                        sizes.truncate(index);
+                        list.truncate(keep);
+                    } else {
+                        list.truncate(index);
+                    }
+                }
+            }
         }
+        self.turn_count = index;
         self.turn(resolver).await
     }
 }
@@ -1086,6 +1192,7 @@ mod tests {
             name: "main".into(),
             kind: NodeKind::Plain { source: "hello".into() },
             strategy: Strategy::default(),
+            history: false,
         }]);
         let (pname, pconfig) = default_provider();
         let result = ChatEngine::new(
@@ -1095,7 +1202,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await;
         assert!(result.is_ok());
@@ -1107,6 +1213,7 @@ mod tests {
             name: "main".into(),
             kind: NodeKind::Plain { source: "hello".into() },
             strategy: Strategy::default(),
+            history: false,
         }]);
         let (pname, pconfig) = default_provider();
         let result = ChatEngine::new(
@@ -1116,7 +1223,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "nonexistent",
-            None,
         )
         .await;
         assert!(matches!(result, Err(ChatError::EntrypointNotFound(_))));
@@ -1128,6 +1234,7 @@ mod tests {
             name: "main".into(),
             kind: NodeKind::Plain { source: "hello world".into() },
             strategy: Strategy::default(),
+            history: false,
         }]);
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
@@ -1137,7 +1244,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await
         .unwrap();
@@ -1163,6 +1269,7 @@ mod tests {
                 max_tokens: None,
             },
             strategy: Strategy::default(),
+            history: false,
         }]);
         let (pname, pconfig) = default_provider();
         let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
@@ -1173,7 +1280,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await
         .unwrap();
@@ -1189,6 +1295,7 @@ mod tests {
                 name: "tool_target".into(),
                 kind: NodeKind::Plain { source: "tool result text".into() },
                 strategy: Strategy::default(),
+                history: false,
             },
             NodeSpec {
                 name: "main".into(),
@@ -1210,6 +1317,7 @@ mod tests {
                     max_tokens: None,
                 },
                 strategy: Strategy::default(),
+                history: false,
             },
         ]);
         let (pname, pconfig) = default_provider();
@@ -1224,7 +1332,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await
         .unwrap();
@@ -1240,6 +1347,7 @@ mod tests {
                 name: "tool_target".into(),
                 kind: NodeKind::Plain { source: "result".into() },
                 strategy: Strategy::default(),
+                history: false,
             },
             NodeSpec {
                 name: "main".into(),
@@ -1261,6 +1369,7 @@ mod tests {
                     max_tokens: None,
                 },
                 strategy: Strategy::default(),
+                history: false,
             },
         ]);
         let (pname, pconfig) = default_provider();
@@ -1277,7 +1386,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await
         .unwrap();
@@ -1293,6 +1401,7 @@ mod tests {
                 name: "tool_target".into(),
                 kind: NodeKind::Plain { source: "result".into() },
                 strategy: Strategy::default(),
+                history: false,
             },
             NodeSpec {
                 name: "main".into(),
@@ -1314,6 +1423,7 @@ mod tests {
                     max_tokens: None,
                 },
                 strategy: Strategy::default(),
+                history: false,
             },
         ]);
         let (pname, pconfig) = default_provider();
@@ -1335,7 +1445,6 @@ mod tests {
             ExternFnRegistry::new(),
             HashMapStorage::new(),
             "main",
-            None,
         )
         .await
         .unwrap();

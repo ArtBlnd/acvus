@@ -34,6 +34,7 @@ pub struct NodeSpec {
     pub name: String,
     pub kind: NodeKind,
     pub strategy: Strategy,
+    pub history: bool,
 }
 
 #[derive(Debug, Clone, Default)]

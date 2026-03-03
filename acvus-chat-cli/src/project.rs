@@ -10,7 +10,6 @@ pub struct ProjectSpec {
     pub fuel_limit: u64,
     pub nodes: Vec<String>,
     pub entrypoint: String,
-    pub history: Option<String>,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
