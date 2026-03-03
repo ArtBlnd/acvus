@@ -1,0 +1,24 @@
+name = "chat"
+kind = "llm"
+provider = "gemini"
+model = "gemini-2.5-flash"
+
+[strategy]
+mode = "always"
+
+[[messages]]
+role = "system"
+template = "system.acvus"
+
+[[messages]]
+iterator = "@context.chat.histories"
+
+[[messages]]
+role = "user"
+template = "user.acvus"
+
+[[tools]]
+name = "get_weather"
+description = "Get current weather for a city"
+node = "get_weather"
+params = { city = "string" }

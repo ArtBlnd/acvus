@@ -20,8 +20,14 @@ pub enum ChatError {
     #[error("parse error for node {node}: {detail}")]
     Parse { node: String, detail: String },
 
-    #[error("tool calls not supported for node {0}")]
-    UnsupportedToolCalls(String),
+    #[error("tool not found: node {node} requested tool {tool}")]
+    ToolNotFound { node: String, tool: String },
+
+    #[error("tool target node not found: tool {tool} targets {target}")]
+    ToolTargetNotFound { tool: String, target: String },
+
+    #[error("tool call limit exceeded for node {0}")]
+    ToolCallLimitExceeded(String),
 }
 
 /// Shorthand for formatting a `Value` variant name without pulling in the full debug repr.

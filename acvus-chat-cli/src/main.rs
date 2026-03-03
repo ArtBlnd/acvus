@@ -48,6 +48,10 @@ fn parse_context_args(args: &[String]) -> HashMap<String, String> {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     let project_dir_arg = args.get(1);
 

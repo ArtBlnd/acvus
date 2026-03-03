@@ -108,6 +108,8 @@ struct GenerationParamsDef {
 struct ToolBindingDef {
     name: String,
     #[serde(default)]
+    description: String,
+    #[serde(default)]
     node: String,
     #[serde(default)]
     params: HashMap<String, String>,
@@ -185,6 +187,7 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
 
     let tools: Vec<ToolBinding> = def.tools.into_iter().map(|t| ToolBinding {
         name: t.name,
+        description: t.description,
         node: t.node,
         params: t.params,
     }).collect();

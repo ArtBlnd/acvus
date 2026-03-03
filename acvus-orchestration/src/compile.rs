@@ -49,6 +49,7 @@ impl CompiledNodeKind {
 #[derive(Debug, Clone)]
 pub struct CompiledToolBinding {
     pub name: String,
+    pub description: String,
     pub node: String,
     pub params: HashMap<String, Ty>,
 }
@@ -315,6 +316,7 @@ fn compile_tool_bindings(tools: &[ToolBinding]) -> Result<Vec<CompiledToolBindin
         }
         compiled.push(CompiledToolBinding {
             name: tool.name.clone(),
+            description: tool.description.clone(),
             node: tool.node.clone(),
             params,
         });
@@ -434,10 +436,35 @@ pub fn compile_nodes(
         context_types.insert(spec.name.clone(), Ty::String);
     }
 
+    // Collect tool param types: target node name → param name → Ty.
+    // When a tool targets a node, the tool's params become context types
+    // available to that node at compile time.
+    let mut tool_param_types: HashMap<String, HashMap<String, Ty>> = HashMap::new();
+    for spec in specs {
+        if let NodeKind::Llm { tools, .. } = &spec.kind {
+            for tool in tools {
+                let mut params = HashMap::new();
+                for (param_name, type_name) in &tool.params {
+                    if let Some(ty) = parse_type_name(type_name) {
+                        params.insert(param_name.clone(), ty);
+                    }
+                }
+                tool_param_types
+                    .entry(tool.node.clone())
+                    .or_default()
+                    .extend(params);
+            }
+        }
+    }
+
     let mut nodes = Vec::new();
     let mut errors = Vec::new();
     for spec in specs {
-        match compile_node(spec, &context_types, registry) {
+        let mut node_ctx = context_types.clone();
+        if let Some(params) = tool_param_types.get(&spec.name) {
+            node_ctx.extend(params.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        match compile_node(spec, &node_ctx, registry) {
             Ok(node) => nodes.push(node),
             Err(errs) => errors.extend(errs),
         }

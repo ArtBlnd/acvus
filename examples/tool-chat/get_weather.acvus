@@ -1,0 +1,1 @@
+The weather in {{ @city }} is sunny, 24°C.

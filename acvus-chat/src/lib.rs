@@ -11,7 +11,8 @@ use acvus_interpreter::{ExternFnRegistry, Interpreter, NeedContextStepped, Resum
 use acvus_orchestration::{
     build_cache_request, build_request, parse_cache_response, parse_response, CompiledBlock,
     CompiledMessage, CompiledNode, CompiledNodeKind, CompiledToolBinding, Fetch,
-    HashMapStorage, Message, ModelResponse, ProviderConfig, Storage, StrategyMode, ToolSpec,
+    HashMapStorage, Message, ModelResponse, ProviderConfig, Storage, StrategyMode, ToolCall,
+    ToolSpec,
 };
 
 use error::value_type_name;
@@ -129,16 +130,48 @@ fn update_history(
     }
 }
 
+fn ty_to_json_schema(ty: &acvus_mir::ty::Ty) -> &'static str {
+    use acvus_mir::ty::Ty;
+    match ty {
+        Ty::String => "string",
+        Ty::Int => "integer",
+        Ty::Float => "number",
+        Ty::Bool => "boolean",
+        _ => "string",
+    }
+}
+
 fn tool_specs(tools: &[CompiledToolBinding]) -> Vec<ToolSpec> {
     tools
         .iter()
         .map(|t| ToolSpec {
             name: t.name.clone(),
-            description: String::new(),
-            params: t.params.iter().map(|(k, v)| (k.clone(), format!("{v:?}"))).collect(),
+            description: t.description.clone(),
+            params: t.params.iter().map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string())).collect(),
         })
         .collect()
 }
+
+fn json_to_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Unit,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(obj) => {
+            Value::Object(obj.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect())
+        }
+    }
+}
+
+const MAX_TOOL_ROUNDS: usize = 10;
 
 impl<'a, F, R> RenderCtx<'a, F, R>
 where
@@ -175,6 +208,7 @@ where
         } else if let Some(cached) = turn_local.get(name) {
             Ok(cached.clone())
         } else {
+            tracing::debug!(context = %name, "resolve via external resolver");
             let resolved = (self.resolver)(name.to_string()).await;
             turn_local.insert(name.to_string(), resolved.clone());
             Ok(resolved)
@@ -244,6 +278,7 @@ where
     ) -> Fut<'a, Result<(), ChatError>> {
         Box::pin(async move {
             let node = &self.nodes[idx];
+            tracing::debug!(node = %node.name, "resolve_node");
 
             if matches!(node.strategy.mode, StrategyMode::IfModified) {
                 if let Some(key_block) = &node.key_module {
@@ -255,6 +290,7 @@ where
                         .map(|k| k == &current_key)
                         .unwrap_or(false)
                     {
+                        tracing::debug!(node = %node.name, "if_modified skip (key unchanged)");
                         return Ok(());
                     }
                     key_cache.insert(node.name.clone(), current_key);
@@ -290,11 +326,15 @@ where
                     let request = build_cache_request(
                         &provider_config, model, &rendered, ttl, cache_config,
                     );
+                    tracing::debug!(node = %node.name, body = %request.body, "llm_cache fetch request");
                     let json = self.fetch.fetch(&request).await.map_err(|e| {
+                        tracing::warn!(node = %node.name, error = %e, "llm_cache fetch failed");
                         ChatError::Fetch { node: node.name.clone(), detail: e }
                     })?;
+                    tracing::debug!(node = %node.name, response = %json, "llm_cache fetch response");
                     let cache_name =
                         parse_cache_response(&provider_config.api, &json).map_err(|e| {
+                            tracing::warn!(node = %node.name, response = %json, "llm_cache parse failed");
                             ChatError::Parse { node: node.name.clone(), detail: e }
                         })?;
                     storage.set(node.name.clone(), Value::String(cache_name));
@@ -344,38 +384,123 @@ where
                     let request = build_request(
                         &provider_config, model, &rendered, &specs, generation, cached_content.as_deref(),
                     );
+                    tracing::debug!(node = %node.name, body = %request.body, "llm fetch request");
                     let json = self.fetch.fetch(&request).await.map_err(|e| {
+                        tracing::warn!(node = %node.name, error = %e, "llm fetch failed");
                         ChatError::Fetch { node: node.name.clone(), detail: e }
                     })?;
-                    let response =
+                    tracing::debug!(node = %node.name, response = %json, "llm fetch response");
+                    let mut response =
                         parse_response(&provider_config.api, &json).map_err(|e| {
+                            tracing::warn!(node = %node.name, response = %json, "llm parse failed");
                             ChatError::Parse { node: node.name.clone(), detail: e }
                         })?;
 
-                    let response_text = match response {
-                        ModelResponse::Text(text) => text,
-                        ModelResponse::ToolCalls(_) => {
-                            return Err(ChatError::UnsupportedToolCalls(node.name.clone()));
+                    let mut tool_rounds = 0usize;
+                    loop {
+                        match response {
+                            ModelResponse::Text(text) => {
+                                tracing::debug!(node = %node.name, len = text.len(), "llm text response");
+                                let iterator_keys: Vec<String> = messages
+                                    .iter()
+                                    .filter_map(|m| match m {
+                                        CompiledMessage::Iterator { key, .. } => Some(key.clone()),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                if !iterator_keys.is_empty() {
+                                    update_history(storage, &iterator_keys, &new_turn_messages, &text);
+                                }
+                                storage.set(node.name.clone(), Value::String(text));
+                                break;
+                            }
+                            ModelResponse::ToolCalls(calls) => {
+                                tool_rounds += 1;
+                                if tool_rounds > MAX_TOOL_ROUNDS {
+                                    return Err(ChatError::ToolCallLimitExceeded(node.name.clone()));
+                                }
+
+                                rendered.push(Message {
+                                    role: "assistant".into(),
+                                    content: String::new(),
+                                    tool_calls: calls.clone(),
+                                    tool_call_id: None,
+                                });
+
+                                for call in &calls {
+                                    tracing::debug!(node = %node.name, tool = %call.name, args = %call.arguments, "tool call received");
+                                    let result_text = self.execute_tool_call(
+                                        call, &node.name, tools, storage, key_cache, turn_local,
+                                    ).await?;
+                                    tracing::debug!(tool = %call.name, result = %result_text, "tool call result");
+                                    rendered.push(Message {
+                                        role: "tool".into(),
+                                        content: result_text,
+                                        tool_calls: Vec::new(),
+                                        tool_call_id: Some(call.id.clone()),
+                                    });
+                                }
+
+                                let request = build_request(
+                                    &provider_config, model, &rendered, &specs, generation, cached_content.as_deref(),
+                                );
+                                tracing::debug!(node = %node.name, body = %request.body, "llm fetch request (tool followup)");
+                                let json = self.fetch.fetch(&request).await.map_err(|e| {
+                                    tracing::warn!(node = %node.name, error = %e, "llm fetch failed (tool followup)");
+                                    ChatError::Fetch { node: node.name.clone(), detail: e }
+                                })?;
+                                tracing::debug!(node = %node.name, response = %json, "llm fetch response (tool followup)");
+                                response = parse_response(&provider_config.api, &json).map_err(|e| {
+                                    tracing::warn!(node = %node.name, response = %json, "llm parse failed (tool followup)");
+                                    ChatError::Parse { node: node.name.clone(), detail: e }
+                                })?;
+                            }
                         }
-                    };
-
-                    // Update history for iterator keys
-                    let iterator_keys: Vec<String> = messages
-                        .iter()
-                        .filter_map(|m| match m {
-                            CompiledMessage::Iterator { key, .. } => Some(key.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    if !iterator_keys.is_empty() {
-                        update_history(storage, &iterator_keys, &new_turn_messages, &response_text);
                     }
-
-                    storage.set(node.name.clone(), Value::String(response_text));
                 }
             }
             Ok(())
         })
+    }
+
+    async fn execute_tool_call(
+        &'a self,
+        call: &ToolCall,
+        node_name: &str,
+        tools: &[CompiledToolBinding],
+        storage: &'a mut HashMapStorage,
+        key_cache: &'a mut HashMap<String, String>,
+        turn_local: &'a mut HashMap<String, Value>,
+    ) -> Result<String, ChatError> {
+        let binding = tools.iter().find(|t| t.name == call.name).ok_or_else(|| {
+            ChatError::ToolNotFound { node: node_name.to_string(), tool: call.name.clone() }
+        })?;
+        let target_idx = *self.name_to_idx.get(&binding.node).ok_or_else(|| {
+            ChatError::ToolTargetNotFound {
+                tool: call.name.clone(),
+                target: binding.node.clone(),
+            }
+        })?;
+
+        let tool_local: HashMap<String, Value> = match &call.arguments {
+            serde_json::Value::Object(obj) => {
+                obj.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect()
+            }
+            _ => HashMap::new(),
+        };
+
+        self.resolve_node(target_idx, storage, tool_local, key_cache, turn_local)
+            .await?;
+
+        let result = storage
+            .get(&binding.node)
+            .map(|arc| match &*arc {
+                Value::String(s) => s.clone(),
+                other => format!("{other:?}"),
+            })
+            .unwrap_or_default();
+
+        Ok(result)
     }
 
     async fn expand_iterator(
@@ -392,7 +517,10 @@ where
         let stored = storage.get(key);
         let all_items = match stored.as_deref() {
             Some(Value::List(items)) => items,
-            _ => return Ok(Vec::new()),
+            _ => {
+                tracing::debug!(key = %key, "expand_iterator: no history");
+                return Ok(Vec::new());
+            }
         };
 
         let items: &[Value] = if let Some(s) = slice {
@@ -408,6 +536,7 @@ where
             all_items
         };
 
+        tracing::debug!(key = %key, count = items.len(), "expand_iterator");
         let mut messages = Vec::new();
         for item in items {
             let (item_type, item_text) = item_fields(item);
@@ -496,6 +625,9 @@ where
     where
         R: AsyncFn(String) -> Value + Sync,
     {
+        let entrypoint = &self.nodes[self.entrypoint_idx].name;
+        tracing::debug!(entrypoint = %entrypoint, "turn start");
+
         // Remove always-strategy nodes so they re-resolve this turn
         for node in &self.nodes {
             if matches!(node.strategy.mode, StrategyMode::Always) {
@@ -533,5 +665,384 @@ where
             Value::String(s) => Ok(s),
             other => Err(ChatError::EmitType(value_type_name(&other))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    use acvus_mir::extern_module::ExternRegistry;
+    use acvus_orchestration::{
+        compile_nodes, ApiKind, GenerationParams, HttpRequest, MessageSpec, NodeKind, NodeSpec,
+        Strategy, ToolBinding,
+    };
+
+    // -- MockFetch: returns queued JSON responses in order -----------------------
+
+    struct MockFetch {
+        responses: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl MockFetch {
+        fn new(responses: Vec<serde_json::Value>) -> Self {
+            Self { responses: Mutex::new(responses) }
+        }
+    }
+
+    impl Fetch for MockFetch {
+        async fn fetch(&self, _request: &HttpRequest) -> Result<serde_json::Value, String> {
+            let mut q = self.responses.lock().unwrap();
+            if q.is_empty() {
+                return Err("no more mock responses".into());
+            }
+            Ok(q.remove(0))
+        }
+    }
+
+    // -- helpers ----------------------------------------------------------------
+
+    fn openai_text_response(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": text
+                }
+            }]
+        })
+    }
+
+    fn openai_tool_call_response(calls: Vec<(&str, &str, serde_json::Value)>) -> serde_json::Value {
+        let tool_calls: Vec<serde_json::Value> = calls
+            .into_iter()
+            .enumerate()
+            .map(|(_, (id, name, args))| {
+                serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": serde_json::to_string(&args).unwrap()
+                    }
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": tool_calls
+                }
+            }]
+        })
+    }
+
+    fn default_provider() -> (String, ProviderConfig) {
+        (
+            "test".into(),
+            ProviderConfig {
+                api: ApiKind::OpenAI,
+                endpoint: "http://mock".into(),
+                api_key: String::new(),
+            },
+        )
+    }
+
+    fn noop_resolver() -> impl AsyncFn(String) -> Value + Sync {
+        |_: String| async { Value::Unit }
+    }
+
+    fn compile_test_nodes(specs: &[NodeSpec]) -> Vec<CompiledNode> {
+        compile_nodes(specs, &HashMap::new(), &ExternRegistry::default()).unwrap()
+    }
+
+    // -- tests ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn new_valid_entrypoint() {
+        let nodes = compile_test_nodes(&[NodeSpec {
+            name: "main".into(),
+            kind: NodeKind::Plain { source: "hello".into() },
+            strategy: Strategy::default(),
+        }]);
+        let (pname, pconfig) = default_provider();
+        let result = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            MockFetch::new(vec![]),
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_invalid_entrypoint() {
+        let nodes = compile_test_nodes(&[NodeSpec {
+            name: "main".into(),
+            kind: NodeKind::Plain { source: "hello".into() },
+            strategy: Strategy::default(),
+        }]);
+        let (pname, pconfig) = default_provider();
+        let result = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            MockFetch::new(vec![]),
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "nonexistent",
+        )
+        .await;
+        assert!(matches!(result, Err(ChatError::EntrypointNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn turn_plain_node() {
+        let nodes = compile_test_nodes(&[NodeSpec {
+            name: "main".into(),
+            kind: NodeKind::Plain { source: "hello world".into() },
+            strategy: Strategy::default(),
+        }]);
+        let (pname, pconfig) = default_provider();
+        let mut engine = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            MockFetch::new(vec![]),
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await
+        .unwrap();
+
+        let result = engine.turn(&noop_resolver()).await.unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[tokio::test]
+    async fn turn_llm_text_response() {
+        let nodes = compile_test_nodes(&[NodeSpec {
+            name: "main".into(),
+            kind: NodeKind::Llm {
+                provider: "test".into(),
+                model: "gpt-test".into(),
+                messages: vec![MessageSpec::Block {
+                    role: "user".into(),
+                    source: "hi".into(),
+                }],
+                tools: vec![],
+                generation: GenerationParams::default(),
+                cache_key: None,
+            },
+            strategy: Strategy::default(),
+        }]);
+        let (pname, pconfig) = default_provider();
+        let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
+        let mut engine = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            mock,
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await
+        .unwrap();
+
+        let result = engine.turn(&noop_resolver()).await.unwrap();
+        assert_eq!(result, "hello from LLM");
+    }
+
+    #[tokio::test]
+    async fn turn_tool_call_round_trip() {
+        let nodes = compile_test_nodes(&[
+            NodeSpec {
+                name: "tool_target".into(),
+                kind: NodeKind::Plain { source: "tool result text".into() },
+                strategy: Strategy::default(),
+            },
+            NodeSpec {
+                name: "main".into(),
+                kind: NodeKind::Llm {
+                    provider: "test".into(),
+                    model: "gpt-test".into(),
+                    messages: vec![MessageSpec::Block {
+                        role: "user".into(),
+                        source: "use the tool".into(),
+                    }],
+                    tools: vec![ToolBinding {
+                        name: "my_tool".into(),
+                        description: String::new(),
+                        node: "tool_target".into(),
+                        params: HashMap::new(),
+                    }],
+                    generation: GenerationParams::default(),
+                    cache_key: None,
+                },
+                strategy: Strategy::default(),
+            },
+        ]);
+        let (pname, pconfig) = default_provider();
+        let mock = MockFetch::new(vec![
+            openai_tool_call_response(vec![("call_1", "my_tool", serde_json::json!({}))]),
+            openai_text_response("final answer"),
+        ]);
+        let mut engine = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            mock,
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await
+        .unwrap();
+
+        let result = engine.turn(&noop_resolver()).await.unwrap();
+        assert_eq!(result, "final answer");
+    }
+
+    #[tokio::test]
+    async fn turn_tool_not_found() {
+        let nodes = compile_test_nodes(&[
+            NodeSpec {
+                name: "tool_target".into(),
+                kind: NodeKind::Plain { source: "result".into() },
+                strategy: Strategy::default(),
+            },
+            NodeSpec {
+                name: "main".into(),
+                kind: NodeKind::Llm {
+                    provider: "test".into(),
+                    model: "gpt-test".into(),
+                    messages: vec![MessageSpec::Block {
+                        role: "user".into(),
+                        source: "use tool".into(),
+                    }],
+                    tools: vec![ToolBinding {
+                        name: "my_tool".into(),
+                        description: String::new(),
+                        node: "tool_target".into(),
+                        params: HashMap::new(),
+                    }],
+                    generation: GenerationParams::default(),
+                    cache_key: None,
+                },
+                strategy: Strategy::default(),
+            },
+        ]);
+        let (pname, pconfig) = default_provider();
+        // Model calls a tool name that doesn't match any binding
+        let mock = MockFetch::new(vec![openai_tool_call_response(vec![(
+            "call_1",
+            "unknown_tool",
+            serde_json::json!({}),
+        )])]);
+        let mut engine = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            mock,
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await
+        .unwrap();
+
+        let err = engine.turn(&noop_resolver()).await.unwrap_err();
+        assert!(matches!(err, ChatError::ToolNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn turn_tool_call_limit() {
+        let nodes = compile_test_nodes(&[
+            NodeSpec {
+                name: "tool_target".into(),
+                kind: NodeKind::Plain { source: "result".into() },
+                strategy: Strategy::default(),
+            },
+            NodeSpec {
+                name: "main".into(),
+                kind: NodeKind::Llm {
+                    provider: "test".into(),
+                    model: "gpt-test".into(),
+                    messages: vec![MessageSpec::Block {
+                        role: "user".into(),
+                        source: "loop".into(),
+                    }],
+                    tools: vec![ToolBinding {
+                        name: "my_tool".into(),
+                        description: String::new(),
+                        node: "tool_target".into(),
+                        params: HashMap::new(),
+                    }],
+                    generation: GenerationParams::default(),
+                    cache_key: None,
+                },
+                strategy: Strategy::default(),
+            },
+        ]);
+        let (pname, pconfig) = default_provider();
+        // Return tool calls 11 times → exceeds MAX_TOOL_ROUNDS (10)
+        let responses: Vec<_> = (0..=MAX_TOOL_ROUNDS)
+            .map(|i| {
+                openai_tool_call_response(vec![(
+                    &format!("call_{i}"),
+                    "my_tool",
+                    serde_json::json!({}),
+                )])
+            })
+            .collect();
+        let mock = MockFetch::new(responses);
+        let mut engine = ChatEngine::new(
+            nodes,
+            HashMap::from([(pname, pconfig)]),
+            mock,
+            ExternFnRegistry::new(),
+            HashMapStorage::new(),
+            "main",
+        )
+        .await
+        .unwrap();
+
+        let err = engine.turn(&noop_resolver()).await.unwrap_err();
+        assert!(matches!(err, ChatError::ToolCallLimitExceeded(_)));
+    }
+
+    #[test]
+    fn tool_specs_json_schema_types() {
+        use acvus_mir::ty::Ty;
+        let tools = vec![CompiledToolBinding {
+            name: "t".into(),
+            description: String::new(),
+            node: "n".into(),
+            params: HashMap::from([
+                ("a".into(), Ty::String),
+                ("b".into(), Ty::Int),
+                ("c".into(), Ty::Float),
+                ("d".into(), Ty::Bool),
+            ]),
+        }];
+        let specs = tool_specs(&tools);
+        assert_eq!(specs[0].params["a"], "string");
+        assert_eq!(specs[0].params["b"], "integer");
+        assert_eq!(specs[0].params["c"], "number");
+        assert_eq!(specs[0].params["d"], "boolean");
+    }
+
+    #[test]
+    fn json_to_value_basic() {
+        assert!(matches!(json_to_value(&serde_json::json!(null)), Value::Unit));
+        assert!(matches!(json_to_value(&serde_json::json!(true)), Value::Bool(true)));
+        assert!(matches!(json_to_value(&serde_json::json!(42)), Value::Int(42)));
+        assert!(matches!(json_to_value(&serde_json::json!(3.14)), Value::Float(f) if (f - 3.14).abs() < f64::EPSILON));
+        assert!(matches!(json_to_value(&serde_json::json!("hello")), Value::String(s) if s == "hello"));
+        assert!(matches!(json_to_value(&serde_json::json!([1, 2])), Value::List(v) if v.len() == 2));
+        assert!(matches!(json_to_value(&serde_json::json!({"key": "val"})), Value::Object(m) if m.contains_key("key")));
     }
 }

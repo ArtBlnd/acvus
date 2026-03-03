@@ -120,8 +120,8 @@ where
                                 .iter()
                                 .map(|t| ToolSpec {
                                     name: t.name.clone(),
-                                    description: String::new(),
-                                    params: t.params.iter().map(|(k, v)| (k.clone(), format!("{v:?}"))).collect(),
+                                    description: t.description.clone(),
+                                    params: t.params.iter().map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string())).collect(),
                                 })
                                 .collect();
                             (provider.clone(), model.clone(), tool_specs, generation.clone())
@@ -431,6 +431,17 @@ fn consume_fuel(fuel: &AtomicU64, limit: u64) -> Result<(), OrchError> {
         Err(OrchError::new(OrchErrorKind::FuelExhausted))
     } else {
         Ok(())
+    }
+}
+
+fn ty_to_json_schema(ty: &acvus_mir::ty::Ty) -> &'static str {
+    use acvus_mir::ty::Ty;
+    match ty {
+        Ty::String => "string",
+        Ty::Int => "integer",
+        Ty::Float => "number",
+        Ty::Bool => "boolean",
+        _ => "string",
     }
 }
 

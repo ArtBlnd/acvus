@@ -80,6 +80,7 @@ pub struct GenerationParams {
 #[derive(Debug, Clone)]
 pub struct ToolBinding {
     pub name: String,
+    pub description: String,
     pub node: String,
     pub params: HashMap<String, String>,
 }
