@@ -2,8 +2,8 @@ use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
-    #[error("no iterator found in messages")]
-    NoIterator,
+    #[error("entrypoint not found: {0}")]
+    EntrypointNotFound(String),
 
     #[error("unknown provider: {0}")]
     UnknownProvider(String),

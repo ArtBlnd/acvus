@@ -20,6 +20,10 @@ pub enum OrchErrorKind {
     CycleDetected { nodes: Vec<String> },
     UnresolvedDependency { node: String, key: String },
 
+    // Tool
+    ToolTargetNotFound { tool: String, target: String },
+    ToolParamType { tool: String, param: String, type_name: String },
+
     // Runtime
     FuelExhausted,
     ModelError(String),
@@ -47,6 +51,12 @@ impl fmt::Display for OrchError {
             }
             OrchErrorKind::UnresolvedDependency { node, key } => {
                 write!(f, "unresolved dependency: node '{node}' requires key '{key}'")
+            }
+            OrchErrorKind::ToolTargetNotFound { tool, target } => {
+                write!(f, "tool '{tool}' references unknown node '{target}'")
+            }
+            OrchErrorKind::ToolParamType { tool, param, type_name } => {
+                write!(f, "tool '{tool}' param '{param}': unknown type '{type_name}'")
             }
             OrchErrorKind::FuelExhausted => write!(f, "fuel exhausted"),
             OrchErrorKind::ModelError(msg) => write!(f, "model error: {msg}"),

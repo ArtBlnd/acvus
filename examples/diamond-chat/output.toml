@@ -1,0 +1,3 @@
+name = "output"
+kind = "plain"
+template = "output.acvus"

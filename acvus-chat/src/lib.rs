@@ -10,8 +10,8 @@ use std::sync::Arc;
 use acvus_interpreter::{ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value};
 use acvus_orchestration::{
     build_cache_request, build_request, parse_cache_response, parse_response, CompiledBlock,
-    CompiledMessage, CompiledNode, Fetch, HashMapStorage, Message, ModelResponse, NodeKind,
-    ProviderConfig, Storage, StrategyMode, ToolDecl, ToolSpec,
+    CompiledMessage, CompiledNode, CompiledNodeKind, CompiledToolBinding, Fetch,
+    HashMapStorage, Message, ModelResponse, ProviderConfig, Storage, StrategyMode, ToolSpec,
 };
 
 use error::value_type_name;
@@ -129,13 +129,13 @@ fn update_history(
     }
 }
 
-fn tool_specs(tools: &[ToolDecl]) -> Vec<ToolSpec> {
+fn tool_specs(tools: &[CompiledToolBinding]) -> Vec<ToolSpec> {
     tools
         .iter()
         .map(|t| ToolSpec {
             name: t.name.clone(),
             description: String::new(),
-            params: t.params.clone(),
+            params: t.params.iter().map(|(k, v)| (k.clone(), format!("{v:?}"))).collect(),
         })
         .collect()
 }
@@ -261,28 +261,34 @@ where
                 }
             }
 
-            let mut messages = Vec::new();
-            for msg in &node.messages {
-                let block = match msg {
-                    CompiledMessage::Block(block) => block,
-                    CompiledMessage::Iterator { .. } => continue,
-                };
-                let text = self
-                    .render_with_deps(block, storage, local.clone(), key_cache, turn_local)
-                    .await?;
-                messages.push(Message::text(&block.role, text));
-            }
+            match &node.kind {
+                CompiledNodeKind::Plain { block } => {
+                    let text = self
+                        .render_with_deps(block, storage, local, key_cache, turn_local)
+                        .await?;
+                    storage.set(node.name.clone(), Value::String(text));
+                }
+                CompiledNodeKind::LlmCache { provider, model, messages, ttl, cache_config } => {
+                    let mut rendered = Vec::new();
+                    for msg in messages {
+                        let block = match msg {
+                            CompiledMessage::Block(block) => block,
+                            CompiledMessage::Iterator { .. } => continue,
+                        };
+                        let text = self
+                            .render_with_deps(block, storage, local.clone(), key_cache, turn_local)
+                            .await?;
+                        rendered.push(Message::text(&block.role, text));
+                    }
 
-            let provider_config = self
-                .providers
-                .get(&node.provider)
-                .ok_or_else(|| ChatError::UnknownProvider(node.provider.clone()))?
-                .clone();
+                    let provider_config = self
+                        .providers
+                        .get(provider)
+                        .ok_or_else(|| ChatError::UnknownProvider(provider.clone()))?
+                        .clone();
 
-            match node.kind {
-                NodeKind::LlmCache { ref ttl, ref cache_config } => {
                     let request = build_cache_request(
-                        &provider_config, &node.model, &messages, ttl, cache_config,
+                        &provider_config, model, &rendered, ttl, cache_config,
                     );
                     let json = self.fetch.fetch(&request).await.map_err(|e| {
                         ChatError::Fetch { node: node.name.clone(), detail: e }
@@ -293,11 +299,50 @@ where
                         })?;
                     storage.set(node.name.clone(), Value::String(cache_name));
                 }
-                NodeKind::Llm => {
-                    let tools = tool_specs(&node.tools);
+                CompiledNodeKind::Llm { provider, model, messages, tools, generation, cache_key } => {
+                    let mut rendered = Vec::new();
+                    let mut new_turn_messages = Vec::new();
+                    let first_iter = messages
+                        .iter()
+                        .position(|m| matches!(m, CompiledMessage::Iterator { .. }));
 
+                    let cached_content = if let Some(ck) = cache_key {
+                        self.resolve_cached_content(ck, storage, key_cache, turn_local)
+                            .await?
+                    } else {
+                        None
+                    };
+
+                    for (i, msg) in messages.iter().enumerate() {
+                        match msg {
+                            CompiledMessage::Block(block) => {
+                                let text = self
+                                    .render_with_deps(block, storage, local.clone(), key_cache, turn_local)
+                                    .await?;
+                                let message = Message::text(&block.role, text);
+                                rendered.push(message.clone());
+                                if first_iter.map_or(false, |pos| i > pos) {
+                                    new_turn_messages.push(message);
+                                }
+                            }
+                            CompiledMessage::Iterator { key, block, slice, bind, role } => {
+                                let expanded = self
+                                    .expand_iterator(key, block.as_ref(), slice, bind, role, storage, key_cache, turn_local)
+                                    .await?;
+                                rendered.extend(expanded);
+                            }
+                        }
+                    }
+
+                    let provider_config = self
+                        .providers
+                        .get(provider)
+                        .ok_or_else(|| ChatError::UnknownProvider(provider.clone()))?
+                        .clone();
+
+                    let specs = tool_specs(tools);
                     let request = build_request(
-                        &provider_config, &node.model, &messages, &tools, &node.generation, None,
+                        &provider_config, model, &rendered, &specs, generation, cached_content.as_deref(),
                     );
                     let json = self.fetch.fetch(&request).await.map_err(|e| {
                         ChatError::Fetch { node: node.name.clone(), detail: e }
@@ -307,14 +352,26 @@ where
                             ChatError::Parse { node: node.name.clone(), detail: e }
                         })?;
 
-                    match response {
-                        ModelResponse::Text(text) => {
-                            storage.set(node.name.clone(), Value::String(text));
-                        }
+                    let response_text = match response {
+                        ModelResponse::Text(text) => text,
                         ModelResponse::ToolCalls(_) => {
                             return Err(ChatError::UnsupportedToolCalls(node.name.clone()));
                         }
+                    };
+
+                    // Update history for iterator keys
+                    let iterator_keys: Vec<String> = messages
+                        .iter()
+                        .filter_map(|m| match m {
+                            CompiledMessage::Iterator { key, .. } => Some(key.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    if !iterator_keys.is_empty() {
+                        update_history(storage, &iterator_keys, &new_turn_messages, &response_text);
                     }
+
+                    storage.set(node.name.clone(), Value::String(response_text));
                 }
             }
             Ok(())
@@ -389,12 +446,7 @@ pub struct ChatEngine<F> {
     extern_fns: ExternFnRegistry,
     storage: HashMapStorage,
     key_cache: HashMap<String, String>,
-    static_messages: Vec<Message>,
-    first_iter_idx: usize,
-    iterator_keys: Vec<String>,
-    provider_config: ProviderConfig,
-    tools: Vec<ToolSpec>,
-    output_module: CompiledBlock,
+    entrypoint_idx: usize,
 }
 
 impl<F> ChatEngine<F>
@@ -407,7 +459,7 @@ where
         fetch: F,
         extern_fns: ExternFnRegistry,
         mut storage: HashMapStorage,
-        output_module: CompiledBlock,
+        entrypoint: &str,
     ) -> Result<Self, ChatError> {
         let name_to_idx: HashMap<String, usize> = nodes
             .iter()
@@ -415,64 +467,18 @@ where
             .map(|(i, n)| (n.name.clone(), i))
             .collect();
 
-        let node = &nodes[0];
+        let entrypoint_idx = *name_to_idx
+            .get(entrypoint)
+            .ok_or_else(|| ChatError::EntrypointNotFound(entrypoint.to_string()))?;
 
-        let first_iter_idx = node
-            .messages
-            .iter()
-            .position(|m| matches!(m, CompiledMessage::Iterator { .. }))
-            .ok_or(ChatError::NoIterator)?;
-
-        let provider_config = providers
-            .get(&node.provider)
-            .ok_or_else(|| ChatError::UnknownProvider(node.provider.clone()))?
-            .clone();
-
-        let tools = tool_specs(&node.tools);
-
-        // Seed context metadata for the main node
-        let ctx_prefix = format!("context.{}", node.name);
-        storage.set(
-            format!("{ctx_prefix}.model"),
-            Value::String(node.model.clone()),
-        );
-        storage.set(
-            format!("{ctx_prefix}.provider"),
-            Value::String(node.provider.clone()),
-        );
-
-        let mut key_cache = HashMap::new();
-        let mut turn_local = HashMap::new();
-
-        let noop = |_: String| async { Value::Unit };
-        let ctx = RenderCtx {
-            nodes: &nodes,
-            name_to_idx: &name_to_idx,
-            providers: &providers,
-            fetch: &fetch,
-            extern_fns: &extern_fns,
-            resolver: &noop,
-        };
-
-        let mut static_messages = Vec::new();
-        for msg in &nodes[0].messages[..first_iter_idx] {
-            if let CompiledMessage::Block(block) = msg {
-                let text = ctx
-                    .render_with_deps(
-                        block, &mut storage, HashMap::new(), &mut key_cache, &mut turn_local,
-                    )
-                    .await?;
-                static_messages.push(Message::text(&block.role, text));
+        // Seed context metadata for all Llm nodes
+        for node in &nodes {
+            if let CompiledNodeKind::Llm { provider, model, .. } = &node.kind {
+                let prefix = format!("context.{}", node.name);
+                storage.set(format!("{prefix}.model"), Value::String(model.clone()));
+                storage.set(format!("{prefix}.provider"), Value::String(provider.clone()));
             }
         }
-
-        let iterator_keys: Vec<String> = nodes[0].messages[first_iter_idx..]
-            .iter()
-            .filter_map(|m| match m {
-                CompiledMessage::Iterator { key, .. } => Some(key.clone()),
-                _ => None,
-            })
-            .collect();
 
         Ok(Self {
             nodes,
@@ -481,13 +487,8 @@ where
             fetch,
             extern_fns,
             storage,
-            key_cache,
-            static_messages,
-            first_iter_idx,
-            iterator_keys,
-            provider_config,
-            tools,
-            output_module,
+            key_cache: HashMap::new(),
+            entrypoint_idx,
         })
     }
 
@@ -496,97 +497,41 @@ where
         R: AsyncFn(String) -> Value + Sync,
     {
         // Remove always-strategy nodes so they re-resolve this turn
-        for i in 0..self.nodes.len() {
-            if matches!(self.nodes[i].strategy.mode, StrategyMode::Always) {
-                self.storage.remove(&self.nodes[i].name);
+        for node in &self.nodes {
+            if matches!(node.strategy.mode, StrategyMode::Always) {
+                self.storage.remove(&node.name);
             }
         }
 
         let mut turn_local = HashMap::new();
 
-        // Split borrows: immutable refs for ctx, mutable refs for storage/key_cache
-        let nodes = &self.nodes;
-        let name_to_idx = &self.name_to_idx;
-        let providers = &self.providers;
-        let fetch = &self.fetch;
-        let extern_fns = &self.extern_fns;
-        let storage = &mut self.storage;
-        let key_cache = &mut self.key_cache;
-
-        let ctx = RenderCtx { nodes, name_to_idx, providers, fetch, extern_fns, resolver };
-
-        let cached_content = match nodes[0].cache_key {
-            Some(ref cache_key) => {
-                ctx.resolve_cached_content(cache_key, storage, key_cache, &mut turn_local)
-                    .await?
-            }
-            None => None,
+        let ctx = RenderCtx {
+            nodes: &self.nodes,
+            name_to_idx: &self.name_to_idx,
+            providers: &self.providers,
+            fetch: &self.fetch,
+            extern_fns: &self.extern_fns,
+            resolver,
         };
 
-        let mut messages = self.static_messages.clone();
-        let mut new_messages: Vec<Message> = Vec::new();
+        ctx.resolve_node(
+            self.entrypoint_idx,
+            &mut self.storage,
+            HashMap::new(),
+            &mut self.key_cache,
+            &mut turn_local,
+        )
+        .await?;
 
-        let main_node_name = nodes[0].name.clone();
-
-        let dynamic_msgs = &nodes[0].messages[self.first_iter_idx..];
-        for msg in dynamic_msgs {
-            match msg {
-                CompiledMessage::Iterator { key, block, slice, bind, role } => {
-                    let expanded = ctx
-                        .expand_iterator(
-                            key, block.as_ref(), slice, bind, role, storage, key_cache,
-                            &mut turn_local,
-                        )
-                        .await?;
-                    messages.extend(expanded);
-                }
-                CompiledMessage::Block(block) => {
-                    let text = ctx
-                        .render_with_deps(
-                            block, storage, HashMap::new(), key_cache, &mut turn_local,
-                        )
-                        .await?;
-                    let message = Message::text(&block.role, text);
-                    messages.push(message.clone());
-                    new_messages.push(message);
-                }
-            }
+        let name = &self.nodes[self.entrypoint_idx].name;
+        let result = self
+            .storage
+            .get(name)
+            .map(|v| Arc::unwrap_or_clone(v))
+            .ok_or_else(|| ChatError::UnresolvedContext(name.clone()))?;
+        match result {
+            Value::String(s) => Ok(s),
+            other => Err(ChatError::EmitType(value_type_name(&other))),
         }
-
-        let request = build_request(
-            &self.provider_config,
-            &nodes[0].model,
-            &messages,
-            &self.tools,
-            &nodes[0].generation,
-            cached_content.as_deref(),
-        );
-        let json = fetch.fetch(&request).await.map_err(|e| ChatError::Fetch {
-            node: main_node_name.clone(),
-            detail: e,
-        })?;
-        let response =
-            parse_response(&self.provider_config.api, &json).map_err(|e| ChatError::Parse {
-                node: main_node_name.clone(),
-                detail: e,
-            })?;
-
-        let response_text = match response {
-            ModelResponse::Text(text) => text,
-            ModelResponse::ToolCalls(_) => {
-                return Err(ChatError::UnsupportedToolCalls(main_node_name));
-            }
-        };
-
-        update_history(storage, &self.iterator_keys, &new_messages, &response_text);
-
-        storage.set(nodes[0].name.clone(), Value::String(response_text));
-        let rendered = ctx
-            .render_with_deps(
-                &self.output_module, storage, HashMap::new(), key_cache, &mut turn_local,
-            )
-            .await?;
-        storage.remove(&nodes[0].name);
-        Ok(rendered)
     }
 }

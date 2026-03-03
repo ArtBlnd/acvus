@@ -80,16 +80,17 @@ mod tests {
     fn make_node(name: &str, context_keys: Vec<&str>) -> CompiledNode {
         CompiledNode {
             name: name.into(),
-            kind: crate::dsl::NodeKind::Llm,
-            provider: "test".into(),
-            model: "m".into(),
-            tools: vec![],
-            messages: vec![],
+            kind: crate::compile::CompiledNodeKind::Llm {
+                provider: "test".into(),
+                model: "m".into(),
+                messages: vec![],
+                tools: vec![],
+                generation: Default::default(),
+                cache_key: None,
+            },
             all_context_keys: context_keys.into_iter().map(Into::into).collect(),
             strategy: Default::default(),
-            generation: Default::default(),
             key_module: None,
-            cache_key: None,
         }
     }
 

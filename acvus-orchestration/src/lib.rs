@@ -8,8 +8,8 @@ mod dag;
 mod executor;
 
 pub use error::{OrchError, OrchErrorKind};
-pub use dsl::{NodeSpec, NodeKind, MessageSpec, Strategy, StrategyMode, ToolDecl, GenerationParams};
-pub use compile::{compile_node, compile_nodes, compile_template, CompiledNode, CompiledBlock, CompiledMessage};
+pub use dsl::{NodeSpec, NodeKind, MessageSpec, Strategy, StrategyMode, ToolBinding, GenerationParams};
+pub use compile::{compile_node, compile_nodes, compile_template, CompiledNode, CompiledNodeKind, CompiledBlock, CompiledMessage, CompiledToolBinding};
 pub use acvus_mir_pass::analysis::reachable_context::ContextKeyPartition;
 pub use storage::{Storage, HashMapStorage};
 pub use message::{Message, ToolCall, ToolResult, ModelResponse, ToolSpec, Output};

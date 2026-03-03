@@ -12,8 +12,9 @@ use acvus_mir_pass::analysis::reachable_context::reachable_context_keys;
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 
-use crate::compile::{CompiledMessage, CompiledNode};
+use crate::compile::{CompiledMessage, CompiledNode, CompiledNodeKind};
 use crate::dag::Dag;
+use crate::dsl::GenerationParams;
 use crate::error::{OrchError, OrchErrorKind};
 use crate::message::{Message, ModelResponse, ToolCall, ToolResult, ToolSpec};
 use crate::provider::{build_request, parse_response, Fetch, ProviderConfig};
@@ -113,18 +114,34 @@ where
 
                 for i in to_submit {
                     let state = node_states[i].take().unwrap();
+                    let (provider, model, tools, generation) = match &nodes[i].kind {
+                        CompiledNodeKind::Llm { provider, model, tools, generation, .. } => {
+                            let tool_specs: Vec<ToolSpec> = tools
+                                .iter()
+                                .map(|t| ToolSpec {
+                                    name: t.name.clone(),
+                                    description: String::new(),
+                                    params: t.params.iter().map(|(k, v)| (k.clone(), format!("{v:?}"))).collect(),
+                                })
+                                .collect();
+                            (provider.clone(), model.clone(), tool_specs, generation.clone())
+                        }
+                        _ => continue,
+                    };
                     let provider_config = providers
-                        .get(&nodes[i].provider)
+                        .get(&provider)
                         .ok_or_else(|| {
                             OrchError::new(OrchErrorKind::ModelError(format!(
                                 "unknown provider: {}",
-                                nodes[i].provider
+                                provider
                             )))
                         })?
                         .clone();
                     running.push(Box::pin(call_model(
                         i,
-                        nodes[i].clone(),
+                        model,
+                        tools,
+                        generation,
                         state.rendered_messages,
                         provider_config,
                         Arc::clone(&fetch),
@@ -206,7 +223,8 @@ enum DriveResult {
 
 fn make_node_state(node: &CompiledNode) -> NodeRunState {
     let blocks: Vec<(String, MirModule)> = node
-        .messages
+        .kind
+        .messages()
         .iter()
         .filter_map(|msg| match msg {
             CompiledMessage::Block(block) => Some((block.role.clone(), block.module.clone())),
@@ -290,7 +308,9 @@ where
 
 async fn call_model<F>(
     idx: usize,
-    node: CompiledNode,
+    model: String,
+    tools: Vec<ToolSpec>,
+    generation: GenerationParams,
     messages: Vec<Message>,
     provider_config: ProviderConfig,
     fetch: Arc<F>,
@@ -300,18 +320,8 @@ async fn call_model<F>(
 where
     F: Fetch,
 {
-    let tools: Vec<ToolSpec> = node
-        .tools
-        .iter()
-        .map(|t| ToolSpec {
-            name: t.name.clone(),
-            description: String::new(),
-            params: t.params.clone(),
-        })
-        .collect();
-
     consume_fuel(&fuel, fuel_limit)?;
-    let http_request = build_request(&provider_config, &node.model, &messages, &tools, &node.generation, None);
+    let http_request = build_request(&provider_config, &model, &messages, &tools, &generation, None);
     let json = fetch
         .fetch(&http_request)
         .await
@@ -340,7 +350,7 @@ where
             });
         }
 
-        let http_request = build_request(&provider_config, &node.model, &all_messages, &tools, &node.generation, None);
+        let http_request = build_request(&provider_config, &model, &all_messages, &tools, &generation, None);
         let json = fetch
             .fetch(&http_request)
             .await
@@ -382,7 +392,7 @@ where
     }
 
     let mut needed = HashSet::new();
-    for msg in &node.messages {
+    for msg in node.kind.messages() {
         if let CompiledMessage::Block(block) = msg {
             needed.extend(reachable_context_keys(&block.module, &known, &block.val_def));
         }

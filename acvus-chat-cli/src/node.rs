@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use acvus_orchestration::{
-    GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolDecl,
+    GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolBinding,
 };
 use serde::Deserialize;
 
@@ -29,6 +29,7 @@ impl<'de> Deserialize<'de> for ContextRef {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum NodeKindDef {
+    Plain,
     Llm,
     LlmCache {
         ttl: String,
@@ -42,10 +43,14 @@ pub struct NodeDef {
     pub name: String,
     #[serde(flatten)]
     kind: NodeKindDef,
-    provider: String,
-    model: String,
+    // Plain node: top-level template
+    template: Option<String>,
+    inline_template: Option<String>,
+    // Llm/LlmCache (None for Plain)
+    provider: Option<String>,
+    model: Option<String>,
     #[serde(default)]
-    tools: Vec<ToolDeclDef>,
+    tools: Vec<ToolBindingDef>,
     #[serde(default)]
     messages: Vec<MessageDef>,
     #[serde(default)]
@@ -100,8 +105,10 @@ struct GenerationParamsDef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ToolDeclDef {
+struct ToolBindingDef {
     name: String,
+    #[serde(default)]
+    node: String,
     #[serde(default)]
     params: HashMap<String, String>,
 }
@@ -125,11 +132,6 @@ fn resolve_template(
 
 /// Convert a TOML `NodeDef` into a pure `NodeSpec`, reading template files from `base_dir`.
 pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
-    let kind = match def.kind {
-        NodeKindDef::Llm => NodeKind::Llm,
-        NodeKindDef::LlmCache { ttl, cache_config } => NodeKind::LlmCache { ttl, cache_config },
-    };
-
     let mut messages = Vec::new();
     for (i, msg) in def.messages.into_iter().enumerate() {
         match msg {
@@ -181,22 +183,47 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
         max_tokens: def.generation.max_tokens,
     };
 
-    let tools = def.tools.into_iter().map(|t| ToolDecl {
+    let tools: Vec<ToolBinding> = def.tools.into_iter().map(|t| ToolBinding {
         name: t.name,
+        node: t.node,
         params: t.params,
     }).collect();
 
     let cache_key = def.cache_key.map(|r| r.0);
 
+    let kind = match def.kind {
+        NodeKindDef::Plain => {
+            let source = resolve_template(
+                base_dir,
+                def.template.as_deref(),
+                def.inline_template.as_deref(),
+            )
+            .map_err(|e| format!("plain node '{}': {e}", def.name))?;
+            NodeKind::Plain { source }
+        }
+        NodeKindDef::Llm => {
+            let provider = def.provider.ok_or_else(|| {
+                format!("node '{}': llm requires 'provider'", def.name)
+            })?;
+            let model = def.model.ok_or_else(|| {
+                format!("node '{}': llm requires 'model'", def.name)
+            })?;
+            NodeKind::Llm { provider, model, messages, tools, generation, cache_key }
+        }
+        NodeKindDef::LlmCache { ttl, cache_config } => {
+            let provider = def.provider.ok_or_else(|| {
+                format!("node '{}': llm-cache requires 'provider'", def.name)
+            })?;
+            let model = def.model.ok_or_else(|| {
+                format!("node '{}': llm-cache requires 'model'", def.name)
+            })?;
+            NodeKind::LlmCache { provider, model, messages, ttl, cache_config }
+        }
+    };
+
     Ok(NodeSpec {
         name: def.name,
         kind,
-        provider: def.provider,
-        model: def.model,
-        tools,
-        messages,
         strategy,
-        generation,
-        cache_key,
     })
 }

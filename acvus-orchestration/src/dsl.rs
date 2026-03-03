@@ -4,8 +4,21 @@ use std::collections::HashMap;
 /// Config specific to each kind lives inside the variant.
 #[derive(Debug, Clone)]
 pub enum NodeKind {
-    Llm,
+    Plain {
+        source: String,
+    },
+    Llm {
+        provider: String,
+        model: String,
+        messages: Vec<MessageSpec>,
+        tools: Vec<ToolBinding>,
+        generation: GenerationParams,
+        cache_key: Option<String>,
+    },
     LlmCache {
+        provider: String,
+        model: String,
+        messages: Vec<MessageSpec>,
         /// TTL string, e.g. "300s", "1h".
         ttl: String,
         /// Provider-specific cache config (e.g. display_name for Gemini).
@@ -18,13 +31,7 @@ pub enum NodeKind {
 pub struct NodeSpec {
     pub name: String,
     pub kind: NodeKind,
-    pub provider: String,
-    pub model: String,
-    pub tools: Vec<ToolDecl>,
-    pub messages: Vec<MessageSpec>,
     pub strategy: Strategy,
-    pub generation: GenerationParams,
-    pub cache_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -69,9 +76,10 @@ pub struct GenerationParams {
     pub max_tokens: Option<u32>,
 }
 
-/// Tool declaration.
+/// Tool binding — binds a tool name to a target node with typed parameters.
 #[derive(Debug, Clone)]
-pub struct ToolDecl {
+pub struct ToolBinding {
     pub name: String,
+    pub node: String,
     pub params: HashMap<String, String>,
 }

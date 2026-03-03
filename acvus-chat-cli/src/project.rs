@@ -9,10 +9,7 @@ pub struct ProjectSpec {
     #[serde(default = "default_fuel_limit")]
     pub fuel_limit: u64,
     pub nodes: Vec<String>,
-    /// Output template file path — rendered after the main model responds.
-    pub output: Option<String>,
-    /// Inline output template.
-    pub inline_output: Option<String>,
+    pub entrypoint: String,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
@@ -104,6 +101,7 @@ mod tests {
 name = "test-pipeline"
 fuel_limit = 10
 nodes = ["a.toml", "b.toml"]
+entrypoint = "a"
 
 [providers.openai]
 api = "openai"
@@ -127,6 +125,7 @@ count = 5
         let toml_str = r#"
 name = "minimal"
 nodes = []
+entrypoint = "main"
 "#;
         let spec: ProjectSpec = toml::from_str(toml_str).unwrap();
         assert_eq!(spec.fuel_limit, 50);
