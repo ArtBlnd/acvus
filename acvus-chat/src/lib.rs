@@ -940,6 +940,7 @@ where
                 history_obj.insert(name.clone(), Value::List(Vec::new()));
             }
             storage.set("history".into(), Value::Object(history_obj));
+            storage.set("index".into(), Value::Int(0));
         }
 
         Ok(Self {
@@ -963,6 +964,10 @@ where
     {
         let entrypoint = &self.nodes[self.entrypoint_idx].name;
         tracing::debug!(entrypoint = %entrypoint, "turn start");
+
+        // Update @index to current turn count
+        self.storage
+            .set("index".into(), Value::Int(self.turn_count as i64));
 
         // Always-strategy nodes re-resolve every turn
         for node in &self.nodes {

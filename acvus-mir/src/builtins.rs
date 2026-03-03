@@ -249,6 +249,14 @@ impl BuiltinSig for Contains {
     }
 }
 
+pub struct ContainsStr;
+impl BuiltinSig for ContainsStr {
+    fn name(&self) -> &'static str { "contains_str" }
+    fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
+        (vec![Ty::String, Ty::String], Ty::Bool)
+    }
+}
+
 pub struct Substring;
 impl BuiltinSig for Substring {
     fn name(&self) -> &'static str { "substring" }
@@ -308,6 +316,7 @@ pub fn builtins() -> Vec<&'static dyn BuiltinSig> {
         &CharToInt,
         &IntToChar,
         &Contains,
+        &ContainsStr,
         &Substring,
         &LenStr,
         &ToBytes,

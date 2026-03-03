@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
 use serde::Deserialize;
 
@@ -53,6 +54,38 @@ pub fn toml_to_ty(value: &toml::Value) -> Ty {
             Ty::Object(fields)
         }
         toml::Value::Datetime(_) => Ty::String,
+    }
+}
+
+/// Context entry: type + optional default value.
+pub struct ContextEntry {
+    pub ty: Ty,
+    pub default: Option<Value>,
+}
+
+/// Parse a context entry from TOML.
+///
+/// - String ("int", "string"...) → type only
+/// - Table { type = "...", value = ... } → type + default
+pub fn parse_context_entry(value: &toml::Value) -> ContextEntry {
+    if let toml::Value::Table(table) = value {
+        if let Some(ty_val) = table.get("type") {
+            let ty = toml_to_ty(ty_val);
+            let default = table.get("value").map(toml_to_value);
+            return ContextEntry { ty, default };
+        }
+    }
+    ContextEntry { ty: toml_to_ty(value), default: None }
+}
+
+/// Convert a TOML value to a runtime Value.
+pub fn toml_to_value(value: &toml::Value) -> Value {
+    match value {
+        toml::Value::String(s) => Value::String(s.clone()),
+        toml::Value::Integer(n) => Value::Int(*n),
+        toml::Value::Float(f) => Value::Float(*f),
+        toml::Value::Boolean(b) => Value::Bool(*b),
+        _ => Value::String(value.to_string()),
     }
 }
 

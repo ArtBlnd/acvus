@@ -42,6 +42,10 @@ pub(crate) fn builtin_contains(items: Vec<Value>, target: Value) -> bool {
     items.iter().any(|v| values_equal(v, &target))
 }
 
+pub(crate) fn builtin_contains_str(haystack: String, needle: String) -> bool {
+    haystack.contains(&needle)
+}
+
 pub(crate) fn builtin_substring(s: String, start: i64, len: i64) -> String {
     s.chars().skip(start.max(0) as usize).take(len.max(0) as usize).collect()
 }

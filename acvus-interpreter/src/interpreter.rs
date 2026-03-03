@@ -451,8 +451,8 @@ impl Interpreter {
     ) -> (Self, Value) {
         match name {
             "to_string" | "to_int" | "to_float" | "char_to_int" | "int_to_char" | "len"
-            | "reverse" | "join" | "contains" | "substring" | "len_str" | "to_bytes"
-            | "to_utf8" | "to_utf8_lossy" => {
+            | "reverse" | "join" | "contains" | "contains_str" | "substring" | "len_str"
+            | "to_bytes" | "to_utf8" | "to_utf8_lossy" => {
                 (this, builtins::call_pure(name, args))
             }
             "filter" => Self::exec_hof_filter(this, args, handle).await,

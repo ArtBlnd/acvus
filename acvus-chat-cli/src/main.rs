@@ -13,7 +13,7 @@ use acvus_orchestration::{
     compile_nodes, ApiKind, Fetch, HashMapStorage, HttpRequest, ProviderConfig,
 };
 use node::NodeDef;
-use project::{toml_to_ty, ProjectSpec};
+use project::{parse_context_entry, ProjectSpec};
 
 #[derive(Clone)]
 struct HttpFetch {
@@ -77,12 +77,16 @@ async fn main() {
         process::exit(1);
     });
 
-    // Context is type-only — no constant values
-    let context_types: HashMap<String, Ty> = spec
-        .context
-        .iter()
-        .map(|(k, v)| (k.clone(), toml_to_ty(v)))
-        .collect();
+    // Context types + defaults
+    let mut context_types: HashMap<String, Ty> = HashMap::new();
+    let mut context_defaults: HashMap<String, Value> = HashMap::new();
+    for (k, v) in &spec.context {
+        let entry = parse_context_entry(v);
+        context_types.insert(k.clone(), entry.ty);
+        if let Some(default) = entry.default {
+            context_defaults.insert(k.clone(), default);
+        }
+    }
 
     let mut node_specs = Vec::new();
     for node_file in &spec.nodes {
@@ -115,7 +119,7 @@ async fn main() {
     // Storage starts empty — context is type-only
     let storage = HashMapStorage::new();
 
-    let mut providers = HashMap::new();
+    let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
     for (name, config) in &spec.providers {
         let api_key = if let Some(key) = &config.api_key {
             key.clone()
@@ -156,12 +160,21 @@ async fn main() {
     });
 
     if context_args.is_empty() {
-        // Interactive mode: resolve context keys from stdin on demand
-        let resolver = |name: String| async move {
-            eprint!("{name}: ");
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
-            Value::String(input.trim_end().to_string())
+        // Interactive mode: defaults → stdin fallback
+        let resolver = {
+            let defaults = context_defaults.clone();
+            move |name: String| {
+                let defaults = defaults.clone();
+                async move {
+                    if let Some(val) = defaults.get(&name) {
+                        return val.clone();
+                    }
+                    eprint!("{name}: ");
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).unwrap();
+                    Value::String(input.trim_end().to_string())
+                }
+            }
         };
 
         loop {
@@ -172,13 +185,18 @@ async fn main() {
             println!("{response}");
         }
     } else {
-        // One-shot: resolve from CLI args
-        let resolver = |name: String| {
-            let value = context_args
-                .get(&name)
-                .unwrap_or_else(|| panic!("unresolved context: @{name}"))
-                .clone();
-            async move { Value::String(value) }
+        // One-shot: CLI args → defaults → panic
+        let resolver = {
+            let defaults = context_defaults.clone();
+            move |name: String| {
+                let value = context_args
+                    .get(&name)
+                    .cloned()
+                    .map(Value::String)
+                    .or_else(|| defaults.get(&name).cloned())
+                    .unwrap_or_else(|| panic!("unresolved context: @{name}"));
+                async move { value }
+            }
         };
         let response = engine.turn(&resolver).await.unwrap_or_else(|e| {
             eprintln!("turn error: {e}");

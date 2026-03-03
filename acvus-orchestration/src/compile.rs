@@ -206,7 +206,7 @@ impl CompiledNode {
 pub fn compile_script(source: &str) -> Result<CompiledScript, OrchError> {
     let script = acvus_ast::parse_script(source).map_err(|e| {
         OrchError::new(OrchErrorKind::ScriptParse {
-            error: format!("{e:?}"),
+            error: format!("{e}"),
         })
     })?;
     let (module, _hints) = acvus_mir::compile_script(&script);
@@ -224,7 +224,7 @@ pub fn compile_template(
     let ast = acvus_ast::parse(source).map_err(|e| {
         OrchError::new(OrchErrorKind::TemplateParse {
             block: block_idx,
-            error: format!("{e:?}"),
+            error: format!("{e}"),
         })
     })?;
 
@@ -466,6 +466,27 @@ pub fn compile_nodes(
     let mut context_types = injected_types.clone();
     for spec in specs {
         context_types.insert(spec.name.clone(), Ty::String);
+    }
+
+    // Inject @history type for nodes with history = true.
+    // @history is an Object where each key is a history-enabled node name,
+    // mapping to List<Object<{type: String, text: String}>>.
+    let history_nodes: Vec<&str> = specs
+        .iter()
+        .filter(|s| s.history)
+        .map(|s| s.name.as_str())
+        .collect();
+    if !history_nodes.is_empty() {
+        let msg_ty = Ty::Object(BTreeMap::from([
+            ("type".into(), Ty::String),
+            ("text".into(), Ty::String),
+        ]));
+        let mut history_fields = BTreeMap::new();
+        for name in &history_nodes {
+            history_fields.insert(name.to_string(), Ty::List(Box::new(msg_ty.clone())));
+        }
+        context_types.insert("history".into(), Ty::Object(history_fields));
+        context_types.insert("index".into(), Ty::Int);
     }
 
     // Collect tool param types: target node name → param name → Ty.

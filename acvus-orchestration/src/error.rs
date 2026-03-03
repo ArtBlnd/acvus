@@ -45,7 +45,11 @@ impl fmt::Display for OrchError {
                 write!(f, "template parse error in block {block}: {error}")
             }
             OrchErrorKind::TemplateCompile { block, errors } => {
-                write!(f, "compile errors in block {block}: {} error(s)", errors.len())
+                writeln!(f, "compile errors in block {block}:")?;
+                for e in errors {
+                    writeln!(f, "  [{}..{}] {e}", e.span.start, e.span.end)?;
+                }
+                Ok(())
             }
             OrchErrorKind::ScriptParse { error } => {
                 write!(f, "script parse error: {error}")
