@@ -15,13 +15,17 @@ A template engine for multi modal orchestration. Templates compile to typed inte
 ## Architecture
 
 ```
-acvus-ast             Parser (lalrpop + logos)
-acvus-mir             Type checker + MIR lowering
-acvus-mir-pass        Analysis passes (ValDefMap, reachable context)
-acvus-interpreter     Runtime values, sync execution
-acvus-orchestration   DAG builder, parallel executor, Fetch trait
-acvus-cli             CLI frontend — TOML project, multi-provider HTTP
-acvus-playground      Web playground (axum)
+acvus-ast               Parser (lalrpop + logos)
+acvus-mir               Type checker + MIR lowering
+acvus-mir-pass          Analysis passes (ValDefMap, reachable context)
+acvus-mir-cli           CLI tool for MIR inspection
+acvus-mir-test          MIR snapshot tests (insta)
+acvus-interpreter       Runtime values, sync execution
+acvus-interpreter-test  Interpreter e2e tests
+acvus-orchestration     Compilation, DAG builder, provider abstraction, Fetch trait
+acvus-chat              Chat engine — multi-turn LLM orchestration, tool calls
+acvus-chat-cli          Chat CLI — TOML project, multi-provider HTTP
+acvus-playground        Web playground (axum)
 ```
 
 ## Template language
