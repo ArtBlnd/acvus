@@ -2,12 +2,20 @@ use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::grammar::TagContentParser;
+use crate::grammar::{ScriptParser, TagContentParser};
 use crate::lexer::{ExprTokenizer, Segment, scan_template};
 use crate::span::Span;
 use crate::token::Token;
 
 use crate::tag_content::TagContent;
+
+/// Parse a script source string (standalone expressions with semicolons).
+pub fn parse_script(source: &str) -> Result<Script, ParseError> {
+    let tokenizer = ExprTokenizer::new(source, 0);
+    ScriptParser::new()
+        .parse(tokenizer)
+        .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
+}
 
 /// Parse a template source string into an AST.
 pub fn parse_template(source: &str) -> Result<Template, ParseError> {
@@ -803,6 +811,71 @@ mod tests {
             assert_eq!(mb.indent, Some(IndentModifier::Increase(3)));
         } else {
             panic!("expected MatchBlock");
+        }
+    }
+
+    // ── Script parsing tests ──────────────────────────────────────────
+
+    #[test]
+    fn script_single_expr() {
+        let s = parse_script("@data").unwrap();
+        assert!(s.stmts.is_empty());
+        assert!(matches!(
+            s.tail.as_deref(),
+            Some(Expr::Ident { name, ref_kind: RefKind::Context, .. }) if name == "data"
+        ));
+    }
+
+    #[test]
+    fn script_bind_and_tail() {
+        let s = parse_script("x = @data; x").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if name == "x"));
+        assert!(matches!(
+            s.tail.as_deref(),
+            Some(Expr::Ident { name, ref_kind: RefKind::Value, .. }) if name == "x"
+        ));
+    }
+
+    #[test]
+    fn script_trailing_semicolon_no_tail() {
+        let s = parse_script("x = @data;").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(s.tail.is_none());
+    }
+
+    #[test]
+    fn script_multiple_stmts_and_tail() {
+        let s = parse_script("x = @data; y = x; y").unwrap();
+        assert_eq!(s.stmts.len(), 2);
+        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if name == "x"));
+        assert!(matches!(&s.stmts[1], Stmt::Bind { name, .. } if name == "y"));
+        assert!(s.tail.is_some());
+    }
+
+    #[test]
+    fn script_expr_stmt() {
+        let s = parse_script("42; @data").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(matches!(&s.stmts[0], Stmt::Expr(Expr::Literal { value: Literal::Int(42), .. })));
+        assert!(s.tail.is_some());
+    }
+
+    #[test]
+    fn script_empty() {
+        let s = parse_script("").unwrap();
+        assert!(s.stmts.is_empty());
+        assert!(s.tail.is_none());
+    }
+
+    #[test]
+    fn script_pipe_in_bind() {
+        let s = parse_script("x = @data | filter(f); x").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        if let Stmt::Bind { expr, .. } = &s.stmts[0] {
+            assert!(matches!(expr, Expr::Pipe { .. }));
+        } else {
+            panic!("expected Bind");
         }
     }
 }

@@ -1,5 +1,20 @@
 use crate::span::Span;
 
+/// A parsed script (standalone expressions with semicolons).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Script {
+    pub stmts: Vec<Stmt>,
+    pub tail: Option<Box<Expr>>,
+    pub span: Span,
+}
+
+/// A statement in a script.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Bind { name: String, expr: Expr, span: Span },
+    Expr(Expr),
+}
+
 /// A parsed template.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template {

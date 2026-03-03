@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use acvus_ast::{
     Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
-    ObjectPatternField, Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
+    ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
+    TuplePatternElem,
 };
 
 use crate::builtins::builtins;
@@ -117,6 +118,29 @@ impl Lowerer {
 
     pub fn lower_template(mut self, template: &Template) -> (MirModule, HintTable) {
         self.lower_nodes(&template.body);
+        self.build_module()
+    }
+
+    pub fn lower_script(mut self, script: &Script) -> (MirModule, HintTable) {
+        for stmt in &script.stmts {
+            match stmt {
+                Stmt::Bind { name, expr, .. } => {
+                    let val = self.lower_expr(expr);
+                    self.scopes.last_mut().unwrap().insert(name.clone(), val);
+                }
+                Stmt::Expr(expr) => {
+                    self.lower_expr(expr);
+                }
+            }
+        }
+        if let Some(tail) = &script.tail {
+            let val = self.lower_expr(tail);
+            self.emit_inst(script.span, InstKind::Yield(val));
+        }
+        self.build_module()
+    }
+
+    fn build_module(self) -> (MirModule, HintTable) {
         let module = MirModule {
             main: self.body,
             closures: self.closures,

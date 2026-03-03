@@ -50,11 +50,26 @@ extern {
         "}" => Token::RBrace,
         "," => Token::Comma,
         ":" => Token::Colon,
+        ";" => Token::Semicolon,
         "fmt_start" => Token::FmtStringStart(<String>),
         "fmt_mid" => Token::FmtStringMid(<String>),
         "fmt_end" => Token::FmtStringEnd(<String>),
     }
 }
+
+// ── Script rule ───────────────────────────────────────────────────────
+
+pub Script: Script = {
+    <l:@L> <stmts:(<Stmt> ";")*> <tail:Expr?> <r:@R> =>
+        Script { stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
+};
+
+Stmt: Stmt = {
+    <l:@L> <name:"ident"> "=" <e:Expr> <r:@R> =>
+        Stmt::Bind { name, expr: e, span: Span::new(l, r) },
+    <e:Expr> =>
+        Stmt::Expr(e),
+};
 
 // ── Top-level rule ─────────────────────────────────────────────────────
 

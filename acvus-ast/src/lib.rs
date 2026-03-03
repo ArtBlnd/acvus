@@ -21,7 +21,7 @@ mod grammar {
 
 pub use ast::*;
 pub use error::ParseError;
-pub use parser::parse_template;
+pub use parser::{parse_script, parse_template};
 pub use span::{Span, Spanned};
 
 /// Parse a template source string into an AST.

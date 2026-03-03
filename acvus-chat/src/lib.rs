@@ -10,7 +10,7 @@ use std::sync::Arc;
 use acvus_interpreter::{ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value};
 use acvus_orchestration::{
     build_cache_request, create_llm_model, parse_cache_response, CompiledBlock,
-    CompiledMessage, CompiledNode, CompiledNodeKind, CompiledToolBinding, Fetch,
+    CompiledScript, CompiledMessage, CompiledNode, CompiledNodeKind, CompiledToolBinding, Fetch,
     HashMapStorage, LlmModel, Message, ModelResponse, ProviderConfig, Storage, StrategyMode,
     TokenBudget, ToolCall, ToolSpec,
 };
@@ -72,6 +72,46 @@ fn drive_block(
             }
             Stepped::Done => {
                 return Ok(BlockDriveResult::Done(std::mem::take(output)));
+            }
+        }
+    }
+}
+
+enum ScriptDriveResult {
+    Value(Value),
+    NeedContext(NeedContextStepped),
+}
+
+fn drive_script(
+    coroutine: &mut acvus_interpreter::Coroutine,
+    mut key: ResumeKey,
+    storage: &HashMapStorage,
+    local: &HashMap<String, Value>,
+    turn_local: &HashMap<String, Value>,
+) -> Result<ScriptDriveResult, ChatError> {
+    loop {
+        match coroutine.resume(key) {
+            Stepped::Emit(emit) => {
+                let (value, _next_key) = emit.into_parts();
+                return Ok(ScriptDriveResult::Value(value));
+            }
+            Stepped::NeedContext(need) => {
+                if !need.bindings().is_empty() {
+                    return Ok(ScriptDriveResult::NeedContext(need));
+                }
+                let name = need.name().to_string();
+                if let Some(value) = local.get(&name) {
+                    key = need.into_key(value.clone());
+                } else if let Some(value) = turn_local.get(&name) {
+                    key = need.into_key(value.clone());
+                } else if let Some(arc) = storage.get(&name) {
+                    key = need.into_key(Arc::unwrap_or_clone(arc));
+                } else {
+                    return Ok(ScriptDriveResult::NeedContext(need));
+                }
+            }
+            Stepped::Done => {
+                return Ok(ScriptDriveResult::Value(Value::Unit));
             }
         }
     }
@@ -215,23 +255,45 @@ where
         }
     }
 
+    async fn eval_script(
+        &self,
+        expr: &CompiledScript,
+        storage: &mut HashMapStorage,
+        key_cache: &mut HashMap<String, String>,
+        turn_local: &mut HashMap<String, Value>,
+    ) -> Result<Value, ChatError> {
+        let interp = Interpreter::new(expr.module.clone(), self.extern_fns.clone());
+        let (mut coroutine, key) = interp.execute();
+        let mut result = drive_script(&mut coroutine, key, storage, &HashMap::new(), turn_local)?;
+        loop {
+            match result {
+                ScriptDriveResult::Value(v) => return Ok(v),
+                ScriptDriveResult::NeedContext(need) => {
+                    let name = need.name().to_string();
+                    let bindings = need.bindings().clone();
+                    let value = self
+                        .resolve_context(&name, bindings, storage, key_cache, turn_local)
+                        .await?;
+                    let key = need.into_key(value);
+                    result = drive_script(&mut coroutine, key, storage, &HashMap::new(), turn_local)?;
+                }
+            }
+        }
+    }
+
     async fn resolve_cached_content(
         &self,
-        cache_key: &str,
+        expr: &CompiledScript,
         storage: &mut HashMapStorage,
         key_cache: &mut HashMap<String, String>,
         turn_local: &mut HashMap<String, Value>,
     ) -> Result<Option<String>, ChatError> {
-        if storage.get(cache_key).is_none() {
-            if let Some(&idx) = self.name_to_idx.get(cache_key) {
-                self.resolve_node(idx, storage, HashMap::new(), key_cache, turn_local)
-                    .await?;
-            }
+        let value = self.eval_script(expr, storage, key_cache, turn_local).await?;
+        match value {
+            Value::String(s) => Ok(Some(s)),
+            Value::Unit => Ok(None),
+            _ => Ok(None),
         }
-        Ok(storage.get(cache_key).and_then(|arc| match &*arc {
-            Value::String(s) => Some(s.clone()),
-            _ => None,
-        }))
     }
 
     fn render_with_deps(
@@ -352,8 +414,8 @@ where
                         .clone();
                     let llm = create_llm_model(provider_config, model.clone());
 
-                    let cached_content = if let Some(ck) = cache_key {
-                        self.resolve_cached_content(ck, storage, key_cache, turn_local)
+                    let cached_content = if let Some(expr) = cache_key {
+                        self.resolve_cached_content(expr, storage, key_cache, turn_local)
                             .await?
                     } else {
                         None
@@ -372,9 +434,9 @@ where
                                 }
                                 segments.push(MessageSegment::Single(message));
                             }
-                            CompiledMessage::Iterator { key, block, slice, bind, role, token_budget } => {
+                            CompiledMessage::Iterator { expr, block, slice, bind, role, token_budget, .. } => {
                                 let expanded = self
-                                    .expand_iterator(key, block.as_ref(), slice, bind, role, storage, key_cache, turn_local)
+                                    .expand_iterator(expr, block.as_ref(), slice, bind, role, storage, key_cache, turn_local)
                                     .await?;
                                 segments.push(MessageSegment::Iterator {
                                     messages: expanded,
@@ -412,15 +474,16 @@ where
                         match response {
                             ModelResponse::Text(text) => {
                                 tracing::debug!(node = %node.name, len = text.len(), "llm text response");
-                                let iterator_keys: Vec<String> = messages
+                                let write_keys: Vec<String> = messages
                                     .iter()
                                     .filter_map(|m| match m {
-                                        CompiledMessage::Iterator { key, .. } => Some(key.clone()),
+                                        CompiledMessage::Iterator { write_keys, .. } => Some(write_keys.clone()),
                                         _ => None,
                                     })
+                                    .flatten()
                                     .collect();
-                                if !iterator_keys.is_empty() {
-                                    update_history(storage, &iterator_keys, &new_turn_messages, &text);
+                                if !write_keys.is_empty() {
+                                    update_history(storage, &write_keys, &new_turn_messages, &text);
                                 }
                                 storage.set(node.name.clone(), Value::String(text));
                                 break;
@@ -516,7 +579,7 @@ where
 
     async fn expand_iterator(
         &'a self,
-        key: &str,
+        expr: &CompiledScript,
         block: Option<&'a CompiledBlock>,
         slice: &Option<Vec<i64>>,
         bind: &Option<String>,
@@ -525,11 +588,11 @@ where
         key_cache: &'a mut HashMap<String, String>,
         turn_local: &'a mut HashMap<String, Value>,
     ) -> Result<Vec<Message>, ChatError> {
-        let stored = storage.get(key);
-        let all_items = match stored.as_deref() {
-            Some(Value::List(items)) => items,
+        let evaluated = self.eval_script(expr, storage, key_cache, turn_local).await?;
+        let all_items = match &evaluated {
+            Value::List(items) => items.as_slice(),
             _ => {
-                tracing::debug!(key = %key, "expand_iterator: no history");
+                tracing::debug!("expand_iterator: not a list");
                 return Ok(Vec::new());
             }
         };
@@ -547,7 +610,7 @@ where
             all_items
         };
 
-        tracing::debug!(key = %key, count = items.len(), "expand_iterator");
+        tracing::debug!(count = items.len(), "expand_iterator");
         let mut messages = Vec::new();
         for item in items {
             let (item_type, item_text) = item_fields(item);

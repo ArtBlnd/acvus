@@ -25,7 +25,7 @@ pub enum CompiledNodeKind {
         messages: Vec<CompiledMessage>,
         tools: Vec<CompiledToolBinding>,
         generation: GenerationParams,
-        cache_key: Option<String>,
+        cache_key: Option<CompiledScript>,
         max_tokens: Option<u32>,
     },
     LlmCache {
@@ -65,12 +65,20 @@ pub struct CompiledNode {
     pub key_module: Option<CompiledBlock>,
 }
 
+/// Compiled expression (Script → MIR).
+#[derive(Debug, Clone)]
+pub struct CompiledScript {
+    pub module: MirModule,
+    pub context_keys: HashSet<String>,
+}
+
 /// A compiled message entry.
 #[derive(Debug, Clone)]
 pub enum CompiledMessage {
     Block(CompiledBlock),
     Iterator {
-        key: String,
+        expr: CompiledScript,
+        write_keys: Vec<String>,
         block: Option<CompiledBlock>,
         slice: Option<Vec<i64>>,
         bind: Option<String>,
@@ -195,6 +203,18 @@ impl CompiledNode {
     }
 }
 
+/// Compile an expression string (script syntax) into a `CompiledScript`.
+pub fn compile_script(source: &str) -> Result<CompiledScript, OrchError> {
+    let script = acvus_ast::parse_script(source).map_err(|e| {
+        OrchError::new(OrchErrorKind::ScriptParse {
+            error: format!("{e:?}"),
+        })
+    })?;
+    let (module, _hints) = acvus_mir::compile_script(&script);
+    let context_keys = extract_context_keys(&module);
+    Ok(CompiledScript { module, context_keys })
+}
+
 /// Compile a template source string into a `CompiledBlock`.
 pub fn compile_template(
     source: &str,
@@ -254,6 +274,14 @@ fn compile_messages(
                 }
             }
             MessageSpec::Iterator { key, source, slice, bind, role, token_budget } => {
+                let expr = match compile_script(key) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
+                    }
+                };
+
                 let block = if let Some(src) = source {
                     let mut iter_types = context_types.clone();
                     if let Some(bind_name) = bind {
@@ -280,8 +308,11 @@ fn compile_messages(
                     None
                 };
 
+                let write_keys: Vec<String> = expr.context_keys.iter().cloned().collect();
+                all_context_keys.extend(expr.context_keys.iter().cloned());
                 compiled_messages.push(CompiledMessage::Iterator {
-                    key: key.clone(),
+                    expr,
+                    write_keys,
                     block,
                     slice: slice.clone(),
                     bind: bind.clone(),
@@ -381,9 +412,14 @@ pub fn compile_node(
             let (compiled_messages, keys) = compile_messages(messages, context_types, registry)?;
             let compiled_tools = compile_tool_bindings(tools)?;
             let mut all_keys = keys;
-            if let Some(k) = cache_key {
-                all_keys.insert(k.clone());
-            }
+            let compiled_cache_key = match cache_key {
+                Some(ck) => {
+                    let expr = compile_script(ck).map_err(|e| vec![e])?;
+                    all_keys.extend(expr.context_keys.iter().cloned());
+                    Some(expr)
+                }
+                None => None,
+            };
             (
                 CompiledNodeKind::Llm {
                     provider: provider.clone(),
@@ -391,7 +427,7 @@ pub fn compile_node(
                     messages: compiled_messages,
                     tools: compiled_tools,
                     generation: generation.clone(),
-                    cache_key: cache_key.clone(),
+                    cache_key: compiled_cache_key,
                     max_tokens: *max_tokens,
                 },
                 all_keys,

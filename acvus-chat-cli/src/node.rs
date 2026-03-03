@@ -7,25 +7,6 @@ use acvus_orchestration::{
 };
 use serde::Deserialize;
 
-/// A context reference like `"@node-name"`. Strips the `@` prefix on deserialization.
-#[derive(Debug, Clone)]
-struct ContextRef(String);
-
-impl<'de> Deserialize<'de> for ContextRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.strip_prefix('@') {
-            Some(name) => Ok(ContextRef(name.to_string())),
-            None => Err(serde::de::Error::custom(format!(
-                "context reference must start with '@', got: {s}"
-            ))),
-        }
-    }
-}
-
 /// TOML-deserializable node definition.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -60,7 +41,7 @@ pub struct NodeDef {
     strategy: StrategyDef,
     #[serde(default)]
     generation: GenerationParamsDef,
-    cache_key: Option<ContextRef>,
+    cache_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -84,7 +65,7 @@ enum StrategyModeDef {
 #[serde(untagged)]
 enum MessageDef {
     Iterator {
-        iterator: ContextRef,
+        iterator: String,
         template: Option<String>,
         inline_template: Option<String>,
         #[serde(default)]
@@ -163,7 +144,7 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
                     None
                 };
                 messages.push(MessageSpec::Iterator {
-                    key: iterator.0,
+                    key: iterator,
                     source,
                     slice,
                     bind,
@@ -208,7 +189,7 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
         params: t.params,
     }).collect();
 
-    let cache_key = def.cache_key.map(|r| r.0);
+    let cache_key = def.cache_key;
 
     let kind = match def.kind {
         NodeKindDef::Plain => {
