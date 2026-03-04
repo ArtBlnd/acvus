@@ -46,6 +46,18 @@ fn to_float_int() {
     assert!(matches!(call_pure("to_float", vec![Value::Int(5)]), Value::Float(f) if f == 5.0));
 }
 
+/// Names of pure (non-HOF) builtins dispatched by `call_pure`.
+const PURE_NAMES: &[&str] = &[
+    "to_string", "to_int", "to_float", "char_to_int", "int_to_char",
+    "len", "reverse", "flatten", "join", "contains", "contains_str",
+    "substring", "len_str", "to_bytes", "to_utf8", "to_utf8_lossy",
+];
+
+/// Names of higher-order function builtins dispatched by `exec_builtin`.
+const HOF_NAMES: &[&str] = &[
+    "filter", "map", "pmap", "find", "reduce", "fold", "any", "all",
+];
+
 #[test]
 fn all_mir_builtins_handled() {
     let mir_names: HashSet<&str> = acvus_mir::builtins::builtins()

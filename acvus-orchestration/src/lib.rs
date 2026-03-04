@@ -9,7 +9,7 @@ mod executor;
 
 pub use error::{OrchError, OrchErrorKind};
 pub use dsl::{NodeSpec, NodeKind, MessageSpec, Strategy, StrategyMode, ToolBinding, GenerationParams, TokenBudget, HistorySpec};
-pub use compile::{compile_script_typed, compile_node, compile_nodes, compile_template, CompiledScript, CompiledNode, CompiledNodeKind, CompiledBlock, CompiledMessage, CompiledToolBinding, CompiledHistory};
+pub use compile::{compile_script, compile_node, compile_nodes, compile_template, CompiledScript, CompiledNode, CompiledNodeKind, CompiledBlock, CompiledMessage, CompiledToolBinding, CompiledHistory};
 pub use acvus_mir_pass::analysis::reachable_context::ContextKeyPartition;
 pub use storage::{Storage, HashMapStorage};
 pub use message::{Message, ToolCall, ToolResult, ModelResponse, ToolSpec, Output, Usage};

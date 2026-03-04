@@ -210,7 +210,7 @@ impl CompiledNode {
 
 /// Compile an expression string (script syntax) with type checking.
 /// Returns the compiled script and its tail expression type.
-pub fn compile_script_typed(
+pub fn compile_script(
     source: &str,
     context_types: &HashMap<String, Ty>,
     registry: &ExternRegistry,
@@ -221,7 +221,7 @@ pub fn compile_script_typed(
         })
     })?;
     let (module, _hints, tail_ty) =
-        acvus_mir::compile_script_typed(&script, context_types.clone(), registry).map_err(|errs| {
+        acvus_mir::compile_script(&script, context_types.clone(), registry).map_err(|errs| {
             OrchError::new(OrchErrorKind::ScriptCompile {
                 context: source.to_string(),
                 errors: errs,
@@ -333,7 +333,7 @@ fn compile_messages(
                 }
             }
             MessageSpec::Iterator { key, source, slice, bind, role, token_budget } => {
-                let (expr, elem_ty) = match compile_script_typed(key, context_types, registry) {
+                let (expr, elem_ty) = match compile_script(key, context_types, registry) {
                     Ok((script, tail_ty)) => {
                         match expect_list(&format!("iterator (block {i})"), tail_ty) {
                             Ok(inner) => (script, inner),
@@ -447,7 +447,7 @@ pub fn compile_node(
     // Compile bind script for if-modified strategy
     let bind_module = if matches!(spec.strategy.mode, StrategyMode::IfModified) {
         if let Some(bind_src) = &spec.strategy.bind_source {
-            let (script, _ty) = compile_script_typed(bind_src, context_types, registry)
+            let (script, _ty) = compile_script(bind_src, context_types, registry)
                 .map_err(|e| vec![e])?;
             Some(script)
         } else {
@@ -473,7 +473,7 @@ pub fn compile_node(
             let mut all_keys = keys;
             let compiled_cache_key = match cache_key {
                 Some(ck) => {
-                    let (expr, ck_ty) = compile_script_typed(ck, context_types, registry)
+                    let (expr, ck_ty) = compile_script(ck, context_types, registry)
                         .map_err(|e| vec![e])?;
                     expect_ty("cache_key", &ck_ty, &Ty::String)
                         .map_err(|e| vec![e])?;
@@ -518,7 +518,7 @@ pub fn compile_node(
     // Compile history store script with type checking.
     let history = match &spec.history {
         Some(hs) => {
-            let (store, _ty) = compile_script_typed(&hs.store, context_types, registry)
+            let (store, _ty) = compile_script(&hs.store, context_types, registry)
                 .map_err(|e| vec![e])?;
             all_context_keys.extend(store.context_keys.iter().cloned());
             Some(CompiledHistory { store })
@@ -563,7 +563,7 @@ pub fn compile_nodes(
         let store_ctx = context_types.clone();
         let mut history_fields = BTreeMap::new();
         for &(name, store_src) in &history_specs {
-            match compile_script_typed(store_src, &store_ctx, registry) {
+            match compile_script(store_src, &store_ctx, registry) {
                 Ok((_script, ty)) => {
                     history_fields.insert(name.to_string(), Ty::List(Box::new(ty)));
                 }

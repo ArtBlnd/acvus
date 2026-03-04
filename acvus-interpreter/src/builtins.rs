@@ -17,18 +17,6 @@ pub fn is_builtin(name: &str) -> bool {
     BUILTIN_NAMES.contains(name)
 }
 
-/// Names of pure (non-HOF) builtins dispatched by `call_pure`.
-pub const PURE_NAMES: &[&str] = &[
-    "to_string", "to_int", "to_float", "char_to_int", "int_to_char",
-    "len", "reverse", "flatten", "join", "contains", "contains_str",
-    "substring", "len_str", "to_bytes", "to_utf8", "to_utf8_lossy",
-];
-
-/// Names of higher-order function builtins dispatched by `exec_builtin`.
-pub const HOF_NAMES: &[&str] = &[
-    "filter", "map", "pmap", "find", "reduce", "fold", "any", "all",
-];
-
 /// Dispatch a pure (non-HOF) builtin.
 pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
     match name {

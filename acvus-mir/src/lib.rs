@@ -18,7 +18,7 @@ use crate::hints::HintTable;
 use crate::ir::MirModule;
 use crate::lower::Lowerer;
 use crate::ty::Ty;
-use crate::typeck::{TypeChecker, TypeMap};
+use crate::typeck::TypeChecker;
 
 /// Compile a parsed template into MIR.
 ///
@@ -40,14 +40,8 @@ pub fn compile(
     Ok((module, hints))
 }
 
-/// Compile a parsed script into MIR (no type checking).
-pub fn compile_script(script: &Script) -> (MirModule, HintTable) {
-    let lowerer = Lowerer::new(TypeMap::new(), HashSet::new());
-    lowerer.lower_script(script)
-}
-
 /// Compile a parsed script with type checking. Returns the MIR module, hint table, and the tail expression type.
-pub fn compile_script_typed(
+pub fn compile_script(
     script: &Script,
     context_types: HashMap<String, Ty>,
     registry: &ExternRegistry,
@@ -248,10 +242,16 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn compile_script_test(source: &str) -> MirModule {
+        let script = acvus_ast::parse_script(source).unwrap();
+        let ctx = HashMap::from([("data".into(), Ty::String)]);
+        let (module, _, _) = compile_script(&script, ctx, &empty_registry()).unwrap();
+        module
+    }
+
     #[test]
     fn script_single_expr() {
-        let script = acvus_ast::parse_script("@data").unwrap();
-        let (module, _) = compile_script(&script);
+        let module = compile_script_test("@data");
         let has_yield = module.main.insts.iter().any(|i| {
             matches!(&i.kind, crate::ir::InstKind::Yield(_))
         });
@@ -260,8 +260,7 @@ mod tests {
 
     #[test]
     fn script_bind_and_tail() {
-        let script = acvus_ast::parse_script("x = @data; x").unwrap();
-        let (module, _) = compile_script(&script);
+        let module = compile_script_test("x = @data; x");
         let has_context_load = module.main.insts.iter().any(|i| {
             matches!(&i.kind, crate::ir::InstKind::ContextLoad { .. })
         });
@@ -274,8 +273,7 @@ mod tests {
 
     #[test]
     fn script_trailing_semicolon_no_yield() {
-        let script = acvus_ast::parse_script("x = @data;").unwrap();
-        let (module, _) = compile_script(&script);
+        let module = compile_script_test("x = @data;");
         let has_yield = module.main.insts.iter().any(|i| {
             matches!(&i.kind, crate::ir::InstKind::Yield(_))
         });
