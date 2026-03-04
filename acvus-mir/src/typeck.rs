@@ -1120,11 +1120,10 @@ impl TypeChecker {
                 ..
             } => {
                 let resolved = match ast_enum_name {
-                    Some(ename) => {
-                        self.variant_registry
-                            .resolve(tag)
-                            .filter(|(edef, _)| edef.name == *ename)
-                    }
+                    Some(ename) => self
+                        .variant_registry
+                        .resolve(tag)
+                        .filter(|(edef, _)| edef.name == *ename),
                     None => self.variant_registry.resolve(tag),
                 };
                 let Some((enum_def, variant_def)) = resolved else {
@@ -1225,7 +1224,11 @@ mod tests {
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(source).expect("parse failed");
-        let checker = TypeChecker::new(HashMap::new(), &ExternRegistry::new(), &UserTypeRegistry::new());
+        let checker = TypeChecker::new(
+            HashMap::new(),
+            &ExternRegistry::new(),
+            &UserTypeRegistry::new(),
+        );
         let (tm, _) = checker.check_template(&template)?;
         Ok(tm)
     }

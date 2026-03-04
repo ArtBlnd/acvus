@@ -102,14 +102,19 @@ async fn compile_and_run(
     let extern_fns = ExternFnRegistry::new();
     let mir_registry = extern_fns.to_mir_registry();
 
-    let (module, _hints) =
-        acvus_mir::compile(&template, context_types, &mir_registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errors| {
-            errors
-                .iter()
-                .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let (module, _hints) = acvus_mir::compile(
+        &template,
+        context_types,
+        &mir_registry,
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .map_err(|errors| {
+        errors
+            .iter()
+            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     let ir = acvus_mir::printer::dump(&module);
 

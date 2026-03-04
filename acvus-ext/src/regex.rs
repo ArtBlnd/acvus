@@ -19,8 +19,7 @@ fn extract_regex(v: &Value) -> &regex::Regex {
 }
 
 fn compile_regex(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern)
-        .unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"))
+    regex::Regex::new(pattern).unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"))
 }
 
 /// Build the compile-time `ExternModule` and register runtime functions.
@@ -104,9 +103,7 @@ impl ExternFn for RegexMatch {
         }
     }
     fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|re: Value, s: String| async move {
-            extract_regex(&re).is_match(&s)
-        })
+        ExternFnBody::from_fn(|re: Value, s: String| async move { extract_regex(&re).is_match(&s) })
     }
 }
 
@@ -124,9 +121,7 @@ impl ExternFn for RegexFind {
     }
     fn into_body(self) -> ExternFnBody {
         ExternFnBody::from_fn(|re: Value, s: String| async move {
-            extract_regex(&re)
-                .find(&s)
-                .map(|m| m.as_str().to_string())
+            extract_regex(&re).find(&s).map(|m| m.as_str().to_string())
         })
     }
 }
@@ -168,7 +163,9 @@ impl ExternFn for RegexReplace {
     }
     fn into_body(self) -> ExternFnBody {
         ExternFnBody::from_fn(|re: Value, s: String, rep: String| async move {
-            extract_regex(&re).replace_all(&s, rep.as_str()).into_owned()
+            extract_regex(&re)
+                .replace_all(&s, rep.as_str())
+                .into_owned()
         })
     }
 }

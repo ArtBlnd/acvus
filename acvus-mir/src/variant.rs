@@ -115,7 +115,10 @@ impl VariantRegistry {
     /// Get enum and variant definition from a VariantTagId.
     pub fn get_tag_info(&self, id: VariantTagId) -> (&EnumDef, &VariantDef) {
         let (enum_idx, var_idx) = self.tag_id_index[id.0 as usize];
-        (&self.enums[enum_idx], &self.enums[enum_idx].variants[var_idx])
+        (
+            &self.enums[enum_idx],
+            &self.enums[enum_idx].variants[var_idx],
+        )
     }
 
     /// Get the tag name string from a VariantTagId.

@@ -1,7 +1,9 @@
 use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::DebugInfo;
-use acvus_mir::ir::{CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
+use acvus_mir::ir::{
+    CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+};
 use acvus_mir::ty::Ty;
 use rand::Rng;
 use rand::rngs::StdRng;

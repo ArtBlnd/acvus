@@ -6,7 +6,9 @@ use super::*;
 
 #[test]
 fn to_string_int() {
-    assert!(matches!(call_pure(BuiltinId::ToString, vec![Value::Int(42)]), Value::String(s) if s == "42"));
+    assert!(
+        matches!(call_pure(BuiltinId::ToString, vec![Value::Int(42)]), Value::String(s) if s == "42")
+    );
 }
 
 #[test]
@@ -58,7 +60,9 @@ fn to_int_float() {
 
 #[test]
 fn to_float_int() {
-    assert!(matches!(call_pure(BuiltinId::ToFloat, vec![Value::Int(5)]), Value::Float(f) if f == 5.0));
+    assert!(
+        matches!(call_pure(BuiltinId::ToFloat, vec![Value::Int(5)]), Value::Float(f) if f == 5.0)
+    );
 }
 
 /// Names of pure (non-HOF) builtins dispatched by `call_pure`.

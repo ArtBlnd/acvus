@@ -394,7 +394,7 @@ fn write_body(
                     )?,
                     None => writeln!(f, "{} = variant {}", fmt_val(*dst), name)?,
                 }
-            },
+            }
             InstKind::TestVariant { dst, src, tag } => {
                 let name = ctx.tag_name(tag);
                 writeln!(
@@ -404,7 +404,7 @@ fn write_body(
                     fmt_use(*src, &consts, &texts),
                     name,
                 )?
-            },
+            }
             InstKind::UnwrapVariant { dst, src } => writeln!(
                 f,
                 "{} = unwrap {}",
@@ -632,7 +632,13 @@ mod tests {
         registry: &crate::extern_module::ExternRegistry,
     ) -> String {
         let template = acvus_ast::parse(source).expect("parse failed");
-        let (module, _) = crate::compile(&template, context, registry, &crate::user_type::UserTypeRegistry::new()).expect("compile failed");
+        let (module, _) = crate::compile(
+            &template,
+            context,
+            registry,
+            &crate::user_type::UserTypeRegistry::new(),
+        )
+        .expect("compile failed");
         dump(&module)
     }
 

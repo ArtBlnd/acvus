@@ -499,7 +499,8 @@ impl Interpreter {
                     let result;
                     match func {
                         CallTarget::Builtin(id) => {
-                            (this, result) = Self::exec_builtin(this, *id, arg_values, handle).await;
+                            (this, result) =
+                                Self::exec_builtin(this, *id, arg_values, handle).await;
                         }
                         CallTarget::Extern(id) => {
                             result = this.extern_fn_table[id.0 as usize].call(arg_values).await;
@@ -512,7 +513,10 @@ impl Interpreter {
                     let CallTarget::Extern(id) = func else {
                         panic!("AsyncCall with non-extern target");
                     };
-                    frame.set_new(*dst, this.extern_fn_table[id.0 as usize].call(arg_values).await);
+                    frame.set_new(
+                        *dst,
+                        this.extern_fn_table[id.0 as usize].call(arg_values).await,
+                    );
                 }
                 InstKind::CallClosure { dst, closure, args } => {
                     let fn_val = expect_fn(frame.take_owned(*closure), "CallClosure");
@@ -566,17 +570,33 @@ impl Interpreter {
         handle: &'a YieldHandle,
     ) -> (Self, Value) {
         match id {
-            BuiltinId::ToString | BuiltinId::ToInt | BuiltinId::ToFloat
-            | BuiltinId::CharToInt | BuiltinId::IntToChar | BuiltinId::Len
-            | BuiltinId::Reverse | BuiltinId::Flatten | BuiltinId::Join
-            | BuiltinId::Contains | BuiltinId::ContainsStr | BuiltinId::Substring
-            | BuiltinId::LenStr | BuiltinId::ToBytes | BuiltinId::ToUtf8
-            | BuiltinId::ToUtf8Lossy | BuiltinId::Trim | BuiltinId::TrimStart
-            | BuiltinId::TrimEnd | BuiltinId::Upper | BuiltinId::Lower
-            | BuiltinId::ReplaceStr | BuiltinId::SplitStr | BuiltinId::StartsWithStr
-            | BuiltinId::EndsWithStr | BuiltinId::RepeatStr | BuiltinId::Unwrap => {
-                (this, builtins::call_pure(id, args))
-            }
+            BuiltinId::ToString
+            | BuiltinId::ToInt
+            | BuiltinId::ToFloat
+            | BuiltinId::CharToInt
+            | BuiltinId::IntToChar
+            | BuiltinId::Len
+            | BuiltinId::Reverse
+            | BuiltinId::Flatten
+            | BuiltinId::Join
+            | BuiltinId::Contains
+            | BuiltinId::ContainsStr
+            | BuiltinId::Substring
+            | BuiltinId::LenStr
+            | BuiltinId::ToBytes
+            | BuiltinId::ToUtf8
+            | BuiltinId::ToUtf8Lossy
+            | BuiltinId::Trim
+            | BuiltinId::TrimStart
+            | BuiltinId::TrimEnd
+            | BuiltinId::Upper
+            | BuiltinId::Lower
+            | BuiltinId::ReplaceStr
+            | BuiltinId::SplitStr
+            | BuiltinId::StartsWithStr
+            | BuiltinId::EndsWithStr
+            | BuiltinId::RepeatStr
+            | BuiltinId::Unwrap => (this, builtins::call_pure(id, args)),
             BuiltinId::Filter => Self::exec_hof_filter(this, args, handle).await,
             BuiltinId::Map | BuiltinId::Pmap => Self::exec_hof_map(this, args, handle).await,
             BuiltinId::Find => Self::exec_hof_find(this, args, handle).await,

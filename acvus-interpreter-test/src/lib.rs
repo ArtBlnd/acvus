@@ -16,8 +16,13 @@ pub async fn run(
 ) -> String {
     let template = acvus_ast::parse(source).expect("parse failed");
     let mir_registry = extern_fns.to_mir_registry();
-    let (module, _hints) =
-        acvus_mir::compile(&template, context_types, &mir_registry, &acvus_mir::user_type::UserTypeRegistry::new()).expect("compile failed");
+    let (module, _hints) = acvus_mir::compile(
+        &template,
+        context_types,
+        &mir_registry,
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .expect("compile failed");
 
     let interp = Interpreter::new(module, &extern_fns);
     interp.execute_to_string(context_values).await
@@ -46,8 +51,13 @@ pub async fn run_obfuscated(
 
     let template = acvus_ast::parse(source).expect("parse failed");
     let mir_registry = extern_fns.to_mir_registry();
-    let (module, _hints) =
-        acvus_mir::compile(&template, context_types, &mir_registry, &acvus_mir::user_type::UserTypeRegistry::new()).expect("compile failed");
+    let (module, _hints) = acvus_mir::compile(
+        &template,
+        context_types,
+        &mir_registry,
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .expect("compile failed");
 
     let module = ObfuscatePass {
         config: ObfConfig {
@@ -99,9 +109,13 @@ pub async fn run_capturing_context_calls(
     values: HashMap<String, Value>,
 ) -> ContextCallResult {
     let template = acvus_ast::parse(source).expect("parse failed");
-    let (module, _hints) =
-        acvus_mir::compile(&template, types, &ExternFnRegistry::new().to_mir_registry(), &acvus_mir::user_type::UserTypeRegistry::new())
-            .expect("compile failed");
+    let (module, _hints) = acvus_mir::compile(
+        &template,
+        types,
+        &ExternFnRegistry::new().to_mir_registry(),
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .expect("compile failed");
     let interp = Interpreter::new(module, &ExternFnRegistry::new());
     let (mut coroutine, mut key) = interp.execute();
     let mut output = String::new();

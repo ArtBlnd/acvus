@@ -171,13 +171,18 @@ pub(crate) fn compile_script(
             error: format!("{e}"),
         })
     })?;
-    let (module, _hints, tail_ty) =
-        acvus_mir::compile_script(&script, context_types.clone(), registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errs| {
-            OrchError::new(OrchErrorKind::ScriptCompile {
-                context: source.to_string(),
-                errors: errs,
-            })
-        })?;
+    let (module, _hints, tail_ty) = acvus_mir::compile_script(
+        &script,
+        context_types.clone(),
+        registry,
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .map_err(|errs| {
+        OrchError::new(OrchErrorKind::ScriptCompile {
+            context: source.to_string(),
+            errors: errs,
+        })
+    })?;
     let context_keys = extract_context_keys(&module);
     Ok((
         CompiledScript {
@@ -239,13 +244,18 @@ pub(crate) fn compile_template(
         })
     })?;
 
-    let (module, _hints) =
-        acvus_mir::compile(&ast, context_types.clone(), registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errs| {
-            OrchError::new(OrchErrorKind::TemplateCompile {
-                block: block_idx,
-                errors: errs,
-            })
-        })?;
+    let (module, _hints) = acvus_mir::compile(
+        &ast,
+        context_types.clone(),
+        registry,
+        &acvus_mir::user_type::UserTypeRegistry::new(),
+    )
+    .map_err(|errs| {
+        OrchError::new(OrchErrorKind::TemplateCompile {
+            block: block_idx,
+            errors: errs,
+        })
+    })?;
 
     let context_keys = extract_context_keys(&module);
     let val_def = ValDefMapAnalysis.run(&module, ());

@@ -6,8 +6,8 @@ pub use handler::{FromValue, IntoValue};
 use handler::PureBuiltin;
 use pure::*;
 
-use acvus_mir::builtins::BuiltinId;
 use crate::value::Value;
+use acvus_mir::builtins::BuiltinId;
 
 /// Dispatch a pure (non-HOF) builtin by ID.
 pub fn call_pure(id: BuiltinId, args: Vec<Value>) -> Value {

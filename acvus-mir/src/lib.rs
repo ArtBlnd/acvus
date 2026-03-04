@@ -251,7 +251,8 @@ mod tests {
     fn compile_script_test(source: &str) -> MirModule {
         let script = acvus_ast::parse_script(source).unwrap();
         let ctx = HashMap::from([("data".into(), Ty::String)]);
-        let (module, _, _) = compile_script(&script, ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
+        let (module, _, _) =
+            compile_script(&script, ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
         module
     }
 

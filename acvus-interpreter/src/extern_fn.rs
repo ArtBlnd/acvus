@@ -144,10 +144,7 @@ impl ExternFnRegistry {
 
     /// Build an ID-indexed table for fast runtime lookup.
     /// Call after `to_mir_registry()` with the same registry's name table.
-    pub fn build_id_table(
-        &self,
-        extern_names: &HashMap<ExternFnId, String>,
-    ) -> Vec<ExternFnBody> {
+    pub fn build_id_table(&self, extern_names: &HashMap<ExternFnId, String>) -> Vec<ExternFnBody> {
         let mut table = vec![None; extern_names.len()];
         for (&id, name) in extern_names {
             let body = self
