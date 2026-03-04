@@ -16,6 +16,7 @@ pub trait Storage {
 }
 
 /// Simple in-memory storage backed by a `HashMap`.
+#[derive(Debug)]
 pub struct HashMapStorage {
     entries: HashMap<String, Arc<Value>>,
 }

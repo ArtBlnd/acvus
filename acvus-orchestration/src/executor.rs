@@ -512,6 +512,16 @@ fn handle_tool_calls(calls: &[ToolCall]) -> Vec<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use acvus_mir::extern_module::ExternRegistry;
+
+    use crate::compile::compile_nodes;
+    use crate::dag::build_dag;
+    use crate::dsl::{MessageSpec, NodeSpec, Strategy};
+    use crate::kind::{LlmSpec, MaxTokens};
+    use crate::provider::{ApiKind, HttpRequest, ProviderConfig};
+    use crate::storage::HashMapStorage;
 
     #[test]
     fn value_to_literal_string() {
@@ -541,5 +551,246 @@ mod tests {
     fn value_to_literal_object_none() {
         let lit = value_to_literal(&Value::Object(Default::default()));
         assert!(lit.is_none());
+    }
+
+    // -- MockFetch ---------------------------------------------------------------
+
+    struct MockFetch {
+        responses: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl MockFetch {
+        fn new(responses: Vec<serde_json::Value>) -> Self {
+            Self {
+                responses: Mutex::new(responses),
+            }
+        }
+    }
+
+    impl Fetch for MockFetch {
+        async fn fetch(&self, _request: &HttpRequest) -> Result<serde_json::Value, String> {
+            let mut q = self.responses.lock().unwrap();
+            if q.is_empty() {
+                return Err("no more mock responses".into());
+            }
+            Ok(q.remove(0))
+        }
+    }
+
+    // -- helpers -----------------------------------------------------------------
+
+    fn compile_test_nodes(specs: &[NodeSpec]) -> Vec<CompiledNode> {
+        compile_nodes(specs, &HashMap::new(), &ExternRegistry::default()).unwrap()
+    }
+
+    fn default_provider() -> (String, ProviderConfig) {
+        (
+            "test".into(),
+            ProviderConfig {
+                api: ApiKind::OpenAI,
+                endpoint: "http://mock".into(),
+                api_key: String::new(),
+            },
+        )
+    }
+
+    fn openai_text_response(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": text
+                }
+            }]
+        })
+    }
+
+    fn openai_tool_call_response(
+        calls: Vec<(&str, &str, serde_json::Value)>,
+    ) -> serde_json::Value {
+        let tool_calls: Vec<serde_json::Value> = calls
+            .into_iter()
+            .map(|(id, name, args)| {
+                serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": serde_json::to_string(&args).unwrap()
+                    }
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": tool_calls
+                }
+            }]
+        })
+    }
+
+    fn llm_node(name: &str, template: &str) -> NodeSpec {
+        NodeSpec {
+            name: name.into(),
+            kind: crate::kind::NodeKind::Llm(LlmSpec {
+                api: ApiKind::OpenAI,
+                provider: "test".into(),
+                model: "m".into(),
+                messages: vec![MessageSpec::Block {
+                    role: "user".into(),
+                    source: template.into(),
+                }],
+                tools: vec![],
+                generation: Default::default(),
+                cache_key: None,
+                max_tokens: MaxTokens::default(),
+            }),
+            strategy: Strategy::default(),
+            history: None,
+        }
+    }
+
+    async fn run_executor(
+        nodes: Vec<CompiledNode>,
+        responses: Vec<serde_json::Value>,
+        fuel_limit: u64,
+    ) -> Result<HashMapStorage, OrchError> {
+        let dag = build_dag(&nodes).unwrap();
+        let (pname, pconfig) = default_provider();
+        let executor = Executor::new(
+            nodes,
+            dag,
+            HashMapStorage::new(),
+            MockFetch::new(responses),
+            HashMap::from([(pname, pconfig)]),
+            ExternRegistry::default(),
+            fuel_limit,
+        );
+        executor.run().await
+    }
+
+    // -- e2e tests ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn single_node_text_response() {
+        let nodes = compile_test_nodes(&[llm_node("a", "hello")]);
+        let storage = run_executor(nodes, vec![openai_text_response("world")], 10)
+            .await
+            .unwrap();
+        let val = storage.get("a").unwrap();
+        assert!(matches!(&*val, Value::String(s) if s == "world"));
+    }
+
+    #[tokio::test]
+    async fn two_node_dependency() {
+        use crate::compile::CompiledBlock;
+        use acvus_mir_pass::AnalysisPass;
+        use acvus_mir_pass::analysis::val_def::ValDefMapAnalysis;
+
+        // Build node A: simple template "first"
+        let nodes_a = compile_test_nodes(&[llm_node("a", "first")]);
+        let node_a = nodes_a.into_iter().next().unwrap();
+
+        // Build node B manually with a dependency on "a" via all_context_keys.
+        // The template is just "hello" but we mark "a" as a context key to create the dep.
+        let ctx = HashMap::from([("a".into(), acvus_mir::ty::Ty::String)]);
+        let ast_b = acvus_ast::parse("{{@a}}").unwrap();
+        let (module_b, _) = acvus_mir::compile(
+            &ast_b,
+            ctx,
+            &ExternRegistry::default(),
+            &acvus_mir::user_type::UserTypeRegistry::new(),
+        )
+        .unwrap();
+        let val_def_b = ValDefMapAnalysis.run(&module_b, ());
+        let node_b = CompiledNode {
+            name: "b".into(),
+            kind: CompiledNodeKind::Llm(crate::kind::CompiledLlm {
+                api: ApiKind::OpenAI,
+                provider: "test".into(),
+                model: "m".into(),
+                messages: vec![CompiledMessage::Block(CompiledBlock {
+                    role: "user".into(),
+                    module: module_b,
+                    context_keys: ["a".into()].into(),
+                    val_def: val_def_b,
+                })],
+                tools: vec![],
+                generation: Default::default(),
+                cache_key: None,
+                max_tokens: Default::default(),
+            }),
+            all_context_keys: ["a".into()].into(),
+            strategy: Strategy::default(),
+            bind_module: None,
+            history: None,
+        };
+
+        let storage = run_executor(
+            vec![node_a, node_b],
+            vec![
+                openai_text_response("from-a"),
+                openai_text_response("from-b"),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+        let a = storage.get("a").unwrap();
+        assert!(matches!(&*a, Value::String(s) if s == "from-a"));
+        let b = storage.get("b").unwrap();
+        assert!(matches!(&*b, Value::String(s) if s == "from-b"));
+    }
+
+    #[tokio::test]
+    async fn tool_call_loop() {
+        let nodes = compile_test_nodes(&[llm_node("a", "do something")]);
+        let storage = run_executor(
+            nodes,
+            vec![
+                openai_tool_call_response(vec![("c1", "fn1", serde_json::json!({}))]),
+                openai_text_response("done"),
+            ],
+            10,
+        )
+        .await
+        .unwrap();
+        let val = storage.get("a").unwrap();
+        assert!(matches!(&*val, Value::String(s) if s == "done"));
+    }
+
+    #[tokio::test]
+    async fn fuel_exhaustion() {
+        let nodes = compile_test_nodes(&[llm_node("a", "go")]);
+        let err = run_executor(
+            nodes,
+            vec![
+                openai_tool_call_response(vec![("c1", "fn1", serde_json::json!({}))]),
+                openai_tool_call_response(vec![("c2", "fn2", serde_json::json!({}))]),
+                openai_text_response("never"),
+            ],
+            1,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.kind, OrchErrorKind::FuelExhausted));
+    }
+
+    #[tokio::test]
+    async fn malformed_response_error() {
+        let nodes = compile_test_nodes(&[llm_node("a", "hello")]);
+        let response = serde_json::json!({ "error": "bad request" });
+        let err = run_executor(nodes, vec![response], 10).await.unwrap_err();
+        assert!(matches!(err.kind, OrchErrorKind::ModelError(_)));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Object")]
+    fn item_fields_non_object_panics() {
+        let api = ApiKind::OpenAI;
+        api.item_fields(&Value::String("not an object".into()));
     }
 }
