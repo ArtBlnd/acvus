@@ -7,6 +7,7 @@ pub mod lower;
 pub mod printer;
 pub mod ty;
 pub mod typeck;
+pub mod user_type;
 pub mod variant;
 
 use std::collections::{HashMap, HashSet};
@@ -20,23 +21,26 @@ use crate::ir::MirModule;
 use crate::lower::Lowerer;
 use crate::ty::Ty;
 use crate::typeck::TypeChecker;
+use crate::user_type::UserTypeRegistry;
 
 /// Compile a parsed template into MIR.
 ///
 /// - `template`: the parsed AST from `acvus_ast::parse()`.
 /// - `context_types`: types for each `@name` context variable.
 /// - `registry`: external function definitions.
+/// - `user_types`: user-defined enum types.
 ///
 /// Returns a `MirModule` and `HintTable`, or a list of errors.
 pub fn compile(
     template: &Template,
     context_types: HashMap<String, Ty>,
     registry: &ExternRegistry,
+    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let context_names: HashSet<String> = context_types.keys().cloned().collect();
-    let checker = TypeChecker::new(context_types, registry);
-    let type_map = checker.check_template(template)?;
-    let lowerer = Lowerer::new(type_map, context_names);
+    let checker = TypeChecker::new(context_types, registry, user_types);
+    let (type_map, variant_registry) = checker.check_template(template)?;
+    let lowerer = Lowerer::new(type_map, context_names, variant_registry, registry.clone());
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -46,11 +50,12 @@ pub fn compile_script(
     script: &Script,
     context_types: HashMap<String, Ty>,
     registry: &ExternRegistry,
+    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let context_names: HashSet<String> = context_types.keys().cloned().collect();
-    let checker = TypeChecker::new(context_types, registry);
-    let (type_map, tail_ty) = checker.check_script(script)?;
-    let lowerer = Lowerer::new(type_map, context_names);
+    let checker = TypeChecker::new(context_types, registry, user_types);
+    let (type_map, tail_ty, variant_registry) = checker.check_script(script)?;
+    let lowerer = Lowerer::new(type_map, context_names, variant_registry, registry.clone());
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -68,7 +73,7 @@ mod tests {
         registry: &ExternRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
         let template = acvus_ast::parse(source).expect("parse failed");
-        compile(&template, context, registry)
+        compile(&template, context, registry, &UserTypeRegistry::new())
     }
 
     fn empty_registry() -> ExternRegistry {
@@ -246,7 +251,7 @@ mod tests {
     fn compile_script_test(source: &str) -> MirModule {
         let script = acvus_ast::parse_script(source).unwrap();
         let ctx = HashMap::from([("data".into(), Ty::String)]);
-        let (module, _, _) = compile_script(&script, ctx, &empty_registry()).unwrap();
+        let (module, _, _) = compile_script(&script, ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
         module
     }
 

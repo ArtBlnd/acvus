@@ -6,11 +6,15 @@ use acvus_ast::{
     TuplePatternElem,
 };
 
-use crate::builtins::builtins;
+use crate::builtins::BuiltinId;
+use crate::extern_module::ExternRegistry;
 use crate::hints::{Hint, HintTable};
-use crate::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
+use crate::ir::{
+    CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+};
 use crate::ty::Ty;
 use crate::typeck::TypeMap;
+use crate::variant::VariantRegistry;
 
 pub struct Lowerer {
     body: MirBody,
@@ -25,8 +29,10 @@ pub struct Lowerer {
     closures: HashMap<Label, ClosureBody>,
     /// Hint table.
     hints: HintTable,
-    /// Set of builtin function names (sync calls).
-    builtin_names: HashSet<String>,
+    /// Variant registry for tag → VariantTagId resolution.
+    variant_registry: VariantRegistry,
+    /// Extern registry for name → ExternFnId resolution.
+    extern_registry: ExternRegistry,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -102,9 +108,12 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
 }
 
 impl Lowerer {
-    pub fn new(type_map: TypeMap, context_names: HashSet<String>) -> Self {
-        let builtin_names: HashSet<String> =
-            builtins().iter().map(|b| b.name().to_string()).collect();
+    pub fn new(
+        type_map: TypeMap,
+        context_names: HashSet<String>,
+        variant_registry: VariantRegistry,
+        extern_registry: ExternRegistry,
+    ) -> Self {
         Self {
             body: MirBody::new(),
             scopes: vec![HashMap::new()],
@@ -112,7 +121,8 @@ impl Lowerer {
             context_names,
             closures: HashMap::new(),
             hints: HintTable::new(),
-            builtin_names,
+            variant_registry,
+            extern_registry,
         }
     }
 
@@ -141,9 +151,13 @@ impl Lowerer {
     }
 
     fn build_module(self) -> (MirModule, HintTable) {
+        let tag_names = self.variant_registry.build_tag_names();
+        let extern_names = self.extern_registry.build_name_table();
         let module = MirModule {
             main: self.body,
             closures: self.closures,
+            tag_names,
+            extern_names,
         };
         (module, self.hints)
     }
@@ -688,17 +702,26 @@ impl Lowerer {
                 dst
             }
 
-            Expr::Variant { tag, payload, span } => {
+            Expr::Variant {
+                enum_name,
+                tag,
+                payload,
+                span,
+            } => {
                 let payload_val = payload.as_ref().map(|e| self.lower_expr(e));
                 let dst = self.alloc_val();
                 let ty = self.type_of_span(*span);
                 self.set_val_type(dst, ty);
                 self.set_origin(dst, ValOrigin::Expr);
+                let tag_id = self
+                    .variant_registry
+                    .resolve_tag(enum_name.as_deref(), tag)
+                    .unwrap_or_else(|| panic!("unknown variant tag: {tag}"));
                 self.emit_inst(
                     *span,
                     InstKind::MakeVariant {
                         dst,
-                        tag: tag.clone(),
+                        tag: tag_id,
                         payload: payload_val,
                     },
                 );
@@ -739,13 +762,13 @@ impl Lowerer {
 
         self.set_origin(dst, ValOrigin::Call(name.clone()));
 
-        if self.builtin_names.contains(name.as_str()) {
+        if let Some(builtin_id) = BuiltinId::resolve(&name) {
             // Builtin: synchronous Call.
             self.emit_inst(
                 call_span,
                 InstKind::Call {
                     dst,
-                    func: name.clone(),
+                    func: CallTarget::Builtin(builtin_id),
                     args: arg_regs,
                 },
             );
@@ -768,13 +791,17 @@ impl Lowerer {
         }
 
         // External function: async call + await.
+        let extern_id = self
+            .extern_registry
+            .resolve(&name)
+            .unwrap_or_else(|| panic!("unknown function: {name}"));
         let future_reg = self.alloc_val();
         self.set_val_type(future_reg, Ty::Unit); // placeholder
         self.emit_inst(
             call_span,
             InstKind::AsyncCall {
                 dst: future_reg,
-                func: name.clone(),
+                func: CallTarget::Extern(extern_id),
                 args: arg_regs,
             },
         );
@@ -1411,8 +1438,17 @@ impl Lowerer {
                 all_ok
             }
 
-            Pattern::Variant { tag, payload, .. } => {
+            Pattern::Variant {
+                enum_name,
+                tag,
+                payload,
+                ..
+            } => {
                 // Test if the variant tag matches.
+                let tag_id = self
+                    .variant_registry
+                    .resolve_tag(enum_name.as_deref(), tag)
+                    .unwrap_or_else(|| panic!("unknown variant tag: {tag}"));
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
                 self.emit_inst(
@@ -1420,7 +1456,7 @@ impl Lowerer {
                     InstKind::TestVariant {
                         dst: tag_ok,
                         src: src_reg,
-                        tag: tag.clone(),
+                        tag: tag_id,
                     },
                 );
 
@@ -1759,6 +1795,7 @@ mod tests {
     use super::*;
     use crate::extern_module::ExternRegistry;
     use crate::typeck::TypeChecker;
+    use crate::user_type::UserTypeRegistry;
     use std::collections::HashMap;
 
     fn lower(source: &str) -> MirModule {
@@ -1772,11 +1809,12 @@ mod tests {
     ) -> MirModule {
         let template = acvus_ast::parse(source).expect("parse failed");
         let context_names: HashSet<String> = context.keys().cloned().collect();
-        let checker = TypeChecker::new(context, registry);
-        let type_map = checker
+        let user_types = UserTypeRegistry::new();
+        let checker = TypeChecker::new(context, registry, &user_types);
+        let (type_map, variant_registry) = checker
             .check_template(&template)
             .expect("type check failed");
-        let lowerer = Lowerer::new(type_map, context_names);
+        let lowerer = Lowerer::new(type_map, context_names, variant_registry, registry.clone());
         let (module, _hints) = lowerer.lower_template(&template);
         module
     }
@@ -1864,7 +1902,7 @@ mod tests {
             .main
             .insts
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::Call { func, .. } if func == "to_string"));
+            .any(|i| matches!(&i.kind, InstKind::Call { func, .. } if *func == CallTarget::Builtin(crate::builtins::BuiltinId::ToString)));
         assert!(has_call);
     }
 

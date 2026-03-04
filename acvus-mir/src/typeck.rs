@@ -9,6 +9,7 @@ use crate::builtins::builtins;
 use crate::error::{MirError, MirErrorKind};
 use crate::extern_module::ExternRegistry;
 use crate::ty::{Ty, TySubst};
+use crate::user_type::UserTypeRegistry;
 use crate::variant::{VariantPayload, VariantRegistry, make_enum_ty};
 
 /// Maps each AST Span to its inferred type.
@@ -34,20 +35,32 @@ pub struct TypeChecker {
 }
 
 impl TypeChecker {
-    pub fn new(context_types: HashMap<String, Ty>, registry: &ExternRegistry) -> Self {
+    pub fn new(
+        context_types: HashMap<String, Ty>,
+        registry: &ExternRegistry,
+        user_types: &UserTypeRegistry,
+    ) -> Self {
+        let mut variant_registry = VariantRegistry::new();
+        // Register user-defined enums into the variant registry.
+        for (_id, def) in user_types.iter() {
+            variant_registry.register(def.clone());
+        }
         Self {
             scopes: vec![HashMap::new()],
             context_types,
             variable_types: HashMap::new(),
             extern_registry: registry.clone(),
-            variant_registry: VariantRegistry::new(),
+            variant_registry,
             subst: TySubst::new(),
             type_map: TypeMap::new(),
             errors: Vec::new(),
         }
     }
 
-    pub fn check_template(mut self, template: &Template) -> Result<TypeMap, Vec<MirError>> {
+    pub fn check_template(
+        mut self,
+        template: &Template,
+    ) -> Result<(TypeMap, VariantRegistry), Vec<MirError>> {
         self.check_nodes(&template.body);
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -58,13 +71,13 @@ impl TypeChecker {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok(resolved)
+        Ok((resolved, self.variant_registry))
     }
 
     pub fn check_script(
         mut self,
         script: &acvus_ast::Script,
-    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
+    ) -> Result<(TypeMap, Ty, VariantRegistry), Vec<MirError>> {
         for stmt in &script.stmts {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
@@ -90,7 +103,7 @@ impl TypeChecker {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok((resolved, resolved_tail))
+        Ok((resolved, resolved_tail, self.variant_registry))
     }
 
     fn push_scope(&mut self) {
@@ -719,8 +732,22 @@ impl TypeChecker {
                 ty
             }
 
-            Expr::Variant { tag, payload, span } => {
-                let Some((enum_def, variant_def)) = self.variant_registry.resolve(tag) else {
+            Expr::Variant {
+                enum_name: ast_enum_name,
+                tag,
+                payload,
+                span,
+            } => {
+                let resolved = match ast_enum_name {
+                    Some(ename) => {
+                        // Qualified: Enum::Tag
+                        self.variant_registry
+                            .resolve(tag)
+                            .filter(|(edef, _)| edef.name == *ename)
+                    }
+                    None => self.variant_registry.resolve(tag),
+                };
+                let Some((enum_def, variant_def)) = resolved else {
                     self.error(
                         MirErrorKind::UndefinedFunction(format!("unknown variant: {tag}")),
                         *span,
@@ -759,7 +786,7 @@ impl TypeChecker {
                     VariantPayload::None => {}
                 }
 
-                let ty = make_enum_ty(&enum_name, &type_params, &self.subst);
+                let ty = make_enum_ty(&enum_name, &type_params, &self.subst, None);
                 self.record(*span, ty.clone());
                 ty
             }
@@ -804,7 +831,7 @@ impl TypeChecker {
         };
 
         // Check builtins first.
-        for b in builtins() {
+        for (_, b) in builtins() {
             if b.name() != name {
                 continue;
             }
@@ -1086,8 +1113,21 @@ impl TypeChecker {
                 }
             }
 
-            Pattern::Variant { tag, payload, .. } => {
-                let Some((enum_def, variant_def)) = self.variant_registry.resolve(tag) else {
+            Pattern::Variant {
+                enum_name: ast_enum_name,
+                tag,
+                payload,
+                ..
+            } => {
+                let resolved = match ast_enum_name {
+                    Some(ename) => {
+                        self.variant_registry
+                            .resolve(tag)
+                            .filter(|(edef, _)| edef.name == *ename)
+                    }
+                    None => self.variant_registry.resolve(tag),
+                };
+                let Some((enum_def, variant_def)) = resolved else {
                     self.error(
                         MirErrorKind::UndefinedFunction(format!("unknown variant: {tag}")),
                         span,
@@ -1100,7 +1140,7 @@ impl TypeChecker {
                     .collect();
                 let variant_payload = variant_def.payload.clone();
 
-                let enum_ty = make_enum_ty(&enum_name, &type_params, &self.subst);
+                let enum_ty = make_enum_ty(&enum_name, &type_params, &self.subst, None);
                 if self.subst.unify(&source_resolved, &enum_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
@@ -1180,12 +1220,14 @@ fn op_str(op: BinOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::extern_module::{ExternModule, ExternRegistry};
+    use crate::user_type::UserTypeRegistry;
     use acvus_ast::parse;
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(source).expect("parse failed");
-        let checker = TypeChecker::new(HashMap::new(), &ExternRegistry::new());
-        checker.check_template(&template)
+        let checker = TypeChecker::new(HashMap::new(), &ExternRegistry::new(), &UserTypeRegistry::new());
+        let (tm, _) = checker.check_template(&template)?;
+        Ok(tm)
     }
 
     fn check_with_context(
@@ -1193,8 +1235,9 @@ mod tests {
         context: HashMap<String, Ty>,
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(source).expect("parse failed");
-        let checker = TypeChecker::new(context, &ExternRegistry::new());
-        checker.check_template(&template)
+        let checker = TypeChecker::new(context, &ExternRegistry::new(), &UserTypeRegistry::new());
+        let (tm, _) = checker.check_template(&template)?;
+        Ok(tm)
     }
 
     fn check_with_extern(
@@ -1202,8 +1245,9 @@ mod tests {
         registry: &ExternRegistry,
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(source).expect("parse failed");
-        let checker = TypeChecker::new(HashMap::new(), registry);
-        checker.check_template(&template)
+        let checker = TypeChecker::new(HashMap::new(), registry, &UserTypeRegistry::new());
+        let (tm, _) = checker.check_template(&template)?;
+        Ok(tm)
     }
 
     #[test]

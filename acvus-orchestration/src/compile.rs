@@ -172,7 +172,7 @@ pub(crate) fn compile_script(
         })
     })?;
     let (module, _hints, tail_ty) =
-        acvus_mir::compile_script(&script, context_types.clone(), registry).map_err(|errs| {
+        acvus_mir::compile_script(&script, context_types.clone(), registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errs| {
             OrchError::new(OrchErrorKind::ScriptCompile {
                 context: source.to_string(),
                 errors: errs,
@@ -240,7 +240,7 @@ pub(crate) fn compile_template(
     })?;
 
     let (module, _hints) =
-        acvus_mir::compile(&ast, context_types.clone(), registry).map_err(|errs| {
+        acvus_mir::compile(&ast, context_types.clone(), registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errs| {
             OrchError::new(OrchErrorKind::TemplateCompile {
                 block: block_idx,
                 errors: errs,

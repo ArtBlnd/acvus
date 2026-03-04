@@ -2,13 +2,22 @@ use std::collections::HashMap;
 
 use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
 
+use crate::builtins::BuiltinId;
+use crate::extern_module::ExternFnId;
 use crate::ty::Ty;
+use crate::variant::VariantTagId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallTarget {
+    Builtin(BuiltinId),
+    Extern(ExternFnId),
+}
 
 #[derive(Debug, Clone)]
 pub struct Inst {
@@ -61,12 +70,12 @@ pub enum InstKind {
     // Calls
     Call {
         dst: ValueId,
-        func: String,
+        func: CallTarget,
         args: Vec<ValueId>,
     },
     AsyncCall {
         dst: ValueId,
-        func: String,
+        func: CallTarget,
         args: Vec<ValueId>,
     },
     Await {
@@ -171,13 +180,13 @@ pub enum InstKind {
     // Variant (tagged union)
     MakeVariant {
         dst: ValueId,
-        tag: String,
+        tag: VariantTagId,
         payload: Option<ValueId>,
     },
     TestVariant {
         dst: ValueId,
         src: ValueId,
-        tag: String,
+        tag: VariantTagId,
     },
     UnwrapVariant {
         dst: ValueId,
@@ -298,4 +307,8 @@ pub struct ClosureBody {
 pub struct MirModule {
     pub main: MirBody,
     pub closures: HashMap<Label, ClosureBody>,
+    /// Tag name table: `VariantTagId(n)` → `tag_names[n]`.
+    pub tag_names: Vec<String>,
+    /// Extern fn name table: `ExternFnId` → name string.
+    pub extern_names: HashMap<ExternFnId, String>,
 }

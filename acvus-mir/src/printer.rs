@@ -3,7 +3,8 @@ use std::fmt;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 
-use crate::ir::{ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::extern_module::ExternFnId;
+use crate::ir::{CallTarget, ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
 
 fn fmt_val(r: ValueId) -> String {
     format!("r{}", r.0)
@@ -65,6 +66,32 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
     }
 }
 
+struct PrintCtx<'a> {
+    lit_to_tidx: &'a HashMap<String, usize>,
+    extern_names: &'a HashMap<ExternFnId, String>,
+    tag_names: &'a [String],
+}
+
+impl PrintCtx<'_> {
+    fn fmt_call_target(&self, target: &CallTarget) -> String {
+        match target {
+            CallTarget::Builtin(id) => id.name().to_string(),
+            CallTarget::Extern(id) => self
+                .extern_names
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("extern#{}", id.0)),
+        }
+    }
+
+    fn tag_name(&self, tag: &crate::variant::VariantTagId) -> &str {
+        self.tag_names
+            .get(tag.0 as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("?")
+    }
+}
+
 fn fmt_use(
     r: ValueId,
     consts: &HashMap<ValueId, &Literal>,
@@ -114,7 +141,7 @@ fn write_body(
     f: &mut fmt::Formatter<'_>,
     body: &MirBody,
     indent: &str,
-    lit_to_tidx: &HashMap<String, usize>,
+    ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
     // Small constants (Int, Float, Bool, Byte) → inline at use sites.
     let consts: HashMap<ValueId, &Literal> = body
@@ -138,7 +165,7 @@ fn write_body(
             InstKind::Const { dst, value }
                 if matches!(value, Literal::String(_) | Literal::List(_)) =>
             {
-                lit_to_tidx
+                ctx.lit_to_tidx
                     .get(&fmt_literal(value))
                     .map(|&tidx| (*dst, tidx))
             }
@@ -222,14 +249,16 @@ fn write_body(
             // Calls
             InstKind::Call { dst, func, args } => writeln!(
                 f,
-                "{} = call {func}({})",
+                "{} = call {}({})",
                 fmt_val(*dst),
+                ctx.fmt_call_target(func),
                 fmt_uses(args, &consts, &texts)
             )?,
             InstKind::AsyncCall { dst, func, args } => writeln!(
                 f,
-                "{} = async_call {func}({})",
+                "{} = async_call {}({})",
                 fmt_val(*dst),
+                ctx.fmt_call_target(func),
                 fmt_uses(args, &consts, &texts)
             )?,
             InstKind::Await { dst, src } => writeln!(
@@ -353,21 +382,29 @@ fn write_body(
             )?,
 
             // Variant
-            InstKind::MakeVariant { dst, tag, payload } => match payload {
-                Some(p) => writeln!(
-                    f,
-                    "{} = variant {tag}({})",
-                    fmt_val(*dst),
-                    fmt_use(*p, &consts, &texts)
-                )?,
-                None => writeln!(f, "{} = variant {tag}", fmt_val(*dst))?,
+            InstKind::MakeVariant { dst, tag, payload } => {
+                let name = ctx.tag_name(tag);
+                match payload {
+                    Some(p) => writeln!(
+                        f,
+                        "{} = variant {}({})",
+                        fmt_val(*dst),
+                        name,
+                        fmt_use(*p, &consts, &texts)
+                    )?,
+                    None => writeln!(f, "{} = variant {}", fmt_val(*dst), name)?,
+                }
             },
-            InstKind::TestVariant { dst, src, tag } => writeln!(
-                f,
-                "{} = test {} is {tag}",
-                fmt_val(*dst),
-                fmt_use(*src, &consts, &texts)
-            )?,
+            InstKind::TestVariant { dst, src, tag } => {
+                let name = ctx.tag_name(tag);
+                writeln!(
+                    f,
+                    "{} = test {} is {}",
+                    fmt_val(*dst),
+                    fmt_use(*src, &consts, &texts),
+                    name,
+                )?
+            },
             InstKind::UnwrapVariant { dst, src } => writeln!(
                 f,
                 "{} = unwrap {}",
@@ -523,12 +560,18 @@ impl fmt::Display for MirModule {
             writeln!(f)?;
         }
 
+        let ctx = PrintCtx {
+            lit_to_tidx: &lit_to_tidx,
+            extern_names: &self.extern_names,
+            tag_names: &self.tag_names,
+        };
+
         writeln!(f, "=== main ===")?;
-        write_body(f, &self.main, "  ", &lit_to_tidx)?;
+        write_body(f, &self.main, "  ", &ctx)?;
 
         for label in &labels {
             let closure = &self.closures[label];
-            write_closure(f, **label, closure, &lit_to_tidx)?;
+            write_closure(f, **label, closure, &ctx)?;
         }
 
         Ok(())
@@ -539,7 +582,7 @@ fn write_closure(
     f: &mut fmt::Formatter<'_>,
     label: Label,
     closure: &ClosureBody,
-    lit_to_tidx: &HashMap<String, usize>,
+    ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
     writeln!(f)?;
     write!(f, "=== closure {} (", fmt_label(label))?;
@@ -554,13 +597,20 @@ fn write_closure(
         write!(f, " [captures: {}]", closure.capture_names.join(", "))?;
     }
     writeln!(f, " ===")?;
-    write_body(f, &closure.body, "  ", lit_to_tidx)?;
+    write_body(f, &closure.body, "  ", ctx)?;
     Ok(())
 }
 
 impl fmt::Display for MirBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_body(f, self, "", &HashMap::new())
+        let empty_lits = HashMap::new();
+        let empty_externs = HashMap::new();
+        let ctx = PrintCtx {
+            lit_to_tidx: &empty_lits,
+            extern_names: &empty_externs,
+            tag_names: &[],
+        };
+        write_body(f, self, "", &ctx)
     }
 }
 
@@ -582,7 +632,7 @@ mod tests {
         registry: &crate::extern_module::ExternRegistry,
     ) -> String {
         let template = acvus_ast::parse(source).expect("parse failed");
-        let (module, _) = crate::compile(&template, context, registry).expect("compile failed");
+        let (module, _) = crate::compile(&template, context, registry, &crate::user_type::UserTypeRegistry::new()).expect("compile failed");
         dump(&module)
     }
 

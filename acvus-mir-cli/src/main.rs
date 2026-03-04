@@ -130,7 +130,7 @@ fn main() {
     };
 
     // Compile.
-    match acvus_mir::compile(&template, context_types, &registry) {
+    match acvus_mir::compile(&template, context_types, &registry, &acvus_mir::user_type::UserTypeRegistry::new()) {
         Ok((mut module, _hints)) => {
             if obfuscate {
                 use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};

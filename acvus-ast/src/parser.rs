@@ -488,12 +488,18 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 span: *span,
             })
         }
-        Expr::Variant { tag, payload, span } => {
+        Expr::Variant {
+            enum_name,
+            tag,
+            payload,
+            span,
+        } => {
             let pat_payload = match payload {
                 Some(inner) => Some(Box::new(expr_to_pattern(inner)?)),
                 None => None,
             };
             Ok(Pattern::Variant {
+                enum_name: enum_name.clone(),
                 tag: tag.clone(),
                 payload: pat_payload,
                 span: *span,
@@ -996,6 +1002,7 @@ mod tests {
     #[test]
     fn validate_variant_is_refutable() {
         let expr = Expr::Variant {
+            enum_name: None,
             tag: "Some".into(),
             payload: Some(Box::new(Expr::Ident {
                 name: "x".into(),

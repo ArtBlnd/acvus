@@ -1,30 +1,32 @@
 use std::collections::{BTreeMap, HashSet};
 
+use acvus_mir::builtins::BuiltinId;
+
 use super::*;
 
 #[test]
 fn to_string_int() {
-    assert!(matches!(call_pure("to_string", vec![Value::Int(42)]), Value::String(s) if s == "42"));
+    assert!(matches!(call_pure(BuiltinId::ToString, vec![Value::Int(42)]), Value::String(s) if s == "42"));
 }
 
 #[test]
 fn to_string_float() {
     assert!(
-        matches!(call_pure("to_string", vec![Value::Float(3.14)]), Value::String(s) if s == "3.14")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::Float(3.14)]), Value::String(s) if s == "3.14")
     );
 }
 
 #[test]
 fn to_string_bool() {
     assert!(
-        matches!(call_pure("to_string", vec![Value::Bool(true)]), Value::String(s) if s == "true")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::Bool(true)]), Value::String(s) if s == "true")
     );
 }
 
 #[test]
 fn to_string_string() {
     assert!(
-        matches!(call_pure("to_string", vec![Value::String("hi".into())]), Value::String(s) if s == "hi")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::String("hi".into())]), Value::String(s) if s == "hi")
     );
 }
 
@@ -32,7 +34,7 @@ fn to_string_string() {
 #[should_panic(expected = "to_string: expected scalar or Unit, got")]
 fn to_string_list_panics() {
     call_pure(
-        "to_string",
+        BuiltinId::ToString,
         vec![Value::List(vec![Value::Int(1), Value::Int(2)])],
     );
 }
@@ -41,7 +43,7 @@ fn to_string_list_panics() {
 #[should_panic(expected = "to_string: expected scalar or Unit, got")]
 fn to_string_object_panics() {
     call_pure(
-        "to_string",
+        BuiltinId::ToString,
         vec![Value::Object(BTreeMap::from([("a".into(), Value::Int(1))]))],
     );
 }
@@ -49,14 +51,14 @@ fn to_string_object_panics() {
 #[test]
 fn to_int_float() {
     assert!(matches!(
-        call_pure("to_int", vec![Value::Float(3.7)]),
+        call_pure(BuiltinId::ToInt, vec![Value::Float(3.7)]),
         Value::Int(3)
     ));
 }
 
 #[test]
 fn to_float_int() {
-    assert!(matches!(call_pure("to_float", vec![Value::Int(5)]), Value::Float(f) if f == 5.0));
+    assert!(matches!(call_pure(BuiltinId::ToFloat, vec![Value::Int(5)]), Value::Float(f) if f == 5.0));
 }
 
 /// Names of pure (non-HOF) builtins dispatched by `call_pure`.
@@ -99,7 +101,7 @@ const HOF_NAMES: &[&str] = &[
 fn all_mir_builtins_handled() {
     let mir_names: HashSet<&str> = acvus_mir::builtins::builtins()
         .iter()
-        .map(|b| b.name())
+        .map(|(_, b)| b.name())
         .collect();
     let handled: HashSet<&str> = PURE_NAMES.iter().chain(HOF_NAMES.iter()).copied().collect();
     let missing: Vec<&&str> = mir_names.difference(&handled).collect();

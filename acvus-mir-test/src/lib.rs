@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::printer::dump;
 use acvus_mir::ty::Ty;
+use acvus_mir::user_type::UserTypeRegistry;
 
 /// Parse a template and compile to MIR, returning the printed IR.
 pub fn compile_to_ir(
@@ -11,7 +12,7 @@ pub fn compile_to_ir(
     registry: &ExternRegistry,
 ) -> Result<String, String> {
     let template = acvus_ast::parse(source).map_err(|e| format!("parse error: {e}"))?;
-    let (module, _hints) = acvus_mir::compile(&template, context, registry).map_err(|errors| {
+    let (module, _hints) = acvus_mir::compile(&template, context, registry, &UserTypeRegistry::new()).map_err(|errors| {
         errors
             .iter()
             .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))

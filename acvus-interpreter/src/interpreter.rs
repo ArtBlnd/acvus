@@ -5,17 +5,18 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
-use acvus_mir::ir::{Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_mir::builtins::BuiltinId;
+use acvus_mir::ir::{CallTarget, Inst, InstKind, Label, MirBody, MirModule, ValueId};
 
 use crate::builtins;
-use crate::extern_fn::ExternFnRegistry;
+use crate::extern_fn::{ExternFnBody, ExternFnRegistry};
 use crate::value::{FnValue, Value};
 use crate::yielder::{self, Coroutine, ResumeKey, Stepped, YieldHandle};
 
 pub struct Interpreter {
     module: MirModule,
     variables: HashMap<String, Arc<Value>>,
-    extern_fns: ExternFnRegistry,
+    extern_fn_table: Vec<ExternFnBody>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,11 +198,12 @@ fn build_label_map(body: &MirBody) -> HashMap<Label, usize> {
 // ---------------------------------------------------------------------------
 
 impl Interpreter {
-    pub fn new(module: MirModule, extern_fns: ExternFnRegistry) -> Self {
+    pub fn new(module: MirModule, extern_fns: &ExternFnRegistry) -> Self {
+        let extern_fn_table = extern_fns.build_id_table(&module.extern_names);
         Self {
             module,
             variables: HashMap::new(),
-            extern_fns,
+            extern_fn_table,
         }
     }
 
@@ -380,10 +382,11 @@ impl Interpreter {
                 // -- variant --
                 InstKind::MakeVariant { dst, tag, payload } => {
                     let p = payload.as_ref().map(|v| Box::new(frame.take_owned(*v)));
+                    let tag_name = this.module.tag_names[tag.0 as usize].clone();
                     frame.set_new(
                         *dst,
                         Value::Variant {
-                            tag: tag.clone(),
+                            tag: tag_name,
                             payload: p,
                         },
                     );
@@ -392,7 +395,8 @@ impl Interpreter {
                     let Value::Variant { tag: t, .. } = frame.get(*src) else {
                         panic!("TestVariant: expected Variant, got {:?}", frame.get(*src));
                     };
-                    frame.set_new(*dst, Value::Bool(t == tag));
+                    let tag_name = &this.module.tag_names[tag.0 as usize];
+                    frame.set_new(*dst, Value::Bool(t == tag_name));
                 }
                 InstKind::UnwrapVariant { dst, src } => {
                     let Value::Variant {
@@ -493,24 +497,22 @@ impl Interpreter {
                 InstKind::Call { dst, func, args } => {
                     let arg_values = frame.collect_args(args);
                     let result;
-                    if builtins::is_builtin(func) {
-                        (this, result) = Self::exec_builtin(this, func, arg_values, handle).await;
-                    } else {
-                        let f = this
-                            .extern_fns
-                            .get(func)
-                            .unwrap_or_else(|| panic!("unknown function: {func}"));
-                        result = f.call(arg_values).await;
+                    match func {
+                        CallTarget::Builtin(id) => {
+                            (this, result) = Self::exec_builtin(this, *id, arg_values, handle).await;
+                        }
+                        CallTarget::Extern(id) => {
+                            result = this.extern_fn_table[id.0 as usize].call(arg_values).await;
+                        }
                     }
                     frame.set_new(*dst, result);
                 }
                 InstKind::AsyncCall { dst, func, args } => {
                     let arg_values = frame.collect_args(args);
-                    let f = this
-                        .extern_fns
-                        .get(func)
-                        .unwrap_or_else(|| panic!("unknown async function: {func}"));
-                    frame.set_new(*dst, f.call(arg_values).await);
+                    let CallTarget::Extern(id) = func else {
+                        panic!("AsyncCall with non-extern target");
+                    };
+                    frame.set_new(*dst, this.extern_fn_table[id.0 as usize].call(arg_values).await);
                 }
                 InstKind::CallClosure { dst, closure, args } => {
                     let fn_val = expect_fn(frame.take_owned(*closure), "CallClosure");
@@ -559,24 +561,29 @@ impl Interpreter {
 
     async fn exec_builtin<'a>(
         this: Self,
-        name: &str,
+        id: BuiltinId,
         args: Vec<Value>,
         handle: &'a YieldHandle,
     ) -> (Self, Value) {
-        match name {
-            "to_string" | "to_int" | "to_float" | "char_to_int" | "int_to_char" | "len"
-            | "reverse" | "flatten" | "join" | "contains" | "contains_str" | "substring"
-            | "len_str" | "to_bytes" | "to_utf8" | "to_utf8_lossy" | "unwrap" => {
-                (this, builtins::call_pure(name, args))
+        match id {
+            BuiltinId::ToString | BuiltinId::ToInt | BuiltinId::ToFloat
+            | BuiltinId::CharToInt | BuiltinId::IntToChar | BuiltinId::Len
+            | BuiltinId::Reverse | BuiltinId::Flatten | BuiltinId::Join
+            | BuiltinId::Contains | BuiltinId::ContainsStr | BuiltinId::Substring
+            | BuiltinId::LenStr | BuiltinId::ToBytes | BuiltinId::ToUtf8
+            | BuiltinId::ToUtf8Lossy | BuiltinId::Trim | BuiltinId::TrimStart
+            | BuiltinId::TrimEnd | BuiltinId::Upper | BuiltinId::Lower
+            | BuiltinId::ReplaceStr | BuiltinId::SplitStr | BuiltinId::StartsWithStr
+            | BuiltinId::EndsWithStr | BuiltinId::RepeatStr | BuiltinId::Unwrap => {
+                (this, builtins::call_pure(id, args))
             }
-            "filter" => Self::exec_hof_filter(this, args, handle).await,
-            "map" | "pmap" => Self::exec_hof_map(this, args, handle).await,
-            "find" => Self::exec_hof_find(this, args, handle).await,
-            "reduce" => Self::exec_hof_reduce(this, args, handle).await,
-            "fold" => Self::exec_hof_fold(this, args, handle).await,
-            "any" => Self::exec_hof_any(this, args, handle).await,
-            "all" => Self::exec_hof_all(this, args, handle).await,
-            _ => panic!("unknown builtin: {name}"),
+            BuiltinId::Filter => Self::exec_hof_filter(this, args, handle).await,
+            BuiltinId::Map | BuiltinId::Pmap => Self::exec_hof_map(this, args, handle).await,
+            BuiltinId::Find => Self::exec_hof_find(this, args, handle).await,
+            BuiltinId::Reduce => Self::exec_hof_reduce(this, args, handle).await,
+            BuiltinId::Fold => Self::exec_hof_fold(this, args, handle).await,
+            BuiltinId::Any => Self::exec_hof_any(this, args, handle).await,
+            BuiltinId::All => Self::exec_hof_all(this, args, handle).await,
         }
     }
 

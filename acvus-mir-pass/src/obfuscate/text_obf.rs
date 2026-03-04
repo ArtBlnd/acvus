@@ -1,6 +1,7 @@
 use acvus_ast::{BinOp, Literal, Span};
+use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::DebugInfo;
-use acvus_mir::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
+use acvus_mir::ir::{CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use acvus_mir::ty::Ty;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -666,7 +667,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
         span,
         kind: InstKind::Call {
             dst: v_len,
-            func: "len".into(),
+            func: CallTarget::Builtin(BuiltinId::Len),
             args: vec![v_bytes],
         },
     });
@@ -770,7 +771,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
         span,
         kind: InstKind::Call {
             dst: v_byte,
-            func: "to_int".into(),
+            func: CallTarget::Builtin(BuiltinId::ToInt),
             args: vec![v_byte_raw],
         },
     });
@@ -996,7 +997,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
         span,
         kind: InstKind::Call {
             dst: v_char,
-            func: "int_to_char".into(),
+            func: CallTarget::Builtin(BuiltinId::IntToChar),
             args: vec![v_plain],
         },
     });

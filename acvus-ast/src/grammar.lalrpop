@@ -52,6 +52,7 @@ extern {
         "}" => Token::RBrace,
         "," => Token::Comma,
         ":" => Token::Colon,
+        "::" => Token::DoubleColon,
         ";" => Token::Semicolon,
         "fmt_start" => Token::FmtStringStart(<String>),
         "fmt_mid" => Token::FmtStringMid(<String>),
@@ -178,6 +179,17 @@ UnaryExpr: Expr = {
         Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
     <l:@L> "!" <e:UnaryExpr> <r:@R> =>
         Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
+    QualifiedExpr,
+};
+
+// Qualified variant: above PostfixExpr so "(" doesn't conflict with function call
+QualifiedExpr: Expr = {
+    // Qualified variant with payload: Enum::Tag(expr)
+    <l:@L> <ename:"ident"> "::" <tag:"ident"> "(" <inner:Expr> ")" <r:@R> =>
+        Expr::Variant { enum_name: Some(ename), tag, payload: Some(Box::new(inner)), span: Span::new(l, r) },
+    // Qualified variant without payload: Enum::Tag
+    <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
+        Expr::Variant { enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) },
     PostfixExpr,
 };
 
@@ -214,9 +226,9 @@ PrimaryExpr: Expr = {
 
     // Variant constructors: Some(expr) and None
     <l:@L> "Some" "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { tag: "Some".into(), payload: Some(Box::new(inner)), span: Span::new(l, r) },
+        Expr::Variant { enum_name: None, tag: "Some".into(), payload: Some(Box::new(inner)), span: Span::new(l, r) },
     <l:@L> "None" <r:@R> =>
-        Expr::Variant { tag: "None".into(), payload: None, span: Span::new(l, r) },
+        Expr::Variant { enum_name: None, tag: "None".into(), payload: None, span: Span::new(l, r) },
 
     // Parenthesized expression or tuple
     <l:@L> "(" <items:CommaSep<TupleElemRule>> ")" <r:@R> => {

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use crate::user_type::UserTypeId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(pub u32);
 
@@ -23,6 +25,8 @@ pub enum Ty {
     /// Opaque type: user-defined, identified by name. No internal structure.
     Opaque(String),
     Option(Box<Ty>),
+    /// User-defined enum type.
+    UserType(UserTypeId),
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
     /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
@@ -83,6 +87,7 @@ impl fmt::Display for Ty {
             }
             Ty::Option(inner) => write!(f, "Option<{inner}>"),
             Ty::Opaque(name) => write!(f, "{name}"),
+            Ty::UserType(id) => write!(f, "UserType({})", id.0),
             Ty::Var(v) => write!(f, "?{}", v.0),
             Ty::Error => write!(f, "<error>"),
         }
@@ -202,6 +207,7 @@ impl TySubst {
             | (Ty::Byte, Ty::Byte) => Ok(()),
 
             (Ty::Opaque(a), Ty::Opaque(b)) if a == b => Ok(()),
+            (Ty::UserType(a), Ty::UserType(b)) if a == b => Ok(()),
 
             (Ty::Var(v), other) | (other, Ty::Var(v)) => {
                 if let Ty::Var(v2) = other

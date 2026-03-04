@@ -2,6 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ty::Ty;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExternFnId(pub u32);
+
 /// Definition of a single external function.
 #[derive(Debug, Clone)]
 pub struct ExternFnDef {
@@ -74,8 +77,11 @@ impl ExternModule {
 /// Panics on duplicate function names across modules.
 #[derive(Debug, Clone)]
 pub struct ExternRegistry {
-    fns: HashMap<String, ExternFnDef>,
     opaque_types: HashSet<String>,
+    /// ID-indexed storage: ExternFnId(n) → (name, def).
+    fn_list: Vec<(String, ExternFnDef)>,
+    /// Name → ExternFnId mapping.
+    fn_id_index: HashMap<String, ExternFnId>,
 }
 
 impl Default for ExternRegistry {
@@ -87,8 +93,9 @@ impl Default for ExternRegistry {
 impl ExternRegistry {
     pub fn new() -> Self {
         Self {
-            fns: HashMap::new(),
             opaque_types: HashSet::new(),
+            fn_list: Vec::new(),
+            fn_id_index: HashMap::new(),
         }
     }
 
@@ -102,25 +109,49 @@ impl ExternRegistry {
         }
         for (name, def) in &module.fns {
             assert!(
-                !self.fns.contains_key(name),
+                !self.fn_id_index.contains_key(name),
                 "duplicate extern function '{name}' (from module '{}')",
                 module.name,
             );
-            self.fns.insert(name.clone(), def.clone());
+            let id = ExternFnId(self.fn_list.len() as u32);
+            self.fn_list.push((name.clone(), def.clone()));
+            self.fn_id_index.insert(name.clone(), id);
         }
         self
     }
 
     pub fn get(&self, name: &str) -> Option<&ExternFnDef> {
-        self.fns.get(name)
+        let id = self.fn_id_index.get(name)?;
+        Some(&self.fn_list[id.0 as usize].1)
+    }
+
+    pub fn resolve(&self, name: &str) -> Option<ExternFnId> {
+        self.fn_id_index.get(name).copied()
+    }
+
+    pub fn get_by_id(&self, id: ExternFnId) -> &ExternFnDef {
+        &self.fn_list[id.0 as usize].1
+    }
+
+    pub fn name_by_id(&self, id: ExternFnId) -> &str {
+        &self.fn_list[id.0 as usize].0
+    }
+
+    /// Build a name table mapping ExternFnId → name for the MirModule.
+    pub fn build_name_table(&self) -> HashMap<ExternFnId, String> {
+        self.fn_list
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (ExternFnId(i as u32), name.clone()))
+            .collect()
     }
 
     pub fn has_opaque(&self, name: &str) -> bool {
         self.opaque_types.contains(name)
     }
 
-    pub fn fns(&self) -> &HashMap<String, ExternFnDef> {
-        &self.fns
+    pub fn fns(&self) -> impl Iterator<Item = (&str, &ExternFnDef)> {
+        self.fn_list.iter().map(|(name, def)| (name.as_str(), def))
     }
 }
 

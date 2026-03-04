@@ -138,7 +138,8 @@ fn traces_to_var_load(
 mod tests {
     use super::*;
     use acvus_ast::Span;
-    use acvus_mir::ir::{DebugInfo, Inst, MirBody};
+    use acvus_mir::extern_module::ExternFnId;
+    use acvus_mir::ir::{CallTarget, DebugInfo, Inst, MirBody};
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
@@ -150,6 +151,8 @@ mod tests {
                 label_count: 0,
             },
             closures: HashMap::new(),
+            tag_names: Vec::new(),
+            extern_names: HashMap::new(),
         }
     }
 
@@ -321,7 +324,7 @@ mod tests {
             // v0 = Call("make_user", [])
             inst(InstKind::Call {
                 dst: ValueId(0),
-                func: "make_user".into(),
+                func: CallTarget::Extern(ExternFnId(0)),
                 args: vec![],
             }),
             // VarStore("user", v0)
@@ -418,7 +421,7 @@ mod tests {
             }),
             inst(InstKind::Call {
                 dst: ValueId(2),
-                func: "uppercase".into(),
+                func: CallTarget::Extern(ExternFnId(1)),
                 args: vec![ValueId(1)],
             }),
             inst(InstKind::MakeObject {

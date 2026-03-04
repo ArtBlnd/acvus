@@ -538,6 +538,8 @@ mod tests {
                 label_count: 0,
             },
             closures: HashMap::new(),
+            tag_names: Vec::new(),
+            extern_names: HashMap::new(),
         }
     }
 

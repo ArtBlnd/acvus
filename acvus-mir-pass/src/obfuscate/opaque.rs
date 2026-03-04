@@ -16,7 +16,8 @@
 //! so static analysis cannot determine which closure is called.
 
 use acvus_ast::{BinOp, Literal, Span};
-use acvus_mir::ir::{
+use acvus_mir::builtins::BuiltinId;
+use acvus_mir::ir::{CallTarget,
     ClosureBody, DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use acvus_mir::ty::Ty;
@@ -744,7 +745,7 @@ fn make_dead_block(
                     span,
                     kind: InstKind::Call {
                         dst: v_char,
-                        func: "int_to_char".into(),
+                        func: CallTarget::Builtin(BuiltinId::IntToChar),
                         args: vec![v_dec],
                     },
                 });

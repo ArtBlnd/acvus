@@ -246,7 +246,7 @@ where
         bind_cache: &mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &mut HashMap<String, Arc<Value>>,
     ) -> Result<Value, ChatError> {
-        let interp = Interpreter::new(expr.module.clone(), self.extern_fns.clone());
+        let interp = Interpreter::new(expr.module.clone(), &self.extern_fns);
         let (mut coroutine, key) = interp.execute();
         let mut result = drive_script(&mut coroutine, key, storage, &HashMap::new(), turn_local)?;
         loop {
@@ -292,7 +292,7 @@ where
         turn_local: &'a mut HashMap<String, Arc<Value>>,
     ) -> Fut<'a, Result<String, ChatError>> {
         Box::pin(async move {
-            let interp = Interpreter::new(block.module.clone(), self.extern_fns.clone());
+            let interp = Interpreter::new(block.module.clone(), &self.extern_fns);
             let (mut coroutine, key) = interp.execute();
             let mut output = String::new();
 
@@ -1010,7 +1010,7 @@ where
 
         // Evaluate store expressions and append to history
         for (name, history) in &self.history_nodes {
-            let interp = Interpreter::new(history.store.module.clone(), self.extern_fns.clone());
+            let interp = Interpreter::new(history.store.module.clone(), &self.extern_fns);
             let (mut coroutine, key) = interp.execute();
             let result = drive_script(
                 &mut coroutine,

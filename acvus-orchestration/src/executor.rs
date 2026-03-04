@@ -283,7 +283,7 @@ where
                 return DriveResult::AllRendered;
             }
             let (_, module) = &state.blocks[state.block_idx];
-            let interp = Interpreter::new(module.clone(), ExternFnRegistry::new());
+            let interp = Interpreter::new(module.clone(), &ExternFnRegistry::new());
             let (coroutine, key) = interp.execute();
             state.coroutine = Some(coroutine);
             state.resume_key = Some(key);

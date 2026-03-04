@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use acvus_mir::extern_module::{ExternModule, ExternRegistry};
+use acvus_mir::extern_module::{ExternFnId, ExternModule, ExternRegistry};
 use acvus_mir::ty::Ty;
 
 use crate::builtins::{FromValue, IntoValue};
@@ -140,6 +140,23 @@ impl ExternFnRegistry {
 
     pub fn get(&self, name: &str) -> Option<&ExternFnBody> {
         self.fns.get(name).map(|(_, body)| body)
+    }
+
+    /// Build an ID-indexed table for fast runtime lookup.
+    /// Call after `to_mir_registry()` with the same registry's name table.
+    pub fn build_id_table(
+        &self,
+        extern_names: &HashMap<ExternFnId, String>,
+    ) -> Vec<ExternFnBody> {
+        let mut table = vec![None; extern_names.len()];
+        for (&id, name) in extern_names {
+            let body = self
+                .fns
+                .get(name)
+                .unwrap_or_else(|| panic!("extern fn not found: {name}"));
+            table[id.0 as usize] = Some(body.1.clone());
+        }
+        table.into_iter().map(|b| b.unwrap()).collect()
     }
 
     /// Extract compile-time type information for the MIR compiler.

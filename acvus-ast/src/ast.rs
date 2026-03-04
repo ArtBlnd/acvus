@@ -166,8 +166,9 @@ pub enum Expr {
         bindings: Vec<(String, Expr)>,
         span: Span,
     },
-    /// A variant constructor: `Some(expr)` or `None`.
+    /// A variant constructor: `Some(expr)`, `None`, or `Color::Red`.
     Variant {
+        enum_name: Option<String>,
         tag: String,
         payload: Option<Box<Expr>>,
         span: Span,
@@ -258,8 +259,9 @@ pub enum Pattern {
         elements: Vec<TuplePatternElem>,
         span: Span,
     },
-    /// A variant pattern: `Some(inner)` or `None`.
+    /// A variant pattern: `Some(inner)`, `None`, or `Color::Red`.
     Variant {
+        enum_name: Option<String>,
         tag: String,
         payload: Option<Box<Pattern>>,
         span: Span,

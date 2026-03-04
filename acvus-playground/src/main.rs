@@ -103,7 +103,7 @@ async fn compile_and_run(
     let mir_registry = extern_fns.to_mir_registry();
 
     let (module, _hints) =
-        acvus_mir::compile(&template, context_types, &mir_registry).map_err(|errors| {
+        acvus_mir::compile(&template, context_types, &mir_registry, &acvus_mir::user_type::UserTypeRegistry::new()).map_err(|errors| {
             errors
                 .iter()
                 .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
@@ -113,7 +113,7 @@ async fn compile_and_run(
 
     let ir = acvus_mir::printer::dump(&module);
 
-    let interp = Interpreter::new(module, extern_fns);
+    let interp = Interpreter::new(module, &extern_fns);
     let output = interp.execute_to_string(context_values).await;
 
     Ok((output, ir))

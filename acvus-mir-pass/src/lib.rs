@@ -164,6 +164,8 @@ where
                 MirModule {
                     main: MirBody::new(),
                     closures: HashMap::new(),
+                    tag_names: Vec::new(),
+                    extern_names: HashMap::new(),
                 },
             );
             *module = self.0.0.transform(old, deps);
@@ -288,6 +290,8 @@ mod tests {
         MirModule {
             main: MirBody::new(),
             closures: HashMap::new(),
+            tag_names: Vec::new(),
+            extern_names: HashMap::new(),
         }
     }
 

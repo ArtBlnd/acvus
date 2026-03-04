@@ -64,6 +64,8 @@ pub enum Token {
     StringLit(String),
 
     // ── Two-char operators ──
+    #[token("::")]
+    DoubleColon,
     #[token("&&")]
     AndAnd,
     #[token("||")]
@@ -150,6 +152,7 @@ impl fmt::Display for Token {
             Token::Underscore => write!(f, "_"),
             Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
+            Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
