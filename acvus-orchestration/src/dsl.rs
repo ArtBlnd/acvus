@@ -58,4 +58,3 @@ pub struct TokenBudget {
     /// Maximum tokens this iterator may use.
     pub max: Option<u32>,
 }
-

@@ -30,9 +30,8 @@ pub fn compile_plain(
     context_types: &HashMap<String, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledPlain, HashSet<String>), Vec<OrchError>> {
-    let block =
-        crate::compile::compile_template(&spec.source, 0, context_types, registry)
-            .map_err(|e| vec![e])?;
+    let block = crate::compile::compile_template(&spec.source, 0, context_types, registry)
+        .map_err(|e| vec![e])?;
     let keys = block.context_keys.clone();
     Ok((CompiledPlain { block }, keys))
 }

@@ -104,8 +104,7 @@ pub fn compile_llm(
     let compiled_cache_key = match &spec.cache_key {
         Some(ck) => {
             let (expr, ck_ty) =
-                crate::compile::compile_script(ck, context_types, registry)
-                    .map_err(|e| vec![e])?;
+                crate::compile::compile_script(ck, context_types, registry).map_err(|e| vec![e])?;
             crate::compile::expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
             all_keys.extend(expr.context_keys.iter().cloned());
             Some(expr)
