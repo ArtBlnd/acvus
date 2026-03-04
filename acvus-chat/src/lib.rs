@@ -11,8 +11,8 @@ use acvus_interpreter::{
     ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value,
 };
 use acvus_orchestration::{
-    CompiledBlock, CompiledHistory, CompiledMessage, CompiledNode, CompiledNodeKind,
-    CompiledScript, CompiledToolBinding, Fetch, HashMapStorage, LlmModel, Message,
+    ApiKind, CompiledBlock, CompiledHistory, CompiledMessage, CompiledNode, CompiledNodeKind,
+    CompiledScript, CompiledToolBinding, Content, Fetch, HashMapStorage, LlmModelKind, Message,
     ModelResponse, ProviderConfig, Storage, StrategyMode, TokenBudget, ToolCall, ToolSpec,
     build_cache_request, create_llm_model, parse_cache_response,
 };
@@ -124,24 +124,6 @@ fn resolve_index(idx: i64, len: usize) -> usize {
         (len as i64 + idx).max(0) as usize
     } else {
         (idx as usize).min(len)
-    }
-}
-
-fn item_fields(item: &Value) -> (&str, &str) {
-    match item {
-        Value::Object(obj) => {
-            let role = match obj.get("role") {
-                Some(Value::String(s)) => s.as_str(),
-                _ => "user",
-            };
-            let content = match obj.get("content") {
-                Some(Value::String(s)) => s.as_str(),
-                _ => "",
-            };
-            (role, content)
-        }
-        Value::String(s) => ("user", s.as_str()),
-        _ => ("user", ""),
     }
 }
 
@@ -423,7 +405,10 @@ where
             let text = self
                 .render_with_deps(block, storage, local.clone(), bind_cache, turn_local)
                 .await?;
-            rendered.push(Message::text(&block.role, text));
+            rendered.push(Message::Content {
+                role: block.role.clone(),
+                content: Content::Text(text),
+            });
         }
 
         let provider_config = self
@@ -465,7 +450,8 @@ where
         let CompiledNodeKind::Llm(llm) = &node.kind else {
             unreachable!()
         };
-        let (provider, model, messages, tools, generation, cache_key, max_tokens) = (
+        let (api, provider, model, messages, tools, generation, cache_key, max_tokens) = (
+            &llm.api,
             &llm.provider,
             &llm.model,
             &llm.messages,
@@ -498,7 +484,10 @@ where
                     let text = self
                         .render_with_deps(block, storage, local.clone(), bind_cache, turn_local)
                         .await?;
-                    let message = Message::text(&block.role, text);
+                    let message = Message::Content {
+                        role: block.role.clone(),
+                        content: Content::Text(text),
+                    };
                     segments.push(MessageSegment::Single(message));
                 }
                 CompiledMessage::Iterator {
@@ -509,7 +498,7 @@ where
                     ..
                 } => {
                     let expanded = self
-                        .expand_iterator(expr, slice, role, storage, bind_cache, turn_local)
+                        .expand_iterator(api, expr, slice, role, storage, bind_cache, turn_local)
                         .await?;
                     segments.push(MessageSegment::Iterator {
                         messages: expanded,
@@ -519,7 +508,7 @@ where
             }
         }
 
-        self.allocate_token_budgets(&*llm, &node.name, &mut segments, max_tokens.input)
+        self.allocate_token_budgets(&llm, &node.name, &mut segments, max_tokens.input)
             .await?;
 
         let mut rendered: Vec<Message> = segments
@@ -530,8 +519,13 @@ where
             })
             .collect();
         let specs = tool_specs(tools);
-        let request =
-            llm.build_request(&rendered, &specs, generation, max_output_tokens, cached_content.as_deref());
+        let request = llm.build_request(
+            &rendered,
+            &specs,
+            generation,
+            max_output_tokens,
+            cached_content.as_deref(),
+        );
         tracing::debug!(node = %node.name, body = %request.body, "llm fetch request");
         let json = self.fetch.fetch(&request).await.map_err(|e| {
             tracing::warn!(node = %node.name, error = %e, "llm fetch failed");
@@ -552,13 +546,25 @@ where
         let mut tool_rounds = 0usize;
         loop {
             match response {
-                ModelResponse::Text(text) => {
-                    tracing::info!(node = %node.name, len = text.len(), "llm text response");
-                    let output = Value::Object(BTreeMap::from([
-                        ("role".into(), Value::String("assistant".into())),
-                        ("content".into(), Value::String(text.clone())),
-                        ("content_type".into(), Value::String("text".into())),
-                    ]));
+                ModelResponse::Content(items) => {
+                    tracing::info!(node = %node.name, parts = items.len(), "llm content response");
+                    let values: Vec<Value> = items
+                        .iter()
+                        .map(|item| {
+                            let (content_str, content_type_str) = match &item.content {
+                                Content::Text(s) => (s.clone(), "text".to_string()),
+                                Content::Blob { mime_type, data } => {
+                                    (data.clone(), mime_type.clone())
+                                }
+                            };
+                            Value::Object(BTreeMap::from([
+                                ("role".into(), Value::String(item.role.clone())),
+                                ("content".into(), Value::String(content_str)),
+                                ("content_type".into(), Value::String(content_type_str)),
+                            ]))
+                        })
+                        .collect();
+                    let output = Value::List(values);
                     // IfModified: cache bind_value → output
                     if matches!(node.strategy.mode, StrategyMode::IfModified)
                         && let Some(bind_val) = local.remove("bind")
@@ -577,12 +583,7 @@ where
                         return Err(ChatError::ToolCallLimitExceeded(node.name.clone()));
                     }
 
-                    rendered.push(Message {
-                        role: "assistant".into(),
-                        content: String::new(),
-                        tool_calls: calls.clone(),
-                        tool_call_id: None,
-                    });
+                    rendered.push(Message::ToolCalls(calls.clone()));
 
                     for call in &calls {
                         tracing::info!(node = %node.name, tool = %call.name, "tool call received");
@@ -594,11 +595,9 @@ where
                             .await?;
                         tracing::info!(node = %node.name, tool = %call.name, len = result_text.len(), "tool call result");
                         tracing::debug!(tool = %call.name, result = %result_text, "tool call result body");
-                        rendered.push(Message {
-                            role: "tool".into(),
+                        rendered.push(Message::ToolResult {
+                            call_id: call.id.clone(),
                             content: result_text,
-                            tool_calls: Vec::new(),
-                            tool_call_id: Some(call.id.clone()),
                         });
                     }
 
@@ -679,6 +678,7 @@ where
 
     async fn expand_iterator(
         &'a self,
+        api: &ApiKind,
         expr: &CompiledScript,
         slice: &Option<Vec<i64>>,
         role_override: &Option<String>,
@@ -711,17 +711,34 @@ where
         tracing::info!(count = items.len(), "expanded iterator");
         let mut messages = Vec::new();
         for item in items {
-            let (item_role, item_text) = item_fields(item);
-            let role = role_override.as_deref().unwrap_or(item_role);
-            messages.push(Message::text(role, item_text));
+            let parts = match item {
+                Value::List(parts) => parts.as_slice(),
+                _ => panic!("expand_iterator: expected List item, got {item:?}"),
+            };
+            for part in parts {
+                let (part_role, part_text, part_content_type) = api.item_fields(part);
+                let role = role_override.as_deref().unwrap_or(part_role);
+                let content = if part_content_type == "text" {
+                    Content::Text(part_text.to_string())
+                } else {
+                    Content::Blob {
+                        mime_type: part_content_type.to_string(),
+                        data: part_text.to_string(),
+                    }
+                };
+                messages.push(Message::Content {
+                    role: role.to_string(),
+                    content,
+                });
+            }
         }
         Ok(messages)
     }
 
-    /// Count tokens for messages via the LlmModel. Returns None if unsupported.
+    /// Count tokens for messages via the LlmModelKind. Returns None if unsupported.
     async fn count_tokens(
         &self,
-        llm: &dyn LlmModel,
+        llm: &LlmModelKind,
         node_name: &str,
         messages: &[Message],
     ) -> Result<Option<u32>, ChatError> {
@@ -763,7 +780,7 @@ where
     /// 6. Trim each iterator to its allocated budget
     async fn allocate_token_budgets(
         &self,
-        llm: &dyn LlmModel,
+        llm: &LlmModelKind,
         node_name: &str,
         segments: &mut [MessageSegment],
         total_budget: Option<u32>,
@@ -1315,6 +1332,7 @@ mod tests {
         let nodes = compile_test_nodes(&[NodeSpec {
             name: "main".into(),
             kind: NodeKind::Llm(LlmSpec {
+                api: ApiKind::OpenAI,
                 provider: "test".into(),
                 model: "gpt-test".into(),
                 messages: vec![MessageSpec::Block {
@@ -1343,8 +1361,12 @@ mod tests {
         .unwrap();
 
         let result = engine.turn(&noop_resolver()).await.unwrap();
-        let Value::Object(obj) = &result else {
-            panic!("expected Object, got {result:?}")
+        let Value::List(items) = &result else {
+            panic!("expected List, got {result:?}")
+        };
+        assert_eq!(items.len(), 1);
+        let Value::Object(obj) = &items[0] else {
+            panic!("expected Object in list, got {:?}", items[0])
         };
         assert_eq!(obj.get("role"), Some(&Value::String("assistant".into())));
         assert_eq!(
@@ -1368,6 +1390,7 @@ mod tests {
             NodeSpec {
                 name: "main".into(),
                 kind: NodeKind::Llm(LlmSpec {
+                    api: ApiKind::OpenAI,
                     provider: "test".into(),
                     model: "gpt-test".into(),
                     messages: vec![MessageSpec::Block {
@@ -1405,8 +1428,12 @@ mod tests {
         .unwrap();
 
         let result = engine.turn(&noop_resolver()).await.unwrap();
-        let Value::Object(obj) = &result else {
-            panic!("expected Object, got {result:?}")
+        let Value::List(items) = &result else {
+            panic!("expected List, got {result:?}")
+        };
+        assert_eq!(items.len(), 1);
+        let Value::Object(obj) = &items[0] else {
+            panic!("expected Object in list, got {:?}", items[0])
         };
         assert_eq!(
             obj.get("content"),
@@ -1428,6 +1455,7 @@ mod tests {
             NodeSpec {
                 name: "main".into(),
                 kind: NodeKind::Llm(LlmSpec {
+                    api: ApiKind::OpenAI,
                     provider: "test".into(),
                     model: "gpt-test".into(),
                     messages: vec![MessageSpec::Block {
@@ -1484,6 +1512,7 @@ mod tests {
             NodeSpec {
                 name: "main".into(),
                 kind: NodeKind::Llm(LlmSpec {
+                    api: ApiKind::OpenAI,
                     provider: "test".into(),
                     model: "gpt-test".into(),
                     messages: vec![MessageSpec::Block {

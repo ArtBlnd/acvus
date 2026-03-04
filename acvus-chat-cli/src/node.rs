@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use acvus_orchestration::{
-    GenerationParams, HistorySpec, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, PlainSpec, Strategy, StrategyMode, TokenBudget, ToolBinding,
+    ApiKind, GenerationParams, HistorySpec, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec,
+    NodeKind, NodeSpec, PlainSpec, Strategy, StrategyMode, TokenBudget, ToolBinding,
 };
 use serde::Deserialize;
 
@@ -134,7 +134,11 @@ fn resolve_template(
 }
 
 /// Convert a TOML `NodeDef` into a pure `NodeSpec`, reading template files from `base_dir`.
-pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
+pub fn resolve_node(
+    def: NodeDef,
+    base_dir: &Path,
+    provider_apis: &HashMap<String, ApiKind>,
+) -> Result<NodeSpec, String> {
     let mut messages = Vec::new();
     for (i, msg) in def.messages.into_iter().enumerate() {
         match msg {
@@ -226,7 +230,12 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
             let model = def
                 .model
                 .ok_or_else(|| format!("node '{}': llm requires 'model'", def.name))?;
+            let api = provider_apis
+                .get(&provider)
+                .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", def.name))?
+                .clone();
             NodeKind::Llm(LlmSpec {
+                api,
                 provider,
                 model,
                 messages,
@@ -243,7 +252,12 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
             let model = def
                 .model
                 .ok_or_else(|| format!("node '{}': llm-cache requires 'model'", def.name))?;
+            let api = provider_apis
+                .get(&provider)
+                .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", def.name))?
+                .clone();
             NodeKind::LlmCache(LlmCacheSpec {
+                api,
                 provider,
                 model,
                 messages,

@@ -25,7 +25,8 @@ pub fn compile_expr(
     context_types: &std::collections::HashMap<String, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledExpr, HashSet<String>), Vec<OrchError>> {
-    let (script, _ty) = compile_script(&spec.source, context_types, registry).map_err(|e| vec![e])?;
+    let (script, _ty) =
+        compile_script(&spec.source, context_types, registry).map_err(|e| vec![e])?;
     let keys = script.context_keys.clone();
     Ok((CompiledExpr { script }, keys))
 }

@@ -3,8 +3,8 @@ mod llm;
 mod llm_cache;
 mod plain;
 
-pub(crate) use llm::parse_type_name;
 pub use expr::{CompiledExpr, ExprSpec, compile_expr};
+pub(crate) use llm::parse_type_name;
 pub use llm::{
     CompiledLlm, CompiledToolBinding, GenerationParams, LlmSpec, MaxTokens, ToolBinding,
     compile_llm,

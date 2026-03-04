@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::kind::GenerationParams;
-use crate::message::{Message, ModelResponse, ToolCall, ToolSpec, Usage};
+use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, ToolSpec, Usage};
 
-use super::{HttpRequest, LlmModel, ProviderConfig};
+use super::{HttpRequest, ProviderConfig};
 
 pub struct GoogleModel {
     config: ProviderConfig,
@@ -14,10 +14,8 @@ impl GoogleModel {
     pub fn new(config: ProviderConfig, model: String) -> Self {
         Self { config, model }
     }
-}
 
-impl LlmModel for GoogleModel {
-    fn build_request(
+    pub fn build_request(
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
@@ -36,11 +34,14 @@ impl LlmModel for GoogleModel {
         )
     }
 
-    fn parse_response(&self, json: &serde_json::Value) -> Result<(ModelResponse, Usage), String> {
+    pub fn parse_response(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<(ModelResponse, Usage), String> {
         parse_response(json)
     }
 
-    fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
+    pub fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
         Some(build_count_tokens_request(
             &self.config,
             &self.model,
@@ -48,7 +49,7 @@ impl LlmModel for GoogleModel {
         ))
     }
 
-    fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
+    pub fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
         parse_count_tokens_response(json)
     }
 }
@@ -93,11 +94,16 @@ pub fn build_cache_request(
     let mut contents = Vec::new();
 
     for m in messages {
-        if m.role == "system" {
+        if let Message::Content { role, content } = m
+            && role == "system"
+        {
+            let Content::Text(text) = content else {
+                panic!("system message must be text, got blob");
+            };
             if !system_text.is_empty() {
                 system_text.push('\n');
             }
-            system_text.push_str(&m.content);
+            system_text.push_str(text);
         } else {
             contents.push(format_content(m));
         }
@@ -147,11 +153,16 @@ pub fn build_count_tokens_request(
     let mut contents = Vec::new();
 
     for m in messages {
-        if m.role == "system" {
+        if let Message::Content { role, content } = m
+            && role == "system"
+        {
+            let Content::Text(text) = content else {
+                panic!("system message must be text, got blob");
+            };
             if !system_text.is_empty() {
                 system_text.push('\n');
             }
-            system_text.push_str(&m.content);
+            system_text.push_str(text);
         } else {
             contents.push(format_content(m));
         }
@@ -195,7 +206,7 @@ fn format_cached_body(
 ) -> serde_json::Value {
     let contents: Vec<serde_json::Value> = messages
         .iter()
-        .filter(|m| m.role != "system")
+        .filter(|m| !matches!(m, Message::Content { role, .. } if role == "system"))
         .map(format_content)
         .collect();
 
@@ -276,11 +287,16 @@ fn format_body(
     let mut contents = Vec::new();
 
     for m in messages {
-        if m.role == "system" {
+        if let Message::Content { role, content } = m
+            && role == "system"
+        {
+            let Content::Text(text) = content else {
+                panic!("system message must be text, got blob");
+            };
             if !system_text.is_empty() {
                 system_text.push('\n');
             }
-            system_text.push_str(&m.content);
+            system_text.push_str(text);
         } else {
             contents.push(format_content(m));
         }
@@ -319,43 +335,52 @@ fn format_body(
 }
 
 fn format_content(m: &Message) -> serde_json::Value {
-    // Map roles: "assistant" -> "model", "tool" stays special
-    let role = match m.role.as_str() {
-        "assistant" => "model",
-        other => other,
-    };
-
-    let mut parts = Vec::new();
-
-    // Tool call results -> functionResponse parts
-    if let Some(ref tool_call_id) = m.tool_call_id {
-        parts.push(serde_json::json!({
-            "functionResponse": {
-                "name": tool_call_id,
-                "response": {
-                    "content": m.content,
-                }
+    match m {
+        Message::Content { role, content } => match content {
+            Content::Text(text) => {
+                serde_json::json!({
+                    "role": role,
+                    "parts": [{ "text": text }],
+                })
             }
-        }));
-        return serde_json::json!({ "role": "function", "parts": parts });
-    }
-
-    // Assistant message with tool calls -> functionCall parts
-    if !m.tool_calls.is_empty() {
-        for tc in &m.tool_calls {
-            parts.push(serde_json::json!({
-                "functionCall": {
-                    "name": tc.name,
-                    "args": tc.arguments,
-                }
-            }));
+            Content::Blob { mime_type, data } => {
+                serde_json::json!({
+                    "role": role,
+                    "parts": [{
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": data,
+                        }
+                    }],
+                })
+            }
+        },
+        Message::ToolCalls(calls) => {
+            let parts: Vec<serde_json::Value> = calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "functionCall": {
+                            "name": tc.name,
+                            "args": tc.arguments,
+                        }
+                    })
+                })
+                .collect();
+            serde_json::json!({ "role": "model", "parts": parts })
         }
-        return serde_json::json!({ "role": role, "parts": parts });
+        Message::ToolResult { call_id, content } => {
+            serde_json::json!({
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "name": call_id,
+                        "response": { "content": content },
+                    }
+                }],
+            })
+        }
     }
-
-    // Plain text
-    parts.push(serde_json::json!({ "text": m.content }));
-    serde_json::json!({ "role": role, "parts": parts })
 }
 
 pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage), String> {
@@ -376,7 +401,7 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
         .ok_or("missing 'parts' in content")?;
 
     let mut tool_calls = Vec::new();
-    let mut text_parts = Vec::new();
+    let mut content_parts = Vec::new();
 
     for part in parts {
         if let Some(fc) = part.get("functionCall") {
@@ -386,7 +411,6 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
                 .ok_or("missing functionCall name")?
                 .to_string();
             let arguments = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
-            // Gemini doesn't have explicit call IDs; generate from name
             let id = format!("call_{name}");
             tool_calls.push(ToolCall {
                 id,
@@ -394,14 +418,38 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
                 arguments,
             });
         } else if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-            text_parts.push(text.to_string());
+            content_parts.push(Content::Text(text.to_string()));
+        } else if let Some(inline) = part.get("inlineData") {
+            let mime_type = inline
+                .get("mimeType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let data = inline
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            content_parts.push(Content::Blob { mime_type, data });
         }
     }
 
     if !tool_calls.is_empty() {
         Ok((ModelResponse::ToolCalls(tool_calls), usage))
     } else {
-        Ok((ModelResponse::Text(text_parts.join("")), usage))
+        let role = content
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("model")
+            .to_string();
+        let items = content_parts
+            .into_iter()
+            .map(|c| ContentItem {
+                role: role.clone(),
+                content: c,
+            })
+            .collect();
+        Ok((ModelResponse::Content(items), usage))
     }
 }
 
@@ -435,8 +483,14 @@ mod tests {
     fn format_system_as_instruction() {
         let body = format_body(
             &[
-                Message::text("system", "You are helpful."),
-                Message::text("user", "Hello"),
+                Message::Content {
+                    role: "system".into(),
+                    content: Content::Text("You are helpful.".into()),
+                },
+                Message::Content {
+                    role: "user".into(),
+                    content: Content::Text("Hello".into()),
+                },
             ],
             &[],
             &GenerationParams::default(),
@@ -452,8 +506,11 @@ mod tests {
     }
 
     #[test]
-    fn format_assistant_as_model() {
-        let msg = Message::text("assistant", "I can help.");
+    fn format_model_role() {
+        let msg = Message::Content {
+            role: "model".into(),
+            content: Content::Text("I can help.".into()),
+        };
         let content = format_content(&msg);
         assert_eq!(content["role"], "model");
     }
@@ -461,7 +518,10 @@ mod tests {
     #[test]
     fn format_with_tools() {
         let body = format_body(
-            &[Message::text("user", "hi")],
+            &[Message::Content {
+                role: "user".into(),
+                content: Content::Text("hi".into()),
+            }],
             &[ToolSpec {
                 name: "search".into(),
                 description: "Search".into(),
@@ -477,16 +537,11 @@ mod tests {
 
     #[test]
     fn format_function_call_message() {
-        let msg = Message {
-            role: "assistant".into(),
-            content: String::new(),
-            tool_calls: vec![ToolCall {
-                id: "call_1".into(),
-                name: "search".into(),
-                arguments: serde_json::json!({"query": "rust"}),
-            }],
-            tool_call_id: None,
-        };
+        let msg = Message::ToolCalls(vec![ToolCall {
+            id: "call_1".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"query": "rust"}),
+        }]);
         let content = format_content(&msg);
         assert_eq!(content["role"], "model");
         let parts = content["parts"].as_array().unwrap();
@@ -495,14 +550,12 @@ mod tests {
 
     #[test]
     fn format_function_response_message() {
-        let msg = Message {
-            role: "tool".into(),
+        let msg = Message::ToolResult {
+            call_id: "search".into(),
             content: "result data".into(),
-            tool_calls: Vec::new(),
-            tool_call_id: Some("search".into()),
         };
         let content = format_content(&msg);
-        assert_eq!(content["role"], "function");
+        assert_eq!(content["role"], "user");
         let parts = content["parts"].as_array().unwrap();
         assert_eq!(parts[0]["functionResponse"]["name"], "search");
     }
@@ -518,7 +571,12 @@ mod tests {
             }]
         });
         let (resp, _) = parse_response(&json).unwrap();
-        assert!(matches!(resp, ModelResponse::Text(ref s) if s == "Hello there!"));
+        let ModelResponse::Content(items) = resp else {
+            panic!("expected Content");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].role, "model");
+        assert!(matches!(&items[0].content, Content::Text(s) if s == "Hello there!"));
     }
 
     #[test]
@@ -573,7 +631,10 @@ mod tests {
         let req = build_count_tokens_request(
             &config,
             "gemini-2.0-flash",
-            &[Message::text("user", "hello")],
+            &[Message::Content {
+                role: "user".into(),
+                content: Content::Text("hello".into()),
+            }],
         );
         assert!(req.url.contains(":countTokens"));
         assert!(req.url.contains("gemini-2.0-flash"));

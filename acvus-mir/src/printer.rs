@@ -633,13 +633,8 @@ mod tests {
         registry: &ExternRegistry,
     ) -> String {
         let template = acvus_ast::parse(source).expect("parse failed");
-        let (module, _) = crate::compile(
-            &template,
-            context,
-            registry,
-            &UserTypeRegistry::new(),
-        )
-        .expect("compile failed");
+        let (module, _) = crate::compile(&template, context, registry, &UserTypeRegistry::new())
+            .expect("compile failed");
         dump(&module)
     }
 

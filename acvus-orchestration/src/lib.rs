@@ -22,9 +22,11 @@ pub use kind::{
     CompiledToolBinding, ExprSpec, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, NodeKind,
     PlainSpec, ToolBinding,
 };
-pub use message::{Message, ModelResponse, Output, ToolCall, ToolResult, ToolSpec, Usage};
+pub use message::{
+    Content, ContentItem, Message, ModelResponse, Output, ToolCall, ToolSpec, Usage,
+};
 pub use provider::{
-    ApiKind, Fetch, HttpRequest, LlmModel, ProviderConfig, build_cache_request, build_request,
+    ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, build_cache_request, build_request,
     create_llm_model, parse_cache_response, parse_response,
 };
 pub use storage::{HashMapStorage, Storage};

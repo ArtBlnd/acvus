@@ -1,7 +1,7 @@
 use crate::kind::GenerationParams;
-use crate::message::{Message, ModelResponse, ToolCall, ToolSpec, Usage};
+use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, ToolSpec, Usage};
 
-use super::{HttpRequest, LlmModel, ProviderConfig};
+use super::{HttpRequest, ProviderConfig};
 
 pub struct OpenAiModel {
     config: ProviderConfig,
@@ -12,10 +12,8 @@ impl OpenAiModel {
     pub fn new(config: ProviderConfig, model: String) -> Self {
         Self { config, model }
     }
-}
 
-impl LlmModel for OpenAiModel {
-    fn build_request(
+    pub fn build_request(
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
@@ -34,15 +32,18 @@ impl LlmModel for OpenAiModel {
         )
     }
 
-    fn parse_response(&self, json: &serde_json::Value) -> Result<(ModelResponse, Usage), String> {
+    pub fn parse_response(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<(ModelResponse, Usage), String> {
         parse_response(json)
     }
 
-    fn build_count_tokens_request(&self, _messages: &[Message]) -> Option<HttpRequest> {
+    pub fn build_count_tokens_request(&self, _messages: &[Message]) -> Option<HttpRequest> {
         None
     }
 
-    fn parse_count_tokens_response(&self, _json: &serde_json::Value) -> Result<u32, String> {
+    pub fn parse_count_tokens_response(&self, _json: &serde_json::Value) -> Result<u32, String> {
         Err("count tokens not supported for OpenAI".into())
     }
 }
@@ -65,37 +66,50 @@ pub fn build_request(
 }
 
 fn format_message(m: &Message) -> serde_json::Value {
-    let mut msg = serde_json::json!({
-        "role": m.role,
-    });
-
-    if !m.content.is_empty() {
-        msg["content"] = serde_json::Value::String(m.content.clone());
-    }
-
-    if !m.tool_calls.is_empty() {
-        let calls: Vec<serde_json::Value> = m
-            .tool_calls
-            .iter()
-            .map(|tc| {
+    match m {
+        Message::Content { role, content } => match content {
+            Content::Text(text) => {
+                serde_json::json!({ "role": role, "content": text })
+            }
+            Content::Blob { mime_type, data } => {
                 serde_json::json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": tc.arguments.to_string(),
-                    }
+                    "role": role,
+                    "content": [{
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{mime_type};base64,{data}"),
+                        }
+                    }]
                 })
+            }
+        },
+        Message::ToolCalls(calls) => {
+            let tool_calls: Vec<serde_json::Value> = calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments.to_string(),
+                        }
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "role": "assistant",
+                "tool_calls": tool_calls,
             })
-            .collect();
-        msg["tool_calls"] = serde_json::Value::Array(calls);
+        }
+        Message::ToolResult { call_id, content } => {
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": content,
+            })
+        }
     }
-
-    if let Some(ref id) = m.tool_call_id {
-        msg["tool_call_id"] = serde_json::Value::String(id.clone());
-    }
-
-    msg
 }
 
 fn format_body(
@@ -197,13 +211,38 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
         return Ok((ModelResponse::ToolCalls(calls?), usage));
     }
 
-    let content = message
-        .get("content")
-        .and_then(|c| c.as_str())
-        .unwrap_or("")
+    let role = message
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("assistant")
         .to_string();
 
-    Ok((ModelResponse::Text(content), usage))
+    let parts = match message.get("content") {
+        Some(serde_json::Value::String(s)) => vec![Content::Text(s.clone())],
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|block| {
+                let ty = block.get("type").and_then(|t| t.as_str())?;
+                match ty {
+                    "text" => {
+                        let text = block.get("text").and_then(|t| t.as_str())?;
+                        Some(Content::Text(text.to_string()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect(),
+        _ => vec![Content::Text(String::new())],
+    };
+
+    let items = parts
+        .into_iter()
+        .map(|content| ContentItem {
+            role: role.clone(),
+            content,
+        })
+        .collect();
+    Ok((ModelResponse::Content(items), usage))
 }
 
 fn parse_usage(json: &serde_json::Value) -> Usage {
@@ -237,8 +276,14 @@ mod tests {
         let body = format_body(
             "gpt-4o",
             &[
-                Message::text("system", "You are helpful."),
-                Message::text("user", "Hello"),
+                Message::Content {
+                    role: "system".into(),
+                    content: Content::Text("You are helpful.".into()),
+                },
+                Message::Content {
+                    role: "user".into(),
+                    content: Content::Text("Hello".into()),
+                },
             ],
             &[],
             &GenerationParams::default(),
@@ -253,7 +298,10 @@ mod tests {
     fn format_with_tools() {
         let body = format_body(
             "gpt-4o",
-            &[Message::text("user", "hi")],
+            &[Message::Content {
+                role: "user".into(),
+                content: Content::Text("hi".into()),
+            }],
             &[ToolSpec {
                 name: "search".into(),
                 description: "Search the web".into(),
@@ -269,17 +317,13 @@ mod tests {
 
     #[test]
     fn format_tool_call_message() {
-        let msg = Message {
-            role: "assistant".into(),
-            content: String::new(),
-            tool_calls: vec![ToolCall {
-                id: "call_1".into(),
-                name: "search".into(),
-                arguments: serde_json::json!({"query": "rust"}),
-            }],
-            tool_call_id: None,
-        };
+        let msg = Message::ToolCalls(vec![ToolCall {
+            id: "call_1".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"query": "rust"}),
+        }]);
         let formatted = format_message(&msg);
+        assert_eq!(formatted["role"], "assistant");
         let calls = formatted["tool_calls"].as_array().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["id"], "call_1");
@@ -288,11 +332,9 @@ mod tests {
 
     #[test]
     fn format_tool_result_message() {
-        let msg = Message {
-            role: "tool".into(),
+        let msg = Message::ToolResult {
+            call_id: "call_1".into(),
             content: "result data".into(),
-            tool_calls: Vec::new(),
-            tool_call_id: Some("call_1".into()),
         };
         let formatted = format_message(&msg);
         assert_eq!(formatted["role"], "tool");
@@ -311,7 +353,12 @@ mod tests {
             }]
         });
         let (resp, _) = parse_response(&json).unwrap();
-        assert!(matches!(resp, ModelResponse::Text(ref s) if s == "Hello there!"));
+        let ModelResponse::Content(items) = resp else {
+            panic!("expected Content");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].role, "assistant");
+        assert!(matches!(&items[0].content, Content::Text(s) if s == "Hello there!"));
     }
 
     #[test]

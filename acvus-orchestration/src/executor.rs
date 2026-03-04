@@ -16,7 +16,7 @@ use crate::compile::{CompiledMessage, CompiledNode};
 use crate::dag::Dag;
 use crate::error::{OrchError, OrchErrorKind};
 use crate::kind::{CompiledNodeKind, GenerationParams};
-use crate::message::{Message, ModelResponse, ToolCall, ToolResult, ToolSpec};
+use crate::message::{Content, Message, ModelResponse, ToolCall, ToolSpec};
 use crate::provider::{Fetch, ProviderConfig, build_request, parse_response};
 use crate::storage::Storage;
 
@@ -319,7 +319,10 @@ where
             Stepped::Done => {
                 let role = state.blocks[state.block_idx].0.clone();
                 let output = std::mem::take(&mut state.current_output);
-                state.rendered_messages.push(Message::text(&role, output));
+                state.rendered_messages.push(Message::Content {
+                    role,
+                    content: Content::Text(output),
+                });
                 state.coroutine = None;
                 state.resume_key = None;
                 state.block_idx += 1;
@@ -369,21 +372,8 @@ where
         consume_fuel(&fuel, fuel_limit)?;
         let tool_results = handle_tool_calls(calls);
 
-        all_messages.push(Message {
-            role: "assistant".into(),
-            content: String::new(),
-            tool_calls: calls.clone(),
-            tool_call_id: None,
-        });
-
-        for result in &tool_results {
-            all_messages.push(Message {
-                role: "tool".into(),
-                content: result.content.clone(),
-                tool_calls: Vec::new(),
-                tool_call_id: Some(result.call_id.clone()),
-            });
-        }
+        all_messages.push(Message::ToolCalls(calls.clone()));
+        all_messages.extend(tool_results);
 
         let http_request = build_request(
             &provider_config,
@@ -403,7 +393,20 @@ where
     }
 
     match response {
-        ModelResponse::Text(text) => Ok((idx, Value::String(text))),
+        ModelResponse::Content(items) => {
+            let mut text = String::new();
+            for item in items {
+                match item.content {
+                    Content::Text(s) => text.push_str(&s),
+                    _ => {
+                        return Err(OrchError::new(OrchErrorKind::ModelError(
+                            "non-text response in DAG executor".into(),
+                        )));
+                    }
+                }
+            }
+            Ok((idx, Value::String(text)))
+        }
         ModelResponse::ToolCalls(_) => unreachable!(),
     }
 }
@@ -492,10 +495,10 @@ fn ty_to_json_schema(ty: &acvus_mir::ty::Ty) -> &'static str {
     }
 }
 
-fn handle_tool_calls(calls: &[ToolCall]) -> Vec<ToolResult> {
+fn handle_tool_calls(calls: &[ToolCall]) -> Vec<Message> {
     calls
         .iter()
-        .map(|call| ToolResult {
+        .map(|call| Message::ToolResult {
             call_id: call.id.clone(),
             content: format!("tool '{}' not implemented", call.name),
         })

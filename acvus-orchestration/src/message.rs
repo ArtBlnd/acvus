@@ -1,23 +1,18 @@
 use std::collections::HashMap;
 
-/// A chat message with role, content, and optional tool call metadata.
+/// Message content — text or binary blob.
 #[derive(Debug, Clone)]
-pub struct Message {
-    pub role: String,
-    pub content: String,
-    pub tool_calls: Vec<ToolCall>,
-    pub tool_call_id: Option<String>,
+pub enum Content {
+    Text(String),
+    Blob { mime_type: String, data: String },
 }
 
-impl Message {
-    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: role.into(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-        }
-    }
+/// A chat message — explicit variants, no implicit fields.
+#[derive(Debug, Clone)]
+pub enum Message {
+    Content { role: String, content: Content },
+    ToolCalls(Vec<ToolCall>),
+    ToolResult { call_id: String, content: String },
 }
 
 /// A tool call requested by the model.
@@ -28,17 +23,17 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-/// Result of executing a tool.
+/// A single content part from a model response.
 #[derive(Debug, Clone)]
-pub struct ToolResult {
-    pub call_id: String,
-    pub content: String,
+pub struct ContentItem {
+    pub role: String,
+    pub content: Content,
 }
 
-/// Model response: either text or tool calls.
+/// Model response: either content parts or tool calls.
 #[derive(Debug, Clone)]
 pub enum ModelResponse {
-    Text(String),
+    Content(Vec<ContentItem>),
     ToolCalls(Vec<ToolCall>),
 }
 

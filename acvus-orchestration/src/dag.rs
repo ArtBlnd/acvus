@@ -90,6 +90,7 @@ mod tests {
         CompiledNode {
             name: name.into(),
             kind: CompiledNodeKind::Llm(CompiledLlm {
+                api: crate::ApiKind::OpenAI,
                 provider: "test".into(),
                 model: "m".into(),
                 messages: vec![],

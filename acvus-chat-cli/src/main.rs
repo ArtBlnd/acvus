@@ -91,15 +91,10 @@ fn parse_context_args(args: &[String]) -> HashMap<String, String> {
 }
 
 fn parse_api_kind(s: &str) -> ApiKind {
-    match s {
-        "openai" => ApiKind::OpenAI,
-        "anthropic" => ApiKind::Anthropic,
-        "google" => ApiKind::Google,
-        other => {
-            eprintln!("unknown api kind: {other}");
-            process::exit(1);
-        }
-    }
+    ApiKind::parse(s).unwrap_or_else(|| {
+        eprintln!("unknown api kind: {s}");
+        process::exit(1);
+    })
 }
 
 #[tokio::main]
@@ -159,7 +154,10 @@ async fn main() {
         } else if let Some(inline) = &expr_def.inline_source {
             inline.clone()
         } else {
-            eprintln!("expr '{}': must have source or inline_source", expr_def.name);
+            eprintln!(
+                "expr '{}': must have source or inline_source",
+                expr_def.name
+            );
             process::exit(1);
         };
         let (_script, tail_ty) =
@@ -179,6 +177,13 @@ async fn main() {
         });
     }
 
+    // Build provider name → ApiKind map (needed for node resolution)
+    let provider_apis: HashMap<String, ApiKind> = spec
+        .providers
+        .iter()
+        .map(|(name, config)| (name.clone(), parse_api_kind(&config.api)))
+        .collect();
+
     let mut node_specs = Vec::new();
     for node_file in &spec.nodes {
         let node_src = std::fs::read_to_string(project_dir.join(node_file)).unwrap_or_else(|e| {
@@ -189,10 +194,11 @@ async fn main() {
             eprintln!("failed to parse {node_file}: {e}");
             process::exit(1);
         });
-        let node_spec = node::resolve_node(node_def, &project_dir).unwrap_or_else(|e| {
-            eprintln!("failed to resolve {node_file}: {e}");
-            process::exit(1);
-        });
+        let node_spec =
+            node::resolve_node(node_def, &project_dir, &provider_apis).unwrap_or_else(|e| {
+                eprintln!("failed to resolve {node_file}: {e}");
+                process::exit(1);
+            });
         node_specs.push(node_spec);
     }
 

@@ -6,6 +6,7 @@ use acvus_mir::ty::Ty;
 use crate::compile::{self, CompiledMessage, CompiledScript};
 use crate::dsl::MessageSpec;
 use crate::error::{OrchError, OrchErrorKind};
+use crate::provider::ApiKind;
 
 /// Token limits for LLM calls.
 #[derive(Debug, Clone, Default)]
@@ -19,6 +20,7 @@ pub struct MaxTokens {
 /// LLM node spec — model call with messages, tools, generation params.
 #[derive(Debug, Clone)]
 pub struct LlmSpec {
+    pub api: ApiKind,
     pub provider: String,
     pub model: String,
     pub messages: Vec<MessageSpec>,
@@ -30,11 +32,11 @@ pub struct LlmSpec {
 
 impl LlmSpec {
     pub fn output_ty(&self) -> Ty {
-        Ty::Object(BTreeMap::from([
+        Ty::List(Box::new(Ty::Object(BTreeMap::from([
             ("role".into(), Ty::String),
             ("content".into(), Ty::String),
             ("content_type".into(), Ty::String),
-        ]))
+        ]))))
     }
 }
 
@@ -68,6 +70,7 @@ pub struct CompiledToolBinding {
 /// Compiled LLM node.
 #[derive(Debug, Clone)]
 pub struct CompiledLlm {
+    pub api: ApiKind,
     pub provider: String,
     pub model: String,
     pub messages: Vec<CompiledMessage>,
@@ -75,16 +78,6 @@ pub struct CompiledLlm {
     pub generation: GenerationParams,
     pub cache_key: Option<CompiledScript>,
     pub max_tokens: MaxTokens,
-}
-
-/// The element type that bodyless iterators must produce for LLM nodes.
-/// Each element is used directly as a message: `{role, content, content_type}`.
-pub(crate) fn message_elem_ty() -> Ty {
-    Ty::Object(BTreeMap::from([
-        ("role".into(), Ty::String),
-        ("content".into(), Ty::String),
-        ("content_type".into(), Ty::String),
-    ]))
 }
 
 /// Parse a type name string into a `Ty`.
@@ -104,7 +97,7 @@ pub fn compile_llm(
     context_types: &HashMap<String, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledLlm, HashSet<String>), Vec<OrchError>> {
-    let elem_ty = message_elem_ty();
+    let elem_ty = spec.api.message_elem_ty();
     let (compiled_messages, mut all_keys) =
         compile::compile_messages(&spec.messages, context_types, registry, &elem_ty)?;
     let compiled_tools = compile_tool_bindings(&spec.tools)?;
@@ -120,6 +113,7 @@ pub fn compile_llm(
     };
     Ok((
         CompiledLlm {
+            api: spec.api.clone(),
             provider: spec.provider.clone(),
             model: spec.model.clone(),
             messages: compiled_messages,

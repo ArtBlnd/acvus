@@ -2,7 +2,10 @@ mod anthropic;
 mod google;
 mod openai;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+use acvus_interpreter::Value;
+use acvus_mir::ty::Ty;
 
 use crate::kind::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolSpec, Usage};
@@ -12,6 +15,41 @@ pub enum ApiKind {
     OpenAI,
     Anthropic,
     Google,
+}
+
+impl ApiKind {
+    pub fn parse(s: &str) -> Option<ApiKind> {
+        match s {
+            "openai" => Some(ApiKind::OpenAI),
+            "anthropic" => Some(ApiKind::Anthropic),
+            "google" => Some(ApiKind::Google),
+            _ => None,
+        }
+    }
+
+    pub fn message_elem_ty(&self) -> Ty {
+        Ty::List(Box::new(Ty::Object(BTreeMap::from([
+            ("role".into(), Ty::String),
+            ("content".into(), Ty::String),
+            ("content_type".into(), Ty::String),
+        ]))))
+    }
+
+    pub fn item_fields<'a>(&self, item: &'a Value) -> (&'a str, &'a str, &'a str) {
+        let Value::Object(obj) = item else {
+            panic!("item_fields: expected Object, got {item:?}");
+        };
+        let Some(Value::String(role)) = obj.get("role") else {
+            panic!("item_fields: missing or non-string 'role'");
+        };
+        let Some(Value::String(content)) = obj.get("content") else {
+            panic!("item_fields: missing or non-string 'content'");
+        };
+        let Some(Value::String(content_type)) = obj.get("content_type") else {
+            panic!("item_fields: missing or non-string 'content_type'");
+        };
+        (role.as_str(), content.as_str(), content_type.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,12 +81,22 @@ pub fn build_request(
     cached_content: Option<&str>,
 ) -> HttpRequest {
     match config.api {
-        ApiKind::OpenAI => {
-            openai::build_request(config, model, messages, tools, generation, max_output_tokens)
-        }
-        ApiKind::Anthropic => {
-            anthropic::build_request(config, model, messages, tools, generation, max_output_tokens)
-        }
+        ApiKind::OpenAI => openai::build_request(
+            config,
+            model,
+            messages,
+            tools,
+            generation,
+            max_output_tokens,
+        ),
+        ApiKind::Anthropic => anthropic::build_request(
+            config,
+            model,
+            messages,
+            tools,
+            generation,
+            max_output_tokens,
+        ),
         ApiKind::Google => google::build_request(
             config,
             model,
@@ -92,29 +140,81 @@ pub fn parse_response(
     }
 }
 
-/// Provider-specific model abstraction — handles request building, response parsing, and token counting.
-pub trait LlmModel {
-    fn build_request(
+/// Provider-specific model abstraction — enum dispatch over provider implementations.
+pub enum LlmModelKind {
+    OpenAI(openai::OpenAiModel),
+    Anthropic(anthropic::AnthropicModel),
+    Google(google::GoogleModel),
+}
+
+impl LlmModelKind {
+    pub fn build_request(
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
         generation: &GenerationParams,
         max_output_tokens: Option<u32>,
         cached_content: Option<&str>,
-    ) -> HttpRequest;
+    ) -> HttpRequest {
+        match self {
+            LlmModelKind::OpenAI(m) => m.build_request(
+                messages,
+                tools,
+                generation,
+                max_output_tokens,
+                cached_content,
+            ),
+            LlmModelKind::Anthropic(m) => m.build_request(
+                messages,
+                tools,
+                generation,
+                max_output_tokens,
+                cached_content,
+            ),
+            LlmModelKind::Google(m) => m.build_request(
+                messages,
+                tools,
+                generation,
+                max_output_tokens,
+                cached_content,
+            ),
+        }
+    }
 
-    fn parse_response(&self, json: &serde_json::Value) -> Result<(ModelResponse, Usage), String>;
+    pub fn parse_response(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<(ModelResponse, Usage), String> {
+        match self {
+            LlmModelKind::OpenAI(m) => m.parse_response(json),
+            LlmModelKind::Anthropic(m) => m.parse_response(json),
+            LlmModelKind::Google(m) => m.parse_response(json),
+        }
+    }
 
-    /// Returns `None` if the provider doesn't support token counting.
-    fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest>;
+    pub fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
+        match self {
+            LlmModelKind::OpenAI(m) => m.build_count_tokens_request(messages),
+            LlmModelKind::Anthropic(m) => m.build_count_tokens_request(messages),
+            LlmModelKind::Google(m) => m.build_count_tokens_request(messages),
+        }
+    }
 
-    fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String>;
+    pub fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
+        match self {
+            LlmModelKind::OpenAI(m) => m.parse_count_tokens_response(json),
+            LlmModelKind::Anthropic(m) => m.parse_count_tokens_response(json),
+            LlmModelKind::Google(m) => m.parse_count_tokens_response(json),
+        }
+    }
 }
 
-pub fn create_llm_model(config: ProviderConfig, model: String) -> Box<dyn LlmModel> {
+pub fn create_llm_model(config: ProviderConfig, model: String) -> LlmModelKind {
     match config.api {
-        ApiKind::OpenAI => Box::new(openai::OpenAiModel::new(config, model)),
-        ApiKind::Anthropic => Box::new(anthropic::AnthropicModel::new(config, model)),
-        ApiKind::Google => Box::new(google::GoogleModel::new(config, model)),
+        ApiKind::OpenAI => LlmModelKind::OpenAI(openai::OpenAiModel::new(config, model)),
+        ApiKind::Anthropic => {
+            LlmModelKind::Anthropic(anthropic::AnthropicModel::new(config, model))
+        }
+        ApiKind::Google => LlmModelKind::Google(google::GoogleModel::new(config, model)),
     }
 }
