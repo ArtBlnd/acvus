@@ -566,7 +566,7 @@ impl Interpreter {
         match name {
             "to_string" | "to_int" | "to_float" | "char_to_int" | "int_to_char" | "len"
             | "reverse" | "flatten" | "join" | "contains" | "contains_str" | "substring"
-            | "len_str" | "to_bytes" | "to_utf8" | "to_utf8_lossy" => {
+            | "len_str" | "to_bytes" | "to_utf8" | "to_utf8_lossy" | "unwrap" => {
                 (this, builtins::call_pure(name, args))
             }
             "filter" => Self::exec_hof_filter(this, args, handle).await,

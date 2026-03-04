@@ -1813,3 +1813,31 @@ async fn variant_construct_none() {
         "none"
     );
 }
+
+#[tokio::test]
+async fn to_utf8_returns_option_and_unwrap() {
+    // valid utf8: to_utf8 returns Some, unwrap extracts the string
+    assert_eq!(
+        run_simple(r#"{{ "hello" | to_bytes | to_utf8 | unwrap }}"#).await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn to_utf8_none_on_invalid() {
+    // 0xFF is not valid utf8 → to_utf8 returns None
+    let types = HashMap::from([("data".into(), Ty::List(Box::new(Ty::Byte)))]);
+    let values = HashMap::from([(
+        "data".into(),
+        Value::List(vec![Value::Byte(0xFF), Value::Byte(0xFE)]),
+    )]);
+    assert_eq!(
+        run_with_context(
+            "{{ None = @data | to_utf8 }}invalid{{_}}valid{{/}}",
+            types,
+            values,
+        )
+        .await,
+        "invalid"
+    );
+}

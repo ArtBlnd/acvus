@@ -49,6 +49,7 @@ pub fn call_pure(name: &str, args: Vec<Value>) -> Value {
         "starts_with_str" => PureBuiltin::call(builtin_starts_with_str, args),
         "ends_with_str" => PureBuiltin::call(builtin_ends_with_str, args),
         "repeat_str" => PureBuiltin::call(builtin_repeat_str, args),
+        "unwrap" => PureBuiltin::call(builtin_unwrap, args),
         _ => panic!("not a pure builtin: {name}"),
     }
 }

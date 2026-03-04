@@ -364,7 +364,7 @@ impl BuiltinSig for ToUtf8 {
         "to_utf8"
     }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
-        (vec![Ty::bytes()], Ty::String)
+        (vec![Ty::bytes()], Ty::Option(Box::new(Ty::String)))
     }
 }
 
@@ -478,6 +478,17 @@ impl BuiltinSig for RepeatStr {
     }
 }
 
+pub struct Unwrap;
+impl BuiltinSig for Unwrap {
+    fn name(&self) -> &'static str {
+        "unwrap"
+    }
+    fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
+        let t = subst.fresh_var();
+        (vec![Ty::Option(Box::new(t.clone()))], t)
+    }
+}
+
 pub fn builtins() -> Vec<&'static dyn BuiltinSig> {
     vec![
         &Filter,
@@ -514,5 +525,6 @@ pub fn builtins() -> Vec<&'static dyn BuiltinSig> {
         &StartsWithStr,
         &EndsWithStr,
         &RepeatStr,
+        &Unwrap,
     ]
 }

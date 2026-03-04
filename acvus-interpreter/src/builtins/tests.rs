@@ -87,6 +87,7 @@ const PURE_NAMES: &[&str] = &[
     "starts_with_str",
     "ends_with_str",
     "repeat_str",
+    "unwrap",
 ];
 
 /// Names of higher-order function builtins dispatched by `exec_builtin`.

@@ -74,8 +74,17 @@ pub(crate) fn builtin_to_bytes(s: String) -> Value {
     Value::List(s.into_bytes().into_iter().map(Value::Byte).collect())
 }
 
-pub(crate) fn builtin_to_utf8(bytes: Vec<u8>) -> String {
-    String::from_utf8(bytes).unwrap()
+pub(crate) fn builtin_to_utf8(bytes: Vec<u8>) -> Value {
+    match String::from_utf8(bytes) {
+        Ok(s) => Value::Variant {
+            tag: "Some".into(),
+            payload: Some(Box::new(Value::String(s))),
+        },
+        Err(_) => Value::Variant {
+            tag: "None".into(),
+            payload: None,
+        },
+    }
 }
 
 pub(crate) fn builtin_to_utf8_lossy(bytes: Vec<u8>) -> String {
@@ -124,6 +133,19 @@ pub(crate) fn builtin_ends_with_str(s: String, suffix: String) -> bool {
 
 pub(crate) fn builtin_repeat_str(s: String, n: i64) -> String {
     s.repeat(n.max(0) as usize)
+}
+
+pub(crate) fn builtin_unwrap(v: Value) -> Value {
+    match v {
+        Value::Variant {
+            tag,
+            payload: Some(inner),
+        } if tag == "Some" => *inner,
+        Value::Variant { tag, .. } if tag == "None" => {
+            panic!("unwrap: called on None")
+        }
+        _ => panic!("unwrap: expected Option variant, got {v:?}"),
+    }
 }
 
 fn value_to_string(v: Value) -> String {
