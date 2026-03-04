@@ -1,11 +1,9 @@
 use acvus_ast::{BinOp, Literal, Span};
-use acvus_mir::ir::{
-    ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
-};
 use acvus_mir::ir::DebugInfo;
+use acvus_mir::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use acvus_mir::ty::Ty;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 use super::rewriter::PassState;
 
@@ -21,9 +19,9 @@ use super::rewriter::PassState;
 
 /// Labels for all 3 stages of decrypt closures, 4 variants each.
 pub struct MultiStageDecryptTable {
-    pub stage_a: [Label; 4],  // (Int) -> Int
-    pub stage_b: [Label; 4],  // (Int, Int) -> Int
-    pub stage_c: [Label; 4],  // (Bytes, Int) -> String
+    pub stage_a: [Label; 4], // (Int) -> Int
+    pub stage_b: [Label; 4], // (Int, Int) -> Int
+    pub stage_c: [Label; 4], // (Bytes, Int) -> String
 }
 
 /// Register 12 multi-stage decrypt closure bodies into the module.
@@ -59,7 +57,11 @@ pub fn register_multistage_decrypt_closures(module: &mut MirModule) -> MultiStag
         module.main.label_count = max_label;
     }
 
-    MultiStageDecryptTable { stage_a, stage_b, stage_c }
+    MultiStageDecryptTable {
+        stage_a,
+        stage_b,
+        stage_c,
+    }
 }
 
 /// Get all labels from the multi-stage table (for filtering user closures).
@@ -95,84 +97,279 @@ fn make_stage_a_closure_body(variant: u32) -> ClosureBody {
     let mut insts = Vec::new();
 
     let v_65537 = alloc(Ty::Int);
-    insts.push(Inst { span, kind: InstKind::Const { dst: v_65537, value: Literal::Int(65537) }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_65537,
+            value: Literal::Int(65537),
+        },
+    });
 
     let v_result = match variant {
         0 => {
             // (key * 7 + 3) % 65537
             let v_7 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_7, value: Literal::Int(7) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_7,
+                    value: Literal::Int(7),
+                },
+            });
             let v_mul = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_mul, op: BinOp::Mul, left: v_key, right: v_7 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mul,
+                    op: BinOp::Mul,
+                    left: v_key,
+                    right: v_7,
+                },
+            });
             let v_3 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_3, value: Literal::Int(3) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_3,
+                    value: Literal::Int(3),
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mul, right: v_3 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_mul,
+                    right: v_3,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_add, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_65537,
+                },
+            });
             v_res
         }
         1 => {
             // ((key ^ 0xDEAD) * 11 + 17) % 65537
             let v_dead = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_dead, value: Literal::Int(0xDEAD) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_dead,
+                    value: Literal::Int(0xDEAD),
+                },
+            });
             let v_xor = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_xor, op: BinOp::Xor, left: v_key, right: v_dead }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_xor,
+                    op: BinOp::Xor,
+                    left: v_key,
+                    right: v_dead,
+                },
+            });
             let v_11 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_11, value: Literal::Int(11) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_11,
+                    value: Literal::Int(11),
+                },
+            });
             let v_mul = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_mul, op: BinOp::Mul, left: v_xor, right: v_11 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mul,
+                    op: BinOp::Mul,
+                    left: v_xor,
+                    right: v_11,
+                },
+            });
             let v_17 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_17, value: Literal::Int(17) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_17,
+                    value: Literal::Int(17),
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mul, right: v_17 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_mul,
+                    right: v_17,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_add, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_65537,
+                },
+            });
             v_res
         }
         2 => {
             // ((key >> 3) * 13 + 7) % 65537
             let v_3 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_3, value: Literal::Int(3) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_3,
+                    value: Literal::Int(3),
+                },
+            });
             let v_shr = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_shr, op: BinOp::Shr, left: v_key, right: v_3 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_shr,
+                    op: BinOp::Shr,
+                    left: v_key,
+                    right: v_3,
+                },
+            });
             let v_13 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_13, value: Literal::Int(13) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_13,
+                    value: Literal::Int(13),
+                },
+            });
             let v_mul = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_mul, op: BinOp::Mul, left: v_shr, right: v_13 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mul,
+                    op: BinOp::Mul,
+                    left: v_shr,
+                    right: v_13,
+                },
+            });
             let v_7 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_7, value: Literal::Int(7) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_7,
+                    value: Literal::Int(7),
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mul, right: v_7 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_mul,
+                    right: v_7,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_add, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_65537,
+                },
+            });
             v_res
         }
         _ => {
             // ((key * key + 5) % 65537 + 65537) % 65537
             let v_sq = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_sq, op: BinOp::Mul, left: v_key, right: v_key }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_sq,
+                    op: BinOp::Mul,
+                    left: v_key,
+                    right: v_key,
+                },
+            });
             let v_5 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_5, value: Literal::Int(5) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_5,
+                    value: Literal::Int(5),
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_sq, right: v_5 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_sq,
+                    right: v_5,
+                },
+            });
             let v_m1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_m1, op: BinOp::Mod, left: v_add, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_m1,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_65537,
+                },
+            });
             let v_add2 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add2, op: BinOp::Add, left: v_m1, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add2,
+                    op: BinOp::Add,
+                    left: v_m1,
+                    right: v_65537,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_add2, right: v_65537 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_add2,
+                    right: v_65537,
+                },
+            });
             v_res
         }
     };
 
-    insts.push(Inst { span, kind: InstKind::Return(v_result) });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Return(v_result),
+    });
     body.insts = insts;
     body.val_count = next_val;
     body.label_count = 0;
     body.debug = debug;
 
-    ClosureBody { capture_names: vec![], param_names: vec!["key".into()], body }
+    ClosureBody {
+        capture_names: vec![],
+        param_names: vec!["key".into()],
+        body,
+    }
 }
 
 /// Compile-time stage A transform (mirrors closure logic).
@@ -219,64 +416,201 @@ fn make_stage_b_closure_body(variant: u32) -> ClosureBody {
         0 => {
             // (subkey ^ key) + 1
             let v_xor = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_xor, op: BinOp::Xor, left: v_subkey, right: v_key }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_xor,
+                    op: BinOp::Xor,
+                    left: v_subkey,
+                    right: v_key,
+                },
+            });
             let v_1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_1, value: Literal::Int(1) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_1,
+                    value: Literal::Int(1),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Add, left: v_xor, right: v_1 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Add,
+                    left: v_xor,
+                    right: v_1,
+                },
+            });
             v_res
         }
         1 => {
             // (subkey * 3 + key * 7) % 65537
             let v_3 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_3, value: Literal::Int(3) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_3,
+                    value: Literal::Int(3),
+                },
+            });
             let v_mul1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_mul1, op: BinOp::Mul, left: v_subkey, right: v_3 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mul1,
+                    op: BinOp::Mul,
+                    left: v_subkey,
+                    right: v_3,
+                },
+            });
             let v_7 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_7, value: Literal::Int(7) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_7,
+                    value: Literal::Int(7),
+                },
+            });
             let v_mul2 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_mul2, op: BinOp::Mul, left: v_key, right: v_7 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mul2,
+                    op: BinOp::Mul,
+                    left: v_key,
+                    right: v_7,
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mul1, right: v_mul2 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_mul1,
+                    right: v_mul2,
+                },
+            });
             let v_m = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_m, value: Literal::Int(65537) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_m,
+                    value: Literal::Int(65537),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_add, right: v_m }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_m,
+                },
+            });
             v_res
         }
         2 => {
             // (subkey + key) ^ 0xBEEF
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_subkey, right: v_key }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_subkey,
+                    right: v_key,
+                },
+            });
             let v_beef = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_beef, value: Literal::Int(0xBEEF) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_beef,
+                    value: Literal::Int(0xBEEF),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Xor, left: v_add, right: v_beef }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Xor,
+                    left: v_add,
+                    right: v_beef,
+                },
+            });
             v_res
         }
         _ => {
             // ((subkey << 3) ^ key) % 65537
             let v_3 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_3, value: Literal::Int(3) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_3,
+                    value: Literal::Int(3),
+                },
+            });
             let v_shl = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_shl, op: BinOp::Shl, left: v_subkey, right: v_3 }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_shl,
+                    op: BinOp::Shl,
+                    left: v_subkey,
+                    right: v_3,
+                },
+            });
             let v_xor = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_xor, op: BinOp::Xor, left: v_shl, right: v_key }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_xor,
+                    op: BinOp::Xor,
+                    left: v_shl,
+                    right: v_key,
+                },
+            });
             let v_m = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_m, value: Literal::Int(65537) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_m,
+                    value: Literal::Int(65537),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp { dst: v_res, op: BinOp::Mod, left: v_xor, right: v_m }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Mod,
+                    left: v_xor,
+                    right: v_m,
+                },
+            });
             v_res
         }
     };
 
-    insts.push(Inst { span, kind: InstKind::Return(v_result) });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Return(v_result),
+    });
     body.insts = insts;
     body.val_count = next_val;
     body.label_count = 0;
     body.debug = debug;
 
-    ClosureBody { capture_names: vec![], param_names: vec!["subkey".into(), "key".into()], body }
+    ClosureBody {
+        capture_names: vec![],
+        param_names: vec!["subkey".into(), "key".into()],
+        body,
+    }
 }
 
 /// Compile-time stage B combine (mirrors closure logic).
@@ -303,7 +637,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     let mut debug = DebugInfo::new();
 
     let v_bytes = ValueId(0);
-    let v_key = ValueId(1);  // combined_key
+    let v_key = ValueId(1); // combined_key
     body.val_count = 2;
     body.val_types.insert(v_bytes, Ty::bytes());
     body.val_types.insert(v_key, Ty::Int);
@@ -328,13 +662,42 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
 
     let mut insts = Vec::new();
 
-    insts.push(Inst { span, kind: InstKind::Call {
-        dst: v_len, func: "len".into(), args: vec![v_bytes],
-    }});
-    insts.push(Inst { span, kind: InstKind::Const { dst: v_zero, value: Literal::Int(0) }});
-    insts.push(Inst { span, kind: InstKind::Const { dst: v_empty, value: Literal::String(String::new()) }});
-    insts.push(Inst { span, kind: InstKind::Const { dst: v_one, value: Literal::Int(1) }});
-    insts.push(Inst { span, kind: InstKind::Const { dst: v_256, value: Literal::Int(256) }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Call {
+            dst: v_len,
+            func: "len".into(),
+            args: vec![v_bytes],
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_zero,
+            value: Literal::Int(0),
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_empty,
+            value: Literal::String(String::new()),
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_one,
+            value: Literal::Int(1),
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_256,
+            value: Literal::Int(256),
+        },
+    });
 
     let l_header = Label(0);
     let l_body = Label(1);
@@ -344,166 +707,351 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     let v_i = alloc(Ty::Int);
     let v_accum = alloc(Ty::String);
 
-    insts.push(Inst { span, kind: InstKind::Jump {
-        label: l_header, args: vec![v_zero, v_empty],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Jump {
+            label: l_header,
+            args: vec![v_zero, v_empty],
+        },
+    });
 
-    insts.push(Inst { span, kind: InstKind::BlockLabel {
-        label: l_header, params: vec![v_i, v_accum],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::BlockLabel {
+            label: l_header,
+            params: vec![v_i, v_accum],
+        },
+    });
 
     let v_done = alloc(Ty::Bool);
-    insts.push(Inst { span, kind: InstKind::BinOp {
-        dst: v_done, op: BinOp::Gte, left: v_i, right: v_len,
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::BinOp {
+            dst: v_done,
+            op: BinOp::Gte,
+            left: v_i,
+            right: v_len,
+        },
+    });
 
     let v_result_param = alloc(Ty::String);
-    insts.push(Inst { span, kind: InstKind::JumpIf {
-        cond: v_done,
-        then_label: l_exit, then_args: vec![v_accum],
-        else_label: l_body, else_args: vec![v_i, v_accum],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::JumpIf {
+            cond: v_done,
+            then_label: l_exit,
+            then_args: vec![v_accum],
+            else_label: l_body,
+            else_args: vec![v_i, v_accum],
+        },
+    });
 
     let v_body_i = alloc(Ty::Int);
     let v_body_accum = alloc(Ty::String);
-    insts.push(Inst { span, kind: InstKind::BlockLabel {
-        label: l_body, params: vec![v_body_i, v_body_accum],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::BlockLabel {
+            label: l_body,
+            params: vec![v_body_i, v_body_accum],
+        },
+    });
 
     let v_byte_raw = alloc(Ty::Byte);
-    insts.push(Inst { span, kind: InstKind::ListGet {
-        dst: v_byte_raw, list: v_bytes, index: v_body_i,
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::ListGet {
+            dst: v_byte_raw,
+            list: v_bytes,
+            index: v_body_i,
+        },
+    });
     let v_byte = alloc(Ty::Int);
-    insts.push(Inst { span, kind: InstKind::Call {
-        dst: v_byte, func: "to_int".into(), args: vec![v_byte_raw],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Call {
+            dst: v_byte,
+            func: "to_int".into(),
+            args: vec![v_byte_raw],
+        },
+    });
 
     // Same decrypt algorithms as before, but now operating on combined_key
     let v_plain = match variant {
         0 => {
             // XOR: plain = enc ^ ((key + i) % 256)
             let v_ki = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_ki, op: BinOp::Add, left: v_key, right: v_body_i,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_ki,
+                    op: BinOp::Add,
+                    left: v_key,
+                    right: v_body_i,
+                },
+            });
             let v_mod = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_mod, op: BinOp::Mod, left: v_ki, right: v_256,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mod,
+                    op: BinOp::Mod,
+                    left: v_ki,
+                    right: v_256,
+                },
+            });
             let v_p = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_p, op: BinOp::Xor, left: v_byte, right: v_mod,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_p,
+                    op: BinOp::Xor,
+                    left: v_byte,
+                    right: v_mod,
+                },
+            });
             v_p
         }
         1 => {
             // Sub: plain = (enc + ((key * (i+1)) % 256)) % 256
             let v_i1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_i1, op: BinOp::Add, left: v_body_i, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_i1,
+                    op: BinOp::Add,
+                    left: v_body_i,
+                    right: v_one,
+                },
+            });
             let v_ki = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_ki, op: BinOp::Mul, left: v_key, right: v_i1,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_ki,
+                    op: BinOp::Mul,
+                    left: v_key,
+                    right: v_i1,
+                },
+            });
             let v_mod = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_mod, op: BinOp::Mod, left: v_ki, right: v_256,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mod,
+                    op: BinOp::Mod,
+                    left: v_ki,
+                    right: v_256,
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_add, op: BinOp::Add, left: v_byte, right: v_mod,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_byte,
+                    right: v_mod,
+                },
+            });
             let v_p = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_p, op: BinOp::Mod, left: v_add, right: v_256,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_p,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_256,
+                },
+            });
             v_p
         }
         2 => {
             // Rot: plain = enc ^ ((key >> (i % 8)) % 256)
             let v_eight = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_eight, value: Literal::Int(8) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_eight,
+                    value: Literal::Int(8),
+                },
+            });
             let v_im = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_im, op: BinOp::Mod, left: v_body_i, right: v_eight,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_im,
+                    op: BinOp::Mod,
+                    left: v_body_i,
+                    right: v_eight,
+                },
+            });
             let v_shift = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_shift, op: BinOp::Shr, left: v_key, right: v_im,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_shift,
+                    op: BinOp::Shr,
+                    left: v_key,
+                    right: v_im,
+                },
+            });
             let v_mod = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_mod, op: BinOp::Mod, left: v_shift, right: v_256,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mod,
+                    op: BinOp::Mod,
+                    left: v_shift,
+                    right: v_256,
+                },
+            });
             let v_p = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_p, op: BinOp::Xor, left: v_byte, right: v_mod,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_p,
+                    op: BinOp::Xor,
+                    left: v_byte,
+                    right: v_mod,
+                },
+            });
             v_p
         }
         _ => {
             // Mul: plain = enc ^ (((key * (i+1)) % 251 + 251) % 251)
             let v_251 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const { dst: v_251, value: Literal::Int(251) }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_251,
+                    value: Literal::Int(251),
+                },
+            });
             let v_i1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_i1, op: BinOp::Add, left: v_body_i, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_i1,
+                    op: BinOp::Add,
+                    left: v_body_i,
+                    right: v_one,
+                },
+            });
             let v_ki = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_ki, op: BinOp::Mul, left: v_key, right: v_i1,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_ki,
+                    op: BinOp::Mul,
+                    left: v_key,
+                    right: v_i1,
+                },
+            });
             let v_m1 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_m1, op: BinOp::Mod, left: v_ki, right: v_251,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_m1,
+                    op: BinOp::Mod,
+                    left: v_ki,
+                    right: v_251,
+                },
+            });
             let v_add = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_add, op: BinOp::Add, left: v_m1, right: v_251,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_add,
+                    op: BinOp::Add,
+                    left: v_m1,
+                    right: v_251,
+                },
+            });
             let v_m2 = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_m2, op: BinOp::Mod, left: v_add, right: v_251,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_m2,
+                    op: BinOp::Mod,
+                    left: v_add,
+                    right: v_251,
+                },
+            });
             let v_p = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_p, op: BinOp::Xor, left: v_byte, right: v_m2,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_p,
+                    op: BinOp::Xor,
+                    left: v_byte,
+                    right: v_m2,
+                },
+            });
             v_p
         }
     };
 
     let v_char = alloc(Ty::String);
-    insts.push(Inst { span, kind: InstKind::Call {
-        dst: v_char, func: "int_to_char".into(), args: vec![v_plain],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Call {
+            dst: v_char,
+            func: "int_to_char".into(),
+            args: vec![v_plain],
+        },
+    });
 
     let v_new_accum = alloc(Ty::String);
-    insts.push(Inst { span, kind: InstKind::BinOp {
-        dst: v_new_accum, op: BinOp::Add, left: v_body_accum, right: v_char,
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::BinOp {
+            dst: v_new_accum,
+            op: BinOp::Add,
+            left: v_body_accum,
+            right: v_char,
+        },
+    });
 
     let v_next_i = alloc(Ty::Int);
-    insts.push(Inst { span, kind: InstKind::BinOp {
-        dst: v_next_i, op: BinOp::Add, left: v_body_i, right: v_one,
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::BinOp {
+            dst: v_next_i,
+            op: BinOp::Add,
+            left: v_body_i,
+            right: v_one,
+        },
+    });
 
-    insts.push(Inst { span, kind: InstKind::Jump {
-        label: l_header, args: vec![v_next_i, v_new_accum],
-    }});
+    insts.push(Inst {
+        span,
+        kind: InstKind::Jump {
+            label: l_header,
+            args: vec![v_next_i, v_new_accum],
+        },
+    });
 
-    insts.push(Inst { span, kind: InstKind::BlockLabel {
-        label: l_exit, params: vec![v_result_param],
-    }});
-    insts.push(Inst { span, kind: InstKind::Return(v_result_param) });
+    insts.push(Inst {
+        span,
+        kind: InstKind::BlockLabel {
+            label: l_exit,
+            params: vec![v_result_param],
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Return(v_result_param),
+    });
 
     body.insts = insts;
     body.val_count = next_val;
     body.debug = debug;
 
-    ClosureBody { capture_names: vec![], param_names: vec!["bytes".into(), "key".into()], body }
+    ClosureBody {
+        capture_names: vec![],
+        param_names: vec!["bytes".into(), "key".into()],
+        body,
+    }
 }
 
 // ── Encryption (compile-time) ────────────────────────────────────
@@ -553,7 +1101,9 @@ fn encrypt_single(text: &str, rng: &mut StdRng) -> EncryptedText {
         let variant_a = rng.random_range(0u32..4);
         let key: i64 = loop {
             let k = rng.random_range(1i64..=1_000_000);
-            if ((k + 1) as u32) % 4 == variant_a { break k; }
+            if ((k + 1) as u32) % 4 == variant_a {
+                break k;
+            }
         };
 
         // Derive the 3-stage pipeline at compile time
@@ -569,7 +1119,10 @@ fn encrypt_single(text: &str, rng: &mut StdRng) -> EncryptedText {
             .map(|(i, &b)| encrypt_byte_staged(variant_c, b, combined, i))
             .collect();
 
-        chunks.push(EncryptedChunk { bytes: encrypted, key });
+        chunks.push(EncryptedChunk {
+            bytes: encrypted,
+            key,
+        });
         offset += chunk_size;
     }
 
@@ -596,7 +1149,8 @@ fn encrypt_byte_staged(variant_c: u32, plain: u8, combined_key: i64, i: usize) -
         }
         // Stage C variant 3: Mul — plain = enc ^ (((key * (i+1)) % 251 + 251) % 251)
         _ => {
-            let k = ((combined_key.wrapping_mul((i + 1) as i64) % 251 + 251) % 251).unsigned_abs() as u8;
+            let k = ((combined_key.wrapping_mul((i + 1) as i64) % 251 + 251) % 251).unsigned_abs()
+                as u8;
             plain ^ k
         }
     }
@@ -619,7 +1173,8 @@ fn decrypt_byte_staged(variant_c: u32, enc: u8, combined_key: i64, i: usize) -> 
             enc ^ k
         }
         _ => {
-            let k = ((combined_key.wrapping_mul((i + 1) as i64) % 251 + 251) % 251).unsigned_abs() as u8;
+            let k = ((combined_key.wrapping_mul((i + 1) as i64) % 251 + 251) % 251).unsigned_abs()
+                as u8;
             enc ^ k
         }
     }
@@ -695,18 +1250,23 @@ fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty) -> ClosureBody {
     let span = Span { start: 0, end: 0 };
 
     // Build rotated list: [fn_{(0+r)%4}, fn_{(1+r)%4}, fn_{(2+r)%4}, fn_{(3+r)%4}]
-    let elements: Vec<ValueId> = (0..4)
-        .map(|i| ValueId((i + rotation) % 4))
-        .collect();
+    let elements: Vec<ValueId> = (0..4).map(|i| ValueId((i + rotation) % 4)).collect();
 
     let list_ty = Ty::List(Box::new(inner_fn_ty.clone()));
     let v_list = alloc(list_ty);
 
     let mut insts = Vec::new();
-    insts.push(Inst { span, kind: InstKind::MakeList {
-        dst: v_list, elements,
-    }});
-    insts.push(Inst { span, kind: InstKind::Return(v_list) });
+    insts.push(Inst {
+        span,
+        kind: InstKind::MakeList {
+            dst: v_list,
+            elements,
+        },
+    });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Return(v_list),
+    });
 
     body.insts = insts;
     body.val_count = next_val;
@@ -742,9 +1302,14 @@ pub fn emit_factory_dispatch_setup(
     let mut inner_vals = Vec::with_capacity(4);
     for &label in inner_labels {
         let v = ctx.alloc_val(inner_fn_ty.clone());
-        ctx.emit(span, InstKind::MakeClosure {
-            dst: v, body: label, captures: vec![],
-        });
+        ctx.emit(
+            span,
+            InstKind::MakeClosure {
+                dst: v,
+                body: label,
+                captures: vec![],
+            },
+        );
         inner_vals.push(v);
     }
 
@@ -758,18 +1323,27 @@ pub fn emit_factory_dispatch_setup(
     let mut factory_vals = Vec::with_capacity(4);
     for &label in &factory_table.labels {
         let v = ctx.alloc_val(factory_fn_ty.clone());
-        ctx.emit(span, InstKind::MakeClosure {
-            dst: v, body: label, captures: inner_vals.clone(),
-        });
+        ctx.emit(
+            span,
+            InstKind::MakeClosure {
+                dst: v,
+                body: label,
+                captures: inner_vals.clone(),
+            },
+        );
         factory_vals.push(v);
     }
 
     // Meta table: List of factory closures
     let meta_ty = Ty::List(Box::new(factory_fn_ty));
     let v_meta = ctx.alloc_val(meta_ty);
-    ctx.emit(span, InstKind::MakeList {
-        dst: v_meta, elements: factory_vals,
-    });
+    ctx.emit(
+        span,
+        InstKind::MakeList {
+            dst: v_meta,
+            elements: factory_vals,
+        },
+    );
 
     v_meta
 }
@@ -796,28 +1370,48 @@ fn emit_two_level_dispatch(
 
     // v_factory = ListGet(meta_table, factory_idx)
     let v_factory = ctx.alloc_val(factory_fn_ty);
-    ctx.emit(span, InstKind::ListGet {
-        dst: v_factory, list: meta_table, index: factory_idx,
-    });
+    ctx.emit(
+        span,
+        InstKind::ListGet {
+            dst: v_factory,
+            list: meta_table,
+            index: factory_idx,
+        },
+    );
 
     // v_inner_table = CallClosure(v_factory, [seed])
     let inner_table_ty = Ty::List(Box::new(inner_fn_ty.clone()));
     let v_inner_table = ctx.alloc_val(inner_table_ty);
-    ctx.emit(span, InstKind::CallClosure {
-        dst: v_inner_table, closure: v_factory, args: vec![seed],
-    });
+    ctx.emit(
+        span,
+        InstKind::CallClosure {
+            dst: v_inner_table,
+            closure: v_factory,
+            args: vec![seed],
+        },
+    );
 
     // v_fn = ListGet(v_inner_table, inner_idx)
     let v_fn = ctx.alloc_val(inner_fn_ty.clone());
-    ctx.emit(span, InstKind::ListGet {
-        dst: v_fn, list: v_inner_table, index: inner_idx,
-    });
+    ctx.emit(
+        span,
+        InstKind::ListGet {
+            dst: v_fn,
+            list: v_inner_table,
+            index: inner_idx,
+        },
+    );
 
     // v_result = CallClosure(v_fn, args)
     let v_result = ctx.alloc_val(result_ty.clone());
-    ctx.emit(span, InstKind::CallClosure {
-        dst: v_result, closure: v_fn, args,
-    });
+    ctx.emit(
+        span,
+        InstKind::CallClosure {
+            dst: v_result,
+            closure: v_fn,
+            args,
+        },
+    );
 
     v_result
 }
@@ -841,48 +1435,88 @@ fn emit_multistage_decrypt_call(
     use_entangle: bool,
 ) -> ValueId {
     let v_bytes = ctx.alloc_val(Ty::bytes());
-    ctx.emit(span, InstKind::Const {
-        dst: v_bytes, value: Literal::List(bytes.iter().map(|b| Literal::Byte(*b)).collect()),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_bytes,
+            value: Literal::List(bytes.iter().map(|b| Literal::Byte(*b)).collect()),
+        },
+    );
 
     let v_key = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const {
-        dst: v_key, value: Literal::Int(key),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_key,
+            value: Literal::Int(key),
+        },
+    );
 
     // Seed for factory calls (constant, unused by current factories but required param)
     let v_seed = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const {
-        dst: v_seed, value: Literal::Int(0),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_seed,
+            value: Literal::Int(0),
+        },
+    );
 
     // ── Stage A dispatch index ──
     // With entanglement: idx_a = (key + __entangle) % 4  (entangle=1, so key+1)
     // Without: idx_a = (key + 1) % 4
     let v_key_adj = if use_entangle {
         let v_entangle = ctx.alloc_val(Ty::Int);
-        ctx.emit(span, InstKind::VarLoad {
-            dst: v_entangle, name: "__entangle".into(),
-        });
+        ctx.emit(
+            span,
+            InstKind::VarLoad {
+                dst: v_entangle,
+                name: "__entangle".into(),
+            },
+        );
         let v_adj = ctx.alloc_val(Ty::Int);
-        ctx.emit(span, InstKind::BinOp {
-            dst: v_adj, op: BinOp::Add, left: v_key, right: v_entangle,
-        });
+        ctx.emit(
+            span,
+            InstKind::BinOp {
+                dst: v_adj,
+                op: BinOp::Add,
+                left: v_key,
+                right: v_entangle,
+            },
+        );
         v_adj
     } else {
         let v_one = ctx.alloc_val(Ty::Int);
-        ctx.emit(span, InstKind::Const { dst: v_one, value: Literal::Int(1) });
+        ctx.emit(
+            span,
+            InstKind::Const {
+                dst: v_one,
+                value: Literal::Int(1),
+            },
+        );
         let v_adj = ctx.alloc_val(Ty::Int);
-        ctx.emit(span, InstKind::BinOp {
-            dst: v_adj, op: BinOp::Add, left: v_key, right: v_one,
-        });
+        ctx.emit(
+            span,
+            InstKind::BinOp {
+                dst: v_adj,
+                op: BinOp::Add,
+                left: v_key,
+                right: v_one,
+            },
+        );
         v_adj
     };
 
     let v_idx_a = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp {
-        dst: v_idx_a, op: BinOp::Mod, left: v_key_adj, right: v_four,
-    });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_idx_a,
+            op: BinOp::Mod,
+            left: v_key_adj,
+            right: v_four,
+        },
+    );
 
     // Precompute variant_a, factory_idx_a, and inner_idx_a at compile time
     let variant_a = ((key + 1) as u32) % 4;
@@ -891,22 +1525,42 @@ fn emit_multistage_decrypt_call(
 
     // We need the inner_idx as a constant for rotation compensation
     let v_inner_a = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const {
-        dst: v_inner_a, value: Literal::Int(inner_idx_a as i64),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_inner_a,
+            value: Literal::Int(inner_idx_a as i64),
+        },
+    );
 
-    let stage_a_fn_ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Int) };
+    let stage_a_fn_ty = Ty::Fn {
+        params: vec![Ty::Int],
+        ret: Box::new(Ty::Int),
+    };
     let v_subkey = emit_two_level_dispatch(
-        ctx, span, meta_a, v_idx_a, v_seed, v_inner_a,
-        &stage_a_fn_ty, vec![v_key], &Ty::Int,
+        ctx,
+        span,
+        meta_a,
+        v_idx_a,
+        v_seed,
+        v_inner_a,
+        &stage_a_fn_ty,
+        vec![v_key],
+        &Ty::Int,
     );
 
     // ── Stage B dispatch index ──
     // idx_b = subkey % 4
     let v_idx_b = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp {
-        dst: v_idx_b, op: BinOp::Mod, left: v_subkey, right: v_four,
-    });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_idx_b,
+            op: BinOp::Mod,
+            left: v_subkey,
+            right: v_four,
+        },
+    );
 
     // Compile-time: compute inner_idx_b from rotation compensation
     let subkey = stage_a_transform(variant_a, key);
@@ -915,26 +1569,52 @@ fn emit_multistage_decrypt_call(
     let inner_idx_b = (variant_b as i32 - factory_idx_b as i32).rem_euclid(4) as u32; // always 0
 
     let v_inner_b = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const {
-        dst: v_inner_b, value: Literal::Int(inner_idx_b as i64),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_inner_b,
+            value: Literal::Int(inner_idx_b as i64),
+        },
+    );
 
-    let stage_b_fn_ty = Ty::Fn { params: vec![Ty::Int, Ty::Int], ret: Box::new(Ty::Int) };
+    let stage_b_fn_ty = Ty::Fn {
+        params: vec![Ty::Int, Ty::Int],
+        ret: Box::new(Ty::Int),
+    };
     let v_combined = emit_two_level_dispatch(
-        ctx, span, meta_b, v_idx_b, v_seed, v_inner_b,
-        &stage_b_fn_ty, vec![v_subkey, v_key], &Ty::Int,
+        ctx,
+        span,
+        meta_b,
+        v_idx_b,
+        v_seed,
+        v_inner_b,
+        &stage_b_fn_ty,
+        vec![v_subkey, v_key],
+        &Ty::Int,
     );
 
     // ── Stage C dispatch index ──
     // idx_c = (key ^ subkey) % 4  — but subkey is runtime, so we use BinOp
     let v_xor_ks = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp {
-        dst: v_xor_ks, op: BinOp::Xor, left: v_key, right: v_subkey,
-    });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_xor_ks,
+            op: BinOp::Xor,
+            left: v_key,
+            right: v_subkey,
+        },
+    );
     let v_idx_c = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp {
-        dst: v_idx_c, op: BinOp::Mod, left: v_xor_ks, right: v_four,
-    });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_idx_c,
+            op: BinOp::Mod,
+            left: v_xor_ks,
+            right: v_four,
+        },
+    );
 
     // Compile-time rotation compensation for stage C
     let variant_c = ((key ^ subkey).unsigned_abs() as u32) % 4;
@@ -942,14 +1622,28 @@ fn emit_multistage_decrypt_call(
     let inner_idx_c = (variant_c as i32 - factory_idx_c as i32).rem_euclid(4) as u32; // always 0
 
     let v_inner_c = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const {
-        dst: v_inner_c, value: Literal::Int(inner_idx_c as i64),
-    });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_inner_c,
+            value: Literal::Int(inner_idx_c as i64),
+        },
+    );
 
-    let stage_c_fn_ty = Ty::Fn { params: vec![Ty::bytes(), Ty::Int], ret: Box::new(Ty::String) };
+    let stage_c_fn_ty = Ty::Fn {
+        params: vec![Ty::bytes(), Ty::Int],
+        ret: Box::new(Ty::String),
+    };
     emit_two_level_dispatch(
-        ctx, span, meta_c, v_idx_c, v_seed, v_inner_c,
-        &stage_c_fn_ty, vec![v_bytes, v_combined], &Ty::String,
+        ctx,
+        span,
+        meta_c,
+        v_idx_c,
+        v_seed,
+        v_inner_c,
+        &stage_c_fn_ty,
+        vec![v_bytes, v_combined],
+        &Ty::String,
     )
 }
 
@@ -971,16 +1665,29 @@ pub fn emit_encrypted_text(
     let mut v_accum: Option<ValueId> = None;
     for chunk in &enc.chunks {
         let v_part = emit_multistage_decrypt_call(
-            ctx, span, &chunk.bytes, chunk.key,
-            meta_a, meta_b, meta_c, v_four, use_entangle,
+            ctx,
+            span,
+            &chunk.bytes,
+            chunk.key,
+            meta_a,
+            meta_b,
+            meta_c,
+            v_four,
+            use_entangle,
         );
         v_accum = Some(match v_accum {
             None => v_part,
             Some(prev) => {
                 let v_concat = ctx.alloc_val(Ty::String);
-                ctx.emit(span, InstKind::BinOp {
-                    dst: v_concat, op: BinOp::Add, left: prev, right: v_part,
-                });
+                ctx.emit(
+                    span,
+                    InstKind::BinOp {
+                        dst: v_concat,
+                        op: BinOp::Add,
+                        left: prev,
+                        right: v_part,
+                    },
+                );
                 v_concat
             }
         });
@@ -1037,17 +1744,30 @@ pub fn emit_hashed_text(
 
         // Use the multi-stage pipeline with __obf_key
         let v_part = emit_multistage_decrypt_call(
-            ctx, span, &encrypted, compile_key,
-            meta_a, meta_b, meta_c, v_four, use_entangle,
+            ctx,
+            span,
+            &encrypted,
+            compile_key,
+            meta_a,
+            meta_b,
+            meta_c,
+            v_four,
+            use_entangle,
         );
 
         v_accum = Some(match v_accum {
             None => v_part,
             Some(prev) => {
                 let v_concat = ctx.alloc_val(Ty::String);
-                ctx.emit(span, InstKind::BinOp {
-                    dst: v_concat, op: BinOp::Add, left: prev, right: v_part,
-                });
+                ctx.emit(
+                    span,
+                    InstKind::BinOp {
+                        dst: v_concat,
+                        op: BinOp::Add,
+                        left: prev,
+                        right: v_part,
+                    },
+                );
                 v_concat
             }
         });
@@ -1070,7 +1790,10 @@ mod tests {
         for variant in 0..4u32 {
             let key = 12345i64;
             let result = stage_a_transform(variant, key);
-            assert!(result >= 0 && result < 65537, "stage_a variant {variant} out of range: {result}");
+            assert!(
+                result >= 0 && result < 65537,
+                "stage_a variant {variant} out of range: {result}"
+            );
         }
     }
 
@@ -1102,7 +1825,11 @@ mod tests {
                 .map(|(i, &enc)| decrypt_byte_staged(variant_c, enc, combined_key, i))
                 .collect();
 
-            assert_eq!(plain, &decrypted[..], "stage_c variant {variant_c} roundtrip failed");
+            assert_eq!(
+                plain,
+                &decrypted[..],
+                "stage_c variant {variant_c} roundtrip failed"
+            );
         }
     }
 
@@ -1158,7 +1885,10 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let text = "a".repeat(200);
         let results = encrypt_texts(&[text.clone()], &mut rng);
-        assert!(results[0].chunks.len() >= 2, "200-byte text should produce multiple chunks");
+        assert!(
+            results[0].chunks.len() >= 2,
+            "200-byte text should produce multiple chunks"
+        );
         let total: usize = results[0].chunks.iter().map(|c| c.bytes.len()).sum();
         assert_eq!(total, 200);
     }

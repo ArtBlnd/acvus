@@ -166,7 +166,7 @@ where
                     closures: HashMap::new(),
                 },
             );
-            *module = self.0 .0.transform(old, deps);
+            *module = self.0.0.transform(old, deps);
             ctx.insert(TransformMarker::<P>(PhantomData));
         } else {
             self.1.run_targeted(target, module, ctx);
@@ -195,8 +195,7 @@ where
             .collect();
 
         let all_analyses: Vec<TypeId> = entries.iter().map(|&(_, _, a)| a).collect();
-        let mut in_degree: HashMap<TypeId, usize> =
-            all_analyses.iter().map(|&a| (a, 0)).collect();
+        let mut in_degree: HashMap<TypeId, usize> = all_analyses.iter().map(|&a| (a, 0)).collect();
         let mut adj: HashMap<TypeId, Vec<TypeId>> =
             all_analyses.iter().map(|&a| (a, Vec::new())).collect();
 

@@ -97,14 +97,14 @@ fn collect_texts_from_body(
     text_entries: &mut Vec<String>,
 ) {
     for inst in &body.insts {
-        if let InstKind::Const { value, .. } = &inst.kind {
-            if matches!(value, Literal::String(_) | Literal::List(_)) {
-                let key = fmt_literal(value);
-                if !lit_to_tidx.contains_key(&key) {
-                    let idx = text_entries.len();
-                    lit_to_tidx.insert(key.clone(), idx);
-                    text_entries.push(key);
-                }
+        if let InstKind::Const { value, .. } = &inst.kind
+            && matches!(value, Literal::String(_) | Literal::List(_))
+        {
+            let key = fmt_literal(value);
+            if !lit_to_tidx.contains_key(&key) {
+                let idx = text_entries.len();
+                lit_to_tidx.insert(key.clone(), idx);
+                text_entries.push(key);
             }
         }
     }
@@ -138,7 +138,9 @@ fn write_body(
             InstKind::Const { dst, value }
                 if matches!(value, Literal::String(_) | Literal::List(_)) =>
             {
-                lit_to_tidx.get(&fmt_literal(value)).map(|&tidx| (*dst, tidx))
+                lit_to_tidx
+                    .get(&fmt_literal(value))
+                    .map(|&tidx| (*dst, tidx))
             }
             _ => None,
         })
@@ -164,7 +166,11 @@ fn write_body(
 
             // Constants — all skipped above, unreachable here.
             InstKind::Const { .. } => unreachable!(),
-            InstKind::ContextLoad { dst, name, bindings } => {
+            InstKind::ContextLoad {
+                dst,
+                name,
+                bindings,
+            } => {
                 if bindings.is_empty() {
                     writeln!(f, "{} = context_load @{name}", fmt_val(*dst))?
                 } else {
@@ -180,9 +186,7 @@ fn write_body(
                     )?
                 }
             }
-            InstKind::VarLoad { dst, name } => {
-                writeln!(f, "{} = var_load ${name}", fmt_val(*dst))?
-            }
+            InstKind::VarLoad { dst, name } => writeln!(f, "{} = var_load ${name}", fmt_val(*dst))?,
             InstKind::VarStore { name, src } => {
                 writeln!(f, "var_store ${name} = {}", fmt_use(*src, &consts, &texts))?
             }
@@ -208,48 +212,40 @@ fn write_body(
                 fmt_unaryop(*op),
                 fmt_use(*operand, &consts, &texts)
             )?,
-            InstKind::FieldGet { dst, object, field } => {
-                writeln!(
-                    f,
-                    "{} = {}.{field}",
-                    fmt_val(*dst),
-                    fmt_use(*object, &consts, &texts)
-                )?
-            }
+            InstKind::FieldGet { dst, object, field } => writeln!(
+                f,
+                "{} = {}.{field}",
+                fmt_val(*dst),
+                fmt_use(*object, &consts, &texts)
+            )?,
 
             // Calls
-            InstKind::Call { dst, func, args } => {
-                writeln!(
-                    f,
-                    "{} = call {func}({})",
-                    fmt_val(*dst),
-                    fmt_uses(args, &consts, &texts)
-                )?
-            }
+            InstKind::Call { dst, func, args } => writeln!(
+                f,
+                "{} = call {func}({})",
+                fmt_val(*dst),
+                fmt_uses(args, &consts, &texts)
+            )?,
             InstKind::AsyncCall { dst, func, args } => writeln!(
                 f,
                 "{} = async_call {func}({})",
                 fmt_val(*dst),
                 fmt_uses(args, &consts, &texts)
             )?,
-            InstKind::Await { dst, src } => {
-                writeln!(
-                    f,
-                    "{} = await {}",
-                    fmt_val(*dst),
-                    fmt_use(*src, &consts, &texts)
-                )?
-            }
+            InstKind::Await { dst, src } => writeln!(
+                f,
+                "{} = await {}",
+                fmt_val(*dst),
+                fmt_use(*src, &consts, &texts)
+            )?,
 
             // Composite constructors
-            InstKind::MakeList { dst, elements } => {
-                writeln!(
-                    f,
-                    "{} = list [{}]",
-                    fmt_val(*dst),
-                    fmt_uses(elements, &consts, &texts)
-                )?
-            }
+            InstKind::MakeList { dst, elements } => writeln!(
+                f,
+                "{} = list [{}]",
+                fmt_val(*dst),
+                fmt_uses(elements, &consts, &texts)
+            )?,
             InstKind::MakeObject { dst, fields } => {
                 let fields_str: String = fields
                     .iter()
@@ -258,22 +254,18 @@ fn write_body(
                     .join(", ");
                 writeln!(f, "{} = object {{{fields_str}}}", fmt_val(*dst))?
             }
-            InstKind::MakeTuple { dst, elements } => {
-                writeln!(
-                    f,
-                    "{} = tuple ({})",
-                    fmt_val(*dst),
-                    fmt_uses(elements, &consts, &texts)
-                )?
-            }
-            InstKind::TupleIndex { dst, tuple, index } => {
-                writeln!(
-                    f,
-                    "{} = {}.{index}",
-                    fmt_val(*dst),
-                    fmt_use(*tuple, &consts, &texts)
-                )?
-            }
+            InstKind::MakeTuple { dst, elements } => writeln!(
+                f,
+                "{} = tuple ({})",
+                fmt_val(*dst),
+                fmt_uses(elements, &consts, &texts)
+            )?,
+            InstKind::TupleIndex { dst, tuple, index } => writeln!(
+                f,
+                "{} = {}.{index}",
+                fmt_val(*dst),
+                fmt_use(*tuple, &consts, &texts)
+            )?,
             InstKind::MakeRange {
                 dst,
                 start,
@@ -329,14 +321,12 @@ fn write_body(
                 fmt_use(*src, &consts, &texts),
                 fmt_range_kind(*kind)
             )?,
-            InstKind::ListIndex { dst, list, index } => {
-                writeln!(
-                    f,
-                    "{} = {}[{index}]",
-                    fmt_val(*dst),
-                    fmt_use(*list, &consts, &texts)
-                )?
-            }
+            InstKind::ListIndex { dst, list, index } => writeln!(
+                f,
+                "{} = {}[{index}]",
+                fmt_val(*dst),
+                fmt_use(*list, &consts, &texts)
+            )?,
             InstKind::ListGet { dst, list, index } => writeln!(
                 f,
                 "{} = {}[{}]",
@@ -355,14 +345,12 @@ fn write_body(
                 fmt_val(*dst),
                 fmt_use(*list, &consts, &texts)
             )?,
-            InstKind::ObjectGet { dst, object, key } => {
-                writeln!(
-                    f,
-                    "{} = {}.{key}",
-                    fmt_val(*dst),
-                    fmt_use(*object, &consts, &texts)
-                )?
-            }
+            InstKind::ObjectGet { dst, object, key } => writeln!(
+                f,
+                "{} = {}.{key}",
+                fmt_val(*dst),
+                fmt_use(*object, &consts, &texts)
+            )?,
 
             // Closures
             InstKind::MakeClosure {
@@ -385,14 +373,12 @@ fn write_body(
             )?,
 
             // Iteration
-            InstKind::IterInit { dst, src } => {
-                writeln!(
-                    f,
-                    "{} = iter_init {}",
-                    fmt_val(*dst),
-                    fmt_use(*src, &consts, &texts)
-                )?
-            }
+            InstKind::IterInit { dst, src } => writeln!(
+                f,
+                "{} = iter_init {}",
+                fmt_val(*dst),
+                fmt_use(*src, &consts, &texts)
+            )?,
             InstKind::IterNext {
                 dst_value,
                 dst_done,
@@ -499,7 +485,11 @@ impl fmt::Display for MirModule {
         let mut labels: Vec<_> = self.closures.keys().collect();
         labels.sort_by_key(|l| l.0);
         for label in &labels {
-            collect_texts_from_body(&self.closures[label].body, &mut lit_to_tidx, &mut text_entries);
+            collect_texts_from_body(
+                &self.closures[label].body,
+                &mut lit_to_tidx,
+                &mut text_entries,
+            );
         }
 
         if !text_entries.is_empty() {
@@ -666,9 +656,10 @@ mod tests {
     fn snapshot_full_example() {
         let context = HashMap::from([(
             "users".into(),
-            Ty::List(Box::new(Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-            ])))),
+            Ty::List(Box::new(Ty::Object(BTreeMap::from([(
+                "name".into(),
+                Ty::String,
+            )])))),
         )]);
         let out = compile_and_dump(
             r#"{{ { name, } in @users }}{{ name }}{{/}}"#,

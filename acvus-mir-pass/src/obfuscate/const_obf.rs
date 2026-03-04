@@ -1,8 +1,8 @@
 use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::ir::{InstKind, ValueId};
 use acvus_mir::ty::Ty;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 use super::rewriter::PassState;
 
@@ -29,35 +29,88 @@ fn compute_hash(x: i64, params: &HashParams) -> i64 {
 }
 
 /// Emit MIR that computes hash(src) at runtime. Returns the hash ValueId.
-fn emit_hash(
-    ctx: &mut PassState,
-    span: Span,
-    src: ValueId,
-    params: &HashParams,
-) -> ValueId {
+fn emit_hash(ctx: &mut PassState, span: Span, src: ValueId, params: &HashParams) -> ValueId {
     let v_p1 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_p1, value: Literal::Int(params.p1) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_p1,
+            value: Literal::Int(params.p1),
+        },
+    );
 
     let v_mul = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_mul, op: BinOp::Mul, left: src, right: v_p1 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_mul,
+            op: BinOp::Mul,
+            left: src,
+            right: v_p1,
+        },
+    );
 
     let v_p2 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_p2, value: Literal::Int(params.p2) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_p2,
+            value: Literal::Int(params.p2),
+        },
+    );
 
     let v_xor = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_xor, op: BinOp::Xor, left: v_mul, right: v_p2 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_xor,
+            op: BinOp::Xor,
+            left: v_mul,
+            right: v_p2,
+        },
+    );
 
     let v_p3 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_p3, value: Literal::Int(params.p3) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_p3,
+            value: Literal::Int(params.p3),
+        },
+    );
 
     let v_mod1 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_mod1, op: BinOp::Mod, left: v_xor, right: v_p3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_mod1,
+            op: BinOp::Mod,
+            left: v_xor,
+            right: v_p3,
+        },
+    );
 
     let v_add = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mod1, right: v_p3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_add,
+            op: BinOp::Add,
+            left: v_mod1,
+            right: v_p3,
+        },
+    );
 
     let v_hash = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_hash, op: BinOp::Mod, left: v_add, right: v_p3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_hash,
+            op: BinOp::Mod,
+            left: v_add,
+            right: v_p3,
+        },
+    );
 
     v_hash
 }
@@ -83,10 +136,13 @@ pub fn hash_test_literal(
     let compile_key = compute_hash(*n, &params);
 
     let v_hash = emit_hash(ctx, span, src, &params);
-    ctx.emit(span, InstKind::VarStore {
-        name: "__obf_key".into(),
-        src: v_hash,
-    });
+    ctx.emit(
+        span,
+        InstKind::VarStore {
+            name: "__obf_key".into(),
+            src: v_hash,
+        },
+    );
 
     // Checksum: ((hash * C1 + C2) % C3 + C3) % C3 == expected
     let c1: i64 = rng.random_range(1000i64..10000);
@@ -99,33 +155,105 @@ pub fn hash_test_literal(
     };
 
     let v_c1 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_c1, value: Literal::Int(c1) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_c1,
+            value: Literal::Int(c1),
+        },
+    );
 
     let v_mul = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_mul, op: BinOp::Mul, left: v_hash, right: v_c1 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_mul,
+            op: BinOp::Mul,
+            left: v_hash,
+            right: v_c1,
+        },
+    );
 
     let v_c2 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_c2, value: Literal::Int(c2) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_c2,
+            value: Literal::Int(c2),
+        },
+    );
 
     let v_add = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_add, op: BinOp::Add, left: v_mul, right: v_c2 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_add,
+            op: BinOp::Add,
+            left: v_mul,
+            right: v_c2,
+        },
+    );
 
     let v_c3 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_c3, value: Literal::Int(c3) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_c3,
+            value: Literal::Int(c3),
+        },
+    );
 
     let v_mod1 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_mod1, op: BinOp::Mod, left: v_add, right: v_c3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_mod1,
+            op: BinOp::Mod,
+            left: v_add,
+            right: v_c3,
+        },
+    );
 
     let v_add2 = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_add2, op: BinOp::Add, left: v_mod1, right: v_c3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_add2,
+            op: BinOp::Add,
+            left: v_mod1,
+            right: v_c3,
+        },
+    );
 
     let v_checksum = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::BinOp { dst: v_checksum, op: BinOp::Mod, left: v_add2, right: v_c3 });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst: v_checksum,
+            op: BinOp::Mod,
+            left: v_add2,
+            right: v_c3,
+        },
+    );
 
     let v_expected = ctx.alloc_val(Ty::Int);
-    ctx.emit(span, InstKind::Const { dst: v_expected, value: Literal::Int(expected) });
+    ctx.emit(
+        span,
+        InstKind::Const {
+            dst: v_expected,
+            value: Literal::Int(expected),
+        },
+    );
 
-    ctx.emit(span, InstKind::BinOp { dst, op: BinOp::Eq, left: v_checksum, right: v_expected });
+    ctx.emit(
+        span,
+        InstKind::BinOp {
+            dst,
+            op: BinOp::Eq,
+            left: v_checksum,
+            right: v_expected,
+        },
+    );
 
     compile_key
 }
@@ -157,7 +285,12 @@ mod tests {
         ctx.val_types.insert(dst, Ty::Bool);
 
         let key = hash_test_literal(
-            &mut ctx, &mut rng, Span { start: 0, end: 0 }, dst, src, &Literal::Int(1),
+            &mut ctx,
+            &mut rng,
+            Span { start: 0, end: 0 },
+            dst,
+            src,
+            &Literal::Int(1),
         );
 
         // VarStore __obf_key present.
@@ -174,10 +307,15 @@ mod tests {
 
         // No literal value exposed (only hash params, checksum params).
         // The original literal (1) should NOT appear.
-        let has_literal_1 = ctx.insts.iter().any(|i| matches!(
-            &i.kind,
-            InstKind::Const { value: Literal::Int(1), .. }
-        ));
+        let has_literal_1 = ctx.insts.iter().any(|i| {
+            matches!(
+                &i.kind,
+                InstKind::Const {
+                    value: Literal::Int(1),
+                    ..
+                }
+            )
+        });
         assert!(!has_literal_1);
 
         // compile_key is deterministic.

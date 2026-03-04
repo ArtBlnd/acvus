@@ -84,11 +84,8 @@ pub enum MessageSpec {
     },
     Iterator {
         key: String,
-        source: Option<String>,
         /// Python-style slice: `[start]` or `[start, end]`. Negative = from end.
         slice: Option<Vec<i64>>,
-        /// Bind each item to this context name (e.g. `bind = "msg"` → `@msg`).
-        bind: Option<String>,
         /// Override the role for all messages from this iterator.
         role: Option<String>,
         /// Token budget for this iterator.

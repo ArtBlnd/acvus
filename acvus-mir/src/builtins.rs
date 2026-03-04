@@ -7,8 +7,12 @@ pub type BuiltinConstraint = fn(&[Ty]) -> Option<String>;
 pub trait BuiltinSig {
     fn name(&self) -> &'static str;
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty);
-    fn is_effectful(&self) -> bool { false }
-    fn constraint(&self) -> Option<BuiltinConstraint> { None }
+    fn is_effectful(&self) -> bool {
+        false
+    }
+    fn constraint(&self) -> Option<BuiltinConstraint> {
+        None
+    }
 }
 
 fn is_scalar(ty: &Ty) -> bool {
@@ -29,9 +33,7 @@ fn require_to_int(args: &[Ty]) -> Option<String> {
     match &args[0] {
         Ty::Float | Ty::Byte => None,
         Ty::Var(_) | Ty::Error => None,
-        ty => Some(format!(
-            "`to_int` requires Float or Byte, got {ty}",
-        )),
+        ty => Some(format!("`to_int` requires Float or Byte, got {ty}",)),
     }
 }
 
@@ -39,13 +41,18 @@ fn require_to_int(args: &[Ty]) -> Option<String> {
 
 pub struct Filter;
 impl BuiltinSig for Filter {
-    fn name(&self) -> &'static str { "filter" }
+    fn name(&self) -> &'static str {
+        "filter"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool) },
+                Ty::Fn {
+                    params: vec![t.clone()],
+                    ret: Box::new(Ty::Bool),
+                },
             ],
             Ty::List(Box::new(t)),
         )
@@ -54,14 +61,19 @@ impl BuiltinSig for Filter {
 
 pub struct Map;
 impl BuiltinSig for Map {
-    fn name(&self) -> &'static str { "map" }
+    fn name(&self) -> &'static str {
+        "map"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         let u = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t], ret: Box::new(u.clone()) },
+                Ty::Fn {
+                    params: vec![t],
+                    ret: Box::new(u.clone()),
+                },
             ],
             Ty::List(Box::new(u)),
         )
@@ -70,14 +82,19 @@ impl BuiltinSig for Map {
 
 pub struct Pmap;
 impl BuiltinSig for Pmap {
-    fn name(&self) -> &'static str { "pmap" }
+    fn name(&self) -> &'static str {
+        "pmap"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         let u = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t], ret: Box::new(u.clone()) },
+                Ty::Fn {
+                    params: vec![t],
+                    ret: Box::new(u.clone()),
+                },
             ],
             Ty::List(Box::new(u)),
         )
@@ -86,17 +103,23 @@ impl BuiltinSig for Pmap {
 
 pub struct ToString;
 impl BuiltinSig for ToString {
-    fn name(&self) -> &'static str { "to_string" }
+    fn name(&self) -> &'static str {
+        "to_string"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (vec![t], Ty::String)
     }
-    fn constraint(&self) -> Option<BuiltinConstraint> { Some(require_scalar) }
+    fn constraint(&self) -> Option<BuiltinConstraint> {
+        Some(require_scalar)
+    }
 }
 
 pub struct ToFloat;
 impl BuiltinSig for ToFloat {
-    fn name(&self) -> &'static str { "to_float" }
+    fn name(&self) -> &'static str {
+        "to_float"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::Int], Ty::Float)
     }
@@ -104,23 +127,32 @@ impl BuiltinSig for ToFloat {
 
 pub struct ToInt;
 impl BuiltinSig for ToInt {
-    fn name(&self) -> &'static str { "to_int" }
+    fn name(&self) -> &'static str {
+        "to_int"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (vec![t], Ty::Int)
     }
-    fn constraint(&self) -> Option<BuiltinConstraint> { Some(require_to_int) }
+    fn constraint(&self) -> Option<BuiltinConstraint> {
+        Some(require_to_int)
+    }
 }
 
 pub struct Find;
 impl BuiltinSig for Find {
-    fn name(&self) -> &'static str { "find" }
+    fn name(&self) -> &'static str {
+        "find"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool) },
+                Ty::Fn {
+                    params: vec![t.clone()],
+                    ret: Box::new(Ty::Bool),
+                },
             ],
             t,
         )
@@ -129,13 +161,18 @@ impl BuiltinSig for Find {
 
 pub struct Reduce;
 impl BuiltinSig for Reduce {
-    fn name(&self) -> &'static str { "reduce" }
+    fn name(&self) -> &'static str {
+        "reduce"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()) },
+                Ty::Fn {
+                    params: vec![t.clone(), t.clone()],
+                    ret: Box::new(t.clone()),
+                },
             ],
             t,
         )
@@ -144,7 +181,9 @@ impl BuiltinSig for Reduce {
 
 pub struct Fold;
 impl BuiltinSig for Fold {
-    fn name(&self) -> &'static str { "fold" }
+    fn name(&self) -> &'static str {
+        "fold"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         let u = subst.fresh_var();
@@ -152,7 +191,10 @@ impl BuiltinSig for Fold {
             vec![
                 Ty::List(Box::new(t.clone())),
                 u.clone(),
-                Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()) },
+                Ty::Fn {
+                    params: vec![u.clone(), t],
+                    ret: Box::new(u.clone()),
+                },
             ],
             u,
         )
@@ -161,13 +203,18 @@ impl BuiltinSig for Fold {
 
 pub struct Any;
 impl BuiltinSig for Any {
-    fn name(&self) -> &'static str { "any" }
+    fn name(&self) -> &'static str {
+        "any"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool) },
+                Ty::Fn {
+                    params: vec![t],
+                    ret: Box::new(Ty::Bool),
+                },
             ],
             Ty::Bool,
         )
@@ -176,13 +223,18 @@ impl BuiltinSig for Any {
 
 pub struct All;
 impl BuiltinSig for All {
-    fn name(&self) -> &'static str { "all" }
+    fn name(&self) -> &'static str {
+        "all"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
             vec![
                 Ty::List(Box::new(t.clone())),
-                Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool) },
+                Ty::Fn {
+                    params: vec![t],
+                    ret: Box::new(Ty::Bool),
+                },
             ],
             Ty::Bool,
         )
@@ -191,7 +243,9 @@ impl BuiltinSig for All {
 
 pub struct Len;
 impl BuiltinSig for Len {
-    fn name(&self) -> &'static str { "len" }
+    fn name(&self) -> &'static str {
+        "len"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (vec![Ty::List(Box::new(t))], Ty::Int)
@@ -200,19 +254,20 @@ impl BuiltinSig for Len {
 
 pub struct Reverse;
 impl BuiltinSig for Reverse {
-    fn name(&self) -> &'static str { "reverse" }
+    fn name(&self) -> &'static str {
+        "reverse"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
-        (
-            vec![Ty::List(Box::new(t.clone()))],
-            Ty::List(Box::new(t)),
-        )
+        (vec![Ty::List(Box::new(t.clone()))], Ty::List(Box::new(t)))
     }
 }
 
 pub struct Flatten;
 impl BuiltinSig for Flatten {
-    fn name(&self) -> &'static str { "flatten" }
+    fn name(&self) -> &'static str {
+        "flatten"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
         (
@@ -224,18 +279,19 @@ impl BuiltinSig for Flatten {
 
 pub struct Join;
 impl BuiltinSig for Join {
-    fn name(&self) -> &'static str { "join" }
+    fn name(&self) -> &'static str {
+        "join"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
-        (
-            vec![Ty::List(Box::new(Ty::String)), Ty::String],
-            Ty::String,
-        )
+        (vec![Ty::List(Box::new(Ty::String)), Ty::String], Ty::String)
     }
 }
 
 pub struct CharToInt;
 impl BuiltinSig for CharToInt {
-    fn name(&self) -> &'static str { "char_to_int" }
+    fn name(&self) -> &'static str {
+        "char_to_int"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::String], Ty::Int)
     }
@@ -243,7 +299,9 @@ impl BuiltinSig for CharToInt {
 
 pub struct IntToChar;
 impl BuiltinSig for IntToChar {
-    fn name(&self) -> &'static str { "int_to_char" }
+    fn name(&self) -> &'static str {
+        "int_to_char"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::Int], Ty::String)
     }
@@ -251,19 +309,20 @@ impl BuiltinSig for IntToChar {
 
 pub struct Contains;
 impl BuiltinSig for Contains {
-    fn name(&self) -> &'static str { "contains" }
+    fn name(&self) -> &'static str {
+        "contains"
+    }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
-        (
-            vec![Ty::List(Box::new(t.clone())), t],
-            Ty::Bool,
-        )
+        (vec![Ty::List(Box::new(t.clone())), t], Ty::Bool)
     }
 }
 
 pub struct ContainsStr;
 impl BuiltinSig for ContainsStr {
-    fn name(&self) -> &'static str { "contains_str" }
+    fn name(&self) -> &'static str {
+        "contains_str"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::String, Ty::String], Ty::Bool)
     }
@@ -271,7 +330,9 @@ impl BuiltinSig for ContainsStr {
 
 pub struct Substring;
 impl BuiltinSig for Substring {
-    fn name(&self) -> &'static str { "substring" }
+    fn name(&self) -> &'static str {
+        "substring"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::String, Ty::Int, Ty::Int], Ty::String)
     }
@@ -279,7 +340,9 @@ impl BuiltinSig for Substring {
 
 pub struct LenStr;
 impl BuiltinSig for LenStr {
-    fn name(&self) -> &'static str { "len_str" }
+    fn name(&self) -> &'static str {
+        "len_str"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::String], Ty::Int)
     }
@@ -287,7 +350,9 @@ impl BuiltinSig for LenStr {
 
 pub struct ToBytes;
 impl BuiltinSig for ToBytes {
-    fn name(&self) -> &'static str { "to_bytes" }
+    fn name(&self) -> &'static str {
+        "to_bytes"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::String], Ty::bytes())
     }
@@ -295,7 +360,9 @@ impl BuiltinSig for ToBytes {
 
 pub struct ToUtf8;
 impl BuiltinSig for ToUtf8 {
-    fn name(&self) -> &'static str { "to_utf8" }
+    fn name(&self) -> &'static str {
+        "to_utf8"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::bytes()], Ty::String)
     }
@@ -303,7 +370,9 @@ impl BuiltinSig for ToUtf8 {
 
 pub struct ToUtf8Lossy;
 impl BuiltinSig for ToUtf8Lossy {
-    fn name(&self) -> &'static str { "to_utf8_lossy" }
+    fn name(&self) -> &'static str {
+        "to_utf8_lossy"
+    }
     fn signature(&self, _subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         (vec![Ty::bytes()], Ty::String)
     }

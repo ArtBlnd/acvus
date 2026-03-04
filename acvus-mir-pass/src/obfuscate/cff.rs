@@ -12,8 +12,8 @@
 use acvus_ast::{BinOp, Literal};
 use acvus_mir::ir::{Inst, InstKind, Label};
 use acvus_mir::ty::Ty;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 use super::rewriter::PassState;
 
@@ -62,10 +62,17 @@ fn flatten_shuffle(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -> V
     // Add an exit label after the last chunk so shuffled blocks can jump to it.
     let exit_label = ctx.alloc_label();
     if let Some(last) = chunks.last_mut() {
-        let span = last.insts.last().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+        let span = last
+            .insts
+            .last()
+            .map(|i| i.span)
+            .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
         last.insts.push(Inst {
             span,
-            kind: InstKind::Jump { label: exit_label, args: vec![] },
+            kind: InstKind::Jump {
+                label: exit_label,
+                args: vec![],
+            },
         });
     }
 
@@ -79,10 +86,16 @@ fn flatten_shuffle(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -> V
     }
 
     // Exit label at the end — code after this segment continues here.
-    let span = out.last().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+    let span = out
+        .last()
+        .map(|i| i.span)
+        .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
     out.push(Inst {
         span,
-        kind: InstKind::BlockLabel { label: exit_label, params: vec![] },
+        kind: InstKind::BlockLabel {
+            label: exit_label,
+            params: vec![],
+        },
     });
 
     out
@@ -127,7 +140,10 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
         emission_order.swap(i, j);
     }
 
-    let span = raw_chunks[0].first().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+    let span = raw_chunks[0]
+        .first()
+        .map(|i| i.span)
+        .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
     let state_var = "__cff_state".to_string();
 
     let mut out = Vec::new();
@@ -136,73 +152,188 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
     let mut table_element_vals = Vec::new();
     for &t in &transition {
         let v = ctx.alloc_val(Ty::Int);
-        out.push(Inst { span, kind: InstKind::Const { dst: v, value: Literal::Int(t) } });
+        out.push(Inst {
+            span,
+            kind: InstKind::Const {
+                dst: v,
+                value: Literal::Int(t),
+            },
+        });
         table_element_vals.push(v);
     }
     let v_table = ctx.alloc_val(Ty::List(Box::new(Ty::Int)));
-    out.push(Inst { span, kind: InstKind::MakeList { dst: v_table, elements: table_element_vals } });
+    out.push(Inst {
+        span,
+        kind: InstKind::MakeList {
+            dst: v_table,
+            elements: table_element_vals,
+        },
+    });
 
     // Initialize state to state_ids[0].
     let v_init = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const { dst: v_init, value: Literal::Int(state_ids[0]) } });
-    out.push(Inst { span, kind: InstKind::VarStore { name: state_var.clone(), src: v_init } });
-    out.push(Inst { span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
+    out.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_init,
+            value: Literal::Int(state_ids[0]),
+        },
+    });
+    out.push(Inst {
+        span,
+        kind: InstKind::VarStore {
+            name: state_var.clone(),
+            src: v_init,
+        },
+    });
+    out.push(Inst {
+        span,
+        kind: InstKind::Jump {
+            label: dispatcher_label,
+            args: vec![],
+        },
+    });
 
     // Dispatcher: load state, lookup next via ListGet, store next, then JumpIf chain.
-    out.push(Inst { span, kind: InstKind::BlockLabel { label: dispatcher_label, params: vec![] } });
+    out.push(Inst {
+        span,
+        kind: InstKind::BlockLabel {
+            label: dispatcher_label,
+            params: vec![],
+        },
+    });
 
     let v_state = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::VarLoad { dst: v_state, name: state_var.clone() } });
+    out.push(Inst {
+        span,
+        kind: InstKind::VarLoad {
+            dst: v_state,
+            name: state_var.clone(),
+        },
+    });
 
     let v_next = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::ListGet { dst: v_next, list: v_table, index: v_state } });
-    out.push(Inst { span, kind: InstKind::VarStore { name: state_var.clone(), src: v_next } });
+    out.push(Inst {
+        span,
+        kind: InstKind::ListGet {
+            dst: v_next,
+            list: v_table,
+            index: v_state,
+        },
+    });
+    out.push(Inst {
+        span,
+        kind: InstKind::VarStore {
+            name: state_var.clone(),
+            src: v_next,
+        },
+    });
 
     // JumpIf chain: v_state → chunk labels.
     for (chunk_idx, &sid) in state_ids.iter().enumerate() {
         if chunk_idx == num_chunks - 1 {
-            out.push(Inst { span, kind: InstKind::Jump { label: chunk_labels[chunk_idx], args: vec![] } });
+            out.push(Inst {
+                span,
+                kind: InstKind::Jump {
+                    label: chunk_labels[chunk_idx],
+                    args: vec![],
+                },
+            });
         } else {
             let v_id = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const { dst: v_id, value: Literal::Int(sid) } });
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_id,
+                    value: Literal::Int(sid),
+                },
+            });
             let v_cmp = ctx.alloc_val(Ty::Bool);
-            out.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_cmp, op: BinOp::Eq, left: v_state, right: v_id,
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_cmp,
+                    op: BinOp::Eq,
+                    left: v_state,
+                    right: v_id,
+                },
+            });
             let next_check = ctx.alloc_label();
-            out.push(Inst { span, kind: InstKind::JumpIf {
-                cond: v_cmp,
-                then_label: chunk_labels[chunk_idx], then_args: vec![],
-                else_label: next_check, else_args: vec![],
-            }});
-            out.push(Inst { span, kind: InstKind::BlockLabel { label: next_check, params: vec![] } });
+            out.push(Inst {
+                span,
+                kind: InstKind::JumpIf {
+                    cond: v_cmp,
+                    then_label: chunk_labels[chunk_idx],
+                    then_args: vec![],
+                    else_label: next_check,
+                    else_args: vec![],
+                },
+            });
+            out.push(Inst {
+                span,
+                kind: InstKind::BlockLabel {
+                    label: next_check,
+                    params: vec![],
+                },
+            });
         }
     }
 
     // Emit chunks in shuffled order.
     for &idx in &emission_order {
         let chunk_span = raw_chunks[idx].first().map(|i| i.span).unwrap_or(span);
-        out.push(Inst { span: chunk_span, kind: InstKind::BlockLabel { label: chunk_labels[idx], params: vec![] } });
+        out.push(Inst {
+            span: chunk_span,
+            kind: InstKind::BlockLabel {
+                label: chunk_labels[idx],
+                params: vec![],
+            },
+        });
         out.extend(raw_chunks[idx].iter().cloned());
 
         if idx + 1 < num_chunks {
             // Jump back to dispatcher (next state already stored).
-            out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: dispatcher_label, args: vec![] } });
+            out.push(Inst {
+                span: chunk_span,
+                kind: InstKind::Jump {
+                    label: dispatcher_label,
+                    args: vec![],
+                },
+            });
         } else {
-            out.push(Inst { span: chunk_span, kind: InstKind::Jump { label: exit_label, args: vec![] } });
+            out.push(Inst {
+                span: chunk_span,
+                kind: InstKind::Jump {
+                    label: exit_label,
+                    args: vec![],
+                },
+            });
         }
     }
 
-    out.push(Inst { span, kind: InstKind::BlockLabel { label: exit_label, params: vec![] } });
+    out.push(Inst {
+        span,
+        kind: InstKind::BlockLabel {
+            label: exit_label,
+            params: vec![],
+        },
+    });
     out
 }
 
 fn emit_chunk(out: &mut Vec<Inst>, chunk: Chunk) {
     if let Some(label) = chunk.label {
-        let span = chunk.insts.first().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+        let span = chunk
+            .insts
+            .first()
+            .map(|i| i.span)
+            .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
         out.push(Inst {
             span,
-            kind: InstKind::BlockLabel { label, params: vec![] },
+            kind: InstKind::BlockLabel {
+                label,
+                params: vec![],
+            },
         });
     }
     out.extend(chunk.insts);
@@ -266,11 +397,7 @@ fn parse_segments(insts: Vec<Inst>) -> Vec<Segment> {
 }
 
 /// Split a straight-line segment into labeled chunks connected by jumps.
-fn split_segment(
-    insts: Vec<Inst>,
-    ctx: &mut PassState,
-    rng: &mut StdRng,
-) -> Vec<Chunk> {
+fn split_segment(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -> Vec<Chunk> {
     let mut chunks = Vec::new();
     let mut remaining = &insts[..];
 
@@ -300,10 +427,17 @@ fn split_segment(
     for i in 0..chunks.len() {
         if i + 1 < chunks.len() {
             let next_label = chunks[i + 1].label.unwrap();
-            let span = chunks[i].insts.last().map(|i| i.span).unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+            let span = chunks[i]
+                .insts
+                .last()
+                .map(|i| i.span)
+                .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
             chunks[i].insts.push(Inst {
                 span,
-                kind: InstKind::Jump { label: next_label, args: vec![] },
+                kind: InstKind::Jump {
+                    label: next_label,
+                    args: vec![],
+                },
             });
         }
     }
@@ -349,17 +483,32 @@ mod tests {
         let insts: Vec<Inst> = (0..10)
             .map(|i| Inst {
                 span: span(),
-                kind: InstKind::Const { dst: ValueId(i), value: Literal::Int(i as i64) },
+                kind: InstKind::Const {
+                    dst: ValueId(i),
+                    value: Literal::Int(i as i64),
+                },
             })
             .collect();
 
         let result = flatten(insts, &mut ctx, &mut rng);
 
-        let jump_count = result.iter().filter(|i| matches!(i.kind, InstKind::Jump { .. })).count();
-        assert!(jump_count >= 1, "expected at least 1 Jump, got {jump_count}");
+        let jump_count = result
+            .iter()
+            .filter(|i| matches!(i.kind, InstKind::Jump { .. }))
+            .count();
+        assert!(
+            jump_count >= 1,
+            "expected at least 1 Jump, got {jump_count}"
+        );
 
-        let label_count = result.iter().filter(|i| matches!(i.kind, InstKind::BlockLabel { .. })).count();
-        assert!(label_count >= 1, "expected at least 1 BlockLabel, got {label_count}");
+        let label_count = result
+            .iter()
+            .filter(|i| matches!(i.kind, InstKind::BlockLabel { .. }))
+            .count();
+        assert!(
+            label_count >= 1,
+            "expected at least 1 BlockLabel, got {label_count}"
+        );
     }
 
     #[test]
@@ -368,13 +517,28 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let insts = vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(2) } },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(1),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::Int(2),
+                },
+            },
         ];
 
         let result = flatten(insts.clone(), &mut ctx, &mut rng);
 
-        let jump_count = result.iter().filter(|i| matches!(i.kind, InstKind::Jump { .. })).count();
+        let jump_count = result
+            .iter()
+            .filter(|i| matches!(i.kind, InstKind::Jump { .. }))
+            .count();
         assert_eq!(jump_count, 0);
     }
 
@@ -388,14 +552,21 @@ mod tests {
             let insts: Vec<Inst> = (0..10)
                 .map(|i| Inst {
                     span: span(),
-                    kind: InstKind::Const { dst: ValueId(i), value: Literal::Int(i as i64) },
+                    kind: InstKind::Const {
+                        dst: ValueId(i),
+                        value: Literal::Int(i as i64),
+                    },
                 })
                 .collect();
 
             let result = flatten(insts, &mut ctx, &mut rng);
 
-            let has_var_store = result.iter().any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__cff_state"));
-            let has_var_load = result.iter().any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__cff_state"));
+            let has_var_store = result.iter().any(
+                |i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__cff_state"),
+            );
+            let has_var_load = result.iter().any(
+                |i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__cff_state"),
+            );
 
             if has_var_store {
                 // If dispatcher was used, VarLoad must also be present.

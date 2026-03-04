@@ -252,21 +252,27 @@ mod tests {
     #[test]
     fn script_single_expr() {
         let module = compile_script_test("@data");
-        let has_yield = module.main.insts.iter().any(|i| {
-            matches!(&i.kind, crate::ir::InstKind::Yield(_))
-        });
+        let has_yield = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, crate::ir::InstKind::Yield(_)));
         assert!(has_yield);
     }
 
     #[test]
     fn script_bind_and_tail() {
         let module = compile_script_test("x = @data; x");
-        let has_context_load = module.main.insts.iter().any(|i| {
-            matches!(&i.kind, crate::ir::InstKind::ContextLoad { .. })
-        });
-        let has_yield = module.main.insts.iter().any(|i| {
-            matches!(&i.kind, crate::ir::InstKind::Yield(_))
-        });
+        let has_context_load = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, crate::ir::InstKind::ContextLoad { .. }));
+        let has_yield = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, crate::ir::InstKind::Yield(_)));
         assert!(has_context_load);
         assert!(has_yield);
     }
@@ -274,9 +280,11 @@ mod tests {
     #[test]
     fn script_trailing_semicolon_no_yield() {
         let module = compile_script_test("x = @data;");
-        let has_yield = module.main.insts.iter().any(|i| {
-            matches!(&i.kind, crate::ir::InstKind::Yield(_))
-        });
+        let has_yield = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, crate::ir::InstKind::Yield(_)));
         assert!(!has_yield);
     }
 }

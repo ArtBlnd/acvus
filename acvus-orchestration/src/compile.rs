@@ -1,14 +1,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use acvus_ast::Literal;
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
-use acvus_ast::Literal;
 use acvus_mir_pass::AnalysisPass;
-use acvus_mir_pass::analysis::reachable_context::{ContextKeyPartition, partition_context_keys, reachable_context_keys};
+use acvus_mir_pass::analysis::reachable_context::{
+    ContextKeyPartition, partition_context_keys, reachable_context_keys,
+};
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 
-use crate::dsl::{GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolBinding};
+use crate::dsl::{
+    GenerationParams, MessageSpec, NodeKind, NodeSpec, Strategy, StrategyMode, ToolBinding,
+};
 use crate::error::{OrchError, OrchErrorKind};
 use crate::executor::value_to_literal;
 use crate::storage::Storage;
@@ -85,9 +89,7 @@ pub enum CompiledMessage {
     Block(CompiledBlock),
     Iterator {
         expr: CompiledScript,
-        block: Option<CompiledBlock>,
         slice: Option<Vec<i64>>,
-        bind: Option<String>,
         role: Option<String>,
         token_budget: Option<crate::dsl::TokenBudget>,
     },
@@ -124,14 +126,8 @@ impl CompiledNode {
     ) -> HashSet<String> {
         let mut needed = HashSet::new();
         for msg in self.kind.messages() {
-            match msg {
-                CompiledMessage::Block(block) => {
-                    needed.extend(block.required_context_keys(known));
-                }
-                CompiledMessage::Iterator { block: Some(block), .. } => {
-                    needed.extend(block.required_context_keys(known));
-                }
-                _ => {}
+            if let CompiledMessage::Block(block) = msg {
+                needed.extend(block.required_context_keys(known));
             }
         }
         if let Some(bind_script) = &self.bind_module {
@@ -170,26 +166,22 @@ impl CompiledNode {
         let known = self.known_from_storage(storage);
         let mut merged = ContextKeyPartition::default();
         for msg in self.kind.messages() {
-            match msg {
-                CompiledMessage::Block(block) => {
-                    let p = partition_context_keys(&block.module, &known, &block.val_def);
-                    merged.eager.extend(p.eager);
-                    merged.lazy.extend(p.lazy);
-                }
-                CompiledMessage::Iterator { block: Some(block), .. } => {
-                    let p = partition_context_keys(&block.module, &known, &block.val_def);
-                    merged.eager.extend(p.eager);
-                    merged.lazy.extend(p.lazy);
-                }
-                _ => {}
+            if let CompiledMessage::Block(block) = msg {
+                let p = partition_context_keys(&block.module, &known, &block.val_def);
+                merged.eager.extend(p.eager);
+                merged.lazy.extend(p.lazy);
             }
         }
         if let Some(bind_script) = &self.bind_module {
             // Script has no branch pruning — all context keys are eager.
-            merged.eager.extend(bind_script.context_keys.iter().cloned());
+            merged
+                .eager
+                .extend(bind_script.context_keys.iter().cloned());
         }
         merged.eager.retain(|k| !resolvable.contains(k));
-        merged.lazy.retain(|k| !resolvable.contains(k) && !merged.eager.contains(k));
+        merged
+            .lazy
+            .retain(|k| !resolvable.contains(k) && !merged.eager.contains(k));
         merged
     }
 
@@ -228,24 +220,38 @@ pub fn compile_script(
             })
         })?;
     let context_keys = extract_context_keys(&module);
-    Ok((CompiledScript { module, context_keys }, tail_ty))
+    Ok((
+        CompiledScript {
+            module,
+            context_keys,
+        },
+        tail_ty,
+    ))
 }
 
 // ── Script output type expectations ──────────────────────────────────
 //
-//   Field          Expected type   Notes
-//   ─────────────  ──────────────  ──────────────────────────────────
-//   iterator       List<T>         T becomes the element type for body
-//   cache_key      String
-//   history store  (any)           type inferred → @history.{node} = List<T>
-//   bind script    (any)
+//   Field               Expected type            Notes
+//   ──────────────────  ───────────────────────  ──────────────────────────
+//   iterator + body     List<T>                  T bound to context for body
+//   iterator (no body)  List<MESSAGE_ELEM_TY>    elements used as messages directly
+//   cache_key           String
+//   history store       (any)                    type inferred → @history.{node} = List<T>
+//   bind script         (any)
 //
 
+/// The element type that bodyless iterators must produce.
+/// Each element is used directly as a message: `{role, content, content_type}`.
+fn message_elem_ty() -> Ty {
+    Ty::Object(BTreeMap::from([
+        ("role".into(), Ty::String),
+        ("content".into(), Ty::String),
+        ("content_type".into(), Ty::String),
+    ]))
+}
+
 /// Expect the tail type to be `List<T>`. Returns the inner `T`.
-fn expect_list(
-    context: &str,
-    ty: Ty,
-) -> Result<Ty, OrchError> {
+fn expect_list(context: &str, ty: Ty) -> Result<Ty, OrchError> {
     match ty {
         Ty::List(inner) => Ok(*inner),
         Ty::Error => Ok(Ty::Error),
@@ -258,11 +264,7 @@ fn expect_list(
 }
 
 /// Expect the tail type to be exactly `expected`.
-fn expect_ty(
-    context: &str,
-    ty: &Ty,
-    expected: &Ty,
-) -> Result<(), OrchError> {
+fn expect_ty(context: &str, ty: &Ty, expected: &Ty) -> Result<(), OrchError> {
     if matches!(ty, Ty::Error) || ty == expected {
         Ok(())
     } else {
@@ -288,14 +290,13 @@ pub fn compile_template(
         })
     })?;
 
-    let (module, _hints) = acvus_mir::compile(&ast, context_types.clone(), registry).map_err(
-        |errs| {
+    let (module, _hints) =
+        acvus_mir::compile(&ast, context_types.clone(), registry).map_err(|errs| {
             OrchError::new(OrchErrorKind::TemplateCompile {
                 block: block_idx,
                 errors: errs,
             })
-        },
-    )?;
+        })?;
 
     let context_keys = extract_context_keys(&module);
     let val_def = ValDefMapAnalysis.run(&module, ());
@@ -321,64 +322,49 @@ fn compile_messages(
     for (i, msg) in messages.iter().enumerate() {
         match msg {
             MessageSpec::Block { role, source } => {
-                match compile_template(source, i, context_types, registry) {
-                    Ok(block) => {
-                        all_context_keys.extend(block.context_keys.iter().cloned());
-                        compiled_messages.push(CompiledMessage::Block(CompiledBlock {
-                            role: role.clone(),
-                            ..block
-                        }));
-                    }
-                    Err(e) => errors.push(e),
-                }
-            }
-            MessageSpec::Iterator { key, source, slice, bind, role, token_budget } => {
-                let (expr, elem_ty) = match compile_script(key, context_types, registry) {
-                    Ok((script, tail_ty)) => {
-                        match expect_list(&format!("iterator (block {i})"), tail_ty) {
-                            Ok(inner) => (script, inner),
-                            Err(e) => {
-                                errors.push(e);
-                                continue;
-                            }
-                        }
-                    }
+                let block = match compile_template(source, i, context_types, registry) {
+                    Ok(b) => b,
                     Err(e) => {
                         errors.push(e);
                         continue;
                     }
                 };
-
-                let block = if let Some(src) = source {
-                    let mut iter_types = context_types.clone();
-                    if let Some(bind_name) = bind {
-                        iter_types.insert(bind_name.clone(), elem_ty.clone());
-                    } else {
-                        // destructure element fields into context
-                        if let Ty::Object(fields) = &elem_ty {
-                            for (k, v) in fields {
-                                iter_types.insert(k.clone(), v.clone());
-                            }
-                        }
+                all_context_keys.extend(block.context_keys.iter().cloned());
+                compiled_messages.push(CompiledMessage::Block(CompiledBlock {
+                    role: role.clone(),
+                    ..block
+                }));
+            }
+            MessageSpec::Iterator {
+                key,
+                slice,
+                role,
+                token_budget,
+            } => {
+                let ctx = format!("iterator (block {i})");
+                let (expr, tail_ty) = match compile_script(key, context_types, registry) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
                     }
-
-                    match compile_template(src, i, &iter_types, registry) {
-                        Ok(block) => Some(block),
-                        Err(e) => {
-                            errors.push(e);
-                            None
-                        }
-                    }
-                } else {
-                    None
                 };
+                let elem_ty = match expect_list(&ctx, tail_ty) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
+                    }
+                };
+                if let Err(e) = expect_ty(&ctx, &elem_ty, &message_elem_ty()) {
+                    errors.push(e);
+                    continue;
+                }
 
                 all_context_keys.extend(expr.context_keys.iter().cloned());
                 compiled_messages.push(CompiledMessage::Iterator {
                     expr,
-                    block,
                     slice: slice.clone(),
-                    bind: bind.clone(),
                     role: role.clone(),
                     token_budget: token_budget.clone(),
                 });
@@ -393,23 +379,24 @@ fn compile_messages(
 }
 
 /// Compile tool bindings, converting param type name strings to `Ty`.
-fn compile_tool_bindings(tools: &[ToolBinding]) -> Result<Vec<CompiledToolBinding>, Vec<OrchError>> {
+fn compile_tool_bindings(
+    tools: &[ToolBinding],
+) -> Result<Vec<CompiledToolBinding>, Vec<OrchError>> {
     let mut compiled = Vec::new();
     let mut errors = Vec::new();
 
     for tool in tools {
         let mut params = HashMap::new();
         for (param_name, type_name) in &tool.params {
-            match parse_type_name(type_name) {
-                Some(ty) => { params.insert(param_name.clone(), ty); }
-                None => {
-                    errors.push(OrchError::new(OrchErrorKind::ToolParamType {
-                        tool: tool.name.clone(),
-                        param: param_name.clone(),
-                        type_name: type_name.clone(),
-                    }));
-                }
-            }
+            let Some(ty) = parse_type_name(type_name) else {
+                errors.push(OrchError::new(OrchErrorKind::ToolParamType {
+                    tool: tool.name.clone(),
+                    param: param_name.clone(),
+                    type_name: type_name.clone(),
+                }));
+                continue;
+            };
+            params.insert(param_name.clone(), ty);
         }
         compiled.push(CompiledToolBinding {
             name: tool.name.clone(),
@@ -447,8 +434,8 @@ pub fn compile_node(
     // Compile bind script for if-modified strategy
     let bind_module = if matches!(spec.strategy.mode, StrategyMode::IfModified) {
         if let Some(bind_src) = &spec.strategy.bind_source {
-            let (script, _ty) = compile_script(bind_src, context_types, registry)
-                .map_err(|e| vec![e])?;
+            let (script, _ty) =
+                compile_script(bind_src, context_types, registry).map_err(|e| vec![e])?;
             Some(script)
         } else {
             None
@@ -459,24 +446,28 @@ pub fn compile_node(
 
     let (kind, mut all_context_keys) = match &spec.kind {
         NodeKind::Plain { source } => {
-            match compile_template(source, 0, context_types, registry) {
-                Ok(block) => {
-                    let keys = block.context_keys.clone();
-                    (CompiledNodeKind::Plain { block }, keys)
-                }
-                Err(e) => return Err(vec![e]),
-            }
+            let block =
+                compile_template(source, 0, context_types, registry).map_err(|e| vec![e])?;
+            let keys = block.context_keys.clone();
+            (CompiledNodeKind::Plain { block }, keys)
         }
-        NodeKind::Llm { provider, model, messages, tools, generation, cache_key, max_tokens } => {
+        NodeKind::Llm {
+            provider,
+            model,
+            messages,
+            tools,
+            generation,
+            cache_key,
+            max_tokens,
+        } => {
             let (compiled_messages, keys) = compile_messages(messages, context_types, registry)?;
             let compiled_tools = compile_tool_bindings(tools)?;
             let mut all_keys = keys;
             let compiled_cache_key = match cache_key {
                 Some(ck) => {
-                    let (expr, ck_ty) = compile_script(ck, context_types, registry)
-                        .map_err(|e| vec![e])?;
-                    expect_ty("cache_key", &ck_ty, &Ty::String)
-                        .map_err(|e| vec![e])?;
+                    let (expr, ck_ty) =
+                        compile_script(ck, context_types, registry).map_err(|e| vec![e])?;
+                    expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
                     all_keys.extend(expr.context_keys.iter().cloned());
                     Some(expr)
                 }
@@ -495,7 +486,13 @@ pub fn compile_node(
                 all_keys,
             )
         }
-        NodeKind::LlmCache { provider, model, messages, ttl, cache_config } => {
+        NodeKind::LlmCache {
+            provider,
+            model,
+            messages,
+            ttl,
+            cache_config,
+        } => {
             let (compiled_messages, keys) = compile_messages(messages, context_types, registry)?;
             (
                 CompiledNodeKind::LlmCache {
@@ -518,8 +515,8 @@ pub fn compile_node(
     // Compile history store script with type checking.
     let history = match &spec.history {
         Some(hs) => {
-            let (store, _ty) = compile_script(&hs.store, context_types, registry)
-                .map_err(|e| vec![e])?;
+            let (store, _ty) =
+                compile_script(&hs.store, context_types, registry).map_err(|e| vec![e])?;
             all_context_keys.extend(store.context_keys.iter().cloned());
             Some(CompiledHistory { store })
         }
@@ -555,7 +552,11 @@ pub fn compile_nodes(
     // @history.{node} = List<store_type>.
     let history_specs: Vec<(&str, &str)> = specs
         .iter()
-        .filter_map(|s| s.history.as_ref().map(|h| (s.name.as_str(), h.store.as_str())))
+        .filter_map(|s| {
+            s.history
+                .as_ref()
+                .map(|h| (s.name.as_str(), h.store.as_str()))
+        })
         .collect();
     if !history_specs.is_empty() {
         // Build a temporary context_types for store type inference.
@@ -563,15 +564,10 @@ pub fn compile_nodes(
         let store_ctx = context_types.clone();
         let mut history_fields = BTreeMap::new();
         for &(name, store_src) in &history_specs {
-            match compile_script(store_src, &store_ctx, registry) {
-                Ok((_script, ty)) => {
-                    history_fields.insert(name.to_string(), Ty::List(Box::new(ty)));
-                }
-                Err(_) => {
-                    // Fallback: type check failed, use Error type (unifies with anything)
-                    history_fields.insert(name.to_string(), Ty::List(Box::new(Ty::Error)));
-                }
-            }
+            let ty = compile_script(store_src, &store_ctx, registry)
+                .map(|(_, ty)| ty)
+                .unwrap_or(Ty::Error);
+            history_fields.insert(name.to_string(), Ty::List(Box::new(ty)));
         }
         context_types.insert("history".into(), Ty::Object(history_fields));
         context_types.insert("index".into(), Ty::Int);
@@ -582,19 +578,19 @@ pub fn compile_nodes(
     // available to that node at compile time.
     let mut tool_param_types: HashMap<String, HashMap<String, Ty>> = HashMap::new();
     for spec in specs {
-        if let NodeKind::Llm { tools, .. } = &spec.kind {
-            for tool in tools {
-                let mut params = HashMap::new();
-                for (param_name, type_name) in &tool.params {
-                    if let Some(ty) = parse_type_name(type_name) {
-                        params.insert(param_name.clone(), ty);
-                    }
-                }
-                tool_param_types
-                    .entry(tool.node.clone())
-                    .or_default()
-                    .extend(params);
-            }
+        let NodeKind::Llm { tools, .. } = &spec.kind else {
+            continue;
+        };
+        for tool in tools {
+            let params: HashMap<String, Ty> = tool
+                .params
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), parse_type_name(v)?)))
+                .collect();
+            tool_param_types
+                .entry(tool.node.clone())
+                .or_default()
+                .extend(params);
         }
     }
 
@@ -607,10 +603,12 @@ pub fn compile_nodes(
         }
         match compile_node(spec, &node_ctx, registry) {
             Ok(node) => nodes.push(node),
-            Err(errs) => errors.extend(errs),
+            Err(errs) => {
+                errors.extend(errs);
+                continue;
+            }
         }
     }
-
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -630,7 +628,11 @@ pub fn compile_nodes(
         }
     }
 
-    if errors.is_empty() { Ok(nodes) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(nodes)
+    } else {
+        Err(errors)
+    }
 }
 
 /// Extract all context keys referenced by `ContextLoad` instructions in a module.

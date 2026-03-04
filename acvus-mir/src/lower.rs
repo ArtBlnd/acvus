@@ -8,7 +8,7 @@ use acvus_ast::{
 
 use crate::builtins::builtins;
 use crate::hints::{Hint, HintTable};
-use crate::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValueId, ValOrigin};
+use crate::ir::{ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use crate::ty::Ty;
 use crate::typeck::TypeMap;
 
@@ -261,7 +261,13 @@ impl Lowerer {
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::String);
                 self.set_origin(dst, ValOrigin::Expr);
-                self.emit_inst(*span, InstKind::Const { dst, value: Literal::String(value.clone()) });
+                self.emit_inst(
+                    *span,
+                    InstKind::Const {
+                        dst,
+                        value: Literal::String(value.clone()),
+                    },
+                );
                 self.emit_inst(*span, InstKind::Yield(dst));
             }
             Node::Comment { .. } => {
@@ -289,7 +295,13 @@ impl Lowerer {
                 let ty = self.type_of_span(*span);
                 self.set_val_type(dst, ty);
                 self.set_origin(dst, ValOrigin::Expr);
-                self.emit_inst(*span, InstKind::Const { dst, value: value.clone() });
+                self.emit_inst(
+                    *span,
+                    InstKind::Const {
+                        dst,
+                        value: value.clone(),
+                    },
+                );
                 dst
             }
 
@@ -454,14 +466,9 @@ impl Lowerer {
                 }
             }
 
-            Expr::Lambda {
-                params,
-                body,
-                span,
-            } => {
+            Expr::Lambda { params, body, span } => {
                 // Capture analysis: find free variables in body.
-                let param_names: HashSet<String> =
-                    params.iter().map(|p| p.name.clone()).collect();
+                let param_names: HashSet<String> = params.iter().map(|p| p.name.clone()).collect();
                 let free_vars = self.free_vars_in_expr(body, &param_names);
 
                 let capture_regs: Vec<ValueId> = free_vars
@@ -484,9 +491,10 @@ impl Lowerer {
                     sub_scopes[0].insert(name.clone(), reg);
                     // Copy capture type from outer body.
                     if let Some(outer_reg) = capture_regs.get(i)
-                        && let Some(ty) = self.body.val_types.get(outer_reg) {
-                            sub_body.val_types.insert(reg, ty.clone());
-                        }
+                        && let Some(ty) = self.body.val_types.get(outer_reg)
+                    {
+                        sub_body.val_types.insert(reg, ty.clone());
+                    }
                 }
 
                 // Params follow captures.
@@ -621,7 +629,13 @@ impl Lowerer {
                 let dst = self.alloc_val();
                 let ty = self.type_of_span(*span);
                 self.set_val_type(dst, ty);
-                self.emit_inst(*span, InstKind::MakeTuple { dst, elements: elem_vals });
+                self.emit_inst(
+                    *span,
+                    InstKind::MakeTuple {
+                        dst,
+                        elements: elem_vals,
+                    },
+                );
                 dst
             }
 
@@ -642,7 +656,11 @@ impl Lowerer {
                 self.lower_expr(last)
             }
 
-            Expr::ContextCall { name, bindings, span } => {
+            Expr::ContextCall {
+                name,
+                bindings,
+                span,
+            } => {
                 let binding_vals: Vec<(String, ValueId)> = bindings
                     .iter()
                     .map(|(k, expr)| (k.clone(), self.lower_expr(expr)))
@@ -671,7 +689,11 @@ impl Lowerer {
         self.set_val_type(dst, ty);
 
         let func_name = match func {
-            Expr::Ident { name, ref_kind: RefKind::Value, .. } => Some(name.clone()),
+            Expr::Ident {
+                name,
+                ref_kind: RefKind::Value,
+                ..
+            } => Some(name.clone()),
             _ => None,
         };
 
@@ -749,29 +771,30 @@ impl Lowerer {
 
     fn lower_match_block(&mut self, mb: &MatchBlock) {
         // Check for body-less binding shorthand (variable write or value binding).
-        if mb.arms.len() == 1 && mb.arms[0].body.is_empty()
+        if mb.arms.len() == 1
+            && mb.arms[0].body.is_empty()
             && let Pattern::Binding {
                 name,
                 ref_kind,
                 span: pat_span,
             } = &mb.arms[0].pattern
-            {
-                let src = self.lower_expr(&mb.source);
-                if *ref_kind == RefKind::Variable {
-                    // Variable write.
-                    self.emit_inst(
-                        *pat_span,
-                        InstKind::VarStore {
-                            name: name.clone(),
-                            src,
-                        },
-                    );
-                } else {
-                    // Local variable binding.
-                    self.define_var(name, src);
-                }
-                return;
+        {
+            let src = self.lower_expr(&mb.source);
+            if *ref_kind == RefKind::Variable {
+                // Variable write.
+                self.emit_inst(
+                    *pat_span,
+                    InstKind::VarStore {
+                        name: name.clone(),
+                        src,
+                    },
+                );
+            } else {
+                // Local variable binding.
+                self.define_var(name, src);
             }
+            return;
+        }
 
         // Pre-compute indent-adjusted arm bodies and catch-all body.
         let adjusted_arm_bodies: Option<Vec<Vec<Node>>> = mb.indent.as_ref().map(|modifier| {
@@ -806,7 +829,13 @@ impl Lowerer {
                 catch_all_label
             };
 
-            self.emit_inst(arm.tag_span, InstKind::BlockLabel { label: arm_label, params: vec![] });
+            self.emit_inst(
+                arm.tag_span,
+                InstKind::BlockLabel {
+                    label: arm_label,
+                    params: vec![],
+                },
+            );
             self.push_scope();
 
             // Test pattern against source value.
@@ -824,7 +853,13 @@ impl Lowerer {
                     else_args: vec![],
                 },
             );
-            self.emit_inst(arm.tag_span, InstKind::BlockLabel { label: arm_body_label, params: vec![] });
+            self.emit_inst(
+                arm.tag_span,
+                InstKind::BlockLabel {
+                    label: arm_body_label,
+                    params: vec![],
+                },
+            );
 
             // Bind pattern variables.
             self.lower_pattern_bind(&arm.pattern, source_reg, arm.tag_span);
@@ -840,11 +875,23 @@ impl Lowerer {
             self.hoist_bodyless_bindings();
             self.pop_scope();
             // After body, jump to end (no loop).
-            self.emit_inst(arm.tag_span, InstKind::Jump { label: end_label, args: vec![] });
+            self.emit_inst(
+                arm.tag_span,
+                InstKind::Jump {
+                    label: end_label,
+                    args: vec![],
+                },
+            );
         }
 
         // Catch-all block.
-        self.emit_inst(mb.span, InstKind::BlockLabel { label: catch_all_label, params: vec![] });
+        self.emit_inst(
+            mb.span,
+            InstKind::BlockLabel {
+                label: catch_all_label,
+                params: vec![],
+            },
+        );
         if let Some(catch_all) = &mb.catch_all {
             self.push_scope();
             let body = adjusted_catch_all_body
@@ -855,7 +902,13 @@ impl Lowerer {
             self.pop_scope();
         }
 
-        self.emit_inst(mb.span, InstKind::BlockLabel { label: end_label, params: vec![] });
+        self.emit_inst(
+            mb.span,
+            InstKind::BlockLabel {
+                label: end_label,
+                params: vec![],
+            },
+        );
     }
 
     // --- Iter block lowering ---
@@ -866,12 +919,11 @@ impl Lowerer {
             .indent
             .as_ref()
             .map(|modifier| apply_indent_to_nodes(&ib.body, modifier));
-        let adjusted_catch_all_body: Option<Vec<Node>> =
-            ib.indent.as_ref().and_then(|modifier| {
-                ib.catch_all
-                    .as_ref()
-                    .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
-            });
+        let adjusted_catch_all_body: Option<Vec<Node>> = ib.indent.as_ref().and_then(|modifier| {
+            ib.catch_all
+                .as_ref()
+                .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
+        });
 
         let source_reg = self.lower_expr(&ib.source);
 
@@ -1061,10 +1113,7 @@ impl Lowerer {
             }
 
             Pattern::List {
-                head,
-                rest,
-                tail,
-                ..
+                head, rest, tail, ..
             } => {
                 let min_len = head.len() + tail.len();
                 let exact = rest.is_none();
@@ -1097,7 +1146,13 @@ impl Lowerer {
                     },
                 );
 
-                self.emit_inst(span, InstKind::BlockLabel { label: check_elems_label, params: vec![] });
+                self.emit_inst(
+                    span,
+                    InstKind::BlockLabel {
+                        label: check_elems_label,
+                        params: vec![],
+                    },
+                );
 
                 // Check each head element.
                 let mut all_ok = len_ok;
@@ -1160,10 +1215,22 @@ impl Lowerer {
                 let result_param = self.alloc_val();
                 self.set_val_type(result_param, Ty::Bool);
 
-                self.emit_inst(span, InstKind::Jump { label: result_label, args: vec![all_ok] });
+                self.emit_inst(
+                    span,
+                    InstKind::Jump {
+                        label: result_label,
+                        args: vec![all_ok],
+                    },
+                );
 
                 // Fail path.
-                self.emit_inst(span, InstKind::BlockLabel { label: fail_label, params: vec![] });
+                self.emit_inst(
+                    span,
+                    InstKind::BlockLabel {
+                        label: fail_label,
+                        params: vec![],
+                    },
+                );
                 let false_reg = self.alloc_val();
                 self.set_val_type(false_reg, Ty::Bool);
                 self.emit_inst(
@@ -1173,10 +1240,22 @@ impl Lowerer {
                         value: Literal::Bool(false),
                     },
                 );
-                self.emit_inst(span, InstKind::Jump { label: result_label, args: vec![false_reg] });
+                self.emit_inst(
+                    span,
+                    InstKind::Jump {
+                        label: result_label,
+                        args: vec![false_reg],
+                    },
+                );
 
                 // Result: block parameter receives value from both paths.
-                self.emit_inst(span, InstKind::BlockLabel { label: result_label, params: vec![result_param] });
+                self.emit_inst(
+                    span,
+                    InstKind::BlockLabel {
+                        label: result_label,
+                        params: vec![result_param],
+                    },
+                );
                 result_param
             }
 
@@ -1331,11 +1410,7 @@ impl Lowerer {
     /// Emit instructions that bind pattern variables from a matched value.
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
-            Pattern::Binding {
-                name,
-                ref_kind,
-                ..
-            } => {
+            Pattern::Binding { name, ref_kind, .. } => {
                 // Variable path — value already stored via pattern_test or body-less binding.
                 // No local define; lookup will fall through to VarLoad.
                 if *ref_kind == RefKind::Value {
@@ -1349,10 +1424,7 @@ impl Lowerer {
             }
 
             Pattern::List {
-                head,
-                rest,
-                tail,
-                ..
+                head, rest, tail, ..
             } => {
                 let elem_ty = self.list_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
@@ -1497,9 +1569,7 @@ impl Lowerer {
             Expr::Paren { inner, .. } => {
                 self.collect_free_vars(inner, bound, free, seen);
             }
-            Expr::List {
-                head, tail, ..
-            } => {
+            Expr::List { head, tail, .. } => {
                 for e in head.iter().chain(tail.iter()) {
                     self.collect_free_vars(e, bound, free, seen);
                 }
@@ -1553,7 +1623,9 @@ mod tests {
         let template = acvus_ast::parse(source).expect("parse failed");
         let context_names: HashSet<String> = context.keys().cloned().collect();
         let checker = TypeChecker::new(context, registry);
-        let type_map = checker.check_template(&template).expect("type check failed");
+        let type_map = checker
+            .check_template(&template)
+            .expect("type check failed");
         let lowerer = Lowerer::new(type_map, context_names);
         let (module, _hints) = lowerer.lower_template(&template);
         module
@@ -1575,18 +1647,17 @@ mod tests {
         let module = lower(r#"{{ "hello" }}"#);
         assert!(module.main.insts.len() >= 2);
         assert!(matches!(&module.main.insts[0].kind, InstKind::Const { .. }));
-        assert!(matches!(
-            &module.main.insts[1].kind,
-            InstKind::Yield(_)
-        ));
+        assert!(matches!(&module.main.insts[1].kind, InstKind::Yield(_)));
     }
 
     #[test]
     fn lower_var_write() {
         let module = lower("{{ $count = 42 }}");
-        let has_store = module.main.insts.iter().any(|i| {
-            matches!(&i.kind, InstKind::VarStore { name, .. } if name == "count")
-        });
+        let has_store = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "count"));
         assert!(has_store);
     }
 
@@ -1638,11 +1709,7 @@ mod tests {
     #[test]
     fn lower_builtin_call() {
         let context = HashMap::from([("n".into(), Ty::Int)]);
-        let module = lower_with(
-            r#"{{ @n | to_string }}"#,
-            context,
-            &ExternRegistry::new(),
-        );
+        let module = lower_with(r#"{{ @n | to_string }}"#, context, &ExternRegistry::new());
         let has_call = module
             .main
             .insts
@@ -1696,7 +1763,10 @@ mod tests {
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::Const { value: Literal::String(s), .. } => Some(s.as_str()),
+                InstKind::Const {
+                    value: Literal::String(s),
+                    ..
+                } => Some(s.as_str()),
                 _ => None,
             })
             .collect();
@@ -1713,7 +1783,10 @@ mod tests {
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::Const { value: Literal::String(s), .. } => Some(s.as_str()),
+                InstKind::Const {
+                    value: Literal::String(s),
+                    ..
+                } => Some(s.as_str()),
                 _ => None,
             })
             .collect();

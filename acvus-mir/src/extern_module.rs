@@ -54,11 +54,14 @@ impl ExternModule {
             "duplicate function in ExternModule '{}': {name}",
             self.name,
         );
-        self.fns.insert(name, ExternFnDef {
-            params,
-            ret,
-            effectful,
-        });
+        self.fns.insert(
+            name,
+            ExternFnDef {
+                params,
+                ret,
+                effectful,
+            },
+        );
         self
     }
 

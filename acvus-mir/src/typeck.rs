@@ -31,10 +31,7 @@ pub struct TypeChecker {
 }
 
 impl TypeChecker {
-    pub fn new(
-        context_types: HashMap<String, Ty>,
-        registry: &ExternRegistry,
-    ) -> Self {
+    pub fn new(context_types: HashMap<String, Ty>, registry: &ExternRegistry) -> Self {
         Self {
             scopes: vec![HashMap::new()],
             context_types,
@@ -60,7 +57,10 @@ impl TypeChecker {
         Ok(resolved)
     }
 
-    pub fn check_script(mut self, script: &acvus_ast::Script) -> Result<(TypeMap, Ty), Vec<MirError>> {
+    pub fn check_script(
+        mut self,
+        script: &acvus_ast::Script,
+    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
         for stmt in &script.stmts {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
@@ -250,7 +250,6 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Ty {
-        
         match expr {
             Expr::Literal { value, span } => {
                 let ty = match value {
@@ -279,7 +278,7 @@ impl TypeChecker {
                             }
                             Ty::List(Box::new(self.subst.resolve(&first_ty)))
                         }
-                    },
+                    }
                 };
                 self.record(*span, ty.clone());
                 ty
@@ -331,9 +330,16 @@ impl TypeChecker {
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if lt.is_error() || rt.is_error() {
                     let ty = match op {
-                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-                        | BinOp::Xor | BinOp::BitAnd | BinOp::BitOr
-                        | BinOp::Shl | BinOp::Shr => Ty::Error,
+                        BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Mod
+                        | BinOp::Xor
+                        | BinOp::BitAnd
+                        | BinOp::BitOr
+                        | BinOp::Shl
+                        | BinOp::Shr => Ty::Error,
                         _ => Ty::Bool,
                     };
                     self.record(*span, ty.clone());
@@ -399,8 +405,7 @@ impl TypeChecker {
                         }
                         Ty::Bool
                     }
-                    BinOp::Xor | BinOp::BitAnd | BinOp::BitOr
-                    | BinOp::Shl | BinOp::Shr => {
+                    BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
                         let lok = self.subst.unify(&lt, &Ty::Int).is_ok();
                         let rok = self.subst.unify(&rt, &Ty::Int).is_ok();
                         if !lok || !rok {
@@ -417,10 +422,7 @@ impl TypeChecker {
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         let ok = self.subst.unify(&lt, &rt).is_ok()
-                            && matches!(
-                                self.subst.resolve(&lt),
-                                Ty::Int | Ty::Float | Ty::Var(_)
-                            );
+                            && matches!(self.subst.resolve(&lt), Ty::Int | Ty::Float | Ty::Var(_));
                         if !ok {
                             self.error(
                                 MirErrorKind::TypeMismatchBinOp {
@@ -472,7 +474,9 @@ impl TypeChecker {
                     acvus_ast::UnaryOp::Not => {
                         match &ot {
                             Ty::Bool => {}
-                            Ty::Var(_) => { let _ = self.subst.unify(&ot, &Ty::Bool); }
+                            Ty::Var(_) => {
+                                let _ = self.subst.unify(&ot, &Ty::Bool);
+                            }
                             _ => self.error(
                                 MirErrorKind::TypeMismatchBinOp {
                                     op: "!",
@@ -498,9 +502,7 @@ impl TypeChecker {
                 let ot = self.subst.resolve(&ot_raw);
                 let ty = match &ot {
                     Ty::Error => Ty::Error,
-                    Ty::Object(fields) if fields.contains_key(field) => {
-                        fields[field].clone()
-                    }
+                    Ty::Object(fields) if fields.contains_key(field) => fields[field].clone(),
                     Ty::Object(fields) => {
                         let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) else {
                             self.error(
@@ -583,10 +585,7 @@ impl TypeChecker {
                         // Right side of pipe must be a function or function call.
                         let _lt = self.check_expr(left);
                         let _rt = self.check_expr(right);
-                        self.error(
-                            MirErrorKind::UndefinedFunction("<pipe rhs>".into()),
-                            *span,
-                        );
+                        self.error(MirErrorKind::UndefinedFunction("<pipe rhs>".into()), *span);
                         Ty::Error
                     }
                 };
@@ -594,11 +593,7 @@ impl TypeChecker {
                 ty
             }
 
-            Expr::Lambda {
-                params,
-                body,
-                span,
-            } => {
+            Expr::Lambda { params, body, span } => {
                 self.push_scope();
                 let mut param_types = Vec::new();
                 for p in params {
@@ -720,7 +715,11 @@ impl TypeChecker {
                 ty
             }
 
-            Expr::ContextCall { name, bindings, span } => {
+            Expr::ContextCall {
+                name,
+                bindings,
+                span,
+            } => {
                 let result_ty = match self.context_types.get(name) {
                     Some(ty) => ty.clone(),
                     None => {
@@ -807,10 +806,7 @@ impl TypeChecker {
                 return self.check_callable(&resolved, args, call_span);
             }
 
-            self.error(
-                MirErrorKind::UndefinedFunction(name.to_string()),
-                call_span,
-            );
+            self.error(MirErrorKind::UndefinedFunction(name.to_string()), call_span);
             return Ty::Error;
         };
 
@@ -880,10 +876,7 @@ impl TypeChecker {
                     ret: Box::new(ret.clone()),
                 };
                 if self.subst.unify(func_ty, &fn_ty).is_err() {
-                    self.error(
-                        MirErrorKind::UndefinedFunction("<expr>".into()),
-                        call_span,
-                    );
+                    self.error(MirErrorKind::UndefinedFunction("<expr>".into()), call_span);
                     return Ty::Error;
                 }
                 self.subst.resolve(&ret)
@@ -935,7 +928,7 @@ impl TypeChecker {
                 RefKind::Value => {
                     self.define_var(name, source_resolved);
                 }
-            }
+            },
 
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value);
@@ -951,10 +944,7 @@ impl TypeChecker {
             }
 
             Pattern::List {
-                head,
-                rest,
-                tail,
-                ..
+                head, rest, tail, ..
             } => {
                 // Source must be List<T>.
                 let elem_ty = self.subst.fresh_var();
@@ -1026,10 +1016,7 @@ impl TypeChecker {
 
             Pattern::Tuple { elements, .. } => {
                 // Source must be Tuple with matching arity.
-                let elem_vars: Vec<Ty> = elements
-                    .iter()
-                    .map(|_| self.subst.fresh_var())
-                    .collect();
+                let elem_vars: Vec<Ty> = elements.iter().map(|_| self.subst.fresh_var()).collect();
                 let tuple_ty = Ty::Tuple(elem_vars.clone());
                 if self.subst.unify(&source_resolved, &tuple_ty).is_err() {
                     self.error(
@@ -1077,10 +1064,7 @@ impl TypeChecker {
                 self.error(MirErrorKind::RangeBoundsNotInt { actual: ty }, span);
             }
             _ => {
-                self.error(
-                    MirErrorKind::RangeBoundsNotInt { actual: Ty::Error },
-                    span,
-                );
+                self.error(MirErrorKind::RangeBoundsNotInt { actual: Ty::Error }, span);
             }
         }
     }
@@ -1112,8 +1096,8 @@ fn op_str(op: BinOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::parse;
     use crate::extern_module::{ExternModule, ExternRegistry};
+    use acvus_ast::parse;
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(source).expect("parse failed");

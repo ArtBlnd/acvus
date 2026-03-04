@@ -31,7 +31,11 @@ impl LlmModel for AnthropicModel {
     }
 
     fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
-        Some(build_count_tokens_request(&self.config, &self.model, messages))
+        Some(build_count_tokens_request(
+            &self.config,
+            &self.model,
+            messages,
+        ))
     }
 
     fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
@@ -106,7 +110,12 @@ pub fn parse_count_tokens_response(json: &serde_json::Value) -> Result<u32, Stri
         .ok_or_else(|| "missing 'input_tokens' in count tokens response".into())
 }
 
-fn format_body(model: &str, messages: &[Message], tools: &[ToolSpec], generation: &GenerationParams) -> serde_json::Value {
+fn format_body(
+    model: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+    generation: &GenerationParams,
+) -> serde_json::Value {
     let mut system_text = String::new();
     let mut msgs = Vec::new();
 
@@ -127,9 +136,15 @@ fn format_body(model: &str, messages: &[Message], tools: &[ToolSpec], generation
         "max_tokens": generation.max_tokens.unwrap_or(4096),
     });
 
-    if let Some(t) = generation.temperature { body["temperature"] = serde_json::json!(t); }
-    if let Some(p) = generation.top_p { body["top_p"] = serde_json::json!(p); }
-    if let Some(k) = generation.top_k { body["top_k"] = serde_json::json!(k); }
+    if let Some(t) = generation.temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(p) = generation.top_p {
+        body["top_p"] = serde_json::json!(p);
+    }
+    if let Some(k) = generation.top_k {
+        body["top_k"] = serde_json::json!(k);
+    }
 
     if !system_text.is_empty() {
         body["system"] = serde_json::Value::String(system_text);
@@ -241,7 +256,11 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
                     .ok_or("missing tool_use name")?
                     .to_string();
                 let arguments = block.get("input").cloned().unwrap_or(serde_json::json!({}));
-                tool_calls.push(ToolCall { id, name, arguments });
+                tool_calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             }
             _ => {}
         }
@@ -260,8 +279,14 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
         None => return Usage::default(),
     };
     Usage {
-        input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-        output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+        input_tokens: u
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        output_tokens: u
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
     }
 }
 
@@ -411,7 +436,11 @@ mod tests {
         assert_eq!(req.body["model"], "claude-sonnet-4-6");
         assert_eq!(req.body["system"], "You are helpful.");
         assert_eq!(req.body["messages"].as_array().unwrap().len(), 1);
-        assert!(req.headers.iter().any(|(k, v)| k == "anthropic-beta" && v.contains("token-counting")));
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-beta" && v.contains("token-counting"))
+        );
     }
 
     #[test]

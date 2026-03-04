@@ -68,31 +68,45 @@ where
 }
 
 impl FromValue for Value {
-    fn from_value(v: Value) -> Self { v }
+    fn from_value(v: Value) -> Self {
+        v
+    }
 }
 
 impl IntoValue for i64 {
-    fn into_value(self) -> Value { Value::Int(self) }
+    fn into_value(self) -> Value {
+        Value::Int(self)
+    }
 }
 
 impl IntoValue for f64 {
-    fn into_value(self) -> Value { Value::Float(self) }
+    fn into_value(self) -> Value {
+        Value::Float(self)
+    }
 }
 
 impl IntoValue for String {
-    fn into_value(self) -> Value { Value::String(self) }
+    fn into_value(self) -> Value {
+        Value::String(self)
+    }
 }
 
 impl IntoValue for bool {
-    fn into_value(self) -> Value { Value::Bool(self) }
+    fn into_value(self) -> Value {
+        Value::Bool(self)
+    }
 }
 
 impl IntoValue for u8 {
-    fn into_value(self) -> Value { Value::Byte(self) }
+    fn into_value(self) -> Value {
+        Value::Byte(self)
+    }
 }
 
 impl IntoValue for Value {
-    fn into_value(self) -> Value { self }
+    fn into_value(self) -> Value {
+        self
+    }
 }
 
 // -- PureBuiltin trait (Axum Handler pattern) -----------------------------

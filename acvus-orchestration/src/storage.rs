@@ -20,9 +20,17 @@ pub struct HashMapStorage {
     entries: HashMap<String, Arc<Value>>,
 }
 
+impl Default for HashMapStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HashMapStorage {
     pub fn new() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
 }
 

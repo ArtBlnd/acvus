@@ -22,10 +22,23 @@ pub enum InstKind {
     Yield(ValueId),
 
     // Constants / variables
-    Const { dst: ValueId, value: Literal },
-    ContextLoad { dst: ValueId, name: String, bindings: Vec<(String, ValueId)> },
-    VarLoad { dst: ValueId, name: String },
-    VarStore { name: String, src: ValueId },
+    Const {
+        dst: ValueId,
+        value: Literal,
+    },
+    ContextLoad {
+        dst: ValueId,
+        name: String,
+        bindings: Vec<(String, ValueId)>,
+    },
+    VarLoad {
+        dst: ValueId,
+        name: String,
+    },
+    VarStore {
+        name: String,
+        src: ValueId,
+    },
 
     // Arithmetic / logic
     BinOp {

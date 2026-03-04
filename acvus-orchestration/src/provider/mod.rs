@@ -1,6 +1,6 @@
-mod openai;
 mod anthropic;
 mod google;
+mod openai;
 
 use std::collections::HashMap;
 
@@ -44,7 +44,9 @@ pub fn build_request(
     match config.api {
         ApiKind::OpenAI => openai::build_request(config, model, messages, tools, generation),
         ApiKind::Anthropic => anthropic::build_request(config, model, messages, tools, generation),
-        ApiKind::Google => google::build_request(config, model, messages, tools, generation, cached_content),
+        ApiKind::Google => {
+            google::build_request(config, model, messages, tools, generation, cached_content)
+        }
     }
 }
 
@@ -61,10 +63,7 @@ pub fn build_cache_request(
     }
 }
 
-pub fn parse_cache_response(
-    api: &ApiKind,
-    json: &serde_json::Value,
-) -> Result<String, String> {
+pub fn parse_cache_response(api: &ApiKind, json: &serde_json::Value) -> Result<String, String> {
     match api {
         ApiKind::Google => google::parse_cache_response(json),
         _ => Err("context caching not supported".into()),

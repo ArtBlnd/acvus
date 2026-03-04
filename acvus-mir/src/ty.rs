@@ -132,9 +132,7 @@ impl TySubst {
                     .collect();
                 Ty::Object(resolved)
             }
-            Ty::Tuple(elems) => {
-                Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect())
-            }
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
             Ty::Fn { params, ret } => Ty::Fn {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(ret)),
@@ -204,9 +202,10 @@ impl TySubst {
 
             (Ty::Var(v), other) | (other, Ty::Var(v)) => {
                 if let Ty::Var(v2) = other
-                    && v == v2 {
-                        return Ok(());
-                    }
+                    && v == v2
+                {
+                    return Ok(());
+                }
                 if self.occurs_in(*v, other) {
                     return Err((a.clone(), b.clone()));
                 }

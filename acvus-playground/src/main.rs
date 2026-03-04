@@ -87,8 +87,7 @@ async fn compile_and_run(
     source: &str,
     context_json: HashMap<String, serde_json::Value>,
 ) -> Result<(String, String), String> {
-    let template =
-        acvus_ast::parse(source).map_err(|e| format!("parse error: {e}"))?;
+    let template = acvus_ast::parse(source).map_err(|e| format!("parse error: {e}"))?;
 
     let mut context_types: HashMap<String, Ty> = HashMap::new();
     let mut context_values: HashMap<String, Value> = HashMap::new();

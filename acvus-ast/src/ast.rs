@@ -11,7 +11,11 @@ pub struct Script {
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Bind { name: String, expr: Expr, span: Span },
+    Bind {
+        name: String,
+        expr: Expr,
+        span: Span,
+    },
     Expr(Expr),
 }
 
@@ -26,20 +30,11 @@ pub struct Template {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     /// Literal text outside `{{ }}`.
-    Text {
-        value: String,
-        span: Span,
-    },
+    Text { value: String, span: Span },
     /// A comment `{{-- ... --}}`.
-    Comment {
-        value: String,
-        span: Span,
-    },
+    Comment { value: String, span: Span },
     /// An inline expression `{{ expr }}` with no binding.
-    InlineExpr {
-        expr: Expr,
-        span: Span,
-    },
+    InlineExpr { expr: Expr, span: Span },
     /// A match block `{{ pattern = expr }} ... {{/}}`.
     /// Variable writes (`{{ $name = expr }}`) are also represented as a
     /// MatchBlock with a single arm whose pattern is
@@ -95,10 +90,7 @@ pub enum Expr {
         span: Span,
     },
     /// A literal value.
-    Literal {
-        value: Literal,
-        span: Span,
-    },
+    Literal { value: Literal, span: Span },
     /// A binary operation: `a + b`.
     BinaryOp {
         left: Box<Expr>,
@@ -137,10 +129,7 @@ pub enum Expr {
         span: Span,
     },
     /// Parenthesized expression: `(expr)`.
-    Paren {
-        inner: Box<Expr>,
-        span: Span,
-    },
+    Paren { inner: Box<Expr>, span: Span },
     /// A list: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
     /// `rest` is `Some` if `..` is present. `head` is before `..`, `tail` is after.
     /// If no `..`, all elements are in `head` and `tail` is empty.
@@ -152,10 +141,7 @@ pub enum Expr {
     },
     /// A group used for lambda parameter lists: `(a, b)`.
     /// This is a temporary node that only appears as the LHS of `->`.
-    Group {
-        elements: Vec<Expr>,
-        span: Span,
-    },
+    Group { elements: Vec<Expr>, span: Span },
     /// An object literal: `{ field1, $field2, field3 }`.
     Object {
         fields: Vec<ObjectExprField>,
@@ -239,10 +225,7 @@ pub enum Pattern {
         span: Span,
     },
     /// A literal pattern that filters: `true`, `"admin"`, `42`.
-    Literal {
-        value: Literal,
-        span: Span,
-    },
+    Literal { value: Literal, span: Span },
     /// A list pattern: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
     /// Same structure as `Expr::List`: `head` before `..`, `tail` after.
     List {

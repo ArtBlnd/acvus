@@ -7,12 +7,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value};
+use acvus_interpreter::{
+    ExternFnRegistry, Interpreter, NeedContextStepped, ResumeKey, Stepped, Value,
+};
 use acvus_orchestration::{
-    build_cache_request, create_llm_model, parse_cache_response, CompiledBlock,
-    CompiledHistory, CompiledScript, CompiledMessage, CompiledNode, CompiledNodeKind,
-    CompiledToolBinding, Fetch, HashMapStorage, LlmModel, Message, ModelResponse, ProviderConfig,
-    Storage, StrategyMode, TokenBudget, ToolCall, ToolSpec,
+    CompiledBlock, CompiledHistory, CompiledMessage, CompiledNode, CompiledNodeKind,
+    CompiledScript, CompiledToolBinding, Fetch, HashMapStorage, LlmModel, Message, ModelResponse,
+    ProviderConfig, Storage, StrategyMode, TokenBudget, ToolCall, ToolSpec, build_cache_request,
+    create_llm_model, parse_cache_response,
 };
 
 use error::value_type_name;
@@ -143,7 +145,6 @@ fn item_fields(item: &Value) -> (&str, &str) {
     }
 }
 
-
 fn ty_to_json_schema(ty: &acvus_mir::ty::Ty) -> &'static str {
     use acvus_mir::ty::Ty;
     match ty {
@@ -161,7 +162,11 @@ fn tool_specs(tools: &[CompiledToolBinding]) -> Vec<ToolSpec> {
         .map(|t| ToolSpec {
             name: t.name.clone(),
             description: t.description.clone(),
-            params: t.params.iter().map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string())).collect(),
+            params: t
+                .params
+                .iter()
+                .map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string()))
+                .collect(),
         })
         .collect()
 }
@@ -179,9 +184,11 @@ fn json_to_value(v: &serde_json::Value) -> Value {
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
         serde_json::Value::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
-        serde_json::Value::Object(obj) => {
-            Value::Object(obj.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect())
-        }
+        serde_json::Value::Object(obj) => Value::Object(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -202,7 +209,10 @@ where
     ) -> Result<Arc<Value>, ChatError> {
         if !bindings.is_empty() {
             if let Some(&idx) = self.name_to_idx.get(name) {
-                let local = bindings.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+                let local = bindings
+                    .into_iter()
+                    .map(|(k, v)| (k, Arc::new(v)))
+                    .collect();
                 self.resolve_node(idx, storage, local, bind_cache, turn_local)
                     .await?;
             }
@@ -211,11 +221,11 @@ where
                 .ok_or_else(|| ChatError::UnresolvedContext(name.to_string()));
         }
 
-        if let Some(&idx) = self.name_to_idx.get(name) {
-            if storage.get(name).is_none() {
-                self.resolve_node(idx, storage, HashMap::new(), bind_cache, turn_local)
-                    .await?;
-            }
+        if let Some(&idx) = self.name_to_idx.get(name)
+            && storage.get(name).is_none()
+        {
+            self.resolve_node(idx, storage, HashMap::new(), bind_cache, turn_local)
+                .await?;
         }
         if let Some(arc) = storage.get(name) {
             Ok(arc)
@@ -249,7 +259,8 @@ where
                         .resolve_context(&name, bindings, storage, bind_cache, turn_local)
                         .await?;
                     let key = need.into_key(value);
-                    result = drive_script(&mut coroutine, key, storage, &HashMap::new(), turn_local)?;
+                    result =
+                        drive_script(&mut coroutine, key, storage, &HashMap::new(), turn_local)?;
                 }
             }
         }
@@ -262,7 +273,9 @@ where
         bind_cache: &mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &mut HashMap<String, Arc<Value>>,
     ) -> Result<Option<String>, ChatError> {
-        let value = self.eval_script(expr, storage, bind_cache, turn_local).await?;
+        let value = self
+            .eval_script(expr, storage, bind_cache, turn_local)
+            .await?;
         match value {
             Value::String(s) => Ok(Some(s)),
             Value::Unit => Ok(None),
@@ -283,8 +296,14 @@ where
             let (mut coroutine, key) = interp.execute();
             let mut output = String::new();
 
-            let mut result =
-                drive_block(&mut coroutine, key, &mut output, storage, &local, turn_local)?;
+            let mut result = drive_block(
+                &mut coroutine,
+                key,
+                &mut output,
+                storage,
+                &local,
+                turn_local,
+            )?;
             loop {
                 match result {
                     BlockDriveResult::Done(text) => return Ok(text),
@@ -296,7 +315,12 @@ where
                             .await?;
                         let key = need.into_key(value);
                         result = drive_block(
-                            &mut coroutine, key, &mut output, storage, &local, turn_local,
+                            &mut coroutine,
+                            key,
+                            &mut output,
+                            storage,
+                            &local,
+                            turn_local,
                         )?;
                     }
                 }
@@ -327,20 +351,20 @@ where
         tracing::debug!(node = %node.name, "resolve_node");
 
         // IfModified: evaluate bind script, check cache
-        if matches!(node.strategy.mode, StrategyMode::IfModified) {
-            if let Some(bind_script) = &node.bind_module {
-                let bind_value = self
-                    .eval_script(bind_script, storage, bind_cache, turn_local)
-                    .await?;
-                if let Some(entries) = bind_cache.get(&node.name) {
-                    if let Some((_, cached_output)) = entries.iter().find(|(v, _)| v == &bind_value) {
-                        tracing::debug!(node = %node.name, "skip (bind cached)");
-                        storage.set(node.name.clone(), Value::clone(cached_output));
-                        return Ok(());
-                    }
-                }
-                local.insert("bind".into(), Arc::new(bind_value));
+        if matches!(node.strategy.mode, StrategyMode::IfModified)
+            && let Some(bind_script) = &node.bind_module
+        {
+            let bind_value = self
+                .eval_script(bind_script, storage, bind_cache, turn_local)
+                .await?;
+            if let Some(entries) = bind_cache.get(&node.name)
+                && let Some((_, cached_output)) = entries.iter().find(|(v, _)| v == &bind_value)
+            {
+                tracing::debug!(node = %node.name, "skip (bind cached)");
+                storage.set(node.name.clone(), Value::clone(cached_output));
+                return Ok(());
             }
+            local.insert("bind".into(), Arc::new(bind_value));
         }
 
         match &node.kind {
@@ -370,7 +394,14 @@ where
         bind_cache: &'a mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &'a mut HashMap<String, Arc<Value>>,
     ) -> Result<(), ChatError> {
-        let CompiledNodeKind::LlmCache { provider, model, messages, ttl, cache_config } = &node.kind else {
+        let CompiledNodeKind::LlmCache {
+            provider,
+            model,
+            messages,
+            ttl,
+            cache_config,
+        } = &node.kind
+        else {
             unreachable!()
         };
 
@@ -392,20 +423,23 @@ where
             .ok_or_else(|| ChatError::UnknownProvider(provider.clone()))?
             .clone();
 
-        let request = build_cache_request(
-            &provider_config, model, &rendered, ttl, cache_config,
-        );
+        let request = build_cache_request(&provider_config, model, &rendered, ttl, cache_config);
         tracing::debug!(node = %node.name, body = %request.body, "llm_cache fetch request");
         let json = self.fetch.fetch(&request).await.map_err(|e| {
             tracing::warn!(node = %node.name, error = %e, "llm_cache fetch failed");
-            ChatError::Fetch { node: node.name.clone(), detail: e }
+            ChatError::Fetch {
+                node: node.name.clone(),
+                detail: e,
+            }
         })?;
         tracing::debug!(node = %node.name, response = %json, "llm_cache fetch response");
-        let cache_name =
-            parse_cache_response(&provider_config.api, &json).map_err(|e| {
-                tracing::warn!(node = %node.name, response = %json, "llm_cache parse failed");
-                ChatError::Parse { node: node.name.clone(), detail: e }
-            })?;
+        let cache_name = parse_cache_response(&provider_config.api, &json).map_err(|e| {
+            tracing::warn!(node = %node.name, response = %json, "llm_cache parse failed");
+            ChatError::Parse {
+                node: node.name.clone(),
+                detail: e,
+            }
+        })?;
         storage.set(node.name.clone(), Value::String(cache_name));
         Ok(())
     }
@@ -418,7 +452,16 @@ where
         bind_cache: &'a mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &'a mut HashMap<String, Arc<Value>>,
     ) -> Result<(), ChatError> {
-        let CompiledNodeKind::Llm { provider, model, messages, tools, generation, cache_key, max_tokens } = &node.kind else {
+        let CompiledNodeKind::Llm {
+            provider,
+            model,
+            messages,
+            tools,
+            generation,
+            cache_key,
+            max_tokens,
+        } = &node.kind
+        else {
             unreachable!()
         };
 
@@ -446,9 +489,15 @@ where
                     let message = Message::text(&block.role, text);
                     segments.push(MessageSegment::Single(message));
                 }
-                CompiledMessage::Iterator { expr, block, slice, bind, role, token_budget, .. } => {
+                CompiledMessage::Iterator {
+                    expr,
+                    slice,
+                    role,
+                    token_budget,
+                    ..
+                } => {
                     let expanded = self
-                        .expand_iterator(expr, block.as_ref(), slice, bind, role, storage, bind_cache, turn_local)
+                        .expand_iterator(expr, slice, role, storage, bind_cache, turn_local)
                         .await?;
                     segments.push(MessageSegment::Iterator {
                         messages: expanded,
@@ -461,25 +510,31 @@ where
         self.allocate_token_budgets(&*llm, &node.name, &mut segments, *max_tokens)
             .await?;
 
-        let mut rendered: Vec<Message> = segments.into_iter().flat_map(|seg| match seg {
-            MessageSegment::Single(m) => vec![m],
-            MessageSegment::Iterator { messages, .. } => messages,
-        }).collect();
+        let mut rendered: Vec<Message> = segments
+            .into_iter()
+            .flat_map(|seg| match seg {
+                MessageSegment::Single(m) => vec![m],
+                MessageSegment::Iterator { messages, .. } => messages,
+            })
+            .collect();
         let specs = tool_specs(tools);
-        let request = llm.build_request(
-            &rendered, &specs, generation, cached_content.as_deref(),
-        );
+        let request = llm.build_request(&rendered, &specs, generation, cached_content.as_deref());
         tracing::debug!(node = %node.name, body = %request.body, "llm fetch request");
         let json = self.fetch.fetch(&request).await.map_err(|e| {
             tracing::warn!(node = %node.name, error = %e, "llm fetch failed");
-            ChatError::Fetch { node: node.name.clone(), detail: e }
+            ChatError::Fetch {
+                node: node.name.clone(),
+                detail: e,
+            }
         })?;
         tracing::debug!(node = %node.name, response = %json, "llm fetch response");
-        let (mut response, _usage) =
-            llm.parse_response(&json).map_err(|e| {
-                tracing::warn!(node = %node.name, response = %json, "llm parse failed");
-                ChatError::Parse { node: node.name.clone(), detail: e }
-            })?;
+        let (mut response, _usage) = llm.parse_response(&json).map_err(|e| {
+            tracing::warn!(node = %node.name, response = %json, "llm parse failed");
+            ChatError::Parse {
+                node: node.name.clone(),
+                detail: e,
+            }
+        })?;
 
         let mut tool_rounds = 0usize;
         loop {
@@ -492,13 +547,13 @@ where
                         ("content_type".into(), Value::String("text".into())),
                     ]));
                     // IfModified: cache bind_value → output
-                    if matches!(node.strategy.mode, StrategyMode::IfModified) {
-                        if let Some(bind_val) = local.remove("bind") {
-                            bind_cache
-                                .entry(node.name.clone())
-                                .or_default()
-                                .push(((*bind_val).clone(), Arc::new(output.clone())));
-                        }
+                    if matches!(node.strategy.mode, StrategyMode::IfModified)
+                        && let Some(bind_val) = local.remove("bind")
+                    {
+                        bind_cache
+                            .entry(node.name.clone())
+                            .or_default()
+                            .push(((*bind_val).clone(), Arc::new(output.clone())));
                     }
                     storage.set(node.name.clone(), output);
                     break;
@@ -518,9 +573,11 @@ where
 
                     for call in &calls {
                         tracing::debug!(node = %node.name, tool = %call.name, args = %call.arguments, "tool call received");
-                        let result_text = self.execute_tool_call(
-                            call, &node.name, tools, storage, bind_cache, turn_local,
-                        ).await?;
+                        let result_text = self
+                            .execute_tool_call(
+                                call, &node.name, tools, storage, bind_cache, turn_local,
+                            )
+                            .await?;
                         tracing::debug!(tool = %call.name, result = %result_text, "tool call result");
                         rendered.push(Message {
                             role: "tool".into(),
@@ -530,9 +587,8 @@ where
                         });
                     }
 
-                    let request = llm.build_request(
-                        &rendered, &specs, generation, cached_content.as_deref(),
-                    );
+                    let request =
+                        llm.build_request(&rendered, &specs, generation, cached_content.as_deref());
                     tracing::debug!(node = %node.name, body = %request.body, "llm fetch request (tool followup)");
                     let json = self.fetch.fetch(&request).await.map_err(|e| {
                         tracing::warn!(node = %node.name, error = %e, "llm fetch failed (tool followup)");
@@ -558,20 +614,28 @@ where
         bind_cache: &'a mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &'a mut HashMap<String, Arc<Value>>,
     ) -> Result<String, ChatError> {
-        let binding = tools.iter().find(|t| t.name == call.name).ok_or_else(|| {
-            ChatError::ToolNotFound { node: node_name.to_string(), tool: call.name.clone() }
-        })?;
-        let target_idx = *self.name_to_idx.get(&binding.node).ok_or_else(|| {
-            ChatError::ToolTargetNotFound {
-                tool: call.name.clone(),
-                target: binding.node.clone(),
-            }
-        })?;
+        let binding =
+            tools
+                .iter()
+                .find(|t| t.name == call.name)
+                .ok_or_else(|| ChatError::ToolNotFound {
+                    node: node_name.to_string(),
+                    tool: call.name.clone(),
+                })?;
+        let target_idx =
+            *self
+                .name_to_idx
+                .get(&binding.node)
+                .ok_or_else(|| ChatError::ToolTargetNotFound {
+                    tool: call.name.clone(),
+                    target: binding.node.clone(),
+                })?;
 
         let tool_local: HashMap<String, Arc<Value>> = match &call.arguments {
-            serde_json::Value::Object(obj) => {
-                obj.iter().map(|(k, v)| (k.clone(), Arc::new(json_to_value(v)))).collect()
-            }
+            serde_json::Value::Object(obj) => obj
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::new(json_to_value(v))))
+                .collect(),
             _ => HashMap::new(),
         };
 
@@ -596,15 +660,15 @@ where
     async fn expand_iterator(
         &'a self,
         expr: &CompiledScript,
-        block: Option<&'a CompiledBlock>,
         slice: &Option<Vec<i64>>,
-        bind: &Option<String>,
         role_override: &Option<String>,
         storage: &'a mut HashMapStorage,
         bind_cache: &'a mut HashMap<String, Vec<(Value, Arc<Value>)>>,
         turn_local: &'a mut HashMap<String, Arc<Value>>,
     ) -> Result<Vec<Message>, ChatError> {
-        let evaluated = self.eval_script(expr, storage, bind_cache, turn_local).await?;
+        let evaluated = self
+            .eval_script(expr, storage, bind_cache, turn_local)
+            .await?;
         let all_items = match &evaluated {
             Value::List(items) => items.as_slice(),
             _ => {
@@ -617,9 +681,7 @@ where
             let len = all_items.len();
             match s.as_slice() {
                 [start] => &all_items[resolve_index(*start, len)..],
-                [start, end] => {
-                    &all_items[resolve_index(*start, len)..resolve_index(*end, len)]
-                }
+                [start, end] => &all_items[resolve_index(*start, len)..resolve_index(*end, len)],
                 _ => all_items,
             }
         } else {
@@ -629,26 +691,9 @@ where
         tracing::debug!(count = items.len(), "expand_iterator");
         let mut messages = Vec::new();
         for item in items {
-            let (item_type, item_text) = item_fields(item);
-            let role = role_override.as_deref().unwrap_or(item_type);
-
-            if let Some(block) = block {
-                let local = if let Some(bind_name) = bind {
-                    HashMap::from([(bind_name.clone(), Arc::new(item.clone()))])
-                } else {
-                    HashMap::from([
-                        ("role".into(), Arc::new(Value::String(role.to_string()))),
-                        ("content".into(), Arc::new(Value::String(item_text.to_string()))),
-                        ("content_type".into(), Arc::new(Value::String("text".to_string()))),
-                    ])
-                };
-                let rendered = self
-                    .render_with_deps(block, storage, local, bind_cache, turn_local)
-                    .await?;
-                messages.push(Message::text(role, rendered));
-            } else {
-                messages.push(Message::text(role, item_text));
-            }
+            let (item_role, item_text) = item_fields(item);
+            let role = role_override.as_deref().unwrap_or(item_role);
+            messages.push(Message::text(role, item_text));
         }
         Ok(messages)
     }
@@ -667,12 +712,20 @@ where
             Some(r) => r,
             None => return Ok(None),
         };
-        let json = self.fetch.fetch(&request).await.map_err(|e| {
-            ChatError::TokenCount { node: node_name.to_string(), detail: e }
-        })?;
-        let count = llm.parse_count_tokens_response(&json).map_err(|e| {
-            ChatError::TokenCount { node: node_name.to_string(), detail: e }
-        })?;
+        let json = self
+            .fetch
+            .fetch(&request)
+            .await
+            .map_err(|e| ChatError::TokenCount {
+                node: node_name.to_string(),
+                detail: e,
+            })?;
+        let count = llm
+            .parse_count_tokens_response(&json)
+            .map_err(|e| ChatError::TokenCount {
+                node: node_name.to_string(),
+                detail: e,
+            })?;
         Ok(Some(count))
     }
 
@@ -693,7 +746,11 @@ where
         // Collect budgeted iterators: (segment index, budget, token count)
         let mut budgeted: Vec<(usize, TokenBudget, u32)> = Vec::new();
         for (i, seg) in segments.iter().enumerate() {
-            if let MessageSegment::Iterator { messages, budget: Some(budget) } = seg {
+            if let MessageSegment::Iterator {
+                messages,
+                budget: Some(budget),
+            } = seg
+            {
                 let count = match self.count_tokens(llm, node_name, messages).await? {
                     Some(c) => c,
                     None => {
@@ -712,20 +769,17 @@ where
         // If no total budget, only apply individual limits
         let Some(total) = total_budget else {
             for (seg_idx, budget, actual) in &budgeted {
-                if let Some(limit) = budget.max {
-                    if *actual > limit {
-                        trim_segment(&mut segments[*seg_idx], *actual, limit, node_name);
-                    }
+                if let Some(limit) = budget.max
+                    && *actual > limit
+                {
+                    trim_segment(&mut segments[*seg_idx], *actual, limit, node_name);
                 }
             }
             return Ok(());
         };
 
         // Reserve pool
-        let reserved: u32 = budgeted
-            .iter()
-            .filter_map(|(_, b, _)| b.min)
-            .sum();
+        let reserved: u32 = budgeted.iter().filter_map(|(_, b, _)| b.min).sum();
         let mut pool = total.saturating_sub(reserved);
 
         // Sort by priority ascending (0 = highest priority, fills first)
@@ -755,7 +809,12 @@ enum MessageSegment {
     },
 }
 
-fn trim_segment(segment: &mut MessageSegment, actual_tokens: u32, target_tokens: u32, node_name: &str) {
+fn trim_segment(
+    segment: &mut MessageSegment,
+    actual_tokens: u32,
+    target_tokens: u32,
+    node_name: &str,
+) {
     let messages = match segment {
         MessageSegment::Iterator { messages, .. } => messages,
         _ => return,
@@ -765,7 +824,11 @@ fn trim_segment(segment: &mut MessageSegment, actual_tokens: u32, target_tokens:
     }
     let len = messages.len();
     let per_message = actual_tokens / len as u32;
-    let keep = if per_message > 0 { (target_tokens / per_message) as usize } else { len };
+    let keep = if per_message > 0 {
+        (target_tokens / per_message) as usize
+    } else {
+        len
+    };
     let keep = keep.max(1).min(len);
     let skip = len - keep;
 
@@ -843,19 +906,19 @@ where
         reachable.insert(entrypoint_idx);
         while let Some(idx) = queue.pop_front() {
             for key in &nodes[idx].all_context_keys {
-                if let Some(&dep_idx) = name_to_idx.get(key) {
-                    if reachable.insert(dep_idx) {
-                        queue.push_back(dep_idx);
-                    }
+                if let Some(&dep_idx) = name_to_idx.get(key)
+                    && reachable.insert(dep_idx)
+                {
+                    queue.push_back(dep_idx);
                 }
             }
             // Tool targets are also reachable
             if let CompiledNodeKind::Llm { tools, .. } = &nodes[idx].kind {
                 for tool in tools {
-                    if let Some(&dep_idx) = name_to_idx.get(&tool.node) {
-                        if reachable.insert(dep_idx) {
-                            queue.push_back(dep_idx);
-                        }
+                    if let Some(&dep_idx) = name_to_idx.get(&tool.node)
+                        && reachable.insert(dep_idx)
+                    {
+                        queue.push_back(dep_idx);
                     }
                 }
             }
@@ -869,7 +932,10 @@ where
         // Seed context metadata as nested Object: context.{node}.{model,provider}
         let mut context_obj: BTreeMap<String, Value> = BTreeMap::new();
         for node in &nodes {
-            if let CompiledNodeKind::Llm { provider, model, .. } = &node.kind {
+            if let CompiledNodeKind::Llm {
+                provider, model, ..
+            } = &node.kind
+            {
                 context_obj.insert(
                     node.name.clone(),
                     Value::Object(BTreeMap::from([
@@ -949,15 +1015,21 @@ where
         for (name, history) in &self.history_nodes {
             let interp = Interpreter::new(history.store.module.clone(), self.extern_fns.clone());
             let (mut coroutine, key) = interp.execute();
-            let result = drive_script(&mut coroutine, key, &self.storage, &HashMap::new(), &turn_local)?;
+            let result = drive_script(
+                &mut coroutine,
+                key,
+                &self.storage,
+                &HashMap::new(),
+                &turn_local,
+            )?;
             let value = match result {
                 ScriptDriveResult::Value(v) => v,
                 ScriptDriveResult::NeedContext(_) => continue,
             };
-            if let Some(Value::Object(obj)) = self.storage.get_mut("history") {
-                if let Some(Value::List(list)) = obj.get_mut(name) {
-                    list.push(value);
-                }
+            if let Some(Value::Object(obj)) = self.storage.get_mut("history")
+                && let Some(Value::List(list)) = obj.get_mut(name)
+            {
+                list.push(value);
             }
         }
 
@@ -1018,8 +1090,8 @@ mod tests {
 
     use acvus_mir::extern_module::ExternRegistry;
     use acvus_orchestration::{
-        compile_nodes, ApiKind, GenerationParams, HttpRequest, MessageSpec, NodeKind, NodeSpec,
-        Strategy, ToolBinding,
+        ApiKind, GenerationParams, HttpRequest, MessageSpec, NodeKind, NodeSpec, Strategy,
+        ToolBinding, compile_nodes,
     };
 
     // -- MockFetch: returns queued JSON responses in order -----------------------
@@ -1030,7 +1102,9 @@ mod tests {
 
     impl MockFetch {
         fn new(responses: Vec<serde_json::Value>) -> Self {
-            Self { responses: Mutex::new(responses) }
+            Self {
+                responses: Mutex::new(responses),
+            }
         }
     }
 
@@ -1108,7 +1182,9 @@ mod tests {
     async fn new_valid_entrypoint() {
         let nodes = compile_test_nodes(&[NodeSpec {
             name: "main".into(),
-            kind: NodeKind::Plain { source: "hello".into() },
+            kind: NodeKind::Plain {
+                source: "hello".into(),
+            },
             strategy: Strategy::default(),
             history: None,
         }]);
@@ -1129,7 +1205,9 @@ mod tests {
     async fn new_invalid_entrypoint() {
         let nodes = compile_test_nodes(&[NodeSpec {
             name: "main".into(),
-            kind: NodeKind::Plain { source: "hello".into() },
+            kind: NodeKind::Plain {
+                source: "hello".into(),
+            },
             strategy: Strategy::default(),
             history: None,
         }]);
@@ -1150,7 +1228,9 @@ mod tests {
     async fn turn_plain_node() {
         let nodes = compile_test_nodes(&[NodeSpec {
             name: "main".into(),
-            kind: NodeKind::Plain { source: "hello world".into() },
+            kind: NodeKind::Plain {
+                source: "hello world".into(),
+            },
             strategy: Strategy::default(),
             history: None,
         }]);
@@ -1203,9 +1283,14 @@ mod tests {
         .unwrap();
 
         let result = engine.turn(&noop_resolver()).await.unwrap();
-        let Value::Object(obj) = &result else { panic!("expected Object, got {result:?}") };
+        let Value::Object(obj) = &result else {
+            panic!("expected Object, got {result:?}")
+        };
         assert_eq!(obj.get("role"), Some(&Value::String("assistant".into())));
-        assert_eq!(obj.get("content"), Some(&Value::String("hello from LLM".into())));
+        assert_eq!(
+            obj.get("content"),
+            Some(&Value::String("hello from LLM".into()))
+        );
         assert_eq!(obj.get("content_type"), Some(&Value::String("text".into())));
     }
 
@@ -1214,7 +1299,9 @@ mod tests {
         let nodes = compile_test_nodes(&[
             NodeSpec {
                 name: "tool_target".into(),
-                kind: NodeKind::Plain { source: "tool result text".into() },
+                kind: NodeKind::Plain {
+                    source: "tool result text".into(),
+                },
                 strategy: Strategy::default(),
                 history: None,
             },
@@ -1258,8 +1345,13 @@ mod tests {
         .unwrap();
 
         let result = engine.turn(&noop_resolver()).await.unwrap();
-        let Value::Object(obj) = &result else { panic!("expected Object, got {result:?}") };
-        assert_eq!(obj.get("content"), Some(&Value::String("final answer".into())));
+        let Value::Object(obj) = &result else {
+            panic!("expected Object, got {result:?}")
+        };
+        assert_eq!(
+            obj.get("content"),
+            Some(&Value::String("final answer".into()))
+        );
     }
 
     #[tokio::test]
@@ -1267,7 +1359,9 @@ mod tests {
         let nodes = compile_test_nodes(&[
             NodeSpec {
                 name: "tool_target".into(),
-                kind: NodeKind::Plain { source: "result".into() },
+                kind: NodeKind::Plain {
+                    source: "result".into(),
+                },
                 strategy: Strategy::default(),
                 history: None,
             },
@@ -1321,7 +1415,9 @@ mod tests {
         let nodes = compile_test_nodes(&[
             NodeSpec {
                 name: "tool_target".into(),
-                kind: NodeKind::Plain { source: "result".into() },
+                kind: NodeKind::Plain {
+                    source: "result".into(),
+                },
                 strategy: Strategy::default(),
                 history: None,
             },
@@ -1398,12 +1494,29 @@ mod tests {
 
     #[test]
     fn json_to_value_basic() {
-        assert!(matches!(json_to_value(&serde_json::json!(null)), Value::Unit));
-        assert!(matches!(json_to_value(&serde_json::json!(true)), Value::Bool(true)));
-        assert!(matches!(json_to_value(&serde_json::json!(42)), Value::Int(42)));
-        assert!(matches!(json_to_value(&serde_json::json!(3.14)), Value::Float(f) if (f - 3.14).abs() < f64::EPSILON));
-        assert!(matches!(json_to_value(&serde_json::json!("hello")), Value::String(s) if s == "hello"));
-        assert!(matches!(json_to_value(&serde_json::json!([1, 2])), Value::List(v) if v.len() == 2));
-        assert!(matches!(json_to_value(&serde_json::json!({"key": "val"})), Value::Object(m) if m.contains_key("key")));
+        assert!(matches!(
+            json_to_value(&serde_json::json!(null)),
+            Value::Unit
+        ));
+        assert!(matches!(
+            json_to_value(&serde_json::json!(true)),
+            Value::Bool(true)
+        ));
+        assert!(matches!(
+            json_to_value(&serde_json::json!(42)),
+            Value::Int(42)
+        ));
+        assert!(
+            matches!(json_to_value(&serde_json::json!(3.14)), Value::Float(f) if (f - 3.14).abs() < f64::EPSILON)
+        );
+        assert!(
+            matches!(json_to_value(&serde_json::json!("hello")), Value::String(s) if s == "hello")
+        );
+        assert!(
+            matches!(json_to_value(&serde_json::json!([1, 2])), Value::List(v) if v.len() == 2)
+        );
+        assert!(
+            matches!(json_to_value(&serde_json::json!({"key": "val"})), Value::Object(m) if m.contains_key("key"))
+        );
     }
 }

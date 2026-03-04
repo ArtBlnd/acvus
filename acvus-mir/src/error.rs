@@ -50,7 +50,9 @@ pub enum MirErrorKind {
         source_ty: Ty,
     },
     ContextWriteAttempt(String),
-    SourceNotIterable { actual: Ty },
+    SourceNotIterable {
+        actual: Ty,
+    },
 
     // Builtin constraint errors
     BuiltinConstraint(String),
@@ -65,7 +67,6 @@ pub enum MirErrorKind {
 
 impl fmt::Display for MirError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         match &self.kind {
             MirErrorKind::TypeMismatchBinOp { op, left, right } => {
                 write!(f, "type mismatch in `{op}`: {left} vs {right}")
@@ -113,7 +114,10 @@ impl fmt::Display for MirError {
                 write!(f, "context `@{name}` is read-only and cannot be assigned")
             }
             MirErrorKind::SourceNotIterable { actual } => {
-                write!(f, "source type `{actual}` is not iterable (expected List or Range)")
+                write!(
+                    f,
+                    "source type `{actual}` is not iterable (expected List or Range)"
+                )
             }
             MirErrorKind::BuiltinConstraint(msg) => {
                 write!(f, "{msg}")

@@ -10,10 +10,10 @@ use acvus_interpreter::{ExternFnRegistry, Value};
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
-    compile_nodes, ApiKind, Fetch, HashMapStorage, HttpRequest, ProviderConfig,
+    ApiKind, Fetch, HashMapStorage, HttpRequest, ProviderConfig, compile_nodes,
 };
 use node::NodeDef;
-use project::{parse_context_entry, ProjectSpec};
+use project::{ProjectSpec, parse_context_entry};
 
 #[derive(Clone)]
 struct HttpFetch {
@@ -111,16 +111,17 @@ async fn main() {
     let render_only = args.iter().any(|a| a == "--render-only");
     let non_flag_args: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
 
-    let project_dir = match non_flag_args.first() {
-        Some(dir) => PathBuf::from(dir),
-        None => {
-            eprintln!("usage: acvus-chat-cli <project-dir> [--render-only] [key=value ...]");
-            process::exit(1);
-        }
+    let Some(dir) = non_flag_args.first() else {
+        eprintln!("usage: acvus-chat-cli <project-dir> [--render-only] [key=value ...]");
+        process::exit(1);
     };
+    let project_dir = PathBuf::from(dir);
 
     let context_args = parse_context_args(
-        &non_flag_args[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        &non_flag_args[1..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
     );
 
     let project_toml = project_dir.join("project.toml");
@@ -196,7 +197,11 @@ async fn main() {
         endpoint_apis.insert(config.endpoint.clone(), api.clone());
         providers.insert(
             name.clone(),
-            ProviderConfig { api, endpoint: config.endpoint.clone(), api_key },
+            ProviderConfig {
+                api,
+                endpoint: config.endpoint.clone(),
+                api_key,
+            },
         );
     }
 
@@ -227,9 +232,16 @@ async fn main() {
     };
 
     if render_only {
-        let fetch = RenderOnlyFetch { endpoints: endpoint_apis };
+        let fetch = RenderOnlyFetch {
+            endpoints: endpoint_apis,
+        };
         let mut engine = ChatEngine::new(
-            compiled_nodes, providers, fetch, extern_fns, storage, &spec.entrypoint,
+            compiled_nodes,
+            providers,
+            fetch,
+            extern_fns,
+            storage,
+            &spec.entrypoint,
         )
         .await
         .unwrap_or_else(|e| {
@@ -242,9 +254,16 @@ async fn main() {
         });
         println!("{}", format_output(&response));
     } else {
-        let fetch = HttpFetch { client: reqwest::Client::new() };
+        let fetch = HttpFetch {
+            client: reqwest::Client::new(),
+        };
         let mut engine = ChatEngine::new(
-            compiled_nodes, providers, fetch, extern_fns, storage, &spec.entrypoint,
+            compiled_nodes,
+            providers,
+            fetch,
+            extern_fns,
+            storage,
+            &spec.entrypoint,
         )
         .await
         .unwrap_or_else(|e| {

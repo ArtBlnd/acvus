@@ -25,7 +25,13 @@ pub async fn run(
 
 /// Simple: no context, no extern fns.
 pub async fn run_simple(source: &str) -> String {
-    run(source, HashMap::new(), HashMap::new(), ExternFnRegistry::new()).await
+    run(
+        source,
+        HashMap::new(),
+        HashMap::new(),
+        ExternFnRegistry::new(),
+    )
+    .await
 }
 
 /// Parse + compile + obfuscate + execute, returning the output string.
@@ -35,8 +41,8 @@ pub async fn run_obfuscated(
     context_values: HashMap<String, Value>,
     extern_fns: ExternFnRegistry,
 ) -> String {
-    use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
     use acvus_mir_pass::TransformPass;
+    use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
 
     let template = acvus_ast::parse(source).expect("parse failed");
     let mir_registry = extern_fns.to_mir_registry();
@@ -57,7 +63,13 @@ pub async fn run_obfuscated(
 
 /// Simple obfuscated: no context, no extern fns.
 pub async fn run_simple_obfuscated(source: &str) -> String {
-    run_obfuscated(source, HashMap::new(), HashMap::new(), ExternFnRegistry::new()).await
+    run_obfuscated(
+        source,
+        HashMap::new(),
+        HashMap::new(),
+        ExternFnRegistry::new(),
+    )
+    .await
 }
 
 /// With context types + values.
@@ -196,8 +208,10 @@ pub fn ty_from_json(v: &serde_json::Value) -> Ty {
             Ty::List(Box::new(elem_ty))
         }
         serde_json::Value::Object(fields) => {
-            let field_types: BTreeMap<String, Ty> =
-                fields.iter().map(|(k, v)| (k.clone(), ty_from_json(v))).collect();
+            let field_types: BTreeMap<String, Ty> = fields
+                .iter()
+                .map(|(k, v)| (k.clone(), ty_from_json(v)))
+                .collect();
             Ty::Object(field_types)
         }
     }
@@ -220,8 +234,10 @@ pub fn pv_from_json(v: &serde_json::Value) -> PureValue {
             PureValue::List(items.iter().map(pv_from_json).collect())
         }
         serde_json::Value::Object(fields) => {
-            let obj: BTreeMap<String, PureValue> =
-                fields.iter().map(|(k, v)| (k.clone(), pv_from_json(v))).collect();
+            let obj: BTreeMap<String, PureValue> = fields
+                .iter()
+                .map(|(k, v)| (k.clone(), pv_from_json(v)))
+                .collect();
             PureValue::Object(obj)
         }
     }
@@ -236,10 +252,7 @@ pub fn int_context(name: &str, value: i64) -> (HashMap<String, Ty>, HashMap<Stri
     )
 }
 
-pub fn string_context(
-    name: &str,
-    value: &str,
-) -> (HashMap<String, Ty>, HashMap<String, Value>) {
+pub fn string_context(name: &str, value: &str) -> (HashMap<String, Ty>, HashMap<String, Value>) {
     (
         HashMap::from([(name.into(), Ty::String)]),
         HashMap::from([(name.into(), Value::String(value.into()))]),

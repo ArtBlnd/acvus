@@ -9,12 +9,16 @@ fn to_string_int() {
 
 #[test]
 fn to_string_float() {
-    assert!(matches!(call_pure("to_string", vec![Value::Float(3.14)]), Value::String(s) if s == "3.14"));
+    assert!(
+        matches!(call_pure("to_string", vec![Value::Float(3.14)]), Value::String(s) if s == "3.14")
+    );
 }
 
 #[test]
 fn to_string_bool() {
-    assert!(matches!(call_pure("to_string", vec![Value::Bool(true)]), Value::String(s) if s == "true"));
+    assert!(
+        matches!(call_pure("to_string", vec![Value::Bool(true)]), Value::String(s) if s == "true")
+    );
 }
 
 #[test]
@@ -27,18 +31,27 @@ fn to_string_string() {
 #[test]
 #[should_panic(expected = "to_string: expected scalar or Unit, got")]
 fn to_string_list_panics() {
-    call_pure("to_string", vec![Value::List(vec![Value::Int(1), Value::Int(2)])]);
+    call_pure(
+        "to_string",
+        vec![Value::List(vec![Value::Int(1), Value::Int(2)])],
+    );
 }
 
 #[test]
 #[should_panic(expected = "to_string: expected scalar or Unit, got")]
 fn to_string_object_panics() {
-    call_pure("to_string", vec![Value::Object(BTreeMap::from([("a".into(), Value::Int(1))]))]);
+    call_pure(
+        "to_string",
+        vec![Value::Object(BTreeMap::from([("a".into(), Value::Int(1))]))],
+    );
 }
 
 #[test]
 fn to_int_float() {
-    assert!(matches!(call_pure("to_int", vec![Value::Float(3.7)]), Value::Int(3)));
+    assert!(matches!(
+        call_pure("to_int", vec![Value::Float(3.7)]),
+        Value::Int(3)
+    ));
 }
 
 #[test]
@@ -48,9 +61,22 @@ fn to_float_int() {
 
 /// Names of pure (non-HOF) builtins dispatched by `call_pure`.
 const PURE_NAMES: &[&str] = &[
-    "to_string", "to_int", "to_float", "char_to_int", "int_to_char",
-    "len", "reverse", "flatten", "join", "contains", "contains_str",
-    "substring", "len_str", "to_bytes", "to_utf8", "to_utf8_lossy",
+    "to_string",
+    "to_int",
+    "to_float",
+    "char_to_int",
+    "int_to_char",
+    "len",
+    "reverse",
+    "flatten",
+    "join",
+    "contains",
+    "contains_str",
+    "substring",
+    "len_str",
+    "to_bytes",
+    "to_utf8",
+    "to_utf8_lossy",
 ];
 
 /// Names of higher-order function builtins dispatched by `exec_builtin`.
@@ -64,11 +90,7 @@ fn all_mir_builtins_handled() {
         .iter()
         .map(|b| b.name())
         .collect();
-    let handled: HashSet<&str> = PURE_NAMES
-        .iter()
-        .chain(HOF_NAMES.iter())
-        .copied()
-        .collect();
+    let handled: HashSet<&str> = PURE_NAMES.iter().chain(HOF_NAMES.iter()).copied().collect();
     let missing: Vec<&&str> = mir_names.difference(&handled).collect();
     assert!(
         missing.is_empty(),

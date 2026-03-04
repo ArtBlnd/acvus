@@ -21,7 +21,9 @@ pub(crate) fn builtin_char_to_int(s: String) -> i64 {
 }
 
 pub(crate) fn builtin_int_to_char(n: i64) -> String {
-    char::from_u32(n as u32).expect("int_to_char: invalid codepoint").to_string()
+    char::from_u32(n as u32)
+        .expect("int_to_char: invalid codepoint")
+        .to_string()
 }
 
 pub(crate) fn builtin_len(items: Vec<Value>) -> i64 {
@@ -58,7 +60,10 @@ pub(crate) fn builtin_contains_str(haystack: String, needle: String) -> bool {
 }
 
 pub(crate) fn builtin_substring(s: String, start: i64, len: i64) -> String {
-    s.chars().skip(start.max(0) as usize).take(len.max(0) as usize).collect()
+    s.chars()
+        .skip(start.max(0) as usize)
+        .take(len.max(0) as usize)
+        .collect()
 }
 
 pub(crate) fn builtin_len_str(s: String) -> i64 {

@@ -47,7 +47,11 @@ impl YieldHandle {
         }
     }
 
-    pub fn request_context_with(&self, name: String, bindings: HashMap<String, Value>) -> ContextFuture {
+    pub fn request_context_with(
+        &self,
+        name: String,
+        bindings: HashMap<String, Value>,
+    ) -> ContextFuture {
         ContextFuture {
             shared: Arc::clone(&self.shared),
             name: Some(name),
@@ -247,7 +251,9 @@ where
         context_response: None,
         context_requested: false,
     }));
-    let handle = YieldHandle { shared: Arc::clone(&shared) };
+    let handle = YieldHandle {
+        shared: Arc::clone(&shared),
+    };
     let fut = f(handle);
     (
         Coroutine {

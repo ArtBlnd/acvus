@@ -10,8 +10,8 @@
 use std::collections::{HashMap, HashSet};
 
 use acvus_mir::ir::{Inst, InstKind, ValueId};
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 pub fn reorder(insts: Vec<Inst>, rng: &mut StdRng) -> Vec<Inst> {
     let blocks = split_basic_blocks(insts);
@@ -185,7 +185,12 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         InstKind::IterInit { src, .. } => vec![*src],
         InstKind::IterNext { iter, .. } => vec![*iter],
         InstKind::VarStore { src, .. } => vec![*src],
-        InstKind::JumpIf { cond, then_args, else_args, .. } => {
+        InstKind::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
             let mut v = vec![*cond];
             v.extend(then_args);
             v.extend(else_args);
@@ -197,9 +202,7 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         | InstKind::VarLoad { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop => vec![],
-        InstKind::ContextLoad { bindings, .. } => {
-            bindings.iter().map(|(_, v)| *v).collect()
-        }
+        InstKind::ContextLoad { bindings, .. } => bindings.iter().map(|(_, v)| *v).collect(),
     }
 }
 
@@ -262,17 +265,40 @@ mod tests {
     fn preserves_data_dependency() {
         let mut rng = StdRng::seed_from_u64(42);
         let insts = vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(2) } },
-            Inst { span: span(), kind: InstKind::BinOp {
-                dst: ValueId(2), op: BinOp::Add, left: ValueId(0), right: ValueId(1),
-            }},
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(1),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::Int(2),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::BinOp {
+                    dst: ValueId(2),
+                    op: BinOp::Add,
+                    left: ValueId(0),
+                    right: ValueId(1),
+                },
+            },
         ];
 
         // Run many times — the Add must always come after both Consts.
         for _ in 0..20 {
             let result = reorder(insts.clone(), &mut rng);
-            let pos = |vid: u32| result.iter().position(|i| defined_val(&i.kind) == Some(ValueId(vid))).unwrap();
+            let pos = |vid: u32| {
+                result
+                    .iter()
+                    .position(|i| defined_val(&i.kind) == Some(ValueId(vid)))
+                    .unwrap()
+            };
             assert!(pos(2) > pos(0));
             assert!(pos(2) > pos(1));
         }
@@ -282,8 +308,14 @@ mod tests {
     fn preserves_side_effect_order() {
         let mut rng = StdRng::seed_from_u64(99);
         let insts = vec![
-            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
-            Inst { span: span(), kind: InstKind::Yield(ValueId(1)) },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(0)),
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(1)),
+            },
         ];
 
         for _ in 0..20 {

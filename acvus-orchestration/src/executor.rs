@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use acvus_ast::Literal;
 use acvus_interpreter::{
@@ -17,7 +17,7 @@ use crate::dag::Dag;
 use crate::dsl::GenerationParams;
 use crate::error::{OrchError, OrchErrorKind};
 use crate::message::{Message, ModelResponse, ToolCall, ToolResult, ToolSpec};
-use crate::provider::{build_request, parse_response, Fetch, ProviderConfig};
+use crate::provider::{Fetch, ProviderConfig, build_request, parse_response};
 use crate::storage::Storage;
 
 pub struct Executor<F, S>
@@ -48,7 +48,15 @@ where
         mir_registry: ExternRegistry,
         fuel_limit: u64,
     ) -> Self {
-        Self { nodes, dag, storage, fetch, providers, mir_registry, fuel_limit }
+        Self {
+            nodes,
+            dag,
+            storage,
+            fetch,
+            providers,
+            mir_registry,
+            fuel_limit,
+        }
     }
 
     /// Run the full DAG with demand-driven rendering.
@@ -58,7 +66,15 @@ where
     /// the dependency's model call completes. Model calls are the only async
     /// operations, driven via `FuturesUnordered`.
     pub async fn run(self) -> Result<S, OrchError> {
-        let Executor { nodes, dag, mut storage, fetch, providers, fuel_limit, .. } = self;
+        let Executor {
+            nodes,
+            dag,
+            mut storage,
+            fetch,
+            providers,
+            fuel_limit,
+            ..
+        } = self;
         let fetch = Arc::new(fetch);
         let fuel = Arc::new(AtomicU64::new(0));
         let n = nodes.len();
@@ -102,11 +118,11 @@ where
                             progress = true;
                         }
                         DriveResult::Blocked(dep_name) => {
-                            if let Some(&dep_idx) = name_to_idx.get(dep_name.as_str()) {
-                                if !launched[dep_idx] {
-                                    to_launch.push(dep_idx);
-                                    progress = true;
-                                }
+                            if let Some(&dep_idx) = name_to_idx.get(dep_name.as_str())
+                                && !launched[dep_idx]
+                            {
+                                to_launch.push(dep_idx);
+                                progress = true;
                             }
                         }
                     }
@@ -115,16 +131,31 @@ where
                 for i in to_submit {
                     let state = node_states[i].take().unwrap();
                     let (provider, model, tools, generation) = match &nodes[i].kind {
-                        CompiledNodeKind::Llm { provider, model, tools, generation, .. } => {
+                        CompiledNodeKind::Llm {
+                            provider,
+                            model,
+                            tools,
+                            generation,
+                            ..
+                        } => {
                             let tool_specs: Vec<ToolSpec> = tools
                                 .iter()
                                 .map(|t| ToolSpec {
                                     name: t.name.clone(),
                                     description: t.description.clone(),
-                                    params: t.params.iter().map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string())).collect(),
+                                    params: t
+                                        .params
+                                        .iter()
+                                        .map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string()))
+                                        .collect(),
                                 })
                                 .collect();
-                            (provider.clone(), model.clone(), tool_specs, generation.clone())
+                            (
+                                provider.clone(),
+                                model.clone(),
+                                tool_specs,
+                                generation.clone(),
+                            )
                         }
                         _ => continue,
                     };
@@ -178,13 +209,13 @@ where
             // 4. Unblock waiting nodes
             let completed_name = &nodes[idx].name;
             for i in 0..n {
-                if let Some(state) = &mut node_states[i] {
-                    if state.waiting_for.as_deref() == Some(completed_name.as_str()) {
-                        let need = state.pending_need.take().unwrap();
-                        let arc = storage.get(completed_name).unwrap();
-                        state.resume_key = Some(need.into_key(arc));
-                        state.waiting_for = None;
-                    }
+                if let Some(state) = &mut node_states[i]
+                    && state.waiting_for.as_deref() == Some(completed_name.as_str())
+                {
+                    let need = state.pending_need.take().unwrap();
+                    let arc = storage.get(completed_name).unwrap();
+                    state.resume_key = Some(need.into_key(arc));
+                    state.waiting_for = None;
                 }
             }
 
@@ -321,7 +352,14 @@ where
     F: Fetch,
 {
     consume_fuel(&fuel, fuel_limit)?;
-    let http_request = build_request(&provider_config, &model, &messages, &tools, &generation, None);
+    let http_request = build_request(
+        &provider_config,
+        &model,
+        &messages,
+        &tools,
+        &generation,
+        None,
+    );
     let json = fetch
         .fetch(&http_request)
         .await
@@ -350,7 +388,14 @@ where
             });
         }
 
-        let http_request = build_request(&provider_config, &model, &all_messages, &tools, &generation, None);
+        let http_request = build_request(
+            &provider_config,
+            &model,
+            &all_messages,
+            &tools,
+            &generation,
+            None,
+        );
         let json = fetch
             .fetch(&http_request)
             .await
@@ -384,17 +429,21 @@ where
 
     let mut known = HashMap::new();
     for key in &node.all_context_keys {
-        if let Some(arc) = storage.get(key) {
-            if let Some(lit) = value_to_literal(&arc) {
-                known.insert(key.clone(), lit);
-            }
+        if let Some(arc) = storage.get(key)
+            && let Some(lit) = value_to_literal(&arc)
+        {
+            known.insert(key.clone(), lit);
         }
     }
 
     let mut needed = HashSet::new();
     for msg in node.kind.messages() {
         if let CompiledMessage::Block(block) = msg {
-            needed.extend(reachable_context_keys(&block.module, &known, &block.val_def));
+            needed.extend(reachable_context_keys(
+                &block.module,
+                &known,
+                &block.val_def,
+            ));
         }
     }
 

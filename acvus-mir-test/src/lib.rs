@@ -11,14 +11,13 @@ pub fn compile_to_ir(
     registry: &ExternRegistry,
 ) -> Result<String, String> {
     let template = acvus_ast::parse(source).map_err(|e| format!("parse error: {e}"))?;
-    let (module, _hints) =
-        acvus_mir::compile(&template, context, registry).map_err(|errors| {
-            errors
-                .iter()
-                .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let (module, _hints) = acvus_mir::compile(&template, context, registry).map_err(|errors| {
+        errors
+            .iter()
+            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
     Ok(dump(&module))
 }
 

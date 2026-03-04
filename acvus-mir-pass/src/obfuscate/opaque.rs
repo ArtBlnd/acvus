@@ -20,8 +20,8 @@ use acvus_mir::ir::{
     ClosureBody, DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use acvus_mir::ty::Ty;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 use super::rewriter::PassState;
 
@@ -93,78 +93,157 @@ fn make_opaque_closure_body(variant: u32) -> ClosureBody {
         0 => {
             // (x - x) + 1 → always 1
             let v_sub = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_sub, op: BinOp::Sub, left: v_x, right: v_x,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_sub,
+                    op: BinOp::Sub,
+                    left: v_x,
+                    right: v_x,
+                },
+            });
             let v_one = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const {
-                dst: v_one, value: Literal::Int(1),
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_one,
+                    value: Literal::Int(1),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_res, op: BinOp::Add, left: v_sub, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Add,
+                    left: v_sub,
+                    right: v_one,
+                },
+            });
             v_res
         }
         1 => {
             // (x*x+1) / (x*x+1) → always 1
             let v_sq = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_sq, op: BinOp::Mul, left: v_x, right: v_x,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_sq,
+                    op: BinOp::Mul,
+                    left: v_x,
+                    right: v_x,
+                },
+            });
             let v_one = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const {
-                dst: v_one, value: Literal::Int(1),
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_one,
+                    value: Literal::Int(1),
+                },
+            });
             let v_sum = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_sum, op: BinOp::Add, left: v_sq, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_sum,
+                    op: BinOp::Add,
+                    left: v_sq,
+                    right: v_one,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_res, op: BinOp::Div, left: v_sum, right: v_sum,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Div,
+                    left: v_sum,
+                    right: v_sum,
+                },
+            });
             v_res
         }
         2 => {
             // (x ^ x) + 1 → always 1
             let v_xor = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_xor, op: BinOp::Xor, left: v_x, right: v_x,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_xor,
+                    op: BinOp::Xor,
+                    left: v_x,
+                    right: v_x,
+                },
+            });
             let v_one = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const {
-                dst: v_one, value: Literal::Int(1),
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_one,
+                    value: Literal::Int(1),
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_res, op: BinOp::Add, left: v_xor, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Add,
+                    left: v_xor,
+                    right: v_one,
+                },
+            });
             v_res
         }
         _ => {
             // (x*x) % 1 + 1 → always 1
             let v_sq = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_sq, op: BinOp::Mul, left: v_x, right: v_x,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_sq,
+                    op: BinOp::Mul,
+                    left: v_x,
+                    right: v_x,
+                },
+            });
             let v_one = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::Const {
-                dst: v_one, value: Literal::Int(1),
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_one,
+                    value: Literal::Int(1),
+                },
+            });
             let v_mod = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_mod, op: BinOp::Mod, left: v_sq, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_mod,
+                    op: BinOp::Mod,
+                    left: v_sq,
+                    right: v_one,
+                },
+            });
             let v_res = alloc(Ty::Int);
-            insts.push(Inst { span, kind: InstKind::BinOp {
-                dst: v_res, op: BinOp::Add, left: v_mod, right: v_one,
-            }});
+            insts.push(Inst {
+                span,
+                kind: InstKind::BinOp {
+                    dst: v_res,
+                    op: BinOp::Add,
+                    left: v_mod,
+                    right: v_one,
+                },
+            });
             v_res
         }
     };
 
-    insts.push(Inst { span, kind: InstKind::Return(v_result) });
+    insts.push(Inst {
+        span,
+        kind: InstKind::Return(v_result),
+    });
 
     body.insts = insts;
     body.val_count = next_val;
@@ -211,12 +290,11 @@ fn insert_inner(
 
             let runtime_val = find_runtime_int_val(&result[..pos], ctx);
 
-            let predicate_insts = make_closure_predicate(
-                ctx, rng, span, runtime_val,
-            );
+            let predicate_insts = make_closure_predicate(ctx, rng, span, runtime_val);
             let dead = make_dead_block(ctx, rng, span, decrypt_dispatch);
 
-            let mut new_result = Vec::with_capacity(result.len() + predicate_insts.len() + dead.len() + 4);
+            let mut new_result =
+                Vec::with_capacity(result.len() + predicate_insts.len() + dead.len() + 4);
 
             new_result.extend(result[..pos].iter().cloned());
 
@@ -240,17 +318,26 @@ fn insert_inner(
 
             new_result.push(Inst {
                 span,
-                kind: InstKind::BlockLabel { label: dead_label, params: vec![] },
+                kind: InstKind::BlockLabel {
+                    label: dead_label,
+                    params: vec![],
+                },
             });
             new_result.extend(dead);
             new_result.push(Inst {
                 span,
-                kind: InstKind::Jump { label: continue_label, args: vec![] },
+                kind: InstKind::Jump {
+                    label: continue_label,
+                    args: vec![],
+                },
             });
 
             new_result.push(Inst {
                 span,
-                kind: InstKind::BlockLabel { label: continue_label, params: vec![] },
+                kind: InstKind::BlockLabel {
+                    label: continue_label,
+                    params: vec![],
+                },
             });
 
             new_result.extend(result[pos..].iter().cloned());
@@ -288,9 +375,13 @@ fn make_closure_predicate(
     } else {
         let rand_val: i64 = rng.random_range(1..=1_000_000);
         let v_x = ctx.alloc_val(Ty::Int);
-        out.push(Inst { span, kind: InstKind::Const {
-            dst: v_x, value: Literal::Int(rand_val),
-        }});
+        out.push(Inst {
+            span,
+            kind: InstKind::Const {
+                dst: v_x,
+                value: Literal::Int(rand_val),
+            },
+        });
         v_x
     };
 
@@ -306,71 +397,127 @@ fn make_closure_predicate(
     // Load opaque meta table from variable (stores factory dispatch table).
     let meta_ty = Ty::List(Box::new(factory_fn_ty.clone()));
     let v_meta = ctx.alloc_val(meta_ty);
-    out.push(Inst { span, kind: InstKind::VarLoad {
-        dst: v_meta, name: "__opaque_table".into(),
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::VarLoad {
+            dst: v_meta,
+            name: "__opaque_table".into(),
+        },
+    });
 
     // Emit local Const(4) — cannot share across CFF blocks.
     let v_four = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const {
-        dst: v_four, value: Literal::Int(4),
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_four,
+            value: Literal::Int(4),
+        },
+    });
 
     // factory_idx = v_arg % 4
     let v_factory_idx = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::BinOp {
-        dst: v_factory_idx, op: BinOp::Mod, left: v_arg, right: v_four,
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::BinOp {
+            dst: v_factory_idx,
+            op: BinOp::Mod,
+            left: v_arg,
+            right: v_four,
+        },
+    });
 
     // v_factory = ListGet(meta_table, factory_idx)
     let v_factory = ctx.alloc_val(factory_fn_ty);
-    out.push(Inst { span, kind: InstKind::ListGet {
-        dst: v_factory, list: v_meta, index: v_factory_idx,
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::ListGet {
+            dst: v_factory,
+            list: v_meta,
+            index: v_factory_idx,
+        },
+    });
 
     // v_inner_table = CallClosure(v_factory, [seed=0])
     let v_seed = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const {
-        dst: v_seed, value: Literal::Int(0),
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_seed,
+            value: Literal::Int(0),
+        },
+    });
     let inner_table_ty = Ty::List(Box::new(inner_fn_ty.clone()));
     let v_inner_table = ctx.alloc_val(inner_table_ty);
-    out.push(Inst { span, kind: InstKind::CallClosure {
-        dst: v_inner_table, closure: v_factory, args: vec![v_seed],
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::CallClosure {
+            dst: v_inner_table,
+            closure: v_factory,
+            args: vec![v_seed],
+        },
+    });
 
     // inner_idx = 0 (rotation == factory_idx, target == factory_idx, so (target - rotation + 4) % 4 = 0)
     let v_inner_idx = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const {
-        dst: v_inner_idx, value: Literal::Int(0),
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_inner_idx,
+            value: Literal::Int(0),
+        },
+    });
 
     // v_fn = ListGet(v_inner_table, inner_idx)
     let v_fn = ctx.alloc_val(inner_fn_ty);
-    out.push(Inst { span, kind: InstKind::ListGet {
-        dst: v_fn, list: v_inner_table, index: v_inner_idx,
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::ListGet {
+            dst: v_fn,
+            list: v_inner_table,
+            index: v_inner_idx,
+        },
+    });
 
     // v_entangle = CallClosure(v_fn, [v_arg]) → Int(1)
     let v_entangle = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::CallClosure {
-        dst: v_entangle, closure: v_fn, args: vec![v_arg],
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::CallClosure {
+            dst: v_entangle,
+            closure: v_fn,
+            args: vec![v_arg],
+        },
+    });
 
     // Store entangle value for text decrypt dependency
-    out.push(Inst { span, kind: InstKind::VarStore {
-        name: "__entangle".into(), src: v_entangle,
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::VarStore {
+            name: "__entangle".into(),
+            src: v_entangle,
+        },
+    });
 
     // Int → Bool conversion: 1 > 0 = true
     let v_zero = ctx.alloc_val(Ty::Int);
-    out.push(Inst { span, kind: InstKind::Const {
-        dst: v_zero, value: Literal::Int(0),
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::Const {
+            dst: v_zero,
+            value: Literal::Int(0),
+        },
+    });
     let v_cond = ctx.alloc_val(Ty::Bool);
-    out.push(Inst { span, kind: InstKind::BinOp {
-        dst: v_cond, op: BinOp::Gt, left: v_entangle, right: v_zero,
-    }});
+    out.push(Inst {
+        span,
+        kind: InstKind::BinOp {
+            dst: v_cond,
+            op: BinOp::Gt,
+            left: v_entangle,
+            right: v_zero,
+        },
+    });
 
     out
 }
@@ -386,9 +533,7 @@ fn find_insertion_point(insts: &[Inst], rng: &mut StdRng) -> Option<usize> {
                     | InstKind::Return(_)
             ) && !matches!(
                 insts[i - 1].kind,
-                InstKind::Jump { .. }
-                    | InstKind::JumpIf { .. }
-                    | InstKind::Return(_)
+                InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Return(_)
             )
         })
         .collect();
@@ -458,19 +603,31 @@ fn make_dead_block(
             let inner_idx_val = rng.random_range(0i64..4);
 
             let v_bytes = ctx.alloc_val(Ty::bytes());
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_bytes, value: Literal::List(garbage.iter().map(|b| Literal::Byte(*b)).collect()),
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_bytes,
+                    value: Literal::List(garbage.iter().map(|b| Literal::Byte(*b)).collect()),
+                },
+            });
 
             let v_key = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_key, value: Literal::Int(key),
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_key,
+                    value: Literal::Int(key),
+                },
+            });
 
             let v_factory_idx = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_factory_idx, value: Literal::Int(factory_idx_val),
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_factory_idx,
+                    value: Literal::Int(factory_idx_val),
+                },
+            });
 
             // 2-level dispatch: ListGet factory → CallClosure → ListGet inner → CallClosure
             let inner_fn_ty = Ty::Fn {
@@ -483,36 +640,67 @@ fn make_dead_block(
             };
 
             let v_factory = ctx.alloc_val(factory_fn_ty);
-            out.push(Inst { span, kind: InstKind::ListGet {
-                dst: v_factory, list: meta_c, index: v_factory_idx,
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::ListGet {
+                    dst: v_factory,
+                    list: meta_c,
+                    index: v_factory_idx,
+                },
+            });
 
             let v_seed = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_seed, value: Literal::Int(0),
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_seed,
+                    value: Literal::Int(0),
+                },
+            });
 
             let v_inner_table = ctx.alloc_val(Ty::List(Box::new(inner_fn_ty.clone())));
-            out.push(Inst { span, kind: InstKind::CallClosure {
-                dst: v_inner_table, closure: v_factory, args: vec![v_seed],
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::CallClosure {
+                    dst: v_inner_table,
+                    closure: v_factory,
+                    args: vec![v_seed],
+                },
+            });
 
             let v_inner_idx = ctx.alloc_val(Ty::Int);
-            out.push(Inst { span, kind: InstKind::Const {
-                dst: v_inner_idx, value: Literal::Int(inner_idx_val),
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::Const {
+                    dst: v_inner_idx,
+                    value: Literal::Int(inner_idx_val),
+                },
+            });
 
             let v_fn = ctx.alloc_val(inner_fn_ty);
-            out.push(Inst { span, kind: InstKind::ListGet {
-                dst: v_fn, list: v_inner_table, index: v_inner_idx,
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::ListGet {
+                    dst: v_fn,
+                    list: v_inner_table,
+                    index: v_inner_idx,
+                },
+            });
 
             let v_result = ctx.alloc_val(Ty::String);
-            out.push(Inst { span, kind: InstKind::CallClosure {
-                dst: v_result, closure: v_fn, args: vec![v_bytes, v_key],
-            }});
+            out.push(Inst {
+                span,
+                kind: InstKind::CallClosure {
+                    dst: v_result,
+                    closure: v_fn,
+                    args: vec![v_bytes, v_key],
+                },
+            });
 
-            out.push(Inst { span, kind: InstKind::Yield(v_result) });
+            out.push(Inst {
+                span,
+                kind: InstKind::Yield(v_result),
+            });
         } else {
             let len = rng.random_range(2..6);
             let mut v_accum: Option<ValueId> = None;
@@ -523,34 +711,66 @@ fn make_dead_block(
                 let encrypted = code ^ key;
 
                 let v_enc = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const { dst: v_enc, value: Literal::Int(encrypted) } });
+                out.push(Inst {
+                    span,
+                    kind: InstKind::Const {
+                        dst: v_enc,
+                        value: Literal::Int(encrypted),
+                    },
+                });
 
                 let v_key = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::Const { dst: v_key, value: Literal::Int(key) } });
+                out.push(Inst {
+                    span,
+                    kind: InstKind::Const {
+                        dst: v_key,
+                        value: Literal::Int(key),
+                    },
+                });
 
                 let v_dec = ctx.alloc_val(Ty::Int);
-                out.push(Inst { span, kind: InstKind::BinOp {
-                    dst: v_dec, op: BinOp::Xor, left: v_enc, right: v_key,
-                }});
+                out.push(Inst {
+                    span,
+                    kind: InstKind::BinOp {
+                        dst: v_dec,
+                        op: BinOp::Xor,
+                        left: v_enc,
+                        right: v_key,
+                    },
+                });
 
                 let v_char = ctx.alloc_val(Ty::String);
-                out.push(Inst { span, kind: InstKind::Call {
-                    dst: v_char, func: "int_to_char".into(), args: vec![v_dec],
-                }});
+                out.push(Inst {
+                    span,
+                    kind: InstKind::Call {
+                        dst: v_char,
+                        func: "int_to_char".into(),
+                        args: vec![v_dec],
+                    },
+                });
 
                 v_accum = Some(match v_accum {
                     None => v_char,
                     Some(prev) => {
                         let v_concat = ctx.alloc_val(Ty::String);
-                        out.push(Inst { span, kind: InstKind::BinOp {
-                            dst: v_concat, op: BinOp::Add, left: prev, right: v_char,
-                        }});
+                        out.push(Inst {
+                            span,
+                            kind: InstKind::BinOp {
+                                dst: v_concat,
+                                op: BinOp::Add,
+                                left: prev,
+                                right: v_char,
+                            },
+                        });
                         v_concat
                     }
                 });
             }
 
-            out.push(Inst { span, kind: InstKind::Yield(v_accum.unwrap()) });
+            out.push(Inst {
+                span,
+                kind: InstKind::Yield(v_accum.unwrap()),
+            });
         }
     }
 
@@ -585,16 +805,25 @@ mod tests {
         let insts: Vec<Inst> = (0..10)
             .map(|i| Inst {
                 span: span(),
-                kind: InstKind::Const { dst: ValueId(i), value: Literal::Int(i as i64) },
+                kind: InstKind::Const {
+                    dst: ValueId(i),
+                    value: Literal::Int(i as i64),
+                },
             })
             .collect();
 
         let result = insert(insts, &mut ctx, &mut rng, None);
 
-        let jumpif_count = result.iter().filter(|i| matches!(i.kind, InstKind::JumpIf { .. })).count();
+        let jumpif_count = result
+            .iter()
+            .filter(|i| matches!(i.kind, InstKind::JumpIf { .. }))
+            .count();
         assert!(jumpif_count >= 1, "expected opaque predicate branches");
 
-        let label_count = result.iter().filter(|i| matches!(i.kind, InstKind::BlockLabel { .. })).count();
+        let label_count = result
+            .iter()
+            .filter(|i| matches!(i.kind, InstKind::BlockLabel { .. }))
+            .count();
         assert!(label_count >= 2, "expected dead + continue labels");
     }
 
@@ -606,19 +835,28 @@ mod tests {
         let rv = ctx.alloc_val(Ty::Int);
         let pred = make_closure_predicate(&mut ctx, &mut rng, span(), Some(rv));
 
-        let has_var_load = pred.iter().any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__opaque_table"));
+        let has_var_load = pred
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__opaque_table"));
         assert!(has_var_load, "expected VarLoad for __opaque_table");
 
-        let has_call_closure = pred.iter().any(|i| matches!(i.kind, InstKind::CallClosure { .. }));
+        let has_call_closure = pred
+            .iter()
+            .any(|i| matches!(i.kind, InstKind::CallClosure { .. }));
         assert!(has_call_closure, "expected CallClosure in predicate");
 
         // Entangle: VarStore __entangle should exist
-        let has_entangle_store = pred.iter().any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__entangle"));
+        let has_entangle_store = pred
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__entangle"));
         assert!(has_entangle_store, "expected VarStore for __entangle");
 
         // Last instruction is BinOp Gt (Int→Bool conversion)
         let last = pred.last().unwrap();
-        if let InstKind::BinOp { dst, op: BinOp::Gt, .. } = &last.kind {
+        if let InstKind::BinOp {
+            dst, op: BinOp::Gt, ..
+        } = &last.kind
+        {
             assert_eq!(ctx.val_types[dst], Ty::Bool);
         } else {
             panic!("last instruction should be BinOp Gt (Int→Bool)");
@@ -632,7 +870,9 @@ mod tests {
 
         let pred = make_closure_predicate(&mut ctx, &mut rng, span(), None);
 
-        let has_const = pred.iter().any(|i| matches!(i.kind, InstKind::Const { .. }));
+        let has_const = pred
+            .iter()
+            .any(|i| matches!(i.kind, InstKind::Const { .. }));
         assert!(has_const, "expected Const when no runtime val");
     }
 
@@ -644,30 +884,45 @@ mod tests {
         let rv = ValueId(0);
         ctx.val_types.insert(rv, Ty::Int);
 
-        let mut insts = vec![
-            Inst {
-                span: span(),
-                kind: InstKind::ContextLoad { dst: rv, name: "count".into(), bindings: Vec::new() },
+        let mut insts = vec![Inst {
+            span: span(),
+            kind: InstKind::ContextLoad {
+                dst: rv,
+                name: "count".into(),
+                bindings: Vec::new(),
             },
-        ];
+        }];
         for i in 1..8u32 {
             let dst = ValueId(i);
             ctx.val_types.insert(dst, Ty::Int);
             insts.push(Inst {
                 span: span(),
-                kind: InstKind::Const { dst, value: Literal::Int(i as i64) },
+                kind: InstKind::Const {
+                    dst,
+                    value: Literal::Int(i as i64),
+                },
             });
         }
 
         let result = insert(insts, &mut ctx, &mut rng, None);
 
-        let has_jumpif = result.iter().any(|i| matches!(i.kind, InstKind::JumpIf { .. }));
+        let has_jumpif = result
+            .iter()
+            .any(|i| matches!(i.kind, InstKind::JumpIf { .. }));
         assert!(has_jumpif, "expected opaque predicate branch");
 
         let uses_runtime = result.iter().any(|i| match &i.kind {
-            InstKind::BinOp { left, right, op: BinOp::Mod, .. } => *left == rv || *right == rv,
+            InstKind::BinOp {
+                left,
+                right,
+                op: BinOp::Mod,
+                ..
+            } => *left == rv || *right == rv,
             _ => false,
         });
-        assert!(uses_runtime, "expected runtime val to be used in index derivation");
+        assert!(
+            uses_runtime,
+            "expected runtime val to be used in index derivation"
+        );
     }
 }

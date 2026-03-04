@@ -54,7 +54,12 @@ pub fn build_list(
             }
         }
     }
-    Ok(Expr::List { head, rest, tail, span })
+    Ok(Expr::List {
+        head,
+        rest,
+        tail,
+        span,
+    })
 }
 
 /// Convert a parsed expression (LHS of `->`) into a Lambda node.

@@ -29,8 +29,15 @@ struct Frame {
 }
 
 enum IterState {
-    List { items: Vec<Value>, pos: usize },
-    Range { current: i64, end: i64, inclusive: bool },
+    List {
+        items: Vec<Value>,
+        pos: usize,
+    },
+    Range {
+        current: i64,
+        end: i64,
+        inclusive: bool,
+    },
 }
 
 impl Frame {
@@ -122,9 +129,15 @@ impl Frame {
     fn iter_init(&mut self, dst: ValueId, src: ValueId) {
         let state = match self.take_owned(src) {
             Value::List(items) => IterState::List { items, pos: 0 },
-            Value::Range { start, end, inclusive } => {
-                IterState::Range { current: start, end, inclusive }
-            }
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => IterState::Range {
+                current: start,
+                end,
+                inclusive,
+            },
             v => panic!("IterInit: expected List or Range, got {v:?}"),
         };
         self.iters.insert(dst, state);
@@ -144,9 +157,11 @@ impl Frame {
                 (val, false)
             }
             IterState::List { .. } => (Value::Unit, true),
-            IterState::Range { current, end, inclusive }
-                if (*inclusive && *current <= *end) || (!*inclusive && *current < *end) =>
-            {
+            IterState::Range {
+                current,
+                end,
+                inclusive,
+            } if (*inclusive && *current <= *end) || (!*inclusive && *current < *end) => {
                 let val = Value::Int(*current);
                 *current += 1;
                 (val, false)
@@ -183,7 +198,11 @@ fn build_label_map(body: &MirBody) -> HashMap<Label, usize> {
 
 impl Interpreter {
     pub fn new(module: MirModule, extern_fns: ExternFnRegistry) -> Self {
-        Self { module, variables: HashMap::new(), extern_fns }
+        Self {
+            module,
+            variables: HashMap::new(),
+            extern_fns,
+        }
     }
 
     pub fn execute(self) -> (Coroutine, ResumeKey) {
@@ -256,11 +275,18 @@ impl Interpreter {
                     frame.set_new(*dst, Value::List(items));
                 }
                 InstKind::MakeObject { dst, fields } => {
-                    let obj: BTreeMap<String, Value> =
-                        fields.iter().map(|(k, v)| (k.clone(), frame.take_owned(*v))).collect();
+                    let obj: BTreeMap<String, Value> = fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), frame.take_owned(*v)))
+                        .collect();
                     frame.set_new(*dst, Value::Object(obj));
                 }
-                InstKind::MakeRange { dst, start, end, kind } => {
+                InstKind::MakeRange {
+                    dst,
+                    start,
+                    end,
+                    kind,
+                } => {
                     let (s, e) = (frame.get(*start), frame.get(*end));
                     match (s, e) {
                         (Value::Int(s), Value::Int(e)) => frame.set_new(
@@ -278,13 +304,28 @@ impl Interpreter {
                     let items = frame.collect_args(elements);
                     frame.set_new(*dst, Value::Tuple(items));
                 }
-                InstKind::MakeClosure { dst, body, captures } => {
+                InstKind::MakeClosure {
+                    dst,
+                    body,
+                    captures,
+                } => {
                     let captured = frame.collect_args_arc(captures);
-                    frame.set_new(*dst, Value::Fn(FnValue { body: *body, captures: captured }));
+                    frame.set_new(
+                        *dst,
+                        Value::Fn(FnValue {
+                            body: *body,
+                            captures: captured,
+                        }),
+                    );
                 }
 
                 // -- arithmetic / logic --
-                InstKind::BinOp { dst, op, left, right } => {
+                InstKind::BinOp {
+                    dst,
+                    op,
+                    left,
+                    right,
+                } => {
                     let result = eval_binop(*op, frame.get(*left), frame.get(*right));
                     frame.set_new(*dst, result);
                 }
@@ -325,7 +366,12 @@ impl Interpreter {
                     let idx = expect_int(frame.get(*index), "ListGet index");
                     frame.set_new(*dst, items[idx as usize].clone());
                 }
-                InstKind::ListSlice { dst, list, skip_head, skip_tail } => {
+                InstKind::ListSlice {
+                    dst,
+                    list,
+                    skip_head,
+                    skip_tail,
+                } => {
                     let items = expect_list(frame.get(*list), "ListSlice");
                     let end = items.len() - *skip_tail;
                     frame.set_new(*dst, Value::List(items[*skip_head..end].to_vec()));
@@ -336,16 +382,32 @@ impl Interpreter {
                     let eq = values_equal(frame.get(*src), &literal_to_value(value));
                     frame.set_new(*dst, Value::Bool(eq));
                 }
-                InstKind::TestListLen { dst, src, min_len, exact } => {
+                InstKind::TestListLen {
+                    dst,
+                    src,
+                    min_len,
+                    exact,
+                } => {
                     let items = expect_list(frame.get(*src), "TestListLen");
-                    let ok = if *exact { items.len() == *min_len } else { items.len() >= *min_len };
+                    let ok = if *exact {
+                        items.len() == *min_len
+                    } else {
+                        items.len() >= *min_len
+                    };
                     frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
-                    let ok = expect_object(frame.get(*src), "TestObjectKey").contains_key(key.as_str());
+                    let ok =
+                        expect_object(frame.get(*src), "TestObjectKey").contains_key(key.as_str());
                     frame.set_new(*dst, Value::Bool(ok));
                 }
-                InstKind::TestRange { dst, src, start, end, kind } => {
+                InstKind::TestRange {
+                    dst,
+                    src,
+                    start,
+                    end,
+                    kind,
+                } => {
                     let n = expect_int(frame.get(*src), "TestRange");
                     let ok = match kind {
                         RangeKind::Exclusive => n >= *start && n < *end,
@@ -357,12 +419,20 @@ impl Interpreter {
 
                 // -- iteration --
                 InstKind::IterInit { dst, src } => frame.iter_init(*dst, *src),
-                InstKind::IterNext { dst_value, dst_done, iter } => {
+                InstKind::IterNext {
+                    dst_value,
+                    dst_done,
+                    iter,
+                } => {
                     frame.iter_next(*dst_value, *dst_done, *iter);
                 }
 
                 // -- context / variable I/O --
-                InstKind::ContextLoad { dst, name, bindings } => {
+                InstKind::ContextLoad {
+                    dst,
+                    name,
+                    bindings,
+                } => {
                     if bindings.is_empty() {
                         let arc = handle.request_context(name.clone()).await;
                         frame.set(*dst, arc);
@@ -371,12 +441,16 @@ impl Interpreter {
                             .iter()
                             .map(|(k, vid)| (k.clone(), frame.get(*vid).clone()))
                             .collect();
-                        let arc = handle.request_context_with(name.clone(), binding_values).await;
+                        let arc = handle
+                            .request_context_with(name.clone(), binding_values)
+                            .await;
                         frame.set(*dst, arc);
                     }
                 }
                 InstKind::VarLoad { dst, name } => {
-                    let v = this.variables.get(name)
+                    let v = this
+                        .variables
+                        .get(name)
                         .unwrap_or_else(|| panic!("VarLoad: undefined variable ${name}"));
                     frame.set(*dst, Arc::clone(v));
                 }
@@ -389,10 +463,11 @@ impl Interpreter {
                     let arg_values = frame.collect_args(args);
                     let result;
                     if builtins::is_builtin(func) {
-                        (this, result) =
-                            Self::exec_builtin(this, func, arg_values, handle).await;
+                        (this, result) = Self::exec_builtin(this, func, arg_values, handle).await;
                     } else {
-                        let f = this.extern_fns.get(func)
+                        let f = this
+                            .extern_fns
+                            .get(func)
                             .unwrap_or_else(|| panic!("unknown function: {func}"));
                         result = f.call(arg_values).await;
                     }
@@ -400,7 +475,9 @@ impl Interpreter {
                 }
                 InstKind::AsyncCall { dst, func, args } => {
                     let arg_values = frame.collect_args(args);
-                    let f = this.extern_fns.get(func)
+                    let f = this
+                        .extern_fns
+                        .get(func)
                         .unwrap_or_else(|| panic!("unknown async function: {func}"));
                     frame.set_new(*dst, f.call(arg_values).await);
                 }
@@ -408,8 +485,7 @@ impl Interpreter {
                     let fn_val = expect_fn(frame.take_owned(*closure), "CallClosure");
                     let arg_values = frame.collect_args_arc(args);
                     let result;
-                    (this, result) =
-                        Self::call_closure(this, fn_val, arg_values, handle).await;
+                    (this, result) = Self::call_closure(this, fn_val, arg_values, handle).await;
                     frame.set_new(*dst, result);
                 }
                 InstKind::Await { dst, src } => {
@@ -422,9 +498,16 @@ impl Interpreter {
                     pc = frame.jump(&insts, label, args);
                     continue;
                 }
-                InstKind::JumpIf { cond, then_label, then_args, else_label, else_args } => {
+                InstKind::JumpIf {
+                    cond,
+                    then_label,
+                    then_args,
+                    else_label,
+                    else_args,
+                } => {
                     pc = frame.jump_if(
-                        &insts, *cond,
+                        &insts,
+                        *cond,
                         (then_label, then_args),
                         (else_label, else_args),
                     );
@@ -528,8 +611,13 @@ impl Interpreter {
         let mut it = items.into_iter();
         let mut acc = it.next().expect("reduce: empty list");
         for item in it {
-            (this, acc) =
-                Self::call_closure(this, fn_val.clone(), vec![Arc::new(acc), Arc::new(item)], handle).await;
+            (this, acc) = Self::call_closure(
+                this,
+                fn_val.clone(),
+                vec![Arc::new(acc), Arc::new(item)],
+                handle,
+            )
+            .await;
         }
         (this, acc)
     }
@@ -549,8 +637,13 @@ impl Interpreter {
         };
         let mut acc = init;
         for item in items {
-            (this, acc) =
-                Self::call_closure(this, fn_val.clone(), vec![Arc::new(acc), Arc::new(item)], handle).await;
+            (this, acc) = Self::call_closure(
+                this,
+                fn_val.clone(),
+                vec![Arc::new(acc), Arc::new(item)],
+                handle,
+            )
+            .await;
         }
         (this, acc)
     }
@@ -698,12 +791,12 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 
 fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
     match op {
-        BinOp::And => Value::Bool(
-            matches!(left, Value::Bool(true)) && matches!(right, Value::Bool(true)),
-        ),
-        BinOp::Or => Value::Bool(
-            matches!(left, Value::Bool(true)) || matches!(right, Value::Bool(true)),
-        ),
+        BinOp::And => {
+            Value::Bool(matches!(left, Value::Bool(true)) && matches!(right, Value::Bool(true)))
+        }
+        BinOp::Or => {
+            Value::Bool(matches!(left, Value::Bool(true)) || matches!(right, Value::Bool(true)))
+        }
         BinOp::Add => match (left, right) {
             (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a + b),

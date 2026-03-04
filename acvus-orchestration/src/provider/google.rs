@@ -24,7 +24,14 @@ impl LlmModel for GoogleModel {
         generation: &GenerationParams,
         cached_content: Option<&str>,
     ) -> HttpRequest {
-        build_request(&self.config, &self.model, messages, tools, generation, cached_content)
+        build_request(
+            &self.config,
+            &self.model,
+            messages,
+            tools,
+            generation,
+            cached_content,
+        )
     }
 
     fn parse_response(&self, json: &serde_json::Value) -> Result<(ModelResponse, Usage), String> {
@@ -32,7 +39,11 @@ impl LlmModel for GoogleModel {
     }
 
     fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
-        Some(build_count_tokens_request(&self.config, &self.model, messages))
+        Some(build_count_tokens_request(
+            &self.config,
+            &self.model,
+            messages,
+        ))
     }
 
     fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
@@ -148,10 +159,7 @@ pub fn build_count_tokens_request(
         });
     }
 
-    let url = format!(
-        "{}/v1beta/models/{}:countTokens",
-        config.endpoint, model
-    );
+    let url = format!("{}/v1beta/models/{}:countTokens", config.endpoint, model);
     HttpRequest {
         url,
         headers: vec![
@@ -187,10 +195,18 @@ fn format_cached_body(
     });
 
     let mut gen_config = serde_json::Map::new();
-    if let Some(t) = generation.temperature { gen_config.insert("temperature".into(), serde_json::json!(t)); }
-    if let Some(p) = generation.top_p { gen_config.insert("topP".into(), serde_json::json!(p)); }
-    if let Some(k) = generation.top_k { gen_config.insert("topK".into(), serde_json::json!(k)); }
-    if let Some(m) = generation.max_tokens { gen_config.insert("maxOutputTokens".into(), serde_json::json!(m)); }
+    if let Some(t) = generation.temperature {
+        gen_config.insert("temperature".into(), serde_json::json!(t));
+    }
+    if let Some(p) = generation.top_p {
+        gen_config.insert("topP".into(), serde_json::json!(p));
+    }
+    if let Some(k) = generation.top_k {
+        gen_config.insert("topK".into(), serde_json::json!(k));
+    }
+    if let Some(m) = generation.max_tokens {
+        gen_config.insert("maxOutputTokens".into(), serde_json::json!(m));
+    }
     if !gen_config.is_empty() {
         body["generationConfig"] = serde_json::Value::Object(gen_config);
     }
@@ -240,7 +256,11 @@ fn format_tools(body: &mut serde_json::Value, tools: &[ToolSpec], grounding: boo
     }
 }
 
-fn format_body(messages: &[Message], tools: &[ToolSpec], generation: &GenerationParams) -> serde_json::Value {
+fn format_body(
+    messages: &[Message],
+    tools: &[ToolSpec],
+    generation: &GenerationParams,
+) -> serde_json::Value {
     let mut system_text = String::new();
     let mut contents = Vec::new();
 
@@ -260,10 +280,18 @@ fn format_body(messages: &[Message], tools: &[ToolSpec], generation: &Generation
     });
 
     let mut gen_config = serde_json::Map::new();
-    if let Some(t) = generation.temperature { gen_config.insert("temperature".into(), serde_json::json!(t)); }
-    if let Some(p) = generation.top_p { gen_config.insert("topP".into(), serde_json::json!(p)); }
-    if let Some(k) = generation.top_k { gen_config.insert("topK".into(), serde_json::json!(k)); }
-    if let Some(m) = generation.max_tokens { gen_config.insert("maxOutputTokens".into(), serde_json::json!(m)); }
+    if let Some(t) = generation.temperature {
+        gen_config.insert("temperature".into(), serde_json::json!(t));
+    }
+    if let Some(p) = generation.top_p {
+        gen_config.insert("topP".into(), serde_json::json!(p));
+    }
+    if let Some(k) = generation.top_k {
+        gen_config.insert("topK".into(), serde_json::json!(k));
+    }
+    if let Some(m) = generation.max_tokens {
+        gen_config.insert("maxOutputTokens".into(), serde_json::json!(m));
+    }
     if !gen_config.is_empty() {
         body["generationConfig"] = serde_json::Value::Object(gen_config);
     }
@@ -328,7 +356,9 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
         .ok_or("missing 'candidates' in response")?;
 
     let candidate = candidates.first().ok_or("empty candidates array")?;
-    let content = candidate.get("content").ok_or("missing 'content' in candidate")?;
+    let content = candidate
+        .get("content")
+        .ok_or("missing 'content' in candidate")?;
     let parts = content
         .get("parts")
         .and_then(|p| p.as_array())
@@ -347,7 +377,11 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
             let arguments = fc.get("args").cloned().unwrap_or(serde_json::json!({}));
             // Gemini doesn't have explicit call IDs; generate from name
             let id = format!("call_{name}");
-            tool_calls.push(ToolCall { id, name, arguments });
+            tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
         } else if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
             text_parts.push(text.to_string());
         }
@@ -366,8 +400,14 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
         None => return Usage::default(),
     };
     Usage {
-        input_tokens: u.get("promptTokenCount").and_then(|v| v.as_u64()).map(|v| v as u32),
-        output_tokens: u.get("candidatesTokenCount").and_then(|v| v.as_u64()).map(|v| v as u32),
+        input_tokens: u
+            .get("promptTokenCount")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        output_tokens: u
+            .get("candidatesTokenCount")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
     }
 }
 

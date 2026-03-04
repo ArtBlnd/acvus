@@ -105,15 +105,11 @@ fn is_clean_field(
     match &insts[def_idx].kind {
         // Direct field extraction: object.field or object["key"]
         InstKind::FieldGet {
-            object,
-            field: f,
-            ..
+            object, field: f, ..
         }
-        | InstKind::ObjectGet {
-            object,
-            key: f,
-            ..
-        } if f == field_name => {
+        | InstKind::ObjectGet { object, key: f, .. }
+            if f == field_name =>
+        {
             // The object must come from VarLoad of the same name
             traces_to_var_load(insts, val_def, store_name, *object)
         }
@@ -165,8 +161,8 @@ mod tests {
     }
 
     fn build_val_def(module: &MirModule) -> ValDefMap {
-        use crate::analysis::val_def::ValDefMapAnalysis;
         use crate::AnalysisPass;
+        use crate::analysis::val_def::ValDefMapAnalysis;
         ValDefMapAnalysis.run(module, ())
     }
 

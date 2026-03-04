@@ -38,9 +38,9 @@ pub fn parse_template(source: &str) -> Result<Template, ParseError> {
 
 fn node_span(node: &Node) -> Span {
     match node {
-        Node::Text { span, .. }
-        | Node::Comment { span, .. }
-        | Node::InlineExpr { span, .. } => *span,
+        Node::Text { span, .. } | Node::Comment { span, .. } | Node::InlineExpr { span, .. } => {
+            *span
+        }
         Node::MatchBlock(mb) => mb.span,
         Node::IterBlock(ib) => ib.span,
     }
@@ -83,7 +83,10 @@ impl<'a> TreeBuilder<'a> {
     /// Build nodes until we hit a block-structural segment or EOF.
     /// When `in_match` is true, bare expressions that can only be patterns
     /// (literals, lists, ranges, objects) are treated as continuation arms.
-    fn build_body_until_terminator(&mut self, in_match: bool) -> Result<(Vec<Node>, BodyTerminator), ParseError> {
+    fn build_body_until_terminator(
+        &mut self,
+        in_match: bool,
+    ) -> Result<(Vec<Node>, BodyTerminator), ParseError> {
         let mut nodes = Vec::new();
 
         loop {
@@ -139,7 +142,8 @@ impl<'a> TreeBuilder<'a> {
                             if !in_match {
                                 return Err(ParseError::new(
                                     ParseErrorKind::InvalidPattern(
-                                        "continuation arm `{{ pattern = }}` outside match block".into(),
+                                        "continuation arm `{{ pattern = }}` outside match block"
+                                            .into(),
                                     ),
                                     tag_span,
                                 ));
@@ -169,8 +173,7 @@ impl<'a> TreeBuilder<'a> {
                                 };
                                 nodes.push(Node::MatchBlock(match_block));
                             } else {
-                                let match_block =
-                                    self.build_match_block(pattern, rhs, tag_span)?;
+                                let match_block = self.build_match_block(pattern, rhs, tag_span)?;
                                 nodes.push(Node::MatchBlock(match_block));
                             }
                         }
@@ -225,10 +228,7 @@ impl<'a> TreeBuilder<'a> {
                 }
             }
             BodyTerminator::Eof => {
-                return Err(ParseError::new(
-                    ParseErrorKind::UnclosedBlock,
-                    tag_span,
-                ));
+                return Err(ParseError::new(ParseErrorKind::UnclosedBlock, tag_span));
             }
             BodyTerminator::MultiArm { tag_span, .. } => {
                 return Err(ParseError::new(
@@ -268,7 +268,8 @@ impl<'a> TreeBuilder<'a> {
         });
 
         // Process remaining arms, catch-all, and close
-        let (catch_all, close_span, indent) = self.continue_match_block(&mut arms, terminator, &source_expr)?;
+        let (catch_all, close_span, indent) =
+            self.continue_match_block(&mut arms, terminator, &source_expr)?;
 
         let span = Span::new(block_start, close_span.end);
         Ok(MatchBlock {
@@ -313,10 +314,9 @@ impl<'a> TreeBuilder<'a> {
                         ParseErrorKind::UnclosedBlock,
                         catch_tag_span,
                     )),
-                    BodyTerminator::CatchAll(span) => Err(ParseError::new(
-                        ParseErrorKind::UnmatchedCatchAll,
-                        span,
-                    )),
+                    BodyTerminator::CatchAll(span) => {
+                        Err(ParseError::new(ParseErrorKind::UnmatchedCatchAll, span))
+                    }
                     BodyTerminator::MultiArm { tag_span, .. } => Err(ParseError::new(
                         ParseErrorKind::ExpectedCloseBlock,
                         tag_span,
@@ -358,15 +358,18 @@ fn convert_lalrpop_error(
             ParseErrorKind::UnexpectedToken("invalid token".into()),
             Span::new(location, location + 1),
         ),
-        LalrpopError::UnrecognizedEof { location, expected: _ } => ParseError::new(
-            ParseErrorKind::UnexpectedEof,
-            Span::new(location, location),
-        ),
+        LalrpopError::UnrecognizedEof {
+            location,
+            expected: _,
+        } => ParseError::new(ParseErrorKind::UnexpectedEof, Span::new(location, location)),
         LalrpopError::UnrecognizedToken {
             token: (start, tok, end),
             expected,
         } => ParseError::new(
-            ParseErrorKind::UnexpectedToken(format!("got `{tok}`, expected one of: {}", expected.join(", "))),
+            ParseErrorKind::UnexpectedToken(format!(
+                "got `{tok}`, expected one of: {}",
+                expected.join(", ")
+            )),
             Span::new(start, end),
         ),
         LalrpopError::ExtraToken {
@@ -409,7 +412,11 @@ fn validate_irrefutable(pattern: &Pattern) -> Result<(), ParseError> {
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
 pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
     match expr {
-        Expr::Ident { name, ref_kind, span } => Ok(Pattern::Binding {
+        Expr::Ident {
+            name,
+            ref_kind,
+            span,
+        } => Ok(Pattern::Binding {
             name: name.clone(),
             ref_kind: *ref_kind,
             span: *span,
@@ -418,11 +425,14 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             value: value.clone(),
             span: *span,
         }),
-        Expr::List { head, rest, tail, span } => {
-            let head_pats: Result<Vec<_>, _> =
-                head.iter().map(expr_to_pattern).collect();
-            let tail_pats: Result<Vec<_>, _> =
-                tail.iter().map(expr_to_pattern).collect();
+        Expr::List {
+            head,
+            rest,
+            tail,
+            span,
+        } => {
+            let head_pats: Result<Vec<_>, _> = head.iter().map(expr_to_pattern).collect();
+            let tail_pats: Result<Vec<_>, _> = tail.iter().map(expr_to_pattern).collect();
             Ok(Pattern::List {
                 head: head_pats?,
                 rest: *rest,
@@ -430,7 +440,12 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 span: *span,
             })
         }
-        Expr::Range { start, end, kind, span } => {
+        Expr::Range {
+            start,
+            end,
+            kind,
+            span,
+        } => {
             let start_pat = expr_to_pattern(start)?;
             let end_pat = expr_to_pattern(end)?;
             Ok(Pattern::Range {
@@ -521,7 +536,13 @@ mod tests {
                 &mb.arms[0].pattern,
                 Pattern::Binding { name, ref_kind: RefKind::Variable, .. } if name == "global"
             ));
-            assert!(matches!(&mb.source, Expr::Literal { value: Literal::Int(42), .. }));
+            assert!(matches!(
+                &mb.source,
+                Expr::Literal {
+                    value: Literal::Int(42),
+                    ..
+                }
+            ));
         } else {
             panic!("expected MatchBlock");
         }
@@ -536,7 +557,9 @@ mod tests {
             assert_eq!(mb.arms.len(), 1);
             assert!(mb.arms[0].body.is_empty());
             assert!(mb.catch_all.is_none());
-            assert!(matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if name == "item"));
+            assert!(
+                matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if name == "item")
+            );
             assert!(matches!(&mb.source, Expr::Ident { name, .. } if name == "list"));
         } else {
             panic!("expected MatchBlock");
@@ -550,7 +573,13 @@ mod tests {
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 1);
             assert!(mb.catch_all.is_some());
-            assert!(matches!(&mb.arms[0].pattern, Pattern::Literal { value: Literal::Bool(true), .. }));
+            assert!(matches!(
+                &mb.arms[0].pattern,
+                Pattern::Literal {
+                    value: Literal::Bool(true),
+                    ..
+                }
+            ));
         } else {
             panic!("expected MatchBlock");
         }
@@ -651,8 +680,16 @@ mod tests {
         assert_eq!(t.body.len(), 1);
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
             // Should be Add(1, Mul(2, 3)) due to precedence
-            if let Expr::BinaryOp { op: BinOp::Add, right, .. } = expr {
-                assert!(matches!(right.as_ref(), Expr::BinaryOp { op: BinOp::Mul, .. }));
+            if let Expr::BinaryOp {
+                op: BinOp::Add,
+                right,
+                ..
+            } = expr
+            {
+                assert!(matches!(
+                    right.as_ref(),
+                    Expr::BinaryOp { op: BinOp::Mul, .. }
+                ));
             } else {
                 panic!("expected Add at top level");
             }
@@ -704,7 +741,10 @@ mod tests {
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Range { kind: RangeKind::Exclusive, .. }
+                Pattern::Range {
+                    kind: RangeKind::Exclusive,
+                    ..
+                }
             ));
         } else {
             panic!("expected MatchBlock");
@@ -717,7 +757,10 @@ mod tests {
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Range { kind: RangeKind::InclusiveEnd, .. }
+                Pattern::Range {
+                    kind: RangeKind::InclusiveEnd,
+                    ..
+                }
             ));
         } else {
             panic!("expected MatchBlock");
@@ -730,7 +773,10 @@ mod tests {
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Range { kind: RangeKind::ExclusiveStart, .. }
+                Pattern::Range {
+                    kind: RangeKind::ExclusiveStart,
+                    ..
+                }
             ));
         } else {
             panic!("expected MatchBlock");
@@ -743,7 +789,10 @@ mod tests {
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
             assert!(matches!(
                 expr,
-                Expr::Range { kind: RangeKind::Exclusive, .. }
+                Expr::Range {
+                    kind: RangeKind::Exclusive,
+                    ..
+                }
             ));
         } else {
             panic!("expected InlineExpr");
@@ -857,7 +906,13 @@ mod tests {
     fn script_expr_stmt() {
         let s = parse_script("42; @data").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::Expr(Expr::Literal { value: Literal::Int(42), .. })));
+        assert!(matches!(
+            &s.stmts[0],
+            Stmt::Expr(Expr::Literal {
+                value: Literal::Int(42),
+                ..
+            })
+        ));
         assert!(s.tail.is_some());
     }
 

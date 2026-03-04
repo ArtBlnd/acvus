@@ -50,7 +50,10 @@ pub fn toml_to_ty(value: &toml::Value) -> Ty {
             Ty::List(Box::new(elem_ty))
         }
         toml::Value::Table(table) => {
-            let fields = table.iter().map(|(k, v)| (k.clone(), toml_to_ty(v))).collect();
+            let fields = table
+                .iter()
+                .map(|(k, v)| (k.clone(), toml_to_ty(v)))
+                .collect();
             Ty::Object(fields)
         }
         toml::Value::Datetime(_) => Ty::String,
@@ -68,14 +71,17 @@ pub struct ContextEntry {
 /// - String ("int", "string"...) → type only
 /// - Table { type = "...", value = ... } → type + default
 pub fn parse_context_entry(value: &toml::Value) -> ContextEntry {
-    if let toml::Value::Table(table) = value {
-        if let Some(ty_val) = table.get("type") {
-            let ty = toml_to_ty(ty_val);
-            let default = table.get("value").map(toml_to_value);
-            return ContextEntry { ty, default };
-        }
+    if let toml::Value::Table(table) = value
+        && let Some(ty_val) = table.get("type")
+    {
+        let ty = toml_to_ty(ty_val);
+        let default = table.get("value").map(toml_to_value);
+        return ContextEntry { ty, default };
     }
-    ContextEntry { ty: toml_to_ty(value), default: None }
+    ContextEntry {
+        ty: toml_to_ty(value),
+        default: None,
+    }
 }
 
 /// Convert a TOML value to a runtime Value.

@@ -30,7 +30,6 @@ fn parse_string_literal(lex: &mut logos::Lexer<'_, Token>) -> Option<String> {
 #[logos(skip r"[ \t\n\r]+")]
 pub enum Token {
     // ── Keywords (exact match, higher priority than ident regex) ──
-
     #[token("true")]
     True,
     #[token("false")]
@@ -41,22 +40,18 @@ pub enum Token {
     Underscore,
 
     // ── Identifiers ──
-
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice().to_string(), priority = 2)]
     Ident(String),
 
     // ── Variable reference: $name ──
-
     #[regex(r"\$[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice()[1..].to_string())]
     VarRef(String),
 
     // ── Context reference: @name ──
-
     #[regex(r"@[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice()[1..].to_string())]
     ContextRef(String),
 
     // ── Literals ──
-
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
     FloatLit(f64),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
@@ -65,7 +60,6 @@ pub enum Token {
     StringLit(String),
 
     // ── Two-char operators ──
-
     #[token("&&")]
     AndAnd,
     #[token("||")]
@@ -88,7 +82,6 @@ pub enum Token {
     DotDot,
 
     // ── Single-char operators ──
-
     #[token("+")]
     Plus,
     #[token("-")]
@@ -113,7 +106,6 @@ pub enum Token {
     Pipe,
 
     // ── Delimiters ──
-
     #[token("(")]
     LParen,
     #[token(")")]
@@ -134,7 +126,6 @@ pub enum Token {
     Semicolon,
 
     // ── Format string segments (emitted by ExprTokenizer, not by logos) ──
-
     FmtStringStart(String),
     FmtStringMid(String),
     FmtStringEnd(String),

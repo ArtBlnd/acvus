@@ -16,11 +16,7 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} at {}..{}",
-            self.kind, self.span.start, self.span.end
-        )
+        write!(f, "{} at {}..{}", self.kind, self.span.start, self.span.end)
     }
 }
 
@@ -73,7 +69,10 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::UnclosedBlock => write!(f, "block not closed, expected `{{{{/}}}}`"),
             ParseErrorKind::ExpectedCloseBlock => write!(f, "expected `{{{{/}}}}`"),
             ParseErrorKind::InvalidPattern(s) => write!(f, "invalid pattern: {s}"),
-            ParseErrorKind::RefutablePattern => write!(f, "refutable pattern not allowed in `in` binding; use `=` for pattern matching"),
+            ParseErrorKind::RefutablePattern => write!(
+                f,
+                "refutable pattern not allowed in `in` binding; use `=` for pattern matching"
+            ),
         }
     }
 }

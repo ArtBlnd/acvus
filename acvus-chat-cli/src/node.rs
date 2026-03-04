@@ -71,11 +71,8 @@ struct StrategyDef {
 enum MessageDef {
     Iterator {
         iterator: String,
-        template: Option<String>,
-        inline_template: Option<String>,
         #[serde(default)]
         slice: Option<Vec<i64>>,
-        bind: Option<String>,
         role: Option<String>,
         token_budget: Option<TokenBudgetDef>,
     },
@@ -136,25 +133,25 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
     let mut messages = Vec::new();
     for (i, msg) in def.messages.into_iter().enumerate() {
         match msg {
-            MessageDef::Block { role, template, inline_template } => {
-                let source = resolve_template(base_dir, template.as_deref(), inline_template.as_deref())
-                    .map_err(|e| format!("message {i}: {e}"))?;
+            MessageDef::Block {
+                role,
+                template,
+                inline_template,
+            } => {
+                let source =
+                    resolve_template(base_dir, template.as_deref(), inline_template.as_deref())
+                        .map_err(|e| format!("message {i}: {e}"))?;
                 messages.push(MessageSpec::Block { role, source });
             }
-            MessageDef::Iterator { iterator, template, inline_template, slice, bind, role, token_budget } => {
-                let source = if template.is_some() || inline_template.is_some() {
-                    Some(
-                        resolve_template(base_dir, template.as_deref(), inline_template.as_deref())
-                            .map_err(|e| format!("message {i}: {e}"))?,
-                    )
-                } else {
-                    None
-                };
+            MessageDef::Iterator {
+                iterator,
+                slice,
+                role,
+                token_budget,
+            } => {
                 messages.push(MessageSpec::Iterator {
                     key: iterator,
-                    source,
                     slice,
-                    bind,
                     role,
                     token_budget: token_budget.map(|tb| TokenBudget {
                         priority: tb.priority,
@@ -171,15 +168,15 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
             StrategyModeDef::Always => StrategyMode::Always,
             StrategyModeDef::IfModified => StrategyMode::IfModified,
         },
-        bind_source: match def.strategy.bind {
-            Some(path) => {
+        bind_source: def
+            .strategy
+            .bind
+            .map(|path| {
                 let full = base_dir.join(&path);
-                let src = std::fs::read_to_string(&full)
-                    .map_err(|e| format!("failed to load strategy bind '{}': {e}", full.display()))?;
-                Some(src)
-            }
-            None => None,
-        },
+                std::fs::read_to_string(&full)
+                    .map_err(|e| format!("failed to load strategy bind '{}': {e}", full.display()))
+            })
+            .transpose()?,
     };
 
     let generation = GenerationParams {
@@ -190,12 +187,16 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
         grounding: def.generation.grounding,
     };
 
-    let tools: Vec<ToolBinding> = def.tools.into_iter().map(|t| ToolBinding {
-        name: t.name,
-        description: t.description,
-        node: t.node,
-        params: t.params,
-    }).collect();
+    let tools: Vec<ToolBinding> = def
+        .tools
+        .into_iter()
+        .map(|t| ToolBinding {
+            name: t.name,
+            description: t.description,
+            node: t.node,
+            params: t.params,
+        })
+        .collect();
 
     let cache_key = def.cache_key;
 
@@ -210,22 +211,36 @@ pub fn resolve_node(def: NodeDef, base_dir: &Path) -> Result<NodeSpec, String> {
             NodeKind::Plain { source }
         }
         NodeKindDef::Llm => {
-            let provider = def.provider.ok_or_else(|| {
-                format!("node '{}': llm requires 'provider'", def.name)
-            })?;
-            let model = def.model.ok_or_else(|| {
-                format!("node '{}': llm requires 'model'", def.name)
-            })?;
-            NodeKind::Llm { provider, model, messages, tools, generation, cache_key, max_tokens: def.max_tokens }
+            let provider = def
+                .provider
+                .ok_or_else(|| format!("node '{}': llm requires 'provider'", def.name))?;
+            let model = def
+                .model
+                .ok_or_else(|| format!("node '{}': llm requires 'model'", def.name))?;
+            NodeKind::Llm {
+                provider,
+                model,
+                messages,
+                tools,
+                generation,
+                cache_key,
+                max_tokens: def.max_tokens,
+            }
         }
         NodeKindDef::LlmCache { ttl, cache_config } => {
-            let provider = def.provider.ok_or_else(|| {
-                format!("node '{}': llm-cache requires 'provider'", def.name)
-            })?;
-            let model = def.model.ok_or_else(|| {
-                format!("node '{}': llm-cache requires 'model'", def.name)
-            })?;
-            NodeKind::LlmCache { provider, model, messages, ttl, cache_config }
+            let provider = def
+                .provider
+                .ok_or_else(|| format!("node '{}': llm-cache requires 'provider'", def.name))?;
+            let model = def
+                .model
+                .ok_or_else(|| format!("node '{}': llm-cache requires 'model'", def.name))?;
+            NodeKind::LlmCache {
+                provider,
+                model,
+                messages,
+                ttl,
+                cache_config,
+            }
         }
     };
 

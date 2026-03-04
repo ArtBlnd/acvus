@@ -17,11 +17,18 @@ pub enum Segment {
     /// A comment `{{-- ... --}}`.
     Comment { value: String, span: Span },
     /// A close block `{{/}}`, optionally with indent modifier `{{/+2}}` or `{{/-2}}`.
-    CloseBlock { span: Span, indent: Option<IndentModifier> },
+    CloseBlock {
+        span: Span,
+        indent: Option<IndentModifier>,
+    },
     /// A catch-all `{{_}}`.
     CatchAll { span: Span },
     /// An expression tag `{{ ... }}` (content is the inner text, trimmed).
-    ExprTag { content: String, span: Span, inner_span: Span },
+    ExprTag {
+        content: String,
+        span: Span,
+        inner_span: Span,
+    },
 }
 
 /// Scan a template source string into segments.
@@ -46,18 +53,21 @@ pub fn scan_template(source: &str) -> Result<Vec<Segment>, ParseError> {
                 let comment_start = pos;
                 loop {
                     // Try close: `--}-}` or `--}}`
-                    if pos + 1 < len && bytes[pos] == b'-' && bytes[pos + 1] == b'-'
-                        && let Some((trim_right, close_skip)) = detect_close(bytes, pos + 2) {
-                            let comment_end = pos;
-                            pos += 2 + close_skip; // skip `--` + close delimiter
-                            let value = source[comment_start..comment_end].to_string();
-                            segments.push(Segment::Comment {
-                                value,
-                                span: Span::new(tag_start, pos),
-                            });
-                            trims.push((trim_left, trim_right));
-                            break;
-                        }
+                    if pos + 1 < len
+                        && bytes[pos] == b'-'
+                        && bytes[pos + 1] == b'-'
+                        && let Some((trim_right, close_skip)) = detect_close(bytes, pos + 2)
+                    {
+                        let comment_end = pos;
+                        pos += 2 + close_skip; // skip `--` + close delimiter
+                        let value = source[comment_start..comment_end].to_string();
+                        segments.push(Segment::Comment {
+                            value,
+                            span: Span::new(tag_start, pos),
+                        });
+                        trims.push((trim_left, trim_right));
+                        break;
+                    }
                     if pos >= len {
                         return Err(ParseError::new(
                             ParseErrorKind::UnclosedComment,
@@ -114,7 +124,10 @@ pub fn scan_template(source: &str) -> Result<Vec<Segment>, ParseError> {
                 let tag_span = Span::new(tag_start, pos);
 
                 if let Some(indent) = parse_close_block(trimmed) {
-                    segments.push(Segment::CloseBlock { span: tag_span, indent: indent.1 });
+                    segments.push(Segment::CloseBlock {
+                        span: tag_span,
+                        indent: indent.1,
+                    });
                 } else if trimmed == "_" {
                     segments.push(Segment::CatchAll { span: tag_span });
                 } else {
@@ -220,14 +233,18 @@ fn apply_whitespace_trimming(segments: &mut Vec<Segment>, trims: &[(bool, bool)]
     for i in 0..len {
         let (trim_left, trim_right) = trims[i];
 
-        if trim_left && i > 0
-            && let Segment::Text { value, .. } = &mut segments[i - 1] {
-                *value = trim_trailing(value).to_string();
-            }
-        if trim_right && i + 1 < len
-            && let Segment::Text { value, .. } = &mut segments[i + 1] {
-                *value = trim_leading(value).to_string();
-            }
+        if trim_left
+            && i > 0
+            && let Segment::Text { value, .. } = &mut segments[i - 1]
+        {
+            *value = trim_trailing(value).to_string();
+        }
+        if trim_right
+            && i + 1 < len
+            && let Segment::Text { value, .. } = &mut segments[i + 1]
+        {
+            *value = trim_leading(value).to_string();
+        }
     }
 
     // Remove empty Text segments
@@ -482,7 +499,10 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert!(matches!(
             &segs[0],
-            Segment::CloseBlock { indent: Some(IndentModifier::Increase(2)), .. }
+            Segment::CloseBlock {
+                indent: Some(IndentModifier::Increase(2)),
+                ..
+            }
         ));
     }
 
@@ -492,7 +512,10 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert!(matches!(
             &segs[0],
-            Segment::CloseBlock { indent: Some(IndentModifier::Decrease(3)), .. }
+            Segment::CloseBlock {
+                indent: Some(IndentModifier::Decrease(3)),
+                ..
+            }
         ));
     }
 
@@ -502,7 +525,10 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert!(matches!(
             &segs[0],
-            Segment::CloseBlock { indent: Some(IndentModifier::Increase(2)), .. }
+            Segment::CloseBlock {
+                indent: Some(IndentModifier::Increase(2)),
+                ..
+            }
         ));
     }
 
@@ -533,9 +559,7 @@ mod tests {
     fn scan_string_with_braces() {
         let segs = scan_template(r#"{{ "a}}b" }}"#).unwrap();
         assert_eq!(segs.len(), 1);
-        assert!(
-            matches!(&segs[0], Segment::ExprTag { content, .. } if content == r#""a}}b""#)
-        );
+        assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == r#""a}}b""#));
     }
 
     #[test]

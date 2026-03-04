@@ -6,7 +6,6 @@ mod rewriter;
 mod scheduler;
 mod text_obf;
 
-
 pub use config::ObfConfig;
 
 use acvus_mir::ir::MirModule;

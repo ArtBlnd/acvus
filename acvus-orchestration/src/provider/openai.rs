@@ -50,9 +50,7 @@ pub fn build_request(
     let url = format!("{}/v1/chat/completions", config.endpoint);
     HttpRequest {
         url,
-        headers: vec![
-            ("Authorization".into(), format!("Bearer {}", config.api_key)),
-        ],
+        headers: vec![("Authorization".into(), format!("Bearer {}", config.api_key))],
         body,
     }
 }
@@ -91,7 +89,12 @@ fn format_message(m: &Message) -> serde_json::Value {
     msg
 }
 
-fn format_body(model: &str, messages: &[Message], tools: &[ToolSpec], generation: &GenerationParams) -> serde_json::Value {
+fn format_body(
+    model: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+    generation: &GenerationParams,
+) -> serde_json::Value {
     let msgs: Vec<serde_json::Value> = messages.iter().map(format_message).collect();
 
     let mut body = serde_json::json!({
@@ -99,9 +102,15 @@ fn format_body(model: &str, messages: &[Message], tools: &[ToolSpec], generation
         "messages": msgs,
     });
 
-    if let Some(t) = generation.temperature { body["temperature"] = serde_json::json!(t); }
-    if let Some(p) = generation.top_p { body["top_p"] = serde_json::json!(p); }
-    if let Some(m) = generation.max_tokens { body["max_tokens"] = serde_json::json!(m); }
+    if let Some(t) = generation.temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(p) = generation.top_p {
+        body["top_p"] = serde_json::json!(p);
+    }
+    if let Some(m) = generation.max_tokens {
+        body["max_tokens"] = serde_json::json!(m);
+    }
 
     if !tools.is_empty() {
         let tool_specs: Vec<serde_json::Value> = tools
@@ -167,7 +176,11 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or(serde_json::Value::Object(Default::default()));
 
-                Ok(ToolCall { id, name, arguments })
+                Ok(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                })
             })
             .collect();
 
@@ -189,8 +202,14 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
         None => return Usage::default(),
     };
     Usage {
-        input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-        output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+        input_tokens: u
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        output_tokens: u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
     }
 }
 

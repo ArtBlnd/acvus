@@ -54,10 +54,10 @@ pub fn partition_context_keys(
     // Closures: conservatively treat all context loads as lazy
     for closure in module.closures.values() {
         for inst in &closure.body.insts {
-            if let InstKind::ContextLoad { name, .. } = &inst.kind {
-                if !known.contains_key(name) {
-                    partition.lazy.insert(name.clone());
-                }
+            if let InstKind::ContextLoad { name, .. } = &inst.kind
+                && !known.contains_key(name)
+            {
+                partition.lazy.insert(name.clone());
             }
         }
     }
@@ -191,7 +191,13 @@ fn partition_from_body(
 
         match &block.terminator {
             Term::Jump(target) => {
-                enqueue_reach(*target, block_reach, &label_to_block, &mut reach, &mut queue);
+                enqueue_reach(
+                    *target,
+                    block_reach,
+                    &label_to_block,
+                    &mut reach,
+                    &mut queue,
+                );
             }
             Term::JumpIf {
                 cond,
@@ -199,14 +205,38 @@ fn partition_from_body(
                 else_label,
             } => match try_eval_condition(*cond, insts, val_def, known) {
                 Some(true) => {
-                    enqueue_reach(*then_label, block_reach, &label_to_block, &mut reach, &mut queue);
+                    enqueue_reach(
+                        *then_label,
+                        block_reach,
+                        &label_to_block,
+                        &mut reach,
+                        &mut queue,
+                    );
                 }
                 Some(false) => {
-                    enqueue_reach(*else_label, block_reach, &label_to_block, &mut reach, &mut queue);
+                    enqueue_reach(
+                        *else_label,
+                        block_reach,
+                        &label_to_block,
+                        &mut reach,
+                        &mut queue,
+                    );
                 }
                 None => {
-                    enqueue_reach(*then_label, Reach::Conditional, &label_to_block, &mut reach, &mut queue);
-                    enqueue_reach(*else_label, Reach::Conditional, &label_to_block, &mut reach, &mut queue);
+                    enqueue_reach(
+                        *then_label,
+                        Reach::Conditional,
+                        &label_to_block,
+                        &mut reach,
+                        &mut queue,
+                    );
+                    enqueue_reach(
+                        *else_label,
+                        Reach::Conditional,
+                        &label_to_block,
+                        &mut reach,
+                        &mut queue,
+                    );
                 }
             },
             Term::Fallthrough => {
@@ -228,10 +258,10 @@ fn partition_from_body(
             Reach::Unreachable => continue,
         };
         for &inst_idx in &block.insts {
-            if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind {
-                if !known.contains_key(name) {
-                    target.insert(name.clone());
-                }
+            if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind
+                && !known.contains_key(name)
+            {
+                target.insert(name.clone());
             }
         }
     }
@@ -244,11 +274,11 @@ fn enqueue_reach(
     reach: &mut [Reach],
     queue: &mut VecDeque<usize>,
 ) {
-    if let Some(&idx) = label_to_block.get(&label) {
-        if new_reach > reach[idx] {
-            reach[idx] = new_reach;
-            queue.push_back(idx);
-        }
+    if let Some(&idx) = label_to_block.get(&label)
+        && new_reach > reach[idx]
+    {
+        reach[idx] = new_reach;
+        queue.push_back(idx);
     }
 }
 
@@ -610,7 +640,10 @@ mod tests {
                 name: "level".into(),
                 bindings: Vec::new(),
             }),
-            inst(InstKind::Jump { label: Label(0), args: vec![] }),
+            inst(InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            }),
             // L1: else branch
             inst(InstKind::BlockLabel {
                 label: Label(1),
@@ -621,7 +654,10 @@ mod tests {
                 name: "guest_data".into(),
                 bindings: Vec::new(),
             }),
-            inst(InstKind::Jump { label: Label(0), args: vec![] }),
+            inst(InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            }),
             // L0: merge
             inst(InstKind::BlockLabel {
                 label: Label(0),
@@ -732,7 +768,10 @@ mod tests {
                 name: "admin_data".into(),
                 bindings: Vec::new(),
             }),
-            inst(InstKind::Jump { label: Label(99), args: vec![] }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
             // L20: next test
             inst(InstKind::BlockLabel {
                 label: Label(20),
@@ -760,7 +799,10 @@ mod tests {
                 name: "user_data".into(),
                 bindings: Vec::new(),
             }),
-            inst(InstKind::Jump { label: Label(99), args: vec![] }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
             // L40: default arm
             inst(InstKind::BlockLabel {
                 label: Label(40),
@@ -771,7 +813,10 @@ mod tests {
                 name: "default_data".into(),
                 bindings: Vec::new(),
             }),
-            inst(InstKind::Jump { label: Label(99), args: vec![] }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
             // L99: merge
             inst(InstKind::BlockLabel {
                 label: Label(99),

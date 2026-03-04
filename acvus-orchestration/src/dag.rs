@@ -32,11 +32,11 @@ pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
 
     for (i, node) in nodes.iter().enumerate() {
         for key in &node.all_context_keys {
-            if let Some(&j) = name_to_idx.get(key) {
-                if j != i {
-                    deps[i].insert(j);
-                    rdeps[j].insert(i);
-                }
+            if let Some(&j) = name_to_idx.get(key)
+                && j != i
+            {
+                deps[i].insert(j);
+                rdeps[j].insert(i);
             }
         }
     }
@@ -67,10 +67,17 @@ pub fn build_dag(nodes: &[CompiledNode]) -> Result<Dag, Vec<OrchError>> {
             .filter(|i| in_degree[*i] > 0)
             .map(|i| nodes[i].name.clone())
             .collect();
-        return Err(vec![OrchError::new(OrchErrorKind::CycleDetected { nodes: in_cycle })]);
+        return Err(vec![OrchError::new(OrchErrorKind::CycleDetected {
+            nodes: in_cycle,
+        })]);
     }
 
-    Ok(Dag { name_to_idx, deps, rdeps, topo_order })
+    Ok(Dag {
+        name_to_idx,
+        deps,
+        rdeps,
+        topo_order,
+    })
 }
 
 #[cfg(test)]
@@ -135,30 +142,21 @@ mod tests {
 
     #[test]
     fn cycle_detected() {
-        let nodes = vec![
-            make_node("A", vec!["B"]),
-            make_node("B", vec!["A"]),
-        ];
+        let nodes = vec![make_node("A", vec!["B"]), make_node("B", vec!["A"])];
         let err = build_dag(&nodes).unwrap_err();
         assert!(matches!(err[0].kind, OrchErrorKind::CycleDetected { .. }));
     }
 
     #[test]
     fn no_deps() {
-        let nodes = vec![
-            make_node("A", vec![]),
-            make_node("B", vec![]),
-        ];
+        let nodes = vec![make_node("A", vec![]), make_node("B", vec![])];
         let dag = build_dag(&nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 2);
     }
 
     #[test]
     fn external_key_ignored() {
-        let nodes = vec![
-            make_node("A", vec![]),
-            make_node("B", vec!["ext"]),
-        ];
+        let nodes = vec![make_node("A", vec![]), make_node("B", vec!["ext"])];
         let dag = build_dag(&nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 2);
         assert!(dag.deps[1].is_empty());

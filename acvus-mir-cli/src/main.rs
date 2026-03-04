@@ -68,7 +68,9 @@ fn main() {
         eprintln!("Context JSON format:");
         eprintln!(r#"  {{"#);
         eprintln!(r#"    "context": {{ "name": "string", "count": "int" }},"#);
-        eprintln!(r#"    "extern_fns": {{ "fetch": {{ "params": ["int"], "ret": "string", "effectful": true }} }}"#);
+        eprintln!(
+            r#"    "extern_fns": {{ "fetch": {{ "params": ["int"], "ret": "string", "effectful": true }} }}"#
+        );
         eprintln!(r#"  }}"#);
         process::exit(1);
     }
@@ -76,10 +78,12 @@ fn main() {
     // Read template.
     let source = if *args[1] == "-" {
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
-            eprintln!("error: failed to read stdin: {e}");
-            process::exit(1);
-        });
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to read stdin: {e}");
+                process::exit(1);
+            });
         buf
     } else {
         fs::read_to_string(args[1]).unwrap_or_else(|e| {
@@ -133,23 +137,16 @@ fn main() {
                 let pass = ObfuscatePass {
                     config: ObfConfig::default(),
                 };
-                module = acvus_mir_pass::TransformPass::transform(
-                    &pass, module, (),
-                );
+                module = acvus_mir_pass::TransformPass::transform(&pass, module, ());
 
                 use acvus_mir_pass::optimize::ConstDedupPass;
-                module = acvus_mir_pass::TransformPass::transform(
-                    &ConstDedupPass, module, (),
-                );
+                module = acvus_mir_pass::TransformPass::transform(&ConstDedupPass, module, ());
             }
             println!("{}", dump(&module));
         }
         Err(errors) => {
             for e in &errors {
-                eprintln!(
-                    "error [{}..{}]: {}",
-                    e.span.start, e.span.end, e
-                );
+                eprintln!("error [{}..{}]: {}", e.span.start, e.span.end, e);
             }
             process::exit(1);
         }

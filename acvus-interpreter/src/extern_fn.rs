@@ -16,9 +16,7 @@ pub struct ExternFnSig {
 }
 
 #[derive(Clone)]
-pub struct ExternFnBody(
-    Arc<dyn Fn(Vec<Value>) -> BoxFuture<'static, Value> + Send + Sync>,
-);
+pub struct ExternFnBody(Arc<dyn Fn(Vec<Value>) -> BoxFuture<'static, Value> + Send + Sync>);
 
 impl ExternFnBody {
     pub fn new<F, Fut>(f: F) -> Self
@@ -77,7 +75,12 @@ impl ExternFnRegistry {
     pub fn to_mir_registry(&self) -> ExternRegistry {
         let mut module = ExternModule::new("extern");
         for (name, (sig, _)) in &self.fns {
-            module.add_fn(name.clone(), sig.params.clone(), sig.ret.clone(), sig.effectful);
+            module.add_fn(
+                name.clone(),
+                sig.params.clone(),
+                sig.ret.clone(),
+                sig.effectful,
+            );
         }
         let mut registry = ExternRegistry::new();
         registry.register(&module);

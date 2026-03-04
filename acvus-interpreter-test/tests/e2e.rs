@@ -53,30 +53,26 @@ async fn variable_write() {
 
 #[tokio::test]
 async fn variable_write_then_read() {
-    assert_eq!(
-        run_simple("{{ $x = 42 }}{{ $x | to_string }}").await,
-        "42"
-    );
+    assert_eq!(run_simple("{{ $x = 42 }}{{ $x | to_string }}").await, "42");
 }
 
 #[tokio::test]
 async fn context_field_access() {
     let (ty, val) = user_context();
-    assert_eq!(
-        run_with_context("{{ @user.name }}", ty, val).await,
-        "alice"
-    );
+    assert_eq!(run_with_context("{{ @user.name }}", ty, val).await, "alice");
 }
 
 #[tokio::test]
 async fn variable_write_computed() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(10)),
-        ("b".into(), Value::Int(32)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(10)), ("b".into(), Value::Int(32))]);
     assert_eq!(
-        run_with_context("{{ $result = @a + @b }}{{ $result | to_string }}", types, values).await,
+        run_with_context(
+            "{{ $result = @a + @b }}{{ $result | to_string }}",
+            types,
+            values
+        )
+        .await,
         "42"
     );
 }
@@ -86,10 +82,7 @@ async fn variable_write_computed() {
 #[tokio::test]
 async fn arithmetic_to_string() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(3)),
-        ("b".into(), Value::Int(7)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(3)), ("b".into(), Value::Int(7))]);
     assert_eq!(
         run_with_context("{{ @a + @b | to_string }}", types, values).await,
         "10"
@@ -123,10 +116,7 @@ async fn boolean_not() {
 #[tokio::test]
 async fn comparison_operators() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(10)),
-        ("b".into(), Value::Int(5)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(10)), ("b".into(), Value::Int(5))]);
     assert_eq!(
         run_with_context(
             r#"{{ x = @a > @b }}{{ x | to_string }}{{_}}{{/}}"#,
@@ -246,10 +236,7 @@ async fn catch_all_with_binding() {
 #[tokio::test]
 async fn equality_as_match_source() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(5)),
-        ("b".into(), Value::Int(5)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(5)), ("b".into(), Value::Int(5))]);
     assert_eq!(
         run_with_context(
             r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
@@ -389,14 +376,8 @@ async fn iter_tuple_destructure() {
     let val = HashMap::from([(
         "pairs".into(),
         Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("a".into()),
-                Value::Int(1),
-            ]),
-            Value::Tuple(vec![
-                Value::String("b".into()),
-                Value::Int(2),
-            ]),
+            Value::Tuple(vec![Value::String("a".into()), Value::Int(1)]),
+            Value::Tuple(vec![Value::String("b".into()), Value::Int(2)]),
         ]),
     )]);
     assert_eq!(
@@ -601,10 +582,7 @@ async fn tuple_pattern_binding() {
     let types = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let values = HashMap::from([(
         "pair".into(),
-        Value::Tuple(vec![
-            Value::String("alice".into()),
-            Value::Int(30),
-        ]),
+        Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
     )]);
     assert_eq!(
         run_with_context(r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#, types, values).await,
@@ -617,10 +595,7 @@ async fn tuple_pattern_wildcard() {
     let types = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let values = HashMap::from([(
         "pair".into(),
-        Value::Tuple(vec![
-            Value::String("alice".into()),
-            Value::Int(30),
-        ]),
+        Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
     )]);
     assert_eq!(
         run_with_context(r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#, types, values).await,
@@ -631,10 +606,7 @@ async fn tuple_pattern_wildcard() {
 #[tokio::test]
 async fn tuple_pattern_literal_match_hit() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(0)),
-        ("b".into(), Value::Int(1)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(0)), ("b".into(), Value::Int(1))]);
     assert_eq!(
         run_with_context(
             r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
@@ -650,10 +622,7 @@ async fn tuple_pattern_literal_match_hit() {
 async fn nested_tuple_pattern() {
     let types = HashMap::from([(
         "data".into(),
-        Ty::Tuple(vec![
-            Ty::Tuple(vec![Ty::Int, Ty::Int]),
-            Ty::String,
-        ]),
+        Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
     )]);
     let values = HashMap::from([(
         "data".into(),
@@ -663,7 +632,12 @@ async fn nested_tuple_pattern() {
         ]),
     )]);
     assert_eq!(
-        run_with_context(r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#, types, values).await,
+        run_with_context(
+            r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
+            types,
+            values
+        )
+        .await,
         "hello"
     );
 }
@@ -803,11 +777,7 @@ async fn closure_capture_context() {
     let values = HashMap::from([
         (
             "items".into(),
-            Value::List(vec![
-                Value::Int(1),
-                Value::Int(5),
-                Value::Int(10),
-            ]),
+            Value::List(vec![Value::Int(1), Value::Int(5), Value::Int(10)]),
         ),
         ("threshold".into(), Value::Int(3)),
     ]);
@@ -898,10 +868,7 @@ async fn lambda_float_arithmetic() {
     let types = HashMap::from([("vals".into(), Ty::List(Box::new(Ty::Float)))]);
     let values = HashMap::from([(
         "vals".into(),
-        Value::List(vec![
-            Value::Float(1.5),
-            Value::Float(2.5),
-        ]),
+        Value::List(vec![Value::Float(1.5), Value::Float(2.5)]),
     )]);
     assert_eq!(
         run_with_context(
@@ -1007,12 +974,7 @@ async fn and_both_true() {
         ("b".into(), Value::Bool(true)),
     ]);
     assert_eq!(
-        run_with_context(
-            r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#,
-            types,
-            values
-        )
-        .await,
+        run_with_context(r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
         "yes"
     );
 }
@@ -1025,12 +987,7 @@ async fn and_one_false() {
         ("b".into(), Value::Bool(false)),
     ]);
     assert_eq!(
-        run_with_context(
-            r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#,
-            types,
-            values
-        )
-        .await,
+        run_with_context(r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
         "no"
     );
 }
@@ -1043,12 +1000,7 @@ async fn or_one_true() {
         ("b".into(), Value::Bool(true)),
     ]);
     assert_eq!(
-        run_with_context(
-            r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#,
-            types,
-            values
-        )
-        .await,
+        run_with_context(r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
         "yes"
     );
 }
@@ -1061,12 +1013,7 @@ async fn or_both_false() {
         ("b".into(), Value::Bool(false)),
     ]);
     assert_eq!(
-        run_with_context(
-            r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#,
-            types,
-            values
-        )
-        .await,
+        run_with_context(r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
         "no"
     );
 }
@@ -1128,10 +1075,7 @@ async fn logical_in_filter() {
 
 #[tokio::test]
 async fn nested_match_with_variable_write() {
-    let types = HashMap::from([
-        ("role".into(), Ty::String),
-        ("level".into(), Ty::Int),
-    ]);
+    let types = HashMap::from([("role".into(), Ty::String), ("level".into(), Ty::Int)]);
     let values = HashMap::from([
         ("role".into(), Value::String("admin".into())),
         ("level".into(), Value::Int(5)),
@@ -1374,7 +1318,10 @@ async fn complex_object_filter_format() {
 #[tokio::test]
 async fn list_literal_expression() {
     assert_eq!(
-        run_simple(r#"{{ x = [1, 2, 3] }}{{ x | map(i -> i | to_string) | join(", ") }}{{_}}{{/}}"#).await,
+        run_simple(
+            r#"{{ x = [1, 2, 3] }}{{ x | map(i -> i | to_string) | join(", ") }}{{_}}{{/}}"#
+        )
+        .await,
         "1, 2, 3"
     );
 }
@@ -1455,12 +1402,15 @@ async fn obf_mixed_text_and_expr() {
 #[tokio::test]
 async fn obf_int_arithmetic() {
     let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(3)),
-        ("b".into(), Value::Int(7)),
-    ]);
+    let values = HashMap::from([("a".into(), Value::Int(3)), ("b".into(), Value::Int(7))]);
     assert_eq!(
-        run_obfuscated("{{ @a + @b | to_string }}", types, values, ExternFnRegistry::new()).await,
+        run_obfuscated(
+            "{{ @a + @b | to_string }}",
+            types,
+            values,
+            ExternFnRegistry::new()
+        )
+        .await,
         "10"
     );
 }
@@ -1520,10 +1470,7 @@ async fn obf_iteration() {
 
 #[tokio::test]
 async fn obf_nested_match_with_variable() {
-    let types = HashMap::from([
-        ("role".into(), Ty::String),
-        ("level".into(), Ty::Int),
-    ]);
+    let types = HashMap::from([("role".into(), Ty::String), ("level".into(), Ty::Int)]);
     let values = HashMap::from([
         ("role".into(), Value::String("admin".into())),
         ("level".into(), Value::Int(5)),
@@ -1574,9 +1521,10 @@ async fn obf_variable_accumulate_in_loop() {
 
 #[tokio::test]
 async fn obf_nested_iteration_with_match() {
-    let ty = HashMap::from([
-        ("rows".into(), Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
-    ]);
+    let ty = HashMap::from([(
+        "rows".into(),
+        Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
+    )]);
     let val = HashMap::from([(
         "rows".into(),
         Value::List(vec![
@@ -1670,9 +1618,7 @@ async fn obf_filter_accumulate_complex() {
 
 #[tokio::test]
 async fn obf_pipe_chain_with_context() {
-    let types = HashMap::from([
-        ("names".into(), Ty::List(Box::new(Ty::String))),
-    ]);
+    let types = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
     let values = HashMap::from([(
         "names".into(),
         Value::List(vec![
@@ -1695,14 +1641,8 @@ async fn obf_pipe_chain_with_context() {
 
 #[tokio::test]
 async fn obf_boolean_logic_in_match() {
-    let types = HashMap::from([
-        ("a".into(), Ty::Int),
-        ("b".into(), Ty::Int),
-    ]);
-    let values = HashMap::from([
-        ("a".into(), Value::Int(5)),
-        ("b".into(), Value::Int(10)),
-    ]);
+    let types = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let values = HashMap::from([("a".into(), Value::Int(5)), ("b".into(), Value::Int(10))]);
     assert_eq!(
         run_obfuscated(
             r#"{{ $result = "none" }}{{ 1..10 = @a }}{{ 5..15 = @b }}{{ $result = "both" }}{{_}}{{ $result = "a-only" }}{{/}}{{_}}{{ $result = "other" }}{{/}}{{ $result }}"#,
@@ -1725,26 +1665,25 @@ async fn context_call_bindings_carried() {
     ]);
     let values = HashMap::from([
         ("node".into(), Value::String("resolved".into())),
-        ("items".into(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        (
+            "items".into(),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        ),
     ]);
-    let result = run_capturing_context_calls(
-        "{{ @node { count: @items | len, } }}",
-        types,
-        values,
-    )
-    .await;
+    let result =
+        run_capturing_context_calls("{{ @node { count: @items | len, } }}", types, values).await;
     assert_eq!(result.output, "resolved");
     assert_eq!(result.calls.len(), 1);
     assert_eq!(result.calls[0].0, "node");
-    assert!(matches!(result.calls[0].1.get("count"), Some(Value::Int(3))));
+    assert!(matches!(
+        result.calls[0].1.get("count"),
+        Some(Value::Int(3))
+    ));
 }
 
 #[tokio::test]
 async fn context_call_multiple_bindings() {
-    let types = HashMap::from([
-        ("target".into(), Ty::String),
-        ("name".into(), Ty::String),
-    ]);
+    let types = HashMap::from([("target".into(), Ty::String), ("name".into(), Ty::String)]);
     let values = HashMap::from([
         ("target".into(), Value::String("done".into())),
         ("name".into(), Value::String("alice".into())),
@@ -1766,12 +1705,8 @@ async fn context_call_multiple_bindings() {
 async fn context_call_variable_shorthand() {
     let types = HashMap::from([("node".into(), Ty::String)]);
     let values = HashMap::from([("node".into(), Value::String("ok".into()))]);
-    let result = run_capturing_context_calls(
-        "{{ $x = 42 }}{{ @node { $x, } }}",
-        types,
-        values,
-    )
-    .await;
+    let result =
+        run_capturing_context_calls("{{ $x = 42 }}{{ @node { $x, } }}", types, values).await;
     assert_eq!(result.output, "ok");
     assert_eq!(result.calls.len(), 1);
     assert!(matches!(result.calls[0].1.get("x"), Some(Value::Int(42))));
@@ -1781,12 +1716,7 @@ async fn context_call_variable_shorthand() {
 async fn context_call_no_bindings_not_captured() {
     let types = HashMap::from([("data".into(), Ty::String)]);
     let values = HashMap::from([("data".into(), Value::String("hi".into()))]);
-    let result = run_capturing_context_calls(
-        "{{ @data }}",
-        types,
-        values,
-    )
-    .await;
+    let result = run_capturing_context_calls("{{ @data }}", types, values).await;
     assert_eq!(result.output, "hi");
     assert!(result.calls.is_empty());
 }

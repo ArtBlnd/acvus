@@ -64,8 +64,7 @@ fn dedup_body(mut body: MirBody) -> MirBody {
     }
 
     // 2. Separate canonical Const instructions (for hoisting) from the rest.
-    let canonical_set: std::collections::HashSet<ValueId> =
-        canonical.values().copied().collect();
+    let canonical_set: std::collections::HashSet<ValueId> = canonical.values().copied().collect();
 
     let mut hoisted = Vec::new();
     let mut rest = Vec::new();
@@ -158,9 +157,7 @@ fn remap_uses(kind: &mut InstKind, remap: &HashMap<ValueId, ValueId>) {
             remap_val(right, remap);
         }
 
-        InstKind::MakeRange {
-            start, end, ..
-        } => {
+        InstKind::MakeRange { start, end, .. } => {
             remap_val(start, remap);
             remap_val(end, remap);
         }
@@ -189,9 +186,7 @@ fn remap_uses(kind: &mut InstKind, remap: &HashMap<ValueId, ValueId>) {
             remap_vec(captures, remap);
         }
 
-        InstKind::CallClosure {
-            closure, args, ..
-        } => {
+        InstKind::CallClosure { closure, args, .. } => {
             remap_val(closure, remap);
             remap_vec(args, remap);
         }
@@ -216,8 +211,8 @@ fn remap_uses(kind: &mut InstKind, remap: &HashMap<ValueId, ValueId>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_mir::ir::{DebugInfo, Inst, MirBody};
     use acvus_ast::Span;
+    use acvus_mir::ir::{DebugInfo, Inst, MirBody};
     use std::collections::HashMap;
 
     fn span() -> Span {
@@ -237,9 +232,27 @@ mod tests {
     #[test]
     fn dedup_removes_duplicate_int_consts() {
         let body = make_body(vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(42) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(42) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(2), value: Literal::Int(42) } },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(42),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::Int(42),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(2),
+                    value: Literal::Int(42),
+                },
+            },
             Inst {
                 span: span(),
                 kind: InstKind::BinOp {
@@ -269,8 +282,20 @@ mod tests {
     #[test]
     fn dedup_keeps_distinct_values() {
         let body = make_body(vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(2) } },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(1),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::Int(2),
+                },
+            },
             Inst {
                 span: span(),
                 kind: InstKind::BinOp {
@@ -289,8 +314,17 @@ mod tests {
     #[test]
     fn dedup_no_change_when_no_duplicates() {
         let body = make_body(vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(1),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(0)),
+            },
         ]);
 
         let result = dedup_body(body);
@@ -300,9 +334,24 @@ mod tests {
     #[test]
     fn dedup_string_consts() {
         let body = make_body(vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::String("hello".into()) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::String("hello".into()) } },
-            Inst { span: span(), kind: InstKind::Yield(ValueId(1)) },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::String("hello".into()),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::String("hello".into()),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(1)),
+            },
         ]);
 
         let result = dedup_body(body);
@@ -316,11 +365,35 @@ mod tests {
     #[test]
     fn dedup_hoists_canonical_to_top() {
         let body = make_body(vec![
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(0), value: Literal::Int(1) } },
-            Inst { span: span(), kind: InstKind::Yield(ValueId(0)) },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(1), value: Literal::Int(256) } },
-            Inst { span: span(), kind: InstKind::Const { dst: ValueId(2), value: Literal::Int(256) } },
-            Inst { span: span(), kind: InstKind::Yield(ValueId(2)) },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(0),
+                    value: Literal::Int(1),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(0)),
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(1),
+                    value: Literal::Int(256),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Const {
+                    dst: ValueId(2),
+                    value: Literal::Int(256),
+                },
+            },
+            Inst {
+                span: span(),
+                kind: InstKind::Yield(ValueId(2)),
+            },
         ]);
 
         let result = dedup_body(body);

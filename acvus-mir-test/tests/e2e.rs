@@ -57,8 +57,7 @@ fn context_field_access() {
 #[test]
 fn arithmetic_to_string() {
     let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let ir =
-        compile_to_ir("{{ @a + @b | to_string }}", context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir("{{ @a + @b | to_string }}", context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -68,12 +67,7 @@ fn arithmetic_to_string() {
 fn simple_match_binding() {
     let context = HashMap::from([("name".into(), Ty::String)]);
     // Variable binding is body-less — defines x in current scope.
-    let ir = compile_to_ir(
-        r#"{{ x = @name }}{{ x }}"#,
-        context,
-        &ExternRegistry::new(),
-    )
-    .unwrap();
+    let ir = compile_to_ir(r#"{{ x = @name }}{{ x }}"#, context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -169,20 +163,14 @@ fn object_pattern() {
 #[test]
 fn range_binding() {
     // Variable binding captures a range value; iterate to emit scalar elements.
-    let ir = compile_simple(
-        r#"{{ x in 0..5 }}{{ x | to_string }}{{/}}"#,
-    )
-    .unwrap();
+    let ir = compile_simple(r#"{{ x in 0..5 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn range_iteration() {
     // Explicit iteration with `in`.
-    let ir = compile_simple(
-        r#"{{ x in 0..3 }}{{ x | to_string }}{{/}}"#,
-    )
-    .unwrap();
+    let ir = compile_simple(r#"{{ x in 0..3 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -268,9 +256,7 @@ fn tuple_expression() {
 
 #[test]
 fn tuple_pattern_binding() {
-    let context = HashMap::from([
-        ("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int])),
-    ]);
+    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let ir = compile_to_ir(
         r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#,
         context,
@@ -282,9 +268,7 @@ fn tuple_pattern_binding() {
 
 #[test]
 fn tuple_pattern_wildcard() {
-    let context = HashMap::from([
-        ("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int])),
-    ]);
+    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let ir = compile_to_ir(
         r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#,
         context,
@@ -296,10 +280,7 @@ fn tuple_pattern_wildcard() {
 
 #[test]
 fn tuple_pattern_literal_match() {
-    let context = HashMap::from([
-        ("a".into(), Ty::Int),
-        ("b".into(), Ty::Int),
-    ]);
+    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
     let ir = compile_to_ir(
         r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
         context,
@@ -329,9 +310,7 @@ fn tuple_nested_destructure() {
 
 #[test]
 fn error_tuple_arity_mismatch() {
-    let context = HashMap::from([
-        ("pair".into(), Ty::Tuple(vec![Ty::Int, Ty::Int])),
-    ]);
+    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::Int, Ty::Int]))]);
     let result = compile_to_ir(
         r#"{{ (a, b, c) = @pair }}{{ a | to_string }}{{/}}"#,
         context,
@@ -352,7 +331,11 @@ fn error_emit_non_string() {
 
 #[test]
 fn error_undefined_context() {
-    let result = compile_to_ir("{{ @unknown | to_string }}", HashMap::new(), &ExternRegistry::new());
+    let result = compile_to_ir(
+        "{{ @unknown | to_string }}",
+        HashMap::new(),
+        &ExternRegistry::new(),
+    );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -387,7 +370,12 @@ fn error_range_float_bounds() {
 #[test]
 fn iter_list_binding() {
     let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir("{{ x in @items }}{{ x | to_string }}{{/}}", context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        "{{ x in @items }}{{ x | to_string }}{{/}}",
+        context,
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -408,7 +396,12 @@ fn iter_tuple_destructure() {
         "pairs".into(),
         Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
     )]);
-    let ir = compile_to_ir("{{ (a, _) in @pairs }}{{ a }}{{/}}", context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        "{{ (a, _) in @pairs }}{{ a }}{{/}}",
+        context,
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -427,14 +420,22 @@ fn iter_with_catch_all() {
 #[test]
 fn error_iter_refutable_pattern() {
     let context = HashMap::from([("roles".into(), Ty::List(Box::new(Ty::String)))]);
-    let result = compile_to_ir(r#"{{ "admin" in @roles }}...{{/}}"#, context, &ExternRegistry::new());
+    let result = compile_to_ir(
+        r#"{{ "admin" in @roles }}...{{/}}"#,
+        context,
+        &ExternRegistry::new(),
+    );
     assert!(result.is_err());
 }
 
 #[test]
 fn error_iter_not_iterable() {
     let context = HashMap::from([("name".into(), Ty::String)]);
-    let result = compile_to_ir("{{ x in @name }}{{ x }}{{/}}", context, &ExternRegistry::new());
+    let result = compile_to_ir(
+        "{{ x in @name }}{{ x }}{{/}}",
+        context,
+        &ExternRegistry::new(),
+    );
     assert!(result.is_err());
 }
 
@@ -489,9 +490,10 @@ fn list_head_with_object_elements() {
     // List destructure where elements are objects.
     let context = HashMap::from([(
         "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-        ])))),
+        Ty::List(Box::new(Ty::Object(BTreeMap::from([(
+            "name".into(),
+            Ty::String,
+        )])))),
     )]);
     let ir = compile_to_ir(
         r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
@@ -507,10 +509,7 @@ fn tuple_with_list_element() {
     // Tuple containing a list, extract and iterate.
     let context = HashMap::from([(
         "data".into(),
-        Ty::Tuple(vec![
-            Ty::String,
-            Ty::List(Box::new(Ty::Int)),
-        ]),
+        Ty::Tuple(vec![Ty::String, Ty::List(Box::new(Ty::Int))]),
     )]);
     let ir = compile_to_ir(
         r#"{{ (label, items) = @data }}{{ label }}{{ x in items }}{{ x | to_string }}{{/}}{{/}}"#,
@@ -629,10 +628,7 @@ fn list_destructure_tail() {
 
 #[test]
 fn variable_write_then_read() {
-    let ir = compile_simple(
-        r#"{{ $x = 42 }}{{ $x | to_string }}"#,
-    )
-    .unwrap();
+    let ir = compile_simple(r#"{{ $x = 42 }}{{ $x | to_string }}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -657,10 +653,7 @@ fn nested_iteration_with_binding() {
 
 #[test]
 fn range_inclusive_iteration() {
-    let ir = compile_simple(
-        r#"{{ x in 0..=3 }}{{ x | to_string }}{{/}}"#,
-    )
-    .unwrap();
+    let ir = compile_simple(r#"{{ x in 0..=3 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -722,10 +715,7 @@ fn multi_arm_range_and_literal() {
 
 #[test]
 fn list_literal_expression() {
-    let ir = compile_simple(
-        r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#,
-    )
-    .unwrap();
+    let ir = compile_simple(r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -803,10 +793,7 @@ fn list_destructure_head_and_tail() {
 fn nested_tuple_pattern() {
     let context = HashMap::from([(
         "data".into(),
-        Ty::Tuple(vec![
-            Ty::Tuple(vec![Ty::Int, Ty::Int]),
-            Ty::String,
-        ]),
+        Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
     )]);
     let ir = compile_to_ir(
         r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
@@ -863,10 +850,7 @@ fn variable_shadowing() {
 
 #[test]
 fn nested_match_blocks() {
-    let context = HashMap::from([
-        ("role".into(), Ty::String),
-        ("level".into(), Ty::Int),
-    ]);
+    let context = HashMap::from([("role".into(), Ty::String), ("level".into(), Ty::Int)]);
     let ir = compile_to_ir(
         r#"{{ "admin" = @role }}{{ 1..10 = @level }}low{{_}}high{{/}}{{_}}guest{{/}}"#,
         context,
@@ -907,9 +891,7 @@ fn triple_pipe_chain() {
 
 #[test]
 fn variable_write_in_iteration() {
-    let context = HashMap::from([
-        ("items".into(), Ty::List(Box::new(Ty::Int))),
-    ]);
+    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
         r#"{{ x in @items }}{{ $last = x }}{{/}}{{ $last | to_string }}"#,
         context,
@@ -1017,10 +999,7 @@ fn multiple_closures_same_capture() {
 
 #[test]
 fn string_equality_in_filter() {
-    let context = HashMap::from([(
-        "names".into(),
-        Ty::List(Box::new(Ty::String)),
-    )]);
+    let context = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
         r#"{{ x = @names | filter(n -> n != "admin") }}{{ x | join(",") }}"#,
         context,
@@ -1056,9 +1035,7 @@ fn lambda_field_access() {
 #[test]
 fn variable_accumulate_in_loop() {
     // Write to variable on each iteration.
-    let context = HashMap::from([
-        ("items".into(), Ty::List(Box::new(Ty::Int))),
-    ]);
+    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
         r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
         context,
@@ -1124,11 +1101,10 @@ fn lambda_multiple_field_access() {
 fn lambda_chained_field_access() {
     let context = HashMap::from([(
         "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("address".into(), Ty::Object(BTreeMap::from([
-                ("city".into(), Ty::String),
-            ]))),
-        ])))),
+        Ty::List(Box::new(Ty::Object(BTreeMap::from([(
+            "address".into(),
+            Ty::Object(BTreeMap::from([("city".into(), Ty::String)])),
+        )])))),
     )]);
     let ir = compile_to_ir(
         r#"{{ x = @users | map(u -> u.address.city) }}{{ x | join(",") }}"#,
@@ -1144,10 +1120,7 @@ fn lambda_chained_field_access() {
 #[test]
 fn lambda_string_concat() {
     // Lambda param is Ty::Var; string concat (+) must resolve via unification.
-    let context = HashMap::from([(
-        "names".into(),
-        Ty::List(Box::new(Ty::String)),
-    )]);
+    let context = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
         r#"{{ x = @names | map(n -> n + "!") }}{{ x | join(",") }}"#,
         context,
@@ -1398,10 +1371,7 @@ fn context_call_simple() {
 
 #[test]
 fn context_call_shorthand() {
-    let context = HashMap::from([
-        ("node".into(), Ty::String),
-        ("other".into(), Ty::String),
-    ]);
+    let context = HashMap::from([("node".into(), Ty::String), ("other".into(), Ty::String)]);
     let ir = compile_to_ir(
         "{{ $var = 42 }}{{ @node { $var, @other, } }}",
         context,
