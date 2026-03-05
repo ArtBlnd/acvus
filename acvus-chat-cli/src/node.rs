@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use acvus_orchestration::{
-    ApiKind, GenerationParams, HistorySpec, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec,
-    NodeKind, NodeSpec, PlainSpec, Strategy, StrategyMode, TokenBudget, ToolBinding,
+    ApiKind, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec,
+    PlainSpec, SelfSpec, Strategy, TokenBudget, ToolBinding,
 };
 use serde::Deserialize;
 
@@ -18,6 +18,12 @@ enum NodeKindDef {
         #[serde(default)]
         cache_config: HashMap<String, serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SelfDef {
+    pub self_bind: String,
+    pub initial_value: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,12 +48,8 @@ pub struct NodeDef {
     #[serde(default)]
     generation: GenerationParamsDef,
     cache_key: Option<String>,
-    history: Option<HistoryDef>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct HistoryDef {
-    pub store: String,
+    #[serde(rename = "self")]
+    self_spec: SelfDef,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -55,6 +57,8 @@ pub struct HistoryDef {
 enum StrategyModeDef {
     #[default]
     Always,
+    OncePerTurn,
+    History,
     IfModified,
 }
 
@@ -62,7 +66,14 @@ enum StrategyModeDef {
 struct StrategyDef {
     #[serde(default)]
     mode: StrategyModeDef,
-    bind: Option<String>,
+    /// File path to history_bind script.
+    history_bind: Option<String>,
+    /// Inline history_bind script (used when no file).
+    inline_history_bind: Option<String>,
+    /// File path to key script.
+    key: Option<String>,
+    /// Inline key script.
+    inline_key: Option<String>,
 }
 
 /// Serde message entry — tried as Iterator first (untagged).
@@ -172,20 +183,32 @@ pub fn resolve_node(
         }
     }
 
-    let strategy = Strategy {
-        mode: match def.strategy.mode {
-            StrategyModeDef::Always => StrategyMode::Always,
-            StrategyModeDef::IfModified => StrategyMode::IfModified,
-        },
-        bind_source: def
-            .strategy
-            .bind
-            .map(|path| {
-                let full = base_dir.join(&path);
-                std::fs::read_to_string(&full)
-                    .map_err(|e| format!("failed to load strategy bind '{}': {e}", full.display()))
-            })
-            .transpose()?,
+    let strategy = match def.strategy.mode {
+        StrategyModeDef::Always => Strategy::Always,
+        StrategyModeDef::OncePerTurn => Strategy::OncePerTurn,
+        StrategyModeDef::History => {
+            let history_bind = resolve_template(
+                base_dir,
+                def.strategy.history_bind.as_deref(),
+                def.strategy.inline_history_bind.as_deref(),
+            )
+            .map_err(|e| format!("node '{}': history strategy: {e}", def.name))?;
+            Strategy::History { history_bind }
+        }
+        StrategyModeDef::IfModified => {
+            let key = resolve_template(
+                base_dir,
+                def.strategy.key.as_deref(),
+                def.strategy.inline_key.as_deref(),
+            )
+            .map_err(|e| format!("node '{}': if-modified strategy: {e}", def.name))?;
+            Strategy::IfModified { key }
+        }
+    };
+
+    let self_spec = SelfSpec {
+        self_bind: def.self_spec.self_bind,
+        initial_value: def.self_spec.initial_value,
     };
 
     let generation = GenerationParams {
@@ -270,7 +293,7 @@ pub fn resolve_node(
     Ok(NodeSpec {
         name: def.name,
         kind,
+        self_spec,
         strategy,
-        history: def.history.map(|h| HistorySpec { store: h.store }),
     })
 }

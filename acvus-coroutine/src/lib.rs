@@ -6,19 +6,17 @@ use std::task::{Context, Poll, Waker};
 
 use parking_lot::Mutex;
 
-use crate::value::Value;
-
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
-struct Shared {
-    value: Option<Value>,
+struct Shared<V> {
+    value: Option<V>,
     yielded: bool,
     producer_waker: Option<Waker>,
     context_request: Option<String>,
-    context_bindings: HashMap<String, Value>,
-    context_response: Option<Arc<Value>>,
+    context_bindings: HashMap<String, V>,
+    context_response: Option<Arc<V>>,
     context_requested: bool,
 }
 
@@ -27,19 +25,19 @@ struct Shared {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct YieldHandle {
-    shared: Arc<Mutex<Shared>>,
+pub struct YieldHandle<V> {
+    shared: Arc<Mutex<Shared<V>>>,
 }
 
-impl YieldHandle {
-    pub fn yield_val(&self, value: Value) -> YieldFuture {
+impl<V> YieldHandle<V> {
+    pub fn yield_val(&self, value: V) -> YieldFuture<V> {
         YieldFuture {
             shared: Arc::clone(&self.shared),
             value: Some(value),
         }
     }
 
-    pub fn request_context(&self, name: String) -> ContextFuture {
+    pub fn request_context(&self, name: String) -> ContextFuture<V> {
         ContextFuture {
             shared: Arc::clone(&self.shared),
             name: Some(name),
@@ -50,8 +48,8 @@ impl YieldHandle {
     pub fn request_context_with(
         &self,
         name: String,
-        bindings: HashMap<String, Value>,
-    ) -> ContextFuture {
+        bindings: HashMap<String, V>,
+    ) -> ContextFuture<V> {
         ContextFuture {
             shared: Arc::clone(&self.shared),
             name: Some(name),
@@ -64,12 +62,15 @@ impl YieldHandle {
 // YieldFuture
 // ---------------------------------------------------------------------------
 
-pub struct YieldFuture {
-    shared: Arc<Mutex<Shared>>,
-    value: Option<Value>,
+pub struct YieldFuture<V> {
+    shared: Arc<Mutex<Shared<V>>>,
+    value: Option<V>,
 }
 
-impl Future for YieldFuture {
+impl<V> Future for YieldFuture<V>
+where
+    V: Unpin,
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -91,16 +92,19 @@ impl Future for YieldFuture {
 // ContextFuture
 // ---------------------------------------------------------------------------
 
-pub struct ContextFuture {
-    shared: Arc<Mutex<Shared>>,
+pub struct ContextFuture<V> {
+    shared: Arc<Mutex<Shared<V>>>,
     name: Option<String>,
-    bindings: HashMap<String, Value>,
+    bindings: HashMap<String, V>,
 }
 
-impl Future for ContextFuture {
-    type Output = Arc<Value>;
+impl<V> Future for ContextFuture<V>
+where
+    V: Unpin,
+{
+    type Output = Arc<V>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<Value>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<V>> {
         let this = self.get_mut();
         let mut shared = this.shared.lock();
 
@@ -123,49 +127,49 @@ impl Future for ContextFuture {
 // Resume API — public types
 // ---------------------------------------------------------------------------
 
-pub struct ResumeKey(ResumeKeyInner);
+pub struct ResumeKey<V>(ResumeKeyInner<V>);
 
-enum ResumeKeyInner {
+enum ResumeKeyInner<V> {
     Start,
-    Context(Arc<Value>),
+    Context(Arc<V>),
 }
 
-pub enum Stepped {
-    Emit(EmitStepped),
-    NeedContext(NeedContextStepped),
+pub enum Stepped<V> {
+    Emit(EmitStepped<V>),
+    NeedContext(NeedContextStepped<V>),
     Done,
 }
 
-pub struct EmitStepped {
-    value: Value,
-    key: ResumeKey,
+pub struct EmitStepped<V> {
+    value: V,
+    key: ResumeKey<V>,
 }
 
-impl EmitStepped {
-    pub fn into_parts(self) -> (Value, ResumeKey) {
+impl<V> EmitStepped<V> {
+    pub fn into_parts(self) -> (V, ResumeKey<V>) {
         (self.value, self.key)
     }
 }
 
-pub struct NeedContextStepped {
+pub struct NeedContextStepped<V> {
     name: String,
-    bindings: HashMap<String, Value>,
+    bindings: HashMap<String, V>,
 }
 
-impl NeedContextStepped {
+impl<V> NeedContextStepped<V> {
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn bindings(&self) -> &HashMap<String, Value> {
+    pub fn bindings(&self) -> &HashMap<String, V> {
         &self.bindings
     }
 
-    pub fn into_parts(self) -> (String, HashMap<String, Value>) {
+    pub fn into_parts(self) -> (String, HashMap<String, V>) {
         (self.name, self.bindings)
     }
 
-    pub fn into_key(self, value: Arc<Value>) -> ResumeKey {
+    pub fn into_key(self, value: Arc<V>) -> ResumeKey<V> {
         ResumeKey(ResumeKeyInner::Context(value))
     }
 }
@@ -174,59 +178,71 @@ impl NeedContextStepped {
 // Coroutine
 // ---------------------------------------------------------------------------
 
-pub struct Coroutine {
-    shared: Arc<Mutex<Shared>>,
+pub struct Coroutine<V> {
+    shared: Arc<Mutex<Shared<V>>>,
     fut: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
-impl Coroutine {
-    pub fn resume(&mut self, key: ResumeKey) -> Stepped {
-        // 1. Inject context response if the key carries one.
+impl<V> Coroutine<V> {
+    pub fn resume(&mut self, key: ResumeKey<V>) -> ResumeFuture<'_, V> {
         if let ResumeKeyInner::Context(arc) = key.0 {
             let mut shared = self.shared.lock();
             shared.context_response = Some(arc);
         }
+        ResumeFuture { coroutine: self }
+    }
+}
 
-        let fut = match &mut self.fut {
+// ---------------------------------------------------------------------------
+// ResumeFuture — async resume
+// ---------------------------------------------------------------------------
+
+pub struct ResumeFuture<'a, V> {
+    coroutine: &'a mut Coroutine<V>,
+}
+
+impl<V> Future for ResumeFuture<'_, V> {
+    type Output = Stepped<V>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Stepped<V>> {
+        let this = self.get_mut();
+        let fut = match &mut this.coroutine.fut {
             Some(f) => f.as_mut(),
-            None => return Stepped::Done,
+            None => return Poll::Ready(Stepped::Done),
         };
 
-        // 2. Poll with noop waker.
-        let waker = Waker::noop();
-        let mut cx = Context::from_waker(waker);
-
-        match fut.poll(&mut cx) {
+        match fut.poll(cx) {
             Poll::Ready(()) => {
-                self.fut = None;
-                let mut shared = self.shared.lock();
+                this.coroutine.fut = None;
+                let mut shared = this.coroutine.shared.lock();
                 if shared.yielded {
                     shared.yielded = false;
                     if let Some(value) = shared.value.take() {
-                        return Stepped::Emit(EmitStepped {
+                        return Poll::Ready(Stepped::Emit(EmitStepped {
                             value,
                             key: ResumeKey(ResumeKeyInner::Start),
-                        });
+                        }));
                     }
                 }
-                Stepped::Done
+                Poll::Ready(Stepped::Done)
             }
             Poll::Pending => {
-                let mut shared = self.shared.lock();
+                let mut shared = this.coroutine.shared.lock();
                 if shared.context_requested {
                     shared.context_requested = false;
                     let name = shared.context_request.take().unwrap();
                     let bindings = std::mem::take(&mut shared.context_bindings);
-                    Stepped::NeedContext(NeedContextStepped { name, bindings })
+                    Poll::Ready(Stepped::NeedContext(NeedContextStepped { name, bindings }))
                 } else if shared.yielded {
                     shared.yielded = false;
                     let value = shared.value.take().unwrap();
-                    Stepped::Emit(EmitStepped {
+                    Poll::Ready(Stepped::Emit(EmitStepped {
                         value,
                         key: ResumeKey(ResumeKeyInner::Start),
-                    })
+                    }))
                 } else {
-                    Stepped::Done
+                    // Real async I/O pending — propagate
+                    Poll::Pending
                 }
             }
         }
@@ -237,9 +253,9 @@ impl Coroutine {
 // Constructor
 // ---------------------------------------------------------------------------
 
-pub fn coroutine<F, Fut>(f: F) -> (Coroutine, ResumeKey)
+pub fn coroutine<V, F, Fut>(f: F) -> (Coroutine<V>, ResumeKey<V>)
 where
-    F: FnOnce(YieldHandle) -> Fut,
+    F: FnOnce(YieldHandle<V>) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let shared = Arc::new(Mutex::new(Shared {

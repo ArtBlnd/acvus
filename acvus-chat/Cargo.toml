@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 acvus-interpreter = { path = "../acvus-interpreter" }
+acvus-coroutine = { path = "../acvus-coroutine" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-orchestration = { path = "../acvus-orchestration" }
-futures = "0.3"
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"

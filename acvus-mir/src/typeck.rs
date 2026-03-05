@@ -75,8 +75,16 @@ impl TypeChecker {
     }
 
     pub fn check_script(
+        self,
+        script: &acvus_ast::Script,
+    ) -> Result<(TypeMap, Ty, VariantRegistry), Vec<MirError>> {
+        self.check_script_with_hint(script, None)
+    }
+
+    pub fn check_script_with_hint(
         mut self,
         script: &acvus_ast::Script,
+        expected_tail: Option<&Ty>,
     ) -> Result<(TypeMap, Ty, VariantRegistry), Vec<MirError>> {
         for stmt in &script.stmts {
             match stmt {
@@ -94,10 +102,24 @@ impl TypeChecker {
             Some(expr) => self.check_expr(expr),
             None => Ty::Unit,
         };
+        // Unify tail with expected type hint (if provided) to resolve ambiguous literals
+        if let Some(expected) = expected_tail {
+            let _ = self.subst.unify(&tail_ty, expected);
+        }
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
         let resolved_tail = self.subst.resolve(&tail_ty);
+        // Check for unresolved type variables (e.g. `[]` without hint)
+        if contains_var(&resolved_tail) {
+            let span = script
+                .tail
+                .as_ref()
+                .map(|e| e.span())
+                .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
+            self.error(MirErrorKind::AmbiguousEmptyList, span);
+            return Err(self.errors);
+        }
         let resolved: TypeMap = self
             .type_map
             .iter()
@@ -643,9 +665,10 @@ impl TypeChecker {
             } => {
                 let all_elems: Vec<_> = head.iter().chain(tail.iter()).collect();
                 if all_elems.is_empty() && rest.is_none() {
-                    // Empty list `[]` — ambiguous without context.
-                    self.error(MirErrorKind::AmbiguousEmptyList, *span);
-                    let ty = Ty::List(Box::new(Ty::Error));
+                    // Empty list `[]` — element type unknown, use fresh var.
+                    // If no hint resolves it, we report the error after resolve.
+                    let elem = self.subst.fresh_var();
+                    let ty = Ty::List(Box::new(elem));
                     self.record(*span, ty.clone());
                     return ty;
                 }
@@ -1189,6 +1212,17 @@ impl TypeChecker {
                 self.error(MirErrorKind::RangeBoundsNotInt { actual: Ty::Error }, span);
             }
         }
+    }
+}
+
+fn contains_var(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) => true,
+        Ty::List(inner) | Ty::Option(inner) => contains_var(inner),
+        Ty::Object(fields) => fields.values().any(contains_var),
+        Ty::Tuple(elems) => elems.iter().any(contains_var),
+        Ty::Fn { params, ret } => params.iter().any(contains_var) || contains_var(ret),
+        _ => false,
     }
 }
 

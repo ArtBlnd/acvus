@@ -1,3 +1,7 @@
 name = "get_weather"
 kind = "plain"
 template = "get_weather.acvus"
+
+[self]
+self_bind = "@raw"
+initial_value = '""'

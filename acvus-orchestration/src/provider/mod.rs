@@ -71,6 +71,15 @@ pub trait Fetch: Sync {
     async fn fetch(&self, request: &HttpRequest) -> Result<serde_json::Value, String>;
 }
 
+impl<F> Fetch for std::sync::Arc<F>
+where
+    F: Fetch,
+{
+    async fn fetch(&self, request: &HttpRequest) -> Result<serde_json::Value, String> {
+        (**self).fetch(request).await
+    }
+}
+
 pub fn build_request(
     config: &ProviderConfig,
     model: &str,

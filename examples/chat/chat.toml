@@ -3,8 +3,13 @@ kind = "llm"
 provider = "gemini"
 model = "gemini-2.5-flash"
 
-[history]
-store = "@chat"
+[self]
+self_bind = '@raw | map(x -> x.content) | join("")'
+initial_value = '""'
+
+[strategy]
+mode = "history"
+inline_history_bind = "@raw"
 
 [[messages]]
 role = "system"

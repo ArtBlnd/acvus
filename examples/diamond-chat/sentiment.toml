@@ -3,6 +3,9 @@ kind = "llm"
 provider = "gemini"
 model = "gemini-2.5-flash"
 
+[self]
+self_bind = '@raw | map(x -> x.content) | join("")'
+initial_value = '""'
 
 [[messages]]
 role = "user"

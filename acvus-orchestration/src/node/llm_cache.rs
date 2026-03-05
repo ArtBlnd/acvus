@@ -1,0 +1,85 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, Value};
+
+use super::Node;
+use super::helpers::render_block_in_coroutine;
+use crate::compile::CompiledMessage;
+use crate::message::{Content, Message};
+use crate::provider::{Fetch, ProviderConfig};
+
+pub struct LlmCacheNode<F> {
+    provider_config: ProviderConfig,
+    model: String,
+    messages: Vec<CompiledMessage>,
+    ttl: String,
+    cache_config: HashMap<String, serde_json::Value>,
+    fetch: Arc<F>,
+    extern_fns: ExternFnRegistry,
+}
+
+impl<F> LlmCacheNode<F>
+where
+    F: Fetch + 'static,
+{
+    pub fn new(
+        cache: &crate::kind::CompiledLlmCache,
+        provider_config: ProviderConfig,
+        fetch: Arc<F>,
+        extern_fns: &ExternFnRegistry,
+    ) -> Self {
+        Self {
+            provider_config,
+            model: cache.model.clone(),
+            messages: cache.messages.clone(),
+            ttl: cache.ttl.clone(),
+            cache_config: cache.cache_config.clone(),
+            fetch,
+            extern_fns: extern_fns.clone(),
+        }
+    }
+}
+
+impl<F> Node for LlmCacheNode<F>
+where
+    F: Fetch + 'static,
+{
+    fn spawn(&self, local: HashMap<String, Arc<Value>>) -> (Coroutine<Value>, ResumeKey<Value>) {
+        let messages = self.messages.clone();
+        let model = self.model.clone();
+        let ttl = self.ttl.clone();
+        let cache_config = self.cache_config.clone();
+        let provider_config = self.provider_config.clone();
+        let fetch = Arc::clone(&self.fetch);
+        let extern_fns = self.extern_fns.clone();
+
+        acvus_coroutine::coroutine(move |handle| async move {
+            let mut rendered = Vec::new();
+            for msg in &messages {
+                let CompiledMessage::Block(block) = msg else {
+                    continue;
+                };
+                let text =
+                    render_block_in_coroutine(&block.module, &local, &extern_fns, &handle).await;
+                rendered.push(Message::Content {
+                    role: block.role.clone(),
+                    content: Content::Text(text),
+                });
+            }
+
+            let request = crate::provider::build_cache_request(
+                &provider_config,
+                &model,
+                &rendered,
+                &ttl,
+                &cache_config,
+            );
+            let json = fetch.fetch(&request).await.expect("llm_cache fetch failed");
+            let cache_name = crate::provider::parse_cache_response(&provider_config.api, &json)
+                .expect("llm_cache response parse failed");
+
+            handle.yield_val(Value::String(cache_name)).await;
+        })
+    }
+}

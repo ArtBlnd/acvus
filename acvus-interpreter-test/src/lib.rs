@@ -119,9 +119,9 @@ pub async fn run_capturing_context_calls(
     let interp = Interpreter::new(module, &ExternFnRegistry::new());
     let (mut coroutine, mut key) = interp.execute();
     let mut output = String::new();
-    let mut calls = Vec::new();
+    let mut calls: Vec<(String, HashMap<String, Value>)> = Vec::new();
     loop {
-        match coroutine.resume(key) {
+        match coroutine.resume(key).await {
             Stepped::Emit(emit) => {
                 let (value, next_key) = emit.into_parts();
                 match value {

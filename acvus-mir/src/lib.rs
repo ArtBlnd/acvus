@@ -52,9 +52,20 @@ pub fn compile_script(
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
+    compile_script_with_hint(script, context_types, registry, user_types, None)
+}
+
+pub fn compile_script_with_hint(
+    script: &Script,
+    context_types: HashMap<String, Ty>,
+    registry: &ExternRegistry,
+    user_types: &UserTypeRegistry,
+    expected_tail: Option<&Ty>,
+) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let context_names: HashSet<String> = context_types.keys().cloned().collect();
     let checker = TypeChecker::new(context_types, registry, user_types);
-    let (type_map, tail_ty, variant_registry) = checker.check_script(script)?;
+    let (type_map, tail_ty, variant_registry) =
+        checker.check_script_with_hint(script, expected_tail)?;
     let lowerer = Lowerer::new(type_map, context_names, variant_registry, registry.clone());
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))

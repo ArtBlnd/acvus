@@ -11,7 +11,7 @@ use acvus_mir::ir::{CallTarget, Inst, InstKind, Label, MirBody, MirModule, Value
 use crate::builtins;
 use crate::extern_fn::{ExternFnBody, ExternFnRegistry};
 use crate::value::{FnValue, Value};
-use crate::yielder::{self, Coroutine, ResumeKey, Stepped, YieldHandle};
+use acvus_coroutine::{Coroutine, ResumeKey, Stepped, YieldHandle};
 
 pub struct Interpreter {
     module: MirModule,
@@ -207,8 +207,8 @@ impl Interpreter {
         }
     }
 
-    pub fn execute(self) -> (Coroutine, ResumeKey) {
-        yielder::coroutine(|handle| async move {
+    pub fn execute(self) -> (Coroutine<Value>, ResumeKey<Value>) {
+        acvus_coroutine::coroutine(|handle| async move {
             let insts = self.module.main.insts.clone();
             let label_map = build_label_map(&self.module.main);
             let frame = Frame::new(self.module.main.val_count, label_map);
@@ -220,7 +220,7 @@ impl Interpreter {
         let (mut coroutine, mut key) = self.execute();
         let mut output = String::new();
         loop {
-            match coroutine.resume(key) {
+            match coroutine.resume(key).await {
                 Stepped::Emit(emit) => {
                     let (value, next_key) = emit.into_parts();
                     match value {
@@ -248,7 +248,7 @@ impl Interpreter {
         this: Self,
         insts: Vec<Inst>,
         frame: Frame,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> BoxFuture<'a, (Self, Frame, Option<Value>)> {
         Box::pin(Self::run_inner(this, insts, frame, handle))
     }
@@ -257,7 +257,7 @@ impl Interpreter {
         mut this: Self,
         insts: Vec<Inst>,
         mut frame: Frame,
-        handle: &YieldHandle,
+        handle: &YieldHandle<Value>,
     ) -> (Self, Frame, Option<Value>) {
         let mut pc = 0;
         while pc < insts.len() {
@@ -567,7 +567,7 @@ impl Interpreter {
         this: Self,
         id: BuiltinId,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         match id {
             BuiltinId::ToString
@@ -610,7 +610,7 @@ impl Interpreter {
     async fn exec_hof_filter<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "filter");
         let mut result = Vec::new();
@@ -629,7 +629,7 @@ impl Interpreter {
     async fn exec_hof_map<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "map");
         let mut result = Vec::new();
@@ -645,7 +645,7 @@ impl Interpreter {
     async fn exec_hof_find<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "find");
         for item in items {
@@ -663,7 +663,7 @@ impl Interpreter {
     async fn exec_hof_reduce<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "reduce");
         let mut it = items.into_iter();
@@ -683,7 +683,7 @@ impl Interpreter {
     async fn exec_hof_fold<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let mut it = args.into_iter();
         let list = it.next().unwrap();
@@ -709,7 +709,7 @@ impl Interpreter {
     async fn exec_hof_any<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "any");
         for item in items {
@@ -726,7 +726,7 @@ impl Interpreter {
     async fn exec_hof_all<'a>(
         mut this: Self,
         args: Vec<Value>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let (items, fn_val) = extract_list_fn(args, "all");
         for item in items {
@@ -746,7 +746,7 @@ impl Interpreter {
         this: Self,
         fn_val: FnValue,
         args: Vec<Arc<Value>>,
-        handle: &'a YieldHandle,
+        handle: &'a YieldHandle<Value>,
     ) -> (Self, Value) {
         let closure_body = this
             .module

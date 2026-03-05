@@ -6,8 +6,13 @@ model = "gemini-2.5-flash"
 [max_tokens]
 input = 16000
 
-[history]
-store = "@chat"
+[self]
+self_bind = '@raw | map(x -> x.content) | join("")'
+initial_value = '""'
+
+[strategy]
+mode = "history"
+inline_history_bind = "@raw"
 
 [[messages]]
 role = "system"

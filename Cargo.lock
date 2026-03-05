@@ -16,10 +16,10 @@ dependencies = [
 name = "acvus-chat"
 version = "0.1.0"
 dependencies = [
+ "acvus-coroutine",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-orchestration",
- "futures",
  "serde_json",
  "thiserror",
  "tokio",
@@ -44,6 +44,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-coroutine"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
 name = "acvus-ext"
 version = "0.1.0"
 dependencies = [
@@ -59,6 +66,7 @@ name = "acvus-interpreter"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-coroutine",
  "acvus-mir",
  "futures",
  "parking_lot",
@@ -123,6 +131,7 @@ name = "acvus-orchestration"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-coroutine",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-mir-pass",

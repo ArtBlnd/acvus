@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
+acvus-coroutine = { path = "../acvus-coroutine" }
 acvus-mir = { path = "../acvus-mir" }
 futures = "0.3"
 parking_lot = "0.12"

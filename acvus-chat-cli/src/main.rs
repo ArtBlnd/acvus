@@ -11,7 +11,7 @@ use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     ApiKind, ExprSpec, Fetch, HashMapStorage, HttpRequest, NodeKind, NodeSpec, ProviderConfig,
-    Strategy, compile_nodes, compile_script,
+    Resolved, SelfSpec, Strategy, compile_nodes, compile_script,
 };
 use node::NodeDef;
 use project::{ProjectSpec, parse_context_entry};
@@ -172,8 +172,11 @@ async fn main() {
                 source,
                 output_ty: tail_ty,
             }),
+            self_spec: SelfSpec {
+                self_bind: "@raw".into(),
+                initial_value: r#""""#.into(),
+            },
             strategy: Strategy::default(),
-            history: None,
         });
     }
 
@@ -256,18 +259,18 @@ async fn main() {
             let context_args = context_args.clone();
             async move {
                 if let Some(v) = context_args.get(&name) {
-                    return Value::String(v.clone());
+                    return Resolved::Turn(Value::String(v.clone()));
                 }
                 if let Some(val) = defaults.get(&name) {
-                    return val.clone();
+                    return Resolved::Turn(val.clone());
                 }
                 if render_only {
-                    return Value::String(format!("(@{name})"));
+                    return Resolved::Turn(Value::String(format!("(@{name})")));
                 }
                 eprint!("{name}: ");
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                Value::String(input.trim_end().to_string())
+                Resolved::Turn(Value::String(input.trim_end().to_string()))
             }
         }
     };

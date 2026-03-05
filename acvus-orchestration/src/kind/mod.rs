@@ -25,8 +25,8 @@ pub enum NodeKind {
 }
 
 impl NodeKind {
-    /// The output type produced by this node kind.
-    pub fn output_ty(&self) -> acvus_mir::ty::Ty {
+    /// The raw output type produced by this node kind (before self.bind).
+    pub fn raw_output_ty(&self) -> acvus_mir::ty::Ty {
         match self {
             NodeKind::Plain(spec) => spec.output_ty(),
             NodeKind::Llm(spec) => spec.output_ty(),
