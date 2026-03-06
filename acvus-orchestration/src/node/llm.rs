@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, Value};
 
+use tracing::{debug, info, warn};
+
 use super::Node;
 use super::helpers::{
     MessageSegment, allocate_token_budgets, content_to_value, eval_script_in_coroutine,
@@ -71,6 +73,7 @@ where
         let extern_fns = self.extern_fns.clone();
 
         acvus_coroutine::coroutine(move |handle| async move {
+            let model_name = model.clone();
             let llm_model = create_llm_model(provider_config, model);
 
             let cached_content = if let Some(ref ck_script) = cache_key_script {
@@ -125,6 +128,7 @@ where
             let mut rendered = flatten_segments(segments);
             let specs = make_tool_specs(&tools);
 
+            info!(model = %model_name, messages = rendered.len(), tools = specs.len(), "llm request");
             let request = llm_model.build_request(
                 &rendered,
                 &specs,
@@ -136,16 +140,23 @@ where
             let (mut response, _usage) = llm_model
                 .parse_response(&json)
                 .expect("llm response parse failed");
+            debug!(
+                input_tokens = _usage.input_tokens,
+                output_tokens = _usage.output_tokens,
+                "llm response received",
+            );
 
             let mut tool_rounds = 0usize;
             loop {
                 match response {
                     ModelResponse::Content(items) => {
+                        debug!(items = items.len(), "llm returned content");
                         handle.yield_val(content_to_value(&items)).await;
                         return;
                     }
                     ModelResponse::ToolCalls(calls) => {
                         tool_rounds += 1;
+                        info!(round = tool_rounds, count = calls.len(), "llm tool calls");
                         if tool_rounds > MAX_TOOL_ROUNDS {
                             panic!("tool call limit exceeded");
                         }
@@ -153,6 +164,7 @@ where
                         rendered.push(Message::ToolCalls(calls.clone()));
 
                         for call in &calls {
+                            debug!(tool = %call.name, id = %call.id, "invoking tool");
                             let binding = tools.iter().find(|t| t.name == call.name);
                             let result_text = if let Some(binding) = binding {
                                 let tool_args: HashMap<String, Value> = match &call.arguments {
@@ -167,6 +179,7 @@ where
                                     .await;
                                 value_to_tool_result(&result)
                             } else {
+                                warn!(tool = %call.name, "tool not found");
                                 format!("tool '{}' not found", call.name)
                             };
 
@@ -176,6 +189,7 @@ where
                             });
                         }
 
+                        debug!(round = tool_rounds, "llm follow-up request after tool results");
                         let request = llm_model.build_request(
                             &rendered,
                             &specs,

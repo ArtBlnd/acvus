@@ -140,6 +140,7 @@ dependencies = [
  "futures",
  "serde_json",
  "tokio",
+ "tracing",
  "trait-variant",
 ]
 

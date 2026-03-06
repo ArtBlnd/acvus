@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, Value};
 
+use tracing::{debug, info};
+
 use super::Node;
 use super::helpers::render_block_in_coroutine;
 use crate::compile::CompiledMessage;
@@ -68,6 +70,7 @@ where
                 });
             }
 
+            info!(model = %model, ttl = %ttl, messages = rendered.len(), "llm_cache request");
             let request = crate::provider::build_cache_request(
                 &provider_config,
                 &model,
@@ -78,6 +81,7 @@ where
             let json = fetch.fetch(&request).await.expect("llm_cache fetch failed");
             let cache_name = crate::provider::parse_cache_response(&provider_config.api, &json)
                 .expect("llm_cache response parse failed");
+            debug!(cache_name = %cache_name, "llm_cache created");
 
             handle.yield_val(Value::String(cache_name)).await;
         })

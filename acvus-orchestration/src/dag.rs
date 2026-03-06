@@ -93,14 +93,21 @@ mod tests {
 
     fn make_node(name: &str, context_keys: Vec<&str>) -> CompiledNode {
         // Dummy compiled self for DAG tests (never executed)
+        let module = MirModule {
+            main: Default::default(),
+            closures: HashMap::new(),
+            tag_names: Vec::new(),
+            extern_names: HashMap::new(),
+        };
+        let val_def = acvus_mir_pass::AnalysisPass::run(
+            &acvus_mir_pass::analysis::val_def::ValDefMapAnalysis,
+            &module,
+            (),
+        );
         let dummy_script = CompiledScript {
-            module: MirModule {
-                main: Default::default(),
-                closures: HashMap::new(),
-                tag_names: Vec::new(),
-                extern_names: HashMap::new(),
-            },
+            module,
             context_keys: Default::default(),
+            val_def,
         };
         CompiledNode {
             name: name.into(),

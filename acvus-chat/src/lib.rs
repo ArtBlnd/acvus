@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Value};
 use acvus_orchestration::{
-    CompiledNode, CompiledNodeKind, CompiledStrategy, Fetch, HashMapStorage, Node, ProviderConfig,
+    CompiledNode, CompiledNodeKind, CompiledStrategy, Fetch, Node, ProviderConfig, ResolveState,
     Resolved, Resolver, State, Storage, build_dag, build_node_table,
 };
 
@@ -15,24 +15,27 @@ use acvus_orchestration::{
 // Public API
 // ---------------------------------------------------------------------------
 
-pub struct ChatEngine {
+pub struct ChatEngine<S> {
     nodes: Vec<CompiledNode>,
     node_table: Vec<Arc<dyn Node>>,
     name_to_idx: HashMap<String, usize>,
     extern_fns: ExternFnRegistry,
-    state: State<HashMapStorage>,
+    state: State<S>,
     bind_cache: HashMap<String, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
     history_nodes: Vec<String>,
 }
 
-impl ChatEngine {
+impl<S> ChatEngine<S>
+where
+    S: Storage,
+{
     pub async fn new<F>(
         nodes: Vec<CompiledNode>,
         providers: HashMap<String, ProviderConfig>,
         fetch: F,
         extern_fns: ExternFnRegistry,
-        mut storage: HashMapStorage,
+        mut storage: S,
         entrypoint: &str,
     ) -> Result<Self, ChatError>
     where
@@ -140,6 +143,7 @@ impl ChatEngine {
 
     pub async fn turn<R>(&mut self, resolver: &R) -> Result<Value, ChatError>
     where
+        S: Default,
         R: AsyncFn(String) -> Resolved + Sync,
     {
         let entrypoint = &self.nodes[self.entrypoint_idx].name;
@@ -157,7 +161,12 @@ impl ChatEngine {
             }
         }
 
-        let mut turn_context = HashMap::new();
+        // Build ResolveState for this turn
+        let mut rs = ResolveState {
+            storage: std::mem::take(&mut self.state.storage),
+            turn_context: HashMap::new(),
+            bind_cache: std::mem::take(&mut self.bind_cache),
+        };
 
         let ctx = Resolver {
             nodes: &self.nodes,
@@ -167,26 +176,22 @@ impl ChatEngine {
             resolver,
         };
 
-        ctx.resolve_node(
-            self.entrypoint_idx,
-            &mut self.state.storage,
-            HashMap::new(),
-            &mut self.bind_cache,
-            &mut turn_context,
-        )
-        .await
-        .map_err(|e| ChatError::Resolve(e.to_string()))?;
-
-        // History bind is now handled inside resolve_node (resolver).
+        ctx.resolve_node(self.entrypoint_idx, &mut rs, HashMap::new())
+            .await
+            .map_err(|e| ChatError::Resolve(e.to_string()))?;
 
         // Merge Always node results from turn_context into storage
         for node in &self.nodes {
             if matches!(node.strategy, CompiledStrategy::Always)
-                && let Some(v) = turn_context.get(&node.name)
+                && let Some(v) = rs.turn_context.get(&node.name)
             {
-                self.state.storage.set(node.name.clone(), Value::clone(v));
+                rs.storage.set(node.name.clone(), Value::clone(v));
             }
         }
+
+        // Restore persistent state
+        self.state.storage = rs.storage;
+        self.bind_cache = rs.bind_cache;
 
         self.state.turn += 1;
         tracing::info!(turn = self.state.turn, "turn complete");
@@ -220,6 +225,7 @@ impl ChatEngine {
 
     pub async fn re_execute<R>(&mut self, index: usize, resolver: &R) -> Result<Value, ChatError>
     where
+        S: Default,
         R: AsyncFn(String) -> Resolved + Sync,
     {
         assert!(
@@ -240,12 +246,15 @@ impl ChatEngine {
 }
 
 /// Drive an interpreter coroutine to a single value, resolving contexts from storage + local.
-async fn drive_script(
+async fn drive_script<S>(
     coroutine: &mut acvus_coroutine::Coroutine<Value>,
     mut key: acvus_coroutine::ResumeKey<Value>,
-    storage: &HashMapStorage,
+    storage: &S,
     local: &HashMap<String, Arc<Value>>,
-) -> Value {
+) -> Value
+where
+    S: Storage,
+{
     loop {
         match coroutine.resume(key).await {
             acvus_coroutine::Stepped::Emit(emit) => {
@@ -274,8 +283,8 @@ mod tests {
 
     use acvus_mir::extern_module::ExternRegistry;
     use acvus_orchestration::{
-        ApiKind, GenerationParams, HttpRequest, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-        NodeSpec, PlainSpec, SelfSpec, Strategy, ToolBinding, compile_nodes,
+        ApiKind, GenerationParams, HashMapStorage, HttpRequest, LlmSpec, MaxTokens, MessageSpec,
+        NodeKind, NodeSpec, PlainSpec, SelfSpec, Strategy, ToolBinding, compile_nodes,
     };
 
     struct MockFetch {

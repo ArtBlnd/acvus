@@ -33,6 +33,6 @@ pub use provider::{
     ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, build_cache_request, build_request,
     create_llm_model, parse_cache_response, parse_response,
 };
-pub use resolve::{ResolveError, Resolved, Resolver};
+pub use resolve::{ResolveError, ResolveState, Resolved, Resolver};
 pub use state::State;
 pub use storage::{HashMapStorage, Storage};

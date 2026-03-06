@@ -51,6 +51,7 @@ pub struct CompiledNode {
 pub struct CompiledScript {
     pub module: MirModule,
     pub context_keys: HashSet<String>,
+    pub val_def: ValDefMap,
 }
 
 /// A compiled message entry.
@@ -146,7 +147,7 @@ impl CompiledNode {
         merged
     }
 
-    fn known_from_storage<S>(&self, storage: &S) -> HashMap<String, Literal>
+    pub(crate) fn known_from_storage<S>(&self, storage: &S) -> HashMap<String, Literal>
     where
         S: Storage,
     {
@@ -197,10 +198,12 @@ pub fn compile_script_with_hint(
         })
     })?;
     let context_keys = extract_context_keys(&module);
+    let val_def = ValDefMapAnalysis.run(&module, ());
     Ok((
         CompiledScript {
             module,
             context_keys,
+            val_def,
         },
         tail_ty,
     ))
@@ -615,14 +618,17 @@ pub fn compile_nodes(
 
 /// Create a dummy compiled script (used as placeholder when errors are accumulated).
 fn dummy_script() -> CompiledScript {
+    let module = MirModule {
+        main: Default::default(),
+        closures: HashMap::new(),
+        tag_names: Vec::new(),
+        extern_names: HashMap::new(),
+    };
+    let val_def = ValDefMapAnalysis.run(&module, ());
     CompiledScript {
-        module: MirModule {
-            main: Default::default(),
-            closures: HashMap::new(),
-            tag_names: Vec::new(),
-            extern_names: HashMap::new(),
-        },
+        module,
         context_keys: HashSet::new(),
+        val_def,
     }
 }
 
