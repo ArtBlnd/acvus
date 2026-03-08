@@ -78,9 +78,14 @@
 	}
 
 	const kindLabels = { none: 'Disabled', context: 'Context', raw: 'Raw', script: 'Script' } as const;
+
+	let locked = $derived(uiState.isOwnerBusy(owner));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col" class:pointer-events-none={locked} class:opacity-60={locked}>
+	{#if locked}
+		<div class="shrink-0 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-400">Turn in progress — editing locked</div>
+	{/if}
 	{#if block}
 		{@const kind = blockKind(block)}
 		<div class="flex items-center gap-3 px-6 pt-10 pb-0" style="max-width: 42rem; margin: 0 auto; width: 100%;">

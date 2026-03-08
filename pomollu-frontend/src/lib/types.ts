@@ -231,6 +231,7 @@ export type Bot = {
 	regions: DisplayRegion[];
 	layout: GridLayout;
 	contextParams: ContextParam[];
+	embeddedStyle?: string;
 };
 
 // --- Display region ---

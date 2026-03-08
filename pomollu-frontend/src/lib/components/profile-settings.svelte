@@ -75,9 +75,14 @@
 	function handleTypeChange(_name: string, _type: string) {
 		scheduleAnalysis();
 	}
+
+	let locked = $derived(uiState.isProfileBusy(profileId));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col" class:pointer-events-none={locked} class:opacity-60={locked}>
+	{#if locked}
+		<div class="shrink-0 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-400">Turn in progress — editing locked</div>
+	{/if}
 	<div class="flex items-center justify-between shrink-0 border-b px-4 py-2">
 		<span class="text-sm font-medium">Profile Settings</span>
 		<div class="flex items-center gap-1">

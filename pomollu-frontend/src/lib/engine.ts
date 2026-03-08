@@ -174,26 +174,39 @@ export type ResolverFn = (key: string) => string | Promise<string>;
 
 export class ChatSession {
 	private inner: WasmChatSession;
+	private _busy = false;
+	private _pendingFree = false;
 
 	private constructor(inner: WasmChatSession) {
 		this.inner = inner;
 	}
 
+	/** True while turn() is running (&mut self held). UI should lock during this. */
+	get busy(): boolean {
+		return this._busy;
+	}
+
 	static async create(
 		config: SessionConfig,
 		storage: unknown | null = null,
-		onStorageChange?: (key: string, value: unknown | null) => void
 	): Promise<ChatSession> {
 		const inner = await WasmChatSession.create(
 			JSON.stringify(config),
 			storage,
-			onStorageChange
 		);
 		return new ChatSession(inner);
 	}
 
 	async turn(resolver: ResolverFn): Promise<unknown> {
-		return this.inner.turn(resolver);
+		this._busy = true;
+		try {
+			return await this.inner.turn(resolver);
+		} finally {
+			this._busy = false;
+			if (this._pendingFree) {
+				this.inner.free();
+			}
+		}
 	}
 
 	exportStorage(): unknown {
@@ -224,7 +237,12 @@ export class ChatSession {
 		return this.inner.render_static(template) as RenderedCard[];
 	}
 
+	/** Safe to call anytime — defers actual free until turn() completes if busy. */
 	free(): void {
-		this.inner.free();
+		if (this._busy) {
+			this._pendingFree = true;
+		} else {
+			this.inner.free();
+		}
 	}
 }

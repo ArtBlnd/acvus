@@ -8,7 +8,7 @@
 	import { Send, MessageSquarePlus, Loader2 } from 'lucide-svelte';
 	import { tick, onMount, onDestroy } from 'svelte';
 	import DisplayCard from './display-card.svelte';
-	import { sessionStore, promptStore } from '$lib/stores.svelte.js';
+	import { sessionStore, promptStore, uiState } from '$lib/stores.svelte.js';
 	import { ChatSession } from '$lib/engine.js';
 	import { buildSessionConfig } from '$lib/session-builder.js';
 
@@ -55,9 +55,6 @@
 	let chatSession: ChatSession | null = null;
 	let chatSessionKey: string | null = null;
 	let destroyed = false;
-	// Guard: suppress on_storage_change callbacks during turn() to prevent
-	// recursive wasm_bindgen RefCell borrows (turn holds &mut self).
-	let turnInProgress = false;
 
 	async function ensureChatSession(): Promise<ChatSession> {
 		const key = `${bot.id}:${session.id}`;
@@ -71,27 +68,14 @@
 		if (!result) throw new Error('no nodes configured');
 		if (!result.ok) throw new Error(result.errors.join('\n'));
 
-		chatSession = await ChatSession.create(result.config, session.storage, (key, value) => {
-			// During turn(), skip real-time updates to avoid triggering Svelte effects
-			// that call ChatSession methods while &mut self is held (recursive RefCell borrow).
-			// Storage is synced in full after turn() returns.
-			if (turnInProgress) return;
-			sessionStore.update(session.id, (s) => {
-				const prev = (s.storage ?? {}) as Record<string, unknown>;
-				const next = { ...prev };
-				if (value === undefined) {
-					// undefined = key removed; null = Value::Unit (keep it)
-					delete next[key];
-				} else {
-					next[key] = value;
-				}
-				return { ...s, storage: next };
-			});
-		});
+		// No callback — storage is synced explicitly after create() and turn().
+		chatSession = await ChatSession.create(result.config, session.storage);
 		chatSessionKey = key;
+
+		// Sync storage (ChatEngine::new sets "context" metadata).
+		sessionStore.update(session.id, (s) => ({ ...s, storage: chatSession!.exportStorageJson() }));
 		turnCount = chatSession.turnCount();
 
-		// Initial load for display engine
 		if (useDisplayEngine) {
 			await initialDisplayLoad(chatSession);
 		}
@@ -130,7 +114,7 @@
 	onDestroy(() => {
 		destroyed = true;
 		if (chatSession) {
-			chatSession.free();
+			chatSession.free(); // safe — defers if turn() is in progress
 			chatSession = null;
 		}
 	});
@@ -306,16 +290,16 @@
 				});
 			};
 
-			turnInProgress = true;
+			uiState.busyBotId = bot.id;
 			let result: unknown;
 			try {
 				result = await cs.turn(resolver);
 			} finally {
-				turnInProgress = false;
+				uiState.busyBotId = null;
 			}
 			if (destroyed) return;
 
-			// Sync full storage to Svelte (skipped during turn to avoid RefCell conflicts).
+			// Sync full storage to Svelte after turn completes.
 			sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorageJson() }));
 
 			turnCount = cs.turnCount();
@@ -337,7 +321,6 @@
 			// Render static regions
 			await renderRegions(cs);
 
-			// Storage is persisted in real-time via on_storage_change callback.
 		} catch (err) {
 			errorMsg = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -422,6 +405,9 @@
 		{/if}
 	</div>
 {:else}
+{#if bot.embeddedStyle}
+	{@html `<style>${bot.embeddedStyle}</style>`}
+{/if}
 <div class="flex h-full flex-col">
 	<div class="flex-1 overflow-hidden flex items-center justify-center">
 		{#if hasRegions}

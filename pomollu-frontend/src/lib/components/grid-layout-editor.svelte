@@ -72,16 +72,13 @@
 
 	function splitVertical() {
 		if (cols >= 6) return;
-		let maxIdx = 0;
-		for (let i = 1; i < cols; i++) {
-			if (layout.colSizes[i] > layout.colSizes[maxIdx]) maxIdx = i;
-		}
-		const half = layout.colSizes[maxIdx] / 2;
+		const idx = selectedCell?.col ?? largestIndex(layout.colSizes);
+		const half = layout.colSizes[idx] / 2;
 		const newColSizes = [...layout.colSizes];
-		newColSizes.splice(maxIdx, 1, half, half);
+		newColSizes.splice(idx, 1, half, half);
 		const newAreas = layout.areas.map((row) => {
 			const newRow = [...row];
-			newRow.splice(maxIdx, 0, '');
+			newRow.splice(idx, 0, '');
 			return newRow;
 		});
 		onupdate({ ...layout, colSizes: newColSizes, areas: newAreas });
@@ -90,18 +87,23 @@
 
 	function splitHorizontal() {
 		if (rows >= 6) return;
-		let maxIdx = 0;
-		for (let i = 1; i < rows; i++) {
-			if (layout.rowSizes[i] > layout.rowSizes[maxIdx]) maxIdx = i;
-		}
-		const half = layout.rowSizes[maxIdx] / 2;
+		const idx = selectedCell?.row ?? largestIndex(layout.rowSizes);
+		const half = layout.rowSizes[idx] / 2;
 		const newRowSizes = [...layout.rowSizes];
-		newRowSizes.splice(maxIdx, 1, half, half);
+		newRowSizes.splice(idx, 1, half, half);
 		const newAreas = [...layout.areas];
 		const newRow = Array(cols).fill('');
-		newAreas.splice(maxIdx, 0, newRow);
+		newAreas.splice(idx, 0, newRow);
 		onupdate({ ...layout, rowSizes: newRowSizes, areas: newAreas });
 		selectedCell = null;
+	}
+
+	function largestIndex(sizes: number[]): number {
+		let idx = 0;
+		for (let i = 1; i < sizes.length; i++) {
+			if (sizes[i] > sizes[idx]) idx = i;
+		}
+		return idx;
 	}
 
 	function removeDivider(axis: 'col' | 'row', index: number) {

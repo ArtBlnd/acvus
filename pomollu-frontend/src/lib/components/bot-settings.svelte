@@ -3,6 +3,7 @@
 	import { GRID_HISTORY, HISTORY_ENTRY_TYPE, createDefaultLayout } from '$lib/types.js';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -292,9 +293,14 @@
 		if (!m) return baseTypes;
 		return { ...baseTypes, item: m[1], index: 'Int' };
 	}
+
+	let locked = $derived(uiState.isBotBusy(botId));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col" class:pointer-events-none={locked} class:opacity-60={locked}>
+	{#if locked}
+		<div class="shrink-0 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-400">Turn in progress — editing locked</div>
+	{/if}
 	<div class="flex items-center justify-between shrink-0 border-b px-4 py-2">
 		<span class="text-sm font-medium">Bot Settings</span>
 		{#if bot}
@@ -360,6 +366,20 @@
 					{#if hasOrphanProfile}
 						<p class="text-xs text-destructive">Profile has been deleted. Please select another.</p>
 					{/if}
+				</div>
+
+				<Separator />
+
+				<div class="space-y-3">
+					<span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Embedded Style</span>
+					<p class="text-xs text-muted-foreground">CSS styles applied to the chat display. Use this to style HTML elements in templates.</p>
+					<Textarea
+						value={bot.embeddedStyle ?? ''}
+						oninput={(e) => botStore.update(bot.id, (b) => ({ ...b, embeddedStyle: e.currentTarget.value }))}
+						placeholder={".card-body h2 { color: var(--color-primary); }"}
+						rows={4}
+						class="font-mono text-xs"
+					/>
 				</div>
 
 				<Separator />

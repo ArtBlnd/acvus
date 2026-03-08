@@ -137,6 +137,36 @@ class UIState {
 	tabs = $state<Tab[]>([]);
 	activeTabIndex = $state(0);
 
+	// Turn lock: the bot currently executing a turn (null = idle).
+	busyBotId = $state<string | null>(null);
+
+	/** True if the given bot is mid-turn. */
+	isBotBusy(botId: string): boolean {
+		return this.busyBotId === botId;
+	}
+
+	/** True if any bot using this prompt is mid-turn. */
+	isPromptBusy(promptId: string): boolean {
+		if (!this.busyBotId) return false;
+		return botStore.get(this.busyBotId)?.promptId === promptId;
+	}
+
+	/** True if any bot using this profile is mid-turn. */
+	isProfileBusy(profileId: string): boolean {
+		if (!this.busyBotId) return false;
+		return botStore.get(this.busyBotId)?.profileId === profileId;
+	}
+
+	/** True if the given owner's bot is mid-turn. */
+	isOwnerBusy(owner: BlockOwner): boolean {
+		if (!this.busyBotId) return false;
+		switch (owner.kind) {
+			case 'bot': return this.busyBotId === owner.botId;
+			case 'prompt': return this.isPromptBusy(owner.promptId);
+			case 'profile': return this.isProfileBusy(owner.profileId);
+		}
+	}
+
 	// Mobile sidebar toggles
 	leftSidebarOpen = $state(false);
 	rightSidebarOpen = $state(false);

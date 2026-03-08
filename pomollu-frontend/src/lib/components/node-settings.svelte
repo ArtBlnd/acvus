@@ -156,9 +156,14 @@
 		'if-modified': 'Execute only when key changes. @self is persistent.',
 		'history': 'Execute once per turn + append to history.',
 	};
+
+	let locked = $derived(uiState.isOwnerBusy(owner));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col" class:pointer-events-none={locked} class:opacity-60={locked}>
+	{#if locked}
+		<div class="shrink-0 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-400">Turn in progress — editing locked</div>
+	{/if}
 	<div class="flex items-center justify-between shrink-0 border-b px-4 py-2">
 		<span class="text-sm font-medium">Node Settings</span>
 		<Button variant="ghost" size="icon-sm" class="text-muted-foreground hover:text-destructive" onclick={handleRemove} title="Delete node">

@@ -1,8 +1,11 @@
 <script lang="ts">
 	import type { RenderedCard } from '$lib/types.js';
+	import { sanitizeHtml } from '$lib/sanitize.js';
 	import { fly, fade } from 'svelte/transition';
 
 	let { card, compact = false }: { card: RenderedCard; compact?: boolean } = $props();
+
+	let sanitized = $derived(sanitizeHtml(card.content));
 </script>
 
 <div
@@ -12,7 +15,7 @@
 	out:fade={{ duration: 100 }}
 >
 	<div class="card-header">{card.name}</div>
-	<div class="card-body">{card.content}</div>
+	<div class="card-body">{@html sanitized}</div>
 </div>
 
 <style>
