@@ -55,6 +55,9 @@
 	let chatSession: ChatSession | null = null;
 	let chatSessionKey: string | null = null;
 	let destroyed = false;
+	// Guard: suppress on_storage_change callbacks during turn() to prevent
+	// recursive wasm_bindgen RefCell borrows (turn holds &mut self).
+	let turnInProgress = false;
 
 	async function ensureChatSession(): Promise<ChatSession> {
 		const key = `${bot.id}:${session.id}`;
@@ -69,10 +72,15 @@
 		if (!result.ok) throw new Error(result.errors.join('\n'));
 
 		chatSession = await ChatSession.create(result.config, session.storage, (key, value) => {
+			// During turn(), skip real-time updates to avoid triggering Svelte effects
+			// that call ChatSession methods while &mut self is held (recursive RefCell borrow).
+			// Storage is synced in full after turn() returns.
+			if (turnInProgress) return;
 			sessionStore.update(session.id, (s) => {
 				const prev = (s.storage ?? {}) as Record<string, unknown>;
 				const next = { ...prev };
-				if (value === null || value === undefined) {
+				if (value === undefined) {
+					// undefined = key removed; null = Value::Unit (keep it)
 					delete next[key];
 				} else {
 					next[key] = value;
@@ -131,9 +139,9 @@
 	let regionsKey = $derived(JSON.stringify(bot.regions));
 	$effect(() => {
 		void regionsKey;
-		if (!isConfigured || destroyed) return;
+		if (!isConfigured || destroyed || isLoading) return;
 		ensureChatSession().then((cs) => {
-			if (!destroyed) renderRegions(cs);
+			if (!destroyed && !isLoading) renderRegions(cs);
 		}).catch((e) => {
 			console.warn('[regions effect] ensureChatSession failed:', e);
 		});
@@ -248,7 +256,7 @@
 	});
 
 	async function loadMore() {
-		if (!chatSession || loadingMore || loadedFrom <= 0) return;
+		if (!chatSession || loadingMore || loadedFrom <= 0 || isLoading) return;
 		loadingMore = true;
 
 		const newStart = Math.max(0, loadedFrom - 10);
@@ -298,8 +306,18 @@
 				});
 			};
 
-			const result = await cs.turn(resolver);
+			turnInProgress = true;
+			let result: unknown;
+			try {
+				result = await cs.turn(resolver);
+			} finally {
+				turnInProgress = false;
+			}
 			if (destroyed) return;
+
+			// Sync full storage to Svelte (skipped during turn to avoid RefCell conflicts).
+			sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorageJson() }));
+
 			turnCount = cs.turnCount();
 
 			if (useDisplayEngine) {

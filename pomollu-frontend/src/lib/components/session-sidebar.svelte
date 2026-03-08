@@ -23,7 +23,7 @@
 			{#each sessions as session (session.id)}
 				<SidebarItem
 					active={session.id === sessionStore.activeSessionId}
-					onselect={() => uiState.selectSession(session.id)}
+					onselect={() => { uiState.selectSession(session.id); uiState.closeMobileSidebars(); }}
 					ondelete={() => uiState.removeSession(session.id)}
 				>
 					{session.name}
@@ -39,7 +39,7 @@
 				{uiState.activeTab?.kind === 'bot-settings'
 				? 'bg-accent text-accent-foreground'
 				: 'text-muted-foreground hover:bg-accent/50'}"
-			onclick={() => activeBot && uiState.openBotSettings(activeBot.id)}
+			onclick={() => { if (activeBot) { uiState.openBotSettings(activeBot.id); uiState.closeMobileSidebars(); } }}
 		>
 			Bot Settings
 		</button>

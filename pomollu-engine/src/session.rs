@@ -200,7 +200,8 @@ impl SessionStorage {
     fn notify_remove(&self, key: &str) {
         let Some(ref cb) = self.on_change else { return };
         let js_key = JsValue::from_str(key);
-        let _ = cb.0.call2(&JsValue::NULL, &js_key, &JsValue::NULL);
+        // Use UNDEFINED (not NULL) so JS can distinguish removal from Unit values.
+        let _ = cb.0.call2(&JsValue::NULL, &js_key, &JsValue::UNDEFINED);
     }
 }
 
@@ -709,12 +710,9 @@ impl ChatSession {
                 }
                 Stepped::NeedContext(need) => {
                     let name = need.name().to_string();
-                    let value = self
-                        .engine
-                        .state
-                        .storage
-                        .get(&name)
-                        .unwrap_or_else(|| Arc::new(Value::Unit));
+                    let Some(value) = self.engine.state.storage.get(&name) else {
+                        return Ok(0);
+                    };
                     key = need.into_key(value);
                 }
                 Stepped::Done => return Ok(0),

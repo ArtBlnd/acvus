@@ -180,11 +180,13 @@ where
             }
             acvus_interpreter::Stepped::NeedContext(need) => {
                 let name = need.name().to_string();
-                let value = local
+                let Some(value) = local
                     .get(&name)
                     .cloned()
                     .or_else(|| storage.get(&name))
-                    .unwrap_or_else(|| Arc::new(Value::Unit));
+                else {
+                    return Value::Unit;
+                };
                 key = need.into_key(value);
             }
             acvus_interpreter::Stepped::Done => return Value::Unit,
@@ -217,11 +219,13 @@ where
             }
             acvus_interpreter::Stepped::NeedContext(need) => {
                 let name = need.name().to_string();
-                let value = local
+                let Some(value) = local
                     .get(&name)
                     .cloned()
                     .or_else(|| storage.get(&name))
-                    .unwrap_or_else(|| Arc::new(Value::Unit));
+                else {
+                    break;
+                };
                 key = need.into_key(value);
             }
             acvus_interpreter::Stepped::Done => break,

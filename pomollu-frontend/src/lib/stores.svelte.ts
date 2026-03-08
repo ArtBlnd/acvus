@@ -137,6 +137,23 @@ class UIState {
 	tabs = $state<Tab[]>([]);
 	activeTabIndex = $state(0);
 
+	// Mobile sidebar toggles
+	leftSidebarOpen = $state(false);
+	rightSidebarOpen = $state(false);
+
+	toggleLeftSidebar() {
+		this.leftSidebarOpen = !this.leftSidebarOpen;
+		if (this.leftSidebarOpen) this.rightSidebarOpen = false;
+	}
+	toggleRightSidebar() {
+		this.rightSidebarOpen = !this.rightSidebarOpen;
+		if (this.rightSidebarOpen) this.leftSidebarOpen = false;
+	}
+	closeMobileSidebars() {
+		this.leftSidebarOpen = false;
+		this.rightSidebarOpen = false;
+	}
+
 	get activeTab(): Tab | undefined {
 		return this.tabs[this.activeTabIndex];
 	}

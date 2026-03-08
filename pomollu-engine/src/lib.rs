@@ -3,6 +3,11 @@ mod session;
 
 use std::collections::{BTreeMap, HashMap};
 
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+fn init() {
+    console_error_panic_hook::set_once();
+}
+
 use acvus_orchestration::NodeSpec;
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};

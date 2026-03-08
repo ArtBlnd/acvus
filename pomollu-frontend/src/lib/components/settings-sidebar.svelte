@@ -104,7 +104,7 @@
 					<SidebarList
 						nodes={providerTree}
 						onnodeschange={() => {}}
-						onselect={(id) => uiState.openProvider(id)}
+						onselect={(id) => { uiState.openProvider(id); uiState.closeMobileSidebars(); }}
 						ondelete={deleteProvider}
 						isActive={(id) => isActiveTab('provider', id)}
 						itemLabel={(id) => providerStore.get(id)?.name ?? 'Provider'}
@@ -128,7 +128,7 @@
 					<SidebarList
 						nodes={profileTree}
 						onnodeschange={() => {}}
-						onselect={(id) => uiState.openProfile(id)}
+						onselect={(id) => { uiState.openProfile(id); uiState.closeMobileSidebars(); }}
 						ondelete={deleteProfile}
 						isActive={(id) => isActiveTab('profile', id)}
 						itemLabel={(id) => profileStore.get(id)?.name ?? 'Profile'}
@@ -152,7 +152,7 @@
 					<SidebarList
 						nodes={promptTree}
 						onnodeschange={() => {}}
-						onselect={(id) => uiState.openPrompt(id)}
+						onselect={(id) => { uiState.openPrompt(id); uiState.closeMobileSidebars(); }}
 						ondelete={deletePrompt}
 						isActive={(id) => isActiveTab('prompt', id)}
 						itemLabel={(id) => promptStore.get(id)?.name ?? 'Prompt'}

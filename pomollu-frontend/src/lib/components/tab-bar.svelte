@@ -99,6 +99,13 @@
 			pointer-events: auto;
 		}
 	}
+	/* Touch devices: always show close on active tab */
+	@media (hover: none) {
+		.tab-close.desktop-visible {
+			opacity: 0.5;
+			pointer-events: auto;
+		}
+	}
 	/* Touch: long-press */
 	:global([data-long-pressed] > .tab-close) {
 		opacity: 1;
