@@ -1,5 +1,6 @@
 use acvus_ast::Literal;
 use acvus_interpreter::Value;
+use acvus_mir_pass::analysis::reachable_context::KnownValue;
 use acvus_utils::Interner;
 
 pub fn json_to_value(interner: &Interner, v: &serde_json::Value) -> Value {
@@ -31,6 +32,23 @@ pub fn value_to_literal(value: &Value) -> Option<Literal> {
         Value::Bool(b) => Some(Literal::Bool(*b)),
         Value::Int(i) => Some(Literal::Int(*i)),
         Value::Float(f) => Some(Literal::Float(*f)),
+        _ => None,
+    }
+}
+
+pub fn value_to_known(value: &Value) -> Option<KnownValue> {
+    match value {
+        Value::String(s) => Some(KnownValue::Literal(Literal::String(s.clone()))),
+        Value::Bool(b) => Some(KnownValue::Literal(Literal::Bool(*b))),
+        Value::Int(i) => Some(KnownValue::Literal(Literal::Int(*i))),
+        Value::Float(f) => Some(KnownValue::Literal(Literal::Float(*f))),
+        Value::Variant { tag, payload } => {
+            let payload = match payload {
+                Some(p) => Some(Box::new(value_to_known(p)?)),
+                None => None,
+            };
+            Some(KnownValue::Variant { tag: *tag, payload })
+        }
         _ => None,
     }
 }

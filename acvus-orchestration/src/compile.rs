@@ -1,19 +1,18 @@
 
 
-use acvus_ast::Literal;
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
 use acvus_mir_pass::AnalysisPass;
 use acvus_mir_pass::analysis::reachable_context::{
-    ContextKeyPartition, partition_context_keys, reachable_context_keys,
+    ContextKeyPartition, KnownValue, partition_context_keys, reachable_context_keys,
 };
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::TokenBudget;
-use crate::convert::value_to_literal;
+use crate::convert::value_to_known;
 use crate::dsl::{MessageSpec, NodeSpec, Strategy};
 use crate::error::{OrchError, OrchErrorKind};
 use crate::kind::{
@@ -86,7 +85,7 @@ impl CompiledBlock {
     ///
     /// Uses dead branch pruning: if a known value resolves a branch condition,
     /// context loads in the dead branch are excluded.
-    pub fn required_context_keys(&self, known: &FxHashMap<Astr, Literal>) -> FxHashSet<Astr> {
+    pub fn required_context_keys(&self, known: &FxHashMap<Astr, KnownValue>) -> FxHashSet<Astr> {
         reachable_context_keys(&self.module, known, &self.val_def)
     }
 }
@@ -98,7 +97,7 @@ impl CompiledNode {
     /// Keys in `resolvable` (e.g. dependency node names) are excluded.
     pub fn required_context_keys(
         &self,
-        known: &FxHashMap<Astr, Literal>,
+        known: &FxHashMap<Astr, KnownValue>,
         resolvable: &FxHashSet<Astr>,
     ) -> FxHashSet<Astr> {
         let mut needed = FxHashSet::default();
@@ -159,7 +158,7 @@ impl CompiledNode {
         &self,
         interner: &Interner,
         storage: &S,
-    ) -> FxHashMap<Astr, Literal>
+    ) -> FxHashMap<Astr, KnownValue>
     where
         S: Storage,
     {
@@ -167,8 +166,8 @@ impl CompiledNode {
             .iter()
             .filter_map(|k| {
                 let arc = storage.get(interner.resolve(*k))?;
-                let lit = value_to_literal(&arc)?;
-                Some((*k, lit))
+                let known = value_to_known(&arc)?;
+                Some((*k, known))
             })
             .collect()
     }

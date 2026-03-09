@@ -8,6 +8,7 @@ fn init() {
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
+use acvus_mir_pass::analysis::reachable_context::KnownValue;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::NodeSpec;
 use acvus_utils::{Astr, Interner};
@@ -156,23 +157,29 @@ pub(crate) fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
     }
 }
 
-/// Try to compile a short script and extract a single constant literal.
+/// Try to compile a short script and extract a known value (literal or variant).
 /// Returns None if the script is not a simple constant expression.
-fn try_extract_literal(
+fn try_extract_known(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-) -> Option<acvus_ast::Literal> {
+) -> Option<KnownValue> {
     if source.trim().is_empty() {
         return None;
     }
     let script = acvus_ast::parse_script(interner, source).ok()?;
     let (module, _, _) = acvus_mir::compile_script_analysis(interner, &script, context_types, registry).ok()?;
-    // Look for a Const instruction in the main body
+    // Look for a Const or MakeVariant instruction in the main body
     for inst in &module.main.insts {
-        if let InstKind::Const { value, .. } = &inst.kind {
-            return Some(value.clone());
+        match &inst.kind {
+            InstKind::Const { value, .. } => {
+                return Some(KnownValue::Literal(value.clone()));
+            }
+            InstKind::MakeVariant { tag, payload: None, .. } => {
+                return Some(KnownValue::Variant { tag: *tag, payload: None });
+            }
+            _ => {}
         }
     }
     None
@@ -181,7 +188,7 @@ fn try_extract_literal(
 fn extract_context_keys_with_types(
     interner: &Interner,
     module: &MirModule,
-    known: &FxHashMap<Astr, acvus_ast::Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
 ) -> Vec<ContextKey> {
     use acvus_mir_pass::AnalysisPass;
     use acvus_mir_pass::analysis::val_def::ValDefMapAnalysis;
@@ -282,7 +289,7 @@ fn do_analyze(
     mode: &str,
     context_types: &FxHashMap<Astr, Ty>,
     expected_tail: Option<&Ty>,
-    known: &FxHashMap<Astr, acvus_ast::Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
 ) -> AnalyzeResult {
     let registry = default_registry(interner);
 
@@ -474,8 +481,8 @@ pub fn analyze_with_known(
     let mut known = FxHashMap::default();
     let mut failed = Vec::new();
     for (name, script) in &known_scripts {
-        if let Some(lit) = try_extract_literal(&interner, script, &context_types, &registry) {
-            known.insert(interner.intern(name), lit);
+        if let Some(kv) = try_extract_known(&interner, script, &context_types, &registry) {
+            known.insert(interner.intern(name), kv);
         } else {
             failed.push(name.as_str());
         }

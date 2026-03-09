@@ -21,6 +21,17 @@ pub struct ContextKeyPartition {
     pub reachable_known: FxHashSet<Astr>,
 }
 
+/// A known context value for branch pruning.
+/// Extends `Literal` to also cover variant (tagged union) values.
+#[derive(Debug, Clone)]
+pub enum KnownValue {
+    Literal(Literal),
+    Variant {
+        tag: Astr,
+        payload: Option<Box<KnownValue>>,
+    },
+}
+
 /// Determine which context keys are actually needed by a MIR module,
 /// given a set of already-known context values.
 ///
@@ -33,7 +44,7 @@ pub struct ContextKeyPartition {
 /// already in `known`.
 pub fn reachable_context_keys(
     module: &MirModule,
-    known: &FxHashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
     val_def: &ValDefMap,
 ) -> FxHashSet<Astr> {
     let p = partition_context_keys(module, known, val_def);
@@ -51,7 +62,7 @@ pub fn reachable_context_keys(
 ///   — resolve on-demand via coroutine.
 pub fn partition_context_keys(
     module: &MirModule,
-    known: &FxHashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
     val_def: &ValDefMap,
 ) -> ContextKeyPartition {
     let mut partition = ContextKeyPartition::default();
@@ -194,7 +205,7 @@ enum Reach {
 fn partition_from_body(
     insts: &[acvus_mir::ir::Inst],
     val_types: &FxHashMap<ValueId, Ty>,
-    known: &FxHashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
     val_def: &ValDefMap,
     partition: &mut ContextKeyPartition,
 ) {
@@ -338,7 +349,7 @@ fn try_eval_condition(
     insts: &[acvus_mir::ir::Inst],
     val_types: &FxHashMap<ValueId, Ty>,
     val_def: &ValDefMap,
-    known: &FxHashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, KnownValue>,
 ) -> Option<bool> {
     let &def_idx = val_def.0.get(&cond)?;
 
@@ -352,7 +363,10 @@ fn try_eval_condition(
         InstKind::TestLiteral { src, value, .. } => {
             let ctx_name = trace_to_context_load(*src, insts, val_def)?;
             let known_val = known.get(&ctx_name)?;
-            Some(known_val == value)
+            match known_val {
+                KnownValue::Literal(lit) => Some(lit == value),
+                _ => None,
+            }
         }
         InstKind::TestRange {
             src,
@@ -363,10 +377,10 @@ fn try_eval_condition(
         } => {
             let ctx_name = trace_to_context_load(*src, insts, val_def)?;
             let known_val = known.get(&ctx_name)?;
-            let Literal::Int(v) = known_val else {
-                return None;
-            };
-            Some(in_range(*v, *start, *end, *kind))
+            match known_val {
+                KnownValue::Literal(Literal::Int(v)) => Some(in_range(*v, *start, *end, *kind)),
+                _ => None,
+            }
         }
 
         // TestVariant: check if the source type is an enum that lacks this variant.
@@ -390,7 +404,13 @@ fn try_eval_condition(
                     _ => {}
                 }
             }
-            None
+            // Value-based pruning — if we know the actual variant tag
+            let ctx_name = trace_to_context_load(*src, insts, val_def)?;
+            let known_val = known.get(&ctx_name)?;
+            match known_val {
+                KnownValue::Variant { tag: known_tag, .. } => Some(*known_tag == *tag),
+                _ => None,
+            }
         }
 
         InstKind::BinOp {
@@ -539,7 +559,7 @@ mod tests {
             }),
         ]);
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("user"), Literal::String("alice".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("user"), KnownValue::Literal(Literal::String("alice".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
         assert_eq!(needed, FxHashSet::from_iter([i.intern("role")]));
     }
@@ -591,7 +611,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("mode"), Literal::String("search".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("mode"), KnownValue::Literal(Literal::String("search".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("query")));
@@ -646,7 +666,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("mode"), Literal::String("other".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("mode"), KnownValue::Literal(Literal::String("other".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(!needed.contains(&i.intern("query")));
@@ -766,7 +786,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("role"), Literal::String("admin".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("role"), KnownValue::Literal(Literal::String("admin".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("level")));
@@ -822,7 +842,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("level"), Literal::Int(5))]);
+        let known = FxHashMap::from_iter([(i.intern("level"), KnownValue::Literal(Literal::Int(5)))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("low_data")));
@@ -918,7 +938,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("role"), Literal::String("user".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("role"), KnownValue::Literal(Literal::String("user".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(!needed.contains(&i.intern("admin_data")));
@@ -1694,5 +1714,109 @@ mod tests {
 
         // scrutinee is also lazy (behind unknown branch)
         assert!(p.lazy.contains(&i.intern("scrutinee")));
+    }
+
+    /// Known variant value prunes dead match arms.
+    #[test]
+    fn known_variant_prunes_match_arms() {
+        let i = Interner::new();
+        let ooc = i.intern("OOC");
+        let normal = i.intern("Normal");
+
+        let mut val_types = FxHashMap::default();
+        val_types.insert(
+            ValueId(0),
+            Ty::Enum {
+                name: i.intern("Output"),
+                variants: FxHashMap::from_iter([
+                    (ooc, None),
+                    (normal, None),
+                ]),
+            },
+        );
+
+        let module = make_module_with_types(
+            vec![
+                // %0 = ContextLoad "Output"
+                inst(InstKind::ContextLoad {
+                    dst: ValueId(0),
+                    name: i.intern("Output"),
+                    bindings: Vec::new(),
+                }),
+                // Test Normal
+                inst(InstKind::TestVariant {
+                    dst: ValueId(1),
+                    src: ValueId(0),
+                    tag: normal,
+                }),
+                inst(InstKind::JumpIf {
+                    cond: ValueId(1),
+                    then_label: Label(10),
+                    then_args: vec![],
+                    else_label: Label(20),
+                    else_args: vec![],
+                }),
+                // Normal arm
+                inst(InstKind::BlockLabel {
+                    label: Label(10),
+                    params: vec![],
+                    merge_of: None,
+                }),
+                inst(InstKind::ContextLoad {
+                    dst: ValueId(2),
+                    name: i.intern("normal_data"),
+                    bindings: Vec::new(),
+                }),
+                inst(InstKind::Jump {
+                    label: Label(99),
+                    args: vec![],
+                }),
+                // OOC arm (catch-all)
+                inst(InstKind::BlockLabel {
+                    label: Label(20),
+                    params: vec![],
+                    merge_of: None,
+                }),
+                inst(InstKind::ContextLoad {
+                    dst: ValueId(3),
+                    name: i.intern("ooc_data"),
+                    bindings: Vec::new(),
+                }),
+                inst(InstKind::Jump {
+                    label: Label(99),
+                    args: vec![],
+                }),
+                // merge
+                inst(InstKind::BlockLabel {
+                    label: Label(99),
+                    params: vec![],
+                    merge_of: Some(Label(10)),
+                }),
+                inst(InstKind::ContextLoad {
+                    dst: ValueId(4),
+                    name: i.intern("post_match"),
+                    bindings: Vec::new(),
+                }),
+            ],
+            val_types,
+        );
+
+        let val_def = build_val_def(&module);
+        // Output is known to be OOC → Normal arm should be pruned
+        let known = FxHashMap::from_iter([(
+            i.intern("Output"),
+            KnownValue::Variant { tag: ooc, payload: None },
+        )]);
+        let p = partition_context_keys(&module, &known, &val_def);
+
+        // Output is known → goes to reachable_known
+        assert!(p.reachable_known.contains(&i.intern("Output")));
+        // Normal arm is dead (TestVariant Normal on OOC value → false)
+        assert!(!p.eager.contains(&i.intern("normal_data")));
+        assert!(!p.lazy.contains(&i.intern("normal_data")));
+        // OOC arm is live and definite (TestVariant Normal is false → else branch is definite)
+        assert!(p.eager.contains(&i.intern("ooc_data")));
+        // post_match is eager (merge_of restores definite)
+        assert!(p.eager.contains(&i.intern("post_match")));
     }
 }
