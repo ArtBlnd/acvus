@@ -61,6 +61,8 @@ pub(crate) struct TypeDescVariant {
     tag: String,
     #[serde(rename = "hasPayload")]
     has_payload: bool,
+    #[serde(rename = "payloadType", skip_serializing_if = "Option::is_none")]
+    payload_type: Option<Box<TypeDesc>>,
 }
 
 fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
@@ -95,6 +97,7 @@ fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
                 .map(|(tag, payload)| TypeDescVariant {
                     tag: interner.resolve(*tag).to_string(),
                     has_payload: payload.is_some(),
+                    payload_type: payload.as_ref().map(|p| Box::new(ty_to_desc(interner, p))),
                 })
                 .collect();
             desc_variants.sort_by(|a, b| a.tag.cmp(&b.tag));
@@ -133,11 +136,11 @@ pub(crate) fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
                 .iter()
                 .map(|v| {
                     let tag = interner.intern(&v.tag);
-                    // TypeDescVariant only tracks has_payload; without payload type info,
-                    // we cannot reconstruct the payload Ty, so use None for no-payload
-                    // and Infer for has-payload.
                     let payload = if v.has_payload {
-                        Some(Box::new(Ty::Infer))
+                        let ty = v.payload_type.as_ref()
+                            .map(|pt| desc_to_ty(interner, pt))
+                            .unwrap_or(Ty::Infer);
+                        Some(Box::new(ty))
                     } else {
                         None
                     };
@@ -1027,6 +1030,25 @@ mod tests {
         fields.insert(interner.intern("age"), Ty::Int);
         let desc = ty_to_desc(&interner, &Ty::Object(fields.clone()));
         assert_eq!(desc_to_ty(&interner, &desc), Ty::Object(fields));
+
+        // Enum roundtrip (with payload types)
+        let mut variants = FxHashMap::default();
+        variants.insert(interner.intern("Ok"), Some(Box::new(Ty::Int)));
+        variants.insert(interner.intern("Err"), Some(Box::new(Ty::String)));
+        variants.insert(interner.intern("None"), None);
+        let enum_ty = Ty::Enum { name: interner.intern("Result"), variants };
+        let desc = ty_to_desc(&interner, &enum_ty);
+        let roundtripped = desc_to_ty(&interner, &desc);
+        match &roundtripped {
+            Ty::Enum { name, variants } => {
+                assert_eq!(interner.resolve(*name), "Result");
+                assert_eq!(variants.len(), 3);
+                assert_eq!(*variants.get(&interner.intern("Ok")).unwrap(), Some(Box::new(Ty::Int)));
+                assert_eq!(*variants.get(&interner.intern("Err")).unwrap(), Some(Box::new(Ty::String)));
+                assert_eq!(*variants.get(&interner.intern("None")).unwrap(), None);
+            }
+            _ => panic!("expected Enum, got {roundtripped:?}"),
+        }
     }
 
     #[test]

@@ -323,43 +323,49 @@ impl TySubst {
             (Ty::Option(a), Ty::Option(b)) => self.unify(a, b),
 
             (Ty::Object(fa), Ty::Object(fb)) => {
-                if fa.len() == fb.len() {
-                    // Same-size: exact key match.
-                    for (key, ty_a) in fa {
-                        if let Some(ty_b) = fb.get(key) {
-                            self.unify(ty_a, ty_b)?;
-                        } else {
-                            return Err((a.clone(), b.clone()));
-                        }
-                    }
-                    Ok(())
-                } else {
-                    // Different sizes: subset matching.
-                    // The smaller must be a subset of the larger, and must trace
-                    // back to a Var (partial constraint from field projection).
-                    let (smaller, larger, smaller_orig) = if fa.len() < fb.len() {
-                        (fa, fb, orig_a)
-                    } else {
-                        (fb, fa, orig_b)
-                    };
-
-                    if let Some(leaf_var) = self.find_leaf_var(smaller_orig) {
-                        for (key, ty_s) in smaller {
-                            if let Some(ty_l) = larger.get(key) {
-                                self.unify(ty_s, ty_l)?;
-                            } else {
-                                return Err((a.clone(), b.clone()));
-                            }
-                        }
-                        // Rebind the leaf var to the fully-resolved larger Object.
-                        let larger_resolved =
-                            Ty::Object(larger.iter().map(|(k, v)| (*k, self.resolve(v))).collect());
-                        self.bindings.insert(leaf_var, larger_resolved);
-                        Ok(())
-                    } else {
-                        Err((a.clone(), b.clone()))
+                // Unify overlapping fields.
+                for (key, ty_a) in fa {
+                    if let Some(ty_b) = fb.get(key) {
+                        self.unify(ty_a, ty_b)?;
                     }
                 }
+
+                // Check if fields differ (one side has keys the other doesn't).
+                let a_only = fa.keys().any(|k| !fb.contains_key(k));
+                let b_only = fb.keys().any(|k| !fa.contains_key(k));
+
+                if !a_only && !b_only {
+                    // Exact same key set — overlapping unify above is sufficient.
+                    return Ok(());
+                }
+
+                // Fields differ: merge is only valid if at least one side
+                // traces back to a Var (partial constraint that can grow).
+                let leaf_a = self.find_leaf_var(orig_a);
+                let leaf_b = self.find_leaf_var(orig_b);
+
+                if leaf_a.is_none() && leaf_b.is_none() {
+                    // Both concrete — differing fields is a type error.
+                    return Err((a.clone(), b.clone()));
+                }
+
+                // Merge all fields.
+                let mut merged = FxHashMap::default();
+                for (k, v) in fa {
+                    merged.insert(*k, self.resolve(v));
+                }
+                for (k, v) in fb {
+                    merged.entry(*k).or_insert_with(|| self.resolve(v));
+                }
+                let merged_ty = Ty::Object(merged);
+
+                if let Some(var) = leaf_a {
+                    self.bindings.insert(var, merged_ty.clone());
+                }
+                if let Some(var) = leaf_b {
+                    self.bindings.insert(var, merged_ty);
+                }
+                Ok(())
             }
 
             (
@@ -533,5 +539,68 @@ mod tests {
         assert!(s.unify(&t1, &t2).is_ok());
         assert!(s.unify(&t2, &Ty::String).is_ok());
         assert_eq!(s.resolve(&t1), Ty::String);
+    }
+
+    // -- Object merge tests --
+
+    #[test]
+    fn unify_object_disjoint_via_var() {
+        // Var → {a} then Var → {b} should merge to {a, b}
+        let mut s = TySubst::new();
+        let i = Interner::new();
+        let v = s.fresh_var();
+        let obj_a = Ty::Object(FxHashMap::from_iter([(i.intern("a"), Ty::Int)]));
+        let obj_b = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::String)]));
+        assert!(s.unify(&v, &obj_a).is_ok());
+        assert!(s.unify(&v, &obj_b).is_ok());
+        let resolved = s.resolve(&v);
+        match &resolved {
+            Ty::Object(fields) => {
+                assert_eq!(fields.len(), 2, "expected {{a, b}}, got {fields:?}");
+                assert_eq!(fields.get(&i.intern("a")), Some(&Ty::Int));
+                assert_eq!(fields.get(&i.intern("b")), Some(&Ty::String));
+            }
+            other => panic!("expected Object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unify_object_overlapping_via_var() {
+        // Var → {a, b} then Var → {b, c} should merge to {a, b, c}
+        let mut s = TySubst::new();
+        let i = Interner::new();
+        let v = s.fresh_var();
+        let obj_ab = Ty::Object(FxHashMap::from_iter([
+            (i.intern("a"), Ty::Int),
+            (i.intern("b"), Ty::String),
+        ]));
+        let obj_bc = Ty::Object(FxHashMap::from_iter([
+            (i.intern("b"), Ty::String),
+            (i.intern("c"), Ty::Bool),
+        ]));
+        assert!(s.unify(&v, &obj_ab).is_ok());
+        assert!(s.unify(&v, &obj_bc).is_ok());
+        let resolved = s.resolve(&v);
+        match &resolved {
+            Ty::Object(fields) => {
+                assert_eq!(fields.len(), 3, "expected {{a, b, c}}, got {fields:?}");
+                assert_eq!(fields.get(&i.intern("a")), Some(&Ty::Int));
+                assert_eq!(fields.get(&i.intern("b")), Some(&Ty::String));
+                assert_eq!(fields.get(&i.intern("c")), Some(&Ty::Bool));
+            }
+            other => panic!("expected Object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unify_object_overlap_type_conflict_fails() {
+        // {b: Int} and {b: String} via same Var should fail
+        let mut s = TySubst::new();
+        let i = Interner::new();
+        let v = s.fresh_var();
+        let obj1 = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::Int)]));
+        let obj2 = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::String)]));
+        assert!(s.unify(&v, &obj1).is_ok());
+        assert!(s.unify(&v, &obj2).is_err());
     }
 }

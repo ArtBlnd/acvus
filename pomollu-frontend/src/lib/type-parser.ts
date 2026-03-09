@@ -7,7 +7,7 @@ export type TypeDesc =
 	| { kind: 'option'; inner: TypeDesc }
 	| { kind: 'object'; fields: { name: string; type: TypeDesc }[] }
 	| { kind: 'list'; elem: TypeDesc }
-	| { kind: 'enum'; name: string; variants: { tag: string; hasPayload: boolean }[] }
+	| { kind: 'enum'; name: string; variants: { tag: string; hasPayload: boolean; payloadType?: TypeDesc }[] }
 	| { kind: 'unsupported'; raw: string };
 
 // ---------------------------------------------------------------------------
@@ -114,14 +114,17 @@ export function parseTypeDesc(
 				const name = inner.slice(0, braceOpen).trim();
 				const braceClose = inner.lastIndexOf('}');
 				const variantsStr = inner.slice(braceOpen + 1, braceClose).trim();
-				const variants: { tag: string; hasPayload: boolean }[] = [];
+				const variants: { tag: string; hasPayload: boolean; payloadType?: TypeDesc }[] = [];
 				if (variantsStr) {
 					for (const part of splitTopLevel(variantsStr, ',')) {
 						const trimmed = part.trim();
 						if (!trimmed) continue;
 						const parenIdx = trimmed.indexOf('(');
 						if (parenIdx !== -1) {
-							variants.push({ tag: trimmed.slice(0, parenIdx).trim(), hasPayload: true });
+							const parenClose = trimmed.lastIndexOf(')');
+							const payloadStr = trimmed.slice(parenIdx + 1, parenClose).trim();
+							const payloadType = payloadStr ? parseTypeDesc(payloadStr) : undefined;
+							variants.push({ tag: trimmed.slice(0, parenIdx).trim(), hasPayload: true, payloadType });
 						} else {
 							variants.push({ tag: trimmed, hasPayload: false });
 						}
@@ -160,7 +163,12 @@ export function typeDescToString(desc: TypeDesc): string {
 			return `{${fields.join(', ')}}`;
 		}
 		case 'enum': {
-			const variants = desc.variants.map((v) => v.hasPayload ? `${v.tag}(T)` : v.tag);
+			const variants = desc.variants.map((v) => {
+				if (v.hasPayload && v.payloadType) {
+					return `${v.tag}(${typeDescToString(v.payloadType)})`;
+				}
+				return v.hasPayload ? `${v.tag}(?)` : v.tag;
+			});
 			return `Enum<${desc.name} { ${variants.join(', ')} }>`;
 		}
 		case 'unsupported':
@@ -205,7 +213,10 @@ export function createDefaultValue(desc: TypeDesc): StructuredValue {
 		case 'enum':
 			if (desc.variants.length > 0) {
 				const first = desc.variants[0];
-				return { kind: 'enum-variant', tag: first.tag };
+				const payload = first.hasPayload && first.payloadType
+					? createDefaultValue(first.payloadType)
+					: undefined;
+				return { kind: 'enum-variant', tag: first.tag, payload };
 			}
 			return { kind: 'raw', script: '' };
 		case 'list':
@@ -248,7 +259,11 @@ export function generateScript(value: StructuredValue, desc: TypeDesc): string {
 			const enumName = desc.kind === 'enum' ? desc.name : '';
 			const qualified = enumName ? `${enumName}::${value.tag}` : value.tag;
 			if (value.payload) {
-				const payloadScript = generateScript(value.payload, { kind: 'unsupported', raw: '' });
+				const variantDef = desc.kind === 'enum'
+					? desc.variants.find((v) => v.tag === value.tag)
+					: undefined;
+				const payloadDesc: TypeDesc = variantDef?.payloadType ?? { kind: 'unsupported', raw: '' };
+				const payloadScript = generateScript(value.payload, payloadDesc);
 				return `${qualified}(${payloadScript})`;
 			}
 			return qualified;

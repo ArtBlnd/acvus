@@ -122,12 +122,17 @@
 
 {:else if typeDesc.kind === 'enum'}
 	{@const selected = value.kind === 'enum-variant' ? value.tag : (typeDesc.variants[0]?.tag ?? '')}
+	{@const selectedVariant = typeDesc.variants.find((v) => v.tag === selected)}
 	<div class="space-y-1.5">
 		<Select.Root
 			type="single"
 			value={selected}
 			onValueChange={(tag) => {
-				onchange({ kind: 'enum-variant', tag });
+				const variant = typeDesc.kind === 'enum' ? typeDesc.variants.find((v) => v.tag === tag) : undefined;
+				const payload = variant?.hasPayload && variant.payloadType
+					? createDefaultValue(variant.payloadType)
+					: undefined;
+				onchange({ kind: 'enum-variant', tag, payload });
 			}}
 		>
 			<Select.Trigger class="h-7 text-xs w-full" size="sm">
@@ -139,6 +144,30 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
+		{#if selectedVariant?.hasPayload && selectedVariant.payloadType}
+			{@const payloadType = selectedVariant.payloadType}
+			{@const payloadValue = value.kind === 'enum-variant' && value.payload ? value.payload : createDefaultValue(payloadType)}
+			{#if isStructured(payloadType)}
+				<div class="pl-3 border-l-2 border-muted">
+					<Self
+						typeDesc={payloadType}
+						value={payloadValue}
+						onchange={(v: StructuredValue) => onchange({ kind: 'enum-variant', tag: selected, payload: v })}
+						{contextTypes}
+						depth={depth + 1}
+					/>
+				</div>
+			{:else}
+				<div class="pl-3 border-l-2 border-muted">
+					<AcvusEngineField
+						mode="script"
+						value={payloadValue.kind === 'raw' ? payloadValue.script : ''}
+						oninput={(v) => onchange({ kind: 'enum-variant', tag: selected, payload: { kind: 'raw', script: v } })}
+						{contextTypes}
+					/>
+				</div>
+			{/if}
+		{/if}
 	</div>
 
 {:else if typeDesc.kind === 'object'}

@@ -1086,16 +1086,27 @@ impl<'a> TypeChecker<'a> {
             }
 
             Pattern::Object { fields, .. } => {
-                // Source must be Object. Open matching: pattern can have subset of fields.
-                let Ty::Object(obj_fields) = &source_resolved else {
-                    self.error(
-                        MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: Ty::Object(FxHashMap::default()),
-                            source_ty: source_resolved,
-                        },
-                        span,
-                    );
-                    return;
+                // If source is already a concrete Object, match fields directly (open/subset).
+                // Otherwise, build an Object from pattern fields and unify to infer the type.
+                let obj_fields = if let Ty::Object(obj_fields) = &source_resolved {
+                    obj_fields.clone()
+                } else {
+                    let field_vars: FxHashMap<Astr, Ty> = fields
+                        .iter()
+                        .map(|f| (f.key, self.subst.fresh_var()))
+                        .collect();
+                    let obj_ty = Ty::Object(field_vars.clone());
+                    if self.subst.unify(source_ty, &obj_ty).is_err() {
+                        self.error(
+                            MirErrorKind::PatternTypeMismatch {
+                                pattern_ty: obj_ty,
+                                source_ty: source_resolved,
+                            },
+                            span,
+                        );
+                        return;
+                    }
+                    field_vars
                 };
                 for ObjectPatternField { key, pattern, .. } in fields {
                     let Some(field_ty) = obj_fields.get(key) else {
@@ -1108,7 +1119,8 @@ impl<'a> TypeChecker<'a> {
                         );
                         continue;
                     };
-                    self.check_pattern(pattern, field_ty, span);
+                    let resolved = self.subst.resolve(field_ty);
+                    self.check_pattern(pattern, &resolved, span);
                 }
             }
 
