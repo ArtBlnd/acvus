@@ -14,14 +14,7 @@
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import GridLayoutEditor from './grid-layout-editor.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import {
-		collectScriptsFromBindings,
-		collectScriptsFromTree,
-		collectNodeNames,
-		analyzeLevel,
-		mergeDiscoveredParams,
-		buildInjectedTypes,
-	} from '$lib/param-resolver.js';
+	import { analyzeBot } from '$lib/param-resolver.js';
 	import { analyzeWithTypes } from '$lib/engine.js';
 	import { onDestroy } from 'svelte';
 
@@ -151,90 +144,28 @@
 	let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
 	let discoveredContextTypes = $state<Record<string, import('$lib/type-parser.js').TypeDesc>>({});
 	let analysisErrors = $state<string[]>([]);
-	let analysisErrorPhase = $state<'analysis' | 'typecheck' | null>(null);
 
 	function runAnalysis() {
-		if (!bot) return;
+		if (!bot) throw new Error('bot not found');
 		const prompt = promptStore.get(bot.promptId);
+		if (!prompt) throw new Error(`prompt '${bot.promptId}' not found`);
 		const profile = profileStore.get(bot.profileId);
+		if (!profile) throw new Error(`profile '${bot.profileId}' not found`);
 
-		// Collect all provided keys — bindings + contextParams from lower levels
-		const providedKeys = new Set<string>();
-		if (prompt) {
-			for (const b of prompt.contextBindings) {
-				if (b.name) providedKeys.add(b.name);
-			}
-			for (const p of prompt.contextParams) {
-				providedKeys.add(p.name);
-			}
-		}
-		if (profile) {
-			for (const p of profile.contextParams) {
-				providedKeys.add(p.name);
-			}
-		}
-
-		// Collect all node names across hierarchy
-		const nodeNames = new Set<string>();
-		if (prompt) for (const n of collectNodeNames(prompt.children)) nodeNames.add(n);
-		if (profile) for (const n of collectNodeNames(profile.children)) nodeNames.add(n);
-		for (const n of collectNodeNames(bot.children)) nodeNames.add(n);
-
-		nodeNames.add('context');
-
-		// Collect all scripts across hierarchy
-		// NOTE: display/region entry scripts are excluded — they run inside
-		// iterator context where @item/@index are provided, not unresolved.
-		// Only the iterator scripts themselves are included.
-		const scripts = [
-			...(prompt ? collectScriptsFromBindings(prompt.contextBindings) : []),
-			...(prompt ? collectScriptsFromTree(prompt.children) : []),
-			...(profile ? collectScriptsFromTree(profile.children) : []),
-			...collectScriptsFromTree(bot.children),
-		];
-		if (bot.display.iterator.trim()) {
-			scripts.push({ source: bot.display.iterator, mode: 'script' as const });
-		}
-		for (const region of bot.regions) {
-			if (region.kind === 'iterable' && region.iterator.trim()) {
-				scripts.push({ source: region.iterator, mode: 'script' as const });
-			} else if (region.kind === 'static' && region.template.trim()) {
-				scripts.push({ source: region.template, mode: 'template' as const });
-			}
-		}
-
-		const allChildren = [
-			...(prompt?.children ?? []),
-			...(profile?.children ?? []),
-			...bot.children,
-		];
-
-		const baseTypes = buildInjectedTypes([
-			...(prompt?.contextParams ?? []),
-			...(profile?.contextParams ?? []),
-		]);
-		baseTypes['context'] = CONTEXT_TYPE;
-
-		const result = analyzeLevel({
-			scripts,
-			nodeNames,
-			providedKeys,
-			existingParams: bot.contextParams,
-			baseTypes,
-			children: allChildren,
-			getApi: (id) => providerStore.get(id)?.api ?? 'openai',
+		const result = analyzeBot(bot, prompt, profile, (id) => {
+			const p = providerStore.get(id);
+			if (!p) throw new Error(`provider '${id}' not found`);
+			return p.api;
 		});
 		if (!result.ok) {
 			analysisErrors = result.errors;
-			analysisErrorPhase = result.phase;
 			discoveredContextTypes = {};
 			return;
 		}
 		analysisErrors = [];
-		analysisErrorPhase = null;
-		discoveredContextTypes = result.discoveredTypes;
+		discoveredContextTypes = result.env.contextTypes;
 		botStore.update(bot.id, (b) => ({
-			...b, contextParams: mergeDiscoveredParams(b.contextParams, result.unresolvedKeys)
+			...b, contextParams: result.params
 		}));
 	}
 

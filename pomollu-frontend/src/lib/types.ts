@@ -237,9 +237,6 @@ export const CONTEXT_TYPE: TypeDesc = {
 	],
 };
 
-/** Context refs provided by the engine (not user-defined). */
-export const BUILTIN_CONTEXT_REFS = new Set(['turn', 'raw', 'self', 'content', 'context']);
-
 export type Prompt = {
 	id: string;
 	name: string;

@@ -315,12 +315,7 @@
 			};
 
 			uiState.busyBotId = bot.id;
-			let result: unknown;
-			try {
-				result = await cs.turn(resolver);
-			} finally {
-				uiState.busyBotId = null;
-			}
+			const result = await cs.turn(resolver);
 
 			// Session was switched or component destroyed during turn — bail out.
 			if (destroyed || chatSessionKey !== snapshotKey) return;
@@ -344,6 +339,9 @@
 		} catch (err) {
 			errorMsg = err instanceof Error ? err.message : String(err);
 		} finally {
+			// Lock MUST be released no matter what — even if turn throws,
+			// display rendering fails, or the session is switched mid-turn.
+			uiState.busyBotId = null;
 			turnSession?.finishTurn();
 			isLoading = false;
 			scrollToBottom();

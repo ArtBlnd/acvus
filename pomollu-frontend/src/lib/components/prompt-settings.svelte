@@ -12,13 +12,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import {
-		collectScriptsFromBindings,
-		collectScriptsFromTree,
-		collectNodeNames,
-		analyzeLevel,
-		mergeDiscoveredParams,
-	} from '$lib/param-resolver.js';
+	import { analyzePrompt } from '$lib/param-resolver.js';
 	import { Download } from 'lucide-svelte';
 	import { downloadJson } from '$lib/io.js';
 	import { onDestroy } from 'svelte';
@@ -71,37 +65,24 @@
 
 	let discoveredContextTypes = $state<Record<string, import('$lib/type-parser.js').TypeDesc>>({});
 	let analysisErrors = $state<string[]>([]);
-	let analysisErrorPhase = $state<'analysis' | 'typecheck' | null>(null);
 	let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function runAnalysis() {
-		if (!prompt) return;
-		const nodeNames = collectNodeNames(prompt.children);
-		nodeNames.add('context');
-		const baseTypes: Record<string, import('$lib/type-parser.js').TypeDesc> = { context: CONTEXT_TYPE };
-		const result = analyzeLevel({
-			scripts: [
-				...collectScriptsFromBindings(prompt.contextBindings),
-				...collectScriptsFromTree(prompt.children),
-			],
-			nodeNames,
-			providedKeys: new Set(prompt.contextBindings.map((b) => b.name).filter((n) => n)),
-			existingParams: prompt.contextParams,
-			baseTypes,
-			children: prompt.children,
-			getApi: (id) => providerStore.get(id)?.api ?? 'openai',
+		if (!prompt) throw new Error(`prompt '${promptId}' not found`);
+		const result = analyzePrompt(prompt, (id) => {
+			const p = providerStore.get(id);
+			if (!p) throw new Error(`provider '${id}' not found`);
+			return p.api;
 		});
 		if (!result.ok) {
 			analysisErrors = result.errors;
-			analysisErrorPhase = result.phase;
 			discoveredContextTypes = {};
 			return;
 		}
 		analysisErrors = [];
-		analysisErrorPhase = null;
-		discoveredContextTypes = result.discoveredTypes;
+		discoveredContextTypes = result.env.contextTypes;
 		promptStore.update(promptId, (p) => ({
-			...p, contextParams: mergeDiscoveredParams(p.contextParams, result.unresolvedKeys)
+			...p, contextParams: result.params
 		}));
 	}
 

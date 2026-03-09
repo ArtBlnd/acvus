@@ -1,10 +1,11 @@
-import type { Bot, Node, MessageDef, Block, RawBlock, ScriptBlock, ContextBlock, ContextBinding } from './types.js';
+import type { Bot, Prompt, Profile, Node, MessageDef, Block, RawBlock, ScriptBlock, ContextBlock, ContextBinding } from './types.js';
 import { isRawBlock, isScriptBlock, isContextBlock, CONTEXT_TYPE } from './types.js';
 import type { SessionConfig, NodeConfig, MessageConfig, ProviderConfig, StrategyConfig } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import { collectNodes, collectBlocks } from './block-tree.js';
 import { promptStore, profileStore, providerStore } from './stores.svelte.js';
+import { analyzeBot } from './param-resolver.js';
 
 function convertMessage(msg: MessageDef, blockLookup: Map<string, RawBlock>): MessageConfig {
 	switch (msg.kind) {
@@ -191,12 +192,14 @@ export type BuildResult =
 
 export function buildSessionConfig(bot: Bot): BuildResult | null {
 	const prompt = promptStore.get(bot.promptId);
+	if (!prompt) throw new Error(`prompt '${bot.promptId}' not found`);
 	const profile = profileStore.get(bot.profileId);
+	if (!profile) throw new Error(`profile '${bot.profileId}' not found`);
 
 	// Collect all blocks (for RawBlock lookup + ScriptBlock → Expr nodes)
 	const allBlocks: Block[] = [];
-	if (prompt) collectBlocks(prompt.children, allBlocks);
-	if (profile) collectBlocks(profile.children, allBlocks);
+	collectBlocks(prompt.children, allBlocks);
+	collectBlocks(profile.children, allBlocks);
 	collectBlocks(bot.children, allBlocks);
 
 	const blockLookup = new Map<string, RawBlock>();
@@ -206,8 +209,8 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 
 	// Collect all user-defined nodes from prompt, profile, bot
 	const allNodes: Node[] = [];
-	if (prompt) collectNodes(prompt.children, allNodes);
-	if (profile) collectNodes(profile.children, allNodes);
+	collectNodes(prompt.children, allNodes);
+	collectNodes(profile.children, allNodes);
 	collectNodes(bot.children, allNodes);
 
 	// Validate node name uniqueness
@@ -226,16 +229,14 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 
 	// Prompt contextBindings → Expr nodes (also tracked as side effects)
 	const sideEffects: string[] = [];
-	if (prompt) {
-		for (const binding of prompt.contextBindings) {
-			if (binding.name && binding.script.trim()) {
-				if (seenNodeNames.has(binding.name)) {
-					errors.push(`binding '${binding.name}' conflicts with a node name`);
-				}
-				seenNodeNames.add(binding.name);
-				nodeConfigs.push(bindingToExprNode(binding));
-				sideEffects.push(binding.name);
+	for (const binding of prompt.contextBindings) {
+		if (binding.name && binding.script.trim()) {
+			if (seenNodeNames.has(binding.name)) {
+				errors.push(`binding '${binding.name}' conflicts with a node name`);
 			}
+			seenNodeNames.add(binding.name);
+			nodeConfigs.push(bindingToExprNode(binding));
+			sideEffects.push(binding.name);
 		}
 	}
 
@@ -268,17 +269,26 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 		}
 	}
 
-	// Build context types from all active context params (prompt + profile + bot)
+	// analyzeBot typechecks all 3 levels and returns ALL params merged
+	// (prompt + profile + bot). This is the single source of truth.
+	const analysisResult = analyzeBot(bot, prompt, profile, (id) => {
+		const p = providerStore.get(id);
+		if (!p) throw new Error(`provider '${id}' not found`);
+		return p.api;
+	});
+	if (!analysisResult.ok) {
+		return { ok: false, errors: analysisResult.errors };
+	}
+
+	// Use ALL params for the session config, not just active ones.
+	// active flag is for UI display (hiding pruned params in editor) — not for compilation.
+	// Dead-branch params are harmless: WASM simply won't evaluate them at runtime.
+	const allActiveParams = analysisResult.params;
+
 	const context: Record<string, { type?: TypeDesc }> = {};
-	const allParams = [
-		...(prompt?.contextParams ?? []),
-		...(profile?.contextParams ?? []),
-		...(bot.contextParams ?? [])
-	].filter((p) => p.active !== false);
-	for (const param of allParams) {
+	for (const param of allActiveParams) {
 		const ty: TypeDesc | undefined = param.userType || (isUnknownType(param.inferredType) ? undefined : param.inferredType);
 		if (param.resolution.kind === 'static') {
-			// Static params → Expr node (engine evaluates the script)
 			const script = (param.resolution as { kind: 'static'; value: string }).value;
 			if (!script.trim()) {
 				errors.push(`static param '${param.name}': empty script`);
@@ -316,8 +326,8 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 	}
 
 	// Validate inputParam is a dynamic context param
-	if (prompt?.inputParam) {
-		const inputParamDef = allParams.find((p) => p.name === prompt.inputParam);
+	if (prompt.inputParam) {
+		const inputParamDef = allActiveParams.find((p) => p.name === prompt.inputParam);
 		if (!inputParamDef) {
 			errors.push(`inputParam '${prompt.inputParam}' is not a known context param`);
 		} else if (inputParamDef.resolution.kind !== 'dynamic') {

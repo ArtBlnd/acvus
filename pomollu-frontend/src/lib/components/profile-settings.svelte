@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ContextParam } from '$lib/types.js';
-	import { CONTEXT_TYPE } from '$lib/types.js';
+
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -8,12 +8,7 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { profileStore, providerStore, uiState } from '$lib/stores.svelte.js';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import {
-		collectScriptsFromTree,
-		collectNodeNames,
-		analyzeLevel,
-		mergeDiscoveredParams,
-	} from '$lib/param-resolver.js';
+	import { analyzeProfile } from '$lib/param-resolver.js';
 	import { Download } from 'lucide-svelte';
 	import { downloadJson } from '$lib/io.js';
 	import { onDestroy } from 'svelte';
@@ -27,33 +22,23 @@
 	let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
 	let discoveredContextTypes = $state<Record<string, import('$lib/type-parser.js').TypeDesc>>({});
 	let analysisErrors = $state<string[]>([]);
-	let analysisErrorPhase = $state<'analysis' | 'typecheck' | null>(null);
 
 	function runAnalysis() {
-		if (!profile) return;
-		const nodeNames = collectNodeNames(profile.children);
-		nodeNames.add('context');
-		const baseTypes: Record<string, import('$lib/type-parser.js').TypeDesc> = { context: CONTEXT_TYPE };
-		const result = analyzeLevel({
-			scripts: collectScriptsFromTree(profile.children),
-			nodeNames,
-			providedKeys: new Set(),
-			existingParams: profile.contextParams,
-			baseTypes,
-			children: profile.children,
-			getApi: (id) => providerStore.get(id)?.api ?? 'openai',
+		if (!profile) throw new Error(`profile '${profileId}' not found`);
+		const result = analyzeProfile(profile, (id) => {
+			const p = providerStore.get(id);
+			if (!p) throw new Error(`provider '${id}' not found`);
+			return p.api;
 		});
 		if (!result.ok) {
 			analysisErrors = result.errors;
-			analysisErrorPhase = result.phase;
 			discoveredContextTypes = {};
 			return;
 		}
 		analysisErrors = [];
-		analysisErrorPhase = null;
-		discoveredContextTypes = result.discoveredTypes;
+		discoveredContextTypes = result.env.contextTypes;
 		profileStore.update(profileId, (p) => ({
-			...p, contextParams: mergeDiscoveredParams(p.contextParams, result.unresolvedKeys)
+			...p, contextParams: result.params
 		}));
 	}
 

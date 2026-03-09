@@ -1,10 +1,23 @@
-import type { ContextKeyInfo, WebNode, TypecheckNodesResult } from './engine.js';
+import type { ContextKeyInfo, WebNode } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
-import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam } from './types.js';
-import { isRawBlock, isScriptBlock, BUILTIN_CONTEXT_REFS } from './types.js';
+import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam, Prompt, Profile, Bot } from './types.js';
+import { isRawBlock, isScriptBlock, CONTEXT_TYPE } from './types.js';
 import { collectBlocks, collectNodes } from './block-tree.js';
 import { analyzeWithTypes, analyzeWithKnown, typecheckNodes } from './engine.js';
+
+/**
+ * Builtin context refs injected automatically by the WASM engine.
+ * These are NOT user-defined params — excluded from param discovery.
+ *
+ * - turn: current turn info (engine internal struct)
+ * - raw/self/content: node-internal variables (types provided by typecheckNodes)
+ * - context: @context object (injected via CONTEXT_TYPE)
+ * - item/index: iterator loop variables (injected by typecheckNodes / render_display)
+ *
+ * DO NOT move this to another file — internal to param-resolver.
+ */
+const BUILTIN_CONTEXT_REFS = new Set(['turn', 'raw', 'self', 'content', 'context', 'item', 'index']);
 
 export type ScriptEntry = { source: string; mode: 'script' | 'template' };
 
@@ -45,9 +58,8 @@ function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
 		if (msg.kind === 'iterator' && msg.iterator.trim()) {
 			out.push({ source: msg.iterator, mode: 'script' });
 		}
-		if (msg.kind === 'iterator' && msg.template?.trim()) {
-			out.push({ source: msg.template, mode: 'template' });
-		}
+		// Do NOT collect iterator templates here.
+		// They use @item/@index loop variables — handled by render_display.
 	}
 }
 
@@ -77,11 +89,11 @@ export function collectNodeNames(children: BlockNode[]): Set<string> {
 	return new Set(collectNodes(children).map((n) => n.name).filter((n) => n));
 }
 
-export type CollectParamsResult =
+type CollectParamsResult =
 	| { ok: true; keys: ContextKeyInfo[] }
 	| { ok: false; errors: string[] };
 
-export function collectUnresolvedParams(opts: {
+function collectUnresolvedParams(opts: {
 	scripts: { source: string; mode: 'script' | 'template' }[];
 	nodeNames: Set<string>;
 	providedKeys: Set<string>;
@@ -124,31 +136,39 @@ export function collectUnresolvedParams(opts: {
 }
 
 /**
- * Shared 2-phase analysis pipeline for Prompt/Profile/Bot settings.
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * twoPassAnalysis — the ONLY 2-phase analysis function.
+ * ALL WASM analysis/typecheck MUST go through this function.
+ * No separate WASM calls outside of this function.
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *
  * ── Phase 1: Pure Type Discovery ──────────────────────────────────
- * Analyzes ALL scripts WITHOUT known values.
- * Every branch is live, so every @context ref is discovered with its
- * correctly-inferred type.  This produces the FULL type set.
- * Keys not found here are deactivated (no longer referenced).
+ * Analyzes all scripts WITHOUT known values.
+ * All branches are live → all @context refs are discovered with correct types.
+ * Params not found here are garbage → deleted.
  *
  * ── Phase 2: Typecheck + Pruning ──────────────────────────────────
- * 1) Hard typecheck (typecheckNodes) runs with the full type set from
- *    Phase 1, so all branches — including dead ones — compile cleanly.
- * 2) Re-analyze WITH known values to classify dead branches.
- *    Keys that only appear on dead paths are "pruned" and removed from
- *    the unresolved list, hiding them from the UI.
+ * Typechecks with Phase 1's full type set (compiles including dead branches).
+ * Re-analyzes with known values to classify dead-branch keys as pruned.
+ * Pruned keys → active: false (hidden in UI, settings preserved).
  *
- * IMPORTANT: Phase 1 MUST run without known values.
- * If known values are passed in Phase 1, the engine's partition logic
- * drops known keys on dead branches entirely — they get no type, no
- * status, and Phase 2 typecheck fails with "undefined context" errors.
+ * ── Sanitization ──────────────────────────────────────────────────
+ * Only keys found in Phase 1 survive — everything else is deleted.
+ * Existing resolution/userType/editorMode from existingParams is preserved.
+ * The resulting params can be stored directly.
+ *
+ * IMPORTANT: Phase 1 MUST run WITHOUT known values.
+ * If known values are provided, the engine's partition logic
+ * omits dead-branch known keys entirely, causing Phase 2 typecheck to fail.
+ *
+ * Each level (Prompt/Profile/Bot) calls this with its OWN params only.
+ * Other levels' params are passed as providedKeys (already resolved).
  */
-export type AnalyzeLevelResult =
-	| { ok: true; discoveredTypes: Record<string, TypeDesc>; unresolvedKeys: ContextKeyInfo[] }
-	| { ok: false; errors: string[]; phase: 'analysis' | 'typecheck' };
+export type TwoPassResult =
+	| { ok: true; env: ContextEnvResult; params: ContextParam[]; activeParams: ContextParam[] }
+	| { ok: false; errors: string[] };
 
-export function analyzeLevel(opts: {
+export function twoPassAnalysis(opts: {
 	scripts: ScriptEntry[];
 	nodeNames: Set<string>;
 	providedKeys: Set<string>;
@@ -156,7 +176,7 @@ export function analyzeLevel(opts: {
 	baseTypes?: Record<string, TypeDesc>;
 	children: BlockNode[];
 	getApi: (providerId: string) => string;
-}): AnalyzeLevelResult {
+}): TwoPassResult {
 	const typesFromParams: Record<string, TypeDesc> = { ...(opts.baseTypes ?? {}) };
 	for (const p of opts.existingParams) {
 		if (p.userType) typesFromParams[p.name] = p.userType;
@@ -176,105 +196,190 @@ export function analyzeLevel(opts: {
 		}
 	}
 
-	// Phase 1: Pure type discovery (no known values).
-	// All branches are live → all context refs discovered with correct types.
-	const collectResult = collectUnresolvedParams({
+	// ── Phase 1: Pure type discovery (no known values) ──
+	const phase1 = collectUnresolvedParams({
 		scripts: allScripts,
 		nodeNames: opts.nodeNames,
 		providedKeys: opts.providedKeys,
 		contextTypes: typesFromParams,
 	});
 
-	if (!collectResult.ok) {
-		return { ok: false, errors: collectResult.errors, phase: 'analysis' };
+	if (!phase1.ok) {
+		return { ok: false, errors: phase1.errors };
 	}
 
-	// Build full type set from Phase 1 discovery.
-	const injectedTypes: Record<string, TypeDesc> = { ...typesFromParams };
-	for (const k of collectResult.keys) {
-		if (!injectedTypes[k.name]) {
-			injectedTypes[k.name] = k.type;
-		}
+	// Full type set from Phase 1.
+	const fullTypes: Record<string, TypeDesc> = { ...typesFromParams };
+	for (const k of phase1.keys) {
+		if (!fullTypes[k.name]) fullTypes[k.name] = k.type;
 	}
 
-	// Phase 2: Typecheck + Pruning.
-	// Typecheck uses the full type set so all branches compile.
-	const env = computeExternalContextEnv(opts.children, injectedTypes, opts.getApi);
+	// ── Phase 2: Typecheck + Pruning ──
+	const webNodes = collectNodes(opts.children)
+		.filter((n) => n.name)
+		.map((n) => toWebNode(n, opts.getApi(n.providerId)));
+	const typecheckResult = typecheckNodes(webNodes, fullTypes);
+	if ('error' in typecheckResult) {
+		return { ok: false, errors: [typecheckResult.error] };
+	}
+	const env: ContextEnvResult = typecheckResult;
 
-	// Pruning: re-analyze with known values + full types to find dead branches.
-	const hasKnown = Object.keys(knownScripts).length > 0;
-	let unresolvedKeys = collectResult.keys;
+	// Pruning with known values.
+	const phase1Names = new Set(phase1.keys.map((k) => k.name));
+	const survivingNames = new Set(phase1Names);
 
-	if (hasKnown) {
-		const pruneResult = collectUnresolvedParams({
+	if (Object.keys(knownScripts).length > 0) {
+		const phase2 = collectUnresolvedParams({
 			scripts: allScripts,
 			nodeNames: opts.nodeNames,
 			providedKeys: opts.providedKeys,
-			contextTypes: injectedTypes,
+			contextTypes: fullTypes,
 			knownScripts,
 		});
-		if (pruneResult.ok) {
-			const prunedNames = new Set(
-				pruneResult.keys.filter((k) => k.status === 'pruned').map((k) => k.name)
-			);
-			unresolvedKeys = collectResult.keys.filter((k) => !prunedNames.has(k.name));
+		if (phase2.ok) {
+			for (const k of phase2.keys) {
+				if (k.status === 'pruned') survivingNames.delete(k.name);
+			}
 		}
 	}
 
-	return { ok: true, discoveredTypes: env.contextTypes, unresolvedKeys };
-}
-
-/**
- * Merge discovered unresolved keys into existing contextParams,
- * preserving user-set resolution and userType overrides.
- * Params no longer discovered are kept with `active: false`.
- */
-export function mergeDiscoveredParams(
-	existing: ContextParam[],
-	discovered: ContextKeyInfo[],
-): ContextParam[] {
-	const discoveredNames = new Set(discovered.map((k) => k.name));
-	const map = new Map(existing.map((p) => [p.name, p]));
-
-	// Active params: currently discovered
-	const active: ContextParam[] = discovered.map((k) => {
-		const prev = map.get(k.name);
+	// ── Sanitization ──
+	// Only Phase 1 keys survive. Everything else is deleted.
+	// Pruned status determines active flag.
+	const existingMap = new Map(opts.existingParams.map((p) => [p.name, p]));
+	const params: ContextParam[] = phase1.keys.map((k) => {
+		const prev = existingMap.get(k.name);
 		return {
 			name: k.name,
 			inferredType: k.type,
 			resolution: prev?.resolution ?? { kind: 'unresolved' as const },
 			userType: prev?.userType,
 			editorMode: prev?.editorMode,
-			active: true,
+			active: survivingNames.has(k.name),
 		};
 	});
 
-	// Params no longer discovered: deactivate (hidden by dead branch).
-	// Configuration (resolution, userType, editorMode) is preserved —
-	// if the param is rediscovered later, it reappears with saved settings.
-	const inactive: ContextParam[] = existing
-		.filter((p) => !discoveredNames.has(p.name))
-		.map((p) => ({
-			...p,
-			active: false,
-		}));
+	const activeParams = params.filter((p) => p.active);
+	return { ok: true, env, params, activeParams };
+}
 
-	return [...active, ...inactive];
+type GetApi = (providerId: string) => string;
+
+export function analyzePrompt(prompt: Prompt, getApi: GetApi): TwoPassResult {
+	const nodeNames = collectNodeNames(prompt.children);
+	nodeNames.add('context');
+	return twoPassAnalysis({
+		scripts: [
+			...collectScriptsFromBindings(prompt.contextBindings),
+			...collectScriptsFromTree(prompt.children),
+		],
+		nodeNames,
+		providedKeys: new Set(prompt.contextBindings.map((b) => b.name).filter((n) => n)),
+		existingParams: prompt.contextParams,
+		baseTypes: { context: CONTEXT_TYPE },
+		children: prompt.children,
+		getApi,
+	});
+}
+
+export function analyzeProfile(profile: Profile, getApi: GetApi): TwoPassResult {
+	const nodeNames = collectNodeNames(profile.children);
+	nodeNames.add('context');
+	return twoPassAnalysis({
+		scripts: collectScriptsFromTree(profile.children),
+		nodeNames,
+		providedKeys: new Set(),
+		existingParams: profile.contextParams,
+		baseTypes: { context: CONTEXT_TYPE },
+		children: profile.children,
+		getApi,
+	});
 }
 
 /**
- * Build injected context types from contextParams.
- * Only uses userType (explicitly set by the user).
- * inferredType is intentionally excluded — it can be stale from a previous
- * analysis and conflict with changed templates (e.g. Int vs Enum pattern).
- * Fresh types are discovered each analysis cycle via collectUnresolvedParams.
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * analyzeBot — Bot-level param analysis with full hierarchy context.
+ *
+ * Each level manages its OWN params (locality):
+ * - twoPassAnalysis discovers only bot-level params
+ * - Prompt/Profile params are already resolved at their levels → providedKeys
+ * - Prompt/Profile types → baseTypes (so typecheckNodes can compile)
+ *
+ * Returns ALL params from all 3 levels merged:
+ * - prompt.contextParams + profile.contextParams + bot's discovered params
+ * - Callers (e.g. buildSessionConfig) get the full picture from this single call.
+ *
+ * DO NOT change this structure.
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
-export function buildInjectedTypes(contextParams: ContextParam[]): Record<string, TypeDesc> {
-	const types: Record<string, TypeDesc> = {};
-	for (const p of contextParams) {
-		if (p.userType) types[p.name] = p.userType;
+export function analyzeBot(bot: Bot, prompt: Prompt, profile: Profile, getApi: GetApi): TwoPassResult {
+	// providedKeys: bindings + prompt/profile params (already resolved at their levels).
+	const providedKeys = new Set<string>();
+	for (const b of prompt.contextBindings) if (b.name) providedKeys.add(b.name);
+	for (const p of prompt.contextParams) providedKeys.add(p.name);
+	for (const p of profile.contextParams) providedKeys.add(p.name);
+
+	// nodeNames: all nodes across 3 levels.
+	const nodeNames = new Set<string>();
+	for (const n of collectNodeNames(prompt.children)) nodeNames.add(n);
+	for (const n of collectNodeNames(profile.children)) nodeNames.add(n);
+	for (const n of collectNodeNames(bot.children)) nodeNames.add(n);
+	nodeNames.add('context');
+
+	// scripts: all 3 levels + bot display/region iterators only.
+	// Display entry condition/template use @item/@index loop vars — NOT param analysis targets.
+	const scripts = [
+		...collectScriptsFromBindings(prompt.contextBindings),
+		...collectScriptsFromTree(prompt.children),
+		...collectScriptsFromTree(profile.children),
+		...collectScriptsFromTree(bot.children),
+	];
+	if (bot.display.iterator.trim()) {
+		scripts.push({ source: bot.display.iterator, mode: 'script' as const });
 	}
-	return types;
+	for (const region of bot.regions) {
+		if (region.kind === 'iterable' && region.iterator.trim()) {
+			scripts.push({ source: region.iterator, mode: 'script' as const });
+		} else if (region.kind === 'static' && region.template.trim()) {
+			scripts.push({ source: region.template, mode: 'template' as const });
+		}
+	}
+
+	// baseTypes: prompt/profile param types + CONTEXT_TYPE.
+	// typecheckNodes needs full hierarchy types to compile all nodes.
+	const baseTypes: Record<string, TypeDesc> = { context: CONTEXT_TYPE };
+	for (const p of prompt.contextParams) {
+		if (p.userType) baseTypes[p.name] = p.userType;
+		else if (p.inferredType) baseTypes[p.name] = p.inferredType;
+	}
+	for (const p of profile.contextParams) {
+		if (p.userType) baseTypes[p.name] = p.userType;
+		else if (p.inferredType) baseTypes[p.name] = p.inferredType;
+	}
+
+	// twoPassAnalysis discovers bot-level params only.
+	const result = twoPassAnalysis({
+		scripts,
+		nodeNames,
+		providedKeys,
+		existingParams: bot.contextParams,
+		baseTypes,
+		children: [...prompt.children, ...profile.children, ...bot.children],
+		getApi,
+	});
+
+	if (!result.ok) return result;
+
+	// Merge all 3 levels' params into the result.
+	// Bot analysis discovers bot-only params; prompt/profile params are already resolved.
+	const allParams = [
+		...prompt.contextParams,
+		...profile.contextParams,
+		...result.params,
+	];
+	const allActiveParams = allParams.filter((p) => p.active !== false);
+
+	return { ok: true, env: result.env, params: allParams, activeParams: allActiveParams };
 }
 
 /**
@@ -321,24 +426,3 @@ export type ContextEnvResult = {
 	nodeErrors: Record<string, Record<string, string>>;
 };
 
-/**
- * Compute all externally-visible context types, per-node local types,
- * and per-node per-field typecheck errors from nodes in a block tree
- * via WASM orchestration pipeline.
- */
-export function computeExternalContextEnv(
-	children: BlockNode[],
-	injectedTypes: Record<string, TypeDesc>,
-	getApi: (providerId: string) => string,
-): ContextEnvResult {
-	const nodes = collectNodes(children);
-	const webNodes = nodes
-		.filter((n) => n.name)
-		.map((n) => toWebNode(n, getApi(n.providerId)));
-	const result = typecheckNodes(webNodes, injectedTypes);
-	if ('error' in result) {
-		console.warn('[computeExternalContextEnv] error:', result.error);
-		return { contextTypes: injectedTypes, nodeLocals: {}, nodeErrors: {} };
-	}
-	return result;
-}

@@ -17,16 +17,9 @@
 	import type { BlockOwner } from '$lib/stores.svelte.js';
 	import { initPersistence } from '$lib/persistence.svelte.js';
 	import { IndexedDBBackend } from '$lib/storage/indexeddb.js';
-	import {
-		buildInjectedTypes, computeExternalContextEnv, collectUnresolvedParams,
-		collectScriptsFromBindings, collectScriptsFromTree, collectNodeNames,
-		mergeDiscoveredParams,
-	} from '$lib/param-resolver.js';
-	import type { ContextEnvResult } from '$lib/param-resolver.js';
-	import type { ContextKeyInfo } from '$lib/engine.js';
-	import type { BlockNode, ContextParam } from '$lib/types.js';
-	import { CONTEXT_TYPE } from '$lib/types.js';
-	import { isUnknownType } from '$lib/type-parser.js';
+	import { analyzePrompt, analyzeProfile, analyzeBot } from '$lib/param-resolver.js';
+	import type { ContextEnvResult, TwoPassResult } from '$lib/param-resolver.js';
+	import type { ContextParam } from '$lib/types.js';
 	import { onMount } from 'svelte';
 
 	let activeTab = $derived(uiState.activeTab);
@@ -41,142 +34,47 @@
 	let envTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastOwnerKey: string | null = null;
 
-	type FullEnvResult = { env: ContextEnvResult; discovered: ContextKeyInfo[]; errors?: string[] };
-
-	/** Full env computation with inline type discovery. */
-	function computeFullEnv(owner: BlockOwner): FullEnvResult {
-		const getApi = (pid: string) => providerStore.get(pid)?.api ?? 'openai';
-
-		function doCollect(
-			scripts: { source: string; mode: 'script' | 'template' }[],
-			nodeNames: Set<string>,
-			providedKeys: Set<string>,
-			injected: Record<string, import('$lib/type-parser.js').TypeDesc>,
-			knownScripts: Record<string, string>,
-			children: import('$lib/types.js').BlockNode[],
-		): FullEnvResult {
-			const collectResult = collectUnresolvedParams({
-				scripts, nodeNames, providedKeys, contextTypes: injected, knownScripts,
-			});
-			if (!collectResult.ok) {
-				return { env: EMPTY_ENV, discovered: [], errors: collectResult.errors };
-			}
-			for (const k of collectResult.keys) {
-				if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
-			}
-			return { env: computeExternalContextEnv(children, injected, getApi), discovered: collectResult.keys };
-		}
+	function computeFullEnv(owner: BlockOwner): TwoPassResult {
+		const getApi = (pid: string) => {
+			const p = providerStore.get(pid);
+			if (!p) throw new Error(`provider '${pid}' not found`);
+			return p.api;
+		};
 
 		switch (owner.kind) {
 			case 'prompt': {
 				const prompt = promptStore.get(owner.promptId);
-				if (!prompt) return { env: EMPTY_ENV, discovered: [] };
-				const injected = buildInjectedTypes(prompt.contextParams);
-				injected['context'] = CONTEXT_TYPE;
-				const scripts = [
-					...collectScriptsFromBindings(prompt.contextBindings),
-					...collectScriptsFromTree(prompt.children),
-				];
-				const nodeNames = collectNodeNames(prompt.children);
-				nodeNames.add('context');
-				const knownScripts: Record<string, string> = {};
-				for (const p of prompt.contextParams) {
-					if (p.resolution.kind === 'static' && p.resolution.value.trim()) {
-						knownScripts[p.name] = p.resolution.value;
-						scripts.push({ source: p.resolution.value, mode: 'script' as const });
-					}
-				}
-				return doCollect(scripts, nodeNames,
-					new Set(prompt.contextBindings.map((b) => b.name).filter((n) => n)),
-					injected, knownScripts, prompt.children);
+				if (!prompt) throw new Error(`prompt '${owner.promptId}' not found`);
+				return analyzePrompt(prompt, getApi);
 			}
 			case 'profile': {
 				const profile = profileStore.get(owner.profileId);
-				if (!profile) return { env: EMPTY_ENV, discovered: [] };
-				const injected = buildInjectedTypes(profile.contextParams);
-				injected['context'] = CONTEXT_TYPE;
-				const nodeNames = collectNodeNames(profile.children);
-				nodeNames.add('context');
-				const knownScripts: Record<string, string> = {};
-				const scripts = collectScriptsFromTree(profile.children);
-				for (const p of profile.contextParams) {
-					if (p.resolution.kind === 'static' && p.resolution.value.trim()) {
-						knownScripts[p.name] = p.resolution.value;
-						scripts.push({ source: p.resolution.value, mode: 'script' as const });
-					}
-				}
-				return doCollect(scripts, nodeNames, new Set(), injected, knownScripts, profile.children);
+				if (!profile) throw new Error(`profile '${owner.profileId}' not found`);
+				return analyzeProfile(profile, getApi);
 			}
 			case 'bot': {
 				const bot = botStore.get(owner.botId);
-				if (!bot) return { env: EMPTY_ENV, discovered: [] };
+				if (!bot) throw new Error(`bot '${owner.botId}' not found`);
 				const prompt = promptStore.get(bot.promptId);
+				if (!prompt) throw new Error(`prompt '${bot.promptId}' not found`);
 				const profile = profileStore.get(bot.profileId);
-				const allParams = [
-					...(prompt?.contextParams ?? []),
-					...(profile?.contextParams ?? []),
-					...bot.contextParams,
-				];
-				const injected = buildInjectedTypes(allParams);
-				injected['context'] = CONTEXT_TYPE;
-
-				const allChildren: import('$lib/types.js').BlockNode[] = [
-					...(prompt?.children ?? []),
-					...(profile?.children ?? []),
-					...bot.children,
-				];
-
-				const providedKeys = new Set<string>();
-				if (prompt) {
-					for (const b of prompt.contextBindings) if (b.name) providedKeys.add(b.name);
-					for (const p of prompt.contextParams) providedKeys.add(p.name);
-				}
-				if (profile) {
-					for (const p of profile.contextParams) providedKeys.add(p.name);
-				}
-
-				const nodeNames = new Set<string>();
-				if (prompt) for (const n of collectNodeNames(prompt.children)) nodeNames.add(n);
-				if (profile) for (const n of collectNodeNames(profile.children)) nodeNames.add(n);
-				for (const n of collectNodeNames(bot.children)) nodeNames.add(n);
-				nodeNames.add('context');
-
-				const scripts = [
-					...(prompt ? collectScriptsFromBindings(prompt.contextBindings) : []),
-					...(prompt ? collectScriptsFromTree(prompt.children) : []),
-					...(profile ? collectScriptsFromTree(profile.children) : []),
-					...collectScriptsFromTree(bot.children),
-				];
-
-				const knownScripts: Record<string, string> = {};
-				for (const p of [...(prompt?.contextParams ?? []), ...(profile?.contextParams ?? []), ...bot.contextParams]) {
-					if (p.resolution.kind === 'static' && p.resolution.value.trim()) {
-						knownScripts[p.name] = p.resolution.value;
-						scripts.push({ source: p.resolution.value, mode: 'script' as const });
-					}
-				}
-				return doCollect(scripts, nodeNames, providedKeys, injected, knownScripts, allChildren);
+				if (!profile) throw new Error(`profile '${bot.profileId}' not found`);
+				return analyzeBot(bot, prompt, profile, getApi);
 			}
 		}
 	}
 
-	/** Sync discovered params into the owner's store. */
-	function syncOwnerParams(owner: BlockOwner, discovered: ContextKeyInfo[]) {
+	/** Sync params from twoPassAnalysis result into the owner's store. */
+	function syncOwnerParams(owner: BlockOwner, params: ContextParam[]) {
 		switch (owner.kind) {
 			case 'prompt':
-				promptStore.update(owner.promptId, (p) => ({
-					...p, contextParams: mergeDiscoveredParams(p.contextParams, discovered),
-				}));
+				promptStore.update(owner.promptId, (p) => ({ ...p, contextParams: params }));
 				break;
 			case 'profile':
-				profileStore.update(owner.profileId, (p) => ({
-					...p, contextParams: mergeDiscoveredParams(p.contextParams, discovered),
-				}));
+				profileStore.update(owner.profileId, (p) => ({ ...p, contextParams: params }));
 				break;
 			case 'bot':
-				botStore.update(owner.botId, (b) => ({
-					...b, contextParams: mergeDiscoveredParams(b.contextParams, discovered),
-				}));
+				botStore.update(owner.botId, (b) => ({ ...b, contextParams: params }));
 				break;
 		}
 	}
@@ -217,12 +115,15 @@
 
 	// First load (tab switch) = immediate. Content changes = debounced. Both compute from scratch.
 	function applyFullEnv(owner: BlockOwner) {
-		const { env, discovered, errors } = computeFullEnv(owner);
-		ownerEnv = env;
-		ownerAnalysisErrors = errors ?? [];
-		if (!errors?.length) {
-			syncOwnerParams(owner, discovered);
+		const result = computeFullEnv(owner);
+		if (!result.ok) {
+			ownerEnv = EMPTY_ENV;
+			ownerAnalysisErrors = result.errors;
+			return;
 		}
+		ownerEnv = result.env;
+		ownerAnalysisErrors = [];
+		syncOwnerParams(owner, result.params);
 	}
 
 	$effect(() => {
