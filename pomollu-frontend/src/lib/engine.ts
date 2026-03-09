@@ -254,12 +254,12 @@ export class ChatSession {
 		index: number
 	): Promise<RenderedCard[]> {
 		if (this._freed || this._busy) return [];
-		return this.inner.render_display(iteratorScript, entriesJson, index) as RenderedCard[];
+		return this.inner.render_display(iteratorScript, entriesJson, index) as unknown as RenderedCard[];
 	}
 
 	async renderStatic(template: string): Promise<RenderedCard[]> {
 		if (this._freed || this._busy) return [];
-		return this.inner.render_static(template) as RenderedCard[];
+		return this.inner.render_static(template) as unknown as RenderedCard[];
 	}
 
 	/**

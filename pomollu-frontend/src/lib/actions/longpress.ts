@@ -10,7 +10,11 @@
  * CSS pattern (use :global for runtime attribute):
  *   :global([data-long-pressed] > .action-btn) { opacity: 1; }
  */
-export function longpress(node: HTMLElement, duration = 500) {
+export type LongpressOptions = { duration?: number; onlongpress?: () => void };
+
+export function longpress(node: HTMLElement, opts: LongpressOptions | number = 500) {
+	let duration = typeof opts === 'number' ? opts : (opts.duration ?? 500);
+	let onlongpress = typeof opts === 'number' ? undefined : opts.onlongpress;
 	let timer: ReturnType<typeof setTimeout>;
 	let preventClick = false;
 	let documentListenerActive = false;
@@ -22,6 +26,7 @@ export function longpress(node: HTMLElement, duration = 500) {
 			preventClick = true;
 			node.setAttribute('data-long-pressed', '');
 			node.dispatchEvent(new CustomEvent('longpress', { bubbles: true }));
+			onlongpress?.();
 			navigator.vibrate?.(30);
 			if (!documentListenerActive) {
 				documentListenerActive = true;
@@ -74,8 +79,9 @@ export function longpress(node: HTMLElement, duration = 500) {
 			node.removeEventListener('touchend', onTouchEnd);
 			node.removeEventListener('click', onClick, { capture: true });
 		},
-		update(newDuration: number) {
-			duration = newDuration;
+		update(newOpts: LongpressOptions | number) {
+			duration = typeof newOpts === 'number' ? newOpts : (newOpts.duration ?? 500);
+			onlongpress = typeof newOpts === 'number' ? undefined : newOpts.onlongpress;
 		}
 	};
 }

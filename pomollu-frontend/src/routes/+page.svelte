@@ -20,9 +20,11 @@
 	import {
 		buildInjectedTypes, computeExternalContextEnv, collectUnresolvedParams,
 		collectScriptsFromBindings, collectScriptsFromTree, collectNodeNames,
+		mergeDiscoveredParams,
 	} from '$lib/param-resolver.js';
 	import type { ContextEnvResult } from '$lib/param-resolver.js';
-	import type { BlockNode } from '$lib/types.js';
+	import type { ContextKeyInfo } from '$lib/engine.js';
+	import type { BlockNode, ContextParam } from '$lib/types.js';
 	import { CONTEXT_TYPE } from '$lib/types.js';
 	import { isUnknownType } from '$lib/type-parser.js';
 	import { onMount } from 'svelte';
@@ -38,14 +40,16 @@
 	let envTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastOwnerKey: string | null = null;
 
-	/** Full env computation with inline type discovery. No store side effects. */
-	function computeFullEnv(owner: BlockOwner): ContextEnvResult {
+	type FullEnvResult = { env: ContextEnvResult; discovered: ContextKeyInfo[] };
+
+	/** Full env computation with inline type discovery. */
+	function computeFullEnv(owner: BlockOwner): FullEnvResult {
 		const getApi = (pid: string) => providerStore.get(pid)?.api ?? 'openai';
 
 		switch (owner.kind) {
 			case 'prompt': {
 				const prompt = promptStore.get(owner.promptId);
-				if (!prompt) return EMPTY_ENV;
+				if (!prompt) return { env: EMPTY_ENV, discovered: [] };
 				const injected = buildInjectedTypes(prompt.contextParams);
 				injected['context'] = CONTEXT_TYPE;
 				const scripts = [
@@ -63,11 +67,11 @@
 				for (const k of discovered) {
 					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
-				return computeExternalContextEnv(prompt.children, injected, getApi);
+				return { env: computeExternalContextEnv(prompt.children, injected, getApi), discovered };
 			}
 			case 'profile': {
 				const profile = profileStore.get(owner.profileId);
-				if (!profile) return EMPTY_ENV;
+				if (!profile) return { env: EMPTY_ENV, discovered: [] };
 				const injected = buildInjectedTypes(profile.contextParams);
 				injected['context'] = CONTEXT_TYPE;
 				const nodeNames = collectNodeNames(profile.children);
@@ -81,11 +85,11 @@
 				for (const k of discovered) {
 					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
-				return computeExternalContextEnv(profile.children, injected, getApi);
+				return { env: computeExternalContextEnv(profile.children, injected, getApi), discovered };
 			}
 			case 'bot': {
 				const bot = botStore.get(owner.botId);
-				if (!bot) return EMPTY_ENV;
+				if (!bot) return { env: EMPTY_ENV, discovered: [] };
 				const prompt = promptStore.get(bot.promptId);
 				const profile = profileStore.get(bot.profileId);
 				const allParams = [
@@ -130,12 +134,40 @@
 				for (const k of discovered) {
 					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
-				return computeExternalContextEnv(allChildren, injected, getApi);
+				return { env: computeExternalContextEnv(allChildren, injected, getApi), discovered };
 			}
 		}
 	}
 
-	// Trigger key: captures all data that should cause a recomputation
+	/** Sync discovered params into the owner's store. */
+	function syncOwnerParams(owner: BlockOwner, discovered: ContextKeyInfo[]) {
+		switch (owner.kind) {
+			case 'prompt':
+				promptStore.update(owner.promptId, (p) => ({
+					...p, contextParams: mergeDiscoveredParams(p.contextParams, discovered),
+				}));
+				break;
+			case 'profile':
+				profileStore.update(owner.profileId, (p) => ({
+					...p, contextParams: mergeDiscoveredParams(p.contextParams, discovered),
+				}));
+				break;
+			case 'bot':
+				botStore.update(owner.botId, (b) => ({
+					...b, contextParams: mergeDiscoveredParams(b.contextParams, discovered),
+				}));
+				break;
+		}
+	}
+
+	// Extract user-set fields only (resolution, userType) — NOT inferredType (which is an output).
+	// This prevents a circular dependency: syncOwnerParams updates inferredType,
+	// which must NOT re-trigger the env computation.
+	function paramUserKey(params?: ContextParam[]) {
+		return params?.map((p) => [p.name, p.resolution, p.userType]);
+	}
+
+	// Trigger key: captures all data that should cause a recomputation.
 	let envTriggerKey = $derived.by(() => {
 		if (!activeTab) return null;
 		if (activeTab.kind !== 'block' && activeTab.kind !== 'node') return null;
@@ -143,26 +175,32 @@
 		switch (owner.kind) {
 			case 'prompt': {
 				const p = promptStore.get(owner.promptId);
-				return JSON.stringify(['prompt', owner.promptId, p?.contextBindings, p?.children, p?.contextParams]);
+				return JSON.stringify(['prompt', owner.promptId, p?.contextBindings, p?.children, paramUserKey(p?.contextParams)]);
 			}
 			case 'profile': {
 				const p = profileStore.get(owner.profileId);
-				return JSON.stringify(['profile', owner.profileId, p?.children, p?.contextParams]);
+				return JSON.stringify(['profile', owner.profileId, p?.children, paramUserKey(p?.contextParams)]);
 			}
 			case 'bot': {
 				const bot = botStore.get(owner.botId);
 				const p = promptStore.get(bot?.promptId ?? '');
 				const pr = profileStore.get(bot?.profileId ?? '');
 				return JSON.stringify(['bot', owner.botId,
-					bot?.children, bot?.display, bot?.regions, bot?.contextParams,
-					p?.contextBindings, p?.children, p?.contextParams,
-					pr?.children, pr?.contextParams,
+					bot?.children, bot?.display, bot?.regions, paramUserKey(bot?.contextParams),
+					p?.contextBindings, p?.children, paramUserKey(p?.contextParams),
+					pr?.children, paramUserKey(pr?.contextParams),
 				]);
 			}
 		}
 	});
 
 	// First load (tab switch) = immediate. Content changes = debounced. Both compute from scratch.
+	function applyFullEnv(owner: BlockOwner) {
+		const { env, discovered } = computeFullEnv(owner);
+		ownerEnv = env;
+		syncOwnerParams(owner, discovered);
+	}
+
 	$effect(() => {
 		const key = envTriggerKey;
 
@@ -178,12 +216,12 @@
 		if (ownerKey !== lastOwnerKey) {
 			lastOwnerKey = ownerKey;
 			if (envTimer) clearTimeout(envTimer);
-			ownerEnv = computeFullEnv(owner);
+			applyFullEnv(owner);
 		} else {
 			if (envTimer) clearTimeout(envTimer);
 			envTimer = setTimeout(() => {
 				envTimer = null;
-				ownerEnv = computeFullEnv(owner);
+				applyFullEnv(owner);
 			}, ENV_DEBOUNCE_MS);
 		}
 

@@ -1816,3 +1816,62 @@ fn structural_enum_name_mismatch_is_error() {
     );
     assert!(result.is_err(), "should fail: different enum names on same var");
 }
+
+#[test]
+fn structural_enum_payload_unifies_with_inner_match() {
+    // Payload variable must unify with patterns inside the arm body.
+    let i = Interner::new();
+    let src = r#"{{ A::X(x) = @a }}{{ 0 = x }}zero{{_}}other{{/}}{{_}}none{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("X"), "variant X missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_payload_unifies_with_emit() {
+    // Payload bound by variant pattern can be used in expressions (emit).
+    let i = Interner::new();
+    let src = r#"{{ A::Val(v) = @a }}{{ v + 1 | to_string }}{{_}}n/a{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("Val"), "variant Val missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_payload_type_propagates_through_context() {
+    // When context provides an enum type with payload, payload type should propagate.
+    let i = Interner::new();
+    let mut variants = FxHashMap::default();
+    variants.insert(i.intern("Ok"), Some(Box::new(Ty::Int)));
+    variants.insert(i.intern("Err"), None);
+    let ctx_types = ctx(&i, &[("r", Ty::Enum { name: i.intern("R"), variants })]);
+    let src = r#"{{ R::Ok(v) = @r }}{{ v + 1 | to_string }}{{ R::Err = }}err{{_}}??{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &ctx_types, &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
+    assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
+}
+
+#[test]
+fn infer_unifies_with_concrete_type() {
+    // Ty::Infer in context types should not block unification.
+    let i = Interner::new();
+    let mut variants = FxHashMap::default();
+    variants.insert(i.intern("X"), Some(Box::new(Ty::Infer)));
+    let ctx_types = ctx(&i, &[("a", Ty::Enum { name: i.intern("A"), variants })]);
+    let src = r#"{{ A::X(x) = @a }}{{ x + 1 | to_string }}{{_}}no{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    // Should compile without error — Infer payload unifies with Int from `x + 1`.
+    acvus_mir::compile_analysis(
+        &i, &template, &ctx_types, &ExternRegistry::new(),
+    ).unwrap();
+}

@@ -25,6 +25,8 @@
 	let structuredValues = $state<Record<string, StructuredValue>>({});
 	// Per-param raw mode override
 	let rawModes = $state<Record<string, boolean>>({});
+	// Track previous inferred types to detect changes
+	let prevInferredTypes = $state<Record<string, string>>({});
 
 	function setResolution(index: number, kind: 'static' | 'dynamic' | 'unresolved') {
 		const updated = params.map((p, i) => {
@@ -75,16 +77,41 @@
 		return desc !== null && isStructured(desc);
 	}
 
-	// Initialize structured values lazily via $effect (not during render)
+	// Reset structured values when inferredType changes
 	$effect(() => {
 		for (const param of params) {
+			const typeKey = JSON.stringify(param.inferredType);
+			const prev = prevInferredTypes[param.name];
+			if (prev && prev !== typeKey) {
+				delete structuredValues[param.name];
+			}
+			prevInferredTypes[param.name] = typeKey;
+		}
+	});
+
+	// Initialize structured values lazily via $effect (not during render)
+	$effect(() => {
+		const pendingUpdates: { index: number; value: string }[] = [];
+		for (let idx = 0; idx < params.length; idx++) {
+			const param = params[idx];
 			if (param.resolution.kind !== 'static') continue;
 			if (rawModes[param.name]) continue;
 			if (structuredValues[param.name]) continue;
 			const desc = getTypeDesc(param);
 			if (desc && isStructured(desc)) {
-				structuredValues[param.name] = createDefaultValue(desc);
+				const defaultVal = createDefaultValue(desc);
+				structuredValues[param.name] = defaultVal;
+				const script = generateScript(defaultVal, desc);
+				pendingUpdates.push({ index: idx, value: script });
 			}
+		}
+		if (pendingUpdates.length > 0) {
+			const updated = params.map((p, i) => {
+				const upd = pendingUpdates.find((u) => u.index === i);
+				if (upd) return { ...p, resolution: { kind: 'static' as const, value: upd.value } };
+				return p;
+			});
+			onupdate(updated);
 		}
 	});
 

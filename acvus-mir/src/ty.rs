@@ -237,8 +237,8 @@ impl TySubst {
         let b = self.shallow_resolve(b);
 
         match (&a, &b) {
-            // Error (poison) unifies with anything -- suppress cascading errors.
-            (Ty::Error, _) | (_, Ty::Error) => Ok(()),
+            // Error (poison) and Infer (unknown) unify with anything.
+            (Ty::Error, _) | (_, Ty::Error) | (Ty::Infer, _) | (_, Ty::Infer) => Ok(()),
 
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)

@@ -154,8 +154,7 @@
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="tree-item"
-					use:longpress
-					onlongpress={() => handleFolderLongPress(node.folder.id, node.folder.name)}
+					use:longpress={{ onlongpress: () => handleFolderLongPress(node.folder.id, node.folder.name) }}
 					onauxclick={(e) => handleFolderAuxClick(e, node.folder.id, node.folder.name)}
 				>
 					<div onclick={() => { if (editingFolderId !== node.folder.id) ontogglefolder(node.folder.id); }}>
