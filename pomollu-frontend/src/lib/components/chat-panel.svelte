@@ -109,7 +109,7 @@
 		chatSession = cs;
 		chatSessionKey = key;
 
-		// Sync storage (ChatEngine::new sets "context" metadata).
+		// Sync storage.
 		sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorageJson() }));
 		turnCount = cs.turnCount();
 
@@ -338,12 +338,19 @@
 			await renderRegions(cs);
 		} catch (err) {
 			errorMsg = err instanceof Error ? err.message : String(err);
+			// WASM crash: session is unusable — discard so next submit recreates it.
+			if (turnSession?.crashed) {
+				chatSession = null;
+				chatSessionKey = null;
+			}
 		} finally {
 			// Lock MUST be released no matter what — even if turn throws,
 			// display rendering fails, or the session is switched mid-turn.
 			uiState.busyBotId = null;
 			turnSession?.finishTurn();
 			isLoading = false;
+			pendingResolve = null;
+			pendingValue = '';
 			scrollToBottom();
 		}
 	}

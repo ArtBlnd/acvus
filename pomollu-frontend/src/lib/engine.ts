@@ -188,6 +188,7 @@ export class ChatSession {
 	private _busy = false;
 	private _pendingFree = false;
 	private _freed = false;
+	private _crashed = false;
 
 	private constructor(inner: WasmChatSession) {
 		this.inner = inner;
@@ -203,6 +204,11 @@ export class ChatSession {
 		return this._freed;
 	}
 
+	/** True after a WASM panic/trap — session is unusable. */
+	get crashed(): boolean {
+		return this._crashed;
+	}
+
 	static async create(
 		config: SessionConfig,
 		storage: unknown | null = null,
@@ -216,14 +222,31 @@ export class ChatSession {
 
 	async turn(resolver: ResolverFn): Promise<unknown> {
 		if (this._freed) throw new Error('ChatSession already freed');
+		if (this._crashed) throw new Error('ChatSession crashed — recreate session');
 		this._busy = true;
 		try {
-			return await this.inner.turn(resolver);
+			// WASM panic=abort causes a WebAssembly.RuntimeError that escapes
+			// the wasm-bindgen-futures executor, leaving the inner Promise
+			// permanently pending. Catch it via window 'error' and force-reject.
+			return await new Promise((resolve, reject) => {
+				let settled = false;
+				const onError = (e: ErrorEvent) => {
+					if (!settled && e.error instanceof WebAssembly.RuntimeError) {
+						settled = true;
+						this._crashed = true;
+						reject(e.error);
+					}
+				};
+				window.addEventListener('error', onError);
+				this.inner.turn(resolver).then(
+					(v) => { settled = true; resolve(v); },
+					(e) => { settled = true; reject(e); },
+				).finally(() => {
+					window.removeEventListener('error', onError);
+				});
+			});
 		} finally {
 			this._busy = false;
-			// Do NOT free here — the caller may still need session methods
-			// (exportStorageJson, displayListLen, etc.) after turn() returns.
-			// Deferred free happens in finishTurn().
 		}
 	}
 

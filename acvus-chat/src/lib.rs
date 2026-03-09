@@ -106,26 +106,6 @@ where
             }
         }
 
-        // Seed context metadata
-        let mut context_obj: FxHashMap<Astr, Value> = FxHashMap::default();
-        for node in &nodes {
-            if let CompiledNodeKind::Llm(llm) = &node.kind {
-                context_obj.insert(
-                    node.name,
-                    Value::Object(FxHashMap::from_iter([
-                        (interner.intern("model"), Value::String(llm.model.clone())),
-                        (
-                            interner.intern("provider"),
-                            Value::String(llm.provider.clone()),
-                        ),
-                    ])),
-                );
-            }
-        }
-        if !context_obj.is_empty() {
-            storage.set("context".into(), Value::Object(context_obj));
-        }
-
         // Resolve side_effect node indices
         let side_effect_idxs: Vec<usize> = side_effects
             .iter()
