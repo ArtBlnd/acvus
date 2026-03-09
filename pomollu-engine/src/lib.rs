@@ -1,7 +1,7 @@
 mod convert;
 mod session;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 fn init() {
@@ -13,6 +13,7 @@ use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
 use acvus_mir::user_type::UserTypeRegistry;
+use acvus_utils::{Astr, Interner};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -22,16 +23,16 @@ fn to_js<T: Serialize>(value: &T) -> JsValue {
     js_sys::JSON::parse(&json_str).unwrap_or(JsValue::NULL)
 }
 
-fn default_registry() -> ExternRegistry {
+fn default_registry(interner: &Interner) -> ExternRegistry {
     let mut registry = ExternRegistry::new();
-    let mut fn_reg = acvus_interpreter::ExternFnRegistry::default();
-    let regex_mod = acvus_ext::regex_module(&mut fn_reg);
+    let mut fn_reg = acvus_interpreter::ExternFnRegistry::new(&interner);
+    let regex_mod = acvus_ext::regex_module(interner, &mut fn_reg);
     registry.register(&regex_mod);
     registry
 }
 
-fn extract_context_keys_with_types(module: &MirModule) -> Vec<ContextKey> {
-    let mut seen = HashMap::<String, Ty>::new();
+fn extract_context_keys_with_types(interner: &Interner, module: &MirModule) -> Vec<ContextKey> {
+    let mut seen = HashMap::<Astr, Ty>::new();
 
     let mut collect = |insts: &[acvus_mir::ir::Inst],
                        val_types: &HashMap<acvus_mir::ir::ValueId, Ty>| {
@@ -41,7 +42,7 @@ fn extract_context_keys_with_types(module: &MirModule) -> Vec<ContextKey> {
                     continue;
                 }
                 let ty = val_types.get(dst).cloned().unwrap_or(Ty::Infer);
-                seen.insert(name.clone(), ty);
+                seen.insert(*name, ty);
             }
         }
     };
@@ -54,7 +55,7 @@ fn extract_context_keys_with_types(module: &MirModule) -> Vec<ContextKey> {
     let mut keys: Vec<_> = seen
         .into_iter()
         .map(|(name, ty)| ContextKey {
-            name,
+            name: interner.resolve(name).to_string(),
             ty: format_ty(&ty),
         })
         .collect();
@@ -89,7 +90,7 @@ fn find_matching_close(s: &str, open: usize) -> Option<usize> {
     None
 }
 
-fn parse_ty(s: &str) -> Option<Ty> {
+fn parse_ty(interner: &Interner, s: &str) -> Option<Ty> {
     let s = s.trim();
     match s {
         "Int" => Some(Ty::Int),
@@ -105,7 +106,7 @@ fn parse_ty(s: &str) -> Option<Ty> {
                 return None;
             }
             let inner = &s[5..close];
-            Some(Ty::List(Box::new(parse_ty(inner)?)))
+            Some(Ty::List(Box::new(parse_ty(interner, inner)?)))
         }
         _ if s.starts_with("Option<") => {
             let close = find_matching_close(s, 6)?;
@@ -113,19 +114,19 @@ fn parse_ty(s: &str) -> Option<Ty> {
                 return None;
             }
             let inner = &s[7..close];
-            Some(Ty::Option(Box::new(parse_ty(inner)?)))
+            Some(Ty::Option(Box::new(parse_ty(interner, inner)?)))
         }
         _ if s.starts_with('{') && s.ends_with('}') => {
             let inner = &s[1..s.len() - 1].trim();
             if inner.is_empty() {
-                return Some(Ty::Object(BTreeMap::new()));
+                return Some(Ty::Object(HashMap::new()));
             }
-            let mut fields = BTreeMap::new();
+            let mut fields = HashMap::new();
             for pair in split_top_level(inner, ',') {
                 let pair = pair.trim();
                 let colon = pair.find(':')?;
-                let key = pair[..colon].trim().to_string();
-                let val = parse_ty(pair[colon + 1..].trim())?;
+                let key = interner.intern(pair[..colon].trim());
+                let val = parse_ty(interner, pair[colon + 1..].trim())?;
                 fields.insert(key, val);
             }
             Some(Ty::Object(fields))
@@ -134,14 +135,14 @@ fn parse_ty(s: &str) -> Option<Ty> {
     }
 }
 
-/// Parse a JSON map of `name → type_string` into `HashMap<String, Ty>`.
+/// Parse a JSON map of `name -> type_string` into `HashMap<Astr, Ty>`.
 /// Returns an error string if any type string fails to parse.
-fn parse_context_types(json: &str) -> Result<HashMap<String, Ty>, String> {
+fn parse_context_types(interner: &Interner, json: &str) -> Result<HashMap<Astr, Ty>, String> {
     let raw: HashMap<String, String> = serde_json::from_str(json).unwrap_or_default();
     let mut result = HashMap::new();
     for (k, v) in raw {
-        let ty = parse_ty(&v).ok_or_else(|| format!("failed to parse type for @{k}: {v}"))?;
-        result.insert(k, ty);
+        let ty = parse_ty(interner, &v).ok_or_else(|| format!("failed to parse type for @{k}: {v}"))?;
+        result.insert(interner.intern(&k), ty);
     }
     Ok(result)
 }
@@ -182,17 +183,18 @@ struct AnalyzeResult {
 }
 
 fn do_analyze(
+    interner: &Interner,
     source: &str,
     mode: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     expected_tail: Option<&Ty>,
 ) -> AnalyzeResult {
-    let registry = default_registry();
+    let registry = default_registry(interner);
     let user_types = UserTypeRegistry::new();
 
     match mode {
         "template" => {
-            let ast = match acvus_ast::parse(source) {
+            let ast = match acvus_ast::parse(interner, source) {
                 Ok(ast) => ast,
                 Err(e) => {
                     return AnalyzeResult {
@@ -203,9 +205,9 @@ fn do_analyze(
                     };
                 }
             };
-            match acvus_mir::compile_analysis(&ast, context_types, &registry, &user_types) {
+            match acvus_mir::compile_analysis(interner, &ast, context_types, &registry, &user_types) {
                 Ok((module, _hints)) => {
-                    let keys = extract_context_keys_with_types(&module);
+                    let keys = extract_context_keys_with_types(interner, &module);
                     AnalyzeResult {
                         ok: true,
                         errors: vec![],
@@ -222,7 +224,7 @@ fn do_analyze(
             }
         }
         _ => {
-            let script = match acvus_ast::parse_script(source) {
+            let script = match acvus_ast::parse_script(interner, source) {
                 Ok(s) => s,
                 Err(e) => {
                     return AnalyzeResult {
@@ -234,6 +236,7 @@ fn do_analyze(
                 }
             };
             match acvus_mir::compile_script_analysis_with_tail(
+                interner,
                 &script,
                 context_types,
                 &registry,
@@ -241,7 +244,7 @@ fn do_analyze(
                 expected_tail,
             ) {
                 Ok((module, _hints, tail_ty)) => {
-                    let keys = extract_context_keys_with_types(&module);
+                    let keys = extract_context_keys_with_types(interner, &module);
                     AnalyzeResult {
                         ok: true,
                         errors: vec![],
@@ -264,8 +267,9 @@ fn do_analyze(
 /// `{ ok, errors, context_keys: [{name, type}], tail_type }`
 #[wasm_bindgen]
 pub fn analyze(source: &str, mode: &str) -> JsValue {
+    let interner = Interner::new();
     let context_types = HashMap::new();
-    let result = do_analyze(source, mode, &context_types, None);
+    let result = do_analyze(&interner, source, mode, &context_types, None);
     to_js(&result)
 }
 
@@ -273,7 +277,8 @@ pub fn analyze(source: &str, mode: &str) -> JsValue {
 /// object mapping names to type strings, e.g. `{"name": "String", "age": "Int"}`.
 #[wasm_bindgen]
 pub fn analyze_with_types(source: &str, mode: &str, context_types_json: &str) -> JsValue {
-    let context_types = match parse_context_types(context_types_json) {
+    let interner = Interner::new();
+    let context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = AnalyzeResult {
@@ -285,7 +290,7 @@ pub fn analyze_with_types(source: &str, mode: &str, context_types_json: &str) ->
             return to_js(&result);
         }
     };
-    let result = do_analyze(source, mode, &context_types, None);
+    let result = do_analyze(&interner, source, mode, &context_types, None);
     to_js(&result)
 }
 
@@ -297,7 +302,8 @@ pub fn analyze_with_tail(
     context_types_json: &str,
     expected_tail_type: &str,
 ) -> JsValue {
-    let context_types = match parse_context_types(context_types_json) {
+    let interner = Interner::new();
+    let context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = AnalyzeResult {
@@ -309,8 +315,8 @@ pub fn analyze_with_tail(
             return to_js(&result);
         }
     };
-    let expected_tail = parse_ty(expected_tail_type);
-    let result = do_analyze(source, mode, &context_types, expected_tail.as_ref());
+    let expected_tail = parse_ty(&interner, expected_tail_type);
+    let result = do_analyze(&interner, source, mode, &context_types, expected_tail.as_ref());
     to_js(&result)
 }
 
@@ -322,28 +328,29 @@ struct CheckResult {
 }
 
 fn do_typecheck(
+    interner: &Interner,
     source: &str,
     mode: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     expected_tail: Option<&Ty>,
 ) -> CheckResult {
-    let registry = default_registry();
+    let registry = default_registry(interner);
     let user_types = UserTypeRegistry::new();
 
     let result = match mode {
         "template" => {
-            let ast = match acvus_ast::parse(source) {
+            let ast = match acvus_ast::parse(interner, source) {
                 Ok(ast) => ast,
                 Err(e) => return CheckResult { ok: false, message: Some(format!("{e}")) },
             };
-            acvus_mir::compile(&ast, context_types, &registry, &user_types).map(|_| ())
+            acvus_mir::compile(interner, &ast, context_types, &registry, &user_types).map(|_| ())
         }
         _ => {
-            let script = match acvus_ast::parse_script(source) {
+            let script = match acvus_ast::parse_script(interner, source) {
                 Ok(s) => s,
                 Err(e) => return CheckResult { ok: false, message: Some(format!("{e}")) },
             };
-            acvus_mir::compile_script_with_hint(&script, context_types, &registry, &user_types, expected_tail)
+            acvus_mir::compile_script_with_hint(interner, &script, context_types, &registry, &user_types, expected_tail)
                 .map(|_| ())
         }
     };
@@ -360,22 +367,24 @@ fn do_typecheck(
 /// Quick type-check (hard mode). Returns JSON: `{ ok, message? }`
 #[wasm_bindgen]
 pub fn typecheck(source: &str, mode: &str) -> JsValue {
+    let interner = Interner::new();
     let context_types = HashMap::new();
-    let check = do_typecheck(source, mode, &context_types, None);
+    let check = do_typecheck(&interner, source, mode, &context_types, None);
     to_js(&check)
 }
 
 /// Quick type-check with user-provided context types (hard mode).
 #[wasm_bindgen]
 pub fn typecheck_with_types(source: &str, mode: &str, context_types_json: &str) -> JsValue {
-    let context_types = match parse_context_types(context_types_json) {
+    let interner = Interner::new();
+    let context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let check = CheckResult { ok: false, message: Some(e) };
             return to_js(&check);
         }
     };
-    let check = do_typecheck(source, mode, &context_types, None);
+    let check = do_typecheck(&interner, source, mode, &context_types, None);
     to_js(&check)
 }
 
@@ -387,21 +396,22 @@ pub fn typecheck_with_tail(
     context_types_json: &str,
     expected_tail_type: &str,
 ) -> JsValue {
-    let context_types = match parse_context_types(context_types_json) {
+    let interner = Interner::new();
+    let context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let check = CheckResult { ok: false, message: Some(e) };
             return to_js(&check);
         }
     };
-    let Some(expected_tail) = parse_ty(expected_tail_type) else {
+    let Some(expected_tail) = parse_ty(&interner, expected_tail_type) else {
         let check = CheckResult {
             ok: false,
             message: Some(format!("failed to parse expected tail type: {expected_tail_type}")),
         };
         return to_js(&check);
     };
-    let check = do_typecheck(source, mode, &context_types, Some(&expected_tail));
+    let check = do_typecheck(&interner, source, mode, &context_types, Some(&expected_tail));
     to_js(&check)
 }
 
@@ -416,6 +426,8 @@ pub fn typecheck_with_tail(
 /// On env-level failure: `{ error: string }`
 #[wasm_bindgen]
 pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
+    let interner = Interner::new();
+
     let web_nodes: Vec<convert::WebNode> = match serde_json::from_str(nodes_json) {
         Ok(v) => v,
         Err(e) => {
@@ -425,7 +437,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         }
     };
 
-    let injected_types = match parse_context_types(injected_types_json) {
+    let injected_types = match parse_context_types(&interner, injected_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = HashMap::from([("error".to_string(), e)]);
@@ -434,7 +446,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         }
     };
 
-    let specs: Vec<NodeSpec> = match web_nodes.iter().map(convert::convert_node).collect::<Result<Vec<_>, _>>() {
+    let specs: Vec<NodeSpec> = match web_nodes.iter().map(|w| convert::convert_node(&interner, w)).collect::<Result<Vec<_>, _>>() {
         Ok(specs) => specs,
         Err(e) => {
             let result = HashMap::from([("error".to_string(), e)]);
@@ -442,10 +454,10 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             return js_sys::JSON::parse(&json).unwrap_or(JsValue::NULL);
         }
     };
-    let registry = default_registry();
+    let registry = default_registry(&interner);
 
     // 1. Compute external context env (this gives us context_types + per-node locals)
-    let env = match acvus_orchestration::compute_external_context_env(&specs, &injected_types, &registry) {
+    let env = match acvus_orchestration::compute_external_context_env(&interner, &specs, &injected_types, &registry) {
         Ok(env) => env,
         Err(errs) => {
             let msg = errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>().join("\n");
@@ -458,7 +470,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
     let context_types_str: HashMap<String, String> = env
         .context_types
         .iter()
-        .map(|(k, v)| (k.clone(), format_ty(v)))
+        .map(|(k, v)| (interner.resolve(*k).to_string(), format_ty(v)))
         .collect();
 
     let node_locals_str: HashMap<String, HashMap<String, String>> = env
@@ -468,7 +480,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             let mut m = HashMap::new();
             m.insert("raw".into(), format_ty(&locals.raw_ty));
             m.insert("self".into(), format_ty(&locals.self_ty));
-            (name.clone(), m)
+            (interner.resolve(*name).to_string(), m)
         })
         .collect();
 
@@ -483,7 +495,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         // Context visible inside this node: external + @self (only when initial_value is Some)
         let mut node_ctx = env.context_types.clone();
         if spec.self_spec.initial_value.is_some() {
-            node_ctx.insert("self".into(), locals.self_ty.clone());
+            node_ctx.insert(interner.intern("self"), locals.self_ty.clone());
         }
 
         // initial_value: expected tail = stored type (only when Some)
@@ -492,22 +504,22 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                 Ty::Error => None,
                 ty => Some(ty),
             };
-            if let Some(err) = check_script(init_src, &env.context_types, &registry, &user_types, hint) {
+            if let Some(err) = check_script(&interner, interner.resolve(*init_src), &env.context_types, &registry, &user_types, hint) {
                 field_errors.insert("initialValue".into(), err);
             }
         }
 
         // strategy: history_bind uses @self (= stored type), no @raw
         let mut strategy_ctx = env.context_types.clone();
-        strategy_ctx.insert("self".into(), locals.self_ty.clone());
+        strategy_ctx.insert(interner.intern("self"), locals.self_ty.clone());
         match &spec.strategy {
             acvus_orchestration::Strategy::History { history_bind } => {
-                if let Some(err) = check_script(history_bind, &strategy_ctx, &registry, &user_types, None) {
+                if let Some(err) = check_script(&interner, interner.resolve(*history_bind), &strategy_ctx, &registry, &user_types, None) {
                     field_errors.insert("historyBind".into(), err);
                 }
             }
             acvus_orchestration::Strategy::IfModified { key } => {
-                if let Some(err) = check_script(key, &env.context_types, &registry, &user_types, None) {
+                if let Some(err) = check_script(&interner, interner.resolve(*key), &env.context_types, &registry, &user_types, None) {
                     field_errors.insert("ifModifiedKey".into(), err);
                 }
             }
@@ -517,8 +529,8 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         // assert: context = external + @self (= stored type), expected tail = Bool
         if let Some(ref assert_src) = spec.assert {
             let mut assert_ctx = env.context_types.clone();
-            assert_ctx.insert("self".into(), locals.self_ty.clone());
-            if let Some(err) = check_script(assert_src, &assert_ctx, &registry, &user_types, Some(&Ty::Bool)) {
+            assert_ctx.insert(interner.intern("self"), locals.self_ty.clone());
+            if let Some(err) = check_script(&interner, interner.resolve(*assert_src), &assert_ctx, &registry, &user_types, Some(&Ty::Bool)) {
                 field_errors.insert("assert".into(), err);
             }
         }
@@ -533,12 +545,12 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         for (mi, msg) in messages.iter().enumerate() {
             match msg {
                 acvus_orchestration::MessageSpec::Block { source, .. } => {
-                    if let Some(err) = check_template(source, &node_ctx, &registry, &user_types) {
+                    if let Some(err) = check_template(&interner, source, &node_ctx, &registry, &user_types) {
                         msg_errors.insert(mi.to_string(), err);
                     }
                 }
                 acvus_orchestration::MessageSpec::Iterator { key, .. } => {
-                    if let Some(err) = check_script(key, &node_ctx, &registry, &user_types, None) {
+                    if let Some(err) = check_script(&interner, interner.resolve(*key), &node_ctx, &registry, &user_types, None) {
                         msg_errors.insert(mi.to_string(), err);
                     }
                 }
@@ -549,7 +561,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         }
 
         if !field_errors.is_empty() {
-            node_errors.insert(spec.name.clone(), field_errors);
+            node_errors.insert(interner.resolve(spec.name).to_string(), field_errors);
         }
     }
 
@@ -564,18 +576,19 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
 
 /// Helper: typecheck a script, returning error string if any.
 fn check_script(
+    interner: &Interner,
     source: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Option<String> {
     if source.trim().is_empty() { return None; }
-    let script = match acvus_ast::parse_script(source) {
+    let script = match acvus_ast::parse_script(interner, source) {
         Ok(s) => s,
         Err(e) => return Some(format!("{e}")),
     };
-    match acvus_mir::compile_script_with_hint(&script, context_types, registry, user_types, expected_tail) {
+    match acvus_mir::compile_script_with_hint(interner, &script, context_types, registry, user_types, expected_tail) {
         Ok(_) => None,
         Err(errs) => Some(errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>().join("\n")),
     }
@@ -583,17 +596,18 @@ fn check_script(
 
 /// Helper: typecheck a template, returning error string if any.
 fn check_template(
+    interner: &Interner,
     source: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Option<String> {
     if source.trim().is_empty() { return None; }
-    let ast = match acvus_ast::parse(source) {
+    let ast = match acvus_ast::parse(interner, source) {
         Ok(a) => a,
         Err(e) => return Some(format!("{e}")),
     };
-    match acvus_mir::compile(&ast, context_types, registry, user_types) {
+    match acvus_mir::compile(interner, &ast, context_types, registry, user_types) {
         Ok(_) => None,
         Err(errs) => Some(errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>().join("\n")),
     }
@@ -603,29 +617,31 @@ fn check_template(
 /// `context_json`: JSON object mapping names to values, e.g. `{"role": "user", "content": "hi"}`
 #[wasm_bindgen]
 pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<JsValue, JsValue> {
-    use acvus_coroutine::Stepped;
+    use acvus_utils::Stepped;
     use acvus_interpreter::{ExternFnRegistry, Interpreter, Value};
     use acvus_mir::user_type::UserTypeRegistry;
     use session::pure_to_json;
     use std::sync::Arc;
 
+    let interner = Interner::new();
+
     let context_values: HashMap<String, serde_json::Value> =
         serde_json::from_str(context_json).unwrap_or_default();
 
     // Infer context types from values
-    let mut context_types: HashMap<String, Ty> = HashMap::new();
+    let mut context_types: HashMap<Astr, Ty> = HashMap::new();
     for (k, v) in &context_values {
-        context_types.insert(k.clone(), json_to_ty(v));
+        context_types.insert(interner.intern(k), json_to_ty(&interner, v));
     }
 
-    let registry = default_registry();
+    let registry = default_registry(&interner);
     let user_types = UserTypeRegistry::new();
 
     let module = match mode {
         "template" => {
-            let ast = acvus_ast::parse(source)
+            let ast = acvus_ast::parse(&interner, source)
                 .map_err(|e| JsValue::from_str(&format!("parse error: {e}")))?;
-            acvus_mir::compile_analysis(&ast, &context_types, &registry, &user_types)
+            acvus_mir::compile_analysis(&interner, &ast, &context_types, &registry, &user_types)
                 .map(|(module, _)| module)
                 .map_err(|errs| {
                     let msg = errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>().join("\n");
@@ -633,9 +649,9 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                 })?
         }
         _ => {
-            let script = acvus_ast::parse_script(source)
+            let script = acvus_ast::parse_script(&interner, source)
                 .map_err(|e| JsValue::from_str(&format!("parse error: {e}")))?;
-            acvus_mir::compile_script_analysis(&script, &context_types, &registry, &user_types)
+            acvus_mir::compile_script_analysis(&interner, &script, &context_types, &registry, &user_types)
                 .map(|(module, _, _)| module)
                 .map_err(|errs| {
                     let msg = errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>().join("\n");
@@ -645,15 +661,15 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
     };
 
     // Build context values
-    let ctx: HashMap<String, Value> = context_values
+    let ctx: HashMap<Astr, Value> = context_values
         .iter()
-        .map(|(k, v)| (k.clone(), json_to_value(v)))
+        .map(|(k, v)| (interner.intern(k), json_to_value(&interner, v)))
         .collect();
 
-    let mut extern_fns = ExternFnRegistry::new();
-    let _regex_mod = acvus_ext::regex_module(&mut extern_fns);
+    let mut extern_fns = ExternFnRegistry::new(&interner);
+    let _regex_mod = acvus_ext::regex_module(&interner, &mut extern_fns);
 
-    let interp = Interpreter::new(module, &extern_fns);
+    let interp = Interpreter::new(&interner, module, &extern_fns);
 
     if mode == "template" {
         // Template: concatenate all emits into a string
@@ -671,7 +687,7 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                     break;
                 }
                 Stepped::NeedContext(need) => {
-                    let name = need.name().to_string();
+                    let name = need.name();
                     let v = ctx.get(&name).cloned().unwrap_or(Value::Unit);
                     key = need.into_key(Arc::new(v));
                 }
@@ -681,13 +697,13 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                 }
             }
         }
-        let json = pure_to_json(&result_value.into_pure());
+        let json = pure_to_json(&interner, &result_value.into_pure());
         let json_str = serde_json::to_string(&json).map_err(|e| JsValue::from_str(&e.to_string()))?;
         js_sys::JSON::parse(&json_str).map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 }
 
-fn json_to_ty(v: &serde_json::Value) -> Ty {
+fn json_to_ty(interner: &Interner, v: &serde_json::Value) -> Ty {
     match v {
         serde_json::Value::Null => Ty::Unit,
         serde_json::Value::Bool(_) => Ty::Bool,
@@ -700,20 +716,20 @@ fn json_to_ty(v: &serde_json::Value) -> Ty {
         }
         serde_json::Value::String(_) => Ty::String,
         serde_json::Value::Array(items) => {
-            let elem_ty = items.first().map(json_to_ty).unwrap_or(Ty::Infer);
+            let elem_ty = items.first().map(|i| json_to_ty(interner, i)).unwrap_or(Ty::Infer);
             Ty::List(Box::new(elem_ty))
         }
         serde_json::Value::Object(map) => {
-            let fields: std::collections::BTreeMap<String, Ty> = map
+            let fields: HashMap<Astr, Ty> = map
                 .iter()
-                .map(|(k, v)| (k.clone(), json_to_ty(v)))
+                .map(|(k, v)| (interner.intern(k), json_to_ty(interner, v)))
                 .collect();
             Ty::Object(fields)
         }
     }
 }
 
-fn json_to_value(v: &serde_json::Value) -> acvus_interpreter::Value {
+fn json_to_value(interner: &Interner, v: &serde_json::Value) -> acvus_interpreter::Value {
     use acvus_interpreter::Value;
     match v {
         serde_json::Value::Null => Value::Unit,
@@ -727,10 +743,10 @@ fn json_to_value(v: &serde_json::Value) -> acvus_interpreter::Value {
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
         serde_json::Value::Array(items) => {
-            Value::List(items.iter().map(json_to_value).collect())
+            Value::List(items.iter().map(|i| json_to_value(interner, i)).collect())
         }
         serde_json::Value::Object(map) => {
-            Value::Object(map.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect())
+            Value::Object(map.iter().map(|(k, v)| (interner.intern(k), json_to_value(interner, v))).collect())
         }
     }
 }
@@ -739,51 +755,60 @@ fn json_to_value(v: &serde_json::Value) -> acvus_interpreter::Value {
 mod tests {
     use super::*;
 
-    fn do_analyze_test(source: &str, mode: &str, ctx: &HashMap<String, Ty>) -> AnalyzeResult {
-        do_analyze(source, mode, ctx, None)
+    fn test_interner() -> Interner {
+        Interner::new()
+    }
+
+    fn do_analyze_test(interner: &Interner, source: &str, mode: &str, ctx: &HashMap<Astr, Ty>) -> AnalyzeResult {
+        do_analyze(interner, source, mode, ctx, None)
     }
 
     #[test]
     fn test_parse_ty_basic() {
-        assert_eq!(parse_ty("Int"), Some(Ty::Int));
-        assert_eq!(parse_ty("Float"), Some(Ty::Float));
-        assert_eq!(parse_ty("String"), Some(Ty::String));
-        assert_eq!(parse_ty("Bool"), Some(Ty::Bool));
-        assert_eq!(parse_ty("Unit"), Some(Ty::Unit));
-        assert_eq!(parse_ty("Range"), Some(Ty::Range));
-        assert_eq!(parse_ty("Byte"), Some(Ty::Byte));
+        let interner = test_interner();
+        assert_eq!(parse_ty(&interner, "Int"), Some(Ty::Int));
+        assert_eq!(parse_ty(&interner, "Float"), Some(Ty::Float));
+        assert_eq!(parse_ty(&interner, "String"), Some(Ty::String));
+        assert_eq!(parse_ty(&interner, "Bool"), Some(Ty::Bool));
+        assert_eq!(parse_ty(&interner, "Unit"), Some(Ty::Unit));
+        assert_eq!(parse_ty(&interner, "Range"), Some(Ty::Range));
+        assert_eq!(parse_ty(&interner, "Byte"), Some(Ty::Byte));
     }
 
     #[test]
     fn test_parse_ty_list() {
-        assert_eq!(parse_ty("List<Int>"), Some(Ty::List(Box::new(Ty::Int))));
+        let interner = test_interner();
+        assert_eq!(parse_ty(&interner, "List<Int>"), Some(Ty::List(Box::new(Ty::Int))));
         assert_eq!(
-            parse_ty("List<List<String>>"),
+            parse_ty(&interner, "List<List<String>>"),
             Some(Ty::List(Box::new(Ty::List(Box::new(Ty::String)))))
         );
     }
 
     #[test]
     fn test_parse_ty_option() {
+        let interner = test_interner();
         assert_eq!(
-            parse_ty("Option<Int>"),
+            parse_ty(&interner, "Option<Int>"),
             Some(Ty::Option(Box::new(Ty::Int)))
         );
     }
 
     #[test]
     fn test_parse_ty_object() {
-        let ty = parse_ty("{name: String, age: Int}").unwrap();
-        let mut expected = BTreeMap::new();
-        expected.insert("name".to_string(), Ty::String);
-        expected.insert("age".to_string(), Ty::Int);
+        let interner = test_interner();
+        let ty = parse_ty(&interner, "{name: String, age: Int}").unwrap();
+        let mut expected = HashMap::new();
+        expected.insert(interner.intern("name"), Ty::String);
+        expected.insert(interner.intern("age"), Ty::Int);
         assert_eq!(ty, Ty::Object(expected));
     }
 
     #[test]
     fn test_parse_ty_unknown() {
-        assert_eq!(parse_ty("Foo"), None);
-        assert_eq!(parse_ty("?"), None);
+        let interner = test_interner();
+        assert_eq!(parse_ty(&interner, "Foo"), None);
+        assert_eq!(parse_ty(&interner, "?"), None);
     }
 
     #[test]
@@ -804,8 +829,9 @@ mod tests {
 
     #[test]
     fn test_analyze_script_context_types() {
+        let interner = test_interner();
         let ctx = HashMap::new();
-        let result = do_analyze_test("@x + 1", "script", &ctx);
+        let result = do_analyze_test(&interner, "@x + 1", "script", &ctx);
         if !result.ok {
             eprintln!("errors: {:?}", result.errors);
         }
@@ -818,17 +844,19 @@ mod tests {
 
     #[test]
     fn test_analyze_with_provided_context_types() {
+        let interner = test_interner();
         let mut ctx = HashMap::new();
-        ctx.insert("x".to_string(), Ty::Int);
-        let result = do_analyze_test("@x + 1", "script", &ctx);
+        ctx.insert(interner.intern("x"), Ty::Int);
+        let result = do_analyze_test(&interner, "@x + 1", "script", &ctx);
         assert!(result.ok);
         assert_eq!(result.context_keys[0].ty, "Int");
     }
 
     #[test]
     fn test_analyze_template() {
+        let interner = test_interner();
         let ctx = HashMap::new();
-        let result = do_analyze_test("hello {{ @name }}", "template", &ctx);
+        let result = do_analyze_test(&interner, "hello {{ @name }}", "template", &ctx);
         assert!(result.ok);
         assert_eq!(result.context_keys.len(), 1);
         assert_eq!(result.context_keys[0].name, "name");
@@ -837,34 +865,38 @@ mod tests {
 
     #[test]
     fn test_parse_ty_list_object() {
-        let ty = parse_ty("List<{content: String, content_type: String, role: String}>").unwrap();
-        let mut fields = BTreeMap::new();
-        fields.insert("content".to_string(), Ty::String);
-        fields.insert("content_type".to_string(), Ty::String);
-        fields.insert("role".to_string(), Ty::String);
+        let interner = test_interner();
+        let ty = parse_ty(&interner, "List<{content: String, content_type: String, role: String}>").unwrap();
+        let mut fields = HashMap::new();
+        fields.insert(interner.intern("content"), Ty::String);
+        fields.insert(interner.intern("content_type"), Ty::String);
+        fields.insert(interner.intern("role"), Ty::String);
         assert_eq!(ty, Ty::List(Box::new(Ty::Object(fields))));
     }
 
     #[test]
     fn test_tail_type_mismatch() {
+        let interner = test_interner();
         let ctx = HashMap::new();
-        let expected = parse_ty("Int").unwrap();
-        let result = do_analyze("\"hello\"", "script", &ctx, Some(&expected));
+        let expected = parse_ty(&interner, "Int").unwrap();
+        let result = do_analyze(&interner, "\"hello\"", "script", &ctx, Some(&expected));
         assert!(!result.ok, "should fail: String vs Int");
     }
 
     #[test]
     fn test_tail_type_match() {
+        let interner = test_interner();
         let ctx = HashMap::new();
-        let expected = parse_ty("Int").unwrap();
-        let result = do_analyze("1 + 2", "script", &ctx, Some(&expected));
+        let expected = parse_ty(&interner, "Int").unwrap();
+        let result = do_analyze(&interner, "1 + 2", "script", &ctx, Some(&expected));
         assert!(result.ok, "should succeed: Int vs Int");
     }
 
     #[test]
     fn test_analyze_unresolved_type() {
+        let interner = test_interner();
         let ctx = HashMap::new();
-        let result = do_analyze_test("@x", "script", &ctx);
+        let result = do_analyze_test(&interner, "@x", "script", &ctx);
         if !result.ok {
             eprintln!("errors: {:?}", result.errors);
         }

@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
+use acvus_utils::{Astr, Interner};
 
 use crate::compile::{self, CompiledMessage, CompiledScript};
 use crate::dsl::MessageSpec;
@@ -31,11 +32,11 @@ pub struct LlmSpec {
 }
 
 impl LlmSpec {
-    pub fn output_ty(&self) -> Ty {
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("role".into(), Ty::String),
-            ("content".into(), Ty::String),
-            ("content_type".into(), Ty::String),
+    pub fn output_ty(&self, interner: &Interner) -> Ty {
+        Ty::List(Box::new(Ty::Object(HashMap::from([
+            (interner.intern("role"), Ty::String),
+            (interner.intern("content"), Ty::String),
+            (interner.intern("content_type"), Ty::String),
         ]))))
     }
 }
@@ -93,18 +94,19 @@ pub(crate) fn parse_type_name(name: &str) -> Option<Ty> {
 
 /// Compile an LLM node spec.
 pub fn compile_llm(
+    interner: &Interner,
     spec: &LlmSpec,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
-) -> Result<(CompiledLlm, HashSet<String>), Vec<OrchError>> {
-    let elem_ty = spec.api.message_elem_ty();
+) -> Result<(CompiledLlm, HashSet<Astr>), Vec<OrchError>> {
+    let elem_ty = spec.api.message_elem_ty(interner);
     let (compiled_messages, mut all_keys) =
-        compile::compile_messages(&spec.messages, context_types, registry, &elem_ty)?;
+        compile::compile_messages(interner, &spec.messages, context_types, registry, &elem_ty)?;
     let compiled_tools = compile_tool_bindings(&spec.tools)?;
     let compiled_cache_key = match &spec.cache_key {
         Some(ck) => {
             let (expr, ck_ty) =
-                compile::compile_script(ck, context_types, registry).map_err(|e| vec![e])?;
+                compile::compile_script(interner, ck, context_types, registry).map_err(|e| vec![e])?;
             compile::expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
             all_keys.extend(expr.context_keys.iter().cloned());
             Some(expr)

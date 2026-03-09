@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use acvus_utils::Astr;
+
 use crate::ty::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,42 +18,40 @@ pub struct ExternFnDef {
 /// A named collection of external function definitions.
 #[derive(Debug, Clone)]
 pub struct ExternModule {
-    pub name: String,
-    fns: HashMap<String, ExternFnDef>,
-    opaque_types: HashSet<String>,
+    pub name: Astr,
+    fns: HashMap<Astr, ExternFnDef>,
+    opaque_types: HashSet<Astr>,
 }
 
 impl ExternModule {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: Astr) -> Self {
         Self {
-            name: name.into(),
+            name,
             fns: HashMap::new(),
             opaque_types: HashSet::new(),
         }
     }
 
-    pub fn add_opaque(&mut self, name: impl Into<String>) -> &mut Self {
-        let name = name.into();
+    pub fn add_opaque(&mut self, name: Astr) -> &mut Self {
         assert!(
-            self.opaque_types.insert(name.clone()),
+            self.opaque_types.insert(name),
             "duplicate opaque type in ExternModule '{}': {name}",
             self.name,
         );
         self
     }
 
-    pub fn opaque_types(&self) -> &HashSet<String> {
+    pub fn opaque_types(&self) -> &HashSet<Astr> {
         &self.opaque_types
     }
 
     pub fn add_fn(
         &mut self,
-        name: impl Into<String>,
+        name: Astr,
         params: Vec<Ty>,
         ret: Ty,
         effectful: bool,
     ) -> &mut Self {
-        let name = name.into();
         assert!(
             !self.fns.contains_key(&name),
             "duplicate function in ExternModule '{}': {name}",
@@ -68,7 +68,7 @@ impl ExternModule {
         self
     }
 
-    pub fn fns(&self) -> &HashMap<String, ExternFnDef> {
+    pub fn fns(&self) -> &HashMap<Astr, ExternFnDef> {
         &self.fns
     }
 }
@@ -77,11 +77,11 @@ impl ExternModule {
 /// Panics on duplicate function names across modules.
 #[derive(Debug, Clone)]
 pub struct ExternRegistry {
-    opaque_types: HashSet<String>,
-    /// ID-indexed storage: ExternFnId(n) → (name, def).
-    fn_list: Vec<(String, ExternFnDef)>,
-    /// Name → ExternFnId mapping.
-    fn_id_index: HashMap<String, ExternFnId>,
+    opaque_types: HashSet<Astr>,
+    /// ID-indexed storage: ExternFnId(n) -> (name, def).
+    fn_list: Vec<(Astr, ExternFnDef)>,
+    /// Name -> ExternFnId mapping.
+    fn_id_index: HashMap<Astr, ExternFnId>,
 }
 
 impl Default for ExternRegistry {
@@ -102,7 +102,7 @@ impl ExternRegistry {
     pub fn register(&mut self, module: &ExternModule) -> &mut Self {
         for name in &module.opaque_types {
             assert!(
-                self.opaque_types.insert(name.clone()),
+                self.opaque_types.insert(*name),
                 "duplicate opaque type '{name}' (from module '{}')",
                 module.name,
             );
@@ -114,60 +114,62 @@ impl ExternRegistry {
                 module.name,
             );
             let id = ExternFnId(self.fn_list.len() as u32);
-            self.fn_list.push((name.clone(), def.clone()));
-            self.fn_id_index.insert(name.clone(), id);
+            self.fn_list.push((*name, def.clone()));
+            self.fn_id_index.insert(*name, id);
         }
         self
     }
 
-    pub fn get(&self, name: &str) -> Option<&ExternFnDef> {
-        let id = self.fn_id_index.get(name)?;
+    pub fn get(&self, name: Astr) -> Option<&ExternFnDef> {
+        let id = self.fn_id_index.get(&name)?;
         Some(&self.fn_list[id.0 as usize].1)
     }
 
-    pub fn resolve(&self, name: &str) -> Option<ExternFnId> {
-        self.fn_id_index.get(name).copied()
+    pub fn resolve(&self, name: Astr) -> Option<ExternFnId> {
+        self.fn_id_index.get(&name).copied()
     }
 
     pub fn get_by_id(&self, id: ExternFnId) -> &ExternFnDef {
         &self.fn_list[id.0 as usize].1
     }
 
-    pub fn name_by_id(&self, id: ExternFnId) -> &str {
-        &self.fn_list[id.0 as usize].0
+    pub fn name_by_id(&self, id: ExternFnId) -> Astr {
+        self.fn_list[id.0 as usize].0
     }
 
-    /// Build a name table mapping ExternFnId → name for the MirModule.
-    pub fn build_name_table(&self) -> HashMap<ExternFnId, String> {
+    /// Build a name table mapping ExternFnId -> name for the MirModule.
+    pub fn build_name_table(&self) -> HashMap<ExternFnId, Astr> {
         self.fn_list
             .iter()
             .enumerate()
-            .map(|(i, (name, _))| (ExternFnId(i as u32), name.clone()))
+            .map(|(i, (name, _))| (ExternFnId(i as u32), *name))
             .collect()
     }
 
-    pub fn has_opaque(&self, name: &str) -> bool {
-        self.opaque_types.contains(name)
+    pub fn has_opaque(&self, name: Astr) -> bool {
+        self.opaque_types.contains(&name)
     }
 
-    pub fn fns(&self) -> impl Iterator<Item = (&str, &ExternFnDef)> {
-        self.fn_list.iter().map(|(name, def)| (name.as_str(), def))
+    pub fn fns(&self) -> impl Iterator<Item = (Astr, &ExternFnDef)> {
+        self.fn_list.iter().map(|(name, def)| (*name, def))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acvus_utils::Interner;
 
     #[test]
     fn register_and_lookup() {
-        let mut module = ExternModule::new("math");
-        module.add_fn("abs", vec![Ty::Int], Ty::Int, false);
+        let interner = Interner::new();
+        let mut module = ExternModule::new(interner.intern("math"));
+        module.add_fn(interner.intern("abs"), vec![Ty::Int], Ty::Int, false);
 
         let mut registry = ExternRegistry::new();
         registry.register(&module);
 
-        let def = registry.get("abs").unwrap();
+        let def = registry.get(interner.intern("abs")).unwrap();
         assert_eq!(def.params, vec![Ty::Int]);
         assert_eq!(def.ret, Ty::Int);
         assert!(!def.effectful);
@@ -175,28 +177,30 @@ mod tests {
 
     #[test]
     fn multiple_modules() {
-        let mut math = ExternModule::new("math");
-        math.add_fn("abs", vec![Ty::Int], Ty::Int, false);
+        let interner = Interner::new();
+        let mut math = ExternModule::new(interner.intern("math"));
+        math.add_fn(interner.intern("abs"), vec![Ty::Int], Ty::Int, false);
 
-        let mut io = ExternModule::new("io");
-        io.add_fn("fetch", vec![Ty::String], Ty::String, true);
+        let mut io = ExternModule::new(interner.intern("io"));
+        io.add_fn(interner.intern("fetch"), vec![Ty::String], Ty::String, true);
 
         let mut registry = ExternRegistry::new();
         registry.register(&math).register(&io);
 
-        assert!(registry.get("abs").is_some());
-        assert!(registry.get("fetch").is_some());
-        assert!(registry.get("fetch").unwrap().effectful);
+        assert!(registry.get(interner.intern("abs")).is_some());
+        assert!(registry.get(interner.intern("fetch")).is_some());
+        assert!(registry.get(interner.intern("fetch")).unwrap().effectful);
     }
 
     #[test]
     #[should_panic(expected = "duplicate extern function")]
     fn duplicate_across_modules_panics() {
-        let mut a = ExternModule::new("a");
-        a.add_fn("foo", vec![], Ty::Unit, false);
+        let interner = Interner::new();
+        let mut a = ExternModule::new(interner.intern("a"));
+        a.add_fn(interner.intern("foo"), vec![], Ty::Unit, false);
 
-        let mut b = ExternModule::new("b");
-        b.add_fn("foo", vec![], Ty::Int, false);
+        let mut b = ExternModule::new(interner.intern("b"));
+        b.add_fn(interner.intern("foo"), vec![], Ty::Int, false);
 
         let mut registry = ExternRegistry::new();
         registry.register(&a).register(&b);
@@ -205,8 +209,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate function in ExternModule")]
     fn duplicate_within_module_panics() {
-        let mut module = ExternModule::new("test");
-        module.add_fn("foo", vec![], Ty::Unit, false);
-        module.add_fn("foo", vec![], Ty::Int, false);
+        let interner = Interner::new();
+        let mut module = ExternModule::new(interner.intern("test"));
+        module.add_fn(interner.intern("foo"), vec![], Ty::Unit, false);
+        module.add_fn(interner.intern("foo"), vec![], Ty::Int, false);
     }
 }

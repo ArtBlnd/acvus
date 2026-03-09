@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 acvus-mir = { path = "../acvus-mir" }
 acvus-interpreter = { path = "../acvus-interpreter" }
+acvus-utils = { path = "../acvus-utils" }
 futures = "0.3"
 regex = "1"
 

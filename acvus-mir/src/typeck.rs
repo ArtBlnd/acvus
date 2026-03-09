@@ -1,9 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use acvus_ast::{
     BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
+use acvus_utils::{Astr, Interner};
 
 use crate::builtins::builtins;
 use crate::error::{MirError, MirErrorKind};
@@ -16,20 +17,23 @@ use crate::variant::{VariantPayload, VariantRegistry, make_enum_ty};
 pub type TypeMap = HashMap<Span, Ty>;
 
 pub struct TypeChecker<'a> {
-    /// Stack of scopes: each scope maps variable names to types.
-    scopes: Vec<HashMap<String, Ty>>,
+    /// Interner for string interning.
+    interner: &'a Interner,
     /// Context variable types (`@name`, externally declared).
-    context_types: &'a HashMap<String, Ty>,
-    /// Variable types (`$name`, inferred at first assignment).
-    variable_types: HashMap<String, Ty>,
+    context_types: &'a HashMap<Astr, Ty>,
     /// External function definitions.
     extern_registry: &'a ExternRegistry,
+
+    /// Stack of scopes: each scope maps variable names to types.
+    scopes: Vec<HashMap<Astr, Ty>>,
+    /// Variable types (`$name`, inferred at first assignment).
+    variable_types: HashMap<Astr, Ty>,
     /// Variant type registry (enum definitions).
     variant_registry: VariantRegistry,
     /// Unification state.
     subst: TySubst,
     /// Cached fresh Vars for `Ty::Infer` context entries.
-    infer_vars: HashMap<String, Ty>,
+    infer_vars: HashMap<Astr, Ty>,
     /// Accumulated type map.
     type_map: TypeMap,
     /// Accumulated errors.
@@ -40,16 +44,18 @@ pub struct TypeChecker<'a> {
 
 impl<'a> TypeChecker<'a> {
     pub fn new(
-        context_types: &'a HashMap<String, Ty>,
+        interner: &'a Interner,
+        context_types: &'a HashMap<Astr, Ty>,
         registry: &'a ExternRegistry,
         user_types: &UserTypeRegistry,
     ) -> Self {
-        let mut variant_registry = VariantRegistry::new();
+        let mut variant_registry = VariantRegistry::new(interner);
         // Register user-defined enums into the variant registry.
         for (_id, def) in user_types.iter() {
             variant_registry.register(def.clone());
         }
         Self {
+            interner,
             scopes: vec![HashMap::new()],
             context_types,
             variable_types: HashMap::new(),
@@ -103,7 +109,7 @@ impl<'a> TypeChecker<'a> {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
                     let ty = self.check_expr(expr);
-                    self.define_var(name, ty.clone());
+                    self.define_var(*name, ty.clone());
                     self.record(*span, ty);
                 }
                 acvus_ast::Stmt::Expr(expr) => {
@@ -163,15 +169,15 @@ impl<'a> TypeChecker<'a> {
         self.scopes.pop();
     }
 
-    fn define_var(&mut self, name: &str, ty: Ty) {
+    fn define_var(&mut self, name: Astr, ty: Ty) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_string(), ty);
+            scope.insert(name, ty);
         }
     }
 
-    fn lookup_var(&self, name: &str) -> Option<Ty> {
+    fn lookup_var(&self, name: Astr) -> Option<Ty> {
         for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(name) {
+            if let Some(ty) = scope.get(&name) {
                 return Some(ty.clone());
             }
         }
@@ -184,6 +190,67 @@ impl<'a> TypeChecker<'a> {
 
     fn record(&mut self, span: Span, ty: Ty) {
         self.type_map.insert(span, ty);
+    }
+
+    /// Record the type at a span and return it.
+    fn record_ret(&mut self, span: Span, ty: Ty) -> Ty {
+        self.record(span, ty.clone());
+        ty
+    }
+
+    /// Resolve a context variable (`@name`) to its type.
+    fn resolve_context_type(&mut self, name: Astr, span: Span) -> Ty {
+        let use_infer_var = match self.context_types.get(&name) {
+            Some(Ty::Infer) => true,
+            Some(ty) => return ty.clone(),
+            None => self.analysis_mode,
+        };
+        if use_infer_var {
+            return self.infer_vars
+                .entry(name)
+                .or_insert_with(|| self.subst.fresh_var())
+                .clone();
+        }
+        self.error(MirErrorKind::UndefinedContext(self.interner.resolve(name).to_string()), span);
+        Ty::Error
+    }
+
+    fn binop_error(&mut self, op: &'static str, left: Ty, right: Ty, span: Span) {
+        self.error(MirErrorKind::TypeMismatchBinOp { op, left, right }, span);
+    }
+
+    /// Check arity and unify argument types against parameter types.
+    /// Returns `true` if arity matched, `false` (with error emitted) if not.
+    fn check_args(
+        &mut self,
+        func: &str,
+        arg_types: &[Ty],
+        param_tys: &[Ty],
+        call_span: Span,
+    ) -> bool {
+        if arg_types.len() != param_tys.len() {
+            self.error(
+                MirErrorKind::ArityMismatch {
+                    func: func.to_string(),
+                    expected: param_tys.len(),
+                    got: arg_types.len(),
+                },
+                call_span,
+            );
+            return false;
+        }
+        for (at, pt) in arg_types.iter().zip(param_tys.iter()) {
+            if self.subst.unify(at, pt).is_err() {
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: self.subst.resolve(pt),
+                        got: self.subst.resolve(at),
+                    },
+                    call_span,
+                );
+            }
+        }
+        true
     }
 
     fn check_nodes(&mut self, nodes: &[Node]) {
@@ -291,7 +358,7 @@ impl<'a> TypeChecker<'a> {
         }
         let (parent, top) = self.scopes.split_at_mut(len - 1);
         for (name, ty) in &top[0] {
-            parent[len - 2].insert(name.clone(), ty.clone());
+            parent[len - 2].insert(*name, ty.clone());
         }
     }
 
@@ -346,8 +413,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Ident {
@@ -356,40 +422,23 @@ impl<'a> TypeChecker<'a> {
                 span,
             } => {
                 let ty = match ref_kind {
-                    RefKind::Context => match self.context_types.get(name) {
-                        Some(Ty::Infer) => self
-                            .infer_vars
-                            .entry(name.clone())
-                            .or_insert_with(|| self.subst.fresh_var())
-                            .clone(),
-                        Some(ty) => ty.clone(),
-                        None if self.analysis_mode => self
-                            .infer_vars
-                            .entry(name.clone())
-                            .or_insert_with(|| self.subst.fresh_var())
-                            .clone(),
-                        None => {
-                            self.error(MirErrorKind::UndefinedContext(name.clone()), *span);
-                            Ty::Error
-                        }
-                    },
+                    RefKind::Context => self.resolve_context_type(*name, *span),
                     RefKind::Variable => match self.variable_types.get(name) {
                         Some(ty) => ty.clone(),
                         None => {
-                            self.error(MirErrorKind::UndefinedVariable(format!("${name}")), *span);
+                            self.error(MirErrorKind::UndefinedVariable(format!("${}", self.interner.resolve(*name))), *span);
                             Ty::Error
                         }
                     },
-                    RefKind::Value => match self.lookup_var(name) {
+                    RefKind::Value => match self.lookup_var(*name) {
                         Some(ty) => ty,
                         None => {
-                            self.error(MirErrorKind::UndefinedVariable(name.clone()), *span);
+                            self.error(MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()), *span);
                             Ty::Error
                         }
                     },
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::BinaryOp {
@@ -418,51 +467,38 @@ impl<'a> TypeChecker<'a> {
                         | BinOp::Shr => Ty::Error,
                         _ => Ty::Bool,
                     };
-                    self.record(*span, ty.clone());
-                    return ty;
+                    return self.record_ret(*span, ty);
                 }
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         if self.subst.unify(&lt, &rt).is_err() {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: self.subst.resolve(&lt),
-                                    right: self.subst.resolve(&rt),
-                                },
+                            self.binop_error(
+                                op_str(*op),
+                                self.subst.resolve(&lt),
+                                self.subst.resolve(&rt),
                                 *span,
                             );
-                            Ty::Error
-                        } else {
-                            let rl = self.subst.resolve(&lt);
-                            match &rl {
-                                Ty::Int | Ty::Float | Ty::Var(_) => rl,
-                                Ty::String if *op == BinOp::Add => Ty::String,
-                                _ => {
-                                    self.error(
-                                        MirErrorKind::TypeMismatchBinOp {
-                                            op: op_str(*op),
-                                            left: rl,
-                                            right: self.subst.resolve(&rt),
-                                        },
-                                        *span,
-                                    );
-                                    Ty::Error
-                                }
+                            return self.record_ret(*span, Ty::Error);
+                        }
+                        let rl = self.subst.resolve(&lt);
+                        match &rl {
+                            Ty::Int | Ty::Float | Ty::Var(_) => rl,
+                            Ty::String if *op == BinOp::Add => Ty::String,
+                            _ => {
+                                self.binop_error(
+                                    op_str(*op),
+                                    rl,
+                                    self.subst.resolve(&rt),
+                                    *span,
+                                );
+                                Ty::Error
                             }
                         }
                     }
                     BinOp::Eq | BinOp::Neq => {
                         if self.subst.unify(&lt, &rt).is_err() {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: lt,
-                                    right: rt,
-                                },
-                                *span,
-                            );
+                            self.binop_error(op_str(*op), lt, rt, *span);
                         }
                         Ty::Bool
                     }
@@ -470,12 +506,10 @@ impl<'a> TypeChecker<'a> {
                         let lok = self.subst.unify(&lt, &Ty::Bool).is_ok();
                         let rok = self.subst.unify(&rt, &Ty::Bool).is_ok();
                         if !lok || !rok {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: self.subst.resolve(&lt),
-                                    right: self.subst.resolve(&rt),
-                                },
+                            self.binop_error(
+                                op_str(*op),
+                                self.subst.resolve(&lt),
+                                self.subst.resolve(&rt),
                                 *span,
                             );
                         }
@@ -485,12 +519,10 @@ impl<'a> TypeChecker<'a> {
                         let lok = self.subst.unify(&lt, &Ty::Int).is_ok();
                         let rok = self.subst.unify(&rt, &Ty::Int).is_ok();
                         if !lok || !rok {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: self.subst.resolve(&lt),
-                                    right: self.subst.resolve(&rt),
-                                },
+                            self.binop_error(
+                                op_str(*op),
+                                self.subst.resolve(&lt),
+                                self.subst.resolve(&rt),
                                 *span,
                             );
                         }
@@ -500,20 +532,17 @@ impl<'a> TypeChecker<'a> {
                         let ok = self.subst.unify(&lt, &rt).is_ok()
                             && matches!(self.subst.resolve(&lt), Ty::Int | Ty::Float | Ty::Var(_));
                         if !ok {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: op_str(*op),
-                                    left: self.subst.resolve(&lt),
-                                    right: self.subst.resolve(&rt),
-                                },
+                            self.binop_error(
+                                op_str(*op),
+                                self.subst.resolve(&lt),
+                                self.subst.resolve(&rt),
                                 *span,
                             );
                         }
                         Ty::Bool
                     }
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::UnaryOp { op, operand, span } => {
@@ -526,8 +555,7 @@ impl<'a> TypeChecker<'a> {
                         acvus_ast::UnaryOp::Neg => Ty::Error,
                         acvus_ast::UnaryOp::Not => Ty::Bool,
                     };
-                    self.record(*span, ty.clone());
-                    return ty;
+                    return self.record_ret(*span, ty);
                 }
 
                 let ty = match op {
@@ -536,14 +564,7 @@ impl<'a> TypeChecker<'a> {
                         Ty::Float => Ty::Float,
                         Ty::Var(_) => ot.clone(),
                         _ => {
-                            self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: "-",
-                                    left: ot,
-                                    right: Ty::Error,
-                                },
-                                *span,
-                            );
+                            self.binop_error("-", ot, Ty::Error, *span);
                             Ty::Error
                         }
                     },
@@ -553,20 +574,12 @@ impl<'a> TypeChecker<'a> {
                             Ty::Var(_) => {
                                 let _ = self.subst.unify(&ot, &Ty::Bool);
                             }
-                            _ => self.error(
-                                MirErrorKind::TypeMismatchBinOp {
-                                    op: "!",
-                                    left: ot,
-                                    right: Ty::Error,
-                                },
-                                *span,
-                            ),
+                            _ => self.binop_error("!", ot, Ty::Error, *span),
                         }
                         Ty::Bool
                     }
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::FieldAccess {
@@ -576,38 +589,37 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let ot_raw = self.check_expr(object);
                 let ot = self.subst.resolve(&ot_raw);
+                let field_key = *field;
+                let field_str = || self.interner.resolve(*field).to_string();
                 let ty = match &ot {
                     Ty::Error => Ty::Error,
-                    Ty::Object(fields) if fields.contains_key(field) => fields[field].clone(),
+                    Ty::Object(fields) if fields.contains_key(&field_key) => fields[&field_key].clone(),
                     Ty::Object(fields) => {
                         let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) else {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: ot.clone(),
-                                    field: field.clone(),
+                                    field: field_str(),
                                 },
                                 *span,
                             );
                             return Ty::Error;
                         };
-                        // Object came from a Var (partial projection constraint).
-                        // Extend the Object with the new field.
                         let fresh = self.subst.fresh_var();
                         let mut new_fields = fields.clone();
-                        new_fields.insert(field.clone(), fresh.clone());
+                        new_fields.insert(field_key, fresh.clone());
                         self.subst.rebind(leaf_var, Ty::Object(new_fields));
                         fresh
                     }
                     Ty::Var(_) => {
-                        // Unresolved Var — create partial Object constraint.
                         let fresh = self.subst.fresh_var();
                         let partial_obj =
-                            Ty::Object(BTreeMap::from([(field.clone(), fresh.clone())]));
+                            Ty::Object(HashMap::from([(field_key, fresh.clone())]));
                         if self.subst.unify(&ot_raw, &partial_obj).is_err() {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: ot,
-                                    field: field.clone(),
+                                    field: field_str(),
                                 },
                                 *span,
                             );
@@ -618,55 +630,43 @@ impl<'a> TypeChecker<'a> {
                         self.error(
                             MirErrorKind::UndefinedField {
                                 object_ty: ot,
-                                field: field.clone(),
+                                field: field_str(),
                             },
                             *span,
                         );
                         Ty::Error
                     }
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::FuncCall { func, args, span } => {
-                let ty = self.check_func_call(func, args, *span);
-                self.record(*span, ty.clone());
-                ty
+                let ty = self.check_func_call(func, args, None, *span);
+                self.record_ret(*span, ty)
             }
 
             Expr::Pipe { left, right, span } => {
                 // Desugar: `a | f(b, c)` → `f(a, b, c)`
                 // `a | f` → `f(a)`
+                let pipe_left = Some(left.as_ref());
                 let ty = match right.as_ref() {
-                    Expr::FuncCall {
-                        func,
-                        args,
-                        span: _,
-                    } => {
-                        let mut new_args = vec![left.as_ref().clone()];
-                        new_args.extend(args.iter().cloned());
-                        self.check_func_call(func, &new_args, *span)
+                    Expr::FuncCall { func, args, .. } => {
+                        self.check_func_call(func, args, pipe_left, *span)
                     }
                     Expr::Ident {
-                        name: _,
                         ref_kind: RefKind::Value,
-                        span: _,
+                        ..
                     } => {
-                        let func_expr = right.as_ref().clone();
-                        let new_args = vec![left.as_ref().clone()];
-                        self.check_func_call(&func_expr, &new_args, *span)
+                        self.check_func_call(right, &[], pipe_left, *span)
                     }
                     _ => {
-                        // Right side of pipe must be a function or function call.
                         let _lt = self.check_expr(left);
                         let _rt = self.check_expr(right);
-                        self.error(MirErrorKind::UndefinedFunction("<pipe rhs>".into()), *span);
+                        self.error(MirErrorKind::UndefinedFunction("<pipe rhs>".to_string()), *span);
                         Ty::Error
                     }
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Lambda { params, body, span } => {
@@ -674,7 +674,7 @@ impl<'a> TypeChecker<'a> {
                 let mut param_types = Vec::new();
                 for p in params {
                     let pt = self.subst.fresh_var();
-                    self.define_var(&p.name, pt.clone());
+                    self.define_var(p.name, pt.clone());
                     self.record(p.span, pt.clone());
                     param_types.push(pt);
                 }
@@ -684,14 +684,12 @@ impl<'a> TypeChecker<'a> {
                     params: param_types,
                     ret: Box::new(ret),
                 };
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Paren { inner, span } => {
                 let ty = self.check_expr(inner);
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::List {
@@ -706,8 +704,7 @@ impl<'a> TypeChecker<'a> {
                     // If no hint resolves it, we report the error after resolve.
                     let elem = self.subst.fresh_var();
                     let ty = Ty::List(Box::new(elem));
-                    self.record(*span, ty.clone());
-                    return ty;
+                    return self.record_ret(*span, ty);
                 }
 
                 let elem_ty = match all_elems.first() {
@@ -729,19 +726,17 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let ty = Ty::List(Box::new(self.subst.resolve(&elem_ty)));
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Object { fields, span } => {
-                let mut field_types = BTreeMap::new();
+                let mut field_types = HashMap::new();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(value);
-                    field_types.insert(key.clone(), ft);
+                    field_types.insert(*key, ft);
                 }
                 let ty = Ty::Object(field_types);
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Range {
@@ -760,9 +755,7 @@ impl<'a> TypeChecker<'a> {
                 if !matches!(&et, Ty::Int | Ty::Error) {
                     self.error(MirErrorKind::RangeBoundsNotInt { actual: et }, *span);
                 }
-                let ty = Ty::Range;
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, Ty::Range)
             }
 
             Expr::Tuple { elements, span } => {
@@ -774,8 +767,7 @@ impl<'a> TypeChecker<'a> {
                     })
                     .collect();
                 let ty = Ty::Tuple(elem_types);
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Group { elements, span } => {
@@ -788,8 +780,7 @@ impl<'a> TypeChecker<'a> {
                     self.check_expr(e);
                 }
                 let ty = self.check_expr(last);
-                self.record(*span, ty.clone());
-                ty
+                self.record_ret(*span, ty)
             }
 
             Expr::Variant {
@@ -798,27 +789,17 @@ impl<'a> TypeChecker<'a> {
                 payload,
                 span,
             } => {
-                let resolved = match ast_enum_name {
-                    Some(ename) => {
-                        // Qualified: Enum::Tag
-                        self.variant_registry
-                            .resolve(tag)
-                            .filter(|(edef, _)| edef.name == *ename)
-                    }
-                    None => self.variant_registry.resolve(tag),
-                };
-                let Some((enum_def, variant_def)) = resolved else {
+                let Some((enum_name, type_params, variant_payload)) =
+                    self.resolve_variant(ast_enum_name, *tag)
+                else {
                     self.error(
-                        MirErrorKind::UndefinedFunction(format!("unknown variant: {tag}")),
+                        MirErrorKind::UndefinedFunction(
+                            format!("unknown variant: {tag}"),
+                        ),
                         *span,
                     );
                     return Ty::Error;
                 };
-                let enum_name = enum_def.name.clone();
-                let type_params: Vec<Ty> = (0..enum_def.type_param_count)
-                    .map(|_| self.subst.fresh_var())
-                    .collect();
-                let variant_payload = variant_def.payload.clone();
 
                 match &variant_payload {
                     VariantPayload::TypeParam(idx) => {
@@ -846,9 +827,8 @@ impl<'a> TypeChecker<'a> {
                     VariantPayload::None => {}
                 }
 
-                let ty = make_enum_ty(&enum_name, &type_params, &self.subst, None);
-                self.record(*span, ty.clone());
-                ty
+                let ty = make_enum_ty(enum_name, &type_params, &self.subst, None, self.interner);
+                self.record_ret(*span, ty)
             }
 
             Expr::ContextCall {
@@ -856,81 +836,47 @@ impl<'a> TypeChecker<'a> {
                 bindings,
                 span,
             } => {
-                let result_ty = match self.context_types.get(name) {
-                    Some(Ty::Infer) => self
-                        .infer_vars
-                        .entry(name.clone())
-                        .or_insert_with(|| self.subst.fresh_var())
-                        .clone(),
-                    Some(ty) => ty.clone(),
-                    None if self.analysis_mode => self
-                        .infer_vars
-                        .entry(name.clone())
-                        .or_insert_with(|| self.subst.fresh_var())
-                        .clone(),
-                    None => {
-                        self.error(MirErrorKind::UndefinedContext(name.clone()), *span);
-                        Ty::Error
-                    }
-                };
+                let result_ty = self.resolve_context_type(*name, *span);
                 for (_, expr) in bindings {
                     self.check_expr(expr);
                 }
-                self.record(*span, result_ty.clone());
-                result_ty
+                self.record_ret(*span, result_ty)
             }
         }
     }
 
-    fn check_func_call(&mut self, func: &Expr, args: &[Expr], call_span: Span) -> Ty {
-        // Try to resolve as a named function (builtin or extern).
-        let func_name = match func {
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::Value,
-                ..
-            } => Some(name.as_str()),
-            _ => None,
-        };
+    fn check_func_call(
+        &mut self,
+        func: &Expr,
+        args: &[Expr],
+        pipe_left: Option<&Expr>,
+        call_span: Span,
+    ) -> Ty {
+        // Collect argument types, prepending pipe_left if present.
+        let pipe_ty = pipe_left.map(|e| self.check_expr(e));
 
-        let Some(name) = func_name else {
+        // Try to resolve as a named function (builtin or extern).
+        let Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } = func else {
             // Not a simple name — evaluate the function expression.
             let ft = self.check_expr(func);
             let resolved = self.subst.resolve(&ft);
-            return self.check_callable(&resolved, args, call_span);
+            return self.check_callable(&resolved, args, &pipe_ty, call_span);
         };
 
         // Check builtins first.
-        for (_, b) in builtins() {
-            if b.name() != name {
-                continue;
-            }
-
+        let name_str = self.interner.resolve(*name);
+        if let Some((_, b)) = builtins().into_iter().find(|(_, b)| b.name() == name_str) {
             let (param_tys, ret_ty) = b.signature(&mut self.subst);
-            let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
+            let arg_types: Vec<Ty> = pipe_ty.iter().cloned()
+                .chain(args.iter().map(|a| self.check_expr(a)))
+                .collect();
 
-            if arg_types.len() != param_tys.len() {
-                self.error(
-                    MirErrorKind::ArityMismatch {
-                        func: name.to_string(),
-                        expected: param_tys.len(),
-                        got: arg_types.len(),
-                    },
-                    call_span,
-                );
+            if !self.check_args(name_str, &arg_types, &param_tys, call_span) {
                 return Ty::Error;
-            }
-
-            for (at, pt) in arg_types.iter().zip(param_tys.iter()) {
-                if self.subst.unify(at, pt).is_err() {
-                    self.error(
-                        MirErrorKind::UnificationFailure {
-                            expected: self.subst.resolve(pt),
-                            got: self.subst.resolve(at),
-                        },
-                        call_span,
-                    );
-                }
             }
 
             if let Some(check) = b.constraint() {
@@ -945,102 +891,77 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Check extern functions.
-        let Some(def) = self.extern_registry.get(name).cloned() else {
+        let Some(def) = self.extern_registry.get(*name).cloned() else {
             // Not an extern fn — check if it's a local variable with function type.
-            if let Some(var_ty) = self.lookup_var(name) {
+            if let Some(var_ty) = self.lookup_var(*name) {
                 let resolved = self.subst.resolve(&var_ty);
-                return self.check_callable(&resolved, args, call_span);
+                return self.check_callable(&resolved, args, &pipe_ty, call_span);
             }
 
-            self.error(MirErrorKind::UndefinedFunction(name.to_string()), call_span);
+            self.error(MirErrorKind::UndefinedFunction(self.interner.resolve(*name).to_string()), call_span);
             return Ty::Error;
         };
 
-        let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
+        let arg_types: Vec<Ty> = pipe_ty.iter().cloned()
+            .chain(args.iter().map(|a| self.check_expr(a)))
+            .collect();
 
-        if arg_types.len() != def.params.len() {
-            self.error(
-                MirErrorKind::ArityMismatch {
-                    func: name.to_string(),
-                    expected: def.params.len(),
-                    got: arg_types.len(),
-                },
-                call_span,
-            );
+        if !self.check_args(self.interner.resolve(*name), &arg_types, &def.params, call_span) {
             return Ty::Error;
-        }
-
-        for (at, pt) in arg_types.iter().zip(def.params.iter()) {
-            if self.subst.unify(at, pt).is_err() {
-                self.error(
-                    MirErrorKind::UnificationFailure {
-                        expected: self.subst.resolve(pt),
-                        got: self.subst.resolve(at),
-                    },
-                    call_span,
-                );
-            }
         }
 
         self.subst.resolve(&def.ret)
     }
 
-    fn check_callable(&mut self, func_ty: &Ty, args: &[Expr], call_span: Span) -> Ty {
+    fn check_callable(
+        &mut self,
+        func_ty: &Ty,
+        args: &[Expr],
+        pipe_ty: &Option<Ty>,
+        call_span: Span,
+    ) -> Ty {
+        // Early exit for non-callable types.
+        match func_ty {
+            Ty::Fn { .. } | Ty::Var(_) => {}
+            Ty::Error => {
+                for a in args {
+                    self.check_expr(a);
+                }
+                return Ty::Error;
+            }
+            _ => {
+                self.error(
+                    MirErrorKind::UndefinedFunction("<not callable>".to_string()),
+                    call_span,
+                );
+                return Ty::Error;
+            }
+        }
+
+        let arg_types: Vec<Ty> = pipe_ty.iter().cloned()
+            .chain(args.iter().map(|a| self.check_expr(a)))
+            .collect();
+
         match func_ty {
             Ty::Fn { params, ret } => {
-                let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
-                if arg_types.len() != params.len() {
-                    self.error(
-                        MirErrorKind::ArityMismatch {
-                            func: "<closure>".to_string(),
-                            expected: params.len(),
-                            got: arg_types.len(),
-                        },
-                        call_span,
-                    );
+                if !self.check_args("<closure>", &arg_types, params, call_span) {
                     return Ty::Error;
-                }
-                for (at, pt) in arg_types.iter().zip(params.iter()) {
-                    if self.subst.unify(at, pt).is_err() {
-                        self.error(
-                            MirErrorKind::UnificationFailure {
-                                expected: self.subst.resolve(pt),
-                                got: self.subst.resolve(at),
-                            },
-                            call_span,
-                        );
-                    }
                 }
                 self.subst.resolve(ret)
             }
             Ty::Var(_) => {
-                // Unknown callable — create fresh return type and unify.
-                let arg_types: Vec<Ty> = args.iter().map(|a| self.check_expr(a)).collect();
                 let ret = self.subst.fresh_var();
                 let fn_ty = Ty::Fn {
                     params: arg_types,
                     ret: Box::new(ret.clone()),
                 };
                 if self.subst.unify(func_ty, &fn_ty).is_err() {
-                    self.error(MirErrorKind::UndefinedFunction("<expr>".into()), call_span);
+                    self.error(MirErrorKind::UndefinedFunction("<expr>".to_string()), call_span);
                     return Ty::Error;
                 }
                 self.subst.resolve(&ret)
             }
-            Ty::Error => {
-                // Poison type from upstream error — don't cascade.
-                for a in args {
-                    self.check_expr(a);
-                }
-                Ty::Error
-            }
-            _ => {
-                self.error(
-                    MirErrorKind::UndefinedFunction("<not callable>".into()),
-                    call_span,
-                );
-                Ty::Error
-            }
+            _ => unreachable!(),
         }
     }
 
@@ -1053,26 +974,25 @@ impl<'a> TypeChecker<'a> {
                 span: _,
             } => match ref_kind {
                 RefKind::Context => {
-                    self.error(MirErrorKind::ContextWriteAttempt(name.clone()), span);
+                    self.error(MirErrorKind::ContextWriteAttempt(self.interner.resolve(*name).to_string()), span);
                 }
-                RefKind::Variable => match self.variable_types.get(name).cloned() {
-                    Some(existing_ty) => {
-                        if self.subst.unify(&source_resolved, &existing_ty).is_err() {
-                            self.error(
-                                MirErrorKind::PatternTypeMismatch {
-                                    pattern_ty: existing_ty,
-                                    source_ty: source_resolved,
-                                },
-                                span,
-                            );
-                        }
+                RefKind::Variable => {
+                    let Some(existing_ty) = self.variable_types.get(name).cloned() else {
+                        self.variable_types.insert(*name, source_resolved);
+                        return;
+                    };
+                    if self.subst.unify(&source_resolved, &existing_ty).is_err() {
+                        self.error(
+                            MirErrorKind::PatternTypeMismatch {
+                                pattern_ty: existing_ty,
+                                source_ty: source_resolved,
+                            },
+                            span,
+                        );
                     }
-                    None => {
-                        self.variable_types.insert(name.clone(), source_resolved);
-                    }
-                },
+                }
                 RefKind::Value => {
-                    self.define_var(name, source_resolved);
+                    self.define_var(*name, source_resolved);
                 }
             },
 
@@ -1090,7 +1010,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Pattern::List {
-                head, rest, tail, ..
+                head, tail, ..
             } => {
                 // Source must be List<T>.
                 let elem_ty = self.subst.fresh_var();
@@ -1109,7 +1029,6 @@ impl<'a> TypeChecker<'a> {
                 for p in head.iter().chain(tail.iter()) {
                     self.check_pattern(p, &resolved_elem, span);
                 }
-                let _ = rest;
             }
 
             Pattern::Object { fields, .. } => {
@@ -1117,7 +1036,7 @@ impl<'a> TypeChecker<'a> {
                 let Ty::Object(obj_fields) = &source_resolved else {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: Ty::Object(BTreeMap::new()),
+                            pattern_ty: Ty::Object(HashMap::new()),
                             source_ty: source_resolved,
                         },
                         span,
@@ -1129,7 +1048,7 @@ impl<'a> TypeChecker<'a> {
                         self.error(
                             MirErrorKind::UndefinedField {
                                 object_ty: source_resolved.clone(),
-                                field: key.clone(),
+                                field: self.interner.resolve(*key).to_string(),
                             },
                             span,
                         );
@@ -1189,27 +1108,19 @@ impl<'a> TypeChecker<'a> {
                 payload,
                 ..
             } => {
-                let resolved = match ast_enum_name {
-                    Some(ename) => self
-                        .variant_registry
-                        .resolve(tag)
-                        .filter(|(edef, _)| edef.name == *ename),
-                    None => self.variant_registry.resolve(tag),
-                };
-                let Some((enum_def, variant_def)) = resolved else {
+                let Some((enum_name, type_params, variant_payload)) =
+                    self.resolve_variant(ast_enum_name, *tag)
+                else {
                     self.error(
-                        MirErrorKind::UndefinedFunction(format!("unknown variant: {tag}")),
+                        MirErrorKind::UndefinedFunction(
+                            format!("unknown variant: {tag}"),
+                        ),
                         span,
                     );
                     return;
                 };
-                let enum_name = enum_def.name.clone();
-                let type_params: Vec<Ty> = (0..enum_def.type_param_count)
-                    .map(|_| self.subst.fresh_var())
-                    .collect();
-                let variant_payload = variant_def.payload.clone();
 
-                let enum_ty = make_enum_ty(&enum_name, &type_params, &self.subst, None);
+                let enum_ty = make_enum_ty(enum_name, &type_params, &self.subst, None, self.interner);
                 if self.subst.unify(&source_resolved, &enum_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
@@ -1229,6 +1140,29 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// Resolve a variant tag to its enum definition, type params, and payload.
+    fn resolve_variant(
+        &mut self,
+        ast_enum_name: &Option<Astr>,
+        tag: Astr,
+    ) -> Option<(Astr, Vec<Ty>, VariantPayload)> {
+        let resolved = match ast_enum_name {
+            Some(ename) => {
+                self.variant_registry
+                    .resolve(tag)
+                    .filter(|(edef, _)| edef.name == *ename)
+            }
+            None => self.variant_registry.resolve(tag),
+        };
+        let (enum_def, variant_def) = resolved?;
+        let enum_name = enum_def.name;
+        let type_params: Vec<Ty> = (0..enum_def.type_param_count)
+            .map(|_| self.subst.fresh_var())
+            .collect();
+        let variant_payload = variant_def.payload.clone();
+        Some((enum_name, type_params, variant_payload))
     }
 
     fn literal_ty(&self, lit: &Literal) -> Ty {
@@ -1304,35 +1238,19 @@ mod tests {
     use acvus_ast::parse;
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
-        let template = parse(source).expect("parse failed");
-        let empty = HashMap::new();
-        let registry = ExternRegistry::new();
-        let user_types = UserTypeRegistry::new();
-        let checker = TypeChecker::new(&empty, &registry, &user_types);
-        let (tm, _) = checker.check_template(&template)?;
-        Ok(tm)
+        let interner = Interner::new();
+        check_with_interner(source, &HashMap::new(), &ExternRegistry::new(), &interner)
     }
 
-    fn check_with_context(
+    fn check_with_interner(
         source: &str,
-        context: HashMap<String, Ty>,
-    ) -> Result<TypeMap, Vec<MirError>> {
-        let template = parse(source).expect("parse failed");
-        let registry = ExternRegistry::new();
-        let user_types = UserTypeRegistry::new();
-        let checker = TypeChecker::new(&context, &registry, &user_types);
-        let (tm, _) = checker.check_template(&template)?;
-        Ok(tm)
-    }
-
-    fn check_with_extern(
-        source: &str,
+        context: &HashMap<Astr, Ty>,
         registry: &ExternRegistry,
+        interner: &Interner,
     ) -> Result<TypeMap, Vec<MirError>> {
-        let template = parse(source).expect("parse failed");
-        let empty = HashMap::new();
+        let template = parse(interner, source).expect("parse failed");
         let user_types = UserTypeRegistry::new();
-        let checker = TypeChecker::new(&empty, registry, &user_types);
+        let checker = TypeChecker::new(interner, context, registry, &user_types);
         let (tm, _) = checker.check_template(&template)?;
         Ok(tm)
     }
@@ -1384,9 +1302,10 @@ mod tests {
 
     #[test]
     fn context_read() {
-        let context = HashMap::from([("name".into(), Ty::String)]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("name"), Ty::String)]);
         let src = "{{ @name }}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
@@ -1404,64 +1323,71 @@ mod tests {
 
     #[test]
     fn extern_fn_call() {
-        let mut module = ExternModule::new("test");
-        module.add_fn("fetch_user", vec![Ty::Int], Ty::String, false);
+        let i = Interner::new();
+        let mut module = ExternModule::new(i.intern("test"));
+        module.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
         let mut registry = ExternRegistry::new();
         registry.register(&module);
         let src = "{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_extern(src, &registry).is_ok());
+        assert!(check_with_interner(src, &HashMap::new(), &registry, &i).is_ok());
     }
 
     #[test]
     fn builtin_to_string() {
-        let context = HashMap::from([("count".into(), Ty::Int)]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("count"), Ty::Int)]);
         let src = "{{ @count | to_string }}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn field_access() {
+        let i = Interner::new();
         let context = HashMap::from([(
-            "user".into(),
-            Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-                ("age".into(), Ty::Int),
+            i.intern("user"),
+            Ty::Object(HashMap::from([
+                (i.intern("name"), Ty::String),
+                (i.intern("age"), Ty::Int),
             ])),
         )]);
         let src = "{{ @user.name }}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn field_access_undefined() {
+        let i = Interner::new();
         let context = HashMap::from([(
-            "user".into(),
-            Ty::Object(BTreeMap::from([("name".into(), Ty::String)])),
+            i.intern("user"),
+            Ty::Object(HashMap::from([(i.intern("name"), Ty::String)])),
         )]);
         let src = "{{ @user.unknown }}";
-        let result = check_with_context(src, context);
+        let result = check_with_interner(src, &context, &ExternRegistry::new(), &i);
         assert!(result.is_err());
     }
 
     #[test]
     fn pattern_binding_captures_type() {
-        let context = HashMap::from([("name".into(), Ty::String)]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("name"), Ty::String)]);
         let src = "{{ x = @name }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn list_pattern_matching() {
-        let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn lambda_type_check() {
-        let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}";
-        let result = check_with_context(src, context);
+        let result = check_with_interner(src, &context, &ExternRegistry::new(), &i);
         assert!(result.is_ok());
     }
 
@@ -1481,31 +1407,35 @@ mod tests {
 
     #[test]
     fn some_pattern_extracts_inner() {
-        let context = HashMap::from([("opt".into(), Ty::Option(Box::new(Ty::String)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("opt"), Ty::Option(Box::new(Ty::String)))]);
         let src = "{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn none_pattern_matches_option() {
-        let context = HashMap::from([("opt".into(), Ty::Option(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ None = @opt }}none{{_}}has value{{/}}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn some_unifies_with_option_context() {
-        let context = HashMap::from([("opt".into(), Ty::Option(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         // match Some(v) against Option<Int> → v : Int
         let src = "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}{{/}}";
-        assert!(check_with_context(src, context).is_ok());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
     }
 
     #[test]
     fn some_type_mismatch() {
+        let i = Interner::new();
         // Some(42) is Option<Int>, cannot match against String
-        let context = HashMap::from([("s".into(), Ty::String)]);
+        let context = HashMap::from([(i.intern("s"), Ty::String)]);
         let src = "{{ Some(x) = @s }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_context(src, context).is_err());
+        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_err());
     }
 }

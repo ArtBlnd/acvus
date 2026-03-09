@@ -6,6 +6,8 @@ use std::task::{Context, Poll};
 
 use parking_lot::Mutex;
 
+use crate::Astr;
+
 // ---------------------------------------------------------------------------
 // Signal — unified coroutine communication
 // ---------------------------------------------------------------------------
@@ -14,8 +16,8 @@ enum Signal<V> {
     Empty,
     Yield(V),
     NeedContext {
-        name: String,
-        bindings: HashMap<String, V>,
+        name: Astr,
+        bindings: HashMap<Astr, V>,
     },
     ContextReady(Arc<V>),
 }
@@ -37,7 +39,7 @@ impl<V> YieldHandle<V> {
         }
     }
 
-    pub fn request_context(&self, name: String) -> ContextFuture<'_, V> {
+    pub fn request_context(&self, name: Astr) -> ContextFuture<'_, V> {
         ContextFuture {
             shared: &self.shared,
             name: Some(name),
@@ -47,8 +49,8 @@ impl<V> YieldHandle<V> {
 
     pub fn request_context_with(
         &self,
-        name: String,
-        bindings: HashMap<String, V>,
+        name: Astr,
+        bindings: HashMap<Astr, V>,
     ) -> ContextFuture<'_, V> {
         ContextFuture {
             shared: &self.shared,
@@ -90,8 +92,8 @@ where
 
 pub struct ContextFuture<'a, V> {
     shared: &'a Arc<Mutex<Signal<V>>>,
-    name: Option<String>,
-    bindings: HashMap<String, V>,
+    name: Option<Astr>,
+    bindings: HashMap<Astr, V>,
 }
 
 impl<V> Future for ContextFuture<'_, V>
@@ -151,20 +153,20 @@ impl<V> EmitStepped<V> {
 }
 
 pub struct NeedContextStepped<V> {
-    name: String,
-    bindings: HashMap<String, V>,
+    name: Astr,
+    bindings: HashMap<Astr, V>,
 }
 
 impl<V> NeedContextStepped<V> {
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Astr {
+        self.name
     }
 
-    pub fn bindings(&self) -> &HashMap<String, V> {
+    pub fn bindings(&self) -> &HashMap<Astr, V> {
         &self.bindings
     }
 
-    pub fn into_parts(self) -> (String, HashMap<String, V>) {
+    pub fn into_parts(self) -> (Astr, HashMap<Astr, V>) {
         (self.name, self.bindings)
     }
 
@@ -274,6 +276,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Interner;
 
     async fn step<V, E>(
         co: &mut Coroutine<V, E>,
@@ -328,8 +331,10 @@ mod tests {
 
     #[tokio::test]
     async fn context_request() {
+        let interner = Interner::new();
+        let user = interner.intern("user");
         let (mut co, key) = coroutine::<_, (), _, _>(|handle| async move {
-            let ctx = handle.request_context("user".into()).await;
+            let ctx = handle.request_context(user).await;
             handle.yield_val(format!("got: {ctx}")).await;
             Ok(())
         });
@@ -337,7 +342,7 @@ mod tests {
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext");
         };
-        assert_eq!(need.name(), "user");
+        assert_eq!(need.name(), user);
         assert!(need.bindings().is_empty());
 
         let key = need.into_key(Arc::new("alice".to_string()));
@@ -352,11 +357,14 @@ mod tests {
 
     #[tokio::test]
     async fn context_request_with_bindings() {
+        let interner = Interner::new();
+        let user = interner.intern("user");
+        let role = interner.intern("role");
         let (mut co, key) = coroutine::<_, (), _, _>(|handle| async move {
             let mut bindings = HashMap::new();
-            bindings.insert("role".into(), "admin".into());
+            bindings.insert(role, "admin".into());
             let ctx = handle
-                .request_context_with("user".into(), bindings)
+                .request_context_with(user, bindings)
                 .await;
             handle.yield_val(format!("got: {ctx}")).await;
             Ok(())
@@ -365,8 +373,8 @@ mod tests {
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext");
         };
-        assert_eq!(need.name(), "user");
-        assert_eq!(need.bindings().get("role"), Some(&"admin".to_string()));
+        assert_eq!(need.name(), user);
+        assert_eq!(need.bindings().get(&role), Some(&"admin".to_string()));
 
         let key = need.into_key(Arc::new("bob".to_string()));
         let Stepped::Emit(emit) = step(&mut co, key).await else {
@@ -380,11 +388,14 @@ mod tests {
 
     #[tokio::test]
     async fn interleaved_yield_and_context() {
+        let interner = Interner::new();
+        let name_key = interner.intern("name");
+        let age_key = interner.intern("age");
         let (mut co, key) = coroutine::<_, (), _, _>(|handle| async move {
             handle.yield_val("start".to_string()).await;
-            let name = handle.request_context("name".into()).await;
+            let name = handle.request_context(name_key).await;
             handle.yield_val(format!("hello {name}")).await;
-            let age = handle.request_context("age".into()).await;
+            let age = handle.request_context(age_key).await;
             handle.yield_val(format!("{name} is {age}")).await;
             Ok(())
         });
@@ -400,7 +411,7 @@ mod tests {
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext");
         };
-        assert_eq!(need.name(), "name");
+        assert_eq!(need.name(), name_key);
         let key = need.into_key(Arc::new("eve".to_string()));
 
         // yield "hello eve"
@@ -414,7 +425,7 @@ mod tests {
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext");
         };
-        assert_eq!(need.name(), "age");
+        assert_eq!(need.name(), age_key);
         let key = need.into_key(Arc::new("30".to_string()));
 
         // yield "eve is 30"
@@ -429,9 +440,12 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_context_requests_in_sequence() {
+        let interner = Interner::new();
+        let a_key = interner.intern("a");
+        let b_key = interner.intern("b");
         let (mut co, key) = coroutine::<_, (), _, _>(|handle| async move {
-            let a = handle.request_context("a".into()).await;
-            let b = handle.request_context("b".into()).await;
+            let a = handle.request_context(a_key).await;
+            let b = handle.request_context(b_key).await;
             handle.yield_val(format!("{a}+{b}")).await;
             Ok(())
         });
@@ -439,13 +453,13 @@ mod tests {
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext a");
         };
-        assert_eq!(need.name(), "a");
+        assert_eq!(need.name(), a_key);
         let key = need.into_key(Arc::new("1".to_string()));
 
         let Stepped::NeedContext(need) = step(&mut co, key).await else {
             panic!("expected NeedContext b");
         };
-        assert_eq!(need.name(), "b");
+        assert_eq!(need.name(), b_key);
         let key = need.into_key(Arc::new("2".to_string()));
 
         let Stepped::Emit(emit) = step(&mut co, key).await else {
@@ -496,8 +510,10 @@ mod tests {
 
     #[tokio::test]
     async fn context_without_yield() {
+        let interner = Interner::new();
+        let ignored = interner.intern("ignored");
         let (mut co, key) = coroutine::<String, (), _, _>(|handle| async move {
-            let _ctx = handle.request_context("ignored".into()).await;
+            let _ctx = handle.request_context(ignored).await;
             Ok(())
         });
 

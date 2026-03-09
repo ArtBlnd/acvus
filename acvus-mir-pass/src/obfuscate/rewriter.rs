@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use acvus_ast::{Literal, Span};
 use acvus_mir::ir::{DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -18,13 +19,13 @@ struct RegisteredLabels {
     all: Vec<Label>,
 }
 
-pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
+pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner) -> MirModule {
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut registered = RegisteredLabels { all: Vec::new() };
 
     // Register multi-stage decrypt closures (12 closures: 4 per stage).
     let decrypt_table = if config.text_encryption {
-        let table = text_obf::register_multistage_decrypt_closures(&mut module);
+        let table = text_obf::register_multistage_decrypt_closures(&mut module, interner);
         registered.all.extend(text_obf::all_decrypt_labels(&table));
         Some(table)
     } else {
@@ -52,6 +53,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
             &dt.stage_a,
             &stage_a_fn_ty,
             "factory_a",
+            interner,
         );
         registered.all.extend(text_obf::all_factory_labels(&fa));
         let fb = text_obf::register_factory_closures(
@@ -59,6 +61,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
             &dt.stage_b,
             &stage_b_fn_ty,
             "factory_b",
+            interner,
         );
         registered.all.extend(text_obf::all_factory_labels(&fb));
         let fc = text_obf::register_factory_closures(
@@ -66,6 +69,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
             &dt.stage_c,
             &stage_c_fn_ty,
             "factory_c",
+            interner,
         );
         registered.all.extend(text_obf::all_factory_labels(&fc));
 
@@ -76,7 +80,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
 
     // Register opaque closures (4 closures).
     let opaque_table = if config.opaque_predicates {
-        let table = opaque::register_opaque_closures(&mut module);
+        let table = opaque::register_opaque_closures(&mut module, interner);
         registered.all.extend(table.labels.iter().copied());
 
         // Register factory closures for opaque dispatch (4 factories).
@@ -89,6 +93,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
             &table.labels,
             &opaque_fn_ty,
             "factory_opaque",
+            interner,
         );
         registered
             .all
@@ -114,6 +119,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
         &factory_tables,
         &opaque_table,
         &mut rng,
+        interner,
     );
 
     // User closures: skip meta table/entangle preamble (no text in closures).
@@ -141,6 +147,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig) -> MirModule {
             &None,
             &opaque_table,
             &mut rng,
+            interner,
         );
         module.closures.insert(label, closure);
     }
@@ -160,8 +167,9 @@ fn rewrite_body(
     )>,
     opaque_table: &Option<(opaque::OpaqueTable, text_obf::FactoryTable)>,
     rng: &mut StdRng,
+    interner: &Interner,
 ) -> MirBody {
-    let mut ctx = PassState::from_body(&body);
+    let mut ctx = PassState::from_body(&body, interner);
     let span = body
         .insts
         .first()
@@ -198,7 +206,7 @@ fn rewrite_body(
         ctx.emit(
             span,
             InstKind::VarStore {
-                name: "__entangle".into(),
+                name: interner.intern("__entangle"),
                 src: v_init,
             },
         );
@@ -230,21 +238,21 @@ fn rewrite_body(
         ctx.emit(
             span,
             InstKind::VarStore {
-                name: "__decrypt_meta_a".into(),
+                name: interner.intern("__decrypt_meta_a"),
                 src: meta_a,
             },
         );
         ctx.emit(
             span,
             InstKind::VarStore {
-                name: "__decrypt_meta_b".into(),
+                name: interner.intern("__decrypt_meta_b"),
                 src: meta_b,
             },
         );
         ctx.emit(
             span,
             InstKind::VarStore {
-                name: "__decrypt_meta_c".into(),
+                name: interner.intern("__decrypt_meta_c"),
                 src: meta_c,
             },
         );
@@ -304,7 +312,7 @@ fn rewrite_body(
         ctx.emit(
             span,
             InstKind::VarStore {
-                name: "__opaque_table".into(),
+                name: interner.intern("__opaque_table"),
                 src: v_opaque_meta,
             },
         );
@@ -377,7 +385,7 @@ fn phase_instruction_transform(
                     inst.span,
                     InstKind::VarLoad {
                         dst: meta_a,
-                        name: "__decrypt_meta_a".into(),
+                        name: ctx.interner.intern("__decrypt_meta_a"),
                     },
                 );
                 let meta_b = ctx.alloc_val(ctx.val_types[&mb].clone());
@@ -385,7 +393,7 @@ fn phase_instruction_transform(
                     inst.span,
                     InstKind::VarLoad {
                         dst: meta_b,
-                        name: "__decrypt_meta_b".into(),
+                        name: ctx.interner.intern("__decrypt_meta_b"),
                     },
                 );
                 let meta_c = ctx.alloc_val(ctx.val_types[&mc].clone());
@@ -393,7 +401,7 @@ fn phase_instruction_transform(
                     inst.span,
                     InstKind::VarLoad {
                         dst: meta_c,
-                        name: "__decrypt_meta_c".into(),
+                        name: ctx.interner.intern("__decrypt_meta_c"),
                     },
                 );
 
@@ -475,16 +483,18 @@ pub struct PassState {
     pub debug: DebugInfo,
     pub next_val: u32,
     pub next_label: u32,
+    pub interner: Interner,
 }
 
 impl PassState {
-    pub fn from_body(body: &MirBody) -> Self {
+    pub fn from_body(body: &MirBody, interner: &Interner) -> Self {
         Self {
             insts: Vec::new(),
             val_types: body.val_types.clone(),
             debug: body.debug.clone(),
             next_val: body.val_count,
             next_label: body.label_count,
+            interner: interner.clone(),
         }
     }
 
@@ -549,7 +559,8 @@ mod tests {
             span: Span { start: 0, end: 0 },
             kind: InstKind::Nop,
         }]);
-        let result = obfuscate(module, &default_config());
+        let interner = Interner::new();
+        let result = obfuscate(module, &default_config(), &interner);
         assert!(
             result
                 .main

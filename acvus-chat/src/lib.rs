@@ -2,7 +2,7 @@ mod error;
 
 pub use error::ChatError;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Value};
@@ -10,6 +10,7 @@ use acvus_orchestration::{
     CompiledNode, CompiledNodeKind, CompiledStrategy, Fetch, Node, ProviderConfig, ResolveState,
     Resolved, Resolver, State, Storage, build_dag, build_node_table,
 };
+use acvus_utils::{Astr, Interner};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -18,13 +19,14 @@ use acvus_orchestration::{
 pub struct ChatEngine<S> {
     nodes: Vec<CompiledNode>,
     node_table: Vec<Arc<dyn Node>>,
-    name_to_idx: HashMap<String, usize>,
+    name_to_idx: HashMap<Astr, usize>,
     extern_fns: ExternFnRegistry,
     pub state: State<S>,
-    bind_cache: HashMap<String, Vec<(Value, Arc<Value>)>>,
+    bind_cache: HashMap<Astr, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
-    history_nodes: Vec<String>,
+    history_nodes: Vec<Astr>,
     side_effect_idxs: Vec<usize>,
+    interner: Interner,
 }
 
 impl<S> ChatEngine<S>
@@ -39,25 +41,27 @@ where
         mut storage: S,
         entrypoint: &str,
         side_effects: &[String],
+        interner: &Interner,
     ) -> Result<Self, ChatError>
     where
         F: Fetch + 'static,
     {
-        let name_to_idx: HashMap<String, usize> = nodes
+        let name_to_idx: HashMap<Astr, usize> = nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.name.clone(), i))
+            .map(|(i, n)| (n.name, i))
             .collect();
 
+        let entrypoint_key = interner.intern(entrypoint);
         let entrypoint_idx = *name_to_idx
-            .get(entrypoint)
+            .get(&entrypoint_key)
             .ok_or_else(|| ChatError::EntrypointNotFound(entrypoint.to_string()))?;
 
         // Collect history nodes
-        let history_nodes: Vec<String> = nodes
+        let history_nodes: Vec<Astr> = nodes
             .iter()
             .filter_map(|n| match &n.strategy {
-                CompiledStrategy::History { .. } => Some(n.name.clone()),
+                CompiledStrategy::History { .. } => Some(n.name),
                 _ => None,
             })
             .collect();
@@ -87,7 +91,8 @@ where
             }
             if let CompiledNodeKind::Llm(llm) = &nodes[idx].kind {
                 for tool in &llm.tools {
-                    if let Some(&dep_idx) = name_to_idx.get(&tool.node)
+                    let tool_node = interner.intern(&tool.node);
+                    if let Some(&dep_idx) = name_to_idx.get(&tool_node)
                         && reachable.insert(dep_idx)
                     {
                         queue.push_back(dep_idx);
@@ -95,21 +100,21 @@ where
                 }
             }
         }
-        for name in &history_nodes {
-            if !reachable.contains(&name_to_idx[name.as_str()]) {
-                return Err(ChatError::HistoryNodeUnreachable(name.clone()));
+        for &name in &history_nodes {
+            if !reachable.contains(&name_to_idx[&name]) {
+                return Err(ChatError::HistoryNodeUnreachable(interner.resolve(name).to_string()));
             }
         }
 
         // Seed context metadata
-        let mut context_obj: BTreeMap<String, Value> = BTreeMap::new();
+        let mut context_obj: HashMap<Astr, Value> = HashMap::new();
         for node in &nodes {
             if let CompiledNodeKind::Llm(llm) = &node.kind {
                 context_obj.insert(
-                    node.name.clone(),
-                    Value::Object(BTreeMap::from([
-                        ("model".into(), Value::String(llm.model.clone())),
-                        ("provider".into(), Value::String(llm.provider.clone())),
+                    node.name,
+                    Value::Object(HashMap::from([
+                        (interner.intern("model"), Value::String(llm.model.clone())),
+                        (interner.intern("provider"), Value::String(llm.provider.clone())),
                     ])),
                 );
             }
@@ -122,11 +127,14 @@ where
         // Resolve side_effect node indices
         let side_effect_idxs: Vec<usize> = side_effects
             .iter()
-            .filter_map(|name| name_to_idx.get(name.as_str()).copied())
+            .filter_map(|name| {
+                let key = interner.intern(name);
+                name_to_idx.get(&key).copied()
+            })
             .collect();
 
         // Build node table — one match, uniform Arc<dyn Node> from here
-        let node_table = build_node_table(&nodes, &providers, Arc::new(fetch), &extern_fns);
+        let node_table = build_node_table(&nodes, &providers, Arc::new(fetch), &extern_fns, interner);
 
         Ok(Self {
             nodes,
@@ -138,32 +146,38 @@ where
             entrypoint_idx,
             history_nodes,
             side_effect_idxs,
+            interner: interner.clone(),
         })
     }
 
     pub async fn turn<R>(&mut self, resolver: &R) -> Result<Value, ChatError>
     where
         S: Default,
-        R: AsyncFn(String) -> Resolved + Sync,
+        R: AsyncFn(Astr) -> Resolved + Sync,
     {
         let entrypoint = &self.nodes[self.entrypoint_idx].name;
         tracing::info!(entrypoint = %entrypoint, "turn start");
 
+        let interner = &self.interner;
+        let index_key = interner.intern("index");
+        let history_key = interner.intern("history");
+        let turn_key = interner.intern("turn");
+
         // Ensure @turn exists; compute next index
-        let turn_index = if let Some(arc) = self.state.storage.get("turn") {
+        let turn_index = if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
             let Value::Object(ref turn) = *arc else {
                 panic!("@turn must be an Object");
             };
-            let Value::Int(i) = turn.get("index").expect("@turn.index missing") else {
+            let Value::Int(i) = turn.get(&index_key).expect("@turn.index missing") else {
                 panic!("@turn.index must be Int");
             };
             *i + 1
         } else {
             self.state.storage.set(
-                "turn".into(),
-                Value::Object(BTreeMap::from([
-                    ("index".into(), Value::Int(0)),
-                    ("history".into(), Value::List(Vec::new())),
+                interner.resolve(turn_key).to_string(),
+                Value::Object(HashMap::from([
+                    (index_key, Value::Int(0)),
+                    (history_key, Value::List(Vec::new())),
                 ])),
             );
             0
@@ -172,7 +186,7 @@ where
         // Always-strategy nodes re-resolve every turn
         for node in &self.nodes {
             if matches!(node.strategy, CompiledStrategy::Always) {
-                self.state.storage.remove(&node.name);
+                self.state.storage.remove(interner.resolve(node.name));
             }
         }
 
@@ -181,7 +195,7 @@ where
             storage: std::mem::take(&mut self.state.storage),
             turn_context: HashMap::new(),
             bind_cache: std::mem::take(&mut self.bind_cache),
-            history_entries: BTreeMap::new(),
+            history_entries: HashMap::new(),
         };
 
         let ctx = Resolver {
@@ -190,6 +204,7 @@ where
             name_to_idx: &self.name_to_idx,
             extern_fns: &self.extern_fns,
             resolver,
+            interner,
         };
 
         ctx.resolve_node(self.entrypoint_idx, &mut rs, HashMap::new())
@@ -201,27 +216,27 @@ where
             if matches!(node.strategy, CompiledStrategy::Always)
                 && let Some(v) = rs.turn_context.get(&node.name)
             {
-                rs.storage.set(node.name.clone(), Value::clone(v));
+                rs.storage.set(interner.resolve(node.name).to_string(), Value::clone(v));
             }
         }
 
         // Flush history + update turn index
         {
-            let mut turn_val = rs.storage.get("turn")
+            let mut turn_val = rs.storage.get(interner.resolve(turn_key))
                 .map(|arc| Value::clone(&arc))
-                .unwrap_or_else(|| Value::Object(BTreeMap::new()));
+                .unwrap_or_else(|| Value::Object(HashMap::new()));
 
             if let Value::Object(ref mut turn) = turn_val {
-                turn.insert("index".into(), Value::Int(turn_index));
+                turn.insert(index_key, Value::Int(turn_index));
                 if !rs.history_entries.is_empty() {
-                    let history = turn.entry("history".into())
+                    let history = turn.entry(history_key)
                         .or_insert_with(|| Value::List(Vec::new()));
                     if let Value::List(list) = history {
                         list.push(Value::Object(std::mem::take(&mut rs.history_entries)));
                     }
                 }
             }
-            rs.storage.set("turn".into(), turn_val);
+            rs.storage.set(interner.resolve(turn_key).to_string(), turn_val);
         }
 
         self.state.turn = turn_index as usize;
@@ -239,12 +254,12 @@ where
 
         tracing::info!(turn = self.state.turn, "turn complete");
 
-        let name = &self.nodes[self.entrypoint_idx].name;
+        let name = self.nodes[self.entrypoint_idx].name;
         let result = self
             .state
             .storage
-            .get(name)
-            .ok_or_else(|| ChatError::UnresolvedContext(name.clone()))?;
+            .get(interner.resolve(name))
+            .ok_or_else(|| ChatError::UnresolvedContext(interner.resolve(name).to_string()))?;
         Ok(Value::clone(&result))
     }
 
@@ -261,35 +276,41 @@ where
             return;
         }
         self.state.turn -= 1;
-        if let Some(arc) = self.state.storage.get("turn") {
+        let interner = &self.interner;
+        let turn_key = interner.intern("turn");
+        let history_key = interner.intern("history");
+        if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
             let mut turn_val = Value::clone(&arc);
             if let Value::Object(ref mut turn) = turn_val
-                && let Some(Value::List(history)) = turn.get_mut("history")
+                && let Some(Value::List(history)) = turn.get_mut(&history_key)
             {
                 history.pop();
             }
-            self.state.storage.set("turn".into(), turn_val);
+            self.state.storage.set(interner.resolve(turn_key).to_string(), turn_val);
         }
     }
 
     pub async fn re_execute<R>(&mut self, index: usize, resolver: &R) -> Result<Value, ChatError>
     where
         S: Default,
-        R: AsyncFn(String) -> Resolved + Sync,
+        R: AsyncFn(Astr) -> Resolved + Sync,
     {
         assert!(
             index <= self.state.turn,
             "re_execute index out of bounds: {index} > {}",
             self.state.turn,
         );
-        if let Some(arc) = self.state.storage.get("turn") {
+        let interner = &self.interner;
+        let turn_key = interner.intern("turn");
+        let history_key = interner.intern("history");
+        if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
             let mut turn_val = Value::clone(&arc);
             if let Value::Object(ref mut turn) = turn_val
-                && let Some(Value::List(history)) = turn.get_mut("history")
+                && let Some(Value::List(history)) = turn.get_mut(&history_key)
             {
                 history.truncate(index);
             }
-            self.state.storage.set("turn".into(), turn_val);
+            self.state.storage.set(interner.resolve(turn_key).to_string(), turn_val);
         }
         self.state.turn = index;
         self.turn(resolver).await
@@ -298,32 +319,33 @@ where
 
 /// Drive an interpreter coroutine to a single value, resolving contexts from storage + local.
 async fn drive_script<S>(
-    coroutine: &mut acvus_coroutine::Coroutine<Value, acvus_interpreter::RuntimeError>,
-    mut key: acvus_coroutine::ResumeKey<Value>,
+    coroutine: &mut acvus_utils::Coroutine<Value, acvus_interpreter::RuntimeError>,
+    mut key: acvus_utils::ResumeKey<Value>,
     storage: &S,
-    local: &HashMap<String, Arc<Value>>,
+    local: &HashMap<Astr, Arc<Value>>,
+    interner: &Interner,
 ) -> Value
 where
     S: Storage,
 {
     loop {
         match coroutine.resume(key).await {
-            acvus_coroutine::Stepped::Emit(emit) => {
+            acvus_utils::Stepped::Emit(emit) => {
                 let (value, _) = emit.into_parts();
                 return value;
             }
-            acvus_coroutine::Stepped::NeedContext(need) => {
-                let name = need.name().to_string();
+            acvus_utils::Stepped::NeedContext(need) => {
+                let name = need.name();
                 if let Some(arc) = local.get(&name) {
                     key = need.into_key(Arc::clone(arc));
-                } else if let Some(arc) = storage.get(&name) {
+                } else if let Some(arc) = storage.get(interner.resolve(name)) {
                     key = need.into_key(arc);
                 } else {
                     return Value::Unit;
                 }
             }
-            acvus_coroutine::Stepped::Done => return Value::Unit,
-            acvus_coroutine::Stepped::Error(e) => panic!("runtime error: {e}"),
+            acvus_utils::Stepped::Done => return Value::Unit,
+            acvus_utils::Stepped::Error(e) => panic!("runtime error: {e}"),
         }
     }
 }
@@ -408,12 +430,12 @@ mod tests {
         )
     }
 
-    fn noop_resolver() -> impl AsyncFn(String) -> Resolved + Sync {
-        |_: String| async { Resolved::Once(Value::Unit) }
+    fn noop_resolver() -> impl AsyncFn(Astr) -> Resolved + Sync {
+        |_: Astr| async { Resolved::Once(Value::Unit) }
     }
 
-    fn compile_test_nodes(specs: &[NodeSpec]) -> Vec<CompiledNode> {
-        compile_nodes(specs, &HashMap::new(), &ExternRegistry::default()).unwrap()
+    fn compile_test_nodes(interner: &Interner, specs: &[NodeSpec]) -> Vec<CompiledNode> {
+        compile_nodes(interner, specs, &HashMap::new(), &ExternRegistry::default()).unwrap()
     }
 
     fn plain_self_spec() -> SelfSpec {
@@ -430,8 +452,9 @@ mod tests {
 
     #[tokio::test]
     async fn new_valid_entrypoint() {
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Plain(PlainSpec {
                 source: "hello".into(),
             }),
@@ -445,10 +468,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await;
         assert!(result.is_ok());
@@ -456,8 +480,9 @@ mod tests {
 
     #[tokio::test]
     async fn new_invalid_entrypoint() {
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Plain(PlainSpec {
                 source: "hello".into(),
             }),
@@ -471,10 +496,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "nonexistent",
             &[],
+            &interner,
         )
         .await;
         assert!(matches!(result, Err(ChatError::EntrypointNotFound(_))));
@@ -482,8 +508,9 @@ mod tests {
 
     #[tokio::test]
     async fn turn_plain_node() {
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Plain(PlainSpec {
                 source: "hello world".into(),
             }),
@@ -497,10 +524,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -511,14 +539,15 @@ mod tests {
 
     #[tokio::test]
     async fn turn_llm_text_response() {
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Llm(LlmSpec {
                 api: ApiKind::OpenAI,
                 provider: "test".into(),
                 model: "gpt-test".into(),
                 messages: vec![MessageSpec::Block {
-                    role: "user".into(),
+                    role: interner.intern("user"),
                     source: "hi".into(),
                 }],
                 tools: vec![],
@@ -537,10 +566,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             mock,
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -554,14 +584,16 @@ mod tests {
         let Value::Object(msg) = &msgs[0] else {
             panic!("expected Object");
         };
-        assert_eq!(msg.get("content"), Some(&Value::String("hello from LLM".into())));
+        let content_key = interner.intern("content");
+        assert_eq!(msg.get(&content_key), Some(&Value::String("hello from LLM".into())));
     }
 
     #[tokio::test]
     async fn turn_tool_call_round_trip() {
-        let nodes = compile_test_nodes(&[
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[
             NodeSpec {
-                name: "tool_target".into(),
+                name: interner.intern("tool_target"),
                 kind: NodeKind::Plain(PlainSpec {
                     source: "tool result text".into(),
                 }),
@@ -571,13 +603,13 @@ mod tests {
                 assert: None,
             },
             NodeSpec {
-                name: "main".into(),
+                name: interner.intern("main"),
                 kind: NodeKind::Llm(LlmSpec {
                     api: ApiKind::OpenAI,
                     provider: "test".into(),
                     model: "gpt-test".into(),
                     messages: vec![MessageSpec::Block {
-                        role: "user".into(),
+                        role: interner.intern("user"),
                         source: "use the tool".into(),
                     }],
                     tools: vec![ToolBinding {
@@ -605,10 +637,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             mock,
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -621,7 +654,8 @@ mod tests {
         let Value::Object(msg) = msgs.last().unwrap() else {
             panic!("expected Object");
         };
-        assert_eq!(msg.get("content"), Some(&Value::String("final answer".into())));
+        let content_key = interner.intern("content");
+        assert_eq!(msg.get(&content_key), Some(&Value::String("final answer".into())));
     }
 
     // -- regression tests -------------------------------------------------------
@@ -631,17 +665,18 @@ mod tests {
     /// With self_bind removed, accumulation is done in the node body template using @self.
     #[tokio::test]
     async fn initial_value_evaluated_on_first_run() {
+        let interner = Interner::new();
         // Template uses @self (previous) to accumulate.
         // initial_value = "A".
         // Turn 1: @self = "A" (initial), template = "{{@self}}B" → "AB"
         // Turn 2: @self = "AB" (persisted), template = "{{@self}}B" → "ABB"
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Plain(PlainSpec {
                 source: "{{@self}}B".into(),
             }),
             self_spec: SelfSpec {
-                initial_value: Some(r#""A""#.into()),
+                initial_value: Some(interner.intern(r#""A""#)),
             },
             strategy: Strategy::OncePerTurn,
             retry: 0,
@@ -652,10 +687,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -670,14 +706,10 @@ mod tests {
     /// #7: Always nodes must re-execute every invocation, not just once per turn.
     #[tokio::test]
     async fn always_node_re_executes_every_reference() {
-        // Two plain nodes: "counter" (Always) referenced by "main".
-        // "main" references @counter twice via template.
-        // Each @counter resolve should re-execute the node.
-        // counter template = "x", self_bind = @raw.
-        // main template = "{{@counter}}{{@counter}}" → "xx"
-        let nodes = compile_test_nodes(&[
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[
             NodeSpec {
-                name: "counter".into(),
+                name: interner.intern("counter"),
                 kind: NodeKind::Plain(PlainSpec { source: "x".into() }),
                 self_spec: plain_self_spec(),
                 strategy: Strategy::Always,
@@ -685,7 +717,7 @@ mod tests {
                 assert: None,
             },
             NodeSpec {
-                name: "main".into(),
+                name: interner.intern("main"),
                 kind: NodeKind::Plain(PlainSpec {
                     source: "{{@counter}}{{@counter}}".into(),
                 }),
@@ -700,10 +732,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -718,13 +751,15 @@ mod tests {
         use acvus_mir::ty::Ty;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
+        let interner = Interner::new();
         // main template references @input twice.
         // External resolver should be called only once for @input per turn.
         let mut ctx = HashMap::new();
-        ctx.insert("input".into(), Ty::String);
+        ctx.insert(interner.intern("input"), Ty::String);
         let nodes = compile_nodes(
+            &interner,
             &[NodeSpec {
-                name: "main".into(),
+                name: interner.intern("main"),
                 kind: NodeKind::Plain(PlainSpec {
                     source: "{{@input}}{{@input}}".into(),
                 }),
@@ -742,17 +777,18 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
 
         let call_count = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&call_count);
-        let resolver = move |_: String| {
+        let resolver = move |_: Astr| {
             let count = Arc::clone(&count);
             async move {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -772,14 +808,15 @@ mod tests {
     /// #6b (history_bind @self): history_bind must have access to @self without panic.
     #[tokio::test]
     async fn history_bind_accesses_self() {
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Llm(LlmSpec {
                 api: ApiKind::OpenAI,
                 provider: "test".into(),
                 model: "m".into(),
                 messages: vec![MessageSpec::Block {
-                    role: "user".into(),
+                    role: interner.intern("user"),
                     source: "hi".into(),
                 }],
                 tools: vec![],
@@ -790,7 +827,7 @@ mod tests {
             self_spec: llm_self_spec(),
             // history_bind accesses @self (= raw output = List) and extracts content
             strategy: Strategy::History {
-                history_bind: r#"@self | map(x -> x.content) | join("")"#.into(),
+                history_bind: interner.intern(r#"@self | map(x -> x.content) | join("")"#),
             },
             retry: 0,
             assert: None,
@@ -800,10 +837,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![openai_text_response("hello")]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();
@@ -816,23 +854,22 @@ mod tests {
         let Value::Object(msg) = &msgs[0] else {
             panic!("expected Object");
         };
-        assert_eq!(msg.get("content"), Some(&Value::String("hello".into())));
+        let content_key = interner.intern("content");
+        assert_eq!(msg.get(&content_key), Some(&Value::String("hello".into())));
     }
 
     /// @self in node body: accumulates across turns.
     /// Uses OncePerTurn so @self persists.
     #[tokio::test]
     async fn node_body_accesses_self() {
-        // Template concatenates @self (previous) + "B".
-        // Turn 1: @self = initial "A", template = "{{@self}}B" → stored = "AB"
-        // Turn 2: @self = "AB", template = "{{@self}}B" → stored = "ABB"
-        let nodes = compile_test_nodes(&[NodeSpec {
-            name: "main".into(),
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(&interner, &[NodeSpec {
+            name: interner.intern("main"),
             kind: NodeKind::Plain(PlainSpec {
                 source: "{{@self}}B".into(),
             }),
             self_spec: SelfSpec {
-                initial_value: Some(r#""A""#.into()),
+                initial_value: Some(interner.intern(r#""A""#)),
             },
             strategy: Strategy::OncePerTurn,
             retry: 0,
@@ -843,10 +880,11 @@ mod tests {
             nodes,
             HashMap::from([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(),
+            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
+            &interner,
         )
         .await
         .unwrap();

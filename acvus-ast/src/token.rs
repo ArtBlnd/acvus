@@ -1,3 +1,4 @@
+use acvus_utils::{Astr, Interner};
 use logos::Logos;
 use std::fmt;
 
@@ -28,6 +29,7 @@ fn parse_string_literal(lex: &mut logos::Lexer<'_, Token>) -> Option<String> {
 /// Tokens produced by the expression tokenizer, driven by logos.
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\n\r]+")]
+#[logos(extras = Interner)]
 pub enum Token {
     // ── Keywords (exact match, higher priority than ident regex) ──
     #[token("true")]
@@ -44,16 +46,16 @@ pub enum Token {
     None,
 
     // ── Identifiers ──
-    #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice().to_string(), priority = 2)]
-    Ident(String),
+    #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
+    Ident(Astr),
 
     // ── Variable reference: $name ──
-    #[regex(r"\$[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice()[1..].to_string())]
-    VarRef(String),
+    #[regex(r"\$[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(&lex.slice()[1..]))]
+    VarRef(Astr),
 
     // ── Context reference: @name ──
-    #[regex(r"@[\p{L}_][\p{L}\p{N}_]*", |lex| lex.slice()[1..].to_string())]
-    ContextRef(String),
+    #[regex(r"@[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(&lex.slice()[1..]))]
+    ContextRef(Astr),
 
     // ── Literals ──
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
@@ -143,9 +145,9 @@ impl fmt::Display for Token {
             Token::IntLit(n) => write!(f, "{n}"),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),
-            Token::Ident(s) => write!(f, "{s}"),
-            Token::VarRef(s) => write!(f, "${s}"),
-            Token::ContextRef(s) => write!(f, "@{s}"),
+            Token::Ident(_) => write!(f, "<ident>"),
+            Token::VarRef(_) => write!(f, "$<ref>"),
+            Token::ContextRef(_) => write!(f, "@<ref>"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::In => write!(f, "in"),

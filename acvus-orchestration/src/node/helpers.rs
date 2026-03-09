@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use acvus_coroutine::YieldHandle;
+use acvus_utils::{Astr, Interner, YieldHandle};
 use acvus_interpreter::{ExternFnRegistry, Interpreter, Stepped, Value};
 
 use crate::compile::CompiledScript;
@@ -11,12 +11,13 @@ use crate::message::{Content, Message, ToolSpec};
 use crate::provider::{ApiKind, Fetch};
 
 pub async fn render_block_in_coroutine(
+    interner: &Interner,
     module: &acvus_mir::ir::MirModule,
-    local: &HashMap<String, Arc<Value>>,
+    local: &HashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> String {
-    let interp = Interpreter::new(module.clone(), extern_fns);
+    let interp = Interpreter::new(interner, module.clone(), extern_fns);
     let (mut inner, mut key) = interp.execute();
     let mut output = String::new();
     loop {
@@ -30,7 +31,7 @@ pub async fn render_block_in_coroutine(
                 key = next_key;
             }
             Stepped::NeedContext(need) => {
-                let name = need.name().to_string();
+                let name = need.name();
                 if let Some(arc) = local.get(&name) {
                     key = need.into_key(Arc::clone(arc));
                 } else {
@@ -50,12 +51,13 @@ pub async fn render_block_in_coroutine(
 }
 
 pub async fn eval_script_in_coroutine(
+    interner: &Interner,
     script: &CompiledScript,
-    local: &HashMap<String, Arc<Value>>,
+    local: &HashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> Value {
-    let interp = Interpreter::new(script.module.clone(), extern_fns);
+    let interp = Interpreter::new(interner, script.module.clone(), extern_fns);
     let (mut inner, mut key) = interp.execute();
     loop {
         match inner.resume(key).await {
@@ -64,7 +66,7 @@ pub async fn eval_script_in_coroutine(
                 return value;
             }
             Stepped::NeedContext(need) => {
-                let name = need.name().to_string();
+                let name = need.name();
                 if let Some(arc) = local.get(&name) {
                     key = need.into_key(Arc::clone(arc));
                 } else {
@@ -95,12 +97,13 @@ pub async fn expand_iterator_in_coroutine(
     api: &ApiKind,
     expr: &CompiledScript,
     slice: &Option<Vec<i64>>,
-    role_override: &Option<String>,
-    local: &HashMap<String, Arc<Value>>,
+    role_override: &Option<Astr>,
+    interner: &Interner,
+    local: &HashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> Vec<Message> {
-    let evaluated = eval_script_in_coroutine(expr, local, extern_fns, handle).await;
+    let evaluated = eval_script_in_coroutine(interner, expr, local, extern_fns, handle).await;
 
     let all_items = match &evaluated {
         Value::List(items) => items.as_slice(),
@@ -118,6 +121,7 @@ pub async fn expand_iterator_in_coroutine(
         all_items
     };
 
+    let role_str = role_override.map(|r| interner.resolve(r).to_string());
     let mut messages = Vec::new();
     for item in items {
         let parts = match item {
@@ -125,8 +129,8 @@ pub async fn expand_iterator_in_coroutine(
             _ => panic!("expand_iterator: expected List item, got {item:?}"),
         };
         for part in parts {
-            let (part_role, part_text, part_content_type) = api.item_fields(part);
-            let role = role_override.as_deref().unwrap_or(part_role);
+            let (part_role, part_text, part_content_type) = api.item_fields(interner, part);
+            let role = role_str.as_deref().unwrap_or(part_role);
             let content = if part_content_type == "text" {
                 Content::Text(part_text.to_string())
             } else {
@@ -144,7 +148,10 @@ pub async fn expand_iterator_in_coroutine(
     messages
 }
 
-pub fn content_to_value(items: &[crate::message::ContentItem]) -> Value {
+pub fn content_to_value(interner: &Interner, items: &[crate::message::ContentItem]) -> Value {
+    let role_key = interner.intern("role");
+    let content_key = interner.intern("content");
+    let content_type_key = interner.intern("content_type");
     let values: Vec<Value> = items
         .iter()
         .map(|item| {
@@ -152,10 +159,10 @@ pub fn content_to_value(items: &[crate::message::ContentItem]) -> Value {
                 Content::Text(s) => (s.clone(), "text".to_string()),
                 Content::Blob { mime_type, data } => (data.clone(), mime_type.clone()),
             };
-            Value::Object(BTreeMap::from([
-                ("role".into(), Value::String(item.role.clone())),
-                ("content".into(), Value::String(content_str)),
-                ("content_type".into(), Value::String(content_type_str)),
+            Value::Object(HashMap::from([
+                (role_key, Value::String(item.role.clone())),
+                (content_key, Value::String(content_str)),
+                (content_type_key, Value::String(content_type_str)),
             ]))
         })
         .collect();
@@ -165,10 +172,15 @@ pub fn content_to_value(items: &[crate::message::ContentItem]) -> Value {
 pub fn value_to_tool_result(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
-        Value::Object(obj) => match obj.get("content") {
-            Some(Value::String(s)) => s.clone(),
-            _ => format!("{obj:?}"),
-        },
+        Value::Object(obj) => {
+            // Try to find "content" key by iterating
+            for (_, v) in obj {
+                if let Value::String(s) = v {
+                    return s.clone();
+                }
+            }
+            format!("{obj:?}")
+        }
         other => format!("{other:?}"),
     }
 }

@@ -1,3 +1,5 @@
+use acvus_utils::Astr;
+
 use crate::kind::NodeKind;
 
 /// Self specification — stored value = raw output (identity).
@@ -8,20 +10,20 @@ use crate::kind::NodeKind;
 #[derive(Debug, Clone)]
 pub struct SelfSpec {
     /// Optional initial state. When Some, @self is available in the node body.
-    pub initial_value: Option<String>,
+    pub initial_value: Option<Astr>,
 }
 
 /// Node specification — pure compilation input, no Serde.
 #[derive(Debug, Clone)]
 pub struct NodeSpec {
-    pub name: String,
+    pub name: Astr,
     pub kind: NodeKind,
     pub self_spec: SelfSpec,
     pub strategy: Strategy,
     /// Maximum retry count on RuntimeError. 0 = no retry.
     pub retry: u32,
     /// Assert script (must evaluate to Bool). If false, triggers retry.
-    pub assert: Option<String>,
+    pub assert: Option<Astr>,
 }
 
 /// Execution strategy — determines execution timing and @self storage location.
@@ -39,25 +41,25 @@ pub enum Strategy {
     OncePerTurn,
     /// Execute only when key changes. @self stored in storage (persistent).
     /// Unchanged key → previous @self retained.
-    IfModified { key: String },
+    IfModified { key: Astr },
     /// Execute once per turn. @self stored in storage (persistent).
     /// Evaluates history_bind (@self + other context → entry) and appends to @turn.history.{name}.
-    History { history_bind: String },
+    History { history_bind: Astr },
 }
 
 /// A message entry: either a template block or an iterator over a context key.
 #[derive(Debug, Clone)]
 pub enum MessageSpec {
     Block {
-        role: String,
+        role: Astr,
         source: String,
     },
     Iterator {
-        key: String,
+        key: Astr,
         /// Python-style slice: `[start]` or `[start, end]`. Negative = from end.
         slice: Option<Vec<i64>>,
         /// Override the role for all messages from this iterator.
-        role: Option<String>,
+        role: Option<Astr>,
         /// Token budget for this iterator.
         token_budget: Option<TokenBudget>,
     },

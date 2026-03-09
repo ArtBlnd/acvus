@@ -5,6 +5,7 @@ use acvus_mir::ir::{
     CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 use rand::Rng;
 use rand::rngs::StdRng;
 
@@ -28,7 +29,7 @@ pub struct MultiStageDecryptTable {
 }
 
 /// Register 12 multi-stage decrypt closure bodies into the module.
-pub fn register_multistage_decrypt_closures(module: &mut MirModule) -> MultiStageDecryptTable {
+pub fn register_multistage_decrypt_closures(module: &mut MirModule, interner: &Interner) -> MultiStageDecryptTable {
     let base_label = module.closures.keys().map(|l| l.0).max().unwrap_or(0) + 1;
     let base_label = base_label.max(module.main.label_count);
     for closure in module.closures.values() {
@@ -42,17 +43,17 @@ pub fn register_multistage_decrypt_closures(module: &mut MirModule) -> MultiStag
     for i in 0..4u32 {
         let label = Label(base_label + i);
         stage_a[i as usize] = label;
-        module.closures.insert(label, make_stage_a_closure_body(i));
+        module.closures.insert(label, make_stage_a_closure_body(i, interner));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 4 + i);
         stage_b[i as usize] = label;
-        module.closures.insert(label, make_stage_b_closure_body(i));
+        module.closures.insert(label, make_stage_b_closure_body(i, interner));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 8 + i);
         stage_c[i as usize] = label;
-        module.closures.insert(label, make_stage_c_closure_body(i));
+        module.closures.insert(label, make_stage_c_closure_body(i, interner));
     }
 
     let max_label = base_label + 12;
@@ -79,14 +80,14 @@ pub fn all_decrypt_labels(table: &MultiStageDecryptTable) -> Vec<Label> {
 // ── Stage A: transform_key ───────────────────────────────────────
 // (Int) → Int — key → subkey
 
-fn make_stage_a_closure_body(variant: u32) -> ClosureBody {
+fn make_stage_a_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let mut body = MirBody::new();
     let mut debug = DebugInfo::new();
 
     let v_key = ValueId(0);
     body.val_count = 1;
     body.val_types.insert(v_key, Ty::Int);
-    debug.set(v_key, ValOrigin::Named("key".into()));
+    debug.set(v_key, ValOrigin::Named(interner.intern("key")));
 
     let mut next_val = 1u32;
     let mut alloc = |ty: Ty| -> ValueId {
@@ -370,7 +371,7 @@ fn make_stage_a_closure_body(variant: u32) -> ClosureBody {
 
     ClosureBody {
         capture_names: vec![],
-        param_names: vec!["key".into()],
+        param_names: vec![interner.intern("key")],
         body,
     }
 }
@@ -392,7 +393,7 @@ pub fn stage_a_transform(variant: u32, key: i64) -> i64 {
 // ── Stage B: combine_keys ────────────────────────────────────────
 // (Int, Int) → Int — (subkey, key) → combined_key
 
-fn make_stage_b_closure_body(variant: u32) -> ClosureBody {
+fn make_stage_b_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let mut body = MirBody::new();
     let mut debug = DebugInfo::new();
 
@@ -401,8 +402,8 @@ fn make_stage_b_closure_body(variant: u32) -> ClosureBody {
     body.val_count = 2;
     body.val_types.insert(v_subkey, Ty::Int);
     body.val_types.insert(v_key, Ty::Int);
-    debug.set(v_subkey, ValOrigin::Named("subkey".into()));
-    debug.set(v_key, ValOrigin::Named("key".into()));
+    debug.set(v_subkey, ValOrigin::Named(interner.intern("subkey")));
+    debug.set(v_key, ValOrigin::Named(interner.intern("key")));
 
     let mut next_val = 2u32;
     let mut alloc = |ty: Ty| -> ValueId {
@@ -611,7 +612,7 @@ fn make_stage_b_closure_body(variant: u32) -> ClosureBody {
 
     ClosureBody {
         capture_names: vec![],
-        param_names: vec!["subkey".into(), "key".into()],
+        param_names: vec![interner.intern("subkey"), interner.intern("key")],
         body,
     }
 }
@@ -635,7 +636,7 @@ pub fn stage_b_combine(variant: u32, subkey: i64, key: i64) -> i64 {
 // ── Stage C: decrypt_final ───────────────────────────────────────
 // (List<Byte>, Int) → String — final decryption using combined_key
 
-fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
+fn make_stage_c_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let mut body = MirBody::new();
     let mut debug = DebugInfo::new();
 
@@ -644,8 +645,8 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
     body.val_count = 2;
     body.val_types.insert(v_bytes, Ty::bytes());
     body.val_types.insert(v_key, Ty::Int);
-    debug.set(v_bytes, ValOrigin::Named("bytes".into()));
-    debug.set(v_key, ValOrigin::Named("key".into()));
+    debug.set(v_bytes, ValOrigin::Named(interner.intern("bytes")));
+    debug.set(v_key, ValOrigin::Named(interner.intern("key")));
 
     let mut next_val = 2u32;
     let mut alloc = |ty: Ty| -> ValueId {
@@ -1052,7 +1053,7 @@ fn make_stage_c_closure_body(variant: u32) -> ClosureBody {
 
     ClosureBody {
         capture_names: vec![],
-        param_names: vec!["bytes".into(), "key".into()],
+        param_names: vec![interner.intern("bytes"), interner.intern("key")],
         body,
     }
 }
@@ -1197,6 +1198,7 @@ pub fn register_factory_closures(
     _inner_labels: &[Label; 4],
     inner_fn_ty: &Ty,
     name_prefix: &str,
+    interner: &Interner,
 ) -> FactoryTable {
     let base_label = module.closures.keys().map(|l| l.0).max().unwrap_or(0) + 1;
     let base_label = base_label.max(module.main.label_count);
@@ -1208,7 +1210,7 @@ pub fn register_factory_closures(
     for rotation in 0..4u32 {
         let label = Label(base_label + rotation);
         labels[rotation as usize] = label;
-        let body = make_factory_closure_body(rotation, inner_fn_ty);
+        let body = make_factory_closure_body(rotation, inner_fn_ty, interner);
         module.closures.insert(label, body);
         let _ = name_prefix; // for future debug info
     }
@@ -1227,7 +1229,7 @@ pub fn register_factory_closures(
 /// Captures: [fn0 (Val 0), fn1 (Val 1), fn2 (Val 2), fn3 (Val 3)]
 /// Params: [seed: Int (Val 4)]
 /// Returns: List<inner_fn_ty>
-fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty) -> ClosureBody {
+fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty, interner: &Interner) -> ClosureBody {
     let mut body = MirBody::new();
     let mut debug = DebugInfo::new();
 
@@ -1235,11 +1237,11 @@ fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty) -> ClosureBody {
     for i in 0..4u32 {
         let v = ValueId(i);
         body.val_types.insert(v, inner_fn_ty.clone());
-        debug.set(v, ValOrigin::Named(format!("fn{i}")));
+        debug.set(v, ValOrigin::Named(interner.intern(&format!("fn{i}"))));
     }
     let v_seed = ValueId(4);
     body.val_types.insert(v_seed, Ty::Int);
-    debug.set(v_seed, ValOrigin::Named("seed".into()));
+    debug.set(v_seed, ValOrigin::Named(interner.intern("seed")));
     body.val_count = 5;
 
     let mut next_val = 5u32;
@@ -1277,8 +1279,8 @@ fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty) -> ClosureBody {
     body.debug = debug;
 
     ClosureBody {
-        capture_names: vec!["fn0".into(), "fn1".into(), "fn2".into(), "fn3".into()],
-        param_names: vec!["seed".into()],
+        capture_names: vec![interner.intern("fn0"), interner.intern("fn1"), interner.intern("fn2"), interner.intern("fn3")],
+        param_names: vec![interner.intern("seed")],
         body,
     }
 }
@@ -1474,7 +1476,7 @@ fn emit_multistage_decrypt_call(
             span,
             InstKind::VarLoad {
                 dst: v_entangle,
-                name: "__entangle".into(),
+                name: ctx.interner.intern("__entangle"),
             },
         );
         let v_adj = ctx.alloc_val(Ty::Int);

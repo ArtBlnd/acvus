@@ -144,7 +144,7 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
         .first()
         .map(|i| i.span)
         .unwrap_or(acvus_ast::Span { start: 0, end: 0 });
-    let state_var = "__cff_state".to_string();
+    let state_var = ctx.interner.intern("__cff_state");
 
     let mut out = Vec::new();
 
@@ -458,6 +458,7 @@ mod tests {
     use super::*;
     use acvus_ast::{Literal, Span};
     use acvus_mir::ir::{DebugInfo, ValueId};
+    use acvus_utils::Interner;
     use rand::SeedableRng;
     use std::collections::HashMap;
 
@@ -466,12 +467,14 @@ mod tests {
     }
 
     fn make_ctx() -> PassState {
+        let interner = Interner::new();
         PassState {
             insts: Vec::new(),
             val_types: HashMap::new(),
             debug: DebugInfo::new(),
             next_val: 100,
             next_label: 100,
+            interner,
         }
     }
 
@@ -561,11 +564,12 @@ mod tests {
 
             let result = flatten(insts, &mut ctx, &mut rng);
 
+            let cff_state_name = ctx.interner.intern("__cff_state");
             let has_var_store = result.iter().any(
-                |i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__cff_state"),
+                |i| matches!(&i.kind, InstKind::VarStore { name, .. } if *name == cff_state_name),
             );
             let has_var_load = result.iter().any(
-                |i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__cff_state"),
+                |i| matches!(&i.kind, InstKind::VarLoad { name, .. } if *name == cff_state_name),
             );
 
             if has_var_store {

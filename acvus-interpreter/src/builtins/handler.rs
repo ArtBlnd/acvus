@@ -1,3 +1,5 @@
+use acvus_utils::get_thread_interner;
+
 use crate::error::RuntimeError;
 use crate::value::Value;
 
@@ -115,13 +117,15 @@ where
     T: IntoValue,
 {
     fn into_value(self) -> Value {
+        let interner = get_thread_interner()
+            .expect("IntoValue<Option>: requires interner context");
         match self {
             Some(v) => Value::Variant {
-                tag: "Some".into(),
+                tag: interner.intern("Some"),
                 payload: Some(Box::new(v.into_value())),
             },
             None => Value::Variant {
-                tag: "None".into(),
+                tag: interner.intern("None"),
                 payload: None,
             },
         }
@@ -133,12 +137,16 @@ where
     T: FromValue,
 {
     fn from_value(v: Value) -> Self {
+        let interner = get_thread_interner()
+            .expect("FromValue<Option>: requires interner context");
+        let some_tag = interner.intern("Some");
+        let none_tag = interner.intern("None");
         match v {
             Value::Variant {
                 tag,
                 payload: Some(inner),
-            } if tag == "Some" => Some(T::from_value(*inner)),
-            Value::Variant { tag, .. } if tag == "None" => None,
+            } if tag == some_tag => Some(T::from_value(*inner)),
+            Value::Variant { tag, .. } if tag == none_tag => None,
             _ => unreachable!("FromValue<Option<T>>: expected Variant, got {v:?}"),
         }
     }

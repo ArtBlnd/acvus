@@ -11,6 +11,7 @@ use acvus_orchestration::{
     compile_iterable_display, compile_static_display, render_display,
     render_display_with_idx,
 };
+use acvus_utils::{Astr, Interner};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -18,10 +19,10 @@ use wasm_bindgen_futures::JsFuture;
 use crate::default_registry;
 
 // ---------------------------------------------------------------------------
-// PureValue → serde_json::Value (plain JS-compatible representation)
+// PureValue -> serde_json::Value (plain JS-compatible representation)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn pure_to_json(v: &PureValue) -> serde_json::Value {
+pub(crate) fn pure_to_json(interner: &Interner, v: &PureValue) -> serde_json::Value {
     match v {
         PureValue::Unit => serde_json::Value::Null,
         PureValue::Int(n) => serde_json::json!(*n),
@@ -35,25 +36,28 @@ pub(crate) fn pure_to_json(v: &PureValue) -> serde_json::Value {
             inclusive,
         } => serde_json::json!({"start": start, "end": end, "inclusive": inclusive}),
         PureValue::List(items) => {
-            serde_json::Value::Array(items.iter().map(pure_to_json).collect())
+            serde_json::Value::Array(items.iter().map(|i| pure_to_json(interner, i)).collect())
         }
         PureValue::Object(map) => serde_json::Value::Object(
             map.iter()
-                .map(|(k, v)| (k.clone(), pure_to_json(v)))
+                .map(|(k, v)| (interner.resolve(*k).to_string(), pure_to_json(interner, v)))
                 .collect(),
         ),
         PureValue::Tuple(items) => {
-            serde_json::Value::Array(items.iter().map(pure_to_json).collect())
+            serde_json::Value::Array(items.iter().map(|i| pure_to_json(interner, i)).collect())
         }
-        PureValue::Variant { tag, payload } => match payload {
-            Some(p) => serde_json::json!({tag: pure_to_json(p)}),
-            None => serde_json::Value::String(tag.clone()),
-        },
+        PureValue::Variant { tag, payload } => {
+            let tag_str = interner.resolve(*tag).to_string();
+            match payload {
+                Some(p) => serde_json::json!({tag_str: pure_to_json(interner, p)}),
+                None => serde_json::Value::String(tag_str),
+            }
+        }
     }
 }
 
-/// serde_json::Value → PureValue (reverse of pure_to_json)
-fn json_to_pure(v: &serde_json::Value) -> Option<PureValue> {
+/// serde_json::Value -> PureValue (reverse of pure_to_json)
+fn json_to_pure(interner: &Interner, v: &serde_json::Value) -> Option<PureValue> {
     match v {
         serde_json::Value::Null => Some(PureValue::Unit),
         serde_json::Value::Bool(b) => Some(PureValue::Bool(*b)),
@@ -66,13 +70,13 @@ fn json_to_pure(v: &serde_json::Value) -> Option<PureValue> {
         }
         serde_json::Value::String(s) => Some(PureValue::String(s.clone())),
         serde_json::Value::Array(arr) => {
-            let items: Option<Vec<PureValue>> = arr.iter().map(json_to_pure).collect();
+            let items: Option<Vec<PureValue>> = arr.iter().map(|i| json_to_pure(interner, i)).collect();
             Some(PureValue::List(items?))
         }
         serde_json::Value::Object(map) => {
-            let items: Option<std::collections::BTreeMap<String, PureValue>> = map
+            let items: Option<HashMap<Astr, PureValue>> = map
                 .iter()
-                .map(|(k, v)| json_to_pure(v).map(|pv| (k.clone(), pv)))
+                .map(|(k, v)| json_to_pure(interner, v).map(|pv| (interner.intern(k), pv)))
                 .collect();
             Some(PureValue::Object(items?))
         }
@@ -80,7 +84,7 @@ fn json_to_pure(v: &serde_json::Value) -> Option<PureValue> {
 }
 
 // ---------------------------------------------------------------------------
-// UnsafeSend — WASM is single-threaded, safe to mark as Send
+// UnsafeSend -- WASM is single-threaded, safe to mark as Send
 // ---------------------------------------------------------------------------
 
 struct UnsafeSend<T>(T);
@@ -101,7 +105,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// WebFetch — browser fetch API
+// WebFetch -- browser fetch API
 // ---------------------------------------------------------------------------
 
 pub struct WebFetch;
@@ -156,7 +160,7 @@ impl acvus_orchestration::Fetch for WebFetch {
 }
 
 // ---------------------------------------------------------------------------
-// SessionStorage — Rust cache + JS callback for real-time sync
+// SessionStorage -- Rust cache + JS callback for real-time sync
 // ---------------------------------------------------------------------------
 
 /// SAFETY: WASM is single-threaded. js_sys::Function is !Send+!Sync but
@@ -168,6 +172,7 @@ unsafe impl Sync for SendSyncFunction {}
 pub struct SessionStorage {
     entries: HashMap<String, Arc<Value>>,
     on_change: Option<SendSyncFunction>,
+    interner: Interner,
 }
 
 impl Default for SessionStorage {
@@ -175,22 +180,24 @@ impl Default for SessionStorage {
         Self {
             entries: HashMap::new(),
             on_change: None,
+            interner: Interner::new(),
         }
     }
 }
 
 impl SessionStorage {
-    pub fn with_callback(on_change: js_sys::Function) -> Self {
+    pub fn with_callback(on_change: js_sys::Function, interner: &Interner) -> Self {
         Self {
             entries: HashMap::new(),
             on_change: Some(SendSyncFunction(on_change)),
+            interner: interner.clone(),
         }
     }
 
     fn notify(&self, key: &str, value: &Value) {
         let Some(ref cb) = self.on_change else { return };
         let js_key = JsValue::from_str(key);
-        let json_str = serde_json::to_string(&pure_to_json(&value.clone().into_pure()))
+        let json_str = serde_json::to_string(&pure_to_json(&self.interner, &value.clone().into_pure()))
             .unwrap_or_default();
 
         let js_val = js_sys::JSON::parse(&json_str).unwrap_or(JsValue::NULL);
@@ -227,7 +234,7 @@ impl SessionStorage {
         let map: HashMap<&str, serde_json::Value> = self
             .entries
             .iter()
-            .map(|(k, v)| (k.as_str(), pure_to_json(&v.as_ref().clone().into_pure())))
+            .map(|(k, v)| (k.as_str(), pure_to_json(&self.interner, &v.as_ref().clone().into_pure())))
             .collect();
         let json_str = serde_json::to_string(&map).unwrap_or_default();
         js_sys::JSON::parse(&json_str).unwrap_or(JsValue::NULL)
@@ -237,7 +244,7 @@ impl SessionStorage {
         self.export()
     }
 
-    pub fn import(js: JsValue, on_change: Option<js_sys::Function>) -> Self {
+    pub fn import(js: JsValue, on_change: Option<js_sys::Function>, interner: &Interner) -> Self {
         let json_str = js_sys::JSON::stringify(&js)
             .ok()
             .and_then(|s| s.as_string())
@@ -246,11 +253,11 @@ impl SessionStorage {
         let map: HashMap<String, serde_json::Value> =
             serde_json::from_str(&json_str).unwrap_or_default();
 
-        // Convert JSON values back to PureValue → Value
+        // Convert JSON values back to PureValue -> Value
         let entries: HashMap<String, Arc<Value>> = map
             .into_iter()
             .filter_map(|(k, v)| {
-                let pure = json_to_pure(&v)?;
+                let pure = json_to_pure(interner, &v)?;
                 let value = Value::from_pure(pure);
                 Some((k, Arc::new(value)))
             })
@@ -259,12 +266,13 @@ impl SessionStorage {
         Self {
             entries,
             on_change: on_change.map(SendSyncFunction),
+            interner: interner.clone(),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// ChatSession — wasm_bindgen wrapper around ChatEngine
+// ChatSession -- wasm_bindgen wrapper around ChatEngine
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -282,7 +290,8 @@ pub struct ChatSession {
     engine: acvus_chat::ChatEngine<SessionStorage>,
     /// Types of values stored in storage (node self types + @turn).
     /// Used for display compilation.
-    storage_types: HashMap<String, Ty>,
+    storage_types: HashMap<Astr, Ty>,
+    interner: Interner,
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +413,7 @@ enum StrategyConfig {
     History { history_bind: String },
 }
 
-fn convert_node(cfg: &NodeConfig) -> Result<NodeSpec, String> {
+fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, String> {
     let kind = match cfg.kind.as_str() {
         "llm" => {
             let api_str = cfg.api.as_ref()
@@ -423,9 +432,9 @@ fn convert_node(cfg: &NodeConfig) -> Result<NodeSpec, String> {
                 .filter_map(|m| {
                     if let Some(iter) = &m.iterator {
                         Some(MessageSpec::Iterator {
-                            key: iter.clone(),
+                            key: interner.intern(iter),
                             slice: m.slice.clone(),
-                            role: m.role.clone(),
+                            role: m.role.as_ref().map(|r| interner.intern(r)),
                             token_budget: m.token_budget.as_ref().map(|tb| TokenBudget {
                                 priority: tb.priority,
                                 min: tb.min,
@@ -439,7 +448,7 @@ fn convert_node(cfg: &NodeConfig) -> Result<NodeSpec, String> {
                             .or(m.template.as_ref())?
                             .clone();
                         Some(MessageSpec::Block {
-                            role: m.role.clone().unwrap_or_else(|| "user".into()),
+                            role: m.role.as_ref().map(|r| interner.intern(r)).unwrap_or_else(|| interner.intern("user")),
                             source,
                         })
                     }
@@ -488,7 +497,7 @@ fn convert_node(cfg: &NodeConfig) -> Result<NodeSpec, String> {
             let output_ty = cfg
                 .output_ty
                 .as_deref()
-                .and_then(crate::parse_ty)
+                .and_then(|s| crate::parse_ty(interner, s))
                 .unwrap_or(Ty::Infer);
             NodeKind::Expr(ExprSpec {
                 source: source.clone(),
@@ -508,19 +517,19 @@ fn convert_node(cfg: &NodeConfig) -> Result<NodeSpec, String> {
     let strategy = match &cfg.strategy {
         StrategyConfig::Always => Strategy::Always,
         StrategyConfig::OncePerTurn => Strategy::OncePerTurn,
-        StrategyConfig::IfModified { key } => Strategy::IfModified { key: key.clone() },
-        StrategyConfig::History { history_bind } => Strategy::History { history_bind: history_bind.clone() },
+        StrategyConfig::IfModified { key } => Strategy::IfModified { key: interner.intern(key) },
+        StrategyConfig::History { history_bind } => Strategy::History { history_bind: interner.intern(history_bind) },
     };
 
     Ok(NodeSpec {
-        name: cfg.name.clone(),
+        name: interner.intern(&cfg.name),
         kind,
         self_spec: SelfSpec {
-            initial_value: cfg.initial_value.clone(),
+            initial_value: cfg.initial_value.as_ref().map(|s| interner.intern(s)),
         },
         strategy,
         retry: cfg.retry,
-        assert: cfg.assert_script.clone(),
+        assert: cfg.assert_script.as_ref().map(|s| interner.intern(s)),
     })
 }
 
@@ -537,28 +546,31 @@ impl ChatSession {
         storage_js: JsValue,
         on_storage_change: Option<js_sys::Function>,
     ) -> Result<ChatSession, JsValue> {
+        let interner = Interner::new();
+
         let config: SessionConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         // Build context types from config
-        let mut context_types: HashMap<String, Ty> = HashMap::new();
+        let mut context_types: HashMap<Astr, Ty> = HashMap::new();
         for (name, decl) in &config.context {
             let ty_str = decl.ty.as_ref()
                 .ok_or_else(|| JsValue::from_str(&format!("context '{name}': missing type")))?;
-            let ty = crate::parse_ty(ty_str)
+            let ty = crate::parse_ty(&interner, ty_str)
                 .ok_or_else(|| JsValue::from_str(&format!("context '{name}': invalid type '{ty_str}'")))?;
-            context_types.insert(name.clone(), ty);
+            context_types.insert(interner.intern(name), ty);
         }
 
-        // Convert nodes — collect all errors
+        // Convert nodes -- collect all errors
         let specs: Vec<NodeSpec> = config.nodes.iter()
-            .map(convert_node)
+            .map(|n| convert_node(&interner, n))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| JsValue::from_str(&e))?;
 
-        // Compile — also compute full context_types (including node-derived @turn, @nodeName, etc.)
-        let extern_registry = default_registry();
+        // Compile -- also compute full context_types (including node-derived @turn, @nodeName, etc.)
+        let extern_registry = default_registry(&interner);
         let env = acvus_orchestration::compute_external_context_env(
+            &interner,
             &specs,
             &context_types,
             &extern_registry,
@@ -569,7 +581,7 @@ impl ChatSession {
         })?;
         let storage_types = env.storage_types.clone();
 
-        let compiled = acvus_orchestration::compile_nodes_with_env(&specs, &extern_registry, env)
+        let compiled = acvus_orchestration::compile_nodes_with_env(&interner, &specs, &extern_registry, env)
             .map_err(|errs| {
                 let msg = errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
                 JsValue::from_str(&msg)
@@ -595,15 +607,15 @@ impl ChatSession {
         // Storage: restore from IndexedDB or fresh, with real-time JS callback
         let storage = if storage_js.is_null() || storage_js.is_undefined() {
             match on_storage_change {
-                Some(cb) => SessionStorage::with_callback(cb),
-                None => SessionStorage::default(),
+                Some(cb) => SessionStorage::with_callback(cb, &interner),
+                None => SessionStorage { interner: interner.clone(), ..SessionStorage::default() },
             }
         } else {
-            SessionStorage::import(storage_js, on_storage_change)
+            SessionStorage::import(storage_js, on_storage_change, &interner)
         };
 
-        let mut extern_fns = ExternFnRegistry::new();
-        let regex_mod = acvus_ext::regex_module(&mut extern_fns);
+        let mut extern_fns = ExternFnRegistry::new(&interner);
+        let regex_mod = acvus_ext::regex_module(&interner, &mut extern_fns);
         let mut extern_reg = ExternRegistry::new();
         extern_reg.register(&regex_mod);
         drop(extern_reg); // only needed for compile, not runtime
@@ -616,30 +628,34 @@ impl ChatSession {
             storage,
             &config.entrypoint,
             &config.side_effects,
+            &interner,
         )
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        Ok(ChatSession { engine, storage_types })
+        Ok(ChatSession { engine, storage_types, interner })
     }
 
     /// Run one turn. `resolve_fn` is called when the engine needs an external
     /// context value (e.g. @input). It receives a key name string and must
     /// return a Promise<string>.
     pub async fn turn(&mut self, resolve_fn: &js_sys::Function) -> Result<JsValue, JsValue> {
-        // SAFETY: WASM is single-threaded — js_sys::Function is !Send+!Sync
+        // SAFETY: WASM is single-threaded -- js_sys::Function is !Send+!Sync
         // but there is no concurrent access.
         struct SendSyncFn(js_sys::Function);
         unsafe impl Send for SendSyncFn {}
         unsafe impl Sync for SendSyncFn {}
 
         let wrapped = SendSyncFn(resolve_fn.clone());
+        let interner = self.interner.clone();
 
-        let resolver = |key: String| {
+        let resolver = move |key: Astr| {
             let resolve_fn = wrapped.0.clone();
+            let interner = interner.clone();
             UnsafeSend(async move {
                 let this = JsValue::NULL;
-                let js_key = JsValue::from_str(&key);
+                let key_str = interner.resolve(key);
+                let js_key = JsValue::from_str(key_str);
                 let result = resolve_fn
                     .call1(&this, &js_key)
                     .unwrap_or(JsValue::UNDEFINED);
@@ -662,7 +678,7 @@ impl ChatSession {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let json = pure_to_json(&result.into_pure());
+        let json = pure_to_json(&self.interner, &result.into_pure());
         let json_str = serde_json::to_string(&json).map_err(|e| JsValue::from_str(&e.to_string()))?;
         js_sys::JSON::parse(&json_str).map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
@@ -686,18 +702,19 @@ impl ChatSession {
 
     /// Evaluate an iterator script against storage and return the list length.
     pub async fn display_list_len(&self, iterator_script: &str) -> Result<usize, JsValue> {
-        use acvus_coroutine::Stepped;
+        use acvus_utils::Stepped;
         use acvus_interpreter::Interpreter;
 
-        let registry = default_registry();
+        let registry = default_registry(&self.interner);
         let (compiled, _) = acvus_orchestration::compile_script(
+            &self.interner,
             iterator_script,
             &self.storage_types,
             &registry,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let interp = Interpreter::new(compiled.module.clone(), self.engine.extern_fns());
+        let interp = Interpreter::new(&self.interner, compiled.module.clone(), self.engine.extern_fns());
         let (mut coroutine, mut key) = interp.execute();
         loop {
             match coroutine.resume(key).await {
@@ -709,8 +726,8 @@ impl ChatSession {
                     return Ok(items.len());
                 }
                 Stepped::NeedContext(need) => {
-                    let name = need.name().to_string();
-                    let Some(value) = self.engine.state.storage.get(&name) else {
+                    let name = need.name();
+                    let Some(value) = self.engine.state.storage.get(self.interner.resolve(name)) else {
                         return Ok(0);
                     };
                     key = need.into_key(value);
@@ -745,14 +762,14 @@ impl ChatSession {
                 })
                 .collect(),
         };
-        let registry = default_registry();
-        let compiled = compile_iterable_display(&spec, &self.storage_types, &registry)
+        let registry = default_registry(&self.interner);
+        let compiled = compile_iterable_display(&self.interner, &spec, &self.storage_types, &registry)
             .map_err(|errs| {
                 let msg = errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
                 JsValue::from_str(&msg)
             })?;
         let result =
-            render_display_with_idx(&compiled, &self.engine.state.storage, self.engine.extern_fns(), index)
+            render_display_with_idx(&self.interner, &compiled, &self.engine.state.storage, self.engine.extern_fns(), index)
                 .await;
         let json_str = serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))?;
         js_sys::JSON::parse(&json_str).map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -763,14 +780,14 @@ impl ChatSession {
         let spec = StaticDisplaySpec {
             template: template.to_string(),
         };
-        let registry = default_registry();
-        let compiled = compile_static_display(&spec, &self.storage_types, &registry)
+        let registry = default_registry(&self.interner);
+        let compiled = compile_static_display(&self.interner, &spec, &self.storage_types, &registry)
             .map_err(|errs| {
                 let msg = errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
                 JsValue::from_str(&msg)
             })?;
         let result =
-            render_display(&compiled, &self.engine.state.storage, self.engine.extern_fns()).await;
+            render_display(&self.interner, &compiled, &self.engine.state.storage, self.engine.extern_fns()).await;
         let json_str = serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))?;
         js_sys::JSON::parse(&json_str).map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }

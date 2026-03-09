@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use acvus_ast::{BinOp, Literal, RangeKind};
 use acvus_mir::ir::{InstKind, Label, MirModule, ValueId};
+use acvus_utils::Astr;
 
 use crate::analysis::val_def::ValDefMap;
 
@@ -9,9 +10,9 @@ use crate::analysis::val_def::ValDefMap;
 #[derive(Debug, Clone, Default)]
 pub struct ContextKeyPartition {
     /// Keys on unconditionally reachable paths — fetch upfront.
-    pub eager: HashSet<String>,
+    pub eager: HashSet<Astr>,
     /// Keys behind unknown branch conditions — resolve lazily via coroutine.
-    pub lazy: HashSet<String>,
+    pub lazy: HashSet<Astr>,
 }
 
 /// Determine which context keys are actually needed by a MIR module,
@@ -26,9 +27,9 @@ pub struct ContextKeyPartition {
 /// already in `known`.
 pub fn reachable_context_keys(
     module: &MirModule,
-    known: &HashMap<String, Literal>,
+    known: &HashMap<Astr, Literal>,
     val_def: &ValDefMap,
-) -> HashSet<String> {
+) -> HashSet<Astr> {
     let p = partition_context_keys(module, known, val_def);
     let mut all = p.eager;
     all.extend(p.lazy);
@@ -44,7 +45,7 @@ pub fn reachable_context_keys(
 ///   — resolve on-demand via coroutine.
 pub fn partition_context_keys(
     module: &MirModule,
-    known: &HashMap<String, Literal>,
+    known: &HashMap<Astr, Literal>,
     val_def: &ValDefMap,
 ) -> ContextKeyPartition {
     let mut partition = ContextKeyPartition::default();
@@ -57,7 +58,7 @@ pub fn partition_context_keys(
             if let InstKind::ContextLoad { name, .. } = &inst.kind
                 && !known.contains_key(name)
             {
-                partition.lazy.insert(name.clone());
+                partition.lazy.insert(*name);
             }
         }
     }
@@ -163,7 +164,7 @@ enum Reach {
 
 fn partition_from_body(
     insts: &[acvus_mir::ir::Inst],
-    known: &HashMap<String, Literal>,
+    known: &HashMap<Astr, Literal>,
     val_def: &ValDefMap,
     partition: &mut ContextKeyPartition,
 ) {
@@ -261,7 +262,7 @@ fn partition_from_body(
             if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind
                 && !known.contains_key(name)
             {
-                target.insert(name.clone());
+                target.insert(*name);
             }
         }
     }
@@ -290,7 +291,7 @@ fn try_eval_condition(
     cond: ValueId,
     insts: &[acvus_mir::ir::Inst],
     val_def: &ValDefMap,
-    known: &HashMap<String, Literal>,
+    known: &HashMap<Astr, Literal>,
 ) -> Option<bool> {
     let &def_idx = val_def.0.get(&cond)?;
 
@@ -346,10 +347,10 @@ fn trace_to_context_load(
     val: ValueId,
     insts: &[acvus_mir::ir::Inst],
     val_def: &ValDefMap,
-) -> Option<String> {
+) -> Option<Astr> {
     let &idx = val_def.0.get(&val)?;
     match &insts[idx].kind {
-        InstKind::ContextLoad { name, .. } => Some(name.clone()),
+        InstKind::ContextLoad { name, .. } => Some(*name),
         _ => None,
     }
 }
@@ -371,6 +372,7 @@ mod tests {
     use super::*;
     use acvus_ast::Span;
     use acvus_mir::ir::{DebugInfo, Inst, MirBody};
+    use acvus_utils::Interner;
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
@@ -403,59 +405,54 @@ mod tests {
     /// No branches — all context loads are needed.
     #[test]
     fn no_branches_all_needed() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "user".into(),
+                name: i.intern("user"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(1),
-                name: "role".into(),
+                name: i.intern("role"),
                 bindings: Vec::new(),
             }),
         ]);
         let val_def = build_val_def(&module);
         let needed = reachable_context_keys(&module, &HashMap::new(), &val_def);
-        assert_eq!(needed, HashSet::from(["user".into(), "role".into()]));
+        assert_eq!(needed, HashSet::from([i.intern("user"), i.intern("role")]));
     }
 
     /// Known context key is excluded from needed set.
     #[test]
     fn known_key_excluded() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "user".into(),
+                name: i.intern("user"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(1),
-                name: "role".into(),
+                name: i.intern("role"),
                 bindings: Vec::new(),
             }),
         ]);
         let val_def = build_val_def(&module);
-        let known = HashMap::from([("user".into(), Literal::String("alice".into()))]);
+        let known = HashMap::from([(i.intern("user"), Literal::String("alice".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
-        assert_eq!(needed, HashSet::from(["role".into()]));
+        assert_eq!(needed, HashSet::from([i.intern("role")]));
     }
 
     /// Match on known context value — dead branch pruned.
-    ///
-    /// ```text
-    /// r0 = context_load @mode           // known: "search"
-    /// r1 = test r0 == "search"
-    /// jump_if r1 then L1 else L2
-    /// L1:  r2 = context_load @query     // live (mode == "search")
-    /// L2:  r3 = context_load @fallback  // dead
-    /// ```
     #[test]
     fn branch_then_taken() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "mode".into(),
+                name: i.intern("mode"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
@@ -476,7 +473,7 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "query".into(),
+                name: i.intern("query"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
@@ -486,28 +483,29 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
-                name: "fallback".into(),
+                name: i.intern("fallback"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([("mode".into(), Literal::String("search".into()))]);
+        let known = HashMap::from([(i.intern("mode"), Literal::String("search".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains("query"));
-        assert!(!needed.contains("fallback"));
-        assert!(!needed.contains("mode")); // already known
+        assert!(needed.contains(&i.intern("query")));
+        assert!(!needed.contains(&i.intern("fallback")));
+        assert!(!needed.contains(&i.intern("mode"))); // already known
     }
 
     /// Match on known context value — else branch taken.
     #[test]
     fn branch_else_taken() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "mode".into(),
+                name: i.intern("mode"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
@@ -528,7 +526,7 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "query".into(),
+                name: i.intern("query"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
@@ -538,27 +536,28 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
-                name: "fallback".into(),
+                name: i.intern("fallback"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([("mode".into(), Literal::String("other".into()))]);
+        let known = HashMap::from([(i.intern("mode"), Literal::String("other".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(!needed.contains("query"));
-        assert!(needed.contains("fallback"));
+        assert!(!needed.contains(&i.intern("query")));
+        assert!(needed.contains(&i.intern("fallback")));
     }
 
     /// Unknown condition — both branches are live (conservative).
     #[test]
     fn unknown_condition_both_live() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "mode".into(),
+                name: i.intern("mode"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
@@ -579,7 +578,7 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "query".into(),
+                name: i.intern("query"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
@@ -589,35 +588,29 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
-                name: "fallback".into(),
+                name: i.intern("fallback"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
 
         let val_def = build_val_def(&module);
-        // mode is NOT known → can't evaluate condition
+        // mode is NOT known -> can't evaluate condition
         let needed = reachable_context_keys(&module, &HashMap::new(), &val_def);
 
-        assert!(needed.contains("mode"));
-        assert!(needed.contains("query"));
-        assert!(needed.contains("fallback"));
+        assert!(needed.contains(&i.intern("mode")));
+        assert!(needed.contains(&i.intern("query")));
+        assert!(needed.contains(&i.intern("fallback")));
     }
 
     /// Nested match — chained dead branch elimination.
-    ///
-    /// ```text
-    /// r0 = context_load @role       // known: "admin"
-    /// test r0 == "admin" → L3 (then), L1 (else)
-    /// L3: r2 = context_load @level  // live
-    /// L1: r6 = const "guest"        // dead
-    /// ```
     #[test]
     fn nested_match_known_condition() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "role".into(),
+                name: i.intern("role"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
@@ -632,35 +625,32 @@ mod tests {
                 else_label: Label(1),
                 else_args: vec![],
             }),
-            // L3: admin branch
             inst(InstKind::BlockLabel {
                 label: Label(3),
                 params: vec![],
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "level".into(),
+                name: i.intern("level"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
                 args: vec![],
             }),
-            // L1: else branch
             inst(InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
-                name: "guest_data".into(),
+                name: i.intern("guest_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
                 args: vec![],
             }),
-            // L0: merge
             inst(InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
@@ -668,20 +658,21 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([("role".into(), Literal::String("admin".into()))]);
+        let known = HashMap::from([(i.intern("role"), Literal::String("admin".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains("level"));
-        assert!(!needed.contains("guest_data"));
+        assert!(needed.contains(&i.intern("level")));
+        assert!(!needed.contains(&i.intern("guest_data")));
     }
 
     /// Range test with known value.
     #[test]
     fn range_condition_evaluated() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "level".into(),
+                name: i.intern("level"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::TestRange {
@@ -704,7 +695,7 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "low_data".into(),
+                name: i.intern("low_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
@@ -714,40 +705,30 @@ mod tests {
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
-                name: "high_data".into(),
+                name: i.intern("high_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
 
         let val_def = build_val_def(&module);
-        // level = 5, in range [1, 10) → then branch live
-        let known = HashMap::from([("level".into(), Literal::Int(5))]);
+        let known = HashMap::from([(i.intern("level"), Literal::Int(5))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains("low_data"));
-        assert!(!needed.contains("high_data"));
+        assert!(needed.contains(&i.intern("low_data")));
+        assert!(!needed.contains(&i.intern("high_data")));
     }
 
     /// Multi-arm match — chained tests, middle arm matched.
-    ///
-    /// ```text
-    /// r0 = context_load @role       // known: "user"
-    /// test r0 == "admin" → L_admin, L_next
-    /// L_next: test r0 == "user" → L_user, L_default
-    /// L_admin: context_load @admin_data     // dead
-    /// L_user:  context_load @user_data      // live
-    /// L_default: context_load @default_data // dead
-    /// ```
     #[test]
     fn multi_arm_match_middle() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
-                name: "role".into(),
+                name: i.intern("role"),
                 bindings: Vec::new(),
             }),
-            // Test "admin"
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
                 src: ValueId(0),
@@ -760,21 +741,19 @@ mod tests {
                 else_label: Label(20),
                 else_args: vec![],
             }),
-            // L10: admin arm
             inst(InstKind::BlockLabel {
                 label: Label(10),
                 params: vec![],
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
-                name: "admin_data".into(),
+                name: i.intern("admin_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
             }),
-            // L20: next test
             inst(InstKind::BlockLabel {
                 label: Label(20),
                 params: vec![],
@@ -791,35 +770,32 @@ mod tests {
                 else_label: Label(40),
                 else_args: vec![],
             }),
-            // L30: user arm
             inst(InstKind::BlockLabel {
                 label: Label(30),
                 params: vec![],
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(4),
-                name: "user_data".into(),
+                name: i.intern("user_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
             }),
-            // L40: default arm
             inst(InstKind::BlockLabel {
                 label: Label(40),
                 params: vec![],
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(5),
-                name: "default_data".into(),
+                name: i.intern("default_data"),
                 bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
             }),
-            // L99: merge
             inst(InstKind::BlockLabel {
                 label: Label(99),
                 params: vec![],
@@ -827,11 +803,11 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([("role".into(), Literal::String("user".into()))]);
+        let known = HashMap::from([(i.intern("role"), Literal::String("user".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(!needed.contains("admin_data"));
-        assert!(needed.contains("user_data"));
-        assert!(!needed.contains("default_data"));
+        assert!(!needed.contains(&i.intern("admin_data")));
+        assert!(needed.contains(&i.intern("user_data")));
+        assert!(!needed.contains(&i.intern("default_data")));
     }
 }

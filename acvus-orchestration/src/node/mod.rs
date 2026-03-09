@@ -4,6 +4,7 @@ mod llm;
 mod llm_cache;
 mod plain;
 
+use acvus_utils::{Astr, Interner};
 pub use expr::ExprNode;
 pub use llm::LlmNode;
 pub use llm_cache::LlmCacheNode;
@@ -21,7 +22,7 @@ use crate::provider::{Fetch, ProviderConfig};
 pub trait Node: Send + Sync {
     fn spawn(
         &self,
-        local_context: HashMap<String, Arc<Value>>,
+        local_context: HashMap<Astr, Arc<Value>>,
     ) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>);
 }
 
@@ -32,6 +33,7 @@ pub fn build_node_table<F>(
     providers: &HashMap<String, ProviderConfig>,
     fetch: Arc<F>,
     extern_fns: &ExternFnRegistry,
+    interner: &Interner,
 ) -> Vec<Arc<dyn Node>>
 where
     F: Fetch + 'static,
@@ -41,10 +43,10 @@ where
         .map(|node| -> Arc<dyn Node> {
             match &node.kind {
                 crate::kind::CompiledNodeKind::Plain(plain) => {
-                    Arc::new(PlainNode::new(plain.block.module.clone(), extern_fns))
+                    Arc::new(PlainNode::new(plain.block.module.clone(), extern_fns, interner))
                 }
                 crate::kind::CompiledNodeKind::Expr(expr) => {
-                    Arc::new(ExprNode::new(expr.script.module.clone(), extern_fns))
+                    Arc::new(ExprNode::new(expr.script.module.clone(), extern_fns, interner))
                 }
                 crate::kind::CompiledNodeKind::Llm(llm) => {
                     let provider_config = providers
@@ -56,6 +58,7 @@ where
                         provider_config,
                         Arc::clone(&fetch),
                         extern_fns,
+                        interner,
                     ))
                 }
                 crate::kind::CompiledNodeKind::LlmCache(cache) => {
@@ -68,6 +71,7 @@ where
                         provider_config,
                         Arc::clone(&fetch),
                         extern_fns,
+                        interner,
                     ))
                 }
             }

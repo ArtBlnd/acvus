@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -7,16 +7,19 @@ use futures::future::BoxFuture;
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::{CallTarget, Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_utils::Astr;
+use acvus_utils::Interner;
 
 use crate::builtins;
 use crate::error::RuntimeError;
 use crate::extern_fn::{ExternFnBody, ExternFnRegistry};
 use crate::value::{FnValue, Value};
-use acvus_coroutine::{Coroutine, ResumeKey, Stepped, YieldHandle};
+use acvus_utils::{Coroutine, ResumeKey, Stepped, YieldHandle};
 
 pub struct Interpreter {
+    interner: Interner,
     module: MirModule,
-    variables: HashMap<String, Arc<Value>>,
+    variables: HashMap<Astr, Arc<Value>>,
     extern_fn_table: Vec<ExternFnBody>,
 }
 
@@ -199,9 +202,10 @@ fn build_label_map(body: &MirBody) -> HashMap<Label, usize> {
 // ---------------------------------------------------------------------------
 
 impl Interpreter {
-    pub fn new(module: MirModule, extern_fns: &ExternFnRegistry) -> Self {
+    pub fn new(interner: &Interner, module: MirModule, extern_fns: &ExternFnRegistry) -> Self {
         let extern_fn_table = extern_fns.build_id_table(&module.extern_names);
         Self {
+            interner: interner.clone(),
             module,
             variables: HashMap::new(),
             extern_fn_table,
@@ -209,7 +213,8 @@ impl Interpreter {
     }
 
     pub fn execute(self) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
-        acvus_coroutine::coroutine(|handle| async move {
+        acvus_utils::coroutine(|handle| async move {
+            acvus_utils::set_thread_interner(&self.interner);
             let insts = self.module.main.insts.clone();
             let label_map = build_label_map(&self.module.main);
             let frame = Frame::new(self.module.main.val_count, label_map);
@@ -218,7 +223,7 @@ impl Interpreter {
         })
     }
 
-    pub async fn execute_to_string(self, context: HashMap<String, Value>) -> String {
+    pub async fn execute_to_string(self, context: HashMap<Astr, Value>) -> String {
         let (mut coroutine, mut key) = self.execute();
         let mut output = String::new();
         loop {
@@ -232,7 +237,7 @@ impl Interpreter {
                     key = next_key;
                 }
                 Stepped::NeedContext(need) => {
-                    let name = need.name().to_string();
+                    let name = need.name();
                     let v = context
                         .get(&name)
                         .unwrap_or_else(|| panic!("ContextLoad: undefined context @{name}"));
@@ -280,9 +285,9 @@ impl Interpreter {
                     frame.set_new(*dst, Value::List(items));
                 }
                 InstKind::MakeObject { dst, fields } => {
-                    let obj: BTreeMap<String, Value> = fields
+                    let obj: HashMap<Astr, Value> = fields
                         .iter()
-                        .map(|(k, v)| (k.clone(), frame.take_owned(*v)))
+                        .map(|(k, v)| (*k, frame.take_owned(*v)))
                         .collect();
                     frame.set_new(*dst, Value::Object(obj));
                 }
@@ -341,14 +346,14 @@ impl Interpreter {
                 // -- access --
                 InstKind::FieldGet { dst, object, field } => {
                     let v = expect_object(frame.get(*object), "FieldGet")
-                        .get(field.as_str())
+                        .get(field)
                         .unwrap_or_else(|| panic!("FieldGet: key '{field}' not found"))
                         .clone();
                     frame.set_new(*dst, v);
                 }
                 InstKind::ObjectGet { dst, object, key } => {
                     let v = expect_object(frame.get(*object), "ObjectGet")
-                        .get(key.as_str())
+                        .get(key)
                         .unwrap_or_else(|| panic!("ObjectGet: key '{key}' not found"))
                         .clone();
                     frame.set_new(*dst, v);
@@ -385,7 +390,7 @@ impl Interpreter {
                 // -- variant --
                 InstKind::MakeVariant { dst, tag, payload } => {
                     let p = payload.as_ref().map(|v| Box::new(frame.take_owned(*v)));
-                    let tag_name = this.module.tag_names[tag.0 as usize].clone();
+                    let tag_name = this.module.tag_names[tag.0 as usize];
                     frame.set_new(
                         *dst,
                         Value::Variant {
@@ -398,8 +403,8 @@ impl Interpreter {
                     let Value::Variant { tag: t, .. } = frame.get(*src) else {
                         panic!("TestVariant: expected Variant, got {:?}", frame.get(*src));
                     };
-                    let tag_name = &this.module.tag_names[tag.0 as usize];
-                    frame.set_new(*dst, Value::Bool(t == tag_name));
+                    let tag_name = this.module.tag_names[tag.0 as usize];
+                    frame.set_new(*dst, Value::Bool(*t == tag_name));
                 }
                 InstKind::UnwrapVariant { dst, src } => {
                     let Value::Variant {
@@ -436,7 +441,7 @@ impl Interpreter {
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
                     let ok =
-                        expect_object(frame.get(*src), "TestObjectKey").contains_key(key.as_str());
+                        expect_object(frame.get(*src), "TestObjectKey").contains_key(key);
                     frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestRange {
@@ -472,15 +477,15 @@ impl Interpreter {
                     bindings,
                 } => {
                     if bindings.is_empty() {
-                        let arc = handle.request_context(name.clone()).await;
+                        let arc = handle.request_context(*name).await;
                         frame.set(*dst, arc);
                     } else {
-                        let binding_values: HashMap<String, Value> = bindings
+                        let binding_values: HashMap<Astr, Value> = bindings
                             .iter()
-                            .map(|(k, vid)| (k.clone(), frame.get(*vid).clone()))
+                            .map(|(k, vid)| (*k, frame.get(*vid).clone()))
                             .collect();
                         let arc = handle
-                            .request_context_with(name.clone(), binding_values)
+                            .request_context_with(*name, binding_values)
                             .await;
                         frame.set(*dst, arc);
                     }
@@ -493,7 +498,7 @@ impl Interpreter {
                     frame.set(*dst, Arc::clone(v));
                 }
                 InstKind::VarStore { name, src } => {
-                    this.variables.insert(name.clone(), frame.take(*src));
+                    this.variables.insert(*name, frame.take(*src));
                 }
 
                 // -- calls (async, ownership-passing) --
@@ -794,7 +799,7 @@ fn expect_list<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
     }
 }
 
-fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a BTreeMap<String, Value> {
+fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a HashMap<Astr, Value> {
     match v {
         Value::Object(fields) => fields,
         _ => panic!("{ctx}: expected Object, got {v:?}"),

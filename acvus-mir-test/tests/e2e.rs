@@ -1,33 +1,48 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
+use acvus_utils::{Astr, Interner};
 use acvus_mir_test::*;
+
+/// Helper: build a context HashMap<Astr, Ty> from string pairs.
+fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> HashMap<Astr, Ty> {
+    pairs.iter().map(|(k, v)| (i.intern(k), v.clone())).collect()
+}
+
+/// Helper: build an Object type from string-keyed fields.
+fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
+    Ty::Object(fields.iter().map(|(k, v)| (i.intern(k), v.clone())).collect())
+}
 
 // ── Text & literals ──────────────────────────────────────────────
 
 #[test]
 fn text_only() {
-    let ir = compile_simple("hello world").unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, "hello world").unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn string_emit() {
-    let ir = compile_simple(r#"{{ "hello" }}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ "hello" }}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn string_concat() {
-    let ir = compile_simple(r#"{{ "hello" + " " + "world" }}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ "hello" + " " + "world" }}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn mixed_text_and_expr() {
-    let context = HashMap::from([("name".into(), Ty::String)]);
-    let ir = compile_to_ir("Hello, {{ @name }}!", &context, &ExternRegistry::new()).unwrap();
+    let i = Interner::new();
+    let context = ctx(&i, &[("name", Ty::String)]);
+    let ir = compile_to_ir(&i, "Hello, {{ @name }}!", &context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -35,20 +50,23 @@ fn mixed_text_and_expr() {
 
 #[test]
 fn context_read() {
-    let context = HashMap::from([("count".into(), Ty::Int)]);
-    let ir = compile_to_ir("{{ @count | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let i = Interner::new();
+    let context = ctx(&i, &[("count", Ty::Int)]);
+    let ir = compile_to_ir(&i, "{{ @count | to_string }}", &context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn variable_write() {
-    let ir = compile_simple("{{ $count = 42 }}").unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, "{{ $count = 42 }}").unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn context_field_access() {
-    let ir = compile_to_ir("{{ @user.name }}", &user_context(), &ExternRegistry::new()).unwrap();
+    let i = Interner::new();
+    let ir = compile_to_ir(&i, "{{ @user.name }}", &user_context(&i), &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -56,8 +74,9 @@ fn context_field_access() {
 
 #[test]
 fn arithmetic_to_string() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
-    let ir = compile_to_ir("{{ @a + @b | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let ir = compile_to_ir(&i, "{{ @a + @b | to_string }}", &context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -65,16 +84,19 @@ fn arithmetic_to_string() {
 
 #[test]
 fn simple_match_binding() {
-    let context = HashMap::from([("name".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("name", Ty::String)]);
     // Variable binding is body-less — defines x in current scope.
-    let ir = compile_to_ir(r#"{{ x = @name }}{{ x }}"#, &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(&i, r#"{{ x = @name }}{{ x }}"#, &context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn match_literal_filter() {
-    let context = HashMap::from([("role".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ "admin" = @role }}admin page{{_}}guest page{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -85,8 +107,10 @@ fn match_literal_filter() {
 
 #[test]
 fn multi_arm_match() {
-    let context = HashMap::from([("role".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ "admin" = @role }}admin{{ "user" = }}user{{_}}guest{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -97,10 +121,12 @@ fn multi_arm_match() {
 
 #[test]
 fn iteration_over_list() {
+    let i = Interner::new();
     // Use object destructuring to iterate and extract name.
     let ir = compile_to_ir(
+        &i,
         r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
-        &users_list_context(),
+        &users_list_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -109,21 +135,20 @@ fn iteration_over_list() {
 
 #[test]
 fn nested_match() {
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[
+            ("name", Ty::String),
             (
-                "posts".into(),
-                Ty::List(Box::new(Ty::Object(BTreeMap::from([(
-                    "title".into(),
-                    Ty::String,
-                )])))),
+                "posts",
+                Ty::List(Box::new(obj(&i, &[("title", Ty::String)]))),
             ),
-        ])))),
+        ]))),
     )]);
     // Use object destructuring for both outer and inner iterations.
     let ir = compile_to_ir(
+        &i,
         r#"{{ { name, posts, } in @users }}{{ { title, } in posts }}{{ title }}{{/}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -136,9 +161,11 @@ fn nested_match() {
 
 #[test]
 fn list_destructure_head() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -149,9 +176,11 @@ fn list_destructure_head() {
 
 #[test]
 fn object_pattern() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ { name, age, } = @user }}{{ name }}{{/}}"#,
-        &user_context(),
+        &user_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -163,21 +192,25 @@ fn object_pattern() {
 #[test]
 fn range_binding() {
     // Variable binding captures a range value; iterate to emit scalar elements.
-    let ir = compile_simple(r#"{{ x in 0..5 }}{{ x | to_string }}{{/}}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ x in 0..5 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn range_iteration() {
     // Explicit iteration with `in`.
-    let ir = compile_simple(r#"{{ x in 0..3 }}{{ x | to_string }}{{/}}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ x in 0..3 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn range_pattern() {
-    let context = HashMap::from([("age".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("age", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -190,10 +223,12 @@ fn range_pattern() {
 
 #[test]
 fn pipe_filter_map() {
+    let i = Interner::new();
     // Variable binding is body-less.
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | filter(x -> x != 0) | map(x -> x + 1) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -202,8 +237,9 @@ fn pipe_filter_map() {
 
 #[test]
 fn pipe_to_string() {
-    let context = HashMap::from([("n".into(), Ty::Int)]);
-    let ir = compile_to_ir("{{ @n | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let i = Interner::new();
+    let context = ctx(&i, &[("n", Ty::Int)]);
+    let ir = compile_to_ir(&i, "{{ @n | to_string }}", &context, &ExternRegistry::new()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -211,10 +247,12 @@ fn pipe_to_string() {
 
 #[test]
 fn lambda_in_filter() {
+    let i = Interner::new();
     // Variable binding is body-less.
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -226,12 +264,14 @@ fn lambda_in_filter() {
 #[test]
 fn extern_async_call() {
     use acvus_mir::extern_module::ExternModule;
-    let mut ext = ExternModule::new("test");
-    ext.add_fn("fetch_user", vec![Ty::Int], Ty::String, false);
+    let i = Interner::new();
+    let mut ext = ExternModule::new(i.intern("test"));
+    ext.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
     let mut registry = ExternRegistry::new();
     registry.register(&ext);
     // Variable binding is body-less.
     let ir = compile_to_ir(
+        &i,
         r#"{{ user = fetch_user(1) }}{{ user }}"#,
         &HashMap::new(),
         &registry,
@@ -244,8 +284,10 @@ fn extern_async_call() {
 
 #[test]
 fn tuple_expression() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (a, b) = (@a, @b) }}{{ a | to_string }}{{ b }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -256,8 +298,10 @@ fn tuple_expression() {
 
 #[test]
 fn tuple_pattern_binding() {
-    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -268,8 +312,10 @@ fn tuple_pattern_binding() {
 
 #[test]
 fn tuple_pattern_wildcard() {
-    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::String, Ty::Int]))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -280,8 +326,10 @@ fn tuple_pattern_wildcard() {
 
 #[test]
 fn tuple_pattern_literal_match() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -292,14 +340,16 @@ fn tuple_pattern_literal_match() {
 
 #[test]
 fn tuple_nested_destructure() {
-    let context = HashMap::from([(
-        "data".into(),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "data",
         Ty::Tuple(vec![
             Ty::String,
-            Ty::Object(BTreeMap::from([("x".into(), Ty::Int)])),
+            obj(&i, &[("x", Ty::Int)]),
         ]),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (label, { x, }) = @data }}{{ label }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -310,8 +360,10 @@ fn tuple_nested_destructure() {
 
 #[test]
 fn error_tuple_arity_mismatch() {
-    let context = HashMap::from([("pair".into(), Ty::Tuple(vec![Ty::Int, Ty::Int]))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::Int, Ty::Int]))]);
     let result = compile_to_ir(
+        &i,
         r#"{{ (a, b, c) = @pair }}{{ a | to_string }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -324,14 +376,17 @@ fn error_tuple_arity_mismatch() {
 
 #[test]
 fn error_emit_non_string() {
-    let result = compile_simple("{{ 42 }}");
+    let i = Interner::new();
+    let result = compile_simple(&i, "{{ 42 }}");
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
 
 #[test]
 fn error_undefined_context() {
+    let i = Interner::new();
     let result = compile_to_ir(
+        &i,
         "{{ @unknown | to_string }}",
         &HashMap::new(),
         &ExternRegistry::new(),
@@ -342,7 +397,9 @@ fn error_undefined_context() {
 
 #[test]
 fn error_undefined_variable() {
+    let i = Interner::new();
     let result = compile_to_ir(
+        &i,
         "{{ x = unknown }}{{_}}{{/}}",
         &HashMap::new(),
         &ExternRegistry::new(),
@@ -353,14 +410,16 @@ fn error_undefined_variable() {
 
 #[test]
 fn error_type_mismatch() {
-    let result = compile_simple(r#"{{ x = 1 + 2.0 }}{{_}}{{/}}"#);
+    let i = Interner::new();
+    let result = compile_simple(&i, r#"{{ x = 1 + 2.0 }}{{_}}{{/}}"#);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
 
 #[test]
 fn error_range_float_bounds() {
-    let result = compile_simple("{{ x = 1.0..2.0 }}{{_}}{{/}}");
+    let i = Interner::new();
+    let result = compile_simple(&i, "{{ x = 1.0..2.0 }}{{_}}{{/}}");
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -369,8 +428,10 @@ fn error_range_float_bounds() {
 
 #[test]
 fn iter_list_binding() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ x in @items }}{{ x | to_string }}{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -381,9 +442,11 @@ fn iter_list_binding() {
 
 #[test]
 fn iter_object_destructure() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         "{{ { name, } in @users }}{{ name }}{{/}}",
-        &users_list_context(),
+        &users_list_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -392,11 +455,13 @@ fn iter_object_destructure() {
 
 #[test]
 fn iter_tuple_destructure() {
-    let context = HashMap::from([(
-        "pairs".into(),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "pairs",
         Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         "{{ (a, _) in @pairs }}{{ a }}{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -407,8 +472,10 @@ fn iter_tuple_destructure() {
 
 #[test]
 fn iter_with_catch_all() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ x in @items }}{{ x | to_string }}{{_}}empty{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -419,8 +486,10 @@ fn iter_with_catch_all() {
 
 #[test]
 fn error_iter_refutable_pattern() {
-    let context = HashMap::from([("roles".into(), Ty::List(Box::new(Ty::String)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("roles", Ty::List(Box::new(Ty::String)))]);
     let result = compile_to_ir(
+        &i,
         r#"{{ "admin" in @roles }}...{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -430,8 +499,10 @@ fn error_iter_refutable_pattern() {
 
 #[test]
 fn error_iter_not_iterable() {
-    let context = HashMap::from([("name".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("name", Ty::String)]);
     let result = compile_to_ir(
+        &i,
         "{{ x in @name }}{{ x }}{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -443,9 +514,11 @@ fn error_iter_not_iterable() {
 
 #[test]
 fn variable_new_ref_binding() {
+    let i = Interner::new();
     // $result is not in initial context — dynamically created via $-binding.
-    let context = HashMap::from([("name".into(), Ty::String)]);
+    let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ $result = @name }}{{ $result }}"#,
         &context,
         &ExternRegistry::new(),
@@ -456,9 +529,11 @@ fn variable_new_ref_binding() {
 
 #[test]
 fn variable_new_ref_in_match_arm() {
+    let i = Interner::new();
     // $selected is created inside a match arm, then read after the match.
-    let context = HashMap::from([("role".into(), Ty::String)]);
+    let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ "admin" = @role }}{{ $selected = "yes" }}{{_}}{{ $selected = "no" }}{{/}}{{ $selected }}"#,
         &context,
         &ExternRegistry::new(),
@@ -471,12 +546,14 @@ fn variable_new_ref_in_match_arm() {
 
 #[test]
 fn list_of_tuples_destructure() {
+    let i = Interner::new();
     // Iterate over list of tuples, destructure each.
-    let context = HashMap::from([(
-        "pairs".into(),
+    let context = ctx(&i, &[(
+        "pairs",
         Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (name, age) in @pairs }}{{ name }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -487,15 +564,14 @@ fn list_of_tuples_destructure() {
 
 #[test]
 fn list_head_with_object_elements() {
+    let i = Interner::new();
     // List destructure where elements are objects.
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([(
-            "name".into(),
-            Ty::String,
-        )])))),
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[("name", Ty::String)]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -506,12 +582,14 @@ fn list_head_with_object_elements() {
 
 #[test]
 fn tuple_with_list_element() {
+    let i = Interner::new();
     // Tuple containing a list, extract and iterate.
-    let context = HashMap::from([(
-        "data".into(),
+    let context = ctx(&i, &[(
+        "data",
         Ty::Tuple(vec![Ty::String, Ty::List(Box::new(Ty::Int))]),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (label, items) = @data }}{{ label }}{{ x in items }}{{ x | to_string }}{{/}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -524,8 +602,10 @@ fn tuple_with_list_element() {
 
 #[test]
 fn object_literal_field_access() {
-    let context = HashMap::from([("name".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ o = { @name, } }}{{ o.name }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -538,8 +618,10 @@ fn object_literal_field_access() {
 
 #[test]
 fn comparison_operators() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @a > @b }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -550,8 +632,10 @@ fn comparison_operators() {
 
 #[test]
 fn unary_negation() {
-    let context = HashMap::from([("n".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("n", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = -@n }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -562,8 +646,10 @@ fn unary_negation() {
 
 #[test]
 fn boolean_not() {
-    let context = HashMap::from([("flag".into(), Ty::Bool)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("flag", Ty::Bool)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = !@flag }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -576,8 +662,10 @@ fn boolean_not() {
 
 #[test]
 fn to_float_conversion() {
-    let context = HashMap::from([("n".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("n", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @n | to_float }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -588,8 +676,10 @@ fn to_float_conversion() {
 
 #[test]
 fn to_int_conversion() {
-    let context = HashMap::from([("f".into(), Ty::Float)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("f", Ty::Float)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @f | to_int }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -602,9 +692,11 @@ fn to_int_conversion() {
 
 #[test]
 fn pmap_builtin() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | pmap(i -> i + 1) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -615,9 +707,11 @@ fn pmap_builtin() {
 
 #[test]
 fn list_destructure_tail() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ [.., a, b] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -628,7 +722,8 @@ fn list_destructure_tail() {
 
 #[test]
 fn variable_write_then_read() {
-    let ir = compile_simple(r#"{{ $x = 42 }}{{ $x | to_string }}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ $x = 42 }}{{ $x | to_string }}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -636,11 +731,13 @@ fn variable_write_then_read() {
 
 #[test]
 fn nested_iteration_with_binding() {
-    let context = HashMap::from([(
-        "matrix".into(),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "matrix",
         Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -653,7 +750,8 @@ fn nested_iteration_with_binding() {
 
 #[test]
 fn range_inclusive_iteration() {
-    let ir = compile_simple(r#"{{ x in 0..=3 }}{{ x | to_string }}{{/}}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ x in 0..=3 }}{{ x | to_string }}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -661,17 +759,19 @@ fn range_inclusive_iteration() {
 
 #[test]
 fn deeply_nested_object_access() {
-    let context = HashMap::from([(
-        "data".into(),
-        Ty::Object(BTreeMap::from([(
-            "user".into(),
-            Ty::Object(BTreeMap::from([(
-                "address".into(),
-                Ty::Object(BTreeMap::from([("city".into(), Ty::String)])),
-            )])),
-        )])),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "data",
+        obj(&i, &[(
+            "user",
+            obj(&i, &[(
+                "address",
+                obj(&i, &[("city", Ty::String)]),
+            )]),
+        )]),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ @data.user.address.city }}"#,
         &context,
         &ExternRegistry::new(),
@@ -684,11 +784,13 @@ fn deeply_nested_object_access() {
 
 #[test]
 fn closure_capture_context() {
-    let context = HashMap::from([
-        ("items".into(), Ty::List(Box::new(Ty::Int))),
-        ("threshold".into(), Ty::Int),
+    let i = Interner::new();
+    let context = ctx(&i, &[
+        ("items", Ty::List(Box::new(Ty::Int))),
+        ("threshold", Ty::Int),
     ]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -701,8 +803,10 @@ fn closure_capture_context() {
 
 #[test]
 fn multi_arm_range_and_literal() {
-    let context = HashMap::from([("score".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("score", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -715,7 +819,8 @@ fn multi_arm_range_and_literal() {
 
 #[test]
 fn list_literal_expression() {
-    let ir = compile_simple(r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#).unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -723,10 +828,12 @@ fn list_literal_expression() {
 
 #[test]
 fn lambda_map_arithmetic() {
+    let i = Interner::new();
     // Lambda param type resolved via unification: map(List<Int>, x -> x + 1)
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | map(i -> i + 1) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -735,10 +842,12 @@ fn lambda_map_arithmetic() {
 
 #[test]
 fn lambda_filter_comparison() {
+    let i = Interner::new();
     // Lambda param type resolved via unification: filter(List<Int>, x -> x > 0)
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -749,10 +858,12 @@ fn lambda_filter_comparison() {
 
 #[test]
 fn closure_capture_local() {
+    let i = Interner::new();
     // Closure captures local variable (not context).
     let ir = compile_to_ir(
+        &i,
         r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) }}{{ x | len | to_string }}{{_}}{{/}}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -763,10 +874,12 @@ fn closure_capture_local() {
 
 #[test]
 fn list_exact_match() {
+    let i = Interner::new();
     // Exact list pattern: [a, b] without rest (..).
     let ir = compile_to_ir(
+        &i,
         r#"{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -777,10 +890,12 @@ fn list_exact_match() {
 
 #[test]
 fn list_destructure_head_and_tail() {
+    let i = Interner::new();
     // [a, .., z] pattern — head and tail extraction.
     let ir = compile_to_ir(
+        &i,
         r#"{{ [first, .., last] = @items }}{{ first | to_string }}{{_}}empty{{/}}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -791,11 +906,13 @@ fn list_destructure_head_and_tail() {
 
 #[test]
 fn nested_tuple_pattern() {
-    let context = HashMap::from([(
-        "data".into(),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "data",
         Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -808,8 +925,10 @@ fn nested_tuple_pattern() {
 
 #[test]
 fn variable_write_computed() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ $result = @a + @b }}{{ $result | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -822,10 +941,12 @@ fn variable_write_computed() {
 
 #[test]
 fn match_binding_with_body() {
+    let i = Interner::new();
     // Object pattern with body (goes through normal match lowering).
     let ir = compile_to_ir(
+        &i,
         r#"{{ { name, } = @user }}{{ name }} is here{{_}}no user{{/}}"#,
-        &user_context(),
+        &user_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -836,8 +957,10 @@ fn match_binding_with_body() {
 
 #[test]
 fn variable_shadowing() {
-    let context = HashMap::from([("name".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = "outer" }}{{ x = @name }}{{ x }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -850,8 +973,10 @@ fn variable_shadowing() {
 
 #[test]
 fn nested_match_blocks() {
-    let context = HashMap::from([("role".into(), Ty::String), ("level".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("role", Ty::String), ("level", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ "admin" = @role }}{{ 1..10 = @level }}low{{_}}high{{/}}{{_}}guest{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -864,8 +989,10 @@ fn nested_match_blocks() {
 
 #[test]
 fn catch_all_with_binding() {
-    let context = HashMap::from([("role".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ "admin" = @role }}admin{{_}}{{ fallback = "guest" }}{{ fallback }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -878,9 +1005,11 @@ fn catch_all_with_binding() {
 
 #[test]
 fn triple_pipe_chain() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> i * 2) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -891,8 +1020,10 @@ fn triple_pipe_chain() {
 
 #[test]
 fn variable_write_in_iteration() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x in @items }}{{ $last = x }}{{/}}{{ $last | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -905,14 +1036,16 @@ fn variable_write_in_iteration() {
 
 #[test]
 fn field_access_on_destructured() {
-    let context = HashMap::from([(
-        "pair".into(),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "pair",
         Ty::Tuple(vec![
-            Ty::Object(BTreeMap::from([("name".into(), Ty::String)])),
+            obj(&i, &[("name", Ty::String)]),
             Ty::Int,
         ]),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -925,8 +1058,10 @@ fn field_access_on_destructured() {
 
 #[test]
 fn equality_as_match_source() {
-    let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -939,10 +1074,12 @@ fn equality_as_match_source() {
 
 #[test]
 fn lambda_negate_param() {
+    let i = Interner::new();
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | map(i -> -i) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -953,9 +1090,11 @@ fn lambda_negate_param() {
 
 #[test]
 fn lambda_not_param() {
+    let i = Interner::new();
     // Lambda param has Ty::Var initially; !i must resolve via unification.
-    let context = HashMap::from([("flags".into(), Ty::List(Box::new(Ty::Bool)))]);
+    let context = ctx(&i, &[("flags", Ty::List(Box::new(Ty::Bool)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @flags | map(i -> !i) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -968,10 +1107,12 @@ fn lambda_not_param() {
 
 #[test]
 fn object_destructure_match() {
+    let i = Interner::new();
     // Object pattern directly on Object source (not List<Object>).
     let ir = compile_to_ir(
+        &i,
         r#"{{ { name, age, } = @user }}{{ name }}{{ age | to_string }}{{_}}none{{/}}"#,
-        &user_context(),
+        &user_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -982,11 +1123,13 @@ fn object_destructure_match() {
 
 #[test]
 fn multiple_closures_same_capture() {
-    let context = HashMap::from([
-        ("items".into(), Ty::List(Box::new(Ty::Int))),
-        ("offset".into(), Ty::Int),
+    let i = Interner::new();
+    let context = ctx(&i, &[
+        ("items", Ty::List(Box::new(Ty::Int))),
+        ("offset", Ty::Int),
     ]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -999,8 +1142,10 @@ fn multiple_closures_same_capture() {
 
 #[test]
 fn string_equality_in_filter() {
-    let context = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @names | filter(n -> n != "admin") }}{{ x | join(",") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1013,15 +1158,17 @@ fn string_equality_in_filter() {
 
 #[test]
 fn lambda_field_access() {
+    let i = Interner::new();
     // Lambda body accesses field on captured object.
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), Ty::Int),
-        ])))),
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[
+            ("name", Ty::String),
+            ("age", Ty::Int),
+        ]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @users | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1034,9 +1181,11 @@ fn lambda_field_access() {
 
 #[test]
 fn variable_accumulate_in_loop() {
+    let i = Interner::new();
     // Write to variable on each iteration.
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1049,9 +1198,11 @@ fn variable_accumulate_in_loop() {
 
 #[test]
 fn pipe_map_to_string_then_filter() {
+    let i = Interner::new();
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @items | map(i -> i + 1) | filter(i -> i != 0) }}{{ x | len | to_string }}"#,
-        &items_context(),
+        &items_context(&i),
         &ExternRegistry::new(),
     )
     .unwrap();
@@ -1062,10 +1213,12 @@ fn pipe_map_to_string_then_filter() {
 
 #[test]
 fn lambda_capture_local_var_ref() {
+    let i = Interner::new();
     // $offset is NOT in initial context — created as local $-var.
     // Lambda must capture it correctly (not fall through to StorageLoad).
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ $offset = 10 }}{{ x = @items | filter(i -> i > $offset) }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -1078,15 +1231,17 @@ fn lambda_capture_local_var_ref() {
 
 #[test]
 fn lambda_multiple_field_access() {
+    let i = Interner::new();
     // Lambda body accesses two fields on the same param.
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), Ty::Int),
-        ])))),
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[
+            ("name", Ty::String),
+            ("age", Ty::Int),
+        ]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @users | map(u -> (u.name, u.age)) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1099,14 +1254,16 @@ fn lambda_multiple_field_access() {
 
 #[test]
 fn lambda_chained_field_access() {
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([(
-            "address".into(),
-            Ty::Object(BTreeMap::from([("city".into(), Ty::String)])),
-        )])))),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[(
+            "address",
+            obj(&i, &[("city", Ty::String)]),
+        )]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @users | map(u -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1119,9 +1276,11 @@ fn lambda_chained_field_access() {
 
 #[test]
 fn lambda_string_concat() {
+    let i = Interner::new();
     // Lambda param is Ty::Var; string concat (+) must resolve via unification.
-    let context = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
+    let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @names | map(n -> n + "!") }}{{ x | join(",") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1134,14 +1293,16 @@ fn lambda_string_concat() {
 
 #[test]
 fn pipe_filter_then_map_field() {
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), Ty::Int),
-        ])))),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[
+            ("name", Ty::String),
+            ("age", Ty::Int),
+        ]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1154,8 +1315,9 @@ fn pipe_filter_then_map_field() {
 
 #[test]
 fn error_field_access_on_int() {
-    let context = HashMap::from([("n".into(), Ty::Int)]);
-    let result = compile_to_ir("{{ @n.foo | to_string }}", &context, &ExternRegistry::new());
+    let i = Interner::new();
+    let context = ctx(&i, &[("n", Ty::Int)]);
+    let result = compile_to_ir(&i, "{{ @n.foo | to_string }}", &context, &ExternRegistry::new());
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1164,9 +1326,10 @@ fn error_field_access_on_int() {
 
 #[test]
 fn error_variable_write_type_mismatch() {
+    let i = Interner::new();
     // Attempting to write to a context key (read-only).
-    let context = HashMap::from([("count".into(), Ty::Int)]);
-    let result = compile_to_ir(r#"{{ @count = "hello" }}"#, &context, &ExternRegistry::new());
+    let context = ctx(&i, &[("count", Ty::Int)]);
+    let result = compile_to_ir(&i, r#"{{ @count = "hello" }}"#, &context, &ExternRegistry::new());
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1175,8 +1338,10 @@ fn error_variable_write_type_mismatch() {
 
 #[test]
 fn lambda_float_arithmetic() {
-    let context = HashMap::from([("vals".into(), Ty::List(Box::new(Ty::Float)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("vals", Ty::List(Box::new(Ty::Float)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1189,8 +1354,10 @@ fn lambda_float_arithmetic() {
 
 #[test]
 fn match_bool_literal() {
-    let context = HashMap::from([("flag".into(), Ty::Bool)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("flag", Ty::Bool)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ true = @flag }}on{{_}}off{{/}}"#,
         &context,
         &ExternRegistry::new(),
@@ -1203,14 +1370,16 @@ fn match_bool_literal() {
 
 #[test]
 fn filter_object_field_equality() {
-    let context = HashMap::from([(
-        "users".into(),
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("active".into(), Ty::Bool),
-        ])))),
+    let i = Interner::new();
+    let context = ctx(&i, &[(
+        "users",
+        Ty::List(Box::new(obj(&i, &[
+            ("name", Ty::String),
+            ("active", Ty::Bool),
+        ]))),
     )]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ x = @users | filter(u -> u.active) }}{{ x | len | to_string }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1224,19 +1393,21 @@ fn filter_object_field_equality() {
 #[test]
 fn extern_fn_object_return() {
     use acvus_mir::extern_module::ExternModule;
-    let mut ext = ExternModule::new("test");
+    let i = Interner::new();
+    let mut ext = ExternModule::new(i.intern("test"));
     ext.add_fn(
-        "get_user",
+        i.intern("get_user"),
         vec![Ty::Int],
-        Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), Ty::Int),
-        ])),
+        obj(&i, &[
+            ("name", Ty::String),
+            ("age", Ty::Int),
+        ]),
         false,
     );
     let mut registry = ExternRegistry::new();
     registry.register(&ext);
     let ir = compile_to_ir(
+        &i,
         r#"{{ u = get_user(1) }}{{ u.name }}"#,
         &HashMap::new(),
         &registry,
@@ -1249,8 +1420,10 @@ fn extern_fn_object_return() {
 
 #[test]
 fn builtin_len() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | len | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1261,8 +1434,10 @@ fn builtin_len() {
 
 #[test]
 fn builtin_reverse() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ x in @items | reverse }}{{ x | to_string }}{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -1273,8 +1448,10 @@ fn builtin_reverse() {
 
 #[test]
 fn builtin_join() {
-    let context = HashMap::from([("names".into(), Ty::List(Box::new(Ty::String)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ @names | join(", ") }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1285,8 +1462,10 @@ fn builtin_join() {
 
 #[test]
 fn builtin_contains() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | contains(3) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1297,8 +1476,10 @@ fn builtin_contains() {
 
 #[test]
 fn builtin_find() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | find(x -> x > 10) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1309,8 +1490,10 @@ fn builtin_find() {
 
 #[test]
 fn builtin_reduce() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | reduce((a, b) -> a + b) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1321,8 +1504,10 @@ fn builtin_reduce() {
 
 #[test]
 fn builtin_fold() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | fold(0, (acc, x) -> acc + x) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1333,8 +1518,10 @@ fn builtin_fold() {
 
 #[test]
 fn builtin_any() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | any(x -> x > 10) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1345,8 +1532,10 @@ fn builtin_any() {
 
 #[test]
 fn builtin_all() {
-    let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ @items | all(x -> x > 0) | to_string }}",
         &context,
         &ExternRegistry::new(),
@@ -1359,8 +1548,10 @@ fn builtin_all() {
 
 #[test]
 fn context_call_simple() {
-    let context = HashMap::from([("node".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("node", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         r#"{{ @node { key: "value", } }}"#,
         &context,
         &ExternRegistry::new(),
@@ -1371,8 +1562,10 @@ fn context_call_simple() {
 
 #[test]
 fn context_call_shorthand() {
-    let context = HashMap::from([("node".into(), Ty::String), ("other".into(), Ty::String)]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("node", Ty::String), ("other", Ty::String)]);
     let ir = compile_to_ir(
+        &i,
         "{{ $var = 42 }}{{ @node { $var, @other, } }}",
         &context,
         &ExternRegistry::new(),
@@ -1383,11 +1576,13 @@ fn context_call_shorthand() {
 
 #[test]
 fn context_call_expr() {
-    let context = HashMap::from([
-        ("node".into(), Ty::String),
-        ("items".into(), Ty::List(Box::new(Ty::Int))),
+    let i = Interner::new();
+    let context = ctx(&i, &[
+        ("node", Ty::String),
+        ("items", Ty::List(Box::new(Ty::Int))),
     ]);
     let ir = compile_to_ir(
+        &i,
         "{{ @node { count: @items | len, } }}",
         &context,
         &ExternRegistry::new(),
@@ -1400,20 +1595,24 @@ fn context_call_expr() {
 
 #[test]
 fn variant_some_expr() {
-    let ir = compile_simple("{{ x = Some(42) }}{{_}}{{/}}").unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, "{{ x = Some(42) }}{{_}}{{/}}").unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn variant_none_expr() {
-    let ir = compile_simple("{{ x = None }}{{_}}{{/}}").unwrap();
+    let i = Interner::new();
+    let ir = compile_simple(&i, "{{ x = None }}{{_}}{{/}}").unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn variant_some_pattern() {
-    let context = HashMap::from([("opt".into(), Ty::Option(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}nope{{/}}",
         &context,
         &ExternRegistry::new(),
@@ -1424,8 +1623,10 @@ fn variant_some_pattern() {
 
 #[test]
 fn variant_none_pattern() {
-    let context = HashMap::from([("opt".into(), Ty::Option(Box::new(Ty::Int)))]);
+    let i = Interner::new();
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
+        &i,
         "{{ None = @opt }}none{{_}}has value{{/}}",
         &context,
         &ExternRegistry::new(),

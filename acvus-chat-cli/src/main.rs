@@ -13,6 +13,7 @@ use acvus_orchestration::{
     ApiKind, ExprSpec, Fetch, HashMapStorage, HttpRequest, NodeKind, NodeSpec, ProviderConfig,
     Resolved, SelfSpec, Strategy, compile_nodes, compile_script,
 };
+use acvus_utils::{Astr, Interner};
 use node::NodeDef;
 use project::{ProjectSpec, parse_context_entry};
 
@@ -131,20 +132,22 @@ async fn main() {
         process::exit(1);
     });
 
+    let interner = Interner::new();
+
     // Context types + defaults
-    let mut context_types: HashMap<String, Ty> = HashMap::new();
-    let mut context_defaults: HashMap<String, Value> = HashMap::new();
+    let mut context_types: HashMap<Astr, Ty> = HashMap::new();
+    let mut context_defaults: HashMap<Astr, Value> = HashMap::new();
     for (k, v) in &spec.context {
-        let entry = parse_context_entry(v);
-        context_types.insert(k.clone(), entry.ty);
+        let entry = parse_context_entry(&interner, v);
+        context_types.insert(interner.intern(k), entry.ty);
         if let Some(default) = entry.default {
-            context_defaults.insert(k.clone(), default);
+            context_defaults.insert(interner.intern(k), default);
         }
     }
 
     // Compile expr definitions → NodeSpec with NodeKind::Expr
-    let mut fn_reg_for_compile = ExternFnRegistry::new();
-    let regex_mod = acvus_ext::regex_module(&mut fn_reg_for_compile);
+    let mut fn_reg_for_compile = ExternFnRegistry::new(&interner);
+    let regex_mod = acvus_ext::regex_module(&interner, &mut fn_reg_for_compile);
     let mut registry = ExternRegistry::new();
     registry.register(&regex_mod);
     let mut expr_node_specs: Vec<NodeSpec> = Vec::new();
@@ -164,13 +167,14 @@ async fn main() {
             process::exit(1);
         };
         let (_script, tail_ty) =
-            compile_script(&source, &context_types, &registry).unwrap_or_else(|e| {
+            compile_script(&interner, &source, &context_types, &registry).unwrap_or_else(|e| {
                 eprintln!("expr '{}' compile error: {e}", expr_def.name);
                 process::exit(1);
             });
-        context_types.insert(expr_def.name.clone(), tail_ty.clone());
+        let expr_name = interner.intern(&expr_def.name);
+        context_types.insert(expr_name, tail_ty.clone());
         expr_node_specs.push(NodeSpec {
-            name: expr_def.name.clone(),
+            name: expr_name,
             kind: NodeKind::Expr(ExprSpec {
                 source,
                 output_ty: tail_ty,
@@ -202,7 +206,7 @@ async fn main() {
             process::exit(1);
         });
         let node_spec =
-            node::resolve_node(node_def, &project_dir, &provider_apis).unwrap_or_else(|e| {
+            node::resolve_node(&interner, node_def, &project_dir, &provider_apis).unwrap_or_else(|e| {
                 eprintln!("failed to resolve {node_file}: {e}");
                 process::exit(1);
             });
@@ -212,7 +216,7 @@ async fn main() {
     // Merge expr node specs into node specs
     node_specs.extend(expr_node_specs);
 
-    let compiled_nodes = match compile_nodes(&node_specs, &context_types, &registry) {
+    let compiled_nodes = match compile_nodes(&interner, &node_specs, &context_types, &registry) {
         Ok(nodes) => nodes,
         Err(errors) => {
             for e in &errors {
@@ -257,21 +261,27 @@ async fn main() {
 
     let resolver = {
         let defaults = context_defaults.clone();
-        let context_args = context_args.clone();
-        move |name: String| {
+        let context_args_astr: HashMap<Astr, String> = context_args
+            .iter()
+            .map(|(k, v)| (interner.intern(k), v.clone()))
+            .collect();
+        let interner_clone = interner.clone();
+        move |name: Astr| {
             let defaults = defaults.clone();
-            let context_args = context_args.clone();
+            let context_args_astr = context_args_astr.clone();
+            let interner_clone = interner_clone.clone();
             async move {
-                if let Some(v) = context_args.get(&name) {
+                if let Some(v) = context_args_astr.get(&name) {
                     return Resolved::Turn(Value::String(v.clone()));
                 }
                 if let Some(val) = defaults.get(&name) {
                     return Resolved::Turn(val.clone());
                 }
+                let name_str = interner_clone.resolve(name);
                 if render_only {
-                    return Resolved::Turn(Value::String(format!("(@{name})")));
+                    return Resolved::Turn(Value::String(format!("(@{name_str})")));
                 }
-                eprint!("{name}: ");
+                eprint!("{name_str}: ");
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
                 Resolved::Turn(Value::String(input.trim_end().to_string()))
@@ -291,6 +301,7 @@ async fn main() {
             storage,
             &spec.entrypoint,
             &[],
+            &interner,
         )
         .await
         .unwrap_or_else(|e| {
@@ -301,7 +312,7 @@ async fn main() {
             eprintln!("turn error: {e}");
             process::exit(1);
         });
-        println!("{}", format_output(&response));
+        println!("{}", format_output(&interner, &response));
     } else {
         let fetch = HttpFetch {
             client: reqwest::Client::new(),
@@ -314,6 +325,7 @@ async fn main() {
             storage,
             &spec.entrypoint,
             &[],
+            &interner,
         )
         .await
         .unwrap_or_else(|e| {
@@ -327,7 +339,7 @@ async fn main() {
                     eprintln!("turn error: {e}");
                     process::exit(1);
                 });
-                println!("{}", format_output(&response));
+                println!("{}", format_output(&interner, &response));
                 println!("{:#?}", engine.state.storage.entries);
             }
         } else {
@@ -335,18 +347,21 @@ async fn main() {
                 eprintln!("turn error: {e}");
                 process::exit(1);
             });
-            println!("{}", format_output(&response));
+            println!("{}", format_output(&interner, &response));
         }
     }
 }
 
-fn format_output(value: &Value) -> String {
+fn format_output(interner: &Interner, value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
-        Value::Object(obj) => match obj.get("content") {
-            Some(Value::String(s)) => s.clone(),
-            _ => format!("{value:?}"),
-        },
+        Value::Object(obj) => {
+            let content_key = interner.intern("content");
+            match obj.get(&content_key) {
+                Some(Value::String(s)) => s.clone(),
+                _ => format!("{value:?}"),
+            }
+        }
         _ => format!("{value:?}"),
     }
 }

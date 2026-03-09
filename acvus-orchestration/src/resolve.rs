@@ -1,10 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Interpreter, RuntimeError, Stepped, Value};
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
+use acvus_utils::{Astr, Interner};
 use tracing::{debug, info, warn};
 
 use crate::compile::{CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy};
@@ -25,10 +26,10 @@ type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 /// - `bind_cache`: IfModified key→output cache
 pub struct ResolveState<S> {
     pub storage: S,
-    pub turn_context: HashMap<String, Arc<Value>>,
-    pub bind_cache: HashMap<String, Vec<(Value, Arc<Value>)>>,
+    pub turn_context: HashMap<Astr, Arc<Value>>,
+    pub bind_cache: HashMap<Astr, Vec<(Value, Arc<Value>)>>,
     /// Buffered history entries for the current turn. Flushed once at turn end.
-    pub history_entries: BTreeMap<String, Value>,
+    pub history_entries: HashMap<Astr, Value>,
 }
 
 impl<S> ResolveState<S>
@@ -40,13 +41,13 @@ where
             storage,
             turn_context: HashMap::new(),
             bind_cache: HashMap::new(),
-            history_entries: BTreeMap::new(),
+            history_entries: HashMap::new(),
         }
     }
 
     /// Check if a name is already resolved in turn_context or storage.
-    fn is_available(&self, name: &str) -> bool {
-        self.turn_context.contains_key(name) || self.storage.get(name).is_some()
+    fn is_available(&self, name: Astr, interner: &Interner) -> bool {
+        self.turn_context.contains_key(&name) || self.storage.get(interner.resolve(name)).is_some()
     }
 }
 
@@ -80,20 +81,21 @@ pub enum Resolved {
 pub struct Resolver<'a, R> {
     pub nodes: &'a [CompiledNode],
     pub node_table: &'a [Arc<dyn Node>],
-    pub name_to_idx: &'a HashMap<String, usize>,
+    pub name_to_idx: &'a HashMap<Astr, usize>,
     pub extern_fns: &'a ExternFnRegistry,
     pub resolver: &'a R,
+    pub interner: &'a Interner,
 }
 
 impl<'a, R> Resolver<'a, R>
 where
-    R: AsyncFn(String) -> Resolved + Sync,
+    R: AsyncFn(Astr) -> Resolved + Sync,
 {
     pub fn resolve_node<S>(
         &'a self,
         idx: usize,
         state: &'a mut ResolveState<S>,
-        local: HashMap<String, Arc<Value>>,
+        local: HashMap<Astr, Arc<Value>>,
     ) -> Fut<'a, Result<(), ResolveError>>
     where
         S: Storage,
@@ -134,12 +136,13 @@ where
         &'a self,
         idx: usize,
         state: &'a mut ResolveState<S>,
-        mut local: HashMap<String, Arc<Value>>,
+        mut local: HashMap<Astr, Arc<Value>>,
     ) -> Result<(), ResolveError>
     where
         S: Storage,
     {
         let node = &self.nodes[idx];
+        let interner = self.interner;
         info!(node = %node.name, "resolve node start");
 
         // IfModified: evaluate key, check cache
@@ -151,11 +154,11 @@ where
                 debug!(node = %node.name, "if_modified cache hit, skipping execution");
                 state
                     .storage
-                    .set(node.name.clone(), Value::clone(cached_output));
+                    .set(interner.resolve(node.name).to_string(), Value::clone(cached_output));
                 return Ok(());
             }
             debug!(node = %node.name, "if_modified cache miss, will execute");
-            local.insert("bind".into(), Arc::new(key_value));
+            local.insert(interner.intern("bind"), Arc::new(key_value));
         }
 
         // Prefetch: iteratively resolve eager deps until stable.
@@ -168,7 +171,7 @@ where
                 .into_iter()
                 .filter(|&i| {
                     !matches!(self.nodes[i].strategy, CompiledStrategy::Always)
-                        && !state.is_available(&self.nodes[i].name)
+                        && !state.is_available(self.nodes[i].name, interner)
                 })
                 .collect();
             if unresolved.is_empty() {
@@ -176,7 +179,7 @@ where
             }
             let dep_names: Vec<&str> = unresolved
                 .iter()
-                .map(|&i| self.nodes[i].name.as_str())
+                .map(|&i| interner.resolve(self.nodes[i].name))
                 .collect();
             debug!(
                 node = %node.name,
@@ -190,7 +193,8 @@ where
 
         // If initial_value is Some, load @self and inject into local context
         if let Some(ref init_script) = node.self_spec.initial_value {
-            let prev_self = if let Some(arc) = state.storage.get(&node.name) {
+            let name_str = interner.resolve(node.name);
+            let prev_self = if let Some(arc) = state.storage.get(name_str) {
                 Value::clone(&arc)
             } else if let Some(arc) = state.turn_context.get(&node.name) {
                 Value::clone(arc)
@@ -199,7 +203,7 @@ where
                 self.eval_script(init_script, &HashMap::new(), state)
                     .await?
             };
-            local.insert("self".into(), Arc::new(prev_self));
+            local.insert(interner.intern("self"), Arc::new(prev_self));
         }
 
         // Spawn via Node trait
@@ -212,21 +216,21 @@ where
         // Assert: evaluate after new_self (= raw output), before storing.
         if let Some(ref assert_script) = node.assert {
             let mut bind_local = HashMap::new();
-            bind_local.insert("self".into(), Arc::new(new_self.clone()));
+            bind_local.insert(interner.intern("self"), Arc::new(new_self.clone()));
             debug!(node = %node.name, "evaluating assert");
             let result = self
                 .eval_script(assert_script, &bind_local, state)
                 .await?;
             let Value::Bool(passed) = result else {
                 return Err(ResolveError::Runtime {
-                    node: node.name.clone(),
+                    node: interner.resolve(node.name).to_string(),
                     error: RuntimeError::type_mismatch("assert", "bool", &format!("{result:?}")),
                 });
             };
             if !passed {
                 info!(node = %node.name, "assert failed, triggering retry");
                 return Err(ResolveError::Runtime {
-                    node: node.name.clone(),
+                    node: interner.resolve(node.name).to_string(),
                     error: RuntimeError::other("assert failed"),
                 });
             }
@@ -234,36 +238,37 @@ where
 
         // IfModified: cache
         if matches!(node.strategy, CompiledStrategy::IfModified { .. })
-            && let Some(bind_val) = local.get("bind")
+            && let Some(bind_val) = local.get(&interner.intern("bind"))
         {
             state
                 .bind_cache
-                .entry(node.name.clone())
+                .entry(node.name)
                 .or_default()
                 .push(((**bind_val).clone(), Arc::new(new_self.clone())));
         }
 
         // Store + history
+        let name_str = interner.resolve(node.name).to_string();
         match &node.strategy {
             CompiledStrategy::Always => {
                 state
                     .turn_context
-                    .insert(node.name.clone(), Arc::new(new_self));
+                    .insert(node.name, Arc::new(new_self));
             }
             CompiledStrategy::OncePerTurn | CompiledStrategy::IfModified { .. } => {
-                state.storage.set(node.name.clone(), new_self);
+                state.storage.set(name_str, new_self);
             }
             CompiledStrategy::History { history_bind } => {
-                state.storage.set(node.name.clone(), new_self.clone());
+                state.storage.set(name_str, new_self.clone());
                 let mut hist_local = HashMap::new();
-                hist_local.insert("self".into(), Arc::new(new_self));
+                hist_local.insert(interner.intern("self"), Arc::new(new_self));
 
                 debug!(node = %node.name, "evaluating history_bind");
                 let entry = self
                     .eval_script(history_bind, &hist_local, state)
                     .await?;
                 // Buffer entry — flushed to @turn.history at turn end.
-                state.history_entries.insert(node.name.clone(), entry);
+                state.history_entries.insert(node.name, entry);
             }
         }
 
@@ -284,7 +289,7 @@ where
         S: Storage,
     {
         let node = &self.nodes[idx];
-        let known = node.known_from_storage(storage);
+        let known = node.known_from_storage(self.interner, storage);
         let mut eager = HashSet::new();
 
         // Message blocks (Llm/LlmCache): proper eager/lazy partition
@@ -320,16 +325,16 @@ where
 
         // initial_value/strategy scripts: always eager
         if let Some(ref iv) = node.self_spec.initial_value {
-            if storage.get(&node.name).is_none() {
-                eager.extend(iv.context_keys.iter().cloned());
+            if storage.get(self.interner.resolve(node.name)).is_none() {
+                eager.extend(iv.context_keys.iter().copied());
             }
         }
         match &node.strategy {
             CompiledStrategy::History { history_bind } => {
-                eager.extend(history_bind.context_keys.iter().cloned());
+                eager.extend(history_bind.context_keys.iter().copied());
             }
             CompiledStrategy::IfModified { key } => {
-                eager.extend(key.context_keys.iter().cloned());
+                eager.extend(key.context_keys.iter().copied());
             }
             _ => {}
         }
@@ -347,10 +352,10 @@ where
     where
         S: Storage,
     {
-        let name = &self.nodes[idx].name;
+        let name = self.nodes[idx].name;
         match &self.nodes[idx].strategy {
             CompiledStrategy::Always => true,
-            _ => !state.is_available(name),
+            _ => !state.is_available(name, self.interner),
         }
     }
 
@@ -362,14 +367,13 @@ where
     /// Resolution: node → turn_context → storage → external resolver.
     fn resolve_context<S>(
         &'a self,
-        name: &str,
-        bindings: HashMap<String, Value>,
+        name: Astr,
+        bindings: HashMap<Astr, Value>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Arc<Value>, ResolveError>>
     where
         S: Storage,
     {
-        let name = name.to_string();
         Box::pin(async move {
             // Tool call: resolve target node with bindings as local context
             if !bindings.is_empty() {
@@ -381,58 +385,59 @@ where
                         .collect();
                     self.resolve_node(idx, state, local).await?;
                 }
-                return self.lookup(&name, state).await;
+                return self.lookup(name, state).await;
             }
 
             // Node: resolve if needed
             if let Some(&idx) = self.name_to_idx.get(&name) {
                 if !self.needs_resolve(idx, state) {
                     debug!(context = %name, "context already available");
-                    return self.lookup(&name, state).await;
+                    return self.lookup(name, state).await;
                 }
                 debug!(context = %name, "resolving context on-demand");
                 self.resolve_node(idx, state, HashMap::new()).await?;
             }
 
-            self.lookup(&name, state).await
+            self.lookup(name, state).await
         })
     }
 
     /// Look up a value: turn_context → storage → external resolver.
     async fn lookup<S>(
         &self,
-        name: &str,
+        name: Astr,
         state: &mut ResolveState<S>,
     ) -> Result<Arc<Value>, ResolveError>
     where
         S: Storage,
     {
-        if let Some(arc) = state.turn_context.get(name) {
-            debug!(name = %name, source = "turn_context", "lookup hit");
+        let name_str = self.interner.resolve(name);
+        if let Some(arc) = state.turn_context.get(&name) {
+            debug!(name = %name_str, source = "turn_context", "lookup hit");
             return Ok(Arc::clone(arc));
         }
-        if let Some(arc) = state.storage.get(name) {
-            debug!(name = %name, source = "storage", "lookup hit");
+        if let Some(arc) = state.storage.get(name_str) {
+            debug!(name = %name_str, source = "storage", "lookup hit");
             return Ok(arc);
         }
-        info!(name = %name, "calling external resolver");
-        match (self.resolver)(name.to_string()).await {
+        info!(name = %name_str, "calling external resolver");
+        match (self.resolver)(name).await {
             Resolved::Once(value) => {
-                debug!(name = %name, kind = "once", "external resolver returned");
+                debug!(name = %name_str, kind = "once", "external resolver returned");
                 Ok(Arc::new(value))
             }
             Resolved::Turn(value) => {
-                debug!(name = %name, kind = "turn", "external resolver returned");
+                debug!(name = %name_str, kind = "turn", "external resolver returned");
                 let arc = Arc::new(value);
                 state
                     .turn_context
-                    .insert(name.to_string(), Arc::clone(&arc));
+                    .insert(name, Arc::clone(&arc));
                 Ok(arc)
             }
             Resolved::Persist(value) => {
-                debug!(name = %name, kind = "persist", "external resolver returned");
+                debug!(name = %name_str, kind = "persist", "external resolver returned");
                 let arc = Arc::new(value);
-                state.storage.set(name.to_string(), Value::clone(&arc));
+                state.storage.set(name_str.to_string(), Value::clone(&arc));
                 Ok(arc)
             }
         }
@@ -446,9 +451,9 @@ where
     /// Resolution: local → resolve_context (turn_context → storage → external).
     fn eval_coroutine<S>(
         &'a self,
-        coroutine: &'a mut acvus_coroutine::Coroutine<Value, RuntimeError>,
-        first_key: acvus_coroutine::ResumeKey<Value>,
-        local: &'a HashMap<String, Arc<Value>>,
+        coroutine: &'a mut acvus_utils::Coroutine<Value, RuntimeError>,
+        first_key: acvus_utils::ResumeKey<Value>,
+        local: &'a HashMap<Astr, Arc<Value>>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Value, ResolveError>>
     where
@@ -463,7 +468,7 @@ where
                         return Ok(value);
                     }
                     Stepped::NeedContext(need) => {
-                        let name = need.name().to_string();
+                        let name = need.name();
                         if let Some(arc) = local.get(&name) {
                             debug!(context = %name, "need_context resolved from local");
                             key = need.into_key(Arc::clone(arc));
@@ -471,7 +476,7 @@ where
                             debug!(context = %name, "need_context delegating to resolve_context");
                             let bindings = need.bindings().clone();
                             let value = self
-                                .resolve_context(&name, bindings, state)
+                                .resolve_context(name, bindings, state)
                                 .await?;
                             key = need.into_key(value);
                         }
@@ -495,14 +500,14 @@ where
     fn eval_script<S>(
         &'a self,
         script: &'a CompiledScript,
-        local: &'a HashMap<String, Arc<Value>>,
+        local: &'a HashMap<Astr, Arc<Value>>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Value, ResolveError>>
     where
         S: Storage,
     {
         Box::pin(async move {
-            let interp = Interpreter::new(script.module.clone(), self.extern_fns);
+            let interp = Interpreter::new(self.interner, script.module.clone(), self.extern_fns);
             let (mut coroutine, key) = interp.execute();
             self.eval_coroutine(&mut coroutine, key, local, state).await
         })

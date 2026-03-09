@@ -22,6 +22,7 @@ use acvus_mir::ir::{
     ValueId,
 };
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 use rand::Rng;
 use rand::rngs::StdRng;
 
@@ -43,7 +44,7 @@ const OPAQUE_NAMES: [&str; 4] = [
 ];
 
 /// Register 4 opaque closure bodies into the module.
-pub fn register_opaque_closures(module: &mut MirModule) -> OpaqueTable {
+pub fn register_opaque_closures(module: &mut MirModule, interner: &Interner) -> OpaqueTable {
     let base_label = module.closures.keys().map(|l| l.0).max().unwrap_or(0) + 1;
     let base_label = base_label.max(module.main.label_count);
     for closure in module.closures.values() {
@@ -54,7 +55,7 @@ pub fn register_opaque_closures(module: &mut MirModule) -> OpaqueTable {
     for (i, _name) in OPAQUE_NAMES.iter().enumerate() {
         let label = Label(base_label + i as u32);
         labels[i] = label;
-        let body = make_opaque_closure_body(i as u32);
+        let body = make_opaque_closure_body(i as u32, interner);
         module.closures.insert(label, body);
     }
 
@@ -70,14 +71,14 @@ pub fn register_opaque_closures(module: &mut MirModule) -> OpaqueTable {
 ///
 /// Params: [x: Int (Val 0)]
 /// Returns: Int (always 1)
-fn make_opaque_closure_body(variant: u32) -> ClosureBody {
+fn make_opaque_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let mut body = MirBody::new();
     let mut debug = DebugInfo::new();
 
     let v_x = ValueId(0);
     body.val_count = 1;
     body.val_types.insert(v_x, Ty::Int);
-    debug.set(v_x, ValOrigin::Named("x".into()));
+    debug.set(v_x, ValOrigin::Named(interner.intern("x")));
 
     let mut next_val = 1u32;
     let mut alloc = |ty: Ty| -> ValueId {
@@ -254,7 +255,7 @@ fn make_opaque_closure_body(variant: u32) -> ClosureBody {
 
     ClosureBody {
         capture_names: vec![],
-        param_names: vec!["x".into()],
+        param_names: vec![interner.intern("x")],
         body,
     }
 }
@@ -403,7 +404,7 @@ fn make_closure_predicate(
         span,
         kind: InstKind::VarLoad {
             dst: v_meta,
-            name: "__opaque_table".into(),
+            name: ctx.interner.intern("__opaque_table"),
         },
     });
 
@@ -496,7 +497,7 @@ fn make_closure_predicate(
     out.push(Inst {
         span,
         kind: InstKind::VarStore {
-            name: "__entangle".into(),
+            name: ctx.interner.intern("__entangle"),
             src: v_entangle,
         },
     });
@@ -790,12 +791,14 @@ mod tests {
     }
 
     fn make_ctx() -> PassState {
+        let interner = Interner::new();
         PassState {
             insts: Vec::new(),
             val_types: HashMap::new(),
             debug: DebugInfo::new(),
             next_val: 200,
             next_label: 200,
+            interner,
         }
     }
 
@@ -837,9 +840,10 @@ mod tests {
         let rv = ctx.alloc_val(Ty::Int);
         let pred = make_closure_predicate(&mut ctx, &mut rng, span(), Some(rv));
 
+        let opaque_table_name = ctx.interner.intern("__opaque_table");
         let has_var_load = pred
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if name == "__opaque_table"));
+            .any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if *name == opaque_table_name));
         assert!(has_var_load, "expected VarLoad for __opaque_table");
 
         let has_call_closure = pred
@@ -848,9 +852,10 @@ mod tests {
         assert!(has_call_closure, "expected CallClosure in predicate");
 
         // Entangle: VarStore __entangle should exist
+        let entangle_name = ctx.interner.intern("__entangle");
         let has_entangle_store = pred
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if name == "__entangle"));
+            .any(|i| matches!(&i.kind, InstKind::VarStore { name, .. } if *name == entangle_name));
         assert!(has_entangle_store, "expected VarStore for __entangle");
 
         // Last instruction is BinOp Gt (Int→Bool conversion)
@@ -890,7 +895,7 @@ mod tests {
             span: span(),
             kind: InstKind::ContextLoad {
                 dst: rv,
-                name: "count".into(),
+                name: ctx.interner.intern("count"),
                 bindings: Vec::new(),
             },
         }];

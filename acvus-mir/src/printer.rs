@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
+use acvus_utils::Astr;
 
 use crate::extern_module::ExternFnId;
 use crate::ir::{CallTarget, ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
@@ -68,8 +69,8 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
 
 struct PrintCtx<'a> {
     lit_to_tidx: &'a HashMap<String, usize>,
-    extern_names: &'a HashMap<ExternFnId, String>,
-    tag_names: &'a [String],
+    extern_names: &'a HashMap<ExternFnId, Astr>,
+    tag_names: &'a [Astr],
 }
 
 impl PrintCtx<'_> {
@@ -79,16 +80,16 @@ impl PrintCtx<'_> {
             CallTarget::Extern(id) => self
                 .extern_names
                 .get(id)
-                .cloned()
+                .map(|v| format!("{v}"))
                 .unwrap_or_else(|| format!("extern#{}", id.0)),
         }
     }
 
-    fn tag_name(&self, tag: &crate::variant::VariantTagId) -> &str {
+    fn tag_name(&self, tag: &crate::variant::VariantTagId) -> String {
         self.tag_names
             .get(tag.0 as usize)
-            .map(|s| s.as_str())
-            .unwrap_or("?")
+            .map(|s| format!("{s}"))
+            .unwrap_or_else(|| "?".to_string())
     }
 }
 
@@ -143,7 +144,7 @@ fn write_body(
     indent: &str,
     ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
-    // Small constants (Int, Float, Bool, Byte) → inline at use sites.
+    // Small constants (Int, Float, Bool, Byte) -> inline at use sites.
     let consts: HashMap<ValueId, &Literal> = body
         .insts
         .iter()
@@ -157,7 +158,7 @@ fn write_body(
         })
         .collect();
 
-    // String/List constants → T-indexed references.
+    // String/List constants -> T-indexed references.
     let texts: HashMap<ValueId, usize> = body
         .insts
         .iter()
@@ -191,7 +192,7 @@ fn write_body(
             // Output
             InstKind::Yield(r) => writeln!(f, "yield {}", fmt_use(*r, &consts, &texts))?,
 
-            // Constants — all skipped above, unreachable here.
+            // Constants -- all skipped above, unreachable here.
             InstKind::Const { .. } => unreachable!(),
             InstKind::ContextLoad {
                 dst,
@@ -333,7 +334,7 @@ fn write_body(
             }
             InstKind::TestObjectKey { dst, src, key } => writeln!(
                 f,
-                "{} = test has_key({}, {key:?})",
+                "{} = test has_key({}, \"{key}\")",
                 fmt_val(*dst),
                 fmt_use(*src, &consts, &texts)
             )?,
@@ -537,7 +538,7 @@ fn write_body(
 
 impl fmt::Display for MirModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Collect unique String/List literals across all bodies → text table.
+        // Collect unique String/List literals across all bodies -> text table.
         let mut lit_to_tidx: HashMap<String, usize> = HashMap::new();
         let mut text_entries: Vec<String> = Vec::new();
 
@@ -594,7 +595,8 @@ fn write_closure(
     }
     write!(f, ")")?;
     if !closure.capture_names.is_empty() {
-        write!(f, " [captures: {}]", closure.capture_names.join(", "))?;
+        let captures: Vec<String> = closure.capture_names.iter().map(|n| format!("{n}")).collect();
+        write!(f, " [captures: {}]", captures.join(", "))?;
     }
     writeln!(f, " ===")?;
     write_body(f, &closure.body, "  ", ctx)?;
@@ -615,8 +617,14 @@ impl fmt::Display for MirBody {
 }
 
 /// Convenience: dump a MirModule to a String.
+/// If you have an interner, prefer `dump_with` for proper Astr resolution.
 pub fn dump(module: &MirModule) -> String {
     module.to_string()
+}
+
+/// Dump a MirModule to a String with interner context for Astr resolution.
+pub fn dump_with(interner: &acvus_utils::Interner, module: &MirModule) -> String {
+    acvus_utils::with_interner_context(interner, || module.to_string())
 }
 
 #[cfg(test)]
@@ -625,22 +633,25 @@ mod tests {
     use crate::extern_module::{ExternModule, ExternRegistry};
     use crate::ty::Ty;
     use crate::user_type::UserTypeRegistry;
-    use std::collections::{BTreeMap, HashMap};
+    use acvus_utils::{Interner, with_interner_context};
+    use std::collections::HashMap;
 
     fn compile_and_dump(
         source: &str,
-        context: &HashMap<String, Ty>,
+        context: &HashMap<Astr, Ty>,
         registry: &ExternRegistry,
+        interner: &Interner,
     ) -> String {
-        let template = acvus_ast::parse(source).expect("parse failed");
-        let (module, _) = crate::compile(&template, context, registry, &UserTypeRegistry::new())
+        let template = acvus_ast::parse(interner, &source).expect("parse failed");
+        let (module, _) = crate::compile(interner, &template, context, registry, &UserTypeRegistry::new(), )
             .expect("compile failed");
-        dump(&module)
+        with_interner_context(interner, || dump(&module))
     }
 
     #[test]
     fn print_text_only() {
-        let out = compile_and_dump("hello world", &HashMap::new(), &ExternRegistry::new());
+        let interner = Interner::new();
+        let out = compile_and_dump("hello world", &HashMap::new(), &ExternRegistry::new(), &interner);
         assert!(out.contains("=== literals ==="));
         assert!(out.contains("T0 = \"hello world\""));
         assert!(out.contains("yield T0"));
@@ -648,18 +659,21 @@ mod tests {
 
     #[test]
     fn print_string_emit() {
-        let out = compile_and_dump(r#"{{ "hello" }}"#, &HashMap::new(), &ExternRegistry::new());
+        let interner = Interner::new();
+        let out = compile_and_dump(r#"{{ "hello" }}"#, &HashMap::new(), &ExternRegistry::new(), &interner);
         assert!(out.contains("T0 = \"hello\""));
         assert!(out.contains("yield T0"));
     }
 
     #[test]
     fn print_arithmetic() {
-        let context = HashMap::from([("a".into(), Ty::Int), ("b".into(), Ty::Int)]);
+        let interner = Interner::new();
+        let context = HashMap::from([(interner.intern("a"), Ty::Int), (interner.intern("b"), Ty::Int)]);
         let out = compile_and_dump(
             "{{ x = @a + @b }}{{ x | to_string }}{{_}}{{/}}",
             &context,
             &ExternRegistry::new(),
+            &interner,
         );
         assert!(out.contains("+"));
         assert!(out.contains("call to_string"));
@@ -667,11 +681,13 @@ mod tests {
 
     #[test]
     fn print_match_block() {
-        let context = HashMap::from([("name".into(), Ty::String)]);
+        let interner = Interner::new();
+        let context = HashMap::from([(interner.intern("name"), Ty::String)]);
         let out = compile_and_dump(
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
             &ExternRegistry::new(),
+            &interner,
         );
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
@@ -681,11 +697,13 @@ mod tests {
 
     #[test]
     fn print_closure() {
-        let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+        let interner = Interner::new();
+        let context = HashMap::from([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let out = compile_and_dump(
             "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}",
             &context,
             &ExternRegistry::new(),
+            &interner,
         );
         assert!(out.contains("closure L"));
         assert!(out.contains("=== closure"));
@@ -695,14 +713,16 @@ mod tests {
 
     #[test]
     fn print_async_call() {
-        let mut ext = ExternModule::new("test");
-        ext.add_fn("fetch", vec![Ty::Int], Ty::String, false);
+        let interner = Interner::new();
+        let mut ext = ExternModule::new(interner.intern("test"));
+        ext.add_fn(interner.intern("fetch"), vec![Ty::Int], Ty::String, false);
         let mut registry = ExternRegistry::new();
         registry.register(&ext);
         let out = compile_and_dump(
             "{{ x = fetch(1) }}{{ x }}{{_}}{{/}}",
             &HashMap::new(),
             &registry,
+            &interner,
         );
         assert!(out.contains("async_call fetch"));
         assert!(out.contains("await"));
@@ -710,29 +730,32 @@ mod tests {
 
     #[test]
     fn print_object_field() {
+        let interner = Interner::new();
         let context = HashMap::from([(
-            "user".into(),
-            Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-                ("age".into(), Ty::Int),
+            interner.intern("user"),
+            Ty::Object(HashMap::from([
+                (interner.intern("name"), Ty::String),
+                (interner.intern("age"), Ty::Int),
             ])),
         )]);
-        let out = compile_and_dump("{{ @user.name }}", &context, &ExternRegistry::new());
+        let out = compile_and_dump("{{ @user.name }}", &context, &ExternRegistry::new(), &interner);
         assert!(out.contains(".name"));
     }
 
     #[test]
     fn print_var_write() {
-        let out = compile_and_dump("{{ $count = 42 }}", &HashMap::new(), &ExternRegistry::new());
+        let interner = Interner::new();
+        let out = compile_and_dump("{{ $count = 42 }}", &HashMap::new(), &ExternRegistry::new(), &interner);
         assert!(out.contains("var_store $count"));
     }
 
     #[test]
     fn snapshot_full_example() {
+        let interner = Interner::new();
         let context = HashMap::from([(
-            "users".into(),
-            Ty::List(Box::new(Ty::Object(BTreeMap::from([(
-                "name".into(),
+            interner.intern("users"),
+            Ty::List(Box::new(Ty::Object(HashMap::from([(
+                interner.intern("name"),
                 Ty::String,
             )])))),
         )]);
@@ -740,6 +763,7 @@ mod tests {
             r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
             &context,
             &ExternRegistry::new(),
+            &interner,
         );
         assert!(out.contains("=== main ==="));
         assert!(out.contains("iter_init"));
@@ -748,10 +772,12 @@ mod tests {
 
     #[test]
     fn print_text_dedup() {
+        let interner = Interner::new();
         let out = compile_and_dump(
             r#"{{ "hello" }}{{ "hello" }}"#,
             &HashMap::new(),
             &ExternRegistry::new(),
+            &interner,
         );
         // Same literal should share one T-index.
         assert!(out.contains("T0 = \"hello\""));

@@ -25,7 +25,7 @@ COPY acvus-orchestration/Cargo.toml   acvus-orchestration/Cargo.toml
 COPY acvus-chat/Cargo.toml            acvus-chat/Cargo.toml
 COPY acvus-chat-cli/Cargo.toml        acvus-chat-cli/Cargo.toml
 COPY acvus-ext/Cargo.toml             acvus-ext/Cargo.toml
-COPY acvus-coroutine/Cargo.toml       acvus-coroutine/Cargo.toml
+COPY acvus-utils/Cargo.toml       acvus-utils/Cargo.toml
 COPY acvus-playground/Cargo.toml      acvus-playground/Cargo.toml
 COPY pomollu-engine/Cargo.toml        pomollu-engine/Cargo.toml
 
@@ -35,7 +35,7 @@ RUN mkdir -p acvus-ast/src acvus-mir/src acvus-mir-pass/src acvus-mir-cli/src \
              acvus-interpreter-test/tests \
              acvus-mir-test/tests \
              acvus-orchestration/src acvus-chat/src acvus-chat-cli/src \
-             acvus-ext/src acvus-coroutine/src \
+             acvus-ext/src acvus-utils/src \
              acvus-playground/src pomollu-engine/src && \
     echo 'fn main(){}' > acvus-ast/src/lib.rs && \
     echo 'fn main(){}' > acvus-mir/src/lib.rs && \
@@ -49,7 +49,7 @@ RUN mkdir -p acvus-ast/src acvus-mir/src acvus-mir-pass/src acvus-mir-cli/src \
     echo 'fn main(){}' > acvus-chat/src/lib.rs && \
     echo 'fn main(){}' > acvus-chat-cli/src/main.rs && \
     echo 'fn main(){}' > acvus-ext/src/lib.rs && \
-    echo 'fn main(){}' > acvus-coroutine/src/lib.rs && \
+    echo 'fn main(){}' > acvus-utils/src/lib.rs && \
     echo 'fn main(){}' > acvus-playground/src/main.rs && \
     touch acvus-playground/src/index.html && \
     echo 'fn main(){}' > pomollu-engine/src/lib.rs
@@ -59,7 +59,7 @@ RUN cargo fetch 2>&1 | tail -3 || true
 # Remove stubs, copy real sources (only what pomollu-engine needs)
 RUN rm -rf acvus-ast/src acvus-mir/src acvus-mir-pass/src \
            acvus-interpreter/src acvus-orchestration/src \
-           acvus-chat/src acvus-ext/src acvus-coroutine/src \
+           acvus-chat/src acvus-ext/src acvus-utils/src \
            pomollu-engine/src
 
 COPY acvus-ast         acvus-ast
@@ -69,7 +69,7 @@ COPY acvus-interpreter acvus-interpreter
 COPY acvus-orchestration acvus-orchestration
 COPY acvus-chat        acvus-chat
 COPY acvus-ext         acvus-ext
-COPY acvus-coroutine   acvus-coroutine
+COPY acvus-utils   acvus-utils
 COPY pomollu-engine    pomollu-engine
 
 RUN wasm-pack build --release --target bundler pomollu-engine

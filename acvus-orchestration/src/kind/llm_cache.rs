@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
+use acvus_utils::{Astr, Interner};
 
 use crate::compile::CompiledMessage;
 use crate::dsl::MessageSpec;
@@ -40,13 +41,14 @@ pub struct CompiledLlmCache {
 
 /// Compile an LLM cache node spec.
 pub fn compile_llm_cache(
+    interner: &Interner,
     spec: &LlmCacheSpec,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
-) -> Result<(CompiledLlmCache, HashSet<String>), Vec<OrchError>> {
-    let elem_ty = spec.api.message_elem_ty();
+) -> Result<(CompiledLlmCache, HashSet<Astr>), Vec<OrchError>> {
+    let elem_ty = spec.api.message_elem_ty(interner);
     let (compiled_messages, keys) =
-        crate::compile::compile_messages(&spec.messages, context_types, registry, &elem_ty)?;
+        crate::compile::compile_messages(interner, &spec.messages, context_types, registry, &elem_ty)?;
     Ok((
         CompiledLlmCache {
             api: spec.api.clone(),

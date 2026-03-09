@@ -2,10 +2,11 @@ mod anthropic;
 mod google;
 mod openai;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 
 use crate::kind::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolSpec, Usage};
@@ -27,25 +28,28 @@ impl ApiKind {
         }
     }
 
-    pub fn message_elem_ty(&self) -> Ty {
-        Ty::List(Box::new(Ty::Object(BTreeMap::from([
-            ("role".into(), Ty::String),
-            ("content".into(), Ty::String),
-            ("content_type".into(), Ty::String),
+    pub fn message_elem_ty(&self, interner: &Interner) -> Ty {
+        Ty::List(Box::new(Ty::Object(HashMap::from([
+            (interner.intern("role"), Ty::String),
+            (interner.intern("content"), Ty::String),
+            (interner.intern("content_type"), Ty::String),
         ]))))
     }
 
-    pub fn item_fields<'a>(&self, item: &'a Value) -> (&'a str, &'a str, &'a str) {
+    pub fn item_fields<'a>(&self, interner: &Interner, item: &'a Value) -> (&'a str, &'a str, &'a str) {
         let Value::Object(obj) = item else {
             panic!("item_fields: expected Object, got {item:?}");
         };
-        let Some(Value::String(role)) = obj.get("role") else {
+        let role_key = interner.intern("role");
+        let content_key = interner.intern("content");
+        let content_type_key = interner.intern("content_type");
+        let Some(Value::String(role)) = obj.get(&role_key) else {
             panic!("item_fields: missing or non-string 'role'");
         };
-        let Some(Value::String(content)) = obj.get("content") else {
+        let Some(Value::String(content)) = obj.get(&content_key) else {
             panic!("item_fields: missing or non-string 'content'");
         };
-        let Some(Value::String(content_type)) = obj.get("content_type") else {
+        let Some(Value::String(content_type)) = obj.get(&content_type_key) else {
             panic!("item_fields: missing or non-string 'content_type'");
         };
         (role.as_str(), content.as_str(), content_type.as_str())

@@ -1,3 +1,5 @@
+use acvus_utils::Astr;
+
 use crate::span::Span;
 
 /// A parsed script (standalone expressions with semicolons).
@@ -12,7 +14,7 @@ pub struct Script {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Bind {
-        name: String,
+        name: Astr,
         expr: Expr,
         span: Span,
     },
@@ -85,7 +87,7 @@ pub struct CatchAll {
 pub enum Expr {
     /// A reference: `name`, `$name`, or `@name`.
     Ident {
-        name: String,
+        name: Astr,
         ref_kind: RefKind,
         span: Span,
     },
@@ -107,7 +109,7 @@ pub enum Expr {
     /// Field access: `a.b`.
     FieldAccess {
         object: Box<Expr>,
-        field: String,
+        field: Astr,
         span: Span,
     },
     /// Function call: `f(args)`.
@@ -162,14 +164,14 @@ pub enum Expr {
     },
     /// Context call with bindings: `@name { key: expr, ... }`.
     ContextCall {
-        name: String,
-        bindings: Vec<(String, Expr)>,
+        name: Astr,
+        bindings: Vec<(Astr, Expr)>,
         span: Span,
     },
     /// A variant constructor: `Some(expr)`, `None`, or `Color::Red`.
     Variant {
-        enum_name: Option<String>,
-        tag: String,
+        enum_name: Option<Astr>,
+        tag: Astr,
         payload: Option<Box<Expr>>,
         span: Span,
     },
@@ -208,7 +210,7 @@ impl Expr {
 /// A lambda parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LambdaParam {
-    pub name: String,
+    pub name: Astr,
     pub span: Span,
 }
 
@@ -218,7 +220,7 @@ pub struct LambdaParam {
 /// Shorthand `{ @name }` → key="name", value=Ident("name", Context).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectExprField {
-    pub key: String,
+    pub key: Astr,
     pub value: Expr,
     pub span: Span,
 }
@@ -228,7 +230,7 @@ pub struct ObjectExprField {
 pub enum Pattern {
     /// A binding that captures a value: `item`, `$name`, or `@name`.
     Binding {
-        name: String,
+        name: Astr,
         ref_kind: RefKind,
         span: Span,
     },
@@ -261,8 +263,8 @@ pub enum Pattern {
     },
     /// A variant pattern: `Some(inner)`, `None`, or `Color::Red`.
     Variant {
-        enum_name: Option<String>,
-        tag: String,
+        enum_name: Option<Astr>,
+        tag: Astr,
         payload: Option<Box<Pattern>>,
         span: Span,
     },
@@ -294,7 +296,7 @@ pub enum TuplePatternElem {
 /// A field in an object pattern: `{ key: pattern }` or shorthand `{ name }` / `{ $name }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectPatternField {
-    pub key: String,
+    pub key: Astr,
     pub pattern: Pattern,
     pub span: Span,
 }

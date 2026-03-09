@@ -92,6 +92,7 @@ mod tests {
     use super::*;
     use acvus_ast::Span;
     use acvus_mir::ir::{Inst, MirBody};
+    use acvus_utils::Interner;
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
@@ -117,9 +118,10 @@ mod tests {
 
     #[test]
     fn context_load_mapped() {
+        let i = Interner::new();
         let module = make_module(vec![inst(InstKind::ContextLoad {
             dst: ValueId(0),
-            name: "user".into(),
+            name: i.intern("user"),
             bindings: Vec::new(),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
@@ -128,9 +130,10 @@ mod tests {
 
     #[test]
     fn var_load_mapped() {
+        let i = Interner::new();
         let module = make_module(vec![inst(InstKind::VarLoad {
             dst: ValueId(0),
-            name: "count".into(),
+            name: i.intern("count"),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
         assert_eq!(result.0[&ValueId(0)], 0);
@@ -185,10 +188,11 @@ mod tests {
 
     #[test]
     fn non_defining_insts_skipped() {
+        let i = Interner::new();
         let module = make_module(vec![
             inst(InstKind::Yield(ValueId(99))),
             inst(InstKind::VarStore {
-                name: "x".into(),
+                name: i.intern("x"),
                 src: ValueId(0),
             }),
             inst(InstKind::Nop),

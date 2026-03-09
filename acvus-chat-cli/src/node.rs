@@ -5,6 +5,7 @@ use acvus_orchestration::{
     ApiKind, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec,
     PlainSpec, SelfSpec, Strategy, TokenBudget, ToolBinding,
 };
+use acvus_utils::Interner;
 use serde::Deserialize;
 
 /// TOML-deserializable node definition.
@@ -148,6 +149,7 @@ fn resolve_template(
 
 /// Convert a TOML `NodeDef` into a pure `NodeSpec`, reading template files from `base_dir`.
 pub fn resolve_node(
+    interner: &Interner,
     def: NodeDef,
     base_dir: &Path,
     provider_apis: &HashMap<String, ApiKind>,
@@ -163,7 +165,7 @@ pub fn resolve_node(
                 let source =
                     resolve_template(base_dir, template.as_deref(), inline_template.as_deref())
                         .map_err(|e| format!("message {i}: {e}"))?;
-                messages.push(MessageSpec::Block { role, source });
+                messages.push(MessageSpec::Block { role: interner.intern(&role), source });
             }
             MessageDef::Iterator {
                 iterator,
@@ -172,9 +174,9 @@ pub fn resolve_node(
                 token_budget,
             } => {
                 messages.push(MessageSpec::Iterator {
-                    key: iterator,
+                    key: interner.intern(&iterator),
                     slice,
-                    role,
+                    role: role.map(|r| interner.intern(&r)),
                     token_budget: token_budget.map(|tb| TokenBudget {
                         priority: tb.priority,
                         min: tb.min,
@@ -195,7 +197,7 @@ pub fn resolve_node(
                 def.strategy.inline_history_bind.as_deref(),
             )
             .map_err(|e| format!("node '{}': history strategy: {e}", def.name))?;
-            Strategy::History { history_bind }
+            Strategy::History { history_bind: interner.intern(&history_bind) }
         }
         StrategyModeDef::IfModified => {
             let key = resolve_template(
@@ -204,12 +206,12 @@ pub fn resolve_node(
                 def.strategy.inline_key.as_deref(),
             )
             .map_err(|e| format!("node '{}': if-modified strategy: {e}", def.name))?;
-            Strategy::IfModified { key }
+            Strategy::IfModified { key: interner.intern(&key) }
         }
     };
 
     let self_spec = SelfSpec {
-        initial_value: def.self_spec.initial_value,
+        initial_value: def.self_spec.initial_value.map(|v| interner.intern(&v)),
     };
 
     let generation = GenerationParams {
@@ -292,11 +294,11 @@ pub fn resolve_node(
     };
 
     Ok(NodeSpec {
-        name: def.name,
+        name: interner.intern(&def.name),
         kind,
         self_spec,
         strategy,
         retry: def.retry,
-        assert: def.assert,
+        assert: def.assert.map(|a| interner.intern(&a)),
     })
 }

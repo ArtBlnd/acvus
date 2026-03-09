@@ -1,7 +1,8 @@
 use acvus_ast::Literal;
 use acvus_interpreter::Value;
+use acvus_utils::Interner;
 
-pub fn json_to_value(v: &serde_json::Value) -> Value {
+pub fn json_to_value(interner: &Interner, v: &serde_json::Value) -> Value {
     match v {
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Bool(b) => Value::Bool(*b),
@@ -13,10 +14,10 @@ pub fn json_to_value(v: &serde_json::Value) -> Value {
             }
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Array(arr) => Value::List(arr.iter().map(|v| json_to_value(interner, v)).collect()),
         serde_json::Value::Object(obj) => Value::Object(
             obj.iter()
-                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .map(|(k, v)| (interner.intern(k), json_to_value(interner, v)))
                 .collect(),
         ),
     }

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
+use acvus_utils::{Astr, Interner};
 
 use crate::compile::CompiledBlock;
 use crate::error::OrchError;
@@ -26,11 +27,12 @@ pub struct CompiledPlain {
 
 /// Compile a plain node spec.
 pub fn compile_plain(
+    interner: &Interner,
     spec: &PlainSpec,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
-) -> Result<(CompiledPlain, HashSet<String>), Vec<OrchError>> {
-    let block = crate::compile::compile_template(&spec.source, 0, context_types, registry)
+) -> Result<(CompiledPlain, HashSet<Astr>), Vec<OrchError>> {
+    let block = crate::compile::compile_template(interner, &spec.source, 0, context_types, registry)
         .map_err(|e| vec![e])?;
     let keys = block.context_keys.clone();
     Ok((CompiledPlain { block }, keys))

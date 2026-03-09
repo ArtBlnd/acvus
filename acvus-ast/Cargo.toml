@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+acvus-utils = { path = "../acvus-utils" }
 lalrpop-util = "0.22"
 logos = "0.14"
 

@@ -50,7 +50,9 @@ impl Storage for HashMapStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::HashMap;
+
+    use acvus_utils::Interner;
 
     use super::*;
 
@@ -64,11 +66,12 @@ mod tests {
 
     #[test]
     fn overwrite() {
+        let interner = Interner::new();
         let mut s = HashMapStorage::new();
         s.set("x".into(), Value::String("first".into()));
         s.set(
             "x".into(),
-            Value::Object(BTreeMap::from([("v".into(), Value::Int(2))])),
+            Value::Object(HashMap::from([(interner.intern("v"), Value::Int(2))])),
         );
         assert!(matches!(&*s.get("x").unwrap(), Value::Object(_)));
     }

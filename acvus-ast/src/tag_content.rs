@@ -1,3 +1,5 @@
+use acvus_utils::Interner;
+
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
 use crate::span::Span;
@@ -65,7 +67,7 @@ pub fn build_list(
 /// Convert a parsed expression (LHS of `->`) into a Lambda node.
 /// The params_expr is semantically validated: single Ident → 1 param,
 /// Group → multiple params, Paren(Ident) → 1 param.
-pub fn expr_to_lambda(params_expr: Expr, body: Expr, span: Span) -> Expr {
+pub fn expr_to_lambda(interner: &Interner, params_expr: Expr, body: Expr, span: Span) -> Expr {
     let params = match params_expr {
         Expr::Ident { name, span, .. } => vec![LambdaParam { name, span }],
         Expr::Tuple { elements, .. } => elements
@@ -73,11 +75,11 @@ pub fn expr_to_lambda(params_expr: Expr, body: Expr, span: Span) -> Expr {
             .map(|elem| match elem {
                 TupleElem::Expr(Expr::Ident { name, span, .. }) => LambdaParam { name, span },
                 TupleElem::Expr(other) => LambdaParam {
-                    name: format!("<invalid:{:?}>", other.span()),
+                    name: interner.intern(&format!("<invalid:{:?}>", other.span())),
                     span: other.span(),
                 },
                 TupleElem::Wildcard(span) => LambdaParam {
-                    name: "<invalid:wildcard>".into(),
+                    name: interner.intern("<invalid:wildcard>"),
                     span,
                 },
             })
@@ -85,12 +87,12 @@ pub fn expr_to_lambda(params_expr: Expr, body: Expr, span: Span) -> Expr {
         Expr::Paren { inner, .. } => match *inner {
             Expr::Ident { name, span, .. } => vec![LambdaParam { name, span }],
             other => vec![LambdaParam {
-                name: format!("<invalid:{:?}>", other.span()),
+                name: interner.intern(&format!("<invalid:{:?}>", other.span())),
                 span: other.span(),
             }],
         },
         other => vec![LambdaParam {
-            name: format!("<invalid:{:?}>", other.span()),
+            name: interner.intern(&format!("<invalid:{:?}>", other.span())),
             span: other.span(),
         }],
     };

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use acvus_utils::{Astr, Interner};
+
 use crate::ty::{Ty, TySubst};
 use crate::user_type::UserTypeId;
 
@@ -19,14 +21,14 @@ pub enum VariantPayload {
 /// Definition of a single variant within an enum.
 #[derive(Debug, Clone)]
 pub struct VariantDef {
-    pub tag: String,
+    pub tag: Astr,
     pub payload: VariantPayload,
 }
 
 /// Definition of an enum (tagged union) type.
 #[derive(Debug, Clone)]
 pub struct EnumDef {
-    pub name: String,
+    pub name: Astr,
     pub type_param_count: usize,
     pub variants: Vec<VariantDef>,
 }
@@ -35,43 +37,37 @@ pub struct EnumDef {
 #[derive(Debug, Clone)]
 pub struct VariantRegistry {
     enums: Vec<EnumDef>,
-    /// Flat tag → VariantTagId (unqualified lookup).
-    tag_index: HashMap<String, VariantTagId>,
-    /// (enum_name, tag) → VariantTagId (qualified lookup).
-    enum_tag_index: HashMap<(String, String), VariantTagId>,
-    /// VariantTagId(n) → (enum index, variant index).
+    /// Flat tag -> VariantTagId (unqualified lookup).
+    tag_index: HashMap<Astr, VariantTagId>,
+    /// (enum_name, tag) -> VariantTagId (qualified lookup).
+    enum_tag_index: HashMap<(Astr, Astr), VariantTagId>,
+    /// VariantTagId(n) -> (enum index, variant index).
     tag_id_index: Vec<(usize, usize)>,
 }
 
-impl Default for VariantRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl VariantRegistry {
-    pub fn new() -> Self {
+    pub fn new(interner: &Interner) -> Self {
         let mut registry = Self {
             enums: Vec::new(),
             tag_index: HashMap::new(),
             enum_tag_index: HashMap::new(),
             tag_id_index: Vec::new(),
         };
-        registry.register_builtins();
+        registry.register_builtins(interner);
         registry
     }
 
-    fn register_builtins(&mut self) {
+    fn register_builtins(&mut self, interner: &Interner) {
         self.register(EnumDef {
-            name: "Option".into(),
+            name: interner.intern("Option"),
             type_param_count: 1,
             variants: vec![
                 VariantDef {
-                    tag: "Some".into(),
+                    tag: interner.intern("Some"),
                     payload: VariantPayload::TypeParam(0),
                 },
                 VariantDef {
-                    tag: "None".into(),
+                    tag: interner.intern("None"),
                     payload: VariantPayload::None,
                 },
             ],
@@ -84,31 +80,28 @@ impl VariantRegistry {
             let tag_id = VariantTagId(self.tag_id_index.len() as u16);
             self.tag_id_index.push((enum_idx, var_idx));
 
-            let prev = self.tag_index.insert(variant.tag.clone(), tag_id);
+            let prev = self.tag_index.insert(variant.tag, tag_id);
             assert!(prev.is_none(), "duplicate variant tag: {}", variant.tag);
 
             self.enum_tag_index
-                .insert((def.name.clone(), variant.tag.clone()), tag_id);
+                .insert((def.name, variant.tag), tag_id);
         }
         self.enums.push(def);
     }
 
     /// Resolve a variant tag, optionally qualified by enum name.
-    /// - `resolve_tag(None, "Some")` → flat lookup
-    /// - `resolve_tag(Some("Color"), "Red")` → qualified lookup
-    pub fn resolve_tag(&self, enum_name: Option<&str>, tag: &str) -> Option<VariantTagId> {
+    /// - `resolve_tag(None, tag)` -> flat lookup
+    /// - `resolve_tag(Some(enum_name), tag)` -> qualified lookup
+    pub fn resolve_tag(&self, enum_name: Option<Astr>, tag: Astr) -> Option<VariantTagId> {
         match enum_name {
-            Some(name) => self
-                .enum_tag_index
-                .get(&(name.to_string(), tag.to_string()))
-                .copied(),
-            None => self.tag_index.get(tag).copied(),
+            Some(name) => self.enum_tag_index.get(&(name, tag)).copied(),
+            None => self.tag_index.get(&tag).copied(),
         }
     }
 
     /// Resolve a variant tag to its parent enum and variant definition.
-    pub fn resolve(&self, tag: &str) -> Option<(&EnumDef, &VariantDef)> {
-        let id = self.tag_index.get(tag)?;
+    pub fn resolve(&self, tag: Astr) -> Option<(&EnumDef, &VariantDef)> {
+        let id = self.tag_index.get(&tag)?;
         Some(self.get_tag_info(*id))
     }
 
@@ -121,33 +114,35 @@ impl VariantRegistry {
         )
     }
 
-    /// Get the tag name string from a VariantTagId.
-    pub fn tag_name(&self, id: VariantTagId) -> &str {
+    /// Get the tag name from a VariantTagId.
+    pub fn tag_name(&self, id: VariantTagId) -> Astr {
         let (_, vdef) = self.get_tag_info(id);
-        &vdef.tag
+        vdef.tag
     }
 
-    /// Build a tag name table for the MirModule: index `i` → tag name for `VariantTagId(i)`.
-    pub fn build_tag_names(&self) -> Vec<String> {
+    /// Build a tag name table for the MirModule: index `i` -> tag name for `VariantTagId(i)`.
+    pub fn build_tag_names(&self) -> Vec<Astr> {
         self.tag_id_index
             .iter()
-            .map(|&(enum_idx, var_idx)| self.enums[enum_idx].variants[var_idx].tag.clone())
+            .map(|&(enum_idx, var_idx)| self.enums[enum_idx].variants[var_idx].tag)
             .collect()
     }
 }
 
 /// Construct a `Ty` for the given enum with resolved type parameters.
 pub fn make_enum_ty(
-    enum_name: &str,
+    enum_name: Astr,
     type_params: &[Ty],
     subst: &TySubst,
     user_type_id: Option<UserTypeId>,
+    interner: &Interner,
 ) -> Ty {
-    match enum_name {
+    let name_str = interner.resolve(enum_name);
+    match name_str {
         "Option" => Ty::Option(Box::new(subst.resolve(&type_params[0]))),
         _ => match user_type_id {
             Some(id) => Ty::UserType(id),
-            None => panic!("unknown enum type: {enum_name}"),
+            None => panic!("unknown enum type: {}", name_str),
         },
     }
 }

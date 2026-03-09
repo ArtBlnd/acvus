@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +43,7 @@ pub struct ProviderConfig {
 ///
 /// If the value is a type name string ("string", "int", "float", "bool"),
 /// returns that type directly. Otherwise infers from the value.
-pub fn toml_to_ty(value: &toml::Value) -> Ty {
+pub fn toml_to_ty(interner: &Interner, value: &toml::Value) -> Ty {
     match value {
         toml::Value::String(s) => match s.as_str() {
             "string" => Ty::String,
@@ -55,13 +56,13 @@ pub fn toml_to_ty(value: &toml::Value) -> Ty {
         toml::Value::Float(_) => Ty::Float,
         toml::Value::Boolean(_) => Ty::Bool,
         toml::Value::Array(arr) => {
-            let elem_ty = arr.first().map(toml_to_ty).unwrap_or(Ty::Unit);
+            let elem_ty = arr.first().map(|v| toml_to_ty(interner, v)).unwrap_or(Ty::Unit);
             Ty::List(Box::new(elem_ty))
         }
         toml::Value::Table(table) => {
             let fields = table
                 .iter()
-                .map(|(k, v)| (k.clone(), toml_to_ty(v)))
+                .map(|(k, v)| (interner.intern(k), toml_to_ty(interner, v)))
                 .collect();
             Ty::Object(fields)
         }
@@ -79,16 +80,16 @@ pub struct ContextEntry {
 ///
 /// - String ("int", "string"...) → type only
 /// - Table { type = "...", value = ... } → type + default
-pub fn parse_context_entry(value: &toml::Value) -> ContextEntry {
+pub fn parse_context_entry(interner: &Interner, value: &toml::Value) -> ContextEntry {
     if let toml::Value::Table(table) = value
         && let Some(ty_val) = table.get("type")
     {
-        let ty = toml_to_ty(ty_val);
+        let ty = toml_to_ty(interner, ty_val);
         let default = table.get("value").map(toml_to_value);
         return ContextEntry { ty, default };
     }
     ContextEntry {
-        ty: toml_to_ty(value),
+        ty: toml_to_ty(interner, value),
         default: None,
     }
 }
@@ -106,39 +107,41 @@ pub fn toml_to_value(value: &toml::Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
 
     #[test]
     fn toml_to_ty_primitives() {
-        assert_eq!(toml_to_ty(&toml::Value::String("hi".into())), Ty::String);
-        assert_eq!(toml_to_ty(&toml::Value::Integer(42)), Ty::Int);
-        assert_eq!(toml_to_ty(&toml::Value::Float(3.14)), Ty::Float);
-        assert_eq!(toml_to_ty(&toml::Value::Boolean(true)), Ty::Bool);
+        let interner = Interner::new();
+        assert_eq!(toml_to_ty(&interner, &toml::Value::String("hi".into())), Ty::String);
+        assert_eq!(toml_to_ty(&interner, &toml::Value::Integer(42)), Ty::Int);
+        assert_eq!(toml_to_ty(&interner, &toml::Value::Float(3.14)), Ty::Float);
+        assert_eq!(toml_to_ty(&interner, &toml::Value::Boolean(true)), Ty::Bool);
     }
 
     #[test]
     fn toml_to_ty_array() {
+        let interner = Interner::new();
         let arr = toml::Value::Array(vec![toml::Value::Integer(1), toml::Value::Integer(2)]);
-        assert_eq!(toml_to_ty(&arr), Ty::List(Box::new(Ty::Int)));
+        assert_eq!(toml_to_ty(&interner, &arr), Ty::List(Box::new(Ty::Int)));
     }
 
     #[test]
     fn toml_to_ty_empty_array() {
+        let interner = Interner::new();
         let arr = toml::Value::Array(vec![]);
-        assert_eq!(toml_to_ty(&arr), Ty::List(Box::new(Ty::Unit)));
+        assert_eq!(toml_to_ty(&interner, &arr), Ty::List(Box::new(Ty::Unit)));
     }
 
     #[test]
     fn toml_to_ty_table() {
+        let interner = Interner::new();
         let mut table = toml::Table::new();
         table.insert("name".into(), toml::Value::String("alice".into()));
         table.insert("age".into(), toml::Value::Integer(30));
-        let ty = toml_to_ty(&toml::Value::Table(table));
-        let expected = Ty::Object(BTreeMap::from([
-            ("age".into(), Ty::Int),
-            ("name".into(), Ty::String),
+        let ty = toml_to_ty(&interner, &toml::Value::Table(table));
+        let expected = Ty::Object(HashMap::from([
+            (interner.intern("age"), Ty::Int),
+            (interner.intern("name"), Ty::String),
         ]));
         assert_eq!(ty, expected);
     }

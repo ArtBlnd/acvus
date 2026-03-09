@@ -23,7 +23,7 @@ acvus-mir-cli           CLI tool for MIR inspection
 acvus-mir-test          MIR snapshot tests (insta)
 acvus-interpreter       Runtime values, sync execution, RuntimeError
 acvus-interpreter-test  Interpreter e2e tests
-acvus-coroutine         Async coroutine primitive (Stepped pattern, error propagation)
+acvus-utils         Async coroutine primitive (Stepped pattern, error propagation)
 acvus-ext               Extension modules (regex, etc.)
 acvus-orchestration     Compilation, DAG builder, provider abstraction, Fetch / Storage traits
 acvus-chat              Chat engine — multi-turn LLM orchestration, tool calls

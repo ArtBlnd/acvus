@@ -1,3 +1,4 @@
+use acvus_utils::Interner;
 use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
@@ -10,20 +11,21 @@ use crate::token::Token;
 use crate::tag_content::TagContent;
 
 /// Parse a script source string (standalone expressions with semicolons).
-pub fn parse_script(source: &str) -> Result<Script, ParseError> {
-    let tokenizer = ExprTokenizer::new(source, 0);
+pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseError> {
+    let tokenizer = ExprTokenizer::new(source, 0, interner);
     ScriptParser::new()
-        .parse(tokenizer)
+        .parse(interner, tokenizer)
         .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
 }
 
 /// Parse a template source string into an AST.
-pub fn parse_template(source: &str) -> Result<Template, ParseError> {
+pub fn parse_template(interner: &Interner, source: &str) -> Result<Template, ParseError> {
     let segments = scan_template(source)?;
     let mut builder = TreeBuilder {
         segments: &segments,
         pos: 0,
         source,
+        interner,
     };
     let body = builder.build_body()?;
     let span = if body.is_empty() {
@@ -51,6 +53,7 @@ struct TreeBuilder<'a> {
     pos: usize,
     #[allow(dead_code)]
     source: &'a str,
+    interner: &'a Interner,
 }
 
 /// What stopped `build_body` from collecting more nodes.
@@ -129,7 +132,7 @@ impl<'a> TreeBuilder<'a> {
                     let inner_span = *inner_span;
                     self.advance();
 
-                    let tag_content = parse_tag_content(&content, inner_span.start)?;
+                    let tag_content = parse_tag_content(self.interner, &content, inner_span.start)?;
 
                     match tag_content {
                         TagContent::Expr(expr) => {
@@ -339,11 +342,11 @@ impl<'a> TreeBuilder<'a> {
 }
 
 /// Parse the content of a `{{ }}` tag using LALRPOP.
-fn parse_tag_content(content: &str, base_offset: usize) -> Result<TagContent, ParseError> {
-    let tokenizer = ExprTokenizer::new(content, base_offset);
+fn parse_tag_content(interner: &Interner, content: &str, base_offset: usize) -> Result<TagContent, ParseError> {
+    let tokenizer = ExprTokenizer::new(content, base_offset, interner);
     let parser = TagContentParser::new();
     parser
-        .parse(tokenizer)
+        .parse(interner, tokenizer)
         .map_err(|e| convert_lalrpop_error(e, base_offset, content.len()))
 }
 
@@ -417,7 +420,7 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             ref_kind,
             span,
         } => Ok(Pattern::Binding {
-            name: name.clone(),
+            name: *name,
             ref_kind: *ref_kind,
             span: *span,
         }),
@@ -461,7 +464,7 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 .map(|f| {
                     let pattern = expr_to_pattern(&f.value)?;
                     Ok(ObjectPatternField {
-                        key: f.key.clone(),
+                        key: f.key,
                         pattern,
                         span: f.span,
                     })
@@ -499,8 +502,8 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 None => None,
             };
             Ok(Pattern::Variant {
-                enum_name: enum_name.clone(),
-                tag: tag.clone(),
+                enum_name: *enum_name,
+                tag: *tag,
                 payload: pat_payload,
                 span: *span,
             })
@@ -516,34 +519,40 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
 mod tests {
     use super::*;
 
-    fn parse(src: &str) -> Result<Template, ParseError> {
-        parse_template(src)
+    fn parse(src: &str) -> (Interner, Result<Template, ParseError>) {
+        let interner = Interner::new();
+        let result = parse_template(&interner, src);
+        (interner, result)
     }
 
     #[test]
     fn parse_literal_text() {
-        let t = parse("hello world").unwrap();
+        let (_interner, result) = parse("hello world");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         assert!(matches!(&t.body[0], Node::Text { value, .. } if value == "hello world"));
     }
 
     #[test]
     fn parse_inline_expr() {
-        let t = parse("{{ \"hello\" }}").unwrap();
+        let (_interner, result) = parse("{{ \"hello\" }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         assert!(matches!(&t.body[0], Node::InlineExpr { .. }));
     }
 
     #[test]
     fn parse_comment() {
-        let t = parse("{{-- comment --}}").unwrap();
+        let (_interner, result) = parse("{{-- comment --}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         assert!(matches!(&t.body[0], Node::Comment { .. }));
     }
 
     #[test]
     fn parse_storage_write() {
-        let t = parse("{{ $global = 42 }}").unwrap();
+        let (interner, result) = parse("{{ $global = 42 }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 1);
@@ -551,7 +560,7 @@ mod tests {
             assert!(mb.catch_all.is_none());
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Binding { name, ref_kind: RefKind::Variable, .. } if name == "global"
+                Pattern::Binding { name, ref_kind: RefKind::Variable, .. } if interner.resolve(*name) == "global"
             ));
             assert!(matches!(
                 &mb.source,
@@ -568,16 +577,17 @@ mod tests {
     #[test]
     fn parse_simple_variable_binding() {
         // Variable bindings are body-less (no {{/}} needed).
-        let t = parse("{{ item = list }}{{ item }}").unwrap();
+        let (interner, result) = parse("{{ item = list }}{{ item }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 2);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 1);
             assert!(mb.arms[0].body.is_empty());
             assert!(mb.catch_all.is_none());
             assert!(
-                matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if name == "item")
+                matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if interner.resolve(*name) == "item")
             );
-            assert!(matches!(&mb.source, Expr::Ident { name, .. } if name == "list"));
+            assert!(matches!(&mb.source, Expr::Ident { name, .. } if interner.resolve(*name) == "list"));
         } else {
             panic!("expected MatchBlock");
         }
@@ -585,7 +595,8 @@ mod tests {
 
     #[test]
     fn parse_match_with_catch_all() {
-        let t = parse("{{ true = is_valid }}yes{{_}}no{{/}}").unwrap();
+        let (_interner, result) = parse("{{ true = is_valid }}yes{{_}}no{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 1);
@@ -605,7 +616,8 @@ mod tests {
     #[test]
     fn parse_multi_arm() {
         // `{{ pattern = }}` is a continuation arm.
-        let t = parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#).unwrap();
+        let (_interner, result) = parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#);
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 2);
@@ -617,7 +629,8 @@ mod tests {
 
     #[test]
     fn parse_destructuring_rest_tail() {
-        let t = parse("{{ [a, b, ..] = list }}{{a}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ [a, b, ..] = list }}{{a}}{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
@@ -632,7 +645,8 @@ mod tests {
 
     #[test]
     fn parse_destructuring_rest_head() {
-        let t = parse("{{ [.., a, b] = list }}{{a}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ [.., a, b] = list }}{{a}}{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
@@ -647,7 +661,8 @@ mod tests {
 
     #[test]
     fn parse_destructuring_exhaustive() {
-        let t = parse("{{ [a, b, c] = list }}{{a}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ [a, b, c] = list }}{{a}}{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
@@ -663,7 +678,8 @@ mod tests {
     #[test]
     fn parse_nested_blocks() {
         // Variable bindings are body-less, so nested blocks use pattern matches.
-        let t = parse("{{ true = flag }}yes{{_}}no{{/}}").unwrap();
+        let (_interner, result) = parse("{{ true = flag }}yes{{_}}no{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.arms.len(), 1);
@@ -673,7 +689,8 @@ mod tests {
         }
 
         // Variable bindings followed by usage.
-        let t = parse("{{ user = users }}{{ user }}").unwrap();
+        let (_interner, result) = parse("{{ user = users }}{{ user }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 2);
         assert!(matches!(&t.body[0], Node::MatchBlock(_)));
         assert!(matches!(&t.body[1], Node::InlineExpr { .. }));
@@ -681,7 +698,8 @@ mod tests {
 
     #[test]
     fn parse_pipe_and_lambda() {
-        let t = parse("{{ list | filter(x -> x != 0) | map(x -> x * 2) }}").unwrap();
+        let (_interner, result) = parse("{{ list | filter(x -> x != 0) | map(x -> x * 2) }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
             // Should be a Pipe expression
@@ -693,7 +711,8 @@ mod tests {
 
     #[test]
     fn parse_arithmetic() {
-        let t = parse("{{ 1 + 2 * 3 }}").unwrap();
+        let (_interner, result) = parse("{{ 1 + 2 * 3 }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
             // Should be Add(1, Mul(2, 3)) due to precedence
@@ -717,10 +736,11 @@ mod tests {
 
     #[test]
     fn parse_field_access() {
-        let t = parse("{{ user.name }}").unwrap();
+        let (interner, result) = parse("{{ user.name }}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
-            assert!(matches!(expr, Expr::FieldAccess { field, .. } if field == "name"));
+            assert!(matches!(expr, Expr::FieldAccess { field, .. } if interner.resolve(*field) == "name"));
         } else {
             panic!("expected InlineExpr");
         }
@@ -729,20 +749,21 @@ mod tests {
     #[test]
     fn parse_object_pattern() {
         // Objects require trailing comma: { $value, name, }
-        let t = parse("{{ { $value, name, } = $global }}x{{/}}").unwrap();
+        let (interner, result) = parse("{{ { $value, name, } = $global }}x{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             if let Pattern::Object { fields, .. } = &mb.arms[0].pattern {
                 assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0].key, "value");
+                assert_eq!(interner.resolve(fields[0].key), "value");
                 assert!(matches!(
                     &fields[0].pattern,
-                    Pattern::Binding { name, ref_kind: RefKind::Variable, .. } if name == "value"
+                    Pattern::Binding { name, ref_kind: RefKind::Variable, .. } if interner.resolve(*name) == "value"
                 ));
-                assert_eq!(fields[1].key, "name");
+                assert_eq!(interner.resolve(fields[1].key), "name");
                 assert!(matches!(
                     &fields[1].pattern,
-                    Pattern::Binding { name, ref_kind: RefKind::Value, .. } if name == "name"
+                    Pattern::Binding { name, ref_kind: RefKind::Value, .. } if interner.resolve(*name) == "name"
                 ));
             } else {
                 panic!("expected Object pattern");
@@ -754,7 +775,8 @@ mod tests {
 
     #[test]
     fn parse_range_exclusive() {
-        let t = parse("{{ 0..10 = x }}{{x}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ 0..10 = x }}{{x}}{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
@@ -770,7 +792,8 @@ mod tests {
 
     #[test]
     fn parse_range_inclusive_end() {
-        let t = parse("{{ 0..=10 = x }}{{x}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ 0..=10 = x }}{{x}}{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
@@ -786,7 +809,8 @@ mod tests {
 
     #[test]
     fn parse_range_exclusive_start() {
-        let t = parse("{{ 0=..10 = x }}{{x}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ 0=..10 = x }}{{x}}{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
@@ -802,7 +826,8 @@ mod tests {
 
     #[test]
     fn parse_range_inline_expr() {
-        let t = parse("{{ 1..5 }}").unwrap();
+        let (_interner, result) = parse("{{ 1..5 }}");
+        let t = result.unwrap();
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
             assert!(matches!(
                 expr,
@@ -819,7 +844,7 @@ mod tests {
     #[test]
     fn parse_unclosed_block() {
         // A literal pattern match without {{/}} is unclosed.
-        let result = parse("{{ true = x }}hello");
+        let (_interner, result) = parse("{{ true = x }}hello");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err().kind,
@@ -841,7 +866,8 @@ mod tests {
 
     #[test]
     fn parse_indent_increase() {
-        let t = parse("{{ true = x }}hello{{/+2}}").unwrap();
+        let (_interner, result) = parse("{{ true = x }}hello{{/+2}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.indent, Some(IndentModifier::Increase(2)));
         } else {
@@ -851,7 +877,8 @@ mod tests {
 
     #[test]
     fn parse_indent_decrease() {
-        let t = parse("{{ true = x }}hello{{/-1}}").unwrap();
+        let (_interner, result) = parse("{{ true = x }}hello{{/-1}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.indent, Some(IndentModifier::Decrease(1)));
         } else {
@@ -861,7 +888,8 @@ mod tests {
 
     #[test]
     fn parse_indent_none() {
-        let t = parse("{{ true = x }}hello{{/}}").unwrap();
+        let (_interner, result) = parse("{{ true = x }}hello{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert_eq!(mb.indent, None);
         } else {
@@ -871,7 +899,8 @@ mod tests {
 
     #[test]
     fn parse_indent_with_catch_all() {
-        let t = parse("{{ true = x }}yes{{_}}no{{/+3}}").unwrap();
+        let (_interner, result) = parse("{{ true = x }}yes{{_}}no{{/+3}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(mb.catch_all.is_some());
             assert_eq!(mb.indent, Some(IndentModifier::Increase(3)));
@@ -884,44 +913,49 @@ mod tests {
 
     #[test]
     fn script_single_expr() {
-        let s = parse_script("@data").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "@data").unwrap();
         assert!(s.stmts.is_empty());
         assert!(matches!(
             s.tail.as_deref(),
-            Some(Expr::Ident { name, ref_kind: RefKind::Context, .. }) if name == "data"
+            Some(Expr::Ident { name, ref_kind: RefKind::Context, .. }) if interner.resolve(*name) == "data"
         ));
     }
 
     #[test]
     fn script_bind_and_tail() {
-        let s = parse_script("x = @data; x").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "x = @data; x").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if name == "x"));
+        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "x"));
         assert!(matches!(
             s.tail.as_deref(),
-            Some(Expr::Ident { name, ref_kind: RefKind::Value, .. }) if name == "x"
+            Some(Expr::Ident { name, ref_kind: RefKind::Value, .. }) if interner.resolve(*name) == "x"
         ));
     }
 
     #[test]
     fn script_trailing_semicolon_no_tail() {
-        let s = parse_script("x = @data;").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "x = @data;").unwrap();
         assert_eq!(s.stmts.len(), 1);
         assert!(s.tail.is_none());
     }
 
     #[test]
     fn script_multiple_stmts_and_tail() {
-        let s = parse_script("x = @data; y = x; y").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "x = @data; y = x; y").unwrap();
         assert_eq!(s.stmts.len(), 2);
-        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if name == "x"));
-        assert!(matches!(&s.stmts[1], Stmt::Bind { name, .. } if name == "y"));
+        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "x"));
+        assert!(matches!(&s.stmts[1], Stmt::Bind { name, .. } if interner.resolve(*name) == "y"));
         assert!(s.tail.is_some());
     }
 
     #[test]
     fn script_expr_stmt() {
-        let s = parse_script("42; @data").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "42; @data").unwrap();
         assert_eq!(s.stmts.len(), 1);
         assert!(matches!(
             &s.stmts[0],
@@ -935,14 +969,16 @@ mod tests {
 
     #[test]
     fn script_empty() {
-        let s = parse_script("").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "").unwrap();
         assert!(s.stmts.is_empty());
         assert!(s.tail.is_none());
     }
 
     #[test]
     fn script_pipe_in_bind() {
-        let s = parse_script("x = @data | filter(f); x").unwrap();
+        let interner = Interner::new();
+        let s = parse_script(&interner, "x = @data | filter(f); x").unwrap();
         assert_eq!(s.stmts.len(), 1);
         if let Stmt::Bind { expr, .. } = &s.stmts[0] {
             assert!(matches!(expr, Expr::Pipe { .. }));
@@ -955,18 +991,20 @@ mod tests {
 
     #[test]
     fn parse_some_expr() {
-        let t = parse("{{ Some(42) | to_string }}{{_}}{{/}}").unwrap();
+        let (_interner, result) = parse("{{ Some(42) | to_string }}{{_}}{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
     }
 
     #[test]
     fn parse_none_expr() {
-        let t = parse("{{ x = None }}{{_}}{{/}}").unwrap();
+        let (interner, result) = parse("{{ x = None }}{{_}}{{/}}");
+        let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.source,
-                Expr::Variant { tag, payload: None, .. } if tag == "None"
+                Expr::Variant { tag, payload: None, .. } if interner.resolve(*tag) == "None"
             ));
         } else {
             panic!("expected MatchBlock");
@@ -975,11 +1013,12 @@ mod tests {
 
     #[test]
     fn parse_some_pattern() {
-        let t = parse("{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}").unwrap();
+        let (interner, result) = parse("{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Variant { tag, payload: Some(_), .. } if tag == "Some"
+                Pattern::Variant { tag, payload: Some(_), .. } if interner.resolve(*tag) == "Some"
             ));
         } else {
             panic!("expected MatchBlock");
@@ -988,11 +1027,12 @@ mod tests {
 
     #[test]
     fn parse_none_pattern() {
-        let t = parse("{{ None = @opt }}nothing{{_}}{{/}}").unwrap();
+        let (interner, result) = parse("{{ None = @opt }}nothing{{_}}{{/}}");
+        let t = result.unwrap();
         if let Node::MatchBlock(mb) = &t.body[0] {
             assert!(matches!(
                 &mb.arms[0].pattern,
-                Pattern::Variant { tag, payload: None, .. } if tag == "None"
+                Pattern::Variant { tag, payload: None, .. } if interner.resolve(*tag) == "None"
             ));
         } else {
             panic!("expected MatchBlock");
@@ -1001,11 +1041,12 @@ mod tests {
 
     #[test]
     fn validate_variant_is_refutable() {
+        let interner = Interner::new();
         let expr = Expr::Variant {
             enum_name: None,
-            tag: "Some".into(),
+            tag: interner.intern("Some"),
             payload: Some(Box::new(Expr::Ident {
-                name: "x".into(),
+                name: interner.intern("x"),
                 ref_kind: RefKind::Value,
                 span: Span::new(0, 1),
             })),

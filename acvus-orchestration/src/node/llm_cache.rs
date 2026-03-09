@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, RuntimeError, Value};
+use acvus_utils::{Astr, Interner};
 
 use tracing::{debug, info};
 
@@ -19,6 +20,7 @@ pub struct LlmCacheNode<F> {
     cache_config: HashMap<String, serde_json::Value>,
     fetch: Arc<F>,
     extern_fns: ExternFnRegistry,
+    interner: Interner,
 }
 
 impl<F> LlmCacheNode<F>
@@ -30,6 +32,7 @@ where
         provider_config: ProviderConfig,
         fetch: Arc<F>,
         extern_fns: &ExternFnRegistry,
+        interner: &Interner,
     ) -> Self {
         Self {
             provider_config,
@@ -39,6 +42,7 @@ where
             cache_config: cache.cache_config.clone(),
             fetch,
             extern_fns: extern_fns.clone(),
+            interner: interner.clone(),
         }
     }
 }
@@ -47,7 +51,7 @@ impl<F> Node for LlmCacheNode<F>
 where
     F: Fetch + 'static,
 {
-    fn spawn(&self, local: HashMap<String, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
         let messages = self.messages.clone();
         let model = self.model.clone();
         let ttl = self.ttl.clone();
@@ -55,17 +59,18 @@ where
         let provider_config = self.provider_config.clone();
         let fetch = Arc::clone(&self.fetch);
         let extern_fns = self.extern_fns.clone();
+        let interner = self.interner.clone();
 
-        acvus_coroutine::coroutine(move |handle| async move {
+        acvus_utils::coroutine(move |handle| async move {
             let mut rendered = Vec::new();
             for msg in &messages {
                 let CompiledMessage::Block(block) = msg else {
                     continue;
                 };
                 let text =
-                    render_block_in_coroutine(&block.module, &local, &extern_fns, &handle).await;
+                    render_block_in_coroutine(&interner, &block.module, &local, &extern_fns, &handle).await;
                 rendered.push(Message::Content {
-                    role: block.role.clone(),
+                    role: interner.resolve(block.role).to_string(),
                     content: Content::Text(text),
                 });
             }

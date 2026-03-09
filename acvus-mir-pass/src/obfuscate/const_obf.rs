@@ -139,7 +139,7 @@ pub fn hash_test_literal(
     ctx.emit(
         span,
         InstKind::VarStore {
-            name: "__obf_key".into(),
+            name: ctx.interner.intern("__obf_key"),
             src: v_hash,
         },
     );
@@ -262,16 +262,19 @@ pub fn hash_test_literal(
 mod tests {
     use super::*;
     use acvus_mir::ir::DebugInfo;
+    use acvus_utils::Interner;
     use rand::SeedableRng;
     use std::collections::HashMap;
 
     fn make_ctx() -> PassState {
+        let interner = Interner::new();
         PassState {
             insts: Vec::new(),
             val_types: HashMap::new(),
             debug: DebugInfo::new(),
             next_val: 100,
             next_label: 0,
+            interner,
         }
     }
 
@@ -294,9 +297,10 @@ mod tests {
         );
 
         // VarStore __obf_key present.
+        let obf_key = ctx.interner.intern("__obf_key");
         assert!(ctx.insts.iter().any(|i| matches!(
             &i.kind,
-            InstKind::VarStore { name, .. } if name == "__obf_key"
+            InstKind::VarStore { name, .. } if *name == obf_key
         )));
 
         // Last instruction is Eq (checksum comparison) writing to dst.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
+use acvus_utils::Astr;
 
 use crate::builtins::BuiltinId;
 use crate::extern_module::ExternFnId;
@@ -37,15 +38,15 @@ pub enum InstKind {
     },
     ContextLoad {
         dst: ValueId,
-        name: String,
-        bindings: Vec<(String, ValueId)>,
+        name: Astr,
+        bindings: Vec<(Astr, ValueId)>,
     },
     VarLoad {
         dst: ValueId,
-        name: String,
+        name: Astr,
     },
     VarStore {
-        name: String,
+        name: Astr,
         src: ValueId,
     },
 
@@ -64,7 +65,7 @@ pub enum InstKind {
     FieldGet {
         dst: ValueId,
         object: ValueId,
-        field: String,
+        field: Astr,
     },
 
     // Calls
@@ -90,7 +91,7 @@ pub enum InstKind {
     },
     MakeObject {
         dst: ValueId,
-        fields: Vec<(String, ValueId)>,
+        fields: Vec<(Astr, ValueId)>,
     },
     MakeRange {
         dst: ValueId,
@@ -123,7 +124,7 @@ pub enum InstKind {
     TestObjectKey {
         dst: ValueId,
         src: ValueId,
-        key: String,
+        key: Astr,
     },
     TestRange {
         dst: ValueId,
@@ -151,7 +152,7 @@ pub enum InstKind {
     ObjectGet {
         dst: ValueId,
         object: ValueId,
-        key: String,
+        key: Astr,
     },
 
     // Closures
@@ -217,15 +218,15 @@ pub enum InstKind {
 #[derive(Debug, Clone)]
 pub enum ValOrigin {
     /// A named variable binding: `user`, `x`, `item`.
-    Named(String),
+    Named(Astr),
     /// A context reference: `@name`.
-    Context(String),
+    Context(Astr),
     /// A variable reference: `$name`.
-    Variable(String),
-    /// A field access: `user.name` — (object val, field name).
-    Field(ValueId, String),
+    Variable(Astr),
+    /// A field access: `user.name` -- (object val, field name).
+    Field(ValueId, Astr),
     /// Result of a function call: `to_string(...)`, `fetch(...)`.
-    Call(String),
+    Call(Astr),
     /// An intermediate/anonymous value (arithmetic, pattern test, etc.).
     Expr,
 }
@@ -257,12 +258,13 @@ impl DebugInfo {
     }
 
     /// Human-readable label for a Val.
+    /// Uses Astr::Display (thread-local interner context).
     pub fn label(&self, val: ValueId) -> String {
         match self.val_origins.get(&val) {
-            Some(ValOrigin::Named(name)) => name.clone(),
+            Some(ValOrigin::Named(name)) => format!("{name}"),
             Some(ValOrigin::Context(name)) => format!("@{name}"),
             Some(ValOrigin::Variable(name)) => format!("${name}"),
-            Some(ValOrigin::Field(_, field)) => field.clone(),
+            Some(ValOrigin::Field(_, field)) => format!("{field}"),
             Some(ValOrigin::Call(func)) => format!("{func}(...)"),
             Some(ValOrigin::Expr) | None => format!("v{}", val.0),
         }
@@ -298,8 +300,8 @@ impl MirBody {
 
 #[derive(Debug, Clone)]
 pub struct ClosureBody {
-    pub capture_names: Vec<String>,
-    pub param_names: Vec<String>,
+    pub capture_names: Vec<Astr>,
+    pub param_names: Vec<Astr>,
     pub body: MirBody,
 }
 
@@ -307,8 +309,8 @@ pub struct ClosureBody {
 pub struct MirModule {
     pub main: MirBody,
     pub closures: HashMap<Label, ClosureBody>,
-    /// Tag name table: `VariantTagId(n)` → `tag_names[n]`.
-    pub tag_names: Vec<String>,
-    /// Extern fn name table: `ExternFnId` → name string.
-    pub extern_names: HashMap<ExternFnId, String>,
+    /// Tag name table: `VariantTagId(n)` -> `tag_names[n]`.
+    pub tag_names: Vec<Astr>,
+    /// Extern fn name table: `ExternFnId` -> name.
+    pub extern_names: HashMap<ExternFnId, Astr>,
 }

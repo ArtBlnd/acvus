@@ -1,9 +1,10 @@
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use acvus_mir::ir::Label;
+use acvus_utils::Astr;
 use serde::{Deserialize, Serialize};
 
 /// Data-only value — no functions, no closures.
@@ -21,11 +22,11 @@ pub enum PureValue {
         inclusive: bool,
     },
     List(Vec<PureValue>),
-    Object(BTreeMap<String, PureValue>),
+    Object(HashMap<Astr, PureValue>),
     Tuple(Vec<PureValue>),
     Byte(u8),
     Variant {
-        tag: String,
+        tag: Astr,
         payload: Option<Box<PureValue>>,
     },
 }
@@ -48,11 +49,11 @@ pub enum Value {
         inclusive: bool,
     },
     List(Vec<Value>),
-    Object(BTreeMap<String, Value>),
+    Object(HashMap<Astr, Value>),
     Tuple(Vec<Value>),
     Byte(u8),
     Variant {
-        tag: String,
+        tag: Astr,
         payload: Option<Box<Value>>,
     },
     Fn(FnValue),

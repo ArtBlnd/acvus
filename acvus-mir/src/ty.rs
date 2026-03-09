@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
+
+use acvus_utils::Astr;
 
 use crate::user_type::UserTypeId;
 
@@ -15,7 +17,7 @@ pub enum Ty {
     Unit,
     Range,
     List(Box<Ty>),
-    Object(BTreeMap<String, Ty>),
+    Object(HashMap<Astr, Ty>),
     Tuple(Vec<Ty>),
     Fn {
         params: Vec<Ty>,
@@ -23,14 +25,14 @@ pub enum Ty {
     },
     Byte,
     /// Opaque type: user-defined, identified by name. No internal structure.
-    Opaque(String),
+    Opaque(std::string::String),
     Option(Box<Ty>),
     /// User-defined enum type.
     UserType(UserTypeId),
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
     /// Inferred type: signals the type checker to create a fresh Var internally.
-    /// Input-only — must not appear in output types.
+    /// Input-only -- must not appear in output types.
     Infer,
     /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
     Error,
@@ -59,8 +61,10 @@ impl fmt::Display for Ty {
             Ty::Byte => write!(f, "Byte"),
             Ty::List(inner) => write!(f, "List<{inner}>"),
             Ty::Object(fields) => {
+                let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by_key(|(k, _)| format!("{k}"));
                 write!(f, "{{")?;
-                for (i, (k, v)) in fields.iter().enumerate() {
+                for (i, (k, v)) in sorted.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -138,9 +142,9 @@ impl TySubst {
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Object(fields) => {
-                let resolved: BTreeMap<_, _> = fields
+                let resolved: HashMap<_, _> = fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), self.resolve(v)))
+                    .map(|(k, v)| (*k, self.resolve(v)))
                     .collect();
                 Ty::Object(resolved)
             }
@@ -199,7 +203,7 @@ impl TySubst {
         let b = self.shallow_resolve(b);
 
         match (&a, &b) {
-            // Error (poison) unifies with anything — suppress cascading errors.
+            // Error (poison) unifies with anything -- suppress cascading errors.
             (Ty::Error, _) | (_, Ty::Error) => Ok(()),
 
             (Ty::Int, Ty::Int)
@@ -272,7 +276,7 @@ impl TySubst {
                         let larger_resolved = Ty::Object(
                             larger
                                 .iter()
-                                .map(|(k, v)| (k.clone(), self.resolve(v)))
+                                .map(|(k, v)| (*k, self.resolve(v)))
                                 .collect(),
                         );
                         self.bindings.insert(leaf_var, larger_resolved);
@@ -334,6 +338,7 @@ impl TySubst {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acvus_utils::Interner;
 
     #[test]
     fn unify_same_concrete() {
@@ -407,14 +412,15 @@ mod tests {
     #[test]
     fn unify_object() {
         let mut s = TySubst::new();
+        let interner = Interner::new();
         let t = s.fresh_var();
-        let obj1 = Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), t.clone()),
+        let obj1 = Ty::Object(HashMap::from([
+            (interner.intern("name"), Ty::String),
+            (interner.intern("age"), t.clone()),
         ]));
-        let obj2 = Ty::Object(BTreeMap::from([
-            ("name".into(), Ty::String),
-            ("age".into(), Ty::Int),
+        let obj2 = Ty::Object(HashMap::from([
+            (interner.intern("name"), Ty::String),
+            (interner.intern("age"), Ty::Int),
         ]));
         assert!(s.unify(&obj1, &obj2).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
@@ -423,8 +429,9 @@ mod tests {
     #[test]
     fn unify_object_key_mismatch() {
         let mut s = TySubst::new();
-        let obj1 = Ty::Object(BTreeMap::from([("name".into(), Ty::String)]));
-        let obj2 = Ty::Object(BTreeMap::from([("age".into(), Ty::Int)]));
+        let interner = Interner::new();
+        let obj1 = Ty::Object(HashMap::from([(interner.intern("name"), Ty::String)]));
+        let obj2 = Ty::Object(HashMap::from([(interner.intern("age"), Ty::Int)]));
         assert!(s.unify(&obj1, &obj2).is_err());
     }
 

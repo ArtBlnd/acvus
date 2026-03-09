@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use acvus_ast::Literal;
 use acvus_mir::extern_module::ExternRegistry;
@@ -9,6 +9,7 @@ use acvus_mir_pass::analysis::reachable_context::{
     ContextKeyPartition, partition_context_keys, reachable_context_keys,
 };
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
+use acvus_utils::{Astr, Interner};
 
 use crate::TokenBudget;
 use crate::convert::value_to_literal;
@@ -41,9 +42,9 @@ pub enum CompiledStrategy {
 /// A compiled orchestration node.
 #[derive(Debug, Clone)]
 pub struct CompiledNode {
-    pub name: String,
+    pub name: Astr,
     pub kind: CompiledNodeKind,
-    pub all_context_keys: HashSet<String>,
+    pub all_context_keys: HashSet<Astr>,
     pub self_spec: CompiledSelf,
     pub strategy: CompiledStrategy,
     pub retry: u32,
@@ -54,7 +55,7 @@ pub struct CompiledNode {
 #[derive(Debug, Clone)]
 pub struct CompiledScript {
     pub module: MirModule,
-    pub context_keys: HashSet<String>,
+    pub context_keys: HashSet<Astr>,
     pub val_def: ValDefMap,
 }
 
@@ -65,7 +66,7 @@ pub enum CompiledMessage {
     Iterator {
         expr: CompiledScript,
         slice: Option<Vec<i64>>,
-        role: Option<String>,
+        role: Option<Astr>,
         token_budget: Option<TokenBudget>,
     },
 }
@@ -73,9 +74,9 @@ pub enum CompiledMessage {
 /// A compiled message block within a node.
 #[derive(Debug, Clone)]
 pub struct CompiledBlock {
-    pub role: String,
+    pub role: Astr,
     pub module: MirModule,
-    pub context_keys: HashSet<String>,
+    pub context_keys: HashSet<Astr>,
     pub val_def: ValDefMap,
 }
 
@@ -84,7 +85,7 @@ impl CompiledBlock {
     ///
     /// Uses dead branch pruning: if a known value resolves a branch condition,
     /// context loads in the dead branch are excluded.
-    pub fn required_context_keys(&self, known: &HashMap<String, Literal>) -> HashSet<String> {
+    pub fn required_context_keys(&self, known: &HashMap<Astr, Literal>) -> HashSet<Astr> {
         reachable_context_keys(&self.module, known, &self.val_def)
     }
 }
@@ -96,9 +97,9 @@ impl CompiledNode {
     /// Keys in `resolvable` (e.g. dependency node names) are excluded.
     pub fn required_context_keys(
         &self,
-        known: &HashMap<String, Literal>,
-        resolvable: &HashSet<String>,
-    ) -> HashSet<String> {
+        known: &HashMap<Astr, Literal>,
+        resolvable: &HashSet<Astr>,
+    ) -> HashSet<Astr> {
         let mut needed = HashSet::new();
         for msg in self.kind.messages() {
             if let CompiledMessage::Block(block) = msg {
@@ -115,13 +116,14 @@ impl CompiledNode {
     /// and excludes keys in `resolvable` (dependency nodes that auto-resolve).
     pub fn required_external_keys<S>(
         &self,
+        interner: &Interner,
         storage: &S,
-        resolvable: &HashSet<String>,
-    ) -> HashSet<String>
+        resolvable: &HashSet<Astr>,
+    ) -> HashSet<Astr>
     where
         S: Storage,
     {
-        let known = self.known_from_storage(storage);
+        let known = self.known_from_storage(interner, storage);
         self.required_context_keys(&known, resolvable)
     }
 
@@ -129,13 +131,14 @@ impl CompiledNode {
     /// (conditionally needed), excluding resolvable dependency nodes.
     pub fn partition_external_keys<S>(
         &self,
+        interner: &Interner,
         storage: &S,
-        resolvable: &HashSet<String>,
+        resolvable: &HashSet<Astr>,
     ) -> ContextKeyPartition
     where
         S: Storage,
     {
-        let known = self.known_from_storage(storage);
+        let known = self.known_from_storage(interner, storage);
         let mut merged = ContextKeyPartition::default();
         for msg in self.kind.messages() {
             if let CompiledMessage::Block(block) = msg {
@@ -151,16 +154,16 @@ impl CompiledNode {
         merged
     }
 
-    pub(crate) fn known_from_storage<S>(&self, storage: &S) -> HashMap<String, Literal>
+    pub(crate) fn known_from_storage<S>(&self, interner: &Interner, storage: &S) -> HashMap<Astr, Literal>
     where
         S: Storage,
     {
         self.all_context_keys
             .iter()
             .filter_map(|k| {
-                let arc = storage.get(k)?;
+                let arc = storage.get(interner.resolve(*k))?;
                 let lit = value_to_literal(&arc)?;
-                Some((k.clone(), lit))
+                Some((*k, lit))
             })
             .collect()
     }
@@ -169,26 +172,29 @@ impl CompiledNode {
 /// Compile an expression string (script syntax) with type checking.
 /// Returns the compiled script and its tail expression type.
 pub fn compile_script(
+    interner: &Interner,
     source: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledScript, Ty), OrchError> {
-    compile_script_with_hint(source, context_types, registry, None)
+    compile_script_with_hint(interner, source, context_types, registry, None)
 }
 
 /// Compile a script with an optional expected tail type hint for unification.
 pub fn compile_script_with_hint(
+    interner: &Interner,
     source: &str,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(CompiledScript, Ty), OrchError> {
-    let script = acvus_ast::parse_script(source).map_err(|e| {
+    let script = acvus_ast::parse_script(interner, source).map_err(|e| {
         OrchError::new(OrchErrorKind::ScriptParse {
             error: format!("{e}"),
         })
     })?;
     let (module, _hints, tail_ty) = acvus_mir::compile_script_with_hint(
+        interner,
         &script,
         context_types,
         registry,
@@ -252,12 +258,13 @@ pub(crate) fn expect_ty(context: &str, ty: &Ty, expected: &Ty) -> Result<(), Orc
 
 /// Compile a template source string into a `CompiledBlock`.
 pub(crate) fn compile_template(
+    interner: &Interner,
     source: &str,
     block_idx: usize,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledBlock, OrchError> {
-    let ast = acvus_ast::parse(source).map_err(|e| {
+    let ast = acvus_ast::parse(interner, source).map_err(|e| {
         OrchError::new(OrchErrorKind::TemplateParse {
             block: block_idx,
             error: format!("{e}"),
@@ -265,6 +272,7 @@ pub(crate) fn compile_template(
     })?;
 
     let (module, _hints) = acvus_mir::compile(
+        interner,
         &ast,
         context_types,
         registry,
@@ -281,7 +289,7 @@ pub(crate) fn compile_template(
     let val_def = ValDefMapAnalysis.run(&module, ());
 
     Ok(CompiledBlock {
-        role: String::new(),
+        role: interner.intern(""),
         module,
         context_keys,
         val_def,
@@ -290,11 +298,12 @@ pub(crate) fn compile_template(
 
 /// Compile messages from a message spec list.
 pub(crate) fn compile_messages(
+    interner: &Interner,
     messages: &[MessageSpec],
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     iterator_elem_ty: &Ty,
-) -> Result<(Vec<CompiledMessage>, HashSet<String>), Vec<OrchError>> {
+) -> Result<(Vec<CompiledMessage>, HashSet<Astr>), Vec<OrchError>> {
     let mut compiled_messages = Vec::new();
     let mut all_context_keys = HashSet::new();
     let mut errors = Vec::new();
@@ -302,16 +311,16 @@ pub(crate) fn compile_messages(
     for (i, msg) in messages.iter().enumerate() {
         match msg {
             MessageSpec::Block { role, source } => {
-                let block = match compile_template(source, i, context_types, registry) {
+                let block = match compile_template(interner, source, i, context_types, registry) {
                     Ok(b) => b,
                     Err(e) => {
                         errors.push(e);
                         continue;
                     }
                 };
-                all_context_keys.extend(block.context_keys.iter().cloned());
+                all_context_keys.extend(block.context_keys.iter().copied());
                 compiled_messages.push(CompiledMessage::Block(CompiledBlock {
-                    role: role.clone(),
+                    role: *role,
                     ..block
                 }));
             }
@@ -322,7 +331,7 @@ pub(crate) fn compile_messages(
                 token_budget,
             } => {
                 let ctx = format!("iterator (block {i})");
-                let (expr, tail_ty) = match compile_script(key, context_types, registry) {
+                let (expr, tail_ty) = match compile_script(interner, interner.resolve(*key), context_types, registry) {
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
@@ -341,11 +350,11 @@ pub(crate) fn compile_messages(
                     continue;
                 }
 
-                all_context_keys.extend(expr.context_keys.iter().cloned());
+                all_context_keys.extend(expr.context_keys.iter().copied());
                 compiled_messages.push(CompiledMessage::Iterator {
                     expr,
                     slice: slice.clone(),
-                    role: role.clone(),
+                    role: *role,
                     token_budget: token_budget.clone(),
                 });
             }
@@ -363,8 +372,9 @@ pub(crate) fn compile_messages(
 /// `stored_ty` is the node's stored type (derived from initial_value in compile_nodes).
 /// Each message's `source` field is compiled directly — no file I/O.
 pub fn compile_node(
+    interner: &Interner,
     spec: &NodeSpec,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     compiled_self: CompiledSelf,
     compiled_strategy: CompiledStrategy,
@@ -372,36 +382,36 @@ pub fn compile_node(
 ) -> Result<CompiledNode, Vec<OrchError>> {
     let (kind, mut all_context_keys) = match &spec.kind {
         NodeKind::Plain(plain_spec) => {
-            let (compiled, keys) = compile_plain(plain_spec, context_types, registry)?;
+            let (compiled, keys) = compile_plain(interner, plain_spec, context_types, registry)?;
             (CompiledNodeKind::Plain(compiled), keys)
         }
         NodeKind::Llm(llm_spec) => {
-            let (compiled, keys) = compile_llm(llm_spec, context_types, registry)?;
+            let (compiled, keys) = compile_llm(interner, llm_spec, context_types, registry)?;
             (CompiledNodeKind::Llm(compiled), keys)
         }
         NodeKind::LlmCache(cache_spec) => {
-            let (compiled, keys) = compile_llm_cache(cache_spec, context_types, registry)?;
+            let (compiled, keys) = compile_llm_cache(interner, cache_spec, context_types, registry)?;
             (CompiledNodeKind::LlmCache(compiled), keys)
         }
         NodeKind::Expr(expr_spec) => {
-            let (compiled, keys) = compile_expr(expr_spec, context_types, registry)?;
+            let (compiled, keys) = compile_expr(interner, expr_spec, context_types, registry)?;
             (CompiledNodeKind::Expr(compiled), keys)
         }
     };
 
     // self_spec context keys contribute to dependencies
     if let Some(ref iv) = compiled_self.initial_value {
-        all_context_keys.extend(iv.context_keys.iter().cloned());
+        all_context_keys.extend(iv.context_keys.iter().copied());
     }
 
     // assert context keys contribute
     let compiled_assert = if let Some(ref assert_src) = spec.assert {
         // assert context: @self = stored value (= raw output), plus all context
         let mut assert_ctx = context_types.clone();
-        assert_ctx.insert("self".into(), stored_ty.clone());
-        let (script, _ty) = compile_script_with_hint(assert_src, &assert_ctx, registry, Some(&Ty::Bool))
+        assert_ctx.insert(interner.intern("self"), stored_ty.clone());
+        let (script, _ty) = compile_script_with_hint(interner, interner.resolve(*assert_src), &assert_ctx, registry, Some(&Ty::Bool))
             .map_err(|e| vec![e])?;
-        all_context_keys.extend(script.context_keys.iter().cloned());
+        all_context_keys.extend(script.context_keys.iter().copied());
         Some(script)
     } else {
         None
@@ -411,15 +421,15 @@ pub fn compile_node(
     match &compiled_strategy {
         CompiledStrategy::Always | CompiledStrategy::OncePerTurn => {}
         CompiledStrategy::History { history_bind } => {
-            all_context_keys.extend(history_bind.context_keys.iter().cloned());
+            all_context_keys.extend(history_bind.context_keys.iter().copied());
         }
         CompiledStrategy::IfModified { key } => {
-            all_context_keys.extend(key.context_keys.iter().cloned());
+            all_context_keys.extend(key.context_keys.iter().copied());
         }
     }
 
     Ok(CompiledNode {
-        name: spec.name.clone(),
+        name: spec.name,
         kind,
         all_context_keys,
         self_spec: compiled_self,
@@ -445,12 +455,12 @@ pub struct NodeLocalTypes {
 }
 
 pub struct ExternalContextEnv {
-    pub context_types: HashMap<String, Ty>,
+    pub context_types: HashMap<Astr, Ty>,
     /// Types of values stored in storage (node self types + @turn).
     /// Does not include injected types (those come from the resolver, not storage).
-    pub storage_types: HashMap<String, Ty>,
+    pub storage_types: HashMap<Astr, Ty>,
     /// Per-node local types, indexed by node name.
-    pub node_locals: HashMap<String, NodeLocalTypes>,
+    pub node_locals: HashMap<Astr, NodeLocalTypes>,
     pub(crate) stored_types: Vec<Ty>,
 }
 
@@ -464,20 +474,21 @@ pub struct ExternalContextEnv {
 /// The result can be used for typechecking binding scripts or passed
 /// to `compile_nodes_with_env` for full compilation.
 pub fn compute_external_context_env(
+    interner: &Interner,
     specs: &[NodeSpec],
-    injected_types: &HashMap<String, Ty>,
+    injected_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<ExternalContextEnv, Vec<OrchError>> {
     let mut context_types = injected_types.clone();
 
     // 1. stored type = raw_output_ty for concrete nodes (LLM, Plain, LlmCache)
     //    Expr nodes start as Ty::Infer — resolved in step 3 after @turn is available.
-    let mut stored_types: Vec<Ty> = specs.iter().map(|s| s.kind.raw_output_ty()).collect();
+    let mut stored_types: Vec<Ty> = specs.iter().map(|s| s.kind.raw_output_ty(interner)).collect();
 
     // 2. Register concrete (non-Infer) stored types so other nodes can reference @name
     for (spec, ty) in specs.iter().zip(stored_types.iter()) {
         if *ty != Ty::Infer {
-            context_types.insert(spec.name.clone(), ty.clone());
+            context_types.insert(spec.name, ty.clone());
         }
     }
 
@@ -486,27 +497,27 @@ pub fn compute_external_context_env(
         .iter()
         .enumerate()
         .filter_map(|(i, s)| match &s.strategy {
-            Strategy::History { history_bind } => Some((i, history_bind.as_str())),
+            Strategy::History { history_bind } => Some((i, interner.resolve(*history_bind))),
             _ => None,
         })
         .collect();
     if !history_specs.is_empty() {
         let store_ctx = context_types.clone();
-        let mut entry_fields = BTreeMap::new();
+        let mut entry_fields = HashMap::new();
         for &(i, bind_src) in &history_specs {
             let mut hist_ctx = store_ctx.clone();
-            hist_ctx.insert("self".into(), stored_types[i].clone());
-            let ty = compile_script(bind_src, &hist_ctx, registry)
+            hist_ctx.insert(interner.intern("self"), stored_types[i].clone());
+            let ty = compile_script(interner, bind_src, &hist_ctx, registry)
                 .map(|(_, ty)| ty)
                 .unwrap_or(Ty::Error);
-            entry_fields.insert(specs[i].name.clone(), ty);
+            entry_fields.insert(specs[i].name, ty);
         }
         let history_ty = Ty::List(Box::new(Ty::Object(entry_fields)));
-        let turn_fields = BTreeMap::from([
-            ("index".into(), Ty::Int),
-            ("history".into(), history_ty),
+        let turn_fields = HashMap::from([
+            (interner.intern("index"), Ty::Int),
+            (interner.intern("history"), history_ty),
         ]);
-        context_types.insert("turn".into(), Ty::Object(turn_fields));
+        context_types.insert(interner.intern("turn"), Ty::Object(turn_fields));
     }
 
     // 4. Resolve Expr node types: compile source with full context (including @turn)
@@ -515,29 +526,29 @@ pub fn compute_external_context_env(
             continue;
         }
         if let NodeKind::Expr(expr_spec) = &spec.kind {
-            stored_types[i] = compile_script(&expr_spec.source, &context_types, registry)
+            stored_types[i] = compile_script(interner, &expr_spec.source, &context_types, registry)
                 .map(|(_, ty)| ty)
                 .unwrap_or(Ty::Error);
         }
-        context_types.insert(spec.name.clone(), stored_types[i].clone());
+        context_types.insert(spec.name, stored_types[i].clone());
     }
 
     let mut node_locals = HashMap::new();
     for (spec, stored_ty) in specs.iter().zip(stored_types.iter()) {
         node_locals.insert(
-            spec.name.clone(),
+            spec.name,
             NodeLocalTypes {
-                raw_ty: spec.kind.raw_output_ty(),
+                raw_ty: spec.kind.raw_output_ty(interner),
                 self_ty: stored_ty.clone(),
             },
         );
     }
 
     // storage_types = context_types minus injected_types
-    let storage_types: HashMap<String, Ty> = context_types
+    let storage_types: HashMap<Astr, Ty> = context_types
         .iter()
-        .filter(|(k, _)| !injected_types.contains_key(k.as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .filter(|(k, _)| !injected_types.contains_key(k))
+        .map(|(k, v)| (*k, v.clone()))
         .collect();
 
     Ok(ExternalContextEnv {
@@ -553,12 +564,13 @@ pub fn compute_external_context_env(
 /// `injected_types` are externally declared context types (from project.toml).
 /// Node stored types are derived from `initial_value` scripts.
 pub fn compile_nodes(
+    interner: &Interner,
     specs: &[NodeSpec],
-    injected_types: &HashMap<String, Ty>,
+    injected_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
-    let env = compute_external_context_env(specs, injected_types, registry)?;
-    compile_nodes_with_env(specs, registry, env)
+    let env = compute_external_context_env(interner, specs, injected_types, registry)?;
+    compile_nodes_with_env(interner, specs, registry, env)
 }
 
 /// Compile nodes using a pre-computed external context environment.
@@ -566,6 +578,7 @@ pub fn compile_nodes(
 /// Use this when you already called `compute_external_context_env` (e.g. for
 /// typechecking binding scripts) and want to avoid recomputation.
 pub fn compile_nodes_with_env(
+    interner: &Interner,
     specs: &[NodeSpec],
     registry: &ExternRegistry,
     env: ExternalContextEnv,
@@ -586,7 +599,8 @@ pub fn compile_nodes_with_env(
             ty => Some(ty),
         };
         let (script, init_ty) = match compile_script_with_hint(
-            init_src,
+            interner,
+            interner.resolve(*init_src),
             &context_types,
             registry,
             hint,
@@ -616,8 +630,8 @@ pub fn compile_nodes_with_env(
             Strategy::OncePerTurn => CompiledStrategy::OncePerTurn,
             Strategy::History { history_bind } => {
                 let mut hist_ctx = context_types.clone();
-                hist_ctx.insert("self".into(), stored_types[i].clone());
-                let (script, _ty) = match compile_script(history_bind, &hist_ctx, registry) {
+                hist_ctx.insert(interner.intern("self"), stored_types[i].clone());
+                let (script, _ty) = match compile_script(interner, interner.resolve(*history_bind), &hist_ctx, registry) {
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
@@ -630,7 +644,7 @@ pub fn compile_nodes_with_env(
                 }
             }
             Strategy::IfModified { key } => {
-                let (script, _ty) = match compile_script(key, &context_types, registry) {
+                let (script, _ty) = match compile_script(interner, interner.resolve(*key), &context_types, registry) {
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
@@ -651,19 +665,19 @@ pub fn compile_nodes_with_env(
     // Tool param types must be injected from the caller (LlmSpec) side because
     // the target node alone cannot know what types its params will have — the
     // param types are declared in ToolBinding, not in the target node itself.
-    let mut tool_param_types: HashMap<String, HashMap<String, Ty>> = HashMap::new();
+    let mut tool_param_types: HashMap<Astr, HashMap<Astr, Ty>> = HashMap::new();
     for spec in specs {
         let NodeKind::Llm(llm_spec) = &spec.kind else {
             continue;
         };
         for tool in &llm_spec.tools {
-            let params: HashMap<String, Ty> = tool
+            let params: HashMap<Astr, Ty> = tool
                 .params
                 .iter()
-                .filter_map(|(k, v)| Some((k.clone(), parse_type_name(v)?)))
+                .filter_map(|(k, v)| Some((interner.intern(k), parse_type_name(v)?)))
                 .collect();
             tool_param_types
-                .entry(tool.node.clone())
+                .entry(interner.intern(&tool.node))
                 .or_default()
                 .extend(params);
         }
@@ -673,17 +687,17 @@ pub fn compile_nodes_with_env(
     for (i, spec) in specs.iter().enumerate() {
         let mut node_ctx = context_types.clone();
         if let Some(params) = tool_param_types.get(&spec.name) {
-            node_ctx.extend(params.iter().map(|(k, v)| (k.clone(), v.clone())));
+            node_ctx.extend(params.iter().map(|(k, v)| (*k, v.clone())));
         }
         // When initial_value is Some, @self is available in the node body
         if initial_value_scripts[i].is_some() {
-            node_ctx.insert("self".into(), stored_types[i].clone());
+            node_ctx.insert(interner.intern("self"), stored_types[i].clone());
         }
         let compiled_self = CompiledSelf {
             initial_value: initial_value_scripts[i].clone(),
         };
         let compiled_strategy = compiled_strategies[i].clone();
-        match compile_node(spec, &node_ctx, registry, compiled_self, compiled_strategy, &stored_types[i]) {
+        match compile_node(interner, spec, &node_ctx, registry, compiled_self, compiled_strategy, &stored_types[i]) {
             Ok(node) => nodes.push(node),
             Err(errs) => {
                 errors.extend(errs);
@@ -698,11 +712,12 @@ pub fn compile_nodes_with_env(
     // Tool targets are not captured in all_context_keys (they are invoked
     // dynamically by the model, not via @ref in templates), so we validate
     // their existence separately.
-    let node_names: HashSet<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+    let node_names: HashSet<Astr> = nodes.iter().map(|n| n.name).collect();
     for node in &nodes {
         if let CompiledNodeKind::Llm(llm) = &node.kind {
             for tool in &llm.tools {
-                if !node_names.contains(tool.node.as_str()) {
+                let tool_node = interner.intern(&tool.node);
+                if !node_names.contains(&tool_node) {
                     errors.push(OrchError::new(OrchErrorKind::ToolTargetNotFound {
                         tool: tool.name.clone(),
                         target: tool.node.clone(),
@@ -720,19 +735,19 @@ pub fn compile_nodes_with_env(
 }
 
 /// Extract all context keys referenced by `ContextLoad` instructions in a module.
-fn extract_context_keys(module: &MirModule) -> HashSet<String> {
+fn extract_context_keys(module: &MirModule) -> HashSet<Astr> {
     let mut keys = HashSet::new();
 
     for inst in &module.main.insts {
         if let InstKind::ContextLoad { name, .. } = &inst.kind {
-            keys.insert(name.clone());
+            keys.insert(*name);
         }
     }
 
     for closure in module.closures.values() {
         for inst in &closure.body.insts {
             if let InstKind::ContextLoad { name, .. } = &inst.kind {
-                keys.insert(name.clone());
+                keys.insert(*name);
             }
         }
     }

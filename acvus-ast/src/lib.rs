@@ -24,7 +24,9 @@ pub use error::ParseError;
 pub use parser::{parse_script, parse_template};
 pub use span::{Span, Spanned};
 
+use acvus_utils::Interner;
+
 /// Parse a template source string into an AST.
-pub fn parse(source: &str) -> Result<Template, ParseError> {
-    parse_template(source)
+pub fn parse(interner: &Interner, source: &str) -> Result<Template, ParseError> {
+    parse_template(interner, source)
 }

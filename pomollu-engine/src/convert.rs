@@ -2,6 +2,7 @@ use acvus_orchestration::{
     ApiKind, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec, PlainSpec,
     SelfSpec, Strategy, TokenBudget, ToolBinding,
 };
+use acvus_utils::Interner;
 use serde::Deserialize;
 
 /// JSON-deserializable node definition from the web UI.
@@ -82,7 +83,7 @@ pub struct WebToolParam {
     pub ty: String,
 }
 
-pub fn convert_node(web: &WebNode) -> Result<NodeSpec, String> {
+pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, String> {
     let kind = match web.kind.as_str() {
         "llm" => NodeKind::Llm(LlmSpec {
             api: ApiKind::parse(&web.api)
@@ -94,7 +95,7 @@ pub fn convert_node(web: &WebNode) -> Result<NodeSpec, String> {
                 .iter()
                 .map(|m| match m {
                     WebMessage::Block { role, template } => MessageSpec::Block {
-                        role: role.clone(),
+                        role: interner.intern(role),
                         source: template.clone(),
                     },
                     WebMessage::Iterator {
@@ -103,9 +104,9 @@ pub fn convert_node(web: &WebNode) -> Result<NodeSpec, String> {
                         slice,
                         token_budget,
                     } => MessageSpec::Iterator {
-                        key: iterator.clone(),
+                        key: interner.intern(iterator),
                         slice: slice.clone(),
-                        role: role.clone(),
+                        role: role.as_ref().map(|r| interner.intern(r)),
                         token_budget: token_budget.as_ref().map(|tb| TokenBudget {
                             priority: tb.priority,
                             min: tb.min,
@@ -151,24 +152,24 @@ pub fn convert_node(web: &WebNode) -> Result<NodeSpec, String> {
     let strategy = match &web.strategy {
         WebStrategy::Always => Strategy::Always,
         WebStrategy::OncePerTurn => Strategy::OncePerTurn,
-        WebStrategy::IfModified { key } => Strategy::IfModified { key: key.clone() },
+        WebStrategy::IfModified { key } => Strategy::IfModified { key: interner.intern(key) },
         WebStrategy::History { history_bind } => Strategy::History {
-            history_bind: history_bind.clone(),
+            history_bind: interner.intern(history_bind),
         },
     };
 
     Ok(NodeSpec {
-        name: web.name.clone(),
+        name: interner.intern(&web.name),
         kind,
         self_spec: SelfSpec {
-            initial_value: web.self_spec.initial_value.clone(),
+            initial_value: web.self_spec.initial_value.as_ref().map(|s| interner.intern(s)),
         },
         strategy,
         retry: web.retry,
         assert: if web.assert.trim().is_empty() {
             None
         } else {
-            Some(web.assert.clone())
+            Some(interner.intern(&web.assert))
         },
     })
 }

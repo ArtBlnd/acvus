@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use acvus_utils::Interner;
 use logos::Logos;
 
 use crate::ast::IndentModifier;
@@ -263,14 +264,16 @@ pub struct ExprTokenizer<'input> {
     lexer: logos::Lexer<'input, Token>,
     base_offset: usize,
     pending: VecDeque<Result<(usize, Token, usize), ParseError>>,
+    interner: Interner,
 }
 
 impl<'input> ExprTokenizer<'input> {
-    pub fn new(input: &'input str, base_offset: usize) -> Self {
+    pub fn new(input: &'input str, base_offset: usize, interner: &Interner) -> Self {
         Self {
-            lexer: Token::lexer(input),
+            lexer: Token::lexer_with_extras(input, interner.clone()),
             base_offset,
             pending: VecDeque::new(),
+            interner: interner.clone(),
         }
     }
 }
@@ -289,7 +292,7 @@ impl<'input> Iterator for ExprTokenizer<'input> {
         let end = self.base_offset + span.end;
         match result {
             Ok(Token::StringLit(ref s)) if s.contains("{{") => {
-                self.pending = expand_format_string(s, start, end);
+                self.pending = expand_format_string(s, start, end, &self.interner);
                 self.pending.pop_front()
             }
             Ok(token) => Some(Ok((start, token, end))),
@@ -326,6 +329,7 @@ fn expand_format_string(
     content: &str,
     base_start: usize,
     base_end: usize,
+    interner: &Interner,
 ) -> VecDeque<Result<(usize, Token, usize), ParseError>> {
     let err_span = Span::new(base_start, base_end);
 
@@ -409,7 +413,7 @@ fn expand_format_string(
 
         // After each text except the last, emit the corresponding expression tokens
         if let Some(expr_str) = exprs.get(i) {
-            for (result, span) in Token::lexer(expr_str).spanned() {
+            for (result, span) in Token::lexer_with_extras(expr_str, interner.clone()).spanned() {
                 match result {
                     Ok(token) => {
                         out.push_back(Ok((base_start, token, base_start)));
@@ -725,34 +729,38 @@ mod tests {
 
     #[test]
     fn tokenize_ident() {
-        let tokens: Vec<_> = ExprTokenizer::new("name", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("name", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(&tokens[0].1, Token::Ident(s) if s == "name"));
+        assert!(matches!(&tokens[0].1, Token::Ident(s) if interner.resolve(*s) == "name"));
     }
 
     #[test]
     fn tokenize_var_ref() {
-        let tokens: Vec<_> = ExprTokenizer::new("$global", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("$global", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(&tokens[0].1, Token::VarRef(s) if s == "global"));
+        assert!(matches!(&tokens[0].1, Token::VarRef(s) if interner.resolve(*s) == "global"));
     }
 
     #[test]
     fn tokenize_context_ref() {
-        let tokens: Vec<_> = ExprTokenizer::new("@users", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("@users", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(&tokens[0].1, Token::ContextRef(s) if s == "users"));
+        assert!(matches!(&tokens[0].1, Token::ContextRef(s) if interner.resolve(*s) == "users"));
     }
 
     #[test]
     fn tokenize_underscore() {
-        let tokens: Vec<_> = ExprTokenizer::new("_", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("_", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
@@ -761,7 +769,8 @@ mod tests {
 
     #[test]
     fn tokenize_keywords() {
-        let tokens: Vec<_> = ExprTokenizer::new("true false", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("true false", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 2);
@@ -771,7 +780,8 @@ mod tests {
 
     #[test]
     fn tokenize_numbers() {
-        let tokens: Vec<_> = ExprTokenizer::new("42 3.14", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("42 3.14", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 2);
@@ -781,7 +791,8 @@ mod tests {
 
     #[test]
     fn tokenize_string() {
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello \"world\"""#, 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello \"world\"""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
@@ -790,7 +801,8 @@ mod tests {
 
     #[test]
     fn tokenize_two_char_operators() {
-        let tokens: Vec<_> = ExprTokenizer::new("== != <= >= -> ..", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("== != <= >= -> ..", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 6);
@@ -804,7 +816,8 @@ mod tests {
 
     #[test]
     fn tokenize_range_operators() {
-        let tokens: Vec<_> = ExprTokenizer::new("..= =..", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("..= =..", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 2);
@@ -814,17 +827,18 @@ mod tests {
 
     #[test]
     fn tokenize_complex_expr() {
-        let tokens: Vec<_> = ExprTokenizer::new("list | filter(x -> x != 0)", 0)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("list | filter(x -> x != 0)", 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
-        assert!(matches!(types[0], Token::Ident(s) if s == "list"));
+        assert!(matches!(types[0], Token::Ident(s) if interner.resolve(*s) == "list"));
         assert!(matches!(types[1], Token::Pipe));
-        assert!(matches!(types[2], Token::Ident(s) if s == "filter"));
+        assert!(matches!(types[2], Token::Ident(s) if interner.resolve(*s) == "filter"));
         assert!(matches!(types[3], Token::LParen));
-        assert!(matches!(types[4], Token::Ident(s) if s == "x"));
+        assert!(matches!(types[4], Token::Ident(s) if interner.resolve(*s) == "x"));
         assert!(matches!(types[5], Token::Arrow));
-        assert!(matches!(types[6], Token::Ident(s) if s == "x"));
+        assert!(matches!(types[6], Token::Ident(s) if interner.resolve(*s) == "x"));
         assert!(matches!(types[7], Token::Neq));
         assert!(matches!(types[8], Token::IntLit(0)));
         assert!(matches!(types[9], Token::RParen));
@@ -832,7 +846,8 @@ mod tests {
 
     #[test]
     fn tokenize_absolute_offsets() {
-        let tokens: Vec<_> = ExprTokenizer::new("ab", 10)
+        let interner = Interner::new();
+        let tokens: Vec<_> = ExprTokenizer::new("ab", 10, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens[0].0, 10); // start
@@ -843,48 +858,52 @@ mod tests {
 
     #[test]
     fn tokenize_fmt_simple() {
+        let interner = Interner::new();
         // "hello {{ name }}!" → FmtStringStart("hello "), Ident("name"), FmtStringEnd("!")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello {{ name }}!""#, 0)
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello {{ name }}!""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "hello "));
-        assert!(matches!(types[1], Token::Ident(s) if s == "name"));
+        assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "name"));
         assert!(matches!(types[2], Token::FmtStringEnd(s) if s == "!"));
     }
 
     #[test]
     fn tokenize_fmt_multiple_interpolations() {
+        let interner = Interner::new();
         // "{{ a }}, {{ b }}" → FmtStringStart(""), Ident(a), FmtStringMid(", "), Ident(b), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""{{ a }}, {{ b }}""#, 0)
+        let tokens: Vec<_> = ExprTokenizer::new(r#""{{ a }}, {{ b }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s.is_empty()));
-        assert!(matches!(types[1], Token::Ident(s) if s == "a"));
+        assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "a"));
         assert!(matches!(types[2], Token::FmtStringMid(s) if s == ", "));
-        assert!(matches!(types[3], Token::Ident(s) if s == "b"));
+        assert!(matches!(types[3], Token::Ident(s) if interner.resolve(*s) == "b"));
         assert!(matches!(types[4], Token::FmtStringEnd(s) if s.is_empty()));
     }
 
     #[test]
     fn tokenize_fmt_expr_with_pipe() {
+        let interner = Interner::new();
         // "age: {{ age | to_string }}" → FmtStringStart("age: "), Ident(age), Pipe, Ident(to_string), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""age: {{ age | to_string }}""#, 0)
+        let tokens: Vec<_> = ExprTokenizer::new(r#""age: {{ age | to_string }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "age: "));
-        assert!(matches!(types[1], Token::Ident(s) if s == "age"));
+        assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "age"));
         assert!(matches!(types[2], Token::Pipe));
-        assert!(matches!(types[3], Token::Ident(s) if s == "to_string"));
+        assert!(matches!(types[3], Token::Ident(s) if interner.resolve(*s) == "to_string"));
         assert!(matches!(types[4], Token::FmtStringEnd(s) if s.is_empty()));
     }
 
     #[test]
     fn tokenize_fmt_no_interpolation_passthrough() {
+        let interner = Interner::new();
         // "hello world" without {{ }} → plain StringLit
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello world""#, 0)
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello world""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
@@ -893,15 +912,16 @@ mod tests {
 
     #[test]
     fn tokenize_fmt_expr_with_add() {
+        let interner = Interner::new();
         // "result: {{ a + b }}" → FmtStringStart("result: "), Ident(a), Plus, Ident(b), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""result: {{ a + b }}""#, 0)
+        let tokens: Vec<_> = ExprTokenizer::new(r#""result: {{ a + b }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "result: "));
-        assert!(matches!(types[1], Token::Ident(s) if s == "a"));
+        assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "a"));
         assert!(matches!(types[2], Token::Plus));
-        assert!(matches!(types[3], Token::Ident(s) if s == "b"));
+        assert!(matches!(types[3], Token::Ident(s) if interner.resolve(*s) == "b"));
         assert!(matches!(types[4], Token::FmtStringEnd(s) if s.is_empty()));
     }
 }

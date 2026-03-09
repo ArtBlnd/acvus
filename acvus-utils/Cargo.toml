@@ -1,10 +1,13 @@
 [package]
-name = "acvus-coroutine"
+name = "acvus-utils"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 parking_lot = "0.12"
+serde = "1.0.228"
+serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+serde_json = "1"

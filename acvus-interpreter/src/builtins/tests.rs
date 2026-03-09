@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use acvus_mir::builtins::BuiltinId;
+use acvus_utils::Interner;
 
 use super::*;
 
@@ -45,9 +46,10 @@ fn to_string_list_panics() {
 #[test]
 #[should_panic(expected = "to_string: expected scalar or Unit, got")]
 fn to_string_object_panics() {
+    let interner = Interner::new();
     call_pure(
         BuiltinId::ToString,
-        vec![Value::Object(BTreeMap::from([("a".into(), Value::Int(1))]))],
+        vec![Value::Object(HashMap::from([(interner.intern("a"), Value::Int(1))]))],
     )
     .unwrap();
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use acvus_utils::{Astr, Interner};
 use futures::future::BoxFuture;
 
 use acvus_mir::extern_module::{ExternFnId, ExternModule, ExternRegistry};
@@ -114,18 +115,14 @@ pub trait ExternFn: Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct ExternFnRegistry {
-    fns: HashMap<String, (ExternFnSig, ExternFnBody)>,
-}
-
-impl Default for ExternFnRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    interner: Interner,
+    fns: HashMap<Astr, (ExternFnSig, ExternFnBody)>,
 }
 
 impl ExternFnRegistry {
-    pub fn new() -> Self {
+    pub fn new(interner: &Interner) -> Self {
         Self {
+            interner: interner.clone(),
             fns: HashMap::new(),
         }
     }
@@ -134,20 +131,21 @@ impl ExternFnRegistry {
         let name = f.name().to_owned();
         let sig = f.sig();
         let body = f.into_body();
+        let key = self.interner.intern(&name);
         assert!(
-            !self.fns.contains_key(&name),
+            !self.fns.contains_key(&key),
             "duplicate extern function: {name}",
         );
-        self.fns.insert(name, (sig, body));
+        self.fns.insert(key, (sig, body));
     }
 
-    pub fn get(&self, name: &str) -> Option<&ExternFnBody> {
-        self.fns.get(name).map(|(_, body)| body)
+    pub fn get(&self, name: Astr) -> Option<&ExternFnBody> {
+        self.fns.get(&name).map(|(_, body)| body)
     }
 
     /// Build an ID-indexed table for fast runtime lookup.
     /// Call after `to_mir_registry()` with the same registry's name table.
-    pub fn build_id_table(&self, extern_names: &HashMap<ExternFnId, String>) -> Vec<ExternFnBody> {
+    pub fn build_id_table(&self, extern_names: &HashMap<ExternFnId, Astr>) -> Vec<ExternFnBody> {
         let mut table = vec![None; extern_names.len()];
         for (&id, name) in extern_names {
             let body = self
@@ -161,10 +159,10 @@ impl ExternFnRegistry {
 
     /// Extract compile-time type information for the MIR compiler.
     pub fn to_mir_registry(&self) -> ExternRegistry {
-        let mut module = ExternModule::new("extern");
-        for (name, (sig, _)) in &self.fns {
+        let mut module = ExternModule::new(self.interner.intern("extern"));
+        for (&name, (sig, _)) in &self.fns {
             module.add_fn(
-                name.clone(),
+                name,
                 sig.params.clone(),
                 sig.ret.clone(),
                 sig.effectful,
@@ -200,10 +198,12 @@ mod tests {
 
     #[tokio::test]
     async fn register_and_call() {
-        let mut registry = ExternFnRegistry::new();
+        let interner = Interner::new();
+        let mut registry = ExternFnRegistry::new(&interner);
         registry.register(AddOne);
 
-        let body = registry.get("add_one").unwrap();
+        let key = interner.intern("add_one");
+        let body = registry.get(key).unwrap();
         let result = body.call(vec![Value::Int(41)]).await.unwrap();
         match result {
             Value::Int(42) => {}
@@ -213,11 +213,13 @@ mod tests {
 
     #[test]
     fn to_mir_registry_extracts_types() {
-        let mut registry = ExternFnRegistry::new();
+        let interner = Interner::new();
+        let mut registry = ExternFnRegistry::new(&interner);
         registry.register(AddOne);
 
         let mir_registry = registry.to_mir_registry();
-        let def = mir_registry.get("add_one").unwrap();
+        let key = interner.intern("add_one");
+        let def = mir_registry.get(key).unwrap();
         assert_eq!(def.params, vec![Ty::Int]);
         assert_eq!(def.ret, Ty::Int);
         assert!(!def.effectful);
@@ -226,7 +228,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate extern function")]
     fn duplicate_panics() {
-        let mut registry = ExternFnRegistry::new();
+        let interner = Interner::new();
+        let mut registry = ExternFnRegistry::new(&interner);
         registry.register(AddOne);
         registry.register(AddOne);
     }

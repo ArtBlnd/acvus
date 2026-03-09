@@ -4,28 +4,31 @@ use std::sync::Arc;
 use acvus_interpreter::{
     Coroutine, ExternFnRegistry, Interpreter, ResumeKey, RuntimeError, Stepped, Value,
 };
+use acvus_utils::{Astr, Interner};
 
 use super::Node;
 
 pub struct ExprNode {
     module: acvus_mir::ir::MirModule,
     extern_fns: ExternFnRegistry,
+    interner: Interner,
 }
 
 impl ExprNode {
-    pub fn new(module: acvus_mir::ir::MirModule, extern_fns: &ExternFnRegistry) -> Self {
+    pub fn new(module: acvus_mir::ir::MirModule, extern_fns: &ExternFnRegistry, interner: &Interner) -> Self {
         Self {
             module,
             extern_fns: extern_fns.clone(),
+            interner: interner.clone(),
         }
     }
 }
 
 impl Node for ExprNode {
-    fn spawn(&self, local: HashMap<String, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
-        let interp = Interpreter::new(self.module.clone(), &self.extern_fns);
+    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+        let interp = Interpreter::new(&self.interner, self.module.clone(), &self.extern_fns);
         let (mut inner, mut key) = interp.execute();
-        acvus_coroutine::coroutine(move |handle| async move {
+        acvus_utils::coroutine(move |handle| async move {
             loop {
                 match inner.resume(key).await {
                     Stepped::Emit(emit) => {
@@ -34,7 +37,7 @@ impl Node for ExprNode {
                         return Ok(());
                     }
                     Stepped::NeedContext(need) => {
-                        let name = need.name().to_string();
+                        let name = need.name();
                         if let Some(arc) = local.get(&name) {
                             key = need.into_key(Arc::clone(arc));
                         } else {

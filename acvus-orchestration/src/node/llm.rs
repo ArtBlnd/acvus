@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, RuntimeError, Value};
+use acvus_utils::{Astr, Interner};
 
 use tracing::{debug, info, warn};
 
@@ -29,6 +30,7 @@ pub struct LlmNode<F> {
     cache_key: Option<CompiledScript>,
     fetch: Arc<F>,
     extern_fns: ExternFnRegistry,
+    interner: Interner,
 }
 
 impl<F> LlmNode<F>
@@ -40,6 +42,7 @@ where
         provider_config: ProviderConfig,
         fetch: Arc<F>,
         extern_fns: &ExternFnRegistry,
+        interner: &Interner,
     ) -> Self {
         Self {
             api: llm.api.clone(),
@@ -52,6 +55,7 @@ where
             cache_key: llm.cache_key.clone(),
             fetch,
             extern_fns: extern_fns.clone(),
+            interner: interner.clone(),
         }
     }
 }
@@ -60,7 +64,7 @@ impl<F> Node for LlmNode<F>
 where
     F: Fetch + 'static,
 {
-    fn spawn(&self, local: HashMap<String, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
         let messages = self.messages.clone();
         let tools = self.tools.clone();
         let api = self.api.clone();
@@ -71,13 +75,14 @@ where
         let provider_config = self.provider_config.clone();
         let fetch = Arc::clone(&self.fetch);
         let extern_fns = self.extern_fns.clone();
+        let interner = self.interner.clone();
 
-        acvus_coroutine::coroutine(move |handle| async move {
+        acvus_utils::coroutine(move |handle| async move {
             let model_name = model.clone();
             let llm_model = create_llm_model(provider_config, model);
 
             let cached_content = if let Some(ref ck_script) = cache_key_script {
-                let val = eval_script_in_coroutine(ck_script, &local, &extern_fns, &handle).await;
+                let val = eval_script_in_coroutine(&interner, ck_script, &local, &extern_fns, &handle).await;
                 match val {
                     Value::String(s) => Some(s),
                     _ => None,
@@ -92,10 +97,10 @@ where
                 match msg {
                     CompiledMessage::Block(block) => {
                         let text =
-                            render_block_in_coroutine(&block.module, &local, &extern_fns, &handle)
+                            render_block_in_coroutine(&interner, &block.module, &local, &extern_fns, &handle)
                                 .await;
                         segments.push(MessageSegment::Single(Message::Content {
-                            role: block.role.clone(),
+                            role: interner.resolve(block.role).to_string(),
                             content: Content::Text(text),
                         }));
                     }
@@ -110,6 +115,7 @@ where
                             expr,
                             slice,
                             role,
+                            &interner,
                             &local,
                             &extern_fns,
                             &handle,
@@ -154,7 +160,7 @@ where
                 match response {
                     ModelResponse::Content(items) => {
                         debug!(items = items.len(), "llm returned content");
-                        handle.yield_val(content_to_value(&items)).await;
+                        handle.yield_val(content_to_value(&interner, &items)).await;
                         return Ok(());
                     }
                     ModelResponse::ToolCalls(calls) => {
@@ -170,15 +176,15 @@ where
                             debug!(tool = %call.name, id = %call.id, "invoking tool");
                             let binding = tools.iter().find(|t| t.name == call.name);
                             let result_text = if let Some(binding) = binding {
-                                let tool_args: HashMap<String, Value> = match &call.arguments {
+                                let tool_args: HashMap<Astr, Value> = match &call.arguments {
                                     serde_json::Value::Object(obj) => obj
                                         .iter()
-                                        .map(|(k, v)| (k.clone(), crate::convert::json_to_value(v)))
+                                        .map(|(k, v)| (interner.intern(k), crate::convert::json_to_value(&interner, v)))
                                         .collect(),
                                     _ => HashMap::new(),
                                 };
                                 let result = handle
-                                    .request_context_with(binding.node.clone(), tool_args)
+                                    .request_context_with(interner.intern(&binding.node), tool_args)
                                     .await;
                                 value_to_tool_result(&result)
                             } else {

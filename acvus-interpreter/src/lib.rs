@@ -4,7 +4,7 @@ pub mod extern_fn;
 mod interpreter;
 mod value;
 
-pub use acvus_coroutine::{
+pub use acvus_utils::{
     Coroutine, EmitStepped, NeedContextStepped, ResumeKey, Stepped, YieldHandle,
 };
 

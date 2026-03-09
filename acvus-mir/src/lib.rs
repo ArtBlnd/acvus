@@ -13,6 +13,7 @@ pub mod variant;
 use std::collections::HashMap;
 
 use acvus_ast::{Script, Template};
+use acvus_utils::{Astr, Interner};
 
 use crate::error::MirError;
 use crate::extern_module::ExternRegistry;
@@ -32,39 +33,42 @@ use crate::user_type::UserTypeRegistry;
 ///
 /// Returns a `MirModule` and `HintTable`, or a list of errors.
 pub fn compile(
+    interner: &Interner,
     template: &Template,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let checker = TypeChecker::new(context_types, registry, user_types);
+    let checker = TypeChecker::new(interner, context_types, registry, user_types);
     let (type_map, variant_registry) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
 
 /// Compile a parsed script with type checking. Returns the MIR module, hint table, and the tail expression type.
 pub fn compile_script(
+    interner: &Interner,
     script: &Script,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_with_hint(script, context_types, registry, user_types, None)
+    compile_script_with_hint(interner, script, context_types, registry, user_types, None)
 }
 
 pub fn compile_script_with_hint(
+    interner: &Interner,
     script: &Script,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    let checker = TypeChecker::new(context_types, registry, user_types);
+    let checker = TypeChecker::new(interner, context_types, registry, user_types);
     let (type_map, tail_ty, variant_registry) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -72,40 +76,43 @@ pub fn compile_script_with_hint(
 /// Compile a template in analysis mode: unknown `@context` refs get fresh
 /// type variables instead of errors, enabling partial type inference.
 pub fn compile_analysis(
+    interner: &Interner,
     template: &Template,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let checker = TypeChecker::new(context_types, registry, user_types).with_analysis_mode();
+    let checker = TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
     let (type_map, variant_registry) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
 
 /// Compile a script in analysis mode.
 pub fn compile_script_analysis(
+    interner: &Interner,
     script: &Script,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_analysis_with_tail(script, context_types, registry, user_types, None)
+    compile_script_analysis_with_tail(interner, script, context_types, registry, user_types, None)
 }
 
 /// Compile a script in analysis mode with an expected tail type hint.
 pub fn compile_script_analysis_with_tail(
+    interner: &Interner,
     script: &Script,
-    context_types: &HashMap<String, Ty>,
+    context_types: &HashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    let checker = TypeChecker::new(context_types, registry, user_types).with_analysis_mode();
+    let checker = TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
     let (type_map, tail_ty, variant_registry) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -113,17 +120,17 @@ pub fn compile_script_analysis_with_tail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     use crate::extern_module::{ExternModule, ExternRegistry};
 
     fn compile_src(
+        interner: &Interner,
         source: &str,
-        context: &HashMap<String, Ty>,
+        context: &HashMap<Astr, Ty>,
         registry: &ExternRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-        let template = acvus_ast::parse(source).expect("parse failed");
-        compile(&template, context, registry, &UserTypeRegistry::new())
+        let template = acvus_ast::parse(interner, source).expect("parse failed");
+        compile(interner, &template, context, registry, &UserTypeRegistry::new())
     }
 
     fn empty_registry() -> ExternRegistry {
@@ -132,32 +139,35 @@ mod tests {
 
     #[test]
     fn integration_text_only() {
-        let result = compile_src("hello world", &HashMap::new(), &empty_registry());
+        let i = Interner::new();
+        let result = compile_src(&i, "hello world", &HashMap::new(), &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_string_emit() {
-        let result = compile_src(r#"{{ "hello" }}"#, &HashMap::new(), &empty_registry());
+        let i = Interner::new();
+        let result = compile_src(&i, r#"{{ "hello" }}"#, &HashMap::new(), &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_context_read_var_write() {
-        // Variable write (no pre-declaration needed)
-        let result = compile_src("{{ $count = 42 }}", &HashMap::new(), &empty_registry());
+        let i = Interner::new();
+        let result = compile_src(&i, "{{ $count = 42 }}", &HashMap::new(), &empty_registry());
         assert!(result.is_ok());
 
-        // Context read
-        let context = HashMap::from([("count".into(), Ty::Int)]);
-        let result = compile_src("{{ @count | to_string }}", &context, &empty_registry());
+        let context = HashMap::from([(i.intern("count"), Ty::Int)]);
+        let result = compile_src(&i, "{{ @count | to_string }}", &context, &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_match_with_catch_all() {
-        let context = HashMap::from([("name".into(), Ty::String)]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("name"), Ty::String)]);
         let result = compile_src(
+            &i,
             r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
             &context,
             &empty_registry(),
@@ -167,18 +177,21 @@ mod tests {
 
     #[test]
     fn integration_variable_binding() {
-        let context = HashMap::from([("name".into(), Ty::String)]);
-        let result = compile_src(r#"{{ x = @name }}{{ x }}"#, &context, &empty_registry());
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("name"), Ty::String)]);
+        let result = compile_src(&i, r#"{{ x = @name }}{{ x }}"#, &context, &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_extern_fn() {
-        let mut module = ExternModule::new("test");
-        module.add_fn("fetch_user", vec![Ty::Int], Ty::String, false);
+        let i = Interner::new();
+        let mut module = ExternModule::new(i.intern("test"));
+        module.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
         let mut registry = ExternRegistry::new();
         registry.register(&module);
         let result = compile_src(
+            &i,
             r#"{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
             &HashMap::new(),
             &registry,
@@ -188,8 +201,10 @@ mod tests {
 
     #[test]
     fn integration_pipe_with_lambda() {
-        let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
+            &i,
             r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &context,
             &empty_registry(),
@@ -199,27 +214,30 @@ mod tests {
 
     #[test]
     fn integration_object_field_access() {
+        let i = Interner::new();
         let context = HashMap::from([(
-            "user".into(),
-            Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-                ("age".into(), Ty::Int),
+            i.intern("user"),
+            Ty::Object(HashMap::from([
+                (i.intern("name"), Ty::String),
+                (i.intern("age"), Ty::Int),
             ])),
         )]);
-        let result = compile_src("{{ @user.name }}", &context, &empty_registry());
+        let result = compile_src(&i, "{{ @user.name }}", &context, &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_nested_match() {
+        let i = Interner::new();
         let context = HashMap::from([(
-            "users".into(),
-            Ty::List(Box::new(Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-                ("age".into(), Ty::Int),
+            i.intern("users"),
+            Ty::List(Box::new(Ty::Object(HashMap::from([
+                (i.intern("name"), Ty::String),
+                (i.intern("age"), Ty::Int),
             ])))),
         )]);
         let result = compile_src(
+            &i,
             r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
             &context,
             &empty_registry(),
@@ -229,13 +247,16 @@ mod tests {
 
     #[test]
     fn integration_type_error_int_emit() {
-        let result = compile_src("{{ 42 }}", &HashMap::new(), &empty_registry());
+        let i = Interner::new();
+        let result = compile_src(&i, "{{ 42 }}", &HashMap::new(), &empty_registry());
         assert!(result.is_err());
     }
 
     #[test]
     fn integration_range_expression() {
+        let i = Interner::new();
         let result = compile_src(
+            &i,
             "{{ x in 0..10 }}{{ x | to_string }}{{/}}",
             &HashMap::new(),
             &empty_registry(),
@@ -245,14 +266,16 @@ mod tests {
 
     #[test]
     fn integration_object_pattern() {
+        let i = Interner::new();
         let context = HashMap::from([(
-            "data".into(),
-            Ty::Object(BTreeMap::from([
-                ("name".into(), Ty::String),
-                ("value".into(), Ty::Int),
+            i.intern("data"),
+            Ty::Object(HashMap::from([
+                (i.intern("name"), Ty::String),
+                (i.intern("value"), Ty::Int),
             ])),
         )]);
         let result = compile_src(
+            &i,
             r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
             &context,
             &empty_registry(),
@@ -262,8 +285,10 @@ mod tests {
 
     #[test]
     fn integration_multi_arm() {
-        let context = HashMap::from([("role".into(), Ty::String)]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("role"), Ty::String)]);
         let result = compile_src(
+            &i,
             r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
             &context,
             &empty_registry(),
@@ -273,8 +298,10 @@ mod tests {
 
     #[test]
     fn integration_list_destructure() {
-        let context = HashMap::from([("items".into(), Ty::List(Box::new(Ty::Int)))]);
+        let i = Interner::new();
+        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
+            &i,
             r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}"#,
             &context,
             &empty_registry(),
@@ -284,7 +311,9 @@ mod tests {
 
     #[test]
     fn integration_string_concat() {
+        let i = Interner::new();
         let result = compile_src(
+            &i,
             r#"{{ "hello" + " " + "world" }}"#,
             &HashMap::new(),
             &empty_registry(),
@@ -294,15 +323,17 @@ mod tests {
 
     #[test]
     fn integration_boolean_logic() {
-        let result = compile_src("{{ true }}", &HashMap::new(), &empty_registry());
+        let i = Interner::new();
+        let result = compile_src(&i, "{{ true }}", &HashMap::new(), &empty_registry());
         assert!(result.is_err());
     }
 
     fn compile_script_test(source: &str) -> MirModule {
-        let script = acvus_ast::parse_script(source).unwrap();
-        let ctx = HashMap::from([("data".into(), Ty::String)]);
+        let i = Interner::new();
+        let script = acvus_ast::parse_script(&i, source).unwrap();
+        let ctx = HashMap::from([(i.intern("data"), Ty::String)]);
         let (module, _, _) =
-            compile_script(&script, &ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
+            compile_script(&i, &script, &ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
         module
     }
 

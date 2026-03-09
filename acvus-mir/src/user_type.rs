@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use acvus_utils::Astr;
+
 use crate::variant::EnumDef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -7,7 +9,7 @@ pub struct UserTypeId(pub u32);
 
 pub struct UserTypeRegistry {
     enums: Vec<EnumDef>,
-    name_index: HashMap<String, UserTypeId>,
+    name_index: HashMap<Astr, UserTypeId>,
 }
 
 impl Default for UserTypeRegistry {
@@ -31,7 +33,7 @@ impl UserTypeRegistry {
             "duplicate user type: {}",
             def.name,
         );
-        self.name_index.insert(def.name.clone(), id);
+        self.name_index.insert(def.name, id);
         self.enums.push(def);
         id
     }
@@ -40,8 +42,8 @@ impl UserTypeRegistry {
         &self.enums[id.0 as usize]
     }
 
-    pub fn resolve_name(&self, name: &str) -> Option<UserTypeId> {
-        self.name_index.get(name).copied()
+    pub fn resolve_name(&self, name: Astr) -> Option<UserTypeId> {
+        self.name_index.get(&name).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (UserTypeId, &EnumDef)> {
