@@ -1709,3 +1709,110 @@ fn variant_none_pattern() {
     .unwrap();
     insta::assert_snapshot!(ir);
 }
+
+#[test]
+fn structural_enum_variant_merge() {
+    let i = Interner::new();
+    let template = acvus_ast::parse(&i, "{{ A::B = @a }}hi{{/}}{{ A::C = @a }}bye{{/}}").unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i,
+        &template,
+        &FxHashMap::default(),
+        &ExternRegistry::new(),
+    )
+    .unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
+    assert!(ir.contains("C"), "variant C missing from IR:\n{ir}");
+}
+
+// ── Structural enum tests ──────────────────────────────────────
+
+#[test]
+fn structural_enum_single_variant() {
+    let i = Interner::new();
+    let template = acvus_ast::parse(&i, "{{ A::B = @a }}yes{{_}}no{{/}}").unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
+}
+
+#[test]
+fn structural_enum_three_variants_merge() {
+    let i = Interner::new();
+    let src = "{{ S::X = @v }}x{{/}}{{ S::Y = @v }}y{{/}}{{ S::Z = @v }}z{{/}}";
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("X"), "variant X missing:\n{ir}");
+    assert!(ir.contains("Y"), "variant Y missing:\n{ir}");
+    assert!(ir.contains("Z"), "variant Z missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_with_payload() {
+    let i = Interner::new();
+    let src = r#"{{ R::Ok(v) = @r }}{{ v | to_string }}{{_}}err{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_mixed_payload_and_unit() {
+    let i = Interner::new();
+    let src = r#"{{ R::Ok(v) = @r }}{{ v | to_string }}{{ R::Err = }}fail{{_}}??{{/}}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
+    assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_same_var_different_blocks_merge() {
+    // Key regression test: separate match blocks on the same context var must merge.
+    let i = Interner::new();
+    let src = "{{ A::B = @a }}b{{/}}{{ A::C = @a }}c{{/}}";
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("B"), "variant B missing:\n{ir}");
+    assert!(ir.contains("C"), "variant C missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_different_enums_different_vars() {
+    let i = Interner::new();
+    let src = "{{ X::A = @x }}xa{{/}}{{ Y::B = @y }}yb{{/}}";
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    assert!(ir.contains("A"), "variant A missing:\n{ir}");
+    assert!(ir.contains("B"), "variant B missing:\n{ir}");
+}
+
+#[test]
+fn structural_enum_name_mismatch_is_error() {
+    // Matching X::A and Y::B on the same var should fail (different enum names).
+    let i = Interner::new();
+    let src = "{{ X::A = @v }}a{{/}}{{ Y::B = @v }}b{{/}}";
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let result = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    );
+    assert!(result.is_err(), "should fail: different enum names on same var");
+}

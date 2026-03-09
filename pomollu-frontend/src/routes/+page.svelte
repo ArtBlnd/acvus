@@ -24,6 +24,7 @@
 	import type { ContextEnvResult } from '$lib/param-resolver.js';
 	import type { BlockNode } from '$lib/types.js';
 	import { CONTEXT_TYPE } from '$lib/types.js';
+	import { isUnknownType } from '$lib/type-parser.js';
 	import { onMount } from 'svelte';
 
 	let activeTab = $derived(uiState.activeTab);
@@ -60,7 +61,7 @@
 					contextTypes: injected,
 				});
 				for (const k of discovered) {
-					if (k.type !== '?' && !(k.name in injected)) injected[k.name] = k.type;
+					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
 				return computeExternalContextEnv(prompt.children, injected, getApi);
 			}
@@ -78,7 +79,7 @@
 					contextTypes: injected,
 				});
 				for (const k of discovered) {
-					if (k.type !== '?' && !(k.name in injected)) injected[k.name] = k.type;
+					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
 				return computeExternalContextEnv(profile.children, injected, getApi);
 			}
@@ -127,7 +128,7 @@
 					scripts, nodeNames, providedKeys, contextTypes: injected,
 				});
 				for (const k of discovered) {
-					if (k.type !== '?' && !(k.name in injected)) injected[k.name] = k.type;
+					if (!isUnknownType(k.type) && !(k.name in injected)) injected[k.name] = k.type;
 				}
 				return computeExternalContextEnv(allChildren, injected, getApi);
 			}

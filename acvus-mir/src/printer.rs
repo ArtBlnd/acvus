@@ -71,7 +71,6 @@ struct PrintCtx<'a> {
     interner: &'a Interner,
     lit_to_tidx: &'a FxHashMap<String, usize>,
     extern_names: &'a FxHashMap<ExternFnId, Astr>,
-    tag_names: &'a [Astr],
 }
 
 impl PrintCtx<'_> {
@@ -86,11 +85,8 @@ impl PrintCtx<'_> {
         }
     }
 
-    fn tag_name(&self, tag: &crate::variant::VariantTagId) -> String {
-        self.tag_names
-            .get(tag.0 as usize)
-            .map(|s| self.interner.resolve(*s).to_string())
-            .unwrap_or_else(|| "?".to_string())
+    fn tag_name(&self, tag: &Astr) -> String {
+        self.interner.resolve(*tag).to_string()
     }
 }
 
@@ -603,7 +599,6 @@ impl fmt::Display for MirModuleDisplay<'_> {
             interner: self.interner,
             lit_to_tidx: &lit_to_tidx,
             extern_names: &module.extern_names,
-            tag_names: &module.tag_names,
         };
 
         writeln!(f, "=== main ===")?;
@@ -670,7 +665,6 @@ impl fmt::Display for MirBodyDisplay<'_> {
             interner: self.interner,
             lit_to_tidx: &empty_lits,
             extern_names: &empty_externs,
-            tag_names: &[],
         };
         write_body(f, self.body, "", &ctx)
     }
@@ -701,7 +695,6 @@ mod tests {
     use super::*;
     use crate::extern_module::{ExternModule, ExternRegistry};
     use crate::ty::Ty;
-    use crate::user_type::UserTypeRegistry;
     use acvus_utils::Interner;
 
     fn compile_and_dump(
@@ -711,14 +704,8 @@ mod tests {
         interner: &Interner,
     ) -> String {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let (module, _) = crate::compile(
-            interner,
-            &template,
-            context,
-            registry,
-            &UserTypeRegistry::new(),
-        )
-        .expect("compile failed");
+        let (module, _) = crate::compile(interner, &template, context, registry)
+            .expect("compile failed");
         dump(interner, &module)
     }
 

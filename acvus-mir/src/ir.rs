@@ -5,7 +5,6 @@ use rustc_hash::FxHashMap;
 use crate::builtins::BuiltinId;
 use crate::extern_module::ExternFnId;
 use crate::ty::Ty;
-use crate::variant::VariantTagId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(pub u32);
@@ -180,13 +179,13 @@ pub enum InstKind {
     // Variant (tagged union)
     MakeVariant {
         dst: ValueId,
-        tag: VariantTagId,
+        tag: Astr,
         payload: Option<ValueId>,
     },
     TestVariant {
         dst: ValueId,
         src: ValueId,
-        tag: VariantTagId,
+        tag: Astr,
     },
     UnwrapVariant {
         dst: ValueId,
@@ -307,8 +306,6 @@ pub struct ClosureBody {
 pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, ClosureBody>,
-    /// Tag name table: `VariantTagId(n)` -> `tag_names[n]`.
-    pub tag_names: Vec<Astr>,
     /// Extern fn name table: `ExternFnId` -> name.
     pub extern_names: FxHashMap<ExternFnId, Astr>,
 }

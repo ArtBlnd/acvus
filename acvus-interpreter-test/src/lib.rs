@@ -23,8 +23,7 @@ pub async fn run(
         &template,
         &context_types,
         &mir_registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
-    )
+        )
     .expect("compile failed");
 
     let interp = Interpreter::new(interner, module, &extern_fns);
@@ -79,8 +78,7 @@ pub async fn run_obfuscated(
         &template,
         &context_types,
         &mir_registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
-    )
+        )
     .expect("compile failed");
 
     let module = ObfuscatePass {
@@ -146,8 +144,7 @@ pub async fn run_capturing_context_calls(
         &template,
         &types,
         &ExternFnRegistry::new(interner).to_mir_registry(),
-        &acvus_mir::user_type::UserTypeRegistry::new(),
-    )
+        )
     .expect("compile failed");
     let ext = ExternFnRegistry::new(interner);
     let interp = Interpreter::new(interner, module, &ext);
@@ -193,8 +190,7 @@ pub async fn run_expect_error(
         &template,
         &context_types,
         &mir_registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
-    )
+        )
     .expect("compile failed");
 
     let interp = Interpreter::new(interner, module, &extern_fns);

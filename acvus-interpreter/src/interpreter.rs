@@ -394,11 +394,10 @@ impl Interpreter {
                 // -- variant --
                 InstKind::MakeVariant { dst, tag, payload } => {
                     let p = payload.as_ref().map(|v| Box::new(frame.take_owned(*v)));
-                    let tag_name = this.module.tag_names[tag.0 as usize];
                     frame.set_new(
                         *dst,
                         Value::Variant {
-                            tag: tag_name,
+                            tag: *tag,
                             payload: p,
                         },
                     );
@@ -407,8 +406,7 @@ impl Interpreter {
                     let Value::Variant { tag: t, .. } = frame.get(*src) else {
                         panic!("TestVariant: expected Variant, got {:?}", frame.get(*src));
                     };
-                    let tag_name = this.module.tag_names[tag.0 as usize];
-                    frame.set_new(*dst, Value::Bool(*t == tag_name));
+                    frame.set_new(*dst, Value::Bool(*t == *tag));
                 }
                 InstKind::UnwrapVariant { dst, src } => {
                     let Value::Variant {

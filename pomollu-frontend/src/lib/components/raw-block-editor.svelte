@@ -9,7 +9,7 @@
 	}: {
 		block: RawBlock;
 		onupdate: (updater: (b: RawBlock) => RawBlock) => void;
-		contextTypes?: Record<string, string>;
+		contextTypes?: Record<string, import('$lib/type-parser.js').TypeDesc>;
 	} = $props();
 </script>
 

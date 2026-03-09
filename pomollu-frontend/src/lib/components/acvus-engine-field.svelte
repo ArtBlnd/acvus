@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { typecheckWithTypes, typecheckWithTail, analyzeWithTypes } from '$lib/engine.js';
+	import type { TypeDesc } from '$lib/type-parser.js';
+	import { isUnknownType } from '$lib/type-parser.js';
 	import { highlightTemplate, highlightScript } from '$lib/highlight.js';
 
 	let {
@@ -24,8 +26,8 @@
 		placeholder?: string;
 		rows?: number;
 		unlimited?: boolean;
-		contextTypes?: Record<string, string>;
-		expectedTailType?: string;
+		contextTypes?: Record<string, TypeDesc>;
+		expectedTailType?: TypeDesc;
 		discoverContext?: boolean;
 	} = $props();
 
@@ -62,7 +64,7 @@
 			if (analysis.ok) {
 				const merged = { ...contextTypes };
 				for (const key of analysis.context_keys) {
-					if (key.type !== '?' && !(key.name in merged)) {
+					if (!isUnknownType(key.type) && !(key.name in merged)) {
 						merged[key.name] = key.type;
 					}
 				}

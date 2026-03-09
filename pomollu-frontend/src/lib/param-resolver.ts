@@ -1,4 +1,6 @@
 import type { ContextKeyInfo, WebNode, TypecheckNodesResult } from './engine.js';
+import type { TypeDesc } from './type-parser.js';
+import { isUnknownType } from './type-parser.js';
 import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam } from './types.js';
 import { isRawBlock, isScriptBlock, BUILTIN_CONTEXT_REFS } from './types.js';
 import { collectBlocks, collectNodes } from './block-tree.js';
@@ -79,9 +81,9 @@ export function collectUnresolvedParams(opts: {
 	scripts: { source: string; mode: 'script' | 'template' }[];
 	nodeNames: Set<string>;
 	providedKeys: Set<string>;
-	contextTypes: Record<string, string>;
+	contextTypes: Record<string, TypeDesc>;
 }): ContextKeyInfo[] {
-	const seen = new Map<string, string>();
+	const seen = new Map<string, TypeDesc>();
 
 	for (const { source, mode } of opts.scripts) {
 		if (!source.trim()) continue;
@@ -91,7 +93,8 @@ export function collectUnresolvedParams(opts: {
 			if (BUILTIN_CONTEXT_REFS.has(key.name)) continue;
 			if (opts.nodeNames.has(key.name)) continue;
 			if (opts.providedKeys.has(key.name)) continue;
-			if (!seen.has(key.name) || seen.get(key.name) === '?') {
+			const existing = seen.get(key.name);
+			if (!existing || isUnknownType(existing)) {
 				seen.set(key.name, key.type);
 			}
 		}
@@ -115,25 +118,25 @@ export function analyzeLevel(opts: {
 	nodeNames: Set<string>;
 	providedKeys: Set<string>;
 	existingParams: ContextParam[];
-	baseTypes?: Record<string, string>;
+	baseTypes?: Record<string, TypeDesc>;
 	children: BlockNode[];
 	getApi: (providerId: string) => string;
-}): { discoveredTypes: Record<string, string>; unresolvedKeys: ContextKeyInfo[] } {
-	const userTypes: Record<string, string> = { ...(opts.baseTypes ?? {}) };
+}): { discoveredTypes: Record<string, TypeDesc>; unresolvedKeys: ContextKeyInfo[] } {
+	const typesFromParams: Record<string, TypeDesc> = { ...(opts.baseTypes ?? {}) };
 	for (const p of opts.existingParams) {
-		if (p.userType) userTypes[p.name] = p.userType;
+		if (p.userType) typesFromParams[p.name] = p.userType;
 	}
 
 	const keys = collectUnresolvedParams({
 		scripts: opts.scripts,
 		nodeNames: opts.nodeNames,
 		providedKeys: opts.providedKeys,
-		contextTypes: userTypes,
+		contextTypes: typesFromParams,
 	});
 
-	const injectedTypes: Record<string, string> = { ...userTypes };
+	const injectedTypes: Record<string, TypeDesc> = { ...typesFromParams };
 	for (const k of keys) {
-		if (k.type !== '?' && !injectedTypes[k.name]) {
+		if (!isUnknownType(k.type) && !injectedTypes[k.name]) {
 			injectedTypes[k.name] = k.type;
 		}
 	}
@@ -158,7 +161,7 @@ export function mergeDiscoveredParams(
 			inferredType: k.type,
 			resolution: prev?.resolution ?? { kind: 'unresolved' as const },
 			userType: prev?.userType,
-		};
+		} satisfies ContextParam;
 	});
 }
 
@@ -166,10 +169,10 @@ export function mergeDiscoveredParams(
  * Build injected context types from contextParams.
  * Uses userType if set, otherwise inferredType (skipping '?').
  */
-export function buildInjectedTypes(contextParams: ContextParam[]): Record<string, string> {
-	const types: Record<string, string> = {};
+export function buildInjectedTypes(contextParams: ContextParam[]): Record<string, TypeDesc> {
+	const types: Record<string, TypeDesc> = {};
 	for (const p of contextParams) {
-		const ty = p.userType || (p.inferredType !== '?' ? p.inferredType : undefined);
+		const ty = p.userType || (isUnknownType(p.inferredType) ? undefined : p.inferredType);
 		if (ty) types[p.name] = ty;
 	}
 	return types;
@@ -214,8 +217,8 @@ export function toWebNode(node: Node, api: string): WebNode {
 }
 
 export type ContextEnvResult = {
-	contextTypes: Record<string, string>;
-	nodeLocals: Record<string, { raw: string; self: string }>;
+	contextTypes: Record<string, TypeDesc>;
+	nodeLocals: Record<string, { raw: TypeDesc; self: TypeDesc }>;
 	nodeErrors: Record<string, Record<string, string>>;
 };
 
@@ -226,7 +229,7 @@ export type ContextEnvResult = {
  */
 export function computeExternalContextEnv(
 	children: BlockNode[],
-	injectedTypes: Record<string, string>,
+	injectedTypes: Record<string, TypeDesc>,
 	getApi: (providerId: string) => string,
 ): ContextEnvResult {
 	const nodes = collectNodes(children);

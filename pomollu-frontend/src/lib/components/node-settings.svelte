@@ -20,8 +20,8 @@
 	}: {
 		nodeId: string;
 		owner: BlockOwner;
-		contextTypes?: Record<string, string>;
-		nodeLocals?: Record<string, { raw: string; self: string }>;
+		contextTypes?: Record<string, import('$lib/type-parser.js').TypeDesc>;
+		nodeLocals?: Record<string, { raw: import('$lib/type-parser.js').TypeDesc; self: import('$lib/type-parser.js').TypeDesc }>;
 		nodeErrors?: Record<string, Record<string, string>>;
 	} = $props();
 
@@ -340,7 +340,7 @@
 									value={node.assert ?? ''}
 									oninput={(v) => updateNode((n) => ({ ...n, assert: v }))}
 									contextTypes={mergedContextTypes}
-									expectedTailType="Bool"
+									expectedTailType={{ kind: 'primitive', name: 'Bool' }}
 									discoverContext
 								/>
 								{#if fieldErrors['assert']}

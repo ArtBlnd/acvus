@@ -9,11 +9,10 @@ fn init() {
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
-use acvus_mir::user_type::UserTypeRegistry;
 use acvus_orchestration::NodeSpec;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use wasm_bindgen::prelude::*;
 
 /// Serialize any Serialize type to JsValue via JSON.
@@ -30,7 +29,134 @@ fn default_registry(interner: &Interner) -> ExternRegistry {
     registry
 }
 
-fn extract_context_keys_with_types(interner: &Interner, module: &MirModule) -> Vec<ContextKey> {
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum TypeDesc {
+    #[serde(rename = "primitive")]
+    Primitive { name: String },
+    #[serde(rename = "option")]
+    Option { inner: Box<TypeDesc> },
+    #[serde(rename = "object")]
+    Object { fields: Vec<TypeDescField> },
+    #[serde(rename = "list")]
+    List { elem: Box<TypeDesc> },
+    #[serde(rename = "enum")]
+    Enum {
+        name: String,
+        variants: Vec<TypeDescVariant>,
+    },
+    #[serde(rename = "unsupported")]
+    Unsupported { raw: String },
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct TypeDescField {
+    name: String,
+    #[serde(rename = "type")]
+    ty: TypeDesc,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct TypeDescVariant {
+    tag: String,
+    #[serde(rename = "hasPayload")]
+    has_payload: bool,
+}
+
+fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
+    match ty {
+        Ty::Int => TypeDesc::Primitive { name: "Int".into() },
+        Ty::Float => TypeDesc::Primitive { name: "Float".into() },
+        Ty::String => TypeDesc::Primitive { name: "String".into() },
+        Ty::Bool => TypeDesc::Primitive { name: "Bool".into() },
+        Ty::Unit => TypeDesc::Unsupported { raw: "Unit".into() },
+        Ty::Range => TypeDesc::Unsupported { raw: "Range".into() },
+        Ty::Byte => TypeDesc::Unsupported { raw: "Byte".into() },
+        Ty::Option(inner) => TypeDesc::Option {
+            inner: Box::new(ty_to_desc(interner, inner)),
+        },
+        Ty::List(inner) => TypeDesc::List {
+            elem: Box::new(ty_to_desc(interner, inner)),
+        },
+        Ty::Object(fields) => {
+            let mut desc_fields: Vec<TypeDescField> = fields
+                .iter()
+                .map(|(k, v)| TypeDescField {
+                    name: interner.resolve(*k).to_string(),
+                    ty: ty_to_desc(interner, v),
+                })
+                .collect();
+            desc_fields.sort_by(|a, b| a.name.cmp(&b.name));
+            TypeDesc::Object { fields: desc_fields }
+        }
+        Ty::Enum { name, variants } => {
+            let mut desc_variants: Vec<TypeDescVariant> = variants
+                .iter()
+                .map(|(tag, payload)| TypeDescVariant {
+                    tag: interner.resolve(*tag).to_string(),
+                    has_payload: payload.is_some(),
+                })
+                .collect();
+            desc_variants.sort_by(|a, b| a.tag.cmp(&b.tag));
+            TypeDesc::Enum {
+                name: interner.resolve(*name).to_string(),
+                variants: desc_variants,
+            }
+        }
+        Ty::Var(_) | Ty::Infer | Ty::Error => TypeDesc::Unsupported { raw: "?".into() },
+        Ty::Fn { .. } => TypeDesc::Unsupported { raw: "Fn".into() },
+        Ty::Opaque(_) => TypeDesc::Unsupported { raw: "Opaque".into() },
+        Ty::Tuple(_) => TypeDesc::Unsupported { raw: "Tuple".into() },
+    }
+}
+
+pub(crate) fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
+    match desc {
+        TypeDesc::Primitive { name } => match name.as_str() {
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "String" => Ty::String,
+            "Bool" => Ty::Bool,
+            _ => Ty::Infer,
+        },
+        TypeDesc::Option { inner } => Ty::Option(Box::new(desc_to_ty(interner, inner))),
+        TypeDesc::List { elem } => Ty::List(Box::new(desc_to_ty(interner, elem))),
+        TypeDesc::Object { fields } => {
+            let ty_fields: FxHashMap<Astr, Ty> = fields
+                .iter()
+                .map(|f| (interner.intern(&f.name), desc_to_ty(interner, &f.ty)))
+                .collect();
+            Ty::Object(ty_fields)
+        }
+        TypeDesc::Enum { name, variants } => {
+            let ty_variants: FxHashMap<Astr, Option<Box<Ty>>> = variants
+                .iter()
+                .map(|v| {
+                    let tag = interner.intern(&v.tag);
+                    // TypeDescVariant only tracks has_payload; without payload type info,
+                    // we cannot reconstruct the payload Ty, so use None for no-payload
+                    // and Infer for has-payload.
+                    let payload = if v.has_payload {
+                        Some(Box::new(Ty::Infer))
+                    } else {
+                        None
+                    };
+                    (tag, payload)
+                })
+                .collect();
+            Ty::Enum {
+                name: interner.intern(name),
+                variants: ty_variants,
+            }
+        }
+        TypeDesc::Unsupported { .. } => Ty::Infer,
+    }
+}
+
+fn extract_context_keys_with_types(
+    interner: &Interner,
+    module: &MirModule,
+) -> Vec<ContextKey> {
     let mut seen = FxHashMap::<Astr, Ty>::default();
 
     let mut collect = |insts: &[acvus_mir::ir::Inst],
@@ -55,123 +181,29 @@ fn extract_context_keys_with_types(interner: &Interner, module: &MirModule) -> V
         .into_iter()
         .map(|(name, ty)| ContextKey {
             name: interner.resolve(name).to_string(),
-            ty: format_ty(interner, &ty),
+            ty: ty_to_desc(interner, &ty),
         })
         .collect();
     keys.sort_by(|a, b| a.name.cmp(&b.name));
     keys
 }
 
-fn format_ty(interner: &Interner, ty: &Ty) -> String {
-    match ty {
-        Ty::Var(_) | Ty::Infer | Ty::Error => "?".to_string(),
-        other => other.display(interner).to_string(),
-    }
-}
-
-/// Find the closing position for a generic bracket `<` at position `open`.
-/// Returns the byte index of the matching `>`, respecting nested `<>`, `{}`, `()`.
-fn find_matching_close(s: &str, open: usize) -> Option<usize> {
-    let mut depth = 0i32;
-    for (i, c) in s[open..].char_indices() {
-        match c {
-            '<' | '{' | '(' => depth += 1,
-            '>' | '}' | ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(open + i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_ty(interner: &Interner, s: &str) -> Option<Ty> {
-    let s = s.trim();
-    match s {
-        "Int" => Some(Ty::Int),
-        "Float" => Some(Ty::Float),
-        "String" => Some(Ty::String),
-        "Bool" => Some(Ty::Bool),
-        "Unit" => Some(Ty::Unit),
-        "Range" => Some(Ty::Range),
-        "Byte" => Some(Ty::Byte),
-        _ if s.starts_with("List<") => {
-            let close = find_matching_close(s, 4)?;
-            if close != s.len() - 1 {
-                return None;
-            }
-            let inner = &s[5..close];
-            Some(Ty::List(Box::new(parse_ty(interner, inner)?)))
-        }
-        _ if s.starts_with("Option<") => {
-            let close = find_matching_close(s, 6)?;
-            if close != s.len() - 1 {
-                return None;
-            }
-            let inner = &s[7..close];
-            Some(Ty::Option(Box::new(parse_ty(interner, inner)?)))
-        }
-        _ if s.starts_with('{') && s.ends_with('}') => {
-            let inner = &s[1..s.len() - 1].trim();
-            if inner.is_empty() {
-                return Some(Ty::Object(FxHashMap::default()));
-            }
-            let mut fields = FxHashMap::default();
-            for pair in split_top_level(inner, ',') {
-                let pair = pair.trim();
-                let colon = pair.find(':')?;
-                let key = interner.intern(pair[..colon].trim());
-                let val = parse_ty(interner, pair[colon + 1..].trim())?;
-                fields.insert(key, val);
-            }
-            Some(Ty::Object(fields))
-        }
-        _ => None,
-    }
-}
-
-/// Parse a JSON map of `name -> type_string` into `HashMap<Astr, Ty>`.
-/// Returns an error string if any type string fails to parse.
+/// Parse a JSON map of `name -> TypeDesc` into `HashMap<Astr, Ty>`.
 fn parse_context_types(interner: &Interner, json: &str) -> Result<FxHashMap<Astr, Ty>, String> {
-    let raw: FxHashMap<String, String> = serde_json::from_str(json)
+    let raw: FxHashMap<String, TypeDesc> = serde_json::from_str(json)
         .map_err(|e| format!("failed to parse context types JSON: {e}"))?;
     let mut result = FxHashMap::default();
     for (k, v) in raw {
-        let ty =
-            parse_ty(interner, &v).ok_or_else(|| format!("failed to parse type for @{k}: {v}"))?;
-        result.insert(interner.intern(&k), ty);
+        result.insert(interner.intern(&k), desc_to_ty(interner, &v));
     }
     Ok(result)
-}
-
-/// Split a string by `sep` only at the top level (not inside `<>`, `{}`, `()`).
-fn split_top_level(s: &str, sep: char) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0;
-    for (i, c) in s.char_indices() {
-        match c {
-            '<' | '{' | '(' => depth += 1,
-            '>' | '}' | ')' => depth -= 1,
-            c if c == sep && depth == 0 => {
-                parts.push(&s[start..i]);
-                start = i + c.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    parts.push(&s[start..]);
-    parts
 }
 
 #[derive(Serialize)]
 struct ContextKey {
     name: String,
     #[serde(rename = "type")]
-    ty: String,
+    ty: TypeDesc,
 }
 
 #[derive(Serialize)]
@@ -179,7 +211,7 @@ struct AnalyzeResult {
     ok: bool,
     errors: Vec<String>,
     context_keys: Vec<ContextKey>,
-    tail_type: String,
+    tail_type: TypeDesc,
 }
 
 fn do_analyze(
@@ -190,7 +222,6 @@ fn do_analyze(
     expected_tail: Option<&Ty>,
 ) -> AnalyzeResult {
     let registry = default_registry(interner);
-    let user_types = UserTypeRegistry::new();
 
     match mode {
         "template" => {
@@ -201,11 +232,11 @@ fn do_analyze(
                         ok: false,
                         errors: vec![format!("{e}")],
                         context_keys: vec![],
-                        tail_type: String::new(),
+                        tail_type: TypeDesc::Unsupported { raw: String::new() },
                     };
                 }
             };
-            match acvus_mir::compile_analysis(interner, &ast, context_types, &registry, &user_types)
+            match acvus_mir::compile_analysis(interner, &ast, context_types, &registry)
             {
                 Ok((module, _hints)) => {
                     let keys = extract_context_keys_with_types(interner, &module);
@@ -213,7 +244,7 @@ fn do_analyze(
                         ok: true,
                         errors: vec![],
                         context_keys: keys,
-                        tail_type: "String".to_string(),
+                        tail_type: TypeDesc::Primitive { name: "String".into() },
                     }
                 }
                 Err(errs) => AnalyzeResult {
@@ -223,7 +254,7 @@ fn do_analyze(
                         .map(|e| e.display(interner).to_string())
                         .collect(),
                     context_keys: vec![],
-                    tail_type: String::new(),
+                    tail_type: TypeDesc::Unsupported { raw: String::new() },
                 },
             }
         }
@@ -235,7 +266,7 @@ fn do_analyze(
                         ok: false,
                         errors: vec![format!("{e}")],
                         context_keys: vec![],
-                        tail_type: String::new(),
+                        tail_type: TypeDesc::Unsupported { raw: String::new() },
                     };
                 }
             };
@@ -244,7 +275,6 @@ fn do_analyze(
                 &script,
                 context_types,
                 &registry,
-                &user_types,
                 expected_tail,
             ) {
                 Ok((module, _hints, tail_ty)) => {
@@ -253,7 +283,7 @@ fn do_analyze(
                         ok: true,
                         errors: vec![],
                         context_keys: keys,
-                        tail_type: format_ty(interner, &tail_ty),
+                        tail_type: ty_to_desc(interner, &tail_ty),
                     }
                 }
                 Err(errs) => AnalyzeResult {
@@ -263,7 +293,7 @@ fn do_analyze(
                         .map(|e| e.display(interner).to_string())
                         .collect(),
                     context_keys: vec![],
-                    tail_type: String::new(),
+                    tail_type: TypeDesc::Unsupported { raw: String::new() },
                 },
             }
         }
@@ -292,7 +322,7 @@ pub fn analyze_with_types(source: &str, mode: &str, context_types_json: &str) ->
                 ok: false,
                 errors: vec![e],
                 context_keys: vec![],
-                tail_type: String::new(),
+                tail_type: TypeDesc::Unsupported { raw: String::new() },
             };
             return to_js(&result);
         }
@@ -317,12 +347,27 @@ pub fn analyze_with_tail(
                 ok: false,
                 errors: vec![e],
                 context_keys: vec![],
-                tail_type: String::new(),
+                tail_type: TypeDesc::Unsupported { raw: String::new() },
             };
             return to_js(&result);
         }
     };
-    let expected_tail = parse_ty(&interner, expected_tail_type);
+    let expected_tail: Option<Ty> = if expected_tail_type.is_empty() {
+        None
+    } else {
+        match serde_json::from_str::<TypeDesc>(expected_tail_type) {
+            Ok(desc) => Some(desc_to_ty(&interner, &desc)),
+            Err(e) => {
+                let result = AnalyzeResult {
+                    ok: false,
+                    errors: vec![format!("failed to parse tail type: {e}")],
+                    context_keys: vec![],
+                    tail_type: TypeDesc::Unsupported { raw: String::new() },
+                };
+                return to_js(&result);
+            }
+        }
+    };
     let result = do_analyze(
         &interner,
         source,
@@ -348,7 +393,6 @@ fn do_typecheck(
     expected_tail: Option<&Ty>,
 ) -> CheckResult {
     let registry = default_registry(interner);
-    let user_types = UserTypeRegistry::new();
 
     let result = match mode {
         "template" => {
@@ -361,7 +405,7 @@ fn do_typecheck(
                     };
                 }
             };
-            acvus_mir::compile(interner, &ast, context_types, &registry, &user_types).map(|_| ())
+            acvus_mir::compile(interner, &ast, context_types, &registry).map(|_| ())
         }
         _ => {
             let script = match acvus_ast::parse_script(interner, source) {
@@ -378,7 +422,6 @@ fn do_typecheck(
                 &script,
                 context_types,
                 &registry,
-                &user_types,
                 expected_tail,
             )
             .map(|_| ())
@@ -448,14 +491,17 @@ pub fn typecheck_with_tail(
             return to_js(&check);
         }
     };
-    let Some(expected_tail) = parse_ty(&interner, expected_tail_type) else {
-        let check = CheckResult {
-            ok: false,
-            message: Some(format!(
-                "failed to parse expected tail type: {expected_tail_type}"
-            )),
-        };
-        return to_js(&check);
+    let expected_tail: Ty = match serde_json::from_str::<TypeDesc>(expected_tail_type) {
+        Ok(desc) => desc_to_ty(&interner, &desc),
+        Err(e) => {
+            let check = CheckResult {
+                ok: false,
+                message: Some(format!(
+                    "failed to parse expected tail type: {e}"
+                )),
+            };
+            return to_js(&check);
+        }
     };
     let check = do_typecheck(
         &interner,
@@ -536,25 +582,24 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         }
     };
 
-    let context_types_str: FxHashMap<String, String> = env
+    let context_types_str: FxHashMap<String, TypeDesc> = env
         .context_types
         .iter()
-        .map(|(k, v)| (interner.resolve(*k).to_string(), format_ty(&interner, v)))
+        .map(|(k, v)| (interner.resolve(*k).to_string(), ty_to_desc(&interner, v)))
         .collect();
 
-    let node_locals_str: FxHashMap<String, FxHashMap<String, String>> = env
+    let node_locals_str: FxHashMap<String, FxHashMap<String, TypeDesc>> = env
         .node_locals
         .iter()
         .map(|(name, locals)| {
             let mut m = FxHashMap::default();
-            m.insert("raw".into(), format_ty(&interner, &locals.raw_ty));
-            m.insert("self".into(), format_ty(&interner, &locals.self_ty));
+            m.insert("raw".into(), ty_to_desc(&interner, &locals.raw_ty));
+            m.insert("self".into(), ty_to_desc(&interner, &locals.self_ty));
             (interner.resolve(*name).to_string(), m)
         })
         .collect();
 
     // 2. Per-node, per-field typecheck
-    let user_types = UserTypeRegistry::new();
     let mut node_errors: FxHashMap<String, FxHashMap<String, String>> = FxHashMap::default();
 
     for spec in &specs {
@@ -580,7 +625,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                 interner.resolve(*init_src),
                 &env.context_types,
                 &registry,
-                &user_types,
+
                 hint,
             ) {
                 field_errors.insert("initialValue".into(), err);
@@ -597,7 +642,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                     interner.resolve(*history_bind),
                     &strategy_ctx,
                     &registry,
-                    &user_types,
+    
                     None,
                 ) {
                     field_errors.insert("historyBind".into(), err);
@@ -609,7 +654,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                     interner.resolve(*key),
                     &env.context_types,
                     &registry,
-                    &user_types,
+    
                     None,
                 ) {
                     field_errors.insert("ifModifiedKey".into(), err);
@@ -627,7 +672,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                 interner.resolve(*assert_src),
                 &assert_ctx,
                 &registry,
-                &user_types,
+
                 Some(&Ty::Bool),
             ) {
                 field_errors.insert("assert".into(), err);
@@ -645,7 +690,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             match msg {
                 acvus_orchestration::MessageSpec::Block { source, .. } => {
                     if let Some(err) =
-                        check_template(&interner, source, &node_ctx, &registry, &user_types)
+                        check_template(&interner, source, &node_ctx, &registry)
                     {
                         msg_errors.insert(mi.to_string(), err);
                     }
@@ -656,7 +701,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                         interner.resolve(*key),
                         &node_ctx,
                         &registry,
-                        &user_types,
+        
                         None,
                     ) {
                         msg_errors.insert(mi.to_string(), err);
@@ -700,7 +745,6 @@ fn check_script(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Option<String> {
     if source.trim().is_empty() {
@@ -715,7 +759,6 @@ fn check_script(
         &script,
         context_types,
         registry,
-        user_types,
         expected_tail,
     ) {
         Ok(_) => None,
@@ -734,7 +777,6 @@ fn check_template(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
 ) -> Option<String> {
     if source.trim().is_empty() {
         return None;
@@ -743,7 +785,7 @@ fn check_template(
         Ok(a) => a,
         Err(e) => return Some(format!("{e}")),
     };
-    match acvus_mir::compile(interner, &ast, context_types, registry, user_types) {
+    match acvus_mir::compile(interner, &ast, context_types, registry) {
         Ok(_) => None,
         Err(errs) => Some(
             errs.into_iter()
@@ -759,7 +801,6 @@ fn check_template(
 #[wasm_bindgen]
 pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<JsValue, JsValue> {
     use acvus_interpreter::{ExternFnRegistry, Interpreter, Value};
-    use acvus_mir::user_type::UserTypeRegistry;
     use acvus_utils::Stepped;
     use session::pure_to_json;
     use std::sync::Arc;
@@ -777,13 +818,12 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
     }
 
     let registry = default_registry(&interner);
-    let user_types = UserTypeRegistry::new();
 
     let module = match mode {
         "template" => {
             let ast = acvus_ast::parse(&interner, source)
                 .map_err(|e| JsValue::from_str(&format!("parse error: {e}")))?;
-            acvus_mir::compile_analysis(&interner, &ast, &context_types, &registry, &user_types)
+            acvus_mir::compile_analysis(&interner, &ast, &context_types, &registry)
                 .map(|(module, _)| module)
                 .map_err(|errs| {
                     let msg = errs
@@ -802,7 +842,7 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                 &script,
                 &context_types,
                 &registry,
-                &user_types,
+
             )
             .map(|(module, _, _)| module)
             .map_err(|errs| {
@@ -937,73 +977,56 @@ mod tests {
         do_analyze(interner, source, mode, ctx, None)
     }
 
-    #[test]
-    fn test_parse_ty_basic() {
-        let interner = test_interner();
-        assert_eq!(parse_ty(&interner, "Int"), Some(Ty::Int));
-        assert_eq!(parse_ty(&interner, "Float"), Some(Ty::Float));
-        assert_eq!(parse_ty(&interner, "String"), Some(Ty::String));
-        assert_eq!(parse_ty(&interner, "Bool"), Some(Ty::Bool));
-        assert_eq!(parse_ty(&interner, "Unit"), Some(Ty::Unit));
-        assert_eq!(parse_ty(&interner, "Range"), Some(Ty::Range));
-        assert_eq!(parse_ty(&interner, "Byte"), Some(Ty::Byte));
+    /// Helper: serialize a TypeDesc to a JSON string for comparison.
+    fn desc_json(desc: &TypeDesc) -> String {
+        serde_json::to_string(desc).expect("TypeDesc serialization should not fail")
     }
 
     #[test]
-    fn test_parse_ty_list() {
+    fn test_ty_to_desc_primitives() {
         let interner = test_interner();
-        assert_eq!(
-            parse_ty(&interner, "List<Int>"),
-            Some(Ty::List(Box::new(Ty::Int)))
-        );
-        assert_eq!(
-            parse_ty(&interner, "List<List<String>>"),
-            Some(Ty::List(Box::new(Ty::List(Box::new(Ty::String)))))
-        );
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Int)), r#"{"kind":"primitive","name":"Int"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Float)), r#"{"kind":"primitive","name":"Float"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::String)), r#"{"kind":"primitive","name":"String"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Bool)), r#"{"kind":"primitive","name":"Bool"}"#);
     }
 
     #[test]
-    fn test_parse_ty_option() {
+    fn test_ty_to_desc_unsupported() {
         let interner = test_interner();
-        assert_eq!(
-            parse_ty(&interner, "Option<Int>"),
-            Some(Ty::Option(Box::new(Ty::Int)))
-        );
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Var(acvus_mir::ty::TyVar(0)))), r#"{"kind":"unsupported","raw":"?"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Infer)), r#"{"kind":"unsupported","raw":"?"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Error)), r#"{"kind":"unsupported","raw":"?"}"#);
     }
 
     #[test]
-    fn test_parse_ty_object() {
+    fn test_ty_to_desc_list() {
         let interner = test_interner();
-        let ty = parse_ty(&interner, "{name: String, age: Int}").unwrap();
-        let mut expected = FxHashMap::default();
-        expected.insert(interner.intern("name"), Ty::String);
-        expected.insert(interner.intern("age"), Ty::Int);
-        assert_eq!(ty, Ty::Object(expected));
+        let desc = ty_to_desc(&interner, &Ty::List(Box::new(Ty::String)));
+        assert_eq!(desc_json(&desc), r#"{"kind":"list","elem":{"kind":"primitive","name":"String"}}"#);
     }
 
     #[test]
-    fn test_parse_ty_unknown() {
+    fn test_desc_to_ty_roundtrip() {
         let interner = test_interner();
-        assert_eq!(parse_ty(&interner, "Foo"), None);
-        assert_eq!(parse_ty(&interner, "?"), None);
-    }
+        // Primitive roundtrip
+        let desc = ty_to_desc(&interner, &Ty::Int);
+        assert_eq!(desc_to_ty(&interner, &desc), Ty::Int);
 
-    #[test]
-    fn test_format_ty_var() {
-        let interner = test_interner();
-        assert_eq!(format_ty(&interner, &Ty::Var(acvus_mir::ty::TyVar(0))), "?");
-        assert_eq!(format_ty(&interner, &Ty::Infer), "?");
-        assert_eq!(format_ty(&interner, &Ty::Error), "?");
-    }
+        // List roundtrip
+        let desc = ty_to_desc(&interner, &Ty::List(Box::new(Ty::String)));
+        assert_eq!(desc_to_ty(&interner, &desc), Ty::List(Box::new(Ty::String)));
 
-    #[test]
-    fn test_format_ty_concrete() {
-        let interner = test_interner();
-        assert_eq!(format_ty(&interner, &Ty::Int), "Int");
-        assert_eq!(
-            format_ty(&interner, &Ty::List(Box::new(Ty::String))),
-            "List<String>"
-        );
+        // Option roundtrip
+        let desc = ty_to_desc(&interner, &Ty::Option(Box::new(Ty::Bool)));
+        assert_eq!(desc_to_ty(&interner, &desc), Ty::Option(Box::new(Ty::Bool)));
+
+        // Object roundtrip
+        let mut fields = FxHashMap::default();
+        fields.insert(interner.intern("name"), Ty::String);
+        fields.insert(interner.intern("age"), Ty::Int);
+        let desc = ty_to_desc(&interner, &Ty::Object(fields.clone()));
+        assert_eq!(desc_to_ty(&interner, &desc), Ty::Object(fields));
     }
 
     #[test]
@@ -1017,8 +1040,8 @@ mod tests {
         assert!(result.ok);
         assert_eq!(result.context_keys.len(), 1);
         assert_eq!(result.context_keys[0].name, "x");
-        assert_eq!(result.context_keys[0].ty, "Int");
-        assert_eq!(result.tail_type, "Int");
+        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"Int"}"#);
+        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"Int"}"#);
     }
 
     #[test]
@@ -1028,7 +1051,7 @@ mod tests {
         ctx.insert(interner.intern("x"), Ty::Int);
         let result = do_analyze_test(&interner, "@x + 1", "script", &ctx);
         assert!(result.ok);
-        assert_eq!(result.context_keys[0].ty, "Int");
+        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"Int"}"#);
     }
 
     #[test]
@@ -1039,30 +1062,14 @@ mod tests {
         assert!(result.ok);
         assert_eq!(result.context_keys.len(), 1);
         assert_eq!(result.context_keys[0].name, "name");
-        assert_eq!(result.tail_type, "String");
-    }
-
-    #[test]
-    fn test_parse_ty_list_object() {
-        let interner = test_interner();
-        let ty = parse_ty(
-            &interner,
-            "List<{content: String, content_type: String, role: String}>",
-        )
-        .unwrap();
-        let mut fields = FxHashMap::default();
-        fields.insert(interner.intern("content"), Ty::String);
-        fields.insert(interner.intern("content_type"), Ty::String);
-        fields.insert(interner.intern("role"), Ty::String);
-        assert_eq!(ty, Ty::List(Box::new(Ty::Object(fields))));
+        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"String"}"#);
     }
 
     #[test]
     fn test_tail_type_mismatch() {
         let interner = test_interner();
         let ctx = FxHashMap::default();
-        let expected = parse_ty(&interner, "Int").unwrap();
-        let result = do_analyze(&interner, "\"hello\"", "script", &ctx, Some(&expected));
+        let result = do_analyze(&interner, "\"hello\"", "script", &ctx, Some(&Ty::Int));
         assert!(!result.ok, "should fail: String vs Int");
     }
 
@@ -1070,8 +1077,7 @@ mod tests {
     fn test_tail_type_match() {
         let interner = test_interner();
         let ctx = FxHashMap::default();
-        let expected = parse_ty(&interner, "Int").unwrap();
-        let result = do_analyze(&interner, "1 + 2", "script", &ctx, Some(&expected));
+        let result = do_analyze(&interner, "1 + 2", "script", &ctx, Some(&Ty::Int));
         assert!(result.ok, "should succeed: Int vs Int");
     }
 
@@ -1084,6 +1090,6 @@ mod tests {
             eprintln!("errors: {:?}", result.errors);
         }
         assert!(result.ok);
-        assert_eq!(result.context_keys[0].ty, "?");
+        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"unsupported","raw":"?"}"#);
     }
 }

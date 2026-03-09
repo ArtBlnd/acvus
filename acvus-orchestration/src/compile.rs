@@ -203,7 +203,6 @@ pub fn compile_script_with_hint(
         &script,
         context_types,
         registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
         expected_tail,
     )
     .map_err(|errs| {
@@ -281,7 +280,6 @@ pub(crate) fn compile_template(
         &ast,
         context_types,
         registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
     )
     .map_err(|errs| {
         OrchError::new(OrchErrorKind::TemplateCompile {

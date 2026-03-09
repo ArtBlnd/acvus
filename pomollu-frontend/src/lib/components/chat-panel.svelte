@@ -6,7 +6,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
 	import { Send, MessageSquarePlus, Loader2 } from 'lucide-svelte';
-	import { tick, onMount, onDestroy } from 'svelte';
+	import { tick, onDestroy } from 'svelte';
 	import DisplayCard from './display-card.svelte';
 	import { sessionStore, promptStore, uiState } from '$lib/stores.svelte.js';
 	import { ChatSession } from '$lib/engine.js';
@@ -56,65 +56,89 @@
 	let chatSessionKey: string | null = null;
 	let destroyed = false;
 
+	// Reset display state when session or bot changes
+	let prevSessionKey = '';
+	$effect(() => {
+		const key = `${bot.id}:${session.id}`;
+		if (key === prevSessionKey) return;
+		prevSessionKey = key;
+
+		// Abort pending resolver so the old turn() can reject and clean up
+		if (pendingResolve) {
+			pendingResolve.resolve('');
+			pendingResolve = null;
+			pendingValue = '';
+		}
+
+		// Clear stale display state
+		displayCards = [];
+		totalListLen = 0;
+		loadedFrom = 0;
+		regionData = new Map();
+		errorMsg = '';
+		turnCount = 0;
+
+		// Re-initialize session (lazy — ensureChatSession is idempotent)
+		if (!isConfigured || destroyed) return;
+		ensureChatSession().catch((e) => {
+			console.warn('[session switch] ensureChatSession failed:', e);
+		});
+	});
+
 	async function ensureChatSession(): Promise<ChatSession> {
 		const key = `${bot.id}:${session.id}`;
 		if (chatSession && chatSessionKey === key) return chatSession;
 		if (chatSession) {
 			chatSession.free();
 			chatSession = null;
+			chatSessionKey = null;
 		}
 
 		const result = buildSessionConfig(bot);
 		if (!result) throw new Error('no nodes configured');
 		if (!result.ok) throw new Error(result.errors.join('\n'));
 
-		// No callback — storage is synced explicitly after create() and turn().
-		chatSession = await ChatSession.create(result.config, session.storage);
+		const cs = await ChatSession.create(result.config, session.storage);
+
+		// Guard: another init may have completed while we were awaiting
+		if (chatSessionKey !== null) {
+			cs.free();
+			return chatSession!;
+		}
+
+		chatSession = cs;
 		chatSessionKey = key;
 
 		// Sync storage (ChatEngine::new sets "context" metadata).
-		sessionStore.update(session.id, (s) => ({ ...s, storage: chatSession!.exportStorageJson() }));
-		turnCount = chatSession.turnCount();
+		sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorageJson() }));
+		turnCount = cs.turnCount();
 
 		if (useDisplayEngine) {
-			await initialDisplayLoad(chatSession);
+			await initialDisplayLoad(cs);
 		}
 
-		return chatSession;
+		return cs;
 	}
 
 	async function initialDisplayLoad(cs: ChatSession) {
-		try {
-			const len = await cs.displayListLen(bot.display.iterator);
-			totalListLen = len;
-			loadedFrom = Math.max(0, len - 10);
-			if (len > 0) {
-				displayCards = await renderDisplayRange(cs, loadedFrom, len);
-			}
-		} catch {
-			// display engine failed — fall through to empty
+		if (cs.freed) return;
+		const len = await cs.displayListLen(bot.display.iterator);
+		totalListLen = len;
+		loadedFrom = Math.max(0, len - 10);
+		if (len > 0) {
+			displayCards = await renderDisplayRange(cs, loadedFrom, len);
 		}
 	}
 
-	onMount(async () => {
-		if (!useDisplayEngine && !hasRegions) return;
-		try {
-			const cs = await ensureChatSession();
-			if (destroyed) return;
-			if (useDisplayEngine) {
-				await initialDisplayLoad(cs);
-				if (destroyed) return;
-			}
-			await renderRegions(cs);
-		} catch {
-			// no config or session yet
-		}
-	});
-
 	onDestroy(() => {
 		destroyed = true;
+		// Abort pending resolver so the old turn() can reject and clean up
+		if (pendingResolve) {
+			pendingResolve.resolve('');
+			pendingResolve = null;
+		}
 		if (chatSession) {
-			chatSession.free(); // safe — defers if turn() is in progress
+			chatSession.free();
 			chatSession = null;
 		}
 	});
@@ -240,7 +264,7 @@
 	});
 
 	async function loadMore() {
-		if (!chatSession || loadingMore || loadedFrom <= 0 || isLoading) return;
+		if (!chatSession || chatSession.freed || chatSession.busy || loadingMore || loadedFrom <= 0 || isLoading) return;
 		loadingMore = true;
 
 		const newStart = Math.max(0, loadedFrom - 10);
@@ -275,15 +299,15 @@
 
 		isLoading = true;
 		errorMsg = '';
+		let turnSession: ChatSession | null = null;
 
 		try {
 			const cs = await ensureChatSession();
+			const snapshotKey = chatSessionKey;
+			turnSession = cs;
 
-			// Static params are handled as Expr nodes by the engine.
-			// Resolver only handles dynamic params.
 			const resolver = (key: string): string | Promise<string> => {
 				if (key === currentInputParam) return currentInput;
-				// On-demand: show input field and wait for user
 				return new Promise<string>((resolve) => {
 					pendingResolve = { key, resolve };
 					pendingValue = '';
@@ -297,15 +321,14 @@
 			} finally {
 				uiState.busyBotId = null;
 			}
-			if (destroyed) return;
 
-			// Sync full storage to Svelte after turn completes.
+			// Session was switched or component destroyed during turn — bail out.
+			if (destroyed || chatSessionKey !== snapshotKey) return;
+
 			sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorageJson() }));
-
 			turnCount = cs.turnCount();
 
 			if (useDisplayEngine) {
-				// Render new display entries
 				const newLen = await cs.displayListLen(bot.display.iterator);
 				if (newLen > totalListLen) {
 					const newCards = await renderDisplayRange(cs, totalListLen, newLen);
@@ -313,17 +336,15 @@
 					totalListLen = newLen;
 				}
 			} else {
-				// Fallback: show input + result as cards
 				const content = formatResult(result);
 				displayCards = [...displayCards, { name: 'User', content: currentInput }, { name: 'Assistant', content }];
 			}
 
-			// Render static regions
 			await renderRegions(cs);
-
 		} catch (err) {
 			errorMsg = err instanceof Error ? err.message : String(err);
 		} finally {
+			turnSession?.finishTurn();
 			isLoading = false;
 			scrollToBottom();
 		}

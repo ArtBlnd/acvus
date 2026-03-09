@@ -9,8 +9,7 @@ use crate::builtins::builtins;
 use crate::error::{MirError, MirErrorKind};
 use crate::extern_module::ExternRegistry;
 use crate::ty::{Ty, TySubst};
-use crate::user_type::UserTypeRegistry;
-use crate::variant::{VariantPayload, VariantRegistry, make_enum_ty};
+use crate::variant::VariantPayload;
 
 /// Maps each AST Span to its inferred type.
 pub type TypeMap = FxHashMap<Span, Ty>;
@@ -27,8 +26,6 @@ pub struct TypeChecker<'a> {
     scopes: Vec<FxHashMap<Astr, Ty>>,
     /// Variable types (`$name`, inferred at first assignment).
     variable_types: FxHashMap<Astr, Ty>,
-    /// Variant type registry (enum definitions).
-    variant_registry: VariantRegistry,
     /// Unification state.
     subst: TySubst,
     /// Cached fresh Vars for `Ty::Infer` context entries.
@@ -46,20 +43,13 @@ impl<'a> TypeChecker<'a> {
         interner: &'a Interner,
         context_types: &'a FxHashMap<Astr, Ty>,
         registry: &'a ExternRegistry,
-        user_types: &UserTypeRegistry,
     ) -> Self {
-        let mut variant_registry = VariantRegistry::new(interner);
-        // Register user-defined enums into the variant registry.
-        for (_id, def) in user_types.iter() {
-            variant_registry.register(def.clone());
-        }
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
             context_types,
             variable_types: FxHashMap::default(),
             extern_registry: registry,
-            variant_registry,
             subst: TySubst::new(),
             infer_vars: FxHashMap::default(),
             type_map: TypeMap::default(),
@@ -78,7 +68,7 @@ impl<'a> TypeChecker<'a> {
     pub fn check_template(
         mut self,
         template: &Template,
-    ) -> Result<(TypeMap, VariantRegistry), Vec<MirError>> {
+    ) -> Result<TypeMap, Vec<MirError>> {
         self.check_nodes(&template.body);
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -89,13 +79,13 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok((resolved, self.variant_registry))
+        Ok(resolved)
     }
 
     pub fn check_script(
         self,
         script: &acvus_ast::Script,
-    ) -> Result<(TypeMap, Ty, VariantRegistry), Vec<MirError>> {
+    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
         self.check_script_with_hint(script, None)
     }
 
@@ -103,7 +93,7 @@ impl<'a> TypeChecker<'a> {
         mut self,
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
-    ) -> Result<(TypeMap, Ty, VariantRegistry), Vec<MirError>> {
+    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
         for stmt in &script.stmts {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
@@ -157,7 +147,7 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok((resolved, resolved_tail, self.variant_registry))
+        Ok((resolved, resolved_tail))
     }
 
     fn push_scope(&mut self) {
@@ -287,8 +277,12 @@ impl<'a> TypeChecker<'a> {
         // Body-less variable binding: define in current scope (no push/pop).
         if self.is_bodyless_var_binding(mb) {
             let source_ty = self.check_expr(&mb.source);
-            let resolved_source = self.subst.resolve(&source_ty);
-            self.check_pattern(&mb.arms[0].pattern, &resolved_source, mb.arms[0].tag_span);
+            if matches!(&mb.arms[0].pattern, Pattern::Variant { .. }) {
+                self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
+            } else {
+                let resolved_source = self.subst.resolve(&source_ty);
+                self.check_pattern(&mb.arms[0].pattern, &resolved_source, mb.arms[0].tag_span);
+            }
             return;
         }
 
@@ -297,9 +291,16 @@ impl<'a> TypeChecker<'a> {
 
         for arm in &mb.arms {
             let match_ty = self.pattern_match_type(&arm.pattern, &resolved_source);
+            // For variant patterns, pass the unresolved source so unify can
+            // trace the Var chain and rebind the merged enum type.
+            let pattern_source = if matches!(&arm.pattern, Pattern::Variant { .. }) {
+                source_ty.clone()
+            } else {
+                match_ty
+            };
 
             self.push_scope();
-            self.check_pattern(&arm.pattern, &match_ty, arm.tag_span);
+            self.check_pattern(&arm.pattern, &pattern_source, arm.tag_span);
             self.check_nodes(&arm.body);
             // Hoist body-less variable bindings to the outer scope.
             self.hoist_bodyless_bindings();
@@ -801,9 +802,43 @@ impl<'a> TypeChecker<'a> {
                 payload,
                 span,
             } => {
-                let Some((enum_name, type_params, variant_payload)) =
-                    self.resolve_variant(ast_enum_name, *tag)
-                else {
+                // Try builtin (Option) first.
+                if let Some((_enum_name, type_params, variant_payload)) =
+                    self.resolve_builtin_variant(ast_enum_name, *tag)
+                {
+                    match &variant_payload {
+                        VariantPayload::TypeParam(idx) => {
+                            let Some(inner_expr) = payload else {
+                                self.error(
+                                    MirErrorKind::UnificationFailure {
+                                        expected: Ty::Error,
+                                        got: Ty::Unit,
+                                    },
+                                    *span,
+                                );
+                                return Ty::Error;
+                            };
+                            let inner_ty = self.check_expr(inner_expr);
+                            if self.subst.unify(&type_params[*idx], &inner_ty).is_err() {
+                                self.error(
+                                    MirErrorKind::UnificationFailure {
+                                        expected: self.subst.resolve(&type_params[*idx]),
+                                        got: self.subst.resolve(&inner_ty),
+                                    },
+                                    *span,
+                                );
+                            }
+                        }
+                        VariantPayload::None => {}
+                    }
+                    // Builtin Option → Ty::Option
+                    let inner = self.subst.resolve(&type_params[0]);
+                    let ty = Ty::Option(Box::new(inner));
+                    return self.record_ret(*span, ty);
+                }
+
+                // Structural enum: requires qualified name (A::B).
+                let Some(enum_name) = ast_enum_name else {
                     self.error(
                         MirErrorKind::UndefinedFunction(format!(
                             "unknown variant: {}",
@@ -814,33 +849,20 @@ impl<'a> TypeChecker<'a> {
                     return Ty::Error;
                 };
 
-                match &variant_payload {
-                    VariantPayload::TypeParam(idx) => {
-                        let Some(inner_expr) = payload else {
-                            self.error(
-                                MirErrorKind::UnificationFailure {
-                                    expected: Ty::Error,
-                                    got: Ty::Unit,
-                                },
-                                *span,
-                            );
-                            return Ty::Error;
-                        };
-                        let inner_ty = self.check_expr(inner_expr);
-                        if self.subst.unify(&type_params[*idx], &inner_ty).is_err() {
-                            self.error(
-                                MirErrorKind::UnificationFailure {
-                                    expected: self.subst.resolve(&type_params[*idx]),
-                                    got: self.subst.resolve(&inner_ty),
-                                },
-                                *span,
-                            );
-                        }
+                let payload_ty = match payload {
+                    Some(expr) => {
+                        let ty = self.check_expr(expr);
+                        Some(Box::new(ty))
                     }
-                    VariantPayload::None => {}
-                }
+                    None => None,
+                };
 
-                let ty = make_enum_ty(enum_name, &type_params, &self.subst, None, self.interner);
+                let mut variants = FxHashMap::default();
+                variants.insert(*tag, payload_ty);
+                let ty = Ty::Enum {
+                    name: *enum_name,
+                    variants,
+                };
                 self.record_ret(*span, ty)
             }
 
@@ -1140,9 +1162,35 @@ impl<'a> TypeChecker<'a> {
                 payload,
                 ..
             } => {
-                let Some((enum_name, type_params, variant_payload)) =
-                    self.resolve_variant(ast_enum_name, *tag)
-                else {
+                // Try builtin (Option) first.
+                if let Some((_enum_name, type_params, variant_payload)) =
+                    self.resolve_builtin_variant(ast_enum_name, *tag)
+                {
+                    let enum_ty = Ty::Option(Box::new(
+                        self.subst.resolve(&type_params[0]),
+                    ));
+                    if self.subst.unify(&source_resolved, &enum_ty).is_err() {
+                        self.error(
+                            MirErrorKind::PatternTypeMismatch {
+                                pattern_ty: enum_ty,
+                                source_ty: source_resolved,
+                            },
+                            span,
+                        );
+                        return;
+                    }
+
+                    if let VariantPayload::TypeParam(idx) = &variant_payload {
+                        let resolved_inner = self.subst.resolve(&type_params[*idx]);
+                        if let Some(inner_pat) = payload {
+                            self.check_pattern(inner_pat, &resolved_inner, span);
+                        }
+                    }
+                    return;
+                }
+
+                // Structural enum: requires qualified name.
+                let Some(enum_name) = ast_enum_name else {
                     self.error(
                         MirErrorKind::UndefinedFunction(format!(
                             "unknown variant: {}",
@@ -1153,9 +1201,21 @@ impl<'a> TypeChecker<'a> {
                     return;
                 };
 
-                let enum_ty =
-                    make_enum_ty(enum_name, &type_params, &self.subst, None, self.interner);
-                if self.subst.unify(&source_resolved, &enum_ty).is_err() {
+                // Build Ty::Enum with this single variant.
+                let payload_ty = if payload.is_some() {
+                    Some(Box::new(self.subst.fresh_var()))
+                } else {
+                    None
+                };
+                let mut variants = FxHashMap::default();
+                variants.insert(*tag, payload_ty.clone());
+                let enum_ty = Ty::Enum {
+                    name: *enum_name,
+                    variants,
+                };
+                // Unify against the original (unresolved) source_ty so that
+                // find_leaf_var can trace the Var chain and rebind the merged type.
+                if self.subst.unify(source_ty, &enum_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: enum_ty,
@@ -1166,36 +1226,42 @@ impl<'a> TypeChecker<'a> {
                     return;
                 }
 
-                if let VariantPayload::TypeParam(idx) = &variant_payload {
-                    let resolved_inner = self.subst.resolve(&type_params[*idx]);
-                    if let Some(inner_pat) = payload {
-                        self.check_pattern(inner_pat, &resolved_inner, span);
-                    }
+                // Bind payload pattern if present.
+                if let Some(inner_pat) = payload {
+                    let inner_ty = payload_ty
+                        .map(|ty| self.subst.resolve(&ty))
+                        .unwrap_or(Ty::Error);
+                    self.check_pattern(inner_pat, &inner_ty, span);
                 }
             }
         }
     }
 
-    /// Resolve a variant tag to its enum definition, type params, and payload.
-    fn resolve_variant(
+    /// Try to resolve a variant tag as a builtin enum (Option).
+    /// Returns None if the tag is not a builtin variant.
+    fn resolve_builtin_variant(
         &mut self,
         ast_enum_name: &Option<Astr>,
         tag: Astr,
     ) -> Option<(Astr, Vec<Ty>, VariantPayload)> {
-        let resolved = match ast_enum_name {
-            Some(ename) => self
-                .variant_registry
-                .resolve(tag)
-                .filter(|(edef, _)| edef.name == *ename),
-            None => self.variant_registry.resolve(tag),
+        let tag_str = self.interner.resolve(tag);
+        let option_name = self.interner.intern("Option");
+
+        // Check qualified name if present.
+        if let Some(ename) = ast_enum_name {
+            if *ename != option_name {
+                return None;
+            }
+        }
+
+        let payload = match tag_str {
+            "Some" => VariantPayload::TypeParam(0),
+            "None" => VariantPayload::None,
+            _ => return None,
         };
-        let (enum_def, variant_def) = resolved?;
-        let enum_name = enum_def.name;
-        let type_params: Vec<Ty> = (0..enum_def.type_param_count)
-            .map(|_| self.subst.fresh_var())
-            .collect();
-        let variant_payload = variant_def.payload.clone();
-        Some((enum_name, type_params, variant_payload))
+
+        let type_params = vec![self.subst.fresh_var()];
+        Some((option_name, type_params, payload))
     }
 
     fn literal_ty(&self, lit: &Literal) -> Ty {
@@ -1236,6 +1302,9 @@ fn contains_var(ty: &Ty) -> bool {
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
         Ty::Fn { params, ret } => params.iter().any(contains_var) || contains_var(ret),
+        Ty::Enum { variants, .. } => variants
+            .values()
+            .any(|p| p.as_ref().map_or(false, |ty| contains_var(ty))),
         _ => false,
     }
 }
@@ -1267,7 +1336,6 @@ fn op_str(op: BinOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::extern_module::{ExternModule, ExternRegistry};
-    use crate::user_type::UserTypeRegistry;
     use acvus_ast::parse;
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
@@ -1287,10 +1355,8 @@ mod tests {
         interner: &Interner,
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(interner, source).expect("parse failed");
-        let user_types = UserTypeRegistry::new();
-        let checker = TypeChecker::new(interner, context, registry, &user_types);
-        let (tm, _) = checker.check_template(&template)?;
-        Ok(tm)
+        let checker = TypeChecker::new(interner, context, registry);
+        checker.check_template(&template)
     }
 
     #[test]

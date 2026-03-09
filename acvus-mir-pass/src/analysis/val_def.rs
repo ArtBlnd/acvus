@@ -103,7 +103,7 @@ mod tests {
                 label_count: 0,
             },
             closures: FxHashMap::default(),
-            tag_names: Vec::new(),
+
             extern_names: FxHashMap::default(),
         }
     }

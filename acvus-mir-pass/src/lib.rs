@@ -165,7 +165,7 @@ where
                 MirModule {
                     main: MirBody::new(),
                     closures: FxHashMap::default(),
-                    tag_names: Vec::new(),
+
                     extern_names: FxHashMap::default(),
                 },
             );
@@ -292,7 +292,7 @@ mod tests {
         MirModule {
             main: MirBody::new(),
             closures: FxHashMap::default(),
-            tag_names: Vec::new(),
+
             extern_names: FxHashMap::default(),
         }
     }

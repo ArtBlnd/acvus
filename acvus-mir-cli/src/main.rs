@@ -145,7 +145,6 @@ fn main() {
         &template,
         &context_types,
         &registry,
-        &acvus_mir::user_type::UserTypeRegistry::new(),
     ) {
         Ok((mut module, _hints)) => {
             if obfuscate {

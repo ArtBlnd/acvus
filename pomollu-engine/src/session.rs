@@ -323,7 +323,7 @@ struct ProviderConfigJson {
 #[derive(Deserialize)]
 struct ContextDecl {
     #[serde(rename = "type")]
-    ty: Option<String>,
+    ty: Option<crate::TypeDesc>,
 }
 
 #[derive(Deserialize)]
@@ -357,7 +357,7 @@ enum NodeKindConfig {
     #[serde(rename = "expr")]
     Expr {
         template: String,
-        output_ty: Option<String>,
+        output_ty: Option<crate::TypeDesc>,
     },
 }
 
@@ -489,8 +489,8 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
             output_ty,
         } => {
             let output_ty = output_ty
-                .as_deref()
-                .and_then(|s| crate::parse_ty(interner, s))
+                .as_ref()
+                .map(|desc| crate::desc_to_ty(interner, desc))
                 .unwrap_or(Ty::Infer);
             NodeKind::Expr(ExprSpec {
                 source: template.clone(),
@@ -546,13 +546,11 @@ impl ChatSession {
         // Build context types from config
         let mut context_types: FxHashMap<Astr, Ty> = FxHashMap::default();
         for (name, decl) in &config.context {
-            let ty_str = decl
+            let desc = decl
                 .ty
                 .as_ref()
                 .ok_or_else(|| JsValue::from_str(&format!("context '{name}': missing type")))?;
-            let ty = crate::parse_ty(&interner, ty_str).ok_or_else(|| {
-                JsValue::from_str(&format!("context '{name}': invalid type '{ty_str}'"))
-            })?;
+            let ty = crate::desc_to_ty(&interner, desc);
             context_types.insert(interner.intern(name), ty);
         }
 

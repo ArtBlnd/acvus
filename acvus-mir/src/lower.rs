@@ -16,7 +16,6 @@ use crate::ir::{
 };
 use crate::ty::Ty;
 use crate::typeck::TypeMap;
-use crate::variant::VariantRegistry;
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -30,8 +29,6 @@ pub struct Lowerer<'a> {
     closures: FxHashMap<Label, ClosureBody>,
     /// Hint table.
     hints: HintTable,
-    /// Variant registry for tag → VariantTagId resolution.
-    variant_registry: VariantRegistry,
     /// Extern registry for name → ExternFnId resolution.
     extern_registry: &'a ExternRegistry,
 }
@@ -112,7 +109,6 @@ impl<'a> Lowerer<'a> {
     pub fn new(
         interner: &'a Interner,
         type_map: TypeMap,
-        variant_registry: VariantRegistry,
         extern_registry: &'a ExternRegistry,
     ) -> Self {
         Self {
@@ -122,7 +118,6 @@ impl<'a> Lowerer<'a> {
             type_map,
             closures: FxHashMap::default(),
             hints: HintTable::new(),
-            variant_registry,
             extern_registry,
         }
     }
@@ -152,13 +147,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn build_module(self) -> (MirModule, HintTable) {
-        let tag_names = self.variant_registry.build_tag_names();
         let extern_names = self.extern_registry.build_name_table();
 
         let module = MirModule {
             main: self.body,
             closures: self.closures,
-            tag_names,
             extern_names,
         };
         (module, self.hints)
@@ -742,24 +735,18 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::Variant {
-                enum_name,
                 tag,
                 payload,
                 span,
+                ..
             } => {
                 let payload_val = payload.as_ref().map(|e| self.lower_expr(e));
                 let dst = self.alloc_expr(*span);
-                let tag_id = self
-                    .variant_registry
-                    .resolve_tag(*enum_name, *tag)
-                    .unwrap_or_else(|| {
-                        panic!("unknown variant tag: {}", self.interner.resolve(*tag))
-                    });
                 self.emit_inst(
                     *span,
                     InstKind::MakeVariant {
                         dst,
-                        tag: tag_id,
+                        tag: *tag,
                         payload: payload_val,
                     },
                 );
@@ -1230,18 +1217,11 @@ impl<'a> Lowerer<'a> {
             }
 
             Pattern::Variant {
-                enum_name,
                 tag,
                 payload,
                 ..
             } => {
                 // Test if the variant tag matches.
-                let tag_id = self
-                    .variant_registry
-                    .resolve_tag(*enum_name, *tag)
-                    .unwrap_or_else(|| {
-                        panic!("unknown variant tag: {}", self.interner.resolve(*tag))
-                    });
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
                 self.emit_inst(
@@ -1249,7 +1229,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::TestVariant {
                         dst: tag_ok,
                         src: src_reg,
-                        tag: tag_id,
+                        tag: *tag,
                     },
                 );
 
@@ -1504,7 +1484,6 @@ mod tests {
     use super::*;
     use crate::extern_module::ExternRegistry;
     use crate::typeck::TypeChecker;
-    use crate::user_type::UserTypeRegistry;
 
     fn lower(interner: &Interner, source: &str) -> MirModule {
         lower_with(
@@ -1522,12 +1501,11 @@ mod tests {
         registry: &ExternRegistry,
     ) -> MirModule {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let user_types = UserTypeRegistry::new();
-        let checker = TypeChecker::new(interner, context, registry, &user_types);
-        let (type_map, variant_registry) = checker
+        let checker = TypeChecker::new(interner, context, registry);
+        let type_map = checker
             .check_template(&template)
             .expect("type check failed");
-        let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
+        let lowerer = Lowerer::new(interner, type_map, registry);
         let (module, _hints) = lowerer.lower_template(&template);
         module
     }

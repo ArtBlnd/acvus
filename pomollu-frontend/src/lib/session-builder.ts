@@ -1,6 +1,8 @@
 import type { Bot, Node, MessageDef, Block, RawBlock, ScriptBlock, ContextBlock, ContextBinding } from './types.js';
 import { isRawBlock, isScriptBlock, isContextBlock, CONTEXT_TYPE } from './types.js';
 import type { SessionConfig, NodeConfig, MessageConfig, ProviderConfig, StrategyConfig } from './engine.js';
+import type { TypeDesc } from './type-parser.js';
+import { isUnknownType } from './type-parser.js';
 import { collectNodes, collectBlocks } from './block-tree.js';
 import { promptStore, profileStore, providerStore } from './stores.svelte.js';
 
@@ -267,14 +269,14 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 	}
 
 	// Build context types from all context params (prompt + profile + bot)
-	const context: Record<string, { type?: string }> = {};
+	const context: Record<string, { type?: TypeDesc }> = {};
 	const allParams = [
 		...(prompt?.contextParams ?? []),
 		...(profile?.contextParams ?? []),
 		...(bot.contextParams ?? [])
 	];
 	for (const param of allParams) {
-		const ty = param.userType || param.inferredType;
+		const ty: TypeDesc | undefined = param.userType || (isUnknownType(param.inferredType) ? undefined : param.inferredType);
 		if (param.resolution.kind === 'static') {
 			// Static params → Expr node (engine evaluates the script)
 			const script = (param.resolution as { kind: 'static'; value: string }).value;
@@ -287,14 +289,14 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 				template: script,
 				strategy: { mode: 'once-per-turn' },
 				retry: 0,
-				output_ty: ty && ty !== '?' ? ty : undefined
+				output_ty: ty
 			});
 			sideEffects.push(param.name);
 		} else if (param.resolution.kind === 'dynamic') {
-			if (ty && ty !== '?') {
+			if (ty) {
 				context[param.name] = { type: ty };
 			} else {
-				context[param.name] = { type: 'String' };
+				context[param.name] = { type: { kind: 'primitive', name: 'String' } };
 			}
 		} else if (param.resolution.kind === 'unresolved') {
 			errors.push(`param '${param.name}': unresolved (set to static or dynamic)`);

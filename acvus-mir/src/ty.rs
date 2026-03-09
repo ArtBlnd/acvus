@@ -3,8 +3,6 @@ use std::fmt;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::user_type::UserTypeId;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(pub u32);
 
@@ -27,8 +25,14 @@ pub enum Ty {
     /// Opaque type: user-defined, identified by name. No internal structure.
     Opaque(std::string::String),
     Option(Box<Ty>),
-    /// User-defined enum type.
-    UserType(UserTypeId),
+    /// User-defined structural enum type.
+    /// `name`: enum name (e.g. `Color`).
+    /// `variants`: known variants → optional payload type (`None` = no payload).
+    /// Open: unification merges variant sets. Same variant with conflicting payload = error.
+    Enum {
+        name: Astr,
+        variants: FxHashMap<Astr, Option<Box<Ty>>>,
+    },
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
     /// Inferred type: signals the type checker to create a fresh Var internally.
@@ -108,7 +112,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             }
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::Opaque(name) => write!(f, "{name}"),
-            Ty::UserType(id) => write!(f, "UserType({})", id.0),
+            Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
             Ty::Var(v) => write!(f, "?{}", v.0),
             Ty::Infer => write!(f, "<infer>"),
             Ty::Error => write!(f, "<error>"),
@@ -171,6 +175,18 @@ impl TySubst {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(ret)),
             },
+            Ty::Enum { name, variants } => {
+                let resolved: FxHashMap<_, _> = variants
+                    .iter()
+                    .map(|(tag, payload)| {
+                        (*tag, payload.as_ref().map(|ty| Box::new(self.resolve(ty))))
+                    })
+                    .collect();
+                Ty::Enum {
+                    name: *name,
+                    variants: resolved,
+                }
+            }
             other => other.clone(),
         }
     }
@@ -233,7 +249,52 @@ impl TySubst {
             | (Ty::Byte, Ty::Byte) => Ok(()),
 
             (Ty::Opaque(a), Ty::Opaque(b)) if a == b => Ok(()),
-            (Ty::UserType(a), Ty::UserType(b)) if a == b => Ok(()),
+
+            // Structural enum unification: merge variant sets (open matching).
+            (
+                Ty::Enum {
+                    name: na,
+                    variants: va,
+                },
+                Ty::Enum {
+                    name: nb,
+                    variants: vb,
+                },
+            ) => {
+                if na != nb {
+                    return Err((a, b));
+                }
+                // Unify overlapping variant payloads.
+                for (tag, payload_a) in va {
+                    if let Some(payload_b) = vb.get(tag) {
+                        match (payload_a, payload_b) {
+                            (None, None) => {}
+                            (Some(ty_a), Some(ty_b)) => self.unify(ty_a, ty_b)?,
+                            _ => return Err((a.clone(), b.clone())),
+                        }
+                    }
+                }
+                // Merge if variant sets differ.
+                let needs_merge = va.len() != vb.len()
+                    || va.keys().any(|k| !vb.contains_key(k));
+                if needs_merge {
+                    let mut merged: FxHashMap<Astr, Option<Box<Ty>>> = va.clone();
+                    for (tag, payload) in vb {
+                        merged.entry(*tag).or_insert_with(|| payload.clone());
+                    }
+                    let merged_ty = Ty::Enum {
+                        name: *na,
+                        variants: merged,
+                    };
+                    if let Some(leaf) = self.find_leaf_var(orig_a) {
+                        self.bindings.insert(leaf, merged_ty.clone());
+                    }
+                    if let Some(leaf) = self.find_leaf_var(orig_b) {
+                        self.bindings.insert(leaf, merged_ty);
+                    }
+                }
+                Ok(())
+            }
 
             (Ty::Var(v), other) | (other, Ty::Var(v)) => {
                 if let Ty::Var(v2) = other
@@ -344,6 +405,9 @@ impl TySubst {
             Ty::Fn { params, ret } => {
                 params.iter().any(|p| self.occurs_in(var, p)) || self.occurs_in(var, ret)
             }
+            Ty::Enum { variants, .. } => variants
+                .values()
+                .any(|p| p.as_ref().map_or(false, |ty| self.occurs_in(var, ty))),
             _ => false,
         }
     }

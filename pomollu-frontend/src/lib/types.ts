@@ -1,3 +1,5 @@
+import type { TypeDesc } from './type-parser.js';
+
 export type ContentPart = {
 	id: string;
 	content_type: string;
@@ -170,9 +172,9 @@ export type ParamResolution =
 
 export type ContextParam = {
 	name: string;
-	inferredType: string;
+	inferredType: TypeDesc;
 	resolution: ParamResolution;
-	userType?: string;
+	userType?: TypeDesc;
 };
 
 // --- Prompt (project) ---
@@ -183,13 +185,53 @@ export type ContextBinding = {
 };
 
 export const HISTORY_BINDING_NAME = 'history';
-export const HISTORY_ENTRY_TYPE = 'List<{content: String, content_type: String, role: String}>';
+export const HISTORY_ENTRY_TYPE: TypeDesc = {
+	kind: 'list',
+	elem: {
+		kind: 'object',
+		fields: [
+			{ name: 'content', type: { kind: 'primitive', name: 'String' } },
+			{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
+			{ name: 'role', type: { kind: 'primitive', name: 'String' } },
+		],
+	},
+};
 
 /** Type of each entry in @context lists. */
-export const CONTEXT_ENTRY_TYPE = '{name: String, description: String, content: String, content_type: String}';
+const CONTEXT_ENTRY_TYPE: TypeDesc = {
+	kind: 'object',
+	fields: [
+		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
+	],
+};
+
+/** Type of each entry in @context.custom. */
+const CONTEXT_CUSTOM_ENTRY_TYPE: TypeDesc = {
+	kind: 'object',
+	fields: [
+		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'type', type: { kind: 'primitive', name: 'String' } },
+	],
+};
 
 /** Fixed type of @context — always available, lists are empty by default. */
-export const CONTEXT_TYPE = `{system: List<${CONTEXT_ENTRY_TYPE}>, character: List<${CONTEXT_ENTRY_TYPE}>, world_info: List<${CONTEXT_ENTRY_TYPE}>, lorebook: List<${CONTEXT_ENTRY_TYPE}>, memory: List<${CONTEXT_ENTRY_TYPE}>, custom: List<{name: String, description: String, content: String, content_type: String, type: String}>}`;
+export const CONTEXT_TYPE: TypeDesc = {
+	kind: 'object',
+	fields: [
+		{ name: 'system', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
+		{ name: 'character', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
+		{ name: 'world_info', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
+		{ name: 'lorebook', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
+		{ name: 'memory', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
+		{ name: 'custom', type: { kind: 'list', elem: CONTEXT_CUSTOM_ENTRY_TYPE } },
+	],
+};
 
 /** Context refs provided by the engine (not user-defined). */
 export const BUILTIN_CONTEXT_REFS = new Set(['turn', 'raw', 'self', 'content', 'context']);

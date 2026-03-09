@@ -15,7 +15,7 @@
 	import RawBlockEditor from './raw-block-editor.svelte';
 	import ScriptBlockEditor from './script-block-editor.svelte';
 
-	let { blockId, owner, contextTypes = {} }: { blockId: string; owner: BlockOwner; contextTypes?: Record<string, string> } = $props();
+	let { blockId, owner, contextTypes = {} }: { blockId: string; owner: BlockOwner; contextTypes?: Record<string, import('$lib/type-parser.js').TypeDesc> } = $props();
 
 	let block = $derived.by(() => {
 		const children = getOwnerChildren(owner);

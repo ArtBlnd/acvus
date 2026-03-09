@@ -1,7 +1,6 @@
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::Ty;
-use acvus_mir::user_type::UserTypeRegistry;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -13,13 +12,7 @@ pub fn compile_to_ir(
     registry: &ExternRegistry,
 ) -> Result<String, String> {
     let template = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e}"))?;
-    let (module, _hints) = acvus_mir::compile(
-        interner,
-        &template,
-        context,
-        registry,
-        &UserTypeRegistry::new(),
-    )
+    let (module, _hints) = acvus_mir::compile(interner, &template, context, registry)
     .map_err(|errors| {
         errors
             .iter()

@@ -2307,3 +2307,131 @@ async fn error_reduce_empty_list() {
         "expected EmptyCollection error, got: {err}",
     );
 }
+
+// ── Structural enum runtime tests ──────────────────────────────
+
+#[tokio::test]
+async fn structural_enum_match_unit_variant() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("s", Ty::Enum {
+        name: i.intern("Status"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Active"), None),
+            (i.intern("Inactive"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("s", Value::Variant {
+        tag: i.intern("Active"),
+        payload: None,
+    })]);
+    assert_eq!(
+        run_ctx(&i, "{{ Status::Active = @s }}yes{{_}}no{{/}}", types, values).await,
+        "yes"
+    );
+}
+
+#[tokio::test]
+async fn structural_enum_match_fallthrough() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("s", Ty::Enum {
+        name: i.intern("Status"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Active"), None),
+            (i.intern("Inactive"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("s", Value::Variant {
+        tag: i.intern("Inactive"),
+        payload: None,
+    })]);
+    assert_eq!(
+        run_ctx(&i, "{{ Status::Active = @s }}yes{{_}}no{{/}}", types, values).await,
+        "no"
+    );
+}
+
+#[tokio::test]
+async fn structural_enum_multi_arm_match() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("c", Ty::Enum {
+        name: i.intern("Color"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Red"), None),
+            (i.intern("Green"), None),
+            (i.intern("Blue"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("c", Value::Variant {
+        tag: i.intern("Green"),
+        payload: None,
+    })]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ Color::Red = @c }}r{{ Color::Green = }}g{{ Color::Blue = }}b{{/}}",
+            types, values,
+        ).await,
+        "g"
+    );
+}
+
+#[tokio::test]
+async fn structural_enum_with_payload_match() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("r", Ty::Enum {
+        name: i.intern("Res"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Ok"), Some(Box::new(Ty::String))),
+            (i.intern("Err"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("r", Value::Variant {
+        tag: i.intern("Ok"),
+        payload: Some(Box::new(Value::String("hello".into()))),
+    })]);
+    assert_eq!(
+        run_ctx(&i, "{{ Res::Ok(v) = @r }}{{ v }}{{_}}err{{/}}", types, values).await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn structural_enum_payload_fallthrough_to_unit() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("r", Ty::Enum {
+        name: i.intern("Res"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Ok"), Some(Box::new(Ty::String))),
+            (i.intern("Err"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("r", Value::Variant {
+        tag: i.intern("Err"),
+        payload: None,
+    })]);
+    assert_eq!(
+        run_ctx(&i, "{{ Res::Ok(v) = @r }}{{ v }}{{ Res::Err = }}fail{{/}}", types, values).await,
+        "fail"
+    );
+}
+
+#[tokio::test]
+async fn structural_enum_separate_blocks_both_match() {
+    // Two separate match blocks on same enum context — regression test.
+    let i = Interner::new();
+    let types = ctx(&i, &[("s", Ty::Enum {
+        name: i.intern("AB"),
+        variants: FxHashMap::from_iter([
+            (i.intern("A"), None),
+            (i.intern("B"), None),
+        ]),
+    })]);
+    let values = vals(&i, &[("s", Value::Variant {
+        tag: i.intern("B"),
+        payload: None,
+    })]);
+    assert_eq!(
+        run_ctx(&i, "{{ AB::A = @s }}a{{/}}{{ AB::B = @s }}b{{/}}", types, values).await,
+        "b"
+    );
+}

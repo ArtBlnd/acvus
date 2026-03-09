@@ -21,14 +21,12 @@ use crate::ir::MirModule;
 use crate::lower::Lowerer;
 use crate::ty::Ty;
 use crate::typeck::TypeChecker;
-use crate::user_type::UserTypeRegistry;
 
 /// Compile a parsed template into MIR.
 ///
 /// - `template`: the parsed AST from `acvus_ast::parse()`.
 /// - `context_types`: types for each `@name` context variable.
 /// - `registry`: external function definitions.
-/// - `user_types`: user-defined enum types.
 ///
 /// Returns a `MirModule` and `HintTable`, or a list of errors.
 pub fn compile(
@@ -36,11 +34,10 @@ pub fn compile(
     template: &Template,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry, user_types);
-    let (type_map, variant_registry) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
+    let checker = TypeChecker::new(interner, context_types, registry);
+    let type_map = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, registry);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -51,9 +48,8 @@ pub fn compile_script(
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_with_hint(interner, script, context_types, registry, user_types, None)
+    compile_script_with_hint(interner, script, context_types, registry, None)
 }
 
 pub fn compile_script_with_hint(
@@ -61,13 +57,12 @@ pub fn compile_script_with_hint(
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry, user_types);
-    let (type_map, tail_ty, variant_registry) =
+    let checker = TypeChecker::new(interner, context_types, registry);
+    let (type_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, registry);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -79,12 +74,11 @@ pub fn compile_analysis(
     template: &Template,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let checker =
-        TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
-    let (type_map, variant_registry) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
+        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+    let type_map = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, registry);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -95,9 +89,8 @@ pub fn compile_script_analysis(
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_analysis_with_tail(interner, script, context_types, registry, user_types, None)
+    compile_script_analysis_with_tail(interner, script, context_types, registry, None)
 }
 
 /// Compile a script in analysis mode with an expected tail type hint.
@@ -106,14 +99,13 @@ pub fn compile_script_analysis_with_tail(
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
-    user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let checker =
-        TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
-    let (type_map, tail_ty, variant_registry) =
+        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+    let (type_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
+    let lowerer = Lowerer::new(interner, type_map, registry);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -131,13 +123,7 @@ mod tests {
         registry: &ExternRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        compile(
-            interner,
-            &template,
-            context,
-            registry,
-            &UserTypeRegistry::new(),
-        )
+        compile(interner, &template, context, registry)
     }
 
     fn empty_registry() -> ExternRegistry {
@@ -349,14 +335,8 @@ mod tests {
         let i = Interner::new();
         let script = acvus_ast::parse_script(&i, source).unwrap();
         let ctx = FxHashMap::from_iter([(i.intern("data"), Ty::String)]);
-        let (module, _, _) = compile_script(
-            &i,
-            &script,
-            &ctx,
-            &empty_registry(),
-            &UserTypeRegistry::new(),
-        )
-        .unwrap();
+        let (module, _, _) = compile_script(&i, &script, &ctx, &empty_registry())
+            .unwrap();
         module
     }
 

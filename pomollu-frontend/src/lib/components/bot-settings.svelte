@@ -149,7 +149,7 @@
 	// --- Unresolved params analysis (full hierarchy) ---
 
 	let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
-	let discoveredContextTypes = $state<Record<string, string>>({});
+	let discoveredContextTypes = $state<Record<string, import('$lib/type-parser.js').TypeDesc>>({});
 
 	function runAnalysis() {
 		if (!bot) return;
@@ -287,14 +287,13 @@
 
 	function computeIterableEntryTypes(
 		iterator: string,
-		baseTypes: Record<string, string>
-	): Record<string, string> {
+		baseTypes: Record<string, import('$lib/type-parser.js').TypeDesc>
+	): Record<string, import('$lib/type-parser.js').TypeDesc> {
 		if (!iterator.trim()) return baseTypes;
 		const result = analyzeWithTypes(iterator, 'script', baseTypes);
-		if (!result.ok) return baseTypes;
-		const m = result.tail_type.match(/^List<(.+)>$/);
-		if (!m) return baseTypes;
-		return { ...baseTypes, item: m[1], index: 'Int' };
+		if (!result.ok || !result.tail_type) return baseTypes;
+		if (result.tail_type.kind !== 'list') return baseTypes;
+		return { ...baseTypes, item: result.tail_type.elem, index: { kind: 'primitive', name: 'Int' } };
 	}
 
 	let locked = $derived(uiState.isBotBusy(botId));

@@ -1,4 +1,5 @@
 import type { RenderedCard } from '$lib/types.js';
+import type { TypeDesc } from '$lib/type-parser.js';
 import {
 	typecheck as wasmTypecheck,
 	typecheck_with_types as wasmTypecheckWithTypes,
@@ -13,18 +14,18 @@ import {
 
 export type CheckResult = { ok: true } | { ok: false; message: string };
 
-export type ContextKeyInfo = { name: string; type: string };
+export type ContextKeyInfo = { name: string; type: TypeDesc };
 
 export type AnalyzeResult = {
 	ok: true;
 	errors: [];
 	context_keys: ContextKeyInfo[];
-	tail_type: string;
+	tail_type: TypeDesc;
 } | {
 	ok: false;
 	errors: string[];
 	context_keys: [];
-	tail_type: '';
+	tail_type: null;
 };
 
 export function typecheck(source: string, mode: 'script' | 'template'): CheckResult {
@@ -34,7 +35,7 @@ export function typecheck(source: string, mode: 'script' | 'template'): CheckRes
 export function typecheckWithTypes(
 	source: string,
 	mode: 'script' | 'template',
-	contextTypes: Record<string, string>
+	contextTypes: Record<string, TypeDesc>
 ): CheckResult {
 	return wasmTypecheckWithTypes(source, mode, JSON.stringify(contextTypes)) as CheckResult;
 }
@@ -42,10 +43,10 @@ export function typecheckWithTypes(
 export function typecheckWithTail(
 	source: string,
 	mode: 'script' | 'template',
-	contextTypes: Record<string, string>,
-	expectedTailType: string
+	contextTypes: Record<string, TypeDesc>,
+	expectedTailType: TypeDesc
 ): CheckResult {
-	return wasmTypecheckWithTail(source, mode, JSON.stringify(contextTypes), expectedTailType) as CheckResult;
+	return wasmTypecheckWithTail(source, mode, JSON.stringify(contextTypes), JSON.stringify(expectedTailType)) as CheckResult;
 }
 
 export function analyze(source: string, mode: 'script' | 'template'): AnalyzeResult {
@@ -55,7 +56,7 @@ export function analyze(source: string, mode: 'script' | 'template'): AnalyzeRes
 export function analyzeWithTypes(
 	source: string,
 	mode: 'script' | 'template',
-	contextTypes: Record<string, string>
+	contextTypes: Record<string, TypeDesc>
 ): AnalyzeResult {
 	return wasmAnalyzeWithTypes(source, mode, JSON.stringify(contextTypes)) as AnalyzeResult;
 }
@@ -63,10 +64,10 @@ export function analyzeWithTypes(
 export function analyzeWithTail(
 	source: string,
 	mode: 'script' | 'template',
-	contextTypes: Record<string, string>,
-	expectedTailType: string
+	contextTypes: Record<string, TypeDesc>,
+	expectedTailType: TypeDesc
 ): AnalyzeResult {
-	return wasmAnalyzeWithTail(source, mode, JSON.stringify(contextTypes), expectedTailType) as AnalyzeResult;
+	return wasmAnalyzeWithTail(source, mode, JSON.stringify(contextTypes), JSON.stringify(expectedTailType)) as AnalyzeResult;
 }
 
 export type WebNode = {
@@ -94,14 +95,14 @@ export type WebNode = {
 export type NodeFieldErrors = Record<string, string>;
 
 export type TypecheckNodesResult = {
-	contextTypes: Record<string, string>;
-	nodeLocals: Record<string, { raw: string; self: string }>;
+	contextTypes: Record<string, TypeDesc>;
+	nodeLocals: Record<string, { raw: TypeDesc; self: TypeDesc }>;
 	nodeErrors: Record<string, NodeFieldErrors>;
 } | { error: string };
 
 export function typecheckNodes(
 	nodes: WebNode[],
-	injectedTypes: Record<string, string>
+	injectedTypes: Record<string, TypeDesc>
 ): TypecheckNodesResult {
 	return wasmTypecheckNodes(JSON.stringify(nodes), JSON.stringify(injectedTypes)) as
 		TypecheckNodesResult;
@@ -123,7 +124,7 @@ export type SessionConfig = {
 	nodes: NodeConfig[];
 	providers: Record<string, ProviderConfig>;
 	entrypoint: string;
-	context?: Record<string, { type?: string }>;
+	context?: Record<string, { type?: TypeDesc }>;
 	side_effects?: string[];
 };
 
@@ -152,7 +153,7 @@ export type NodeConfig = {
 
 	// Plain/Expr-specific
 	template?: string;
-	output_ty?: string;
+	output_ty?: TypeDesc;
 };
 
 export type MessageConfig = {
@@ -176,14 +177,20 @@ export class ChatSession {
 	private inner: WasmChatSession;
 	private _busy = false;
 	private _pendingFree = false;
+	private _freed = false;
 
 	private constructor(inner: WasmChatSession) {
 		this.inner = inner;
 	}
 
-	/** True while turn() is running (&mut self held). UI should lock during this. */
+	/** True while turn() is running (&mut self held by WASM). */
 	get busy(): boolean {
 		return this._busy;
+	}
+
+	/** True after inner WASM object has been freed. */
+	get freed(): boolean {
+		return this._freed;
 	}
 
 	static async create(
@@ -198,30 +205,46 @@ export class ChatSession {
 	}
 
 	async turn(resolver: ResolverFn): Promise<unknown> {
+		if (this._freed) throw new Error('ChatSession already freed');
 		this._busy = true;
 		try {
 			return await this.inner.turn(resolver);
 		} finally {
 			this._busy = false;
-			if (this._pendingFree) {
-				this.inner.free();
-			}
+			// Do NOT free here — the caller may still need session methods
+			// (exportStorageJson, displayListLen, etc.) after turn() returns.
+			// Deferred free happens in finishTurn().
+		}
+	}
+
+	/**
+	 * Call after turn() and all post-turn work is done.
+	 * Actually frees the WASM object if free() was called during turn().
+	 */
+	finishTurn(): void {
+		if (this._pendingFree && !this._freed) {
+			this._freed = true;
+			this.inner.free();
 		}
 	}
 
 	exportStorage(): unknown {
+		if (this._freed) return {};
 		return this.inner.export_storage();
 	}
 
 	exportStorageJson(): Record<string, unknown> {
+		if (this._freed) return {};
 		return this.inner.export_storage_json() as Record<string, unknown>;
 	}
 
 	turnCount(): number {
+		if (this._freed) return 0;
 		return this.inner.turn_count();
 	}
 
 	async displayListLen(iteratorScript: string): Promise<number> {
+		if (this._freed || this._busy) return 0;
 		return this.inner.display_list_len(iteratorScript);
 	}
 
@@ -230,18 +253,25 @@ export class ChatSession {
 		entriesJson: string,
 		index: number
 	): Promise<RenderedCard[]> {
+		if (this._freed || this._busy) return [];
 		return this.inner.render_display(iteratorScript, entriesJson, index) as RenderedCard[];
 	}
 
 	async renderStatic(template: string): Promise<RenderedCard[]> {
+		if (this._freed || this._busy) return [];
 		return this.inner.render_static(template) as RenderedCard[];
 	}
 
-	/** Safe to call anytime — defers actual free until turn() completes if busy. */
+	/**
+	 * Request free. If turn() is in progress, defers until finishTurn().
+	 * If not busy, frees immediately.
+	 */
 	free(): void {
+		if (this._freed) return;
 		if (this._busy) {
 			this._pendingFree = true;
 		} else {
+			this._freed = true;
 			this.inner.free();
 		}
 	}

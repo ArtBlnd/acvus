@@ -69,14 +69,14 @@
 
 	// --- Unresolved params analysis ---
 
-	let discoveredContextTypes = $state<Record<string, string>>({});
+	let discoveredContextTypes = $state<Record<string, import('$lib/type-parser.js').TypeDesc>>({});
 	let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function runAnalysis() {
 		if (!prompt) return;
 		const nodeNames = collectNodeNames(prompt.children);
 		nodeNames.add('context');
-		const baseTypes: Record<string, string> = { context: CONTEXT_TYPE };
+		const baseTypes: Record<string, import('$lib/type-parser.js').TypeDesc> = { context: CONTEXT_TYPE };
 		const { discoveredTypes, unresolvedKeys } = analyzeLevel({
 			scripts: [
 				...collectScriptsFromBindings(prompt.contextBindings),
