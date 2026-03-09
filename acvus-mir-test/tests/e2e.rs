@@ -1876,6 +1876,7 @@ fn variant_merge_inside_tuple_pattern() {
         &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
+    eprintln!("=== TUPLE VARIANT IR ===\n{ir}\n=== END ===");
     assert!(ir.contains("A"), "variant A missing from IR:\n{ir}");
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
 }
@@ -1921,4 +1922,45 @@ fn infer_unifies_with_concrete_type() {
     acvus_mir::compile_analysis(
         &i, &template, &ctx_types, &ExternRegistry::new(),
     ).unwrap();
+}
+
+#[test]
+fn pruned_context_keys_in_dead_catch_all() {
+    // Outer match on @Impersonation with catch_all containing @Pov.
+    // When Impersonation=NoPersona is known, catch_all is dead,
+    // so @Pov should appear in partition.pruned.
+    use acvus_mir_pass::AnalysisPass;
+    use acvus_mir_pass::analysis::val_def::ValDefMapAnalysis;
+    use acvus_mir_pass::analysis::reachable_context::{partition_context_keys, KnownValue};
+
+    let i = Interner::new();
+    let src = r#"{-{ Impersonation::NoPersona = @Impersonation }}{-{_}}{-{ Pov::User = @Pov }}user{-{ Pov::Char = }}char{-{_}}other{-{ / }}{-{ / }}"#;
+    let template = acvus_ast::parse(&i, src).unwrap();
+    let (module, _) = acvus_mir::compile_analysis(
+        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+    ).unwrap();
+
+    let ir = acvus_mir::printer::dump_with(&i, &module);
+    eprintln!("=== PRUNED TEST IR ===\n{ir}\n=== END ===");
+
+    let val_def = ValDefMapAnalysis.run(&module, ());
+    let mut known = FxHashMap::default();
+    known.insert(
+        i.intern("Impersonation"),
+        KnownValue::Variant { tag: i.intern("NoPersona"), payload: None },
+    );
+    let partition = partition_context_keys(&module, &known, &val_def);
+
+    eprintln!("eager: {:?}", partition.eager.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>());
+    eprintln!("lazy: {:?}", partition.lazy.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>());
+    eprintln!("reachable_known: {:?}", partition.reachable_known.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>());
+    eprintln!("pruned: {:?}", partition.pruned.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>());
+
+    assert!(
+        partition.pruned.contains(&i.intern("Pov")),
+        "Pov should be pruned when Impersonation=NoPersona, but got:\n  eager: {:?}\n  lazy: {:?}\n  pruned: {:?}",
+        partition.eager.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>(),
+        partition.lazy.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>(),
+        partition.pruned.iter().map(|a| i.resolve(*a)).collect::<Vec<_>>(),
+    );
 }

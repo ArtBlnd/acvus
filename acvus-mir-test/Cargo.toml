@@ -10,4 +10,5 @@ acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
+acvus-mir-pass = { path = "../acvus-mir-pass" }
 insta = "1"

@@ -124,12 +124,25 @@ export function collectUnresolvedParams(opts: {
 }
 
 /**
- * Shared analysis pipeline for Prompt/Profile/Bot settings.
- * Discovers unresolved context refs, builds injected types,
- * and runs orchestration typecheck.
+ * Shared 2-phase analysis pipeline for Prompt/Profile/Bot settings.
  *
- * Each caller assembles the appropriate scripts/nodeNames/providedKeys
- * for its level, then calls this to get the final discoveredTypes.
+ * ── Phase 1: Pure Type Discovery ──────────────────────────────────
+ * Analyzes ALL scripts WITHOUT known values.
+ * Every branch is live, so every @context ref is discovered with its
+ * correctly-inferred type.  This produces the FULL type set.
+ * Keys not found here are deactivated (no longer referenced).
+ *
+ * ── Phase 2: Typecheck + Pruning ──────────────────────────────────
+ * 1) Hard typecheck (typecheckNodes) runs with the full type set from
+ *    Phase 1, so all branches — including dead ones — compile cleanly.
+ * 2) Re-analyze WITH known values to classify dead branches.
+ *    Keys that only appear on dead paths are "pruned" and removed from
+ *    the unresolved list, hiding them from the UI.
+ *
+ * IMPORTANT: Phase 1 MUST run without known values.
+ * If known values are passed in Phase 1, the engine's partition logic
+ * drops known keys on dead branches entirely — they get no type, no
+ * status, and Phase 2 typecheck fails with "undefined context" errors.
  */
 export type AnalyzeLevelResult =
 	| { ok: true; discoveredTypes: Record<string, TypeDesc>; unresolvedKeys: ContextKeyInfo[] }
@@ -163,32 +176,51 @@ export function analyzeLevel(opts: {
 		}
 	}
 
-	// Phase 1: Discovery
+	// Phase 1: Pure type discovery (no known values).
+	// All branches are live → all context refs discovered with correct types.
 	const collectResult = collectUnresolvedParams({
 		scripts: allScripts,
 		nodeNames: opts.nodeNames,
 		providedKeys: opts.providedKeys,
 		contextTypes: typesFromParams,
-		knownScripts,
 	});
 
 	if (!collectResult.ok) {
-		console.warn('[analyzeLevel] Phase 1 FAILED:', collectResult.errors);
 		return { ok: false, errors: collectResult.errors, phase: 'analysis' };
 	}
 
-	// Phase 2: Typecheck
+	// Build full type set from Phase 1 discovery.
 	const injectedTypes: Record<string, TypeDesc> = { ...typesFromParams };
 	for (const k of collectResult.keys) {
-		if (!isUnknownType(k.type) && !injectedTypes[k.name]) {
+		if (!injectedTypes[k.name]) {
 			injectedTypes[k.name] = k.type;
 		}
 	}
 
+	// Phase 2: Typecheck + Pruning.
+	// Typecheck uses the full type set so all branches compile.
 	const env = computeExternalContextEnv(opts.children, injectedTypes, opts.getApi);
-	// Only report eager/lazy keys as unresolved — pruned keys (in dead branches)
-	// had their types injected above but should not appear in the UI.
-	const unresolvedKeys = collectResult.keys.filter((k) => k.status !== 'pruned');
+
+	// Pruning: re-analyze with known values + full types to find dead branches.
+	const hasKnown = Object.keys(knownScripts).length > 0;
+	let unresolvedKeys = collectResult.keys;
+
+	if (hasKnown) {
+		const pruneResult = collectUnresolvedParams({
+			scripts: allScripts,
+			nodeNames: opts.nodeNames,
+			providedKeys: opts.providedKeys,
+			contextTypes: injectedTypes,
+			knownScripts,
+		});
+		if (pruneResult.ok) {
+			const prunedNames = new Set(
+				pruneResult.keys.filter((k) => k.status === 'pruned').map((k) => k.name)
+			);
+			unresolvedKeys = collectResult.keys.filter((k) => !prunedNames.has(k.name));
+		}
+	}
+
 	return { ok: true, discoveredTypes: env.contextTypes, unresolvedKeys };
 }
 

@@ -132,6 +132,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-mir",
+ "acvus-mir-pass",
  "acvus-utils",
  "insta",
  "rustc-hash",

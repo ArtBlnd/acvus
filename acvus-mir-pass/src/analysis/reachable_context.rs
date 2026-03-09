@@ -316,9 +316,9 @@ fn partition_from_body(
                     Reach::Unreachable => {
                         // Dead branch: not needed at runtime, but the typechecker
                         // still compiles all branches and needs these types injected.
-                        if !known.contains_key(name) {
-                            partition.pruned.insert(*name);
-                        }
+                        // Include even known keys — their types must still reach
+                        // the hard typecheck phase.
+                        partition.pruned.insert(*name);
                     }
                     _ => {
                         if known.contains_key(name) {
@@ -482,6 +482,22 @@ fn trace_to_context_load(
     let &idx = val_def.0.get(&val)?;
     match &insts[idx].kind {
         InstKind::ContextLoad { name, .. } => Some(*name),
+        // Follow TupleIndex through to the source.
+        // The source may be a ContextLoad (tuple loaded directly from context)
+        // or a MakeTuple (tuple constructed inline).
+        InstKind::TupleIndex { tuple, index, .. } => {
+            let &tuple_idx = val_def.0.get(tuple)?;
+            match &insts[tuple_idx].kind {
+                // Tuple loaded from context — the context var itself is the tuple.
+                InstKind::ContextLoad { name, .. } => Some(*name),
+                // Inline tuple — trace through to the element source.
+                InstKind::MakeTuple { elements, .. } => {
+                    let elem = elements.get(*index)?;
+                    trace_to_context_load(*elem, insts, val_def)
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
