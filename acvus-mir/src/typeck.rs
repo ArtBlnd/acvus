@@ -1085,9 +1085,10 @@ impl<'a> TypeChecker<'a> {
                     );
                     return;
                 }
-                let resolved_elem = self.subst.resolve(&elem_ty);
+                // Pass unresolved elem_ty so nested Variant patterns can
+                // trace the Var chain and merge variant sets across arms.
                 for p in head.iter().chain(tail.iter()) {
-                    self.check_pattern(p, &resolved_elem, span);
+                    self.check_pattern(p, &elem_ty, span);
                 }
             }
 
@@ -1169,8 +1170,10 @@ impl<'a> TypeChecker<'a> {
                     let TuplePatternElem::Pattern(pat) = elem else {
                         continue; // Wildcard: no binding, skip.
                     };
-                    let resolved_elem = self.subst.resolve(&elem_vars[i]);
-                    self.check_pattern(pat, &resolved_elem, span);
+                    // Pass the unresolved elem_var so that nested Variant
+                    // patterns can trace the Var chain via find_leaf_var and
+                    // accumulate merged variant sets across match arms.
+                    self.check_pattern(pat, &elem_vars[i], span);
                 }
             }
 
