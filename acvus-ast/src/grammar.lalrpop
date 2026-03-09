@@ -250,8 +250,8 @@ PrimaryExpr: Expr = {
     <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
         build_list(items, Span::new(l, r)),
 
-    // Object literal: { field1, $field2, } — trailing comma required
-    <l:@L> "{" <fields:(<ObjectField> ",")+> "}" <r:@R> =>
+    // Object literal: { field1, $field2, } — trailing comma required (empty {} allowed)
+    <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>
         Expr::Object { fields, span: Span::new(l, r) },
 
     // Format string: "hello {{ name }}, age {{ age | to_string }}"

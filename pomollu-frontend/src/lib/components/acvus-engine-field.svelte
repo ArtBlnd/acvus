@@ -175,9 +175,11 @@
 	}
 	.sf-hl,
 	.sf-textarea {
+		box-sizing: border-box;
 		font-family: var(--font-mono, ui-monospace, monospace);
 		font-size: 0.75rem;
 		line-height: 1.625;
+		letter-spacing: normal;
 		white-space: pre-wrap;
 		word-break: break-all;
 		tab-size: 2;
@@ -213,7 +215,14 @@
 		caret-color: var(--color-foreground);
 		outline: none;
 		transition: border-color 0.15s;
+		/* Hide scrollbar so content width matches overlay exactly */
+		scrollbar-width: none;
+		/* Remove mobile browser default textarea styling */
+		-webkit-appearance: none;
+		appearance: none;
+		-webkit-text-size-adjust: 100%;
 	}
+	.sf-textarea::-webkit-scrollbar { display: none; }
 	.sf-unlimited .sf-textarea {
 		position: absolute;
 		inset: 0;
