@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
 use crate::ty::Ty;
 
@@ -19,7 +20,7 @@ pub struct ExternFnDef {
 #[derive(Debug, Clone)]
 pub struct ExternModule {
     pub name: Astr,
-    fns: HashMap<Astr, ExternFnDef>,
+    fns: FxHashMap<Astr, ExternFnDef>,
     opaque_types: HashSet<Astr>,
 }
 
@@ -27,7 +28,7 @@ impl ExternModule {
     pub fn new(name: Astr) -> Self {
         Self {
             name,
-            fns: HashMap::new(),
+            fns: FxHashMap::default(),
             opaque_types: HashSet::new(),
         }
     }
@@ -45,13 +46,7 @@ impl ExternModule {
         &self.opaque_types
     }
 
-    pub fn add_fn(
-        &mut self,
-        name: Astr,
-        params: Vec<Ty>,
-        ret: Ty,
-        effectful: bool,
-    ) -> &mut Self {
+    pub fn add_fn(&mut self, name: Astr, params: Vec<Ty>, ret: Ty, effectful: bool) -> &mut Self {
         assert!(
             !self.fns.contains_key(&name),
             "duplicate function in ExternModule '{:?}': {name:?}",
@@ -68,7 +63,7 @@ impl ExternModule {
         self
     }
 
-    pub fn fns(&self) -> &HashMap<Astr, ExternFnDef> {
+    pub fn fns(&self) -> &FxHashMap<Astr, ExternFnDef> {
         &self.fns
     }
 }
@@ -81,7 +76,7 @@ pub struct ExternRegistry {
     /// ID-indexed storage: ExternFnId(n) -> (name, def).
     fn_list: Vec<(Astr, ExternFnDef)>,
     /// Name -> ExternFnId mapping.
-    fn_id_index: HashMap<Astr, ExternFnId>,
+    fn_id_index: FxHashMap<Astr, ExternFnId>,
 }
 
 impl Default for ExternRegistry {
@@ -95,7 +90,7 @@ impl ExternRegistry {
         Self {
             opaque_types: HashSet::new(),
             fn_list: Vec::new(),
-            fn_id_index: HashMap::new(),
+            fn_id_index: FxHashMap::default(),
         }
     }
 
@@ -138,7 +133,7 @@ impl ExternRegistry {
     }
 
     /// Build a name table mapping ExternFnId -> name for the MirModule.
-    pub fn build_name_table(&self) -> HashMap<ExternFnId, Astr> {
+    pub fn build_name_table(&self) -> FxHashMap<ExternFnId, Astr> {
         self.fn_list
             .iter()
             .enumerate()

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::extern_module::ExternFnId;
 use crate::ir::{CallTarget, ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
@@ -69,8 +69,8 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
 
 struct PrintCtx<'a> {
     interner: &'a Interner,
-    lit_to_tidx: &'a HashMap<String, usize>,
-    extern_names: &'a HashMap<ExternFnId, Astr>,
+    lit_to_tidx: &'a FxHashMap<String, usize>,
+    extern_names: &'a FxHashMap<ExternFnId, Astr>,
     tag_names: &'a [Astr],
 }
 
@@ -96,8 +96,8 @@ impl PrintCtx<'_> {
 
 fn fmt_use(
     r: ValueId,
-    consts: &HashMap<ValueId, &Literal>,
-    texts: &HashMap<ValueId, usize>,
+    consts: &FxHashMap<ValueId, &Literal>,
+    texts: &FxHashMap<ValueId, usize>,
 ) -> String {
     if let Some(tidx) = texts.get(&r) {
         return format!("T{tidx}");
@@ -110,8 +110,8 @@ fn fmt_use(
 
 fn fmt_uses(
     regs: &[ValueId],
-    consts: &HashMap<ValueId, &Literal>,
-    texts: &HashMap<ValueId, usize>,
+    consts: &FxHashMap<ValueId, &Literal>,
+    texts: &FxHashMap<ValueId, usize>,
 ) -> String {
     regs.iter()
         .map(|r| fmt_use(*r, consts, texts))
@@ -122,7 +122,7 @@ fn fmt_uses(
 /// Collect unique String/List literals from a body and register them into the text table.
 fn collect_texts_from_body(
     body: &MirBody,
-    lit_to_tidx: &mut HashMap<String, usize>,
+    lit_to_tidx: &mut FxHashMap<String, usize>,
     text_entries: &mut Vec<String>,
 ) {
     for inst in &body.insts {
@@ -146,7 +146,7 @@ fn write_body(
     ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
     // Small constants (Int, Float, Bool, Byte) -> inline at use sites.
-    let consts: HashMap<ValueId, &Literal> = body
+    let consts: FxHashMap<ValueId, &Literal> = body
         .insts
         .iter()
         .filter_map(|inst| match &inst.kind {
@@ -160,7 +160,7 @@ fn write_body(
         .collect();
 
     // String/List constants -> T-indexed references.
-    let texts: HashMap<ValueId, usize> = body
+    let texts: FxHashMap<ValueId, usize> = body
         .insts
         .iter()
         .filter_map(|inst| match &inst.kind {
@@ -206,7 +206,13 @@ fn write_body(
                 } else {
                     let args: Vec<String> = bindings
                         .iter()
-                        .map(|(k, v)| format!("{}: {}", ctx.interner.resolve(*k), fmt_use(*v, &consts, &texts)))
+                        .map(|(k, v)| {
+                            format!(
+                                "{}: {}",
+                                ctx.interner.resolve(*k),
+                                fmt_use(*v, &consts, &texts)
+                            )
+                        })
                         .collect();
                     writeln!(
                         f,
@@ -216,10 +222,18 @@ fn write_body(
                     )?
                 }
             }
-            InstKind::VarLoad { dst, name } => writeln!(f, "{} = var_load ${}", fmt_val(*dst), ctx.interner.resolve(*name))?,
-            InstKind::VarStore { name, src } => {
-                writeln!(f, "var_store ${} = {}", ctx.interner.resolve(*name), fmt_use(*src, &consts, &texts))?
-            }
+            InstKind::VarLoad { dst, name } => writeln!(
+                f,
+                "{} = var_load ${}",
+                fmt_val(*dst),
+                ctx.interner.resolve(*name)
+            )?,
+            InstKind::VarStore { name, src } => writeln!(
+                f,
+                "var_store ${} = {}",
+                ctx.interner.resolve(*name),
+                fmt_use(*src, &consts, &texts)
+            )?,
 
             // Arithmetic / logic
             InstKind::BinOp {
@@ -282,7 +296,13 @@ fn write_body(
             InstKind::MakeObject { dst, fields } => {
                 let fields_str: String = fields
                     .iter()
-                    .map(|(k, r)| format!("{}: {}", ctx.interner.resolve(*k), fmt_use(*r, &consts, &texts)))
+                    .map(|(k, r)| {
+                        format!(
+                            "{}: {}",
+                            ctx.interner.resolve(*k),
+                            fmt_use(*r, &consts, &texts)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 writeln!(f, "{} = object {{{fields_str}}}", fmt_val(*dst))?
@@ -557,7 +577,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
         let module = self.module;
 
         // Collect unique String/List literals across all bodies -> text table.
-        let mut lit_to_tidx: HashMap<String, usize> = HashMap::new();
+        let mut lit_to_tidx: FxHashMap<String, usize> = FxHashMap::default();
         let mut text_entries: Vec<String> = Vec::new();
 
         collect_texts_from_body(&module.main, &mut lit_to_tidx, &mut text_entries);
@@ -644,8 +664,8 @@ pub struct MirBodyDisplay<'a> {
 
 impl fmt::Display for MirBodyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let empty_lits = HashMap::new();
-        let empty_externs = HashMap::new();
+        let empty_lits = FxHashMap::default();
+        let empty_externs = FxHashMap::default();
         let ctx = PrintCtx {
             interner: self.interner,
             lit_to_tidx: &empty_lits,
@@ -683,24 +703,34 @@ mod tests {
     use crate::ty::Ty;
     use crate::user_type::UserTypeRegistry;
     use acvus_utils::Interner;
-    use std::collections::HashMap;
 
     fn compile_and_dump(
         source: &str,
-        context: &HashMap<Astr, Ty>,
+        context: &FxHashMap<Astr, Ty>,
         registry: &ExternRegistry,
         interner: &Interner,
     ) -> String {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let (module, _) = crate::compile(interner, &template, context, registry, &UserTypeRegistry::new())
-            .expect("compile failed");
+        let (module, _) = crate::compile(
+            interner,
+            &template,
+            context,
+            registry,
+            &UserTypeRegistry::new(),
+        )
+        .expect("compile failed");
         dump(interner, &module)
     }
 
     #[test]
     fn print_text_only() {
         let interner = Interner::new();
-        let out = compile_and_dump("hello world", &HashMap::new(), &ExternRegistry::new(), &interner);
+        let out = compile_and_dump(
+            "hello world",
+            &FxHashMap::default(),
+            &ExternRegistry::new(),
+            &interner,
+        );
         assert!(out.contains("=== literals ==="));
         assert!(out.contains("T0 = \"hello world\""));
         assert!(out.contains("yield T0"));
@@ -709,7 +739,12 @@ mod tests {
     #[test]
     fn print_string_emit() {
         let interner = Interner::new();
-        let out = compile_and_dump(r#"{{ "hello" }}"#, &HashMap::new(), &ExternRegistry::new(), &interner);
+        let out = compile_and_dump(
+            r#"{{ "hello" }}"#,
+            &FxHashMap::default(),
+            &ExternRegistry::new(),
+            &interner,
+        );
         assert!(out.contains("T0 = \"hello\""));
         assert!(out.contains("yield T0"));
     }
@@ -717,7 +752,10 @@ mod tests {
     #[test]
     fn print_arithmetic() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("a"), Ty::Int), (interner.intern("b"), Ty::Int)]);
+        let context = FxHashMap::from_iter([
+            (interner.intern("a"), Ty::Int),
+            (interner.intern("b"), Ty::Int),
+        ]);
         let out = compile_and_dump(
             "{{ x = @a + @b }}{{ x | to_string }}{{_}}{{/}}",
             &context,
@@ -731,7 +769,7 @@ mod tests {
     #[test]
     fn print_match_block() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         let out = compile_and_dump(
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
@@ -747,7 +785,8 @@ mod tests {
     #[test]
     fn print_closure() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))]);
+        let context =
+            FxHashMap::from_iter([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let out = compile_and_dump(
             "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}",
             &context,
@@ -769,7 +808,7 @@ mod tests {
         registry.register(&ext);
         let out = compile_and_dump(
             "{{ x = fetch(1) }}{{ x }}{{_}}{{/}}",
-            &HashMap::new(),
+            &FxHashMap::default(),
             &registry,
             &interner,
         );
@@ -780,30 +819,40 @@ mod tests {
     #[test]
     fn print_object_field() {
         let interner = Interner::new();
-        let context = HashMap::from([(
+        let context = FxHashMap::from_iter([(
             interner.intern("user"),
-            Ty::Object(HashMap::from([
+            Ty::Object(FxHashMap::from_iter([
                 (interner.intern("name"), Ty::String),
                 (interner.intern("age"), Ty::Int),
             ])),
         )]);
-        let out = compile_and_dump("{{ @user.name }}", &context, &ExternRegistry::new(), &interner);
+        let out = compile_and_dump(
+            "{{ @user.name }}",
+            &context,
+            &ExternRegistry::new(),
+            &interner,
+        );
         assert!(out.contains(".name"));
     }
 
     #[test]
     fn print_var_write() {
         let interner = Interner::new();
-        let out = compile_and_dump("{{ $count = 42 }}", &HashMap::new(), &ExternRegistry::new(), &interner);
+        let out = compile_and_dump(
+            "{{ $count = 42 }}",
+            &FxHashMap::default(),
+            &ExternRegistry::new(),
+            &interner,
+        );
         assert!(out.contains("var_store $count"));
     }
 
     #[test]
     fn snapshot_full_example() {
         let interner = Interner::new();
-        let context = HashMap::from([(
+        let context = FxHashMap::from_iter([(
             interner.intern("users"),
-            Ty::List(Box::new(Ty::Object(HashMap::from([(
+            Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([(
                 interner.intern("name"),
                 Ty::String,
             )])))),
@@ -824,7 +873,7 @@ mod tests {
         let interner = Interner::new();
         let out = compile_and_dump(
             r#"{{ "hello" }}{{ "hello" }}"#,
-            &HashMap::new(),
+            &FxHashMap::default(),
             &ExternRegistry::new(),
             &interner,
         );

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub type InstIdx = usize;
 
 #[derive(Debug, Clone)]
 pub struct HintTable {
-    pub hints: HashMap<InstIdx, Vec<Hint>>,
+    pub hints: FxHashMap<InstIdx, Vec<Hint>>,
 }
 
 impl Default for HintTable {
@@ -16,7 +16,7 @@ impl Default for HintTable {
 impl HintTable {
     pub fn new() -> Self {
         Self {
-            hints: HashMap::new(),
+            hints: FxHashMap::default(),
         }
     }
 

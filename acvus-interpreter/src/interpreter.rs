@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -9,6 +9,7 @@ use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::{CallTarget, Inst, InstKind, Label, MirBody, MirModule, ValueId};
 use acvus_utils::Astr;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 use crate::builtins;
 use crate::error::RuntimeError;
@@ -19,7 +20,7 @@ use acvus_utils::{Coroutine, ResumeKey, Stepped, YieldHandle};
 pub struct Interpreter {
     interner: Interner,
     module: MirModule,
-    variables: HashMap<Astr, Arc<Value>>,
+    variables: FxHashMap<Astr, Arc<Value>>,
     extern_fn_table: Vec<ExternFnBody>,
 }
 
@@ -29,8 +30,8 @@ pub struct Interpreter {
 
 struct Frame {
     vals: Vec<Option<Arc<Value>>>,
-    label_map: HashMap<Label, usize>,
-    iters: HashMap<ValueId, IterState>,
+    label_map: FxHashMap<Label, usize>,
+    iters: FxHashMap<ValueId, IterState>,
 }
 
 enum IterState {
@@ -46,11 +47,11 @@ enum IterState {
 }
 
 impl Frame {
-    fn new(val_count: u32, label_map: HashMap<Label, usize>) -> Self {
+    fn new(val_count: u32, label_map: FxHashMap<Label, usize>) -> Self {
         Self {
             vals: vec![None; val_count as usize],
             label_map,
-            iters: HashMap::new(),
+            iters: FxHashMap::default(),
         }
     }
 
@@ -183,7 +184,7 @@ impl Frame {
 // Label map
 // ---------------------------------------------------------------------------
 
-fn build_label_map(body: &MirBody) -> HashMap<Label, usize> {
+fn build_label_map(body: &MirBody) -> FxHashMap<Label, usize> {
     body.insts
         .iter()
         .enumerate()
@@ -207,7 +208,7 @@ impl Interpreter {
         Self {
             interner: interner.clone(),
             module,
-            variables: HashMap::new(),
+            variables: FxHashMap::default(),
             extern_fn_table,
         }
     }
@@ -223,7 +224,7 @@ impl Interpreter {
         })
     }
 
-    pub async fn execute_to_string(self, context: HashMap<Astr, Value>) -> String {
+    pub async fn execute_to_string(self, context: FxHashMap<Astr, Value>) -> String {
         let (mut coroutine, mut key) = self.execute();
         let mut output = String::new();
         loop {
@@ -285,7 +286,7 @@ impl Interpreter {
                     frame.set_new(*dst, Value::List(items));
                 }
                 InstKind::MakeObject { dst, fields } => {
-                    let obj: HashMap<Astr, Value> = fields
+                    let obj: FxHashMap<Astr, Value> = fields
                         .iter()
                         .map(|(k, v)| (*k, frame.take_owned(*v)))
                         .collect();
@@ -347,14 +348,21 @@ impl Interpreter {
                 InstKind::FieldGet { dst, object, field } => {
                     let v = expect_object(frame.get(*object), "FieldGet")
                         .get(field)
-                        .unwrap_or_else(|| panic!("FieldGet: key '{}' not found", field.display(&this.interner)))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "FieldGet: key '{}' not found",
+                                field.display(&this.interner)
+                            )
+                        })
                         .clone();
                     frame.set_new(*dst, v);
                 }
                 InstKind::ObjectGet { dst, object, key } => {
                     let v = expect_object(frame.get(*object), "ObjectGet")
                         .get(key)
-                        .unwrap_or_else(|| panic!("ObjectGet: key '{}' not found", key.display(&this.interner)))
+                        .unwrap_or_else(|| {
+                            panic!("ObjectGet: key '{}' not found", key.display(&this.interner))
+                        })
                         .clone();
                     frame.set_new(*dst, v);
                 }
@@ -440,8 +448,7 @@ impl Interpreter {
                     frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
-                    let ok =
-                        expect_object(frame.get(*src), "TestObjectKey").contains_key(key);
+                    let ok = expect_object(frame.get(*src), "TestObjectKey").contains_key(key);
                     frame.set_new(*dst, Value::Bool(ok));
                 }
                 InstKind::TestRange {
@@ -480,21 +487,21 @@ impl Interpreter {
                         let arc = handle.request_context(*name).await;
                         frame.set(*dst, arc);
                     } else {
-                        let binding_values: HashMap<Astr, Value> = bindings
+                        let binding_values: FxHashMap<Astr, Value> = bindings
                             .iter()
                             .map(|(k, vid)| (*k, frame.get(*vid).clone()))
                             .collect();
-                        let arc = handle
-                            .request_context_with(*name, binding_values)
-                            .await;
+                        let arc = handle.request_context_with(*name, binding_values).await;
                         frame.set(*dst, arc);
                     }
                 }
                 InstKind::VarLoad { dst, name } => {
-                    let v = this
-                        .variables
-                        .get(name)
-                        .unwrap_or_else(|| panic!("VarLoad: undefined variable ${}", name.display(&this.interner)));
+                    let v = this.variables.get(name).unwrap_or_else(|| {
+                        panic!(
+                            "VarLoad: undefined variable ${}",
+                            name.display(&this.interner)
+                        )
+                    });
                     frame.set(*dst, Arc::clone(v));
                 }
                 InstKind::VarStore { name, src } => {
@@ -511,9 +518,7 @@ impl Interpreter {
                                 Self::exec_builtin(this, *id, arg_values, handle).await?;
                         }
                         CallTarget::Extern(id) => {
-                            result = this.extern_fn_table[id.0 as usize]
-                                .call(arg_values)
-                                .await?;
+                            result = this.extern_fn_table[id.0 as usize].call(arg_values).await?;
                         }
                     }
                     frame.set_new(*dst, result);
@@ -523,9 +528,7 @@ impl Interpreter {
                     let CallTarget::Extern(id) = func else {
                         panic!("AsyncCall with non-extern target");
                     };
-                    let result = this.extern_fn_table[id.0 as usize]
-                        .call(arg_values)
-                        .await?;
+                    let result = this.extern_fn_table[id.0 as usize].call(arg_values).await?;
                     frame.set_new(*dst, result);
                 }
                 InstKind::CallClosure { dst, closure, args } => {
@@ -799,7 +802,7 @@ fn expect_list<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
     }
 }
 
-fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a HashMap<Astr, Value> {
+fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a FxHashMap<Astr, Value> {
     match v {
         Value::Object(fields) => fields,
         _ => panic!("{ctx}: expected Object, got {v:?}"),

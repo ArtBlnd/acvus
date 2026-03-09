@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::compile::{self, CompiledMessage, CompiledScript};
 use crate::dsl::MessageSpec;
@@ -33,7 +34,7 @@ pub struct LlmSpec {
 
 impl LlmSpec {
     pub fn output_ty(&self, interner: &Interner) -> Ty {
-        Ty::List(Box::new(Ty::Object(HashMap::from([
+        Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
             (interner.intern("role"), Ty::String),
             (interner.intern("content"), Ty::String),
             (interner.intern("content_type"), Ty::String),
@@ -56,7 +57,7 @@ pub struct ToolBinding {
     pub name: String,
     pub description: String,
     pub node: String,
-    pub params: HashMap<String, String>,
+    pub params: FxHashMap<String, String>,
 }
 
 /// A compiled tool binding with resolved types.
@@ -65,7 +66,7 @@ pub struct CompiledToolBinding {
     pub name: String,
     pub description: String,
     pub node: String,
-    pub params: HashMap<String, Ty>,
+    pub params: FxHashMap<String, Ty>,
 }
 
 /// Compiled LLM node.
@@ -96,7 +97,7 @@ pub(crate) fn parse_type_name(name: &str) -> Option<Ty> {
 pub fn compile_llm(
     interner: &Interner,
     spec: &LlmSpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledLlm, HashSet<Astr>), Vec<OrchError>> {
     let elem_ty = spec.api.message_elem_ty(interner);
@@ -105,8 +106,8 @@ pub fn compile_llm(
     let compiled_tools = compile_tool_bindings(&spec.tools)?;
     let compiled_cache_key = match &spec.cache_key {
         Some(ck) => {
-            let (expr, ck_ty) =
-                compile::compile_script(interner, ck, context_types, registry).map_err(|e| vec![e])?;
+            let (expr, ck_ty) = compile::compile_script(interner, ck, context_types, registry)
+                .map_err(|e| vec![e])?;
             compile::expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
             all_keys.extend(expr.context_keys.iter().cloned());
             Some(expr)
@@ -136,7 +137,7 @@ fn compile_tool_bindings(
     let mut errors = Vec::new();
 
     for tool in tools {
-        let mut params = HashMap::new();
+        let mut params = FxHashMap::default();
         for (param_name, type_name) in &tool.params {
             let Some(ty) = parse_type_name(type_name) else {
                 errors.push(OrchError::new(OrchErrorKind::ToolParamType {

@@ -7,11 +7,12 @@
 //!   3. Topological sort with random tie-breaking.
 //!   4. Reassemble.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::ir::{Inst, InstKind, ValueId};
 use rand::Rng;
 use rand::rngs::StdRng;
+use rustc_hash::FxHashMap;
 
 pub fn reorder(insts: Vec<Inst>, rng: &mut StdRng) -> Vec<Inst> {
     let blocks = split_basic_blocks(insts);
@@ -76,7 +77,7 @@ fn schedule_block(block: Vec<Inst>, rng: &mut StdRng) -> Vec<Inst> {
     let mut deps: Vec<HashSet<usize>> = vec![HashSet::new(); n];
 
     // Map: ValueId → index of instruction that defines it.
-    let mut def_map: HashMap<ValueId, usize> = HashMap::new();
+    let mut def_map: FxHashMap<ValueId, usize> = FxHashMap::default();
     // Track last side-effect instruction index for ordering.
     let mut last_side_effect: Option<usize> = None;
 

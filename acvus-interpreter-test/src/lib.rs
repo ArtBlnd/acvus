@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Interpreter, PureValue, Stepped, Value};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 // ── Core pipeline ───────────────────────────────────────────────
 
@@ -12,8 +12,8 @@ use acvus_utils::{Astr, Interner};
 pub async fn run(
     interner: &Interner,
     source: &str,
-    context_types: HashMap<Astr, Ty>,
-    context_values: HashMap<Astr, Value>,
+    context_types: FxHashMap<Astr, Ty>,
+    context_values: FxHashMap<Astr, Value>,
     extern_fns: ExternFnRegistry,
 ) -> String {
     let template = acvus_ast::parse(interner, source).expect("parse failed");
@@ -37,8 +37,8 @@ pub async fn run_simple(source: &str) -> String {
     run(
         &interner,
         source,
-        HashMap::new(),
-        HashMap::new(),
+        FxHashMap::default(),
+        FxHashMap::default(),
         ExternFnRegistry::new(&interner),
     )
     .await
@@ -48,18 +48,25 @@ pub async fn run_simple(source: &str) -> String {
 pub async fn run_ctx(
     interner: &Interner,
     source: &str,
-    types: HashMap<Astr, Ty>,
-    values: HashMap<Astr, Value>,
+    types: FxHashMap<Astr, Ty>,
+    values: FxHashMap<Astr, Value>,
 ) -> String {
-    run(interner, source, types, values, ExternFnRegistry::new(interner)).await
+    run(
+        interner,
+        source,
+        types,
+        values,
+        ExternFnRegistry::new(interner),
+    )
+    .await
 }
 
 /// Parse + compile + obfuscate + execute, returning the output string.
 pub async fn run_obfuscated(
     interner: &Interner,
     source: &str,
-    context_types: HashMap<Astr, Ty>,
-    context_values: HashMap<Astr, Value>,
+    context_types: FxHashMap<Astr, Ty>,
+    context_values: FxHashMap<Astr, Value>,
     extern_fns: ExternFnRegistry,
 ) -> String {
     use acvus_mir_pass::TransformPass;
@@ -95,8 +102,8 @@ pub async fn run_simple_obfuscated(source: &str) -> String {
     run_obfuscated(
         &interner,
         source,
-        HashMap::new(),
-        HashMap::new(),
+        FxHashMap::default(),
+        FxHashMap::default(),
         ExternFnRegistry::new(&interner),
     )
     .await
@@ -106,25 +113,32 @@ pub async fn run_simple_obfuscated(source: &str) -> String {
 pub async fn run_obf_ctx(
     interner: &Interner,
     source: &str,
-    types: HashMap<Astr, Ty>,
-    values: HashMap<Astr, Value>,
+    types: FxHashMap<Astr, Ty>,
+    values: FxHashMap<Astr, Value>,
 ) -> String {
-    run_obfuscated(interner, source, types, values, ExternFnRegistry::new(interner)).await
+    run_obfuscated(
+        interner,
+        source,
+        types,
+        values,
+        ExternFnRegistry::new(interner),
+    )
+    .await
 }
 
 /// Context call result: the yielded NeedContext info.
 #[derive(Debug)]
 pub struct ContextCallResult {
     pub output: String,
-    pub calls: Vec<(String, HashMap<Astr, Value>)>,
+    pub calls: Vec<(String, FxHashMap<Astr, Value>)>,
 }
 
 /// Run a template and capture context calls with their bindings.
 pub async fn run_capturing_context_calls(
     interner: &Interner,
     source: &str,
-    types: HashMap<Astr, Ty>,
-    values: HashMap<Astr, Value>,
+    types: FxHashMap<Astr, Ty>,
+    values: FxHashMap<Astr, Value>,
 ) -> ContextCallResult {
     let template = acvus_ast::parse(interner, source).expect("parse failed");
     let (module, _hints) = acvus_mir::compile(
@@ -172,8 +186,8 @@ pub async fn run_capturing_context_calls(
 pub async fn run_expect_error(
     interner: &Interner,
     source: &str,
-    context_types: HashMap<Astr, Ty>,
-    context_values: HashMap<Astr, Value>,
+    context_types: FxHashMap<Astr, Ty>,
+    context_values: FxHashMap<Astr, Value>,
     extern_fns: ExternFnRegistry,
 ) -> acvus_interpreter::RuntimeError {
     let template = acvus_ast::parse(interner, source).expect("parse failed");
@@ -233,15 +247,27 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
                 .collect();
             let values = fields
                 .iter()
-                .map(|(k, v)| (interner.intern(k), Value::from_pure(pv_from_json(&interner, v))))
+                .map(|(k, v)| {
+                    (
+                        interner.intern(k),
+                        Value::from_pure(pv_from_json(&interner, v)),
+                    )
+                })
                 .collect();
             (types, values)
         }
         Some(_) => return Err(format!("{}: 'context' must be an object", path.display())),
-        None => (HashMap::new(), HashMap::new()),
+        None => (FxHashMap::default(), FxHashMap::default()),
     };
 
-    let actual = run(&interner, template, types, values, ExternFnRegistry::new(&interner)).await;
+    let actual = run(
+        &interner,
+        template,
+        types,
+        values,
+        ExternFnRegistry::new(&interner),
+    )
+    .await;
 
     if actual != expected {
         Err(format!(
@@ -312,63 +338,77 @@ pub fn pv_from_json(interner: &Interner, v: &serde_json::Value) -> PureValue {
 
 // ── Helpers (used by e2e.rs) ─────────────────────────────────
 
-pub fn int_context(interner: &Interner, name: &str, value: i64) -> (HashMap<Astr, Ty>, HashMap<Astr, Value>) {
+pub fn int_context(
+    interner: &Interner,
+    name: &str,
+    value: i64,
+) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     (
-        HashMap::from([(interner.intern(name), Ty::Int)]),
-        HashMap::from([(interner.intern(name), Value::Int(value))]),
+        FxHashMap::from_iter([(interner.intern(name), Ty::Int)]),
+        FxHashMap::from_iter([(interner.intern(name), Value::Int(value))]),
     )
 }
 
-pub fn string_context(interner: &Interner, name: &str, value: &str) -> (HashMap<Astr, Ty>, HashMap<Astr, Value>) {
+pub fn string_context(
+    interner: &Interner,
+    name: &str,
+    value: &str,
+) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     (
-        HashMap::from([(interner.intern(name), Ty::String)]),
-        HashMap::from([(interner.intern(name), Value::String(value.into()))]),
+        FxHashMap::from_iter([(interner.intern(name), Ty::String)]),
+        FxHashMap::from_iter([(interner.intern(name), Value::String(value.into()))]),
     )
 }
 
-pub fn user_context(interner: &Interner) -> (HashMap<Astr, Ty>, HashMap<Astr, Value>) {
-    let ty = Ty::Object(HashMap::from([
+pub fn user_context(interner: &Interner) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
+    let ty = Ty::Object(FxHashMap::from_iter([
         (interner.intern("name"), Ty::String),
         (interner.intern("age"), Ty::Int),
         (interner.intern("email"), Ty::String),
     ]));
-    let val = Value::Object(HashMap::from([
+    let val = Value::Object(FxHashMap::from_iter([
         (interner.intern("name"), Value::String("alice".into())),
         (interner.intern("age"), Value::Int(30)),
-        (interner.intern("email"), Value::String("alice@example.com".into())),
+        (
+            interner.intern("email"),
+            Value::String("alice@example.com".into()),
+        ),
     ]));
     (
-        HashMap::from([(interner.intern("user"), ty)]),
-        HashMap::from([(interner.intern("user"), val)]),
+        FxHashMap::from_iter([(interner.intern("user"), ty)]),
+        FxHashMap::from_iter([(interner.intern("user"), val)]),
     )
 }
 
-pub fn users_list_context(interner: &Interner) -> (HashMap<Astr, Ty>, HashMap<Astr, Value>) {
-    let ty = Ty::List(Box::new(Ty::Object(HashMap::from([
+pub fn users_list_context(interner: &Interner) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
+    let ty = Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
         (interner.intern("name"), Ty::String),
         (interner.intern("age"), Ty::Int),
     ]))));
     let val = Value::List(vec![
-        Value::Object(HashMap::from([
+        Value::Object(FxHashMap::from_iter([
             (interner.intern("name"), Value::String("alice".into())),
             (interner.intern("age"), Value::Int(30)),
         ])),
-        Value::Object(HashMap::from([
+        Value::Object(FxHashMap::from_iter([
             (interner.intern("name"), Value::String("bob".into())),
             (interner.intern("age"), Value::Int(25)),
         ])),
     ]);
     (
-        HashMap::from([(interner.intern("users"), ty)]),
-        HashMap::from([(interner.intern("users"), val)]),
+        FxHashMap::from_iter([(interner.intern("users"), ty)]),
+        FxHashMap::from_iter([(interner.intern("users"), val)]),
     )
 }
 
-pub fn items_context(interner: &Interner, items: Vec<i64>) -> (HashMap<Astr, Ty>, HashMap<Astr, Value>) {
+pub fn items_context(
+    interner: &Interner,
+    items: Vec<i64>,
+) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     let ty = Ty::List(Box::new(Ty::Int));
     let val = Value::List(items.into_iter().map(Value::Int).collect());
     (
-        HashMap::from([(interner.intern("items"), ty)]),
-        HashMap::from([(interner.intern("items"), val)]),
+        FxHashMap::from_iter([(interner.intern("items"), ty)]),
+        FxHashMap::from_iter([(interner.intern("items"), val)]),
     )
 }

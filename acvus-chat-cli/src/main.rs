@@ -1,7 +1,6 @@
 mod node;
 mod project;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 
@@ -16,6 +15,7 @@ use acvus_orchestration::{
 use acvus_utils::{Astr, Interner};
 use node::NodeDef;
 use project::{ProjectSpec, parse_context_entry};
+use rustc_hash::FxHashMap;
 
 #[derive(Clone)]
 struct HttpFetch {
@@ -41,7 +41,7 @@ impl Fetch for HttpFetch {
 #[derive(Clone)]
 struct RenderOnlyFetch {
     /// endpoint prefix → API kind
-    endpoints: HashMap<String, ApiKind>,
+    endpoints: FxHashMap<String, ApiKind>,
 }
 
 impl Fetch for RenderOnlyFetch {
@@ -81,8 +81,8 @@ impl Fetch for RenderOnlyFetch {
 }
 
 /// Parse `key=value` pairs from CLI arguments.
-fn parse_context_args(args: &[String]) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+fn parse_context_args(args: &[String]) -> FxHashMap<String, String> {
+    let mut map = FxHashMap::default();
     for arg in args {
         if let Some((k, v)) = arg.split_once('=') {
             map.insert(k.to_string(), v.to_string());
@@ -135,8 +135,8 @@ async fn main() {
     let interner = Interner::new();
 
     // Context types + defaults
-    let mut context_types: HashMap<Astr, Ty> = HashMap::new();
-    let mut context_defaults: HashMap<Astr, Value> = HashMap::new();
+    let mut context_types: FxHashMap<Astr, Ty> = FxHashMap::default();
+    let mut context_defaults: FxHashMap<Astr, Value> = FxHashMap::default();
     for (k, v) in &spec.context {
         let entry = parse_context_entry(&interner, v);
         context_types.insert(interner.intern(k), entry.ty);
@@ -166,9 +166,13 @@ async fn main() {
             );
             process::exit(1);
         };
-        let (_script, tail_ty) =
-            compile_script(&interner, &source, &context_types, &registry).unwrap_or_else(|e| {
-                eprintln!("expr '{}' compile error: {}", expr_def.name, e.display(&interner));
+        let (_script, tail_ty) = compile_script(&interner, &source, &context_types, &registry)
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "expr '{}' compile error: {}",
+                    expr_def.name,
+                    e.display(&interner)
+                );
                 process::exit(1);
             });
         let expr_name = interner.intern(&expr_def.name);
@@ -189,7 +193,7 @@ async fn main() {
     }
 
     // Build provider name → ApiKind map (needed for node resolution)
-    let provider_apis: HashMap<String, ApiKind> = spec
+    let provider_apis: FxHashMap<String, ApiKind> = spec
         .providers
         .iter()
         .map(|(name, config)| (name.clone(), parse_api_kind(&config.api)))
@@ -205,8 +209,8 @@ async fn main() {
             eprintln!("failed to parse {node_file}: {e}");
             process::exit(1);
         });
-        let node_spec =
-            node::resolve_node(&interner, node_def, &project_dir, &provider_apis).unwrap_or_else(|e| {
+        let node_spec = node::resolve_node(&interner, node_def, &project_dir, &provider_apis)
+            .unwrap_or_else(|e| {
                 eprintln!("failed to resolve {node_file}: {e}");
                 process::exit(1);
             });
@@ -229,8 +233,8 @@ async fn main() {
     // Storage starts empty — context is type-only
     let storage = HashMapStorage::new();
 
-    let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
-    let mut endpoint_apis: HashMap<String, ApiKind> = HashMap::new();
+    let mut providers: FxHashMap<String, ProviderConfig> = FxHashMap::default();
+    let mut endpoint_apis: FxHashMap<String, ApiKind> = FxHashMap::default();
     for (name, config) in &spec.providers {
         let api = parse_api_kind(&config.api);
         let api_key = if render_only {
@@ -261,7 +265,7 @@ async fn main() {
 
     let resolver = {
         let defaults = context_defaults.clone();
-        let context_args_astr: HashMap<Astr, String> = context_args
+        let context_args_astr: FxHashMap<Astr, String> = context_args
             .iter()
             .map(|(k, v)| (interner.intern(k), v.clone()))
             .collect();

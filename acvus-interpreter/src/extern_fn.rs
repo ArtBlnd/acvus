@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_utils::{Astr, Interner};
@@ -6,6 +5,7 @@ use futures::future::BoxFuture;
 
 use acvus_mir::extern_module::{ExternFnId, ExternModule, ExternRegistry};
 use acvus_mir::ty::Ty;
+use rustc_hash::FxHashMap;
 
 use crate::builtins::{FromValue, IntoValue};
 use crate::error::RuntimeError;
@@ -116,14 +116,14 @@ pub trait ExternFn: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct ExternFnRegistry {
     interner: Interner,
-    fns: HashMap<Astr, (ExternFnSig, ExternFnBody)>,
+    fns: FxHashMap<Astr, (ExternFnSig, ExternFnBody)>,
 }
 
 impl ExternFnRegistry {
     pub fn new(interner: &Interner) -> Self {
         Self {
             interner: interner.clone(),
-            fns: HashMap::new(),
+            fns: FxHashMap::default(),
         }
     }
 
@@ -145,7 +145,7 @@ impl ExternFnRegistry {
 
     /// Build an ID-indexed table for fast runtime lookup.
     /// Call after `to_mir_registry()` with the same registry's name table.
-    pub fn build_id_table(&self, extern_names: &HashMap<ExternFnId, Astr>) -> Vec<ExternFnBody> {
+    pub fn build_id_table(&self, extern_names: &FxHashMap<ExternFnId, Astr>) -> Vec<ExternFnBody> {
         let mut table = vec![None; extern_names.len()];
         for (&id, name) in extern_names {
             let body = self
@@ -161,12 +161,7 @@ impl ExternFnRegistry {
     pub fn to_mir_registry(&self) -> ExternRegistry {
         let mut module = ExternModule::new(self.interner.intern("extern"));
         for (&name, (sig, _)) in &self.fns {
-            module.add_fn(
-                name,
-                sig.params.clone(),
-                sig.ret.clone(),
-                sig.effectful,
-            );
+            module.add_fn(name, sig.params.clone(), sig.ret.clone(), sig.effectful);
         }
         let mut registry = ExternRegistry::new();
         registry.register(&module);

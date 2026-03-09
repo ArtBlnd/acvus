@@ -13,11 +13,7 @@ pub struct Script {
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Bind {
-        name: Astr,
-        expr: Expr,
-        span: Span,
-    },
+    Bind { name: Astr, expr: Expr, span: Span },
     Expr(Expr),
 }
 

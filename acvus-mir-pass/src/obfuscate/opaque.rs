@@ -784,7 +784,7 @@ fn make_dead_block(
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -794,7 +794,7 @@ mod tests {
         let interner = Interner::new();
         PassState {
             insts: Vec::new(),
-            val_types: HashMap::new(),
+            val_types: FxHashMap::default(),
             debug: DebugInfo::new(),
             next_val: 200,
             next_label: 200,
@@ -841,9 +841,9 @@ mod tests {
         let pred = make_closure_predicate(&mut ctx, &mut rng, span(), Some(rv));
 
         let opaque_table_name = ctx.interner.intern("__opaque_table");
-        let has_var_load = pred
-            .iter()
-            .any(|i| matches!(&i.kind, InstKind::VarLoad { name, .. } if *name == opaque_table_name));
+        let has_var_load = pred.iter().any(
+            |i| matches!(&i.kind, InstKind::VarLoad { name, .. } if *name == opaque_table_name),
+        );
         assert!(has_var_load, "expected VarLoad for __opaque_table");
 
         let has_call_closure = pred

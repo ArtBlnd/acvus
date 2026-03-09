@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::sync::Arc;
 use acvus_interpreter::{ExternFnRegistry, Interpreter, RuntimeError, Stepped, Value};
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use crate::compile::{CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy};
@@ -26,10 +27,10 @@ type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 /// - `bind_cache`: IfModified key→output cache
 pub struct ResolveState<S> {
     pub storage: S,
-    pub turn_context: HashMap<Astr, Arc<Value>>,
-    pub bind_cache: HashMap<Astr, Vec<(Value, Arc<Value>)>>,
+    pub turn_context: FxHashMap<Astr, Arc<Value>>,
+    pub bind_cache: FxHashMap<Astr, Vec<(Value, Arc<Value>)>>,
     /// Buffered history entries for the current turn. Flushed once at turn end.
-    pub history_entries: HashMap<Astr, Value>,
+    pub history_entries: FxHashMap<Astr, Value>,
 }
 
 impl<S> ResolveState<S>
@@ -39,9 +40,9 @@ where
     pub fn new(storage: S) -> Self {
         Self {
             storage,
-            turn_context: HashMap::new(),
-            bind_cache: HashMap::new(),
-            history_entries: HashMap::new(),
+            turn_context: FxHashMap::default(),
+            bind_cache: FxHashMap::default(),
+            history_entries: FxHashMap::default(),
         }
     }
 
@@ -81,7 +82,7 @@ pub enum Resolved {
 pub struct Resolver<'a, R> {
     pub nodes: &'a [CompiledNode],
     pub node_table: &'a [Arc<dyn Node>],
-    pub name_to_idx: &'a HashMap<Astr, usize>,
+    pub name_to_idx: &'a FxHashMap<Astr, usize>,
     pub extern_fns: &'a ExternFnRegistry,
     pub resolver: &'a R,
     pub interner: &'a Interner,
@@ -95,7 +96,7 @@ where
         &'a self,
         idx: usize,
         state: &'a mut ResolveState<S>,
-        local: HashMap<Astr, Arc<Value>>,
+        local: FxHashMap<Astr, Arc<Value>>,
     ) -> Fut<'a, Result<(), ResolveError>>
     where
         S: Storage,
@@ -104,12 +105,12 @@ where
             let max_retries = self.nodes[idx].retry;
             let mut attempt = 0u32;
             loop {
-                match self
-                    .resolve_node_impl(idx, state, local.clone())
-                    .await
-                {
+                match self.resolve_node_impl(idx, state, local.clone()).await {
                     Ok(()) => return Ok(()),
-                    Err(ResolveError::Runtime { ref node, ref error }) => {
+                    Err(ResolveError::Runtime {
+                        ref node,
+                        ref error,
+                    }) => {
                         if attempt < max_retries {
                             attempt += 1;
                             warn!(
@@ -136,7 +137,7 @@ where
         &'a self,
         idx: usize,
         state: &'a mut ResolveState<S>,
-        mut local: HashMap<Astr, Arc<Value>>,
+        mut local: FxHashMap<Astr, Arc<Value>>,
     ) -> Result<(), ResolveError>
     where
         S: Storage,
@@ -148,14 +149,15 @@ where
 
         // IfModified: evaluate key, check cache
         if let CompiledStrategy::IfModified { key } = &node.strategy {
-            let key_value = self.eval_script(key, &HashMap::new(), state).await?;
+            let key_value = self.eval_script(key, &FxHashMap::default(), state).await?;
             if let Some(entries) = state.bind_cache.get(&node.name)
                 && let Some((_, cached_output)) = entries.iter().find(|(v, _)| v == &key_value)
             {
                 debug!(node = %node_name_str, "if_modified cache hit, skipping execution");
-                state
-                    .storage
-                    .set(interner.resolve(node.name).to_string(), Value::clone(cached_output));
+                state.storage.set(
+                    interner.resolve(node.name).to_string(),
+                    Value::clone(cached_output),
+                );
                 return Ok(());
             }
             debug!(node = %node_name_str, "if_modified cache miss, will execute");
@@ -188,7 +190,8 @@ where
                 "prefetching eager dependencies",
             );
             for dep_idx in unresolved {
-                self.resolve_node(dep_idx, state, HashMap::new()).await?;
+                self.resolve_node(dep_idx, state, FxHashMap::default())
+                    .await?;
             }
         }
 
@@ -201,7 +204,7 @@ where
                 Value::clone(arc)
             } else {
                 debug!(node = %node_name_str, "evaluating initial_value (first run)");
-                self.eval_script(init_script, &HashMap::new(), state)
+                self.eval_script(init_script, &FxHashMap::default(), state)
                     .await?
             };
             local.insert(interner.intern("self"), Arc::new(prev_self));
@@ -211,17 +214,15 @@ where
         debug!(node = %node_name_str, "spawning coroutine");
         let (mut coroutine, first_key) = self.node_table[idx].spawn(local.clone());
         let new_self = self
-            .eval_coroutine(&mut coroutine, first_key, &HashMap::new(), state)
+            .eval_coroutine(&mut coroutine, first_key, &FxHashMap::default(), state)
             .await?;
 
         // Assert: evaluate after new_self (= raw output), before storing.
         if let Some(ref assert_script) = node.assert {
-            let mut bind_local = HashMap::new();
+            let mut bind_local = FxHashMap::default();
             bind_local.insert(interner.intern("self"), Arc::new(new_self.clone()));
             debug!(node = %node_name_str, "evaluating assert");
-            let result = self
-                .eval_script(assert_script, &bind_local, state)
-                .await?;
+            let result = self.eval_script(assert_script, &bind_local, state).await?;
             let Value::Bool(passed) = result else {
                 return Err(ResolveError::Runtime {
                     node: interner.resolve(node.name).to_string(),
@@ -252,22 +253,18 @@ where
         let name_str = interner.resolve(node.name).to_string();
         match &node.strategy {
             CompiledStrategy::Always => {
-                state
-                    .turn_context
-                    .insert(node.name, Arc::new(new_self));
+                state.turn_context.insert(node.name, Arc::new(new_self));
             }
             CompiledStrategy::OncePerTurn | CompiledStrategy::IfModified { .. } => {
                 state.storage.set(name_str, new_self);
             }
             CompiledStrategy::History { history_bind } => {
                 state.storage.set(name_str, new_self.clone());
-                let mut hist_local = HashMap::new();
+                let mut hist_local = FxHashMap::default();
                 hist_local.insert(interner.intern("self"), Arc::new(new_self));
 
                 debug!(node = %node_name_str, "evaluating history_bind");
-                let entry = self
-                    .eval_script(history_bind, &hist_local, state)
-                    .await?;
+                let entry = self.eval_script(history_bind, &hist_local, state).await?;
                 // Buffer entry — flushed to @turn.history at turn end.
                 state.history_entries.insert(node.name, entry);
             }
@@ -305,19 +302,13 @@ where
         if node.kind.messages().is_empty() {
             match &node.kind {
                 crate::kind::CompiledNodeKind::Plain(plain) => {
-                    let p = partition_context_keys(
-                        &plain.block.module,
-                        &known,
-                        &plain.block.val_def,
-                    );
+                    let p =
+                        partition_context_keys(&plain.block.module, &known, &plain.block.val_def);
                     eager.extend(p.eager);
                 }
                 crate::kind::CompiledNodeKind::Expr(expr) => {
-                    let p = partition_context_keys(
-                        &expr.script.module,
-                        &known,
-                        &expr.script.val_def,
-                    );
+                    let p =
+                        partition_context_keys(&expr.script.module, &known, &expr.script.val_def);
                     eager.extend(p.eager);
                 }
                 _ => {}
@@ -325,10 +316,10 @@ where
         }
 
         // initial_value/strategy scripts: always eager
-        if let Some(ref iv) = node.self_spec.initial_value {
-            if storage.get(self.interner.resolve(node.name)).is_none() {
-                eager.extend(iv.context_keys.iter().copied());
-            }
+        if let Some(ref iv) = node.self_spec.initial_value
+            && storage.get(self.interner.resolve(node.name)).is_none()
+        {
+            eager.extend(iv.context_keys.iter().copied());
         }
         match &node.strategy {
             CompiledStrategy::History { history_bind } => {
@@ -369,7 +360,7 @@ where
     fn resolve_context<S>(
         &'a self,
         name: Astr,
-        bindings: HashMap<Astr, Value>,
+        bindings: FxHashMap<Astr, Value>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Arc<Value>, ResolveError>>
     where
@@ -397,7 +388,7 @@ where
                     return self.lookup(name, state).await;
                 }
                 debug!(context = %ctx_name_str, "resolving context on-demand");
-                self.resolve_node(idx, state, HashMap::new()).await?;
+                self.resolve_node(idx, state, FxHashMap::default()).await?;
             }
 
             self.lookup(name, state).await
@@ -431,9 +422,7 @@ where
             Resolved::Turn(value) => {
                 debug!(name = %name_str, kind = "turn", "external resolver returned");
                 let arc = Arc::new(value);
-                state
-                    .turn_context
-                    .insert(name, Arc::clone(&arc));
+                state.turn_context.insert(name, Arc::clone(&arc));
                 Ok(arc)
             }
             Resolved::Persist(value) => {
@@ -455,7 +444,7 @@ where
         &'a self,
         coroutine: &'a mut acvus_utils::Coroutine<Value, RuntimeError>,
         first_key: acvus_utils::ResumeKey<Value>,
-        local: &'a HashMap<Astr, Arc<Value>>,
+        local: &'a FxHashMap<Astr, Arc<Value>>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Value, ResolveError>>
     where
@@ -478,9 +467,7 @@ where
                         } else {
                             debug!(context = %name_str, "need_context delegating to resolve_context");
                             let bindings = need.bindings().clone();
-                            let value = self
-                                .resolve_context(name, bindings, state)
-                                .await?;
+                            let value = self.resolve_context(name, bindings, state).await?;
                             key = need.into_key(value);
                         }
                     }
@@ -503,7 +490,7 @@ where
     fn eval_script<S>(
         &'a self,
         script: &'a CompiledScript,
-        local: &'a HashMap<Astr, Arc<Value>>,
+        local: &'a FxHashMap<Astr, Arc<Value>>,
         state: &'a mut ResolveState<S>,
     ) -> Fut<'a, Result<Value, ResolveError>>
     where
@@ -524,10 +511,7 @@ where
 #[derive(Debug)]
 pub enum ResolveError {
     UnresolvedContext(String),
-    Runtime {
-        node: String,
-        error: RuntimeError,
-    },
+    Runtime { node: String, error: RuntimeError },
 }
 
 impl std::fmt::Display for ResolveError {

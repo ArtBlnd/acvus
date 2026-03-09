@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::kind::GenerationParams;
 use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, ToolSpec, Usage};
@@ -88,7 +88,7 @@ pub fn build_cache_request(
     model: &str,
     messages: &[Message],
     ttl: &str,
-    cache_config: &HashMap<String, serde_json::Value>,
+    cache_config: &FxHashMap<String, serde_json::Value>,
 ) -> HttpRequest {
     let mut system_text = String::new();
     let mut contents = Vec::new();
@@ -472,7 +472,6 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use crate::kind::GenerationParams;
     use crate::message::{Message, ToolSpec};
@@ -525,7 +524,7 @@ mod tests {
             &[ToolSpec {
                 name: "search".into(),
                 description: "Search".into(),
-                params: HashMap::from([("query".into(), "string".into())]),
+                params: FxHashMap::from_iter([("query".into(), "string".into())]),
             }],
             &GenerationParams::default(),
             None,

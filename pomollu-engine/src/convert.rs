@@ -42,9 +42,13 @@ pub enum WebStrategy {
     #[serde(rename = "once-per-turn")]
     OncePerTurn,
     #[serde(rename = "if-modified", rename_all = "camelCase")]
-    IfModified { key: String },
+    IfModified {
+        key: String,
+    },
     #[serde(rename = "history", rename_all = "camelCase")]
-    History { history_bind: String },
+    History {
+        history_bind: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -122,7 +126,11 @@ pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, Stri
                     name: t.name.clone(),
                     description: t.description.clone(),
                     node: t.node.clone(),
-                    params: t.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+                    params: t
+                        .params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.ty.clone()))
+                        .collect(),
                 })
                 .collect(),
             generation: GenerationParams {
@@ -152,7 +160,9 @@ pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, Stri
     let strategy = match &web.strategy {
         WebStrategy::Always => Strategy::Always,
         WebStrategy::OncePerTurn => Strategy::OncePerTurn,
-        WebStrategy::IfModified { key } => Strategy::IfModified { key: interner.intern(key) },
+        WebStrategy::IfModified { key } => Strategy::IfModified {
+            key: interner.intern(key),
+        },
         WebStrategy::History { history_bind } => Strategy::History {
             history_bind: interner.intern(history_bind),
         },
@@ -162,7 +172,11 @@ pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, Stri
         name: interner.intern(&web.name),
         kind,
         self_spec: SelfSpec {
-            initial_value: web.self_spec.initial_value.as_ref().map(|s| interner.intern(s)),
+            initial_value: web
+                .self_spec
+                .initial_value
+                .as_ref()
+                .map(|s| interner.intern(s)),
         },
         strategy,
         retry: web.retry,

@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
 use crate::variant::EnumDef;
 
@@ -9,7 +8,7 @@ pub struct UserTypeId(pub u32);
 
 pub struct UserTypeRegistry {
     enums: Vec<EnumDef>,
-    name_index: HashMap<Astr, UserTypeId>,
+    name_index: FxHashMap<Astr, UserTypeId>,
 }
 
 impl Default for UserTypeRegistry {
@@ -22,7 +21,7 @@ impl UserTypeRegistry {
     pub fn new() -> Self {
         Self {
             enums: Vec::new(),
-            name_index: HashMap::new(),
+            name_index: FxHashMap::default(),
         }
     }
 

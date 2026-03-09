@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Message content — text or binary blob.
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ pub enum ModelResponse {
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
-    pub params: HashMap<String, String>,
+    pub params: FxHashMap<String, String>,
 }
 
 /// Token usage from a model response.

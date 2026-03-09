@@ -8,6 +8,7 @@ acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-orchestration = { path = "../acvus-orchestration" }
 acvus-utils = { path = "../acvus-utils" }
+rustc-hash = { workspace = true }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"

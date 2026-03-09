@@ -16,6 +16,9 @@ members = [
     "pomollu-engine"
 ]
 
+[workspace.dependencies]
+rustc-hash = "2"
+
 [profile.release]
 opt-level = 'z'
 lto = true

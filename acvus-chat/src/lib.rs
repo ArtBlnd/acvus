@@ -1,8 +1,9 @@
 mod error;
 
 pub use error::ChatError;
+use rustc_hash::FxHashMap;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Value};
@@ -19,10 +20,10 @@ use acvus_utils::{Astr, Interner};
 pub struct ChatEngine<S> {
     nodes: Vec<CompiledNode>,
     node_table: Vec<Arc<dyn Node>>,
-    name_to_idx: HashMap<Astr, usize>,
+    name_to_idx: FxHashMap<Astr, usize>,
     extern_fns: ExternFnRegistry,
     pub state: State<S>,
-    bind_cache: HashMap<Astr, Vec<(Value, Arc<Value>)>>,
+    bind_cache: FxHashMap<Astr, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
     history_nodes: Vec<Astr>,
     side_effect_idxs: Vec<usize>,
@@ -35,7 +36,7 @@ where
 {
     pub async fn new<F>(
         nodes: Vec<CompiledNode>,
-        providers: HashMap<String, ProviderConfig>,
+        providers: FxHashMap<String, ProviderConfig>,
         fetch: F,
         extern_fns: ExternFnRegistry,
         mut storage: S,
@@ -46,11 +47,8 @@ where
     where
         F: Fetch + 'static,
     {
-        let name_to_idx: HashMap<Astr, usize> = nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.name, i))
-            .collect();
+        let name_to_idx: FxHashMap<Astr, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.name, i)).collect();
 
         let entrypoint_key = interner.intern(entrypoint);
         let entrypoint_idx = *name_to_idx
@@ -102,19 +100,24 @@ where
         }
         for &name in &history_nodes {
             if !reachable.contains(&name_to_idx[&name]) {
-                return Err(ChatError::HistoryNodeUnreachable(interner.resolve(name).to_string()));
+                return Err(ChatError::HistoryNodeUnreachable(
+                    interner.resolve(name).to_string(),
+                ));
             }
         }
 
         // Seed context metadata
-        let mut context_obj: HashMap<Astr, Value> = HashMap::new();
+        let mut context_obj: FxHashMap<Astr, Value> = FxHashMap::default();
         for node in &nodes {
             if let CompiledNodeKind::Llm(llm) = &node.kind {
                 context_obj.insert(
                     node.name,
-                    Value::Object(HashMap::from([
+                    Value::Object(FxHashMap::from_iter([
                         (interner.intern("model"), Value::String(llm.model.clone())),
-                        (interner.intern("provider"), Value::String(llm.provider.clone())),
+                        (
+                            interner.intern("provider"),
+                            Value::String(llm.provider.clone()),
+                        ),
                     ])),
                 );
             }
@@ -122,7 +125,6 @@ where
         if !context_obj.is_empty() {
             storage.set("context".into(), Value::Object(context_obj));
         }
-
 
         // Resolve side_effect node indices
         let side_effect_idxs: Vec<usize> = side_effects
@@ -134,7 +136,8 @@ where
             .collect();
 
         // Build node table — one match, uniform Arc<dyn Node> from here
-        let node_table = build_node_table(&nodes, &providers, Arc::new(fetch), &extern_fns, interner);
+        let node_table =
+            build_node_table(&nodes, &providers, Arc::new(fetch), &extern_fns, interner);
 
         Ok(Self {
             nodes,
@@ -142,7 +145,7 @@ where
             name_to_idx,
             extern_fns,
             state: State::new(storage, 0),
-            bind_cache: HashMap::new(),
+            bind_cache: FxHashMap::default(),
             entrypoint_idx,
             history_nodes,
             side_effect_idxs,
@@ -174,7 +177,7 @@ where
         } else {
             self.state.storage.set(
                 interner.resolve(turn_key).to_string(),
-                Value::Object(HashMap::from([
+                Value::Object(FxHashMap::from_iter([
                     (index_key, Value::Int(0)),
                     (history_key, Value::List(Vec::new())),
                 ])),
@@ -192,9 +195,9 @@ where
         // Build ResolveState for this turn
         let mut rs = ResolveState {
             storage: std::mem::take(&mut self.state.storage),
-            turn_context: HashMap::new(),
+            turn_context: FxHashMap::default(),
             bind_cache: std::mem::take(&mut self.bind_cache),
-            history_entries: HashMap::new(),
+            history_entries: FxHashMap::default(),
         };
 
         let ctx = Resolver {
@@ -206,7 +209,7 @@ where
             interner,
         };
 
-        ctx.resolve_node(self.entrypoint_idx, &mut rs, HashMap::new())
+        ctx.resolve_node(self.entrypoint_idx, &mut rs, FxHashMap::default())
             .await
             .map_err(|e| ChatError::Resolve(e.to_string()))?;
 
@@ -215,34 +218,39 @@ where
             if matches!(node.strategy, CompiledStrategy::Always)
                 && let Some(v) = rs.turn_context.get(&node.name)
             {
-                rs.storage.set(interner.resolve(node.name).to_string(), Value::clone(v));
+                rs.storage
+                    .set(interner.resolve(node.name).to_string(), Value::clone(v));
             }
         }
 
         // Flush history + update turn index
         {
-            let mut turn_val = rs.storage.get(interner.resolve(turn_key))
+            let mut turn_val = rs
+                .storage
+                .get(interner.resolve(turn_key))
                 .map(|arc| Value::clone(&arc))
-                .unwrap_or_else(|| Value::Object(HashMap::new()));
+                .unwrap_or_else(|| Value::Object(FxHashMap::default()));
 
             if let Value::Object(ref mut turn) = turn_val {
                 turn.insert(index_key, Value::Int(turn_index));
                 if !rs.history_entries.is_empty() {
-                    let history = turn.entry(history_key)
+                    let history = turn
+                        .entry(history_key)
                         .or_insert_with(|| Value::List(Vec::new()));
                     if let Value::List(list) = history {
                         list.push(Value::Object(std::mem::take(&mut rs.history_entries)));
                     }
                 }
             }
-            rs.storage.set(interner.resolve(turn_key).to_string(), turn_val);
+            rs.storage
+                .set(interner.resolve(turn_key).to_string(), turn_val);
         }
 
         self.state.turn = turn_index as usize;
 
         // Resolve side-effect nodes after history flush + turn increment
         for &idx in &self.side_effect_idxs {
-            ctx.resolve_node(idx, &mut rs, HashMap::new())
+            ctx.resolve_node(idx, &mut rs, FxHashMap::default())
                 .await
                 .map_err(|e| ChatError::Resolve(e.to_string()))?;
         }
@@ -285,7 +293,9 @@ where
             {
                 history.pop();
             }
-            self.state.storage.set(interner.resolve(turn_key).to_string(), turn_val);
+            self.state
+                .storage
+                .set(interner.resolve(turn_key).to_string(), turn_val);
         }
     }
 
@@ -309,7 +319,9 @@ where
             {
                 history.truncate(index);
             }
-            self.state.storage.set(interner.resolve(turn_key).to_string(), turn_val);
+            self.state
+                .storage
+                .set(interner.resolve(turn_key).to_string(), turn_val);
         }
         self.state.turn = index;
         self.turn(resolver).await
@@ -321,7 +333,7 @@ async fn drive_script<S>(
     coroutine: &mut acvus_utils::Coroutine<Value, acvus_interpreter::RuntimeError>,
     mut key: acvus_utils::ResumeKey<Value>,
     storage: &S,
-    local: &HashMap<Astr, Arc<Value>>,
+    local: &FxHashMap<Astr, Arc<Value>>,
     interner: &Interner,
 ) -> Value
 where
@@ -434,7 +446,13 @@ mod tests {
     }
 
     fn compile_test_nodes(interner: &Interner, specs: &[NodeSpec]) -> Vec<CompiledNode> {
-        compile_nodes(interner, specs, &HashMap::new(), &ExternRegistry::default()).unwrap()
+        compile_nodes(
+            interner,
+            specs,
+            &FxHashMap::default(),
+            &ExternRegistry::default(),
+        )
+        .unwrap()
     }
 
     fn plain_self_spec() -> SelfSpec {
@@ -452,20 +470,23 @@ mod tests {
     #[tokio::test]
     async fn new_valid_entrypoint() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Plain(PlainSpec {
-                source: "hello".into(),
-            }),
-            self_spec: plain_self_spec(),
-            strategy: Strategy::default(),
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Plain(PlainSpec {
+                    source: "hello".into(),
+                }),
+                self_spec: plain_self_spec(),
+                strategy: Strategy::default(),
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let result = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -480,20 +501,23 @@ mod tests {
     #[tokio::test]
     async fn new_invalid_entrypoint() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Plain(PlainSpec {
-                source: "hello".into(),
-            }),
-            self_spec: plain_self_spec(),
-            strategy: Strategy::default(),
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Plain(PlainSpec {
+                    source: "hello".into(),
+                }),
+                self_spec: plain_self_spec(),
+                strategy: Strategy::default(),
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let result = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -508,20 +532,23 @@ mod tests {
     #[tokio::test]
     async fn turn_plain_node() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Plain(PlainSpec {
-                source: "hello world".into(),
-            }),
-            self_spec: plain_self_spec(),
-            strategy: Strategy::default(),
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Plain(PlainSpec {
+                    source: "hello world".into(),
+                }),
+                self_spec: plain_self_spec(),
+                strategy: Strategy::default(),
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -539,31 +566,34 @@ mod tests {
     #[tokio::test]
     async fn turn_llm_text_response() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Llm(LlmSpec {
-                api: ApiKind::OpenAI,
-                provider: "test".into(),
-                model: "gpt-test".into(),
-                messages: vec![MessageSpec::Block {
-                    role: interner.intern("user"),
-                    source: "hi".into(),
-                }],
-                tools: vec![],
-                generation: GenerationParams::default(),
-                cache_key: None,
-                max_tokens: MaxTokens::default(),
-            }),
-            self_spec: llm_self_spec(),
-            strategy: Strategy::default(),
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Llm(LlmSpec {
+                    api: ApiKind::OpenAI,
+                    provider: "test".into(),
+                    model: "gpt-test".into(),
+                    messages: vec![MessageSpec::Block {
+                        role: interner.intern("user"),
+                        source: "hi".into(),
+                    }],
+                    tools: vec![],
+                    generation: GenerationParams::default(),
+                    cache_key: None,
+                    max_tokens: MaxTokens::default(),
+                }),
+                self_spec: llm_self_spec(),
+                strategy: Strategy::default(),
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             mock,
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -584,49 +614,55 @@ mod tests {
             panic!("expected Object");
         };
         let content_key = interner.intern("content");
-        assert_eq!(msg.get(&content_key), Some(&Value::String("hello from LLM".into())));
+        assert_eq!(
+            msg.get(&content_key),
+            Some(&Value::String("hello from LLM".into()))
+        );
     }
 
     #[tokio::test]
     async fn turn_tool_call_round_trip() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[
-            NodeSpec {
-                name: interner.intern("tool_target"),
-                kind: NodeKind::Plain(PlainSpec {
-                    source: "tool result text".into(),
-                }),
-                strategy: Strategy::default(),
-                self_spec: plain_self_spec(),
-                retry: 0,
-                assert: None,
-            },
-            NodeSpec {
-                name: interner.intern("main"),
-                kind: NodeKind::Llm(LlmSpec {
-                    api: ApiKind::OpenAI,
-                    provider: "test".into(),
-                    model: "gpt-test".into(),
-                    messages: vec![MessageSpec::Block {
-                        role: interner.intern("user"),
-                        source: "use the tool".into(),
-                    }],
-                    tools: vec![ToolBinding {
-                        name: "my_tool".into(),
-                        description: String::new(),
-                        node: "tool_target".into(),
-                        params: HashMap::new(),
-                    }],
-                    generation: GenerationParams::default(),
-                    cache_key: None,
-                    max_tokens: MaxTokens::default(),
-                }),
-                strategy: Strategy::default(),
-                self_spec: llm_self_spec(),
-                retry: 0,
-                assert: None,
-            },
-        ]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("tool_target"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "tool result text".into(),
+                    }),
+                    strategy: Strategy::default(),
+                    self_spec: plain_self_spec(),
+                    retry: 0,
+                    assert: None,
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Llm(LlmSpec {
+                        api: ApiKind::OpenAI,
+                        provider: "test".into(),
+                        model: "gpt-test".into(),
+                        messages: vec![MessageSpec::Block {
+                            role: interner.intern("user"),
+                            source: "use the tool".into(),
+                        }],
+                        tools: vec![ToolBinding {
+                            name: "my_tool".into(),
+                            description: String::new(),
+                            node: "tool_target".into(),
+                            params: FxHashMap::default(),
+                        }],
+                        generation: GenerationParams::default(),
+                        cache_key: None,
+                        max_tokens: MaxTokens::default(),
+                    }),
+                    strategy: Strategy::default(),
+                    self_spec: llm_self_spec(),
+                    retry: 0,
+                    assert: None,
+                },
+            ],
+        );
         let (pname, pconfig) = default_provider();
         let mock = MockFetch::new(vec![
             openai_tool_call_response(vec![("call_1", "my_tool", serde_json::json!({}))]),
@@ -634,7 +670,7 @@ mod tests {
         ]);
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             mock,
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -654,7 +690,10 @@ mod tests {
             panic!("expected Object");
         };
         let content_key = interner.intern("content");
-        assert_eq!(msg.get(&content_key), Some(&Value::String("final answer".into())));
+        assert_eq!(
+            msg.get(&content_key),
+            Some(&Value::String("final answer".into()))
+        );
     }
 
     // -- regression tests -------------------------------------------------------
@@ -669,22 +708,25 @@ mod tests {
         // initial_value = "A".
         // Turn 1: @self = "A" (initial), template = "{{@self}}B" → "AB"
         // Turn 2: @self = "AB" (persisted), template = "{{@self}}B" → "ABB"
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Plain(PlainSpec {
-                source: "{{@self}}B".into(),
-            }),
-            self_spec: SelfSpec {
-                initial_value: Some(interner.intern(r#""A""#)),
-            },
-            strategy: Strategy::OncePerTurn,
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Plain(PlainSpec {
+                    source: "{{@self}}B".into(),
+                }),
+                self_spec: SelfSpec {
+                    initial_value: Some(interner.intern(r#""A""#)),
+                },
+                strategy: Strategy::OncePerTurn,
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -706,30 +748,33 @@ mod tests {
     #[tokio::test]
     async fn always_node_re_executes_every_reference() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[
-            NodeSpec {
-                name: interner.intern("counter"),
-                kind: NodeKind::Plain(PlainSpec { source: "x".into() }),
-                self_spec: plain_self_spec(),
-                strategy: Strategy::Always,
-                retry: 0,
-                assert: None,
-            },
-            NodeSpec {
-                name: interner.intern("main"),
-                kind: NodeKind::Plain(PlainSpec {
-                    source: "{{@counter}}{{@counter}}".into(),
-                }),
-                self_spec: plain_self_spec(),
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
-            },
-        ]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("counter"),
+                    kind: NodeKind::Plain(PlainSpec { source: "x".into() }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::Always,
+                    retry: 0,
+                    assert: None,
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "{{@counter}}{{@counter}}".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                },
+            ],
+        );
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -753,7 +798,7 @@ mod tests {
         let interner = Interner::new();
         // main template references @input twice.
         // External resolver should be called only once for @input per turn.
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("input"), Ty::String);
         let nodes = compile_nodes(
             &interner,
@@ -765,7 +810,7 @@ mod tests {
                 self_spec: plain_self_spec(),
                 strategy: Strategy::default(),
                 retry: 0,
-            assert: None,
+                assert: None,
             }],
             &ctx,
             &ExternRegistry::default(),
@@ -774,7 +819,7 @@ mod tests {
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -808,33 +853,36 @@ mod tests {
     #[tokio::test]
     async fn history_bind_accesses_self() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Llm(LlmSpec {
-                api: ApiKind::OpenAI,
-                provider: "test".into(),
-                model: "m".into(),
-                messages: vec![MessageSpec::Block {
-                    role: interner.intern("user"),
-                    source: "hi".into(),
-                }],
-                tools: vec![],
-                generation: GenerationParams::default(),
-                cache_key: None,
-                max_tokens: MaxTokens::default(),
-            }),
-            self_spec: llm_self_spec(),
-            // history_bind accesses @self (= raw output = List) and extracts content
-            strategy: Strategy::History {
-                history_bind: interner.intern(r#"@self | map(x -> x.content) | join("")"#),
-            },
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Llm(LlmSpec {
+                    api: ApiKind::OpenAI,
+                    provider: "test".into(),
+                    model: "m".into(),
+                    messages: vec![MessageSpec::Block {
+                        role: interner.intern("user"),
+                        source: "hi".into(),
+                    }],
+                    tools: vec![],
+                    generation: GenerationParams::default(),
+                    cache_key: None,
+                    max_tokens: MaxTokens::default(),
+                }),
+                self_spec: llm_self_spec(),
+                // history_bind accesses @self (= raw output = List) and extracts content
+                strategy: Strategy::History {
+                    history_bind: interner.intern(r#"@self | map(x -> x.content) | join("")"#),
+                },
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![openai_text_response("hello")]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
@@ -862,22 +910,25 @@ mod tests {
     #[tokio::test]
     async fn node_body_accesses_self() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(&interner, &[NodeSpec {
-            name: interner.intern("main"),
-            kind: NodeKind::Plain(PlainSpec {
-                source: "{{@self}}B".into(),
-            }),
-            self_spec: SelfSpec {
-                initial_value: Some(interner.intern(r#""A""#)),
-            },
-            strategy: Strategy::OncePerTurn,
-            retry: 0,
-            assert: None,
-        }]);
+        let nodes = compile_test_nodes(
+            &interner,
+            &[NodeSpec {
+                name: interner.intern("main"),
+                kind: NodeKind::Plain(PlainSpec {
+                    source: "{{@self}}B".into(),
+                }),
+                self_spec: SelfSpec {
+                    initial_value: Some(interner.intern(r#""A""#)),
+                },
+                strategy: Strategy::OncePerTurn,
+                retry: 0,
+                assert: None,
+            }],
+        );
         let (pname, pconfig) = default_provider();
         let mut engine = ChatEngine::new(
             nodes,
-            HashMap::from([(pname, pconfig)]),
+            FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
             ExternFnRegistry::new(&interner),
             HashMapStorage::new(),

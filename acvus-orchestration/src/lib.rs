@@ -19,12 +19,12 @@ pub use compile::{
     compile_script, compute_external_context_env,
 };
 pub use convert::{json_to_value, value_to_literal};
+pub use dag::{Dag, build_dag};
 pub use display::{
     CompiledDisplayEntry, CompiledIterableDisplay, CompiledStaticDisplay, DisplayEntrySpec,
     IterableDisplaySpec, RenderedDisplayEntry, StaticDisplaySpec, compile_iterable_display,
     compile_static_display, render_display, render_display_with_idx,
 };
-pub use dag::{Dag, build_dag};
 pub use dsl::{MessageSpec, NodeSpec, SelfSpec, Strategy, TokenBudget};
 pub use error::{OrchError, OrchErrorDisplay, OrchErrorKind};
 pub use kind::{

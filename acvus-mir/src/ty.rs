@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::user_type::UserTypeId;
 
@@ -17,7 +17,7 @@ pub enum Ty {
     Unit,
     Range,
     List(Box<Ty>),
-    Object(HashMap<Astr, Ty>),
+    Object(FxHashMap<Astr, Ty>),
     Tuple(Vec<Ty>),
     Fn {
         params: Vec<Ty>,
@@ -77,7 +77,12 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", self.interner.resolve(**k), v.display(self.interner))?;
+                    write!(
+                        f,
+                        "{}: {}",
+                        self.interner.resolve(**k),
+                        v.display(self.interner)
+                    )?;
                 }
                 write!(f, "}}")
             }
@@ -119,7 +124,7 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
 
 /// Substitution table for type unification.
 pub struct TySubst {
-    bindings: HashMap<TyVar, Ty>,
+    bindings: FxHashMap<TyVar, Ty>,
     next_var: u32,
 }
 
@@ -132,7 +137,7 @@ impl Default for TySubst {
 impl TySubst {
     pub fn new() -> Self {
         Self {
-            bindings: HashMap::new(),
+            bindings: FxHashMap::default(),
             next_var: 0,
         }
     }
@@ -157,10 +162,8 @@ impl TySubst {
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Object(fields) => {
-                let resolved: HashMap<_, _> = fields
-                    .iter()
-                    .map(|(k, v)| (*k, self.resolve(v)))
-                    .collect();
+                let resolved: FxHashMap<_, _> =
+                    fields.iter().map(|(k, v)| (*k, self.resolve(v))).collect();
                 Ty::Object(resolved)
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
@@ -288,12 +291,8 @@ impl TySubst {
                             }
                         }
                         // Rebind the leaf var to the fully-resolved larger Object.
-                        let larger_resolved = Ty::Object(
-                            larger
-                                .iter()
-                                .map(|(k, v)| (*k, self.resolve(v)))
-                                .collect(),
-                        );
+                        let larger_resolved =
+                            Ty::Object(larger.iter().map(|(k, v)| (*k, self.resolve(v))).collect());
                         self.bindings.insert(leaf_var, larger_resolved);
                         Ok(())
                     } else {
@@ -429,11 +428,11 @@ mod tests {
         let mut s = TySubst::new();
         let interner = Interner::new();
         let t = s.fresh_var();
-        let obj1 = Ty::Object(HashMap::from([
+        let obj1 = Ty::Object(FxHashMap::from_iter([
             (interner.intern("name"), Ty::String),
             (interner.intern("age"), t.clone()),
         ]));
-        let obj2 = Ty::Object(HashMap::from([
+        let obj2 = Ty::Object(FxHashMap::from_iter([
             (interner.intern("name"), Ty::String),
             (interner.intern("age"), Ty::Int),
         ]));
@@ -445,8 +444,11 @@ mod tests {
     fn unify_object_key_mismatch() {
         let mut s = TySubst::new();
         let interner = Interner::new();
-        let obj1 = Ty::Object(HashMap::from([(interner.intern("name"), Ty::String)]));
-        let obj2 = Ty::Object(HashMap::from([(interner.intern("age"), Ty::Int)]));
+        let obj1 = Ty::Object(FxHashMap::from_iter([(
+            interner.intern("name"),
+            Ty::String,
+        )]));
+        let obj2 = Ty::Object(FxHashMap::from_iter([(interner.intern("age"), Ty::Int)]));
         assert!(s.unify(&obj1, &obj2).is_err());
     }
 

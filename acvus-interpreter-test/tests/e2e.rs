@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use acvus_interpreter::{
     ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, RuntimeError, RuntimeErrorKind, Value,
 };
@@ -8,25 +6,42 @@ use acvus_interpreter_test::*;
 use acvus_interpreter_test::{run_capturing_context_calls, run_obfuscated, run_simple_obfuscated};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 /// Helper: build a context HashMap<Astr, Ty> from string pairs.
-fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> HashMap<acvus_utils::Astr, Ty> {
-    pairs.iter().map(|(k, v)| (i.intern(k), v.clone())).collect()
+fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> FxHashMap<acvus_utils::Astr, Ty> {
+    pairs
+        .iter()
+        .map(|(k, v)| (i.intern(k), v.clone()))
+        .collect()
 }
 
 /// Helper: build a value HashMap<Astr, Value> from string pairs.
-fn vals(i: &Interner, pairs: &[(&str, Value)]) -> HashMap<acvus_utils::Astr, Value> {
-    pairs.iter().map(|(k, v)| (i.intern(k), v.clone())).collect()
+fn vals(i: &Interner, pairs: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, Value> {
+    pairs
+        .iter()
+        .map(|(k, v)| (i.intern(k), v.clone()))
+        .collect()
 }
 
 /// Helper: build an Object type from string-keyed fields.
 fn obj_ty(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
-    Ty::Object(fields.iter().map(|(k, v)| (i.intern(k), v.clone())).collect())
+    Ty::Object(
+        fields
+            .iter()
+            .map(|(k, v)| (i.intern(k), v.clone()))
+            .collect(),
+    )
 }
 
 /// Helper: build an Object value from string-keyed fields.
 fn obj_val(i: &Interner, fields: &[(&str, Value)]) -> Value {
-    Value::Object(fields.iter().map(|(k, v)| (i.intern(k), v.clone())).collect())
+    Value::Object(
+        fields
+            .iter()
+            .map(|(k, v)| (i.intern(k), v.clone()))
+            .collect(),
+    )
 }
 
 // ── Text & literals ──────────────────────────────────────────────
@@ -66,7 +81,7 @@ async fn context_read() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "count", 42);
     assert_eq!(
-        run_ctx(&i,"{{ @count | to_string }}".into(), ty, val).await,
+        run_ctx(&i, "{{ @count | to_string }}".into(), ty, val).await,
         "42"
     );
 }
@@ -85,7 +100,10 @@ async fn variable_write_then_read() {
 async fn context_field_access() {
     let i = Interner::new();
     let (ty, val) = user_context(&i);
-    assert_eq!(run_ctx(&i,"{{ @user.name }}".into(), ty, val).await, "alice");
+    assert_eq!(
+        run_ctx(&i, "{{ @user.name }}".into(), ty, val).await,
+        "alice"
+    );
 }
 
 #[tokio::test]
@@ -94,7 +112,8 @@ async fn variable_write_computed() {
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let values = vals(&i, &[("a", Value::Int(10)), ("b", Value::Int(32))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ $result = @a + @b }}{{ $result | to_string }}",
             types,
             values
@@ -112,7 +131,7 @@ async fn arithmetic_to_string() {
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let values = vals(&i, &[("a", Value::Int(3)), ("b", Value::Int(7))]);
     assert_eq!(
-        run_ctx(&i,"{{ @a + @b | to_string }}".into(), types, values).await,
+        run_ctx(&i, "{{ @a + @b | to_string }}".into(), types, values).await,
         "10"
     );
 }
@@ -122,7 +141,7 @@ async fn unary_negation() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "n", 5);
     assert_eq!(
-        run_ctx(&i,r#"{{ x = -@n }}{{ x | to_string }}{{_}}{{/}}"#, ty, val).await,
+        run_ctx(&i, r#"{{ x = -@n }}{{ x | to_string }}{{_}}{{/}}"#, ty, val).await,
         "-5"
     );
 }
@@ -133,7 +152,8 @@ async fn boolean_not() {
     let types = ctx(&i, &[("flag", Ty::Bool)]);
     let values = vals(&i, &[("flag", Value::Bool(true))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = !@flag }}{{ x | to_string }}{{_}}{{/}}"#,
             types,
             values
@@ -149,7 +169,8 @@ async fn comparison_operators() {
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let values = vals(&i, &[("a", Value::Int(10)), ("b", Value::Int(5))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @a > @b }}{{ x | to_string }}{{_}}{{/}}"#,
             types,
             values
@@ -166,7 +187,7 @@ async fn simple_match_binding() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "name", "alice");
     assert_eq!(
-        run_ctx(&i,r#"{{ x = @name }}{{ x }}"#, ty, val).await,
+        run_ctx(&i, r#"{{ x = @name }}{{ x }}"#, ty, val).await,
         "alice"
     );
 }
@@ -176,7 +197,8 @@ async fn match_literal_filter_hit() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "role", "admin");
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ "admin" = @role }}admin page{{_}}guest page{{/}}"#,
             ty,
             val
@@ -191,7 +213,8 @@ async fn match_literal_filter_miss() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "role", "user");
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ "admin" = @role }}admin page{{_}}guest page{{/}}"#,
             ty,
             val
@@ -206,7 +229,8 @@ async fn multi_arm_match() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "role", "user");
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ "admin" = @role }}admin{{ "user" = }}user{{_}}guest{{/}}"#,
             ty,
             val
@@ -222,7 +246,7 @@ async fn match_bool_literal() {
     let types = ctx(&i, &[("flag", Ty::Bool)]);
     let values = vals(&i, &[("flag", Value::Bool(true))]);
     assert_eq!(
-        run_ctx(&i,r#"{{ true = @flag }}on{{_}}off{{/}}"#, types, values).await,
+        run_ctx(&i, r#"{{ true = @flag }}on{{_}}off{{/}}"#, types, values).await,
         "on"
     );
 }
@@ -232,7 +256,8 @@ async fn match_binding_with_body() {
     let i = Interner::new();
     let (ty, val) = user_context(&i);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ { name, } = @user }}{{ name }} is here{{_}}no user{{/}}"#,
             ty,
             val
@@ -247,7 +272,8 @@ async fn variable_shadowing() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "name", "alice");
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = "outer" }}{{ x = @name }}{{ x }}{{_}}{{/}}"#,
             ty,
             val
@@ -262,7 +288,8 @@ async fn catch_all_with_binding() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "role", "viewer");
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ "admin" = @role }}admin{{_}}{{ fallback = "guest" }}{{ fallback }}{{/}}"#,
             ty,
             val
@@ -278,7 +305,8 @@ async fn equality_as_match_source() {
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let values = vals(&i, &[("a", Value::Int(5)), ("b", Value::Int(5))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
             types,
             values
@@ -294,12 +322,16 @@ async fn equality_as_match_source() {
 async fn nested_match_blocks() {
     let i = Interner::new();
     let types = ctx(&i, &[("role", Ty::String), ("level", Ty::Int)]);
-    let values = vals(&i, &[
-        ("role", Value::String("admin".into())),
-        ("level", Value::Int(5)),
-    ]);
+    let values = vals(
+        &i,
+        &[
+            ("role", Value::String("admin".into())),
+            ("level", Value::Int(5)),
+        ],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ "admin" = @role }}{{ 1..10 = @level }}low{{_}}high{{/}}{{_}}guest{{/}}"#,
             types,
             values
@@ -316,7 +348,7 @@ async fn variable_new_ref_binding() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "name", "alice");
     assert_eq!(
-        run_ctx(&i,r#"{{ $result = @name }}{{ $result }}"#, ty, val).await,
+        run_ctx(&i, r#"{{ $result = @name }}{{ $result }}"#, ty, val).await,
         "alice"
     );
 }
@@ -367,7 +399,8 @@ async fn range_pattern_hit() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "age", 5);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
             ty,
             val
@@ -382,7 +415,8 @@ async fn range_pattern_miss() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "age", 25);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
             ty,
             val
@@ -399,7 +433,13 @@ async fn iter_list_binding() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
-        run_ctx(&i,"{{ x in @items }}{{ x | to_string }}{{/}}".into(), ty, val).await,
+        run_ctx(
+            &i,
+            "{{ x in @items }}{{ x | to_string }}{{/}}".into(),
+            ty,
+            val
+        )
+        .await,
         "123"
     );
 }
@@ -409,7 +449,13 @@ async fn iter_object_destructure() {
     let i = Interner::new();
     let (ty, val) = users_list_context(&i);
     assert_eq!(
-        run_ctx(&i,"{{ { name, } in @users }}{{ name }}{{/}}".into(), ty, val).await,
+        run_ctx(
+            &i,
+            "{{ { name, } in @users }}{{ name }}{{/}}".into(),
+            ty,
+            val
+        )
+        .await,
         "alicebob"
     );
 }
@@ -417,19 +463,25 @@ async fn iter_object_destructure() {
 #[tokio::test]
 async fn iter_tuple_destructure() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "pairs",
-        Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
-    )]);
-    let val = vals(&i, &[(
-        "pairs",
-        Value::List(vec![
-            Value::Tuple(vec![Value::String("a".into()), Value::Int(1)]),
-            Value::Tuple(vec![Value::String("b".into()), Value::Int(2)]),
-        ]),
-    )]);
+    let ty = ctx(
+        &i,
+        &[(
+            "pairs",
+            Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
+        )],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "pairs",
+            Value::List(vec![
+                Value::Tuple(vec![Value::String("a".into()), Value::Int(1)]),
+                Value::Tuple(vec![Value::String("b".into()), Value::Int(2)]),
+            ]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,"{{ (a, _) in @pairs }}{{ a }}{{/}}".into(), ty, val).await,
+        run_ctx(&i, "{{ (a, _) in @pairs }}{{ a }}{{/}}".into(), ty, val).await,
         "ab"
     );
 }
@@ -437,19 +489,23 @@ async fn iter_tuple_destructure() {
 #[tokio::test]
 async fn nested_iteration() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "matrix",
-        Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
-    )]);
-    let val = vals(&i, &[(
-        "matrix",
-        Value::List(vec![
-            Value::List(vec![Value::Int(1), Value::Int(2)]),
-            Value::List(vec![Value::Int(3), Value::Int(4)]),
-        ]),
-    )]);
+    let ty = ctx(
+        &i,
+        &[("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))))],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "matrix",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3), Value::Int(4)]),
+            ]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}",
             ty,
             val
@@ -464,7 +520,8 @@ async fn variable_write_in_iteration() {
     let i = Interner::new();
     let (types, values) = items_context(&i, vec![10, 20, 30]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ $last = 0 }}{{ x in @items }}{{ $last = x }}{{/}}{{ $last | to_string }}",
             types,
             values
@@ -479,7 +536,8 @@ async fn variable_accumulate_in_loop() {
     let i = Interner::new();
     let (types, values) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}",
             types,
             values
@@ -496,7 +554,8 @@ async fn list_destructure_head() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![10, 20, 30]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
             ty,
             val
@@ -511,7 +570,8 @@ async fn list_destructure_tail() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![10, 20, 30]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ [.., a, b] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
             ty,
             val
@@ -541,7 +601,8 @@ async fn list_exact_match_hit() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![10, 20]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}"#,
             ty,
             val
@@ -556,7 +617,8 @@ async fn list_exact_match_miss() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![10, 20, 30]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}"#,
             ty,
             val
@@ -573,7 +635,8 @@ async fn object_pattern() {
     let i = Interner::new();
     let (ty, val) = user_context(&i);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ { name, age, } = @user }}{{ name }}:{{ age | to_string }}{{/}}"#,
             ty,
             val
@@ -586,28 +649,40 @@ async fn object_pattern() {
 #[tokio::test]
 async fn deeply_nested_object_access() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "data",
-        obj_ty(&i, &[(
-            "user",
-            obj_ty(&i, &[(
-                "address",
-                obj_ty(&i, &[("city", Ty::String)]),
-            )]),
-        )]),
-    )]);
-    let val = vals(&i, &[(
-        "data",
-        obj_val(&i, &[(
-            "user",
-            obj_val(&i, &[(
-                "address",
-                obj_val(&i, &[("city", Value::String("Seoul".into()))]),
-            )]),
-        )]),
-    )]);
+    let ty = ctx(
+        &i,
+        &[(
+            "data",
+            obj_ty(
+                &i,
+                &[(
+                    "user",
+                    obj_ty(&i, &[("address", obj_ty(&i, &[("city", Ty::String)]))]),
+                )],
+            ),
+        )],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "data",
+            obj_val(
+                &i,
+                &[(
+                    "user",
+                    obj_val(
+                        &i,
+                        &[(
+                            "address",
+                            obj_val(&i, &[("city", Value::String("Seoul".into()))]),
+                        )],
+                    ),
+                )],
+            ),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,"{{ @data.user.address.city }}".into(), ty, val).await,
+        run_ctx(&i, "{{ @data.user.address.city }}".into(), ty, val).await,
         "Seoul"
     );
 }
@@ -618,12 +693,13 @@ async fn deeply_nested_object_access() {
 async fn tuple_expression() {
     let i = Interner::new();
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::String)]);
-    let values = vals(&i, &[
-        ("a", Value::Int(42)),
-        ("b", Value::String("hello".into())),
-    ]);
+    let values = vals(
+        &i,
+        &[("a", Value::Int(42)), ("b", Value::String("hello".into()))],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ (x, y) = (@a, @b) }}{{ x | to_string }}, {{ y }}{{/}}"#,
             types,
             values
@@ -637,12 +713,21 @@ async fn tuple_expression() {
 async fn tuple_pattern_binding() {
     let i = Interner::new();
     let types = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
-    let values = vals(&i, &[(
-        "pair",
-        Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "pair",
+            Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#, types, values).await,
+        run_ctx(
+            &i,
+            r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#,
+            types,
+            values
+        )
+        .await,
         "alice"
     );
 }
@@ -651,12 +736,21 @@ async fn tuple_pattern_binding() {
 async fn tuple_pattern_wildcard() {
     let i = Interner::new();
     let types = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
-    let values = vals(&i, &[(
-        "pair",
-        Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "pair",
+            Value::Tuple(vec![Value::String("alice".into()), Value::Int(30)]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#, types, values).await,
+        run_ctx(
+            &i,
+            r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#,
+            types,
+            values
+        )
+        .await,
         "alice"
     );
 }
@@ -667,7 +761,8 @@ async fn tuple_pattern_literal_match_hit() {
     let types = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let values = vals(&i, &[("a", Value::Int(0)), ("b", Value::Int(1))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
             types,
             values
@@ -680,19 +775,26 @@ async fn tuple_pattern_literal_match_hit() {
 #[tokio::test]
 async fn nested_tuple_pattern() {
     let i = Interner::new();
-    let types = ctx(&i, &[(
-        "data",
-        Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
-    )]);
-    let values = vals(&i, &[(
-        "data",
-        Value::Tuple(vec![
-            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
-            Value::String("hello".into()),
-        ]),
-    )]);
+    let types = ctx(
+        &i,
+        &[(
+            "data",
+            Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
+        )],
+    );
+    let values = vals(
+        &i,
+        &[(
+            "data",
+            Value::Tuple(vec![
+                Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+                Value::String("hello".into()),
+            ]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
             types,
             values
@@ -709,7 +811,7 @@ async fn pipe_to_string() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "n", 42);
     assert_eq!(
-        run_ctx(&i,"{{ @n | to_string }}".into(), ty, val).await,
+        run_ctx(&i, "{{ @n | to_string }}".into(), ty, val).await,
         "42"
     );
 }
@@ -719,7 +821,8 @@ async fn to_float_conversion() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "n", 5);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @n | to_float }}{{ x | to_string }}{{_}}{{/}}"#,
             ty,
             val
@@ -735,7 +838,8 @@ async fn to_int_conversion() {
     let types = ctx(&i, &[("f", Ty::Float)]);
     let values = vals(&i, &[("f", Value::Float(3.7))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @f | to_int }}{{ x | to_string }}{{_}}{{/}}"#,
             types,
             values
@@ -767,7 +871,8 @@ async fn lambda_map() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @items | map(i -> i + 1) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
             ty,
             val
@@ -782,7 +887,8 @@ async fn lambda_pmap() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @items | pmap(i -> i | to_string) }}{{ x | join(", ") }}"#,
             ty,
             val
@@ -840,17 +946,23 @@ async fn closure_capture_local() {
 #[tokio::test]
 async fn closure_capture_context() {
     let i = Interner::new();
-    let types = ctx(&i, &[
-        ("items", Ty::List(Box::new(Ty::Int))),
-        ("threshold", Ty::Int),
-    ]);
-    let values = vals(&i, &[
-        (
-            "items",
-            Value::List(vec![Value::Int(1), Value::Int(5), Value::Int(10)]),
-        ),
-        ("threshold", Value::Int(3)),
-    ]);
+    let types = ctx(
+        &i,
+        &[
+            ("items", Ty::List(Box::new(Ty::Int))),
+            ("threshold", Ty::Int),
+        ],
+    );
+    let values = vals(
+        &i,
+        &[
+            (
+                "items",
+                Value::List(vec![Value::Int(1), Value::Int(5), Value::Int(10)]),
+            ),
+            ("threshold", Value::Int(3)),
+        ],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
@@ -867,7 +979,8 @@ async fn lambda_field_access() {
     let i = Interner::new();
     let (ty, val) = users_list_context(&i);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @users | map(u -> u.name) }}{{ x | join(", ") }}"#,
             ty,
             val
@@ -882,7 +995,8 @@ async fn lambda_negate_param() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @items | map(i -> -i) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
             ty,
             val
@@ -896,16 +1010,20 @@ async fn lambda_negate_param() {
 async fn lambda_not_param() {
     let i = Interner::new();
     let types = ctx(&i, &[("flags", Ty::List(Box::new(Ty::Bool)))]);
-    let values = vals(&i, &[(
-        "flags",
-        Value::List(vec![
-            Value::Bool(true),
-            Value::Bool(false),
-            Value::Bool(true),
-        ]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "flags",
+            Value::List(vec![
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Bool(true),
+            ]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @flags | map(i -> !i) }}{{ x | map(b -> b | to_string) | join(", ") }}"#,
             types,
             values
@@ -919,15 +1037,19 @@ async fn lambda_not_param() {
 async fn lambda_string_concat() {
     let i = Interner::new();
     let types = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
-    let values = vals(&i, &[(
-        "names",
-        Value::List(vec![
-            Value::String("alice".into()),
-            Value::String("bob".into()),
-        ]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "names",
+            Value::List(vec![
+                Value::String("alice".into()),
+                Value::String("bob".into()),
+            ]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @names | map(n -> n + "!") }}{{ x | join(", ") }}"#,
             types,
             values
@@ -941,12 +1063,16 @@ async fn lambda_string_concat() {
 async fn lambda_float_arithmetic() {
     let i = Interner::new();
     let types = ctx(&i, &[("vals", Ty::List(Box::new(Ty::Float)))]);
-    let values = vals(&i, &[(
-        "vals",
-        Value::List(vec![Value::Float(1.5), Value::Float(2.5)]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "vals",
+            Value::List(vec![Value::Float(1.5), Value::Float(2.5)]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | map(v -> v | to_string) | join(", ") }}"#,
             types,
             values
@@ -961,7 +1087,8 @@ async fn filter_then_map_field() {
     let i = Interner::new();
     let (ty, val) = users_list_context(&i);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(", ") }}"#,
             ty,
             val,
@@ -974,22 +1101,25 @@ async fn filter_then_map_field() {
 #[tokio::test]
 async fn multiple_closures_same_capture() {
     let i = Interner::new();
-    let types = ctx(&i, &[
-        ("items", Ty::List(Box::new(Ty::Int))),
-        ("offset", Ty::Int),
-    ]);
-    let values = vals(&i, &[
-        (
-            "items",
-            Value::List(vec![
-                Value::Int(-1),
-                Value::Int(0),
-                Value::Int(1),
-                Value::Int(2),
-            ]),
-        ),
-        ("offset", Value::Int(1)),
-    ]);
+    let types = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int))), ("offset", Ty::Int)],
+    );
+    let values = vals(
+        &i,
+        &[
+            (
+                "items",
+                Value::List(vec![
+                    Value::Int(-1),
+                    Value::Int(0),
+                    Value::Int(1),
+                    Value::Int(2),
+                ]),
+            ),
+            ("offset", Value::Int(1)),
+        ],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
@@ -1049,12 +1179,9 @@ async fn extern_fn_call() {
 async fn and_both_true() {
     let i = Interner::new();
     let types = ctx(&i, &[("a", Ty::Bool), ("b", Ty::Bool)]);
-    let values = vals(&i, &[
-        ("a", Value::Bool(true)),
-        ("b", Value::Bool(true)),
-    ]);
+    let values = vals(&i, &[("a", Value::Bool(true)), ("b", Value::Bool(true))]);
     assert_eq!(
-        run_ctx(&i,r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
+        run_ctx(&i, r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
         "yes"
     );
 }
@@ -1063,12 +1190,9 @@ async fn and_both_true() {
 async fn and_one_false() {
     let i = Interner::new();
     let types = ctx(&i, &[("a", Ty::Bool), ("b", Ty::Bool)]);
-    let values = vals(&i, &[
-        ("a", Value::Bool(true)),
-        ("b", Value::Bool(false)),
-    ]);
+    let values = vals(&i, &[("a", Value::Bool(true)), ("b", Value::Bool(false))]);
     assert_eq!(
-        run_ctx(&i,r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
+        run_ctx(&i, r#"{{ true = @a && @b }}yes{{_}}no{{/}}"#, types, values).await,
         "no"
     );
 }
@@ -1077,12 +1201,9 @@ async fn and_one_false() {
 async fn or_one_true() {
     let i = Interner::new();
     let types = ctx(&i, &[("a", Ty::Bool), ("b", Ty::Bool)]);
-    let values = vals(&i, &[
-        ("a", Value::Bool(false)),
-        ("b", Value::Bool(true)),
-    ]);
+    let values = vals(&i, &[("a", Value::Bool(false)), ("b", Value::Bool(true))]);
     assert_eq!(
-        run_ctx(&i,r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
+        run_ctx(&i, r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
         "yes"
     );
 }
@@ -1091,12 +1212,9 @@ async fn or_one_true() {
 async fn or_both_false() {
     let i = Interner::new();
     let types = ctx(&i, &[("a", Ty::Bool), ("b", Ty::Bool)]);
-    let values = vals(&i, &[
-        ("a", Value::Bool(false)),
-        ("b", Value::Bool(false)),
-    ]);
+    let values = vals(&i, &[("a", Value::Bool(false)), ("b", Value::Bool(false))]);
     assert_eq!(
-        run_ctx(&i,r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
+        run_ctx(&i, r#"{{ true = @a || @b }}yes{{_}}no{{/}}"#, types, values).await,
         "no"
     );
 }
@@ -1105,18 +1223,18 @@ async fn or_both_false() {
 async fn and_or_precedence() {
     let i = Interner::new();
     // a || b && c => a || (b && c) — && binds tighter
-    let types = ctx(&i, &[
-        ("a", Ty::Bool),
-        ("b", Ty::Bool),
-        ("c", Ty::Bool),
-    ]);
-    let values = vals(&i, &[
-        ("a", Value::Bool(true)),
-        ("b", Value::Bool(false)),
-        ("c", Value::Bool(false)),
-    ]);
+    let types = ctx(&i, &[("a", Ty::Bool), ("b", Ty::Bool), ("c", Ty::Bool)]);
+    let values = vals(
+        &i,
+        &[
+            ("a", Value::Bool(true)),
+            ("b", Value::Bool(false)),
+            ("c", Value::Bool(false)),
+        ],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ true = @a || @b && @c }}yes{{_}}no{{/}}"#,
             types,
             values
@@ -1132,7 +1250,8 @@ async fn and_with_comparison() {
     let types = ctx(&i, &[("x", Ty::Int)]);
     let values = vals(&i, &[("x", Value::Int(15))]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ true = @x > 10 && @x < 20 }}in range{{_}}out{{/}}"#,
             types,
             values
@@ -1163,10 +1282,13 @@ async fn logical_in_filter() {
 async fn nested_match_with_variable_write() {
     let i = Interner::new();
     let types = ctx(&i, &[("role", Ty::String), ("level", Ty::Int)]);
-    let values = vals(&i, &[
-        ("role", Value::String("admin".into())),
-        ("level", Value::Int(5)),
-    ]);
+    let values = vals(
+        &i,
+        &[
+            ("role", Value::String("admin".into())),
+            ("level", Value::Int(5)),
+        ],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ "admin" = @role }}{{ 0..10 = @level }}{{ $result = "low-admin" }}{{_}}{{ $result = "high-admin" }}{{/}}{{_}}{{ $result = "guest" }}{{/}}{{ $result }}"#,
@@ -1181,30 +1303,45 @@ async fn nested_match_with_variable_write() {
 #[tokio::test]
 async fn filter_map_with_object_pattern() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "products",
-        Ty::List(Box::new(obj_ty(&i, &[
-            ("name", Ty::String),
-            ("price", Ty::Int),
-        ]))),
-    )]);
-    let val = vals(&i, &[(
-        "products",
-        Value::List(vec![
-            obj_val(&i, &[
-                ("name", Value::String("apple".into())),
-                ("price", Value::Int(100)),
+    let ty = ctx(
+        &i,
+        &[(
+            "products",
+            Ty::List(Box::new(obj_ty(
+                &i,
+                &[("name", Ty::String), ("price", Ty::Int)],
+            ))),
+        )],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "products",
+            Value::List(vec![
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("apple".into())),
+                        ("price", Value::Int(100)),
+                    ],
+                ),
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("banana".into())),
+                        ("price", Value::Int(50)),
+                    ],
+                ),
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("cherry".into())),
+                        ("price", Value::Int(200)),
+                    ],
+                ),
             ]),
-            obj_val(&i, &[
-                ("name", Value::String("banana".into())),
-                ("price", Value::Int(50)),
-            ]),
-            obj_val(&i, &[
-                ("name", Value::String("cherry".into())),
-                ("price", Value::Int(200)),
-            ]),
-        ]),
-    )]);
+        )],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ x = @products | filter(p -> p.price >= 100) | map(p -> p.name) }}{{ x | join(", ") }}"#,
@@ -1221,7 +1358,8 @@ async fn iteration_with_match_per_item() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ x in @items }}{{ 1..=3 = x }}s{{_}}b{{/}}{{/}}"#,
             ty,
             val
@@ -1234,25 +1372,31 @@ async fn iteration_with_match_per_item() {
 #[tokio::test]
 async fn multi_context_interaction() {
     let i = Interner::new();
-    let types = ctx(&i, &[
-        ("items", Ty::List(Box::new(Ty::Int))),
-        ("min", Ty::Int),
-        ("max", Ty::Int),
-    ]);
-    let values = vals(&i, &[
-        (
-            "items",
-            Value::List(vec![
-                Value::Int(3),
-                Value::Int(7),
-                Value::Int(1),
-                Value::Int(9),
-                Value::Int(4),
-            ]),
-        ),
-        ("min", Value::Int(2)),
-        ("max", Value::Int(8)),
-    ]);
+    let types = ctx(
+        &i,
+        &[
+            ("items", Ty::List(Box::new(Ty::Int))),
+            ("min", Ty::Int),
+            ("max", Ty::Int),
+        ],
+    );
+    let values = vals(
+        &i,
+        &[
+            (
+                "items",
+                Value::List(vec![
+                    Value::Int(3),
+                    Value::Int(7),
+                    Value::Int(1),
+                    Value::Int(9),
+                    Value::Int(4),
+                ]),
+            ),
+            ("min", Value::Int(2)),
+            ("max", Value::Int(8)),
+        ],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ filtered = @items | filter(i -> i >= @min && i <= @max) }}{{ $count = 0 }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}"#,
@@ -1269,7 +1413,8 @@ async fn object_destructure_in_iteration_with_emit() {
     let i = Interner::new();
     let (ty, val) = users_list_context(&i);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ { name, age, } in @users }}{{ name }}({{ age | to_string }}) {{/}}"#,
             ty,
             val
@@ -1283,17 +1428,20 @@ async fn object_destructure_in_iteration_with_emit() {
 async fn chained_pipe_with_logical_filter() {
     let i = Interner::new();
     let types = ctx(&i, &[("nums", Ty::List(Box::new(Ty::Int)))]);
-    let values = vals(&i, &[(
-        "nums",
-        Value::List(vec![
-            Value::Int(-5),
-            Value::Int(0),
-            Value::Int(3),
-            Value::Int(7),
-            Value::Int(12),
-            Value::Int(20),
-        ]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "nums",
+            Value::List(vec![
+                Value::Int(-5),
+                Value::Int(0),
+                Value::Int(3),
+                Value::Int(7),
+                Value::Int(12),
+                Value::Int(20),
+            ]),
+        )],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ x = @nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) }}{{ x | map(n -> n | to_string) | join(", ") }}"#,
@@ -1308,18 +1456,21 @@ async fn chained_pipe_with_logical_filter() {
 #[tokio::test]
 async fn nested_list_iteration_with_accumulator() {
     let i = Interner::new();
-    let types = ctx(&i, &[(
-        "matrix",
-        Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
-    )]);
-    let values = vals(&i, &[(
-        "matrix",
-        Value::List(vec![
-            Value::List(vec![Value::Int(1), Value::Int(2)]),
-            Value::List(vec![Value::Int(3), Value::Int(4)]),
-            Value::List(vec![Value::Int(5), Value::Int(6)]),
-        ]),
-    )]);
+    let types = ctx(
+        &i,
+        &[("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))))],
+    );
+    let values = vals(
+        &i,
+        &[(
+            "matrix",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3), Value::Int(4)]),
+                Value::List(vec![Value::Int(5), Value::Int(6)]),
+            ]),
+        )],
+    );
     assert_eq!(
         run_ctx(&i,
             "{{ $sum = 0 }}{{ row in @matrix }}{{ x in row }}{{ $sum = $sum + x }}{{/}}{{/}}{{ $sum | to_string }}",
@@ -1366,39 +1517,56 @@ async fn extern_fn_in_pipe_chain() {
 #[tokio::test]
 async fn complex_object_filter_format() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj_ty(&i, &[
-            ("name", Ty::String),
-            ("age", Ty::Int),
-            ("active", Ty::Bool),
-        ]))),
-    )]);
-    let val = vals(&i, &[(
-        "users",
-        Value::List(vec![
-            obj_val(&i, &[
-                ("name", Value::String("alice".into())),
-                ("age", Value::Int(30)),
-                ("active", Value::Bool(true)),
+    let ty = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj_ty(
+                &i,
+                &[("name", Ty::String), ("age", Ty::Int), ("active", Ty::Bool)],
+            ))),
+        )],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "users",
+            Value::List(vec![
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("alice".into())),
+                        ("age", Value::Int(30)),
+                        ("active", Value::Bool(true)),
+                    ],
+                ),
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("bob".into())),
+                        ("age", Value::Int(17)),
+                        ("active", Value::Bool(true)),
+                    ],
+                ),
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("carol".into())),
+                        ("age", Value::Int(25)),
+                        ("active", Value::Bool(false)),
+                    ],
+                ),
+                obj_val(
+                    &i,
+                    &[
+                        ("name", Value::String("dave".into())),
+                        ("age", Value::Int(40)),
+                        ("active", Value::Bool(true)),
+                    ],
+                ),
             ]),
-            obj_val(&i, &[
-                ("name", Value::String("bob".into())),
-                ("age", Value::Int(17)),
-                ("active", Value::Bool(true)),
-            ]),
-            obj_val(&i, &[
-                ("name", Value::String("carol".into())),
-                ("age", Value::Int(25)),
-                ("active", Value::Bool(false)),
-            ]),
-            obj_val(&i, &[
-                ("name", Value::String("dave".into())),
-                ("age", Value::Int(40)),
-                ("active", Value::Bool(true)),
-            ]),
-        ]),
-    )]);
+        )],
+    );
     assert_eq!(
         run_ctx(&i,
             r#"{{ eligible = @users | filter(u -> u.active && u.age >= 18) | map(u -> u.name) }}{{ name in eligible }}{{ name }} {{/}}"#,
@@ -1430,7 +1598,8 @@ async fn multi_arm_range_and_literal() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "score", 0);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
             ty,
             val
@@ -1445,7 +1614,8 @@ async fn multi_arm_range_and_literal_low() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "score", 5);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
             ty,
             val
@@ -1460,7 +1630,8 @@ async fn multi_arm_range_and_literal_high() {
     let i = Interner::new();
     let (ty, val) = int_context(&i, "score", 50);
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
             ty,
             val
@@ -1495,7 +1666,14 @@ async fn obf_mixed_text_and_expr() {
     let i = Interner::new();
     let (ty, val) = string_context(&i, "name", "alice");
     assert_eq!(
-        run_obfuscated(&i, "Hello, {{ @name }}!", ty, val, ExternFnRegistry::new(&i)).await,
+        run_obfuscated(
+            &i,
+            "Hello, {{ @name }}!",
+            ty,
+            val,
+            ExternFnRegistry::new(&i)
+        )
+        .await,
         "Hello, alice!"
     );
 }
@@ -1581,10 +1759,13 @@ async fn obf_iteration() {
 async fn obf_nested_match_with_variable() {
     let i = Interner::new();
     let types = ctx(&i, &[("role", Ty::String), ("level", Ty::Int)]);
-    let values = vals(&i, &[
-        ("role", Value::String("admin".into())),
-        ("level", Value::Int(5)),
-    ]);
+    let values = vals(
+        &i,
+        &[
+            ("role", Value::String("admin".into())),
+            ("level", Value::Int(5)),
+        ],
+    );
     assert_eq!(
         run_obfuscated(
             &i,
@@ -1637,17 +1818,20 @@ async fn obf_variable_accumulate_in_loop() {
 #[tokio::test]
 async fn obf_nested_iteration_with_match() {
     let i = Interner::new();
-    let ty = ctx(&i, &[(
-        "rows",
-        Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
-    )]);
-    let val = vals(&i, &[(
-        "rows",
-        Value::List(vec![
-            Value::List(vec![Value::Int(1), Value::Int(2)]),
-            Value::List(vec![Value::Int(3), Value::Int(4)]),
-        ]),
-    )]);
+    let ty = ctx(
+        &i,
+        &[("rows", Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))))],
+    );
+    let val = vals(
+        &i,
+        &[(
+            "rows",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3), Value::Int(4)]),
+            ]),
+        )],
+    );
     assert_eq!(
         run_obfuscated(
             &i,
@@ -1745,14 +1929,17 @@ async fn obf_filter_accumulate_complex() {
 async fn obf_pipe_chain_with_context() {
     let i = Interner::new();
     let types = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
-    let values = vals(&i, &[(
-        "names",
-        Value::List(vec![
-            Value::String("alice".into()),
-            Value::String("bob".into()),
-            Value::String("charlie".into()),
-        ]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "names",
+            Value::List(vec![
+                Value::String("alice".into()),
+                Value::String("bob".into()),
+                Value::String("charlie".into()),
+            ]),
+        )],
+    );
     assert_eq!(
         run_obfuscated(
             &i,
@@ -1789,24 +1976,31 @@ async fn obf_boolean_logic_in_match() {
 #[tokio::test]
 async fn context_call_bindings_carried() {
     let i = Interner::new();
-    let types = ctx(&i, &[
-        ("node", Ty::String),
-        ("items", Ty::List(Box::new(Ty::Int))),
-    ]);
-    let values = vals(&i, &[
-        ("node", Value::String("resolved".into())),
-        (
-            "items",
-            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
-        ),
-    ]);
+    let types = ctx(
+        &i,
+        &[("node", Ty::String), ("items", Ty::List(Box::new(Ty::Int)))],
+    );
+    let values = vals(
+        &i,
+        &[
+            ("node", Value::String("resolved".into())),
+            (
+                "items",
+                Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            ),
+        ],
+    );
     let result =
-        run_capturing_context_calls(&i, "{{ @node { count: @items | len, } }}", types, values).await;
+        run_capturing_context_calls(&i, "{{ @node { count: @items | len, } }}", types, values)
+            .await;
     assert_eq!(result.output, "resolved");
     assert_eq!(result.calls.len(), 1);
     assert_eq!(result.calls[0].0, "node");
     // Note: bindings use Astr keys, check by iterating
-    let has_count = result.calls[0].1.values().any(|v| matches!(v, Value::Int(3)));
+    let has_count = result.calls[0]
+        .1
+        .values()
+        .any(|v| matches!(v, Value::Int(3)));
     assert!(has_count);
 }
 
@@ -1814,10 +2008,13 @@ async fn context_call_bindings_carried() {
 async fn context_call_multiple_bindings() {
     let i = Interner::new();
     let types = ctx(&i, &[("target", Ty::String), ("name", Ty::String)]);
-    let values = vals(&i, &[
-        ("target", Value::String("done".into())),
-        ("name", Value::String("alice".into())),
-    ]);
+    let values = vals(
+        &i,
+        &[
+            ("target", Value::String("done".into())),
+            ("name", Value::String("alice".into())),
+        ],
+    );
     let result = run_capturing_context_calls(
         &i,
         r#"{{ @target { greeting: "hello", @name, } }}"#,
@@ -1828,8 +2025,12 @@ async fn context_call_multiple_bindings() {
     assert_eq!(result.output, "done");
     assert_eq!(result.calls.len(), 1);
     let bindings = &result.calls[0].1;
-    let has_greeting = bindings.values().any(|v| matches!(v, Value::String(s) if s == "hello"));
-    let has_name = bindings.values().any(|v| matches!(v, Value::String(s) if s == "alice"));
+    let has_greeting = bindings
+        .values()
+        .any(|v| matches!(v, Value::String(s) if s == "hello"));
+    let has_name = bindings
+        .values()
+        .any(|v| matches!(v, Value::String(s) if s == "alice"));
     assert!(has_greeting);
     assert!(has_name);
 }
@@ -1843,7 +2044,10 @@ async fn context_call_variable_shorthand() {
         run_capturing_context_calls(&i, "{{ $x = 42 }}{{ @node { $x, } }}", types, values).await;
     assert_eq!(result.output, "ok");
     assert_eq!(result.calls.len(), 1);
-    let has_x = result.calls[0].1.values().any(|v| matches!(v, Value::Int(42)));
+    let has_x = result.calls[0]
+        .1
+        .values()
+        .any(|v| matches!(v, Value::Int(42)));
     assert!(has_x);
 }
 
@@ -1863,15 +2067,19 @@ async fn context_call_no_bindings_not_captured() {
 async fn variant_some_extract_value() {
     let i = Interner::new();
     let types = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::String)))]);
-    let values = vals(&i, &[(
-        "opt",
-        Value::Variant {
-            tag: i.intern("Some"),
-            payload: Some(Box::new(Value::String("hello".into()))),
-        },
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "opt",
+            Value::Variant {
+                tag: i.intern("Some"),
+                payload: Some(Box::new(Value::String("hello".into()))),
+            },
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ Some(value) = @opt }}{{ value }}{{_}}empty{{/}}",
             types,
             values
@@ -1885,15 +2093,24 @@ async fn variant_some_extract_value() {
 async fn variant_none_match() {
     let i = Interner::new();
     let types = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
-    let values = vals(&i, &[(
-        "opt",
-        Value::Variant {
-            tag: i.intern("None"),
-            payload: None,
-        },
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "opt",
+            Value::Variant {
+                tag: i.intern("None"),
+                payload: None,
+            },
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,"{{ None = @opt }}none{{_}}has value{{/}}".into(), types, values).await,
+        run_ctx(
+            &i,
+            "{{ None = @opt }}none{{_}}has value{{/}}".into(),
+            types,
+            values
+        )
+        .await,
         "none"
     );
 }
@@ -1902,15 +2119,19 @@ async fn variant_none_match() {
 async fn variant_some_catch_all() {
     let i = Interner::new();
     let types = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
-    let values = vals(&i, &[(
-        "opt",
-        Value::Variant {
-            tag: i.intern("None"),
-            payload: None,
-        },
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "opt",
+            Value::Variant {
+                tag: i.intern("None"),
+                payload: None,
+            },
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}no value{{/}}",
             types,
             values
@@ -1924,15 +2145,24 @@ async fn variant_some_catch_all() {
 async fn variant_some_with_literal_pattern() {
     let i = Interner::new();
     let types = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
-    let values = vals(&i, &[(
-        "opt",
-        Value::Variant {
-            tag: i.intern("Some"),
-            payload: Some(Box::new(Value::Int(42))),
-        },
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "opt",
+            Value::Variant {
+                tag: i.intern("Some"),
+                payload: Some(Box::new(Value::Int(42))),
+            },
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,"{{ Some(42) = @opt }}matched{{_}}no{{/}}".into(), types, values).await,
+        run_ctx(
+            &i,
+            "{{ Some(42) = @opt }}matched{{_}}no{{/}}".into(),
+            types,
+            values
+        )
+        .await,
         "matched"
     );
 }
@@ -1968,12 +2198,16 @@ async fn to_utf8_none_on_invalid() {
     let i = Interner::new();
     // 0xFF is not valid utf8 -> to_utf8 returns None
     let types = ctx(&i, &[("data", Ty::List(Box::new(Ty::Byte)))]);
-    let values = vals(&i, &[(
-        "data",
-        Value::List(vec![Value::Byte(0xFF), Value::Byte(0xFE)]),
-    )]);
+    let values = vals(
+        &i,
+        &[(
+            "data",
+            Value::List(vec![Value::Byte(0xFF), Value::Byte(0xFE)]),
+        )],
+    );
     assert_eq!(
-        run_ctx(&i,
+        run_ctx(
+            &i,
             "{{ None = @data | to_utf8 }}invalid{{_}}valid{{/}}",
             types,
             values,
@@ -2003,7 +2237,10 @@ async fn error_extern_fn_propagates() {
         }
         fn into_body(self) -> ExternFnBody {
             ExternFnBody::new(|_args| async move {
-                Err(RuntimeError::extern_call("fail_fn", "intentional failure".into()))
+                Err(RuntimeError::extern_call(
+                    "fail_fn",
+                    "intentional failure".into(),
+                ))
             })
         }
     }
@@ -2015,8 +2252,8 @@ async fn error_extern_fn_propagates() {
     let err = run_expect_error(
         &i,
         r#"{{ x = fail_fn(1) }}{{ x }}{{_}}{{/}}"#,
-        HashMap::new(),
-        HashMap::new(),
+        FxHashMap::default(),
+        FxHashMap::default(),
         extern_fns,
     )
     .await;

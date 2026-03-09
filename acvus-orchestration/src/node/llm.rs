@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, RuntimeError, Value};
 use acvus_utils::{Astr, Interner};
 
+use rustc_hash::FxHashMap;
 use tracing::{debug, info, warn};
 
 use super::Node;
@@ -64,7 +64,10 @@ impl<F> Node for LlmNode<F>
 where
     F: Fetch + 'static,
 {
-    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+    fn spawn(
+        &self,
+        local: FxHashMap<Astr, Arc<Value>>,
+    ) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
         let messages = self.messages.clone();
         let tools = self.tools.clone();
         let api = self.api.clone();
@@ -82,7 +85,9 @@ where
             let llm_model = create_llm_model(provider_config, model);
 
             let cached_content = if let Some(ref ck_script) = cache_key_script {
-                let val = eval_script_in_coroutine(&interner, ck_script, &local, &extern_fns, &handle).await;
+                let val =
+                    eval_script_in_coroutine(&interner, ck_script, &local, &extern_fns, &handle)
+                        .await;
                 match val {
                     Value::String(s) => Some(s),
                     _ => None,
@@ -96,9 +101,14 @@ where
             for msg in &messages {
                 match msg {
                     CompiledMessage::Block(block) => {
-                        let text =
-                            render_block_in_coroutine(&interner, &block.module, &local, &extern_fns, &handle)
-                                .await;
+                        let text = render_block_in_coroutine(
+                            &interner,
+                            &block.module,
+                            &local,
+                            &extern_fns,
+                            &handle,
+                        )
+                        .await;
                         segments.push(MessageSegment::Single(Message::Content {
                             role: interner.resolve(block.role).to_string(),
                             content: Content::Text(text),
@@ -142,13 +152,10 @@ where
                 max_tokens.output,
                 cached_content.as_deref(),
             );
-            let json = fetch
-                .fetch(&request)
-                .await
-                .map_err(|e| RuntimeError::fetch(e))?;
+            let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
             let (mut response, _usage) = llm_model
                 .parse_response(&json)
-                .map_err(|e| RuntimeError::fetch(e))?;
+                .map_err(RuntimeError::fetch)?;
             debug!(
                 input_tokens = _usage.input_tokens,
                 output_tokens = _usage.output_tokens,
@@ -176,12 +183,17 @@ where
                             debug!(tool = %call.name, id = %call.id, "invoking tool");
                             let binding = tools.iter().find(|t| t.name == call.name);
                             let result_text = if let Some(binding) = binding {
-                                let tool_args: HashMap<Astr, Value> = match &call.arguments {
+                                let tool_args: FxHashMap<Astr, Value> = match &call.arguments {
                                     serde_json::Value::Object(obj) => obj
                                         .iter()
-                                        .map(|(k, v)| (interner.intern(k), crate::convert::json_to_value(&interner, v)))
+                                        .map(|(k, v)| {
+                                            (
+                                                interner.intern(k),
+                                                crate::convert::json_to_value(&interner, v),
+                                            )
+                                        })
                                         .collect(),
-                                    _ => HashMap::new(),
+                                    _ => FxHashMap::default(),
                                 };
                                 let result = handle
                                     .request_context_with(interner.intern(&binding.node), tool_args)
@@ -198,7 +210,10 @@ where
                             });
                         }
 
-                        debug!(round = tool_rounds, "llm follow-up request after tool results");
+                        debug!(
+                            round = tool_rounds,
+                            "llm follow-up request after tool results"
+                        );
                         let request = llm_model.build_request(
                             &rendered,
                             &specs,
@@ -206,13 +221,10 @@ where
                             max_tokens.output,
                             cached_content.as_deref(),
                         );
-                        let json = fetch
-                            .fetch(&request)
-                            .await
-                            .map_err(|e| RuntimeError::fetch(e))?;
+                        let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
                         let parsed = llm_model
                             .parse_response(&json)
-                            .map_err(|e| RuntimeError::fetch(e))?;
+                            .map_err(RuntimeError::fetch)?;
                         response = parsed.0;
                     }
                 }

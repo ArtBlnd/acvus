@@ -264,13 +264,13 @@ mod tests {
     use acvus_mir::ir::DebugInfo;
     use acvus_utils::Interner;
     use rand::SeedableRng;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     fn make_ctx() -> PassState {
         let interner = Interner::new();
         PassState {
             insts: Vec::new(),
-            val_types: HashMap::new(),
+            val_types: FxHashMap::default(),
             debug: DebugInfo::new(),
             next_val: 100,
             next_label: 0,

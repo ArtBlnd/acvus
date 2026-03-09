@@ -9,8 +9,8 @@ pub use expr::ExprNode;
 pub use llm::LlmNode;
 pub use llm_cache::LlmCacheNode;
 pub use plain::PlainNode;
+use rustc_hash::FxHashMap;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, RuntimeError, Value};
@@ -22,7 +22,7 @@ use crate::provider::{Fetch, ProviderConfig};
 pub trait Node: Send + Sync {
     fn spawn(
         &self,
-        local_context: HashMap<Astr, Arc<Value>>,
+        local_context: FxHashMap<Astr, Arc<Value>>,
     ) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>);
 }
 
@@ -30,7 +30,7 @@ pub trait Node: Send + Sync {
 /// Match once here → uniform `Arc<dyn Node>` everywhere else.
 pub fn build_node_table<F>(
     compiled: &[crate::compile::CompiledNode],
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &FxHashMap<String, ProviderConfig>,
     fetch: Arc<F>,
     extern_fns: &ExternFnRegistry,
     interner: &Interner,
@@ -42,12 +42,16 @@ where
         .iter()
         .map(|node| -> Arc<dyn Node> {
             match &node.kind {
-                crate::kind::CompiledNodeKind::Plain(plain) => {
-                    Arc::new(PlainNode::new(plain.block.module.clone(), extern_fns, interner))
-                }
-                crate::kind::CompiledNodeKind::Expr(expr) => {
-                    Arc::new(ExprNode::new(expr.script.module.clone(), extern_fns, interner))
-                }
+                crate::kind::CompiledNodeKind::Plain(plain) => Arc::new(PlainNode::new(
+                    plain.block.module.clone(),
+                    extern_fns,
+                    interner,
+                )),
+                crate::kind::CompiledNodeKind::Expr(expr) => Arc::new(ExprNode::new(
+                    expr.script.module.clone(),
+                    extern_fns,
+                    interner,
+                )),
                 crate::kind::CompiledNodeKind::Llm(llm) => {
                     let provider_config = providers
                         .get(&llm.provider)

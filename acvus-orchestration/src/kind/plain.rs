@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::compile::CompiledBlock;
 use crate::error::OrchError;
@@ -29,11 +30,12 @@ pub struct CompiledPlain {
 pub fn compile_plain(
     interner: &Interner,
     spec: &PlainSpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledPlain, HashSet<Astr>), Vec<OrchError>> {
-    let block = crate::compile::compile_template(interner, &spec.source, 0, context_types, registry)
-        .map_err(|e| vec![e])?;
+    let block =
+        crate::compile::compile_template(interner, &spec.source, 0, context_types, registry)
+            .map_err(|e| vec![e])?;
     let keys = block.context_keys.clone();
     Ok((CompiledPlain { block }, keys))
 }

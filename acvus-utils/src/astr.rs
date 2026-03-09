@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 
 // ---------------------------------------------------------------------------
 // Global interner ID counter
@@ -84,14 +84,14 @@ const SHARD_COUNT: usize = 64;
 
 struct Shard {
     strings: Vec<String>,
-    lookup: HashMap<String, u32>,
+    lookup: FxHashMap<String, u32>,
 }
 
 impl Shard {
     fn new() -> Self {
         Self {
             strings: Vec::new(),
-            lookup: HashMap::new(),
+            lookup: FxHashMap::default(),
         }
     }
 }
@@ -258,10 +258,9 @@ mod tests {
 
     #[test]
     fn hash_consistency() {
-        use std::collections::HashMap;
         let interner = Interner::new();
         let a = interner.intern("key");
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         map.insert(a, 42);
         assert_eq!(map.get(&a), Some(&42));
     }

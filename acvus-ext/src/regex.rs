@@ -28,7 +28,12 @@ pub fn regex_module(interner: &Interner, fn_reg: &mut ExternFnRegistry) -> Exter
     let mut module = ExternModule::new(interner.intern("regex"));
     module.add_opaque(interner.intern(OPAQUE_NAME));
 
-    module.add_fn(interner.intern("regex"), vec![Ty::String], opaque_ty(), false);
+    module.add_fn(
+        interner.intern("regex"),
+        vec![Ty::String],
+        opaque_ty(),
+        false,
+    );
     module.add_fn(
         interner.intern("regex_match"),
         vec![opaque_ty(), Ty::String],
@@ -241,9 +246,19 @@ mod tests {
         (interner, mir_reg, fn_reg)
     }
 
-    async fn call(interner: &Interner, fn_reg: &ExternFnRegistry, name: &str, args: Vec<Value>) -> Value {
+    async fn call(
+        interner: &Interner,
+        fn_reg: &ExternFnRegistry,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Value {
         acvus_interpreter::set_interner_ctx(interner);
-        let result = fn_reg.get(interner.intern(name)).unwrap().call(args).await.unwrap();
+        let result = fn_reg
+            .get(interner.intern(name))
+            .unwrap()
+            .call(args)
+            .await
+            .unwrap();
         result
     }
 
@@ -265,7 +280,13 @@ mod tests {
     async fn match_no_hit() {
         let (interner, _mir, fns) = setup();
         let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
-        let result = call(&interner, &fns, "regex_match", vec![re, Value::String("abc".into())]).await;
+        let result = call(
+            &interner,
+            &fns,
+            "regex_match",
+            vec![re, Value::String("abc".into())],
+        )
+        .await;
         assert_eq!(result, Value::Bool(false));
     }
 
@@ -329,7 +350,13 @@ mod tests {
     #[tokio::test]
     async fn split_by_pattern() {
         let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"[,;]\s*".into())]).await;
+        let re = call(
+            &interner,
+            &fns,
+            "regex",
+            vec![Value::String(r"[,;]\s*".into())],
+        )
+        .await;
         let result = call(
             &interner,
             &fns,
@@ -366,7 +393,9 @@ mod tests {
             &fns,
             "regex_extract",
             vec![
-                Value::String("hello <thinking>inner1</thinking> mid <thinking>inner2</thinking> end".into()),
+                Value::String(
+                    "hello <thinking>inner1</thinking> mid <thinking>inner2</thinking> end".into(),
+                ),
                 re,
             ],
         )
@@ -382,13 +411,7 @@ mod tests {
     #[tokio::test]
     async fn extract_no_capture_group() {
         let (interner, _mir, fns) = setup();
-        let re = call(
-            &interner,
-            &fns,
-            "regex",
-            vec![Value::String(r"\d+".into())],
-        )
-        .await;
+        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
             &fns,

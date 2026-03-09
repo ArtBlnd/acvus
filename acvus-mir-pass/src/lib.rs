@@ -3,14 +3,15 @@ pub mod obfuscate;
 pub mod optimize;
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+
 use std::marker::PhantomData;
 
 use acvus_mir::ir::{MirBody, MirModule};
+use rustc_hash::FxHashMap;
 
 /// Analysis result store. Each analysis deposits its output here, keyed by TypeId.
 pub struct PassContext {
-    results: HashMap<TypeId, Box<dyn Any>>,
+    results: FxHashMap<TypeId, Box<dyn Any>>,
 }
 
 impl Default for PassContext {
@@ -22,7 +23,7 @@ impl Default for PassContext {
 impl PassContext {
     pub fn new() -> Self {
         Self {
-            results: HashMap::new(),
+            results: FxHashMap::default(),
         }
     }
 
@@ -163,9 +164,9 @@ where
                 module,
                 MirModule {
                     main: MirBody::new(),
-                    closures: HashMap::new(),
+                    closures: FxHashMap::default(),
                     tag_names: Vec::new(),
-                    extern_names: HashMap::new(),
+                    extern_names: FxHashMap::default(),
                 },
             );
             *module = self.0.0.transform(old, deps);
@@ -191,14 +192,15 @@ where
         let mut entries = Vec::new();
         passes.collect_deps(&mut entries);
 
-        let output_to_analysis: HashMap<TypeId, TypeId> = entries
+        let output_to_analysis: FxHashMap<TypeId, TypeId> = entries
             .iter()
             .map(|&(output, _, analysis)| (output, analysis))
             .collect();
 
         let all_analyses: Vec<TypeId> = entries.iter().map(|&(_, _, a)| a).collect();
-        let mut in_degree: HashMap<TypeId, usize> = all_analyses.iter().map(|&a| (a, 0)).collect();
-        let mut adj: HashMap<TypeId, Vec<TypeId>> =
+        let mut in_degree: FxHashMap<TypeId, usize> =
+            all_analyses.iter().map(|&a| (a, 0)).collect();
+        let mut adj: FxHashMap<TypeId, Vec<TypeId>> =
             all_analyses.iter().map(|&a| (a, Vec::new())).collect();
 
         for &(_, ref dep_outputs, analysis_id) in &entries {
@@ -286,12 +288,12 @@ mod tests {
 
     fn empty_module() -> MirModule {
         use acvus_mir::ir::MirBody;
-        use std::collections::HashMap;
+
         MirModule {
             main: MirBody::new(),
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             tag_names: Vec::new(),
-            extern_names: HashMap::new(),
+            extern_names: FxHashMap::default(),
         }
     }
 

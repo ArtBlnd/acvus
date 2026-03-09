@@ -4,8 +4,8 @@
 //! which need an interner to intern "Some"/"None" variant tags.
 //! The interpreter sets this before execution via `set_interner`.
 
-use std::cell::RefCell;
 use acvus_utils::Interner;
+use std::cell::RefCell;
 
 thread_local! {
     static INTERNER: RefCell<Option<Interner>> = const { RefCell::new(None) };

@@ -2,11 +2,10 @@ mod anthropic;
 mod google;
 mod openai;
 
-use std::collections::HashMap;
-
 use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 use crate::kind::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolSpec, Usage};
@@ -29,14 +28,18 @@ impl ApiKind {
     }
 
     pub fn message_elem_ty(&self, interner: &Interner) -> Ty {
-        Ty::List(Box::new(Ty::Object(HashMap::from([
+        Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
             (interner.intern("role"), Ty::String),
             (interner.intern("content"), Ty::String),
             (interner.intern("content_type"), Ty::String),
         ]))))
     }
 
-    pub fn item_fields<'a>(&self, interner: &Interner, item: &'a Value) -> (&'a str, &'a str, &'a str) {
+    pub fn item_fields<'a>(
+        &self,
+        interner: &Interner,
+        item: &'a Value,
+    ) -> (&'a str, &'a str, &'a str) {
         let Value::Object(obj) = item else {
             panic!("item_fields: expected Object, got {item:?}");
         };
@@ -127,7 +130,7 @@ pub fn build_cache_request(
     model: &str,
     messages: &[Message],
     ttl: &str,
-    cache_config: &HashMap<String, serde_json::Value>,
+    cache_config: &FxHashMap<String, serde_json::Value>,
 ) -> HttpRequest {
     match config.api {
         ApiKind::Google => google::build_cache_request(config, model, messages, ttl, cache_config),

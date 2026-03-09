@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::compile::CompiledMessage;
 use crate::dsl::MessageSpec;
@@ -19,7 +20,7 @@ pub struct LlmCacheSpec {
     /// TTL string, e.g. "300s", "1h".
     pub ttl: String,
     /// Provider-specific cache config (e.g. display_name for Gemini).
-    pub cache_config: HashMap<String, serde_json::Value>,
+    pub cache_config: FxHashMap<String, serde_json::Value>,
 }
 
 impl LlmCacheSpec {
@@ -36,19 +37,24 @@ pub struct CompiledLlmCache {
     pub model: String,
     pub messages: Vec<CompiledMessage>,
     pub ttl: String,
-    pub cache_config: HashMap<String, serde_json::Value>,
+    pub cache_config: FxHashMap<String, serde_json::Value>,
 }
 
 /// Compile an LLM cache node spec.
 pub fn compile_llm_cache(
     interner: &Interner,
     spec: &LlmCacheSpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledLlmCache, HashSet<Astr>), Vec<OrchError>> {
     let elem_ty = spec.api.message_elem_ty(interner);
-    let (compiled_messages, keys) =
-        crate::compile::compile_messages(interner, &spec.messages, context_types, registry, &elem_ty)?;
+    let (compiled_messages, keys) = crate::compile::compile_messages(
+        interner,
+        &spec.messages,
+        context_types,
+        registry,
+        &elem_ty,
+    )?;
     Ok((
         CompiledLlmCache {
             api: spec.api.clone(),

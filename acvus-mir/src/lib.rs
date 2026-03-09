@@ -10,10 +10,9 @@ pub mod typeck;
 pub mod user_type;
 pub mod variant;
 
-use std::collections::HashMap;
-
 use acvus_ast::{Script, Template};
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::error::MirError;
 use crate::extern_module::ExternRegistry;
@@ -35,7 +34,7 @@ use crate::user_type::UserTypeRegistry;
 pub fn compile(
     interner: &Interner,
     template: &Template,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
@@ -50,7 +49,7 @@ pub fn compile(
 pub fn compile_script(
     interner: &Interner,
     script: &Script,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
@@ -60,7 +59,7 @@ pub fn compile_script(
 pub fn compile_script_with_hint(
     interner: &Interner,
     script: &Script,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
@@ -78,11 +77,12 @@ pub fn compile_script_with_hint(
 pub fn compile_analysis(
     interner: &Interner,
     template: &Template,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
+    let checker =
+        TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
     let (type_map, variant_registry) = checker.check_template(template)?;
     let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
     let (module, hints) = lowerer.lower_template(template);
@@ -93,7 +93,7 @@ pub fn compile_analysis(
 pub fn compile_script_analysis(
     interner: &Interner,
     script: &Script,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
@@ -104,12 +104,13 @@ pub fn compile_script_analysis(
 pub fn compile_script_analysis_with_tail(
     interner: &Interner,
     script: &Script,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     user_types: &UserTypeRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
+    let checker =
+        TypeChecker::new(interner, context_types, registry, user_types).with_analysis_mode();
     let (type_map, tail_ty, variant_registry) =
         checker.check_script_with_hint(script, expected_tail)?;
     let lowerer = Lowerer::new(interner, type_map, variant_registry, registry);
@@ -126,11 +127,17 @@ mod tests {
     fn compile_src(
         interner: &Interner,
         source: &str,
-        context: &HashMap<Astr, Ty>,
+        context: &FxHashMap<Astr, Ty>,
         registry: &ExternRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        compile(interner, &template, context, registry, &UserTypeRegistry::new())
+        compile(
+            interner,
+            &template,
+            context,
+            registry,
+            &UserTypeRegistry::new(),
+        )
     }
 
     fn empty_registry() -> ExternRegistry {
@@ -140,24 +147,34 @@ mod tests {
     #[test]
     fn integration_text_only() {
         let i = Interner::new();
-        let result = compile_src(&i, "hello world", &HashMap::new(), &empty_registry());
+        let result = compile_src(&i, "hello world", &FxHashMap::default(), &empty_registry());
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_string_emit() {
         let i = Interner::new();
-        let result = compile_src(&i, r#"{{ "hello" }}"#, &HashMap::new(), &empty_registry());
+        let result = compile_src(
+            &i,
+            r#"{{ "hello" }}"#,
+            &FxHashMap::default(),
+            &empty_registry(),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_context_read_var_write() {
         let i = Interner::new();
-        let result = compile_src(&i, "{{ $count = 42 }}", &HashMap::new(), &empty_registry());
+        let result = compile_src(
+            &i,
+            "{{ $count = 42 }}",
+            &FxHashMap::default(),
+            &empty_registry(),
+        );
         assert!(result.is_ok());
 
-        let context = HashMap::from([(i.intern("count"), Ty::Int)]);
+        let context = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
         let result = compile_src(&i, "{{ @count | to_string }}", &context, &empty_registry());
         assert!(result.is_ok());
     }
@@ -165,7 +182,7 @@ mod tests {
     #[test]
     fn integration_match_with_catch_all() {
         let i = Interner::new();
-        let context = HashMap::from([(i.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let result = compile_src(
             &i,
             r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
@@ -178,7 +195,7 @@ mod tests {
     #[test]
     fn integration_variable_binding() {
         let i = Interner::new();
-        let context = HashMap::from([(i.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let result = compile_src(&i, r#"{{ x = @name }}{{ x }}"#, &context, &empty_registry());
         assert!(result.is_ok());
     }
@@ -193,7 +210,7 @@ mod tests {
         let result = compile_src(
             &i,
             r#"{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-            &HashMap::new(),
+            &FxHashMap::default(),
             &registry,
         );
         assert!(result.is_ok());
@@ -202,7 +219,7 @@ mod tests {
     #[test]
     fn integration_pipe_with_lambda() {
         let i = Interner::new();
-        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
+        let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
             &i,
             r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}"#,
@@ -215,9 +232,9 @@ mod tests {
     #[test]
     fn integration_object_field_access() {
         let i = Interner::new();
-        let context = HashMap::from([(
+        let context = FxHashMap::from_iter([(
             i.intern("user"),
-            Ty::Object(HashMap::from([
+            Ty::Object(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
                 (i.intern("age"), Ty::Int),
             ])),
@@ -229,9 +246,9 @@ mod tests {
     #[test]
     fn integration_nested_match() {
         let i = Interner::new();
-        let context = HashMap::from([(
+        let context = FxHashMap::from_iter([(
             i.intern("users"),
-            Ty::List(Box::new(Ty::Object(HashMap::from([
+            Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
                 (i.intern("age"), Ty::Int),
             ])))),
@@ -248,7 +265,7 @@ mod tests {
     #[test]
     fn integration_type_error_int_emit() {
         let i = Interner::new();
-        let result = compile_src(&i, "{{ 42 }}", &HashMap::new(), &empty_registry());
+        let result = compile_src(&i, "{{ 42 }}", &FxHashMap::default(), &empty_registry());
         assert!(result.is_err());
     }
 
@@ -258,7 +275,7 @@ mod tests {
         let result = compile_src(
             &i,
             "{{ x in 0..10 }}{{ x | to_string }}{{/}}",
-            &HashMap::new(),
+            &FxHashMap::default(),
             &empty_registry(),
         );
         assert!(result.is_ok());
@@ -267,9 +284,9 @@ mod tests {
     #[test]
     fn integration_object_pattern() {
         let i = Interner::new();
-        let context = HashMap::from([(
+        let context = FxHashMap::from_iter([(
             i.intern("data"),
-            Ty::Object(HashMap::from([
+            Ty::Object(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
                 (i.intern("value"), Ty::Int),
             ])),
@@ -286,7 +303,7 @@ mod tests {
     #[test]
     fn integration_multi_arm() {
         let i = Interner::new();
-        let context = HashMap::from([(i.intern("role"), Ty::String)]);
+        let context = FxHashMap::from_iter([(i.intern("role"), Ty::String)]);
         let result = compile_src(
             &i,
             r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
@@ -299,7 +316,7 @@ mod tests {
     #[test]
     fn integration_list_destructure() {
         let i = Interner::new();
-        let context = HashMap::from([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
+        let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
             &i,
             r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}"#,
@@ -315,7 +332,7 @@ mod tests {
         let result = compile_src(
             &i,
             r#"{{ "hello" + " " + "world" }}"#,
-            &HashMap::new(),
+            &FxHashMap::default(),
             &empty_registry(),
         );
         assert!(result.is_ok());
@@ -324,16 +341,22 @@ mod tests {
     #[test]
     fn integration_boolean_logic() {
         let i = Interner::new();
-        let result = compile_src(&i, "{{ true }}", &HashMap::new(), &empty_registry());
+        let result = compile_src(&i, "{{ true }}", &FxHashMap::default(), &empty_registry());
         assert!(result.is_err());
     }
 
     fn compile_script_test(source: &str) -> MirModule {
         let i = Interner::new();
         let script = acvus_ast::parse_script(&i, source).unwrap();
-        let ctx = HashMap::from([(i.intern("data"), Ty::String)]);
-        let (module, _, _) =
-            compile_script(&i, &script, &ctx, &empty_registry(), &UserTypeRegistry::new()).unwrap();
+        let ctx = FxHashMap::from_iter([(i.intern("data"), Ty::String)]);
+        let (module, _, _) = compile_script(
+            &i,
+            &script,
+            &ctx,
+            &empty_registry(),
+            &UserTypeRegistry::new(),
+        )
+        .unwrap();
         module
     }
 

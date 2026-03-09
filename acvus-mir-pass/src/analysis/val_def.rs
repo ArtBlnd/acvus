@@ -1,13 +1,12 @@
-use std::collections::HashMap;
-
 use acvus_mir::hints::InstIdx;
 use acvus_mir::ir::{InstKind, MirModule, ValueId};
+use rustc_hash::FxHashMap;
 
 use crate::AnalysisPass;
 
 /// Maps each Val to the instruction index that defines it.
 #[derive(Debug, Clone)]
-pub struct ValDefMap(pub HashMap<ValueId, InstIdx>);
+pub struct ValDefMap(pub FxHashMap<ValueId, InstIdx>);
 
 pub struct ValDefMapAnalysis;
 
@@ -16,7 +15,7 @@ impl AnalysisPass for ValDefMapAnalysis {
     type Output = ValDefMap;
 
     fn run(&self, module: &MirModule, _: ()) -> ValDefMap {
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         for (idx, inst) in module.main.insts.iter().enumerate() {
             if let Some(dst) = dst_of(&inst.kind) {
                 map.insert(dst, idx);
@@ -98,14 +97,14 @@ mod tests {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: HashMap::new(),
+                val_types: FxHashMap::default(),
                 debug: acvus_mir::ir::DebugInfo::new(),
                 val_count: 0,
                 label_count: 0,
             },
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             tag_names: Vec::new(),
-            extern_names: HashMap::new(),
+            extern_names: FxHashMap::default(),
         }
     }
 

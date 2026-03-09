@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::builtins::BuiltinId;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 use super::*;
 
@@ -49,7 +50,10 @@ fn to_string_object_panics() {
     let interner = Interner::new();
     call_pure(
         BuiltinId::ToString,
-        vec![Value::Object(HashMap::from([(interner.intern("a"), Value::Int(1))]))],
+        vec![Value::Object(FxHashMap::from_iter([(
+            interner.intern("a"),
+            Value::Int(1),
+        )]))],
     )
     .unwrap();
 }

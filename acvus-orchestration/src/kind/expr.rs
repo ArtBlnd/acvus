@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::compile::{CompiledScript, compile_script_with_hint};
 use crate::error::OrchError;
@@ -24,7 +25,7 @@ pub struct CompiledExpr {
 pub fn compile_expr(
     interner: &Interner,
     spec: &ExprSpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledExpr, HashSet<Astr>), Vec<OrchError>> {
     let hint = match &spec.output_ty {
@@ -32,7 +33,8 @@ pub fn compile_expr(
         ty => Some(ty),
     };
     let (script, _ty) =
-        compile_script_with_hint(interner, &spec.source, context_types, registry, hint).map_err(|e| vec![e])?;
+        compile_script_with_hint(interner, &spec.source, context_types, registry, hint)
+            .map_err(|e| vec![e])?;
     let keys = script.context_keys.clone();
     Ok((CompiledExpr { script }, keys))
 }

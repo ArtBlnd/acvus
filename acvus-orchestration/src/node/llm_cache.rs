@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, ExternFnRegistry, ResumeKey, RuntimeError, Value};
 use acvus_utils::{Astr, Interner};
 
+use rustc_hash::FxHashMap;
 use tracing::{debug, info};
 
 use super::Node;
@@ -17,7 +17,7 @@ pub struct LlmCacheNode<F> {
     model: String,
     messages: Vec<CompiledMessage>,
     ttl: String,
-    cache_config: HashMap<String, serde_json::Value>,
+    cache_config: FxHashMap<String, serde_json::Value>,
     fetch: Arc<F>,
     extern_fns: ExternFnRegistry,
     interner: Interner,
@@ -51,7 +51,10 @@ impl<F> Node for LlmCacheNode<F>
 where
     F: Fetch + 'static,
 {
-    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+    fn spawn(
+        &self,
+        local: FxHashMap<Astr, Arc<Value>>,
+    ) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
         let messages = self.messages.clone();
         let model = self.model.clone();
         let ttl = self.ttl.clone();
@@ -67,8 +70,14 @@ where
                 let CompiledMessage::Block(block) = msg else {
                     continue;
                 };
-                let text =
-                    render_block_in_coroutine(&interner, &block.module, &local, &extern_fns, &handle).await;
+                let text = render_block_in_coroutine(
+                    &interner,
+                    &block.module,
+                    &local,
+                    &extern_fns,
+                    &handle,
+                )
+                .await;
                 rendered.push(Message::Content {
                     role: interner.resolve(block.role).to_string(),
                     content: Content::Text(text),
@@ -83,12 +92,9 @@ where
                 &ttl,
                 &cache_config,
             );
-            let json = fetch
-                .fetch(&request)
-                .await
-                .map_err(|e| RuntimeError::fetch(e))?;
+            let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
             let cache_name = crate::provider::parse_cache_response(&provider_config.api, &json)
-                .map_err(|e| RuntimeError::fetch(e))?;
+                .map_err(RuntimeError::fetch)?;
             debug!(cache_name = %cache_name, "llm_cache created");
 
             handle.yield_val(Value::String(cache_name)).await;

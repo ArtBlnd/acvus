@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::ty::{Ty, TySubst};
 use crate::user_type::UserTypeId;
@@ -38,9 +37,9 @@ pub struct EnumDef {
 pub struct VariantRegistry {
     enums: Vec<EnumDef>,
     /// Flat tag -> VariantTagId (unqualified lookup).
-    tag_index: HashMap<Astr, VariantTagId>,
+    tag_index: FxHashMap<Astr, VariantTagId>,
     /// (enum_name, tag) -> VariantTagId (qualified lookup).
-    enum_tag_index: HashMap<(Astr, Astr), VariantTagId>,
+    enum_tag_index: FxHashMap<(Astr, Astr), VariantTagId>,
     /// VariantTagId(n) -> (enum index, variant index).
     tag_id_index: Vec<(usize, usize)>,
 }
@@ -49,8 +48,8 @@ impl VariantRegistry {
     pub fn new(interner: &Interner) -> Self {
         let mut registry = Self {
             enums: Vec::new(),
-            tag_index: HashMap::new(),
-            enum_tag_index: HashMap::new(),
+            tag_index: FxHashMap::default(),
+            enum_tag_index: FxHashMap::default(),
             tag_id_index: Vec::new(),
         };
         registry.register_builtins(interner);
@@ -83,8 +82,7 @@ impl VariantRegistry {
             let prev = self.tag_index.insert(variant.tag, tag_id);
             assert!(prev.is_none(), "duplicate variant tag: {:?}", variant.tag);
 
-            self.enum_tag_index
-                .insert((def.name, variant.tag), tag_id);
+            self.enum_tag_index.insert((def.name, variant.tag), tag_id);
         }
         self.enums.push(def);
     }

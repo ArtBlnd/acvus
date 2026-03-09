@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-
 use acvus_ast::{Literal, Span};
 use acvus_mir::ir::{DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rustc_hash::FxHashMap;
 
 use super::cff;
 use super::config::ObfConfig;
@@ -479,7 +478,7 @@ fn phase_instruction_transform(
 
 pub struct PassState {
     pub insts: Vec<Inst>,
-    pub val_types: HashMap<ValueId, Ty>,
+    pub val_types: FxHashMap<ValueId, Ty>,
     pub debug: DebugInfo,
     pub next_val: u32,
     pub next_label: u32,
@@ -529,6 +528,8 @@ impl PassState {
 
 #[cfg(test)]
 mod tests {
+    use rustc_hash::FxHashMap;
+
     use super::*;
 
     fn default_config() -> ObfConfig {
@@ -542,14 +543,14 @@ mod tests {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: HashMap::new(),
+                val_types: FxHashMap::default(),
                 debug: DebugInfo::new(),
                 val_count: 10,
                 label_count: 0,
             },
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             tag_names: Vec::new(),
-            extern_names: HashMap::new(),
+            extern_names: FxHashMap::default(),
         }
     }
 

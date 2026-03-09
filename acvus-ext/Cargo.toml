@@ -8,6 +8,7 @@ acvus-mir = { path = "../acvus-mir" }
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-utils = { path = "../acvus-utils" }
 futures = "0.3"
+rustc-hash = { workspace = true }
 regex = "1"
 
 [dev-dependencies]

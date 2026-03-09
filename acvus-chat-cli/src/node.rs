@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use acvus_orchestration::{
@@ -6,6 +5,7 @@ use acvus_orchestration::{
     PlainSpec, SelfSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
 /// TOML-deserializable node definition.
@@ -17,7 +17,7 @@ enum NodeKindDef {
     LlmCache {
         ttl: String,
         #[serde(default)]
-        cache_config: HashMap<String, serde_json::Value>,
+        cache_config: FxHashMap<String, serde_json::Value>,
     },
 }
 
@@ -127,7 +127,7 @@ struct ToolBindingDef {
     #[serde(default)]
     node: String,
     #[serde(default)]
-    params: HashMap<String, String>,
+    params: FxHashMap<String, String>,
 }
 
 /// Resolve a template: file path or inline source → source string.
@@ -152,7 +152,7 @@ pub fn resolve_node(
     interner: &Interner,
     def: NodeDef,
     base_dir: &Path,
-    provider_apis: &HashMap<String, ApiKind>,
+    provider_apis: &FxHashMap<String, ApiKind>,
 ) -> Result<NodeSpec, String> {
     let mut messages = Vec::new();
     for (i, msg) in def.messages.into_iter().enumerate() {
@@ -165,7 +165,10 @@ pub fn resolve_node(
                 let source =
                     resolve_template(base_dir, template.as_deref(), inline_template.as_deref())
                         .map_err(|e| format!("message {i}: {e}"))?;
-                messages.push(MessageSpec::Block { role: interner.intern(&role), source });
+                messages.push(MessageSpec::Block {
+                    role: interner.intern(&role),
+                    source,
+                });
             }
             MessageDef::Iterator {
                 iterator,
@@ -197,7 +200,9 @@ pub fn resolve_node(
                 def.strategy.inline_history_bind.as_deref(),
             )
             .map_err(|e| format!("node '{}': history strategy: {e}", def.name))?;
-            Strategy::History { history_bind: interner.intern(&history_bind) }
+            Strategy::History {
+                history_bind: interner.intern(&history_bind),
+            }
         }
         StrategyModeDef::IfModified => {
             let key = resolve_template(
@@ -206,7 +211,9 @@ pub fn resolve_node(
                 def.strategy.inline_key.as_deref(),
             )
             .map_err(|e| format!("node '{}': if-modified strategy: {e}", def.name))?;
-            Strategy::IfModified { key: interner.intern(&key) }
+            Strategy::IfModified {
+                key: interner.intern(&key),
+            }
         }
     };
 

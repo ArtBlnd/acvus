@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{
     Coroutine, ExternFnRegistry, Interpreter, ResumeKey, RuntimeError, Stepped, Value,
 };
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use super::Node;
 
@@ -15,7 +15,11 @@ pub struct ExprNode {
 }
 
 impl ExprNode {
-    pub fn new(module: acvus_mir::ir::MirModule, extern_fns: &ExternFnRegistry, interner: &Interner) -> Self {
+    pub fn new(
+        module: acvus_mir::ir::MirModule,
+        extern_fns: &ExternFnRegistry,
+        interner: &Interner,
+    ) -> Self {
         Self {
             module,
             extern_fns: extern_fns.clone(),
@@ -25,7 +29,10 @@ impl ExprNode {
 }
 
 impl Node for ExprNode {
-    fn spawn(&self, local: HashMap<Astr, Arc<Value>>) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
+    fn spawn(
+        &self,
+        local: FxHashMap<Astr, Arc<Value>>,
+    ) -> (Coroutine<Value, RuntimeError>, ResumeKey<Value>) {
         let interp = Interpreter::new(&self.interner, self.module.clone(), &self.extern_fns);
         let (mut inner, mut key) = interp.execute();
         acvus_utils::coroutine(move |handle| async move {

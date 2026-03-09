@@ -342,7 +342,11 @@ impl<'a> TreeBuilder<'a> {
 }
 
 /// Parse the content of a `{{ }}` tag using LALRPOP.
-fn parse_tag_content(interner: &Interner, content: &str, base_offset: usize) -> Result<TagContent, ParseError> {
+fn parse_tag_content(
+    interner: &Interner,
+    content: &str,
+    base_offset: usize,
+) -> Result<TagContent, ParseError> {
     let tokenizer = ExprTokenizer::new(content, base_offset, interner);
     let parser = TagContentParser::new();
     parser
@@ -587,7 +591,9 @@ mod tests {
             assert!(
                 matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if interner.resolve(*name) == "item")
             );
-            assert!(matches!(&mb.source, Expr::Ident { name, .. } if interner.resolve(*name) == "list"));
+            assert!(
+                matches!(&mb.source, Expr::Ident { name, .. } if interner.resolve(*name) == "list")
+            );
         } else {
             panic!("expected MatchBlock");
         }
@@ -616,7 +622,8 @@ mod tests {
     #[test]
     fn parse_multi_arm() {
         // `{{ pattern = }}` is a continuation arm.
-        let (_interner, result) = parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#);
+        let (_interner, result) =
+            parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#);
         let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::MatchBlock(mb) = &t.body[0] {
@@ -740,7 +747,9 @@ mod tests {
         let t = result.unwrap();
         assert_eq!(t.body.len(), 1);
         if let Node::InlineExpr { expr, .. } = &t.body[0] {
-            assert!(matches!(expr, Expr::FieldAccess { field, .. } if interner.resolve(*field) == "name"));
+            assert!(
+                matches!(expr, Expr::FieldAccess { field, .. } if interner.resolve(*field) == "name")
+            );
         } else {
             panic!("expected InlineExpr");
         }

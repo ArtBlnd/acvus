@@ -1,18 +1,25 @@
-use std::collections::HashMap;
-
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
-use acvus_utils::{Astr, Interner};
 use acvus_mir_test::*;
+use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 /// Helper: build a context HashMap<Astr, Ty> from string pairs.
-fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> HashMap<Astr, Ty> {
-    pairs.iter().map(|(k, v)| (i.intern(k), v.clone())).collect()
+fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> FxHashMap<Astr, Ty> {
+    pairs
+        .iter()
+        .map(|(k, v)| (i.intern(k), v.clone()))
+        .collect()
 }
 
 /// Helper: build an Object type from string-keyed fields.
 fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
-    Ty::Object(fields.iter().map(|(k, v)| (i.intern(k), v.clone())).collect())
+    Ty::Object(
+        fields
+            .iter()
+            .map(|(k, v)| (i.intern(k), v.clone()))
+            .collect(),
+    )
 }
 
 // ── Text & literals ──────────────────────────────────────────────
@@ -52,7 +59,13 @@ fn mixed_text_and_expr() {
 fn context_read() {
     let i = Interner::new();
     let context = ctx(&i, &[("count", Ty::Int)]);
-    let ir = compile_to_ir(&i, "{{ @count | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "{{ @count | to_string }}",
+        &context,
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -66,7 +79,13 @@ fn variable_write() {
 #[test]
 fn context_field_access() {
     let i = Interner::new();
-    let ir = compile_to_ir(&i, "{{ @user.name }}", &user_context(&i), &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "{{ @user.name }}",
+        &user_context(&i),
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -76,7 +95,13 @@ fn context_field_access() {
 fn arithmetic_to_string() {
     let i = Interner::new();
     let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
-    let ir = compile_to_ir(&i, "{{ @a + @b | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "{{ @a + @b | to_string }}",
+        &context,
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -87,7 +112,13 @@ fn simple_match_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
     // Variable binding is body-less — defines x in current scope.
-    let ir = compile_to_ir(&i, r#"{{ x = @name }}{{ x }}"#, &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        r#"{{ x = @name }}{{ x }}"#,
+        &context,
+        &ExternRegistry::new(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -136,16 +167,22 @@ fn iteration_over_list() {
 #[test]
 fn nested_match() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[
-            ("name", Ty::String),
-            (
-                "posts",
-                Ty::List(Box::new(obj(&i, &[("title", Ty::String)]))),
-            ),
-        ]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(
+                &i,
+                &[
+                    ("name", Ty::String),
+                    (
+                        "posts",
+                        Ty::List(Box::new(obj(&i, &[("title", Ty::String)]))),
+                    ),
+                ],
+            ))),
+        )],
+    );
     // Use object destructuring for both outer and inner iterations.
     let ir = compile_to_ir(
         &i,
@@ -273,7 +310,7 @@ fn extern_async_call() {
     let ir = compile_to_ir(
         &i,
         r#"{{ user = fetch_user(1) }}{{ user }}"#,
-        &HashMap::new(),
+        &FxHashMap::default(),
         &registry,
     )
     .unwrap();
@@ -341,13 +378,13 @@ fn tuple_pattern_literal_match() {
 #[test]
 fn tuple_nested_destructure() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "data",
-        Ty::Tuple(vec![
-            Ty::String,
-            obj(&i, &[("x", Ty::Int)]),
-        ]),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "data",
+            Ty::Tuple(vec![Ty::String, obj(&i, &[("x", Ty::Int)])]),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ (label, { x, }) = @data }}{{ label }}{{/}}"#,
@@ -388,7 +425,7 @@ fn error_undefined_context() {
     let result = compile_to_ir(
         &i,
         "{{ @unknown | to_string }}",
-        &HashMap::new(),
+        &FxHashMap::default(),
         &ExternRegistry::new(),
     );
     assert!(result.is_err());
@@ -401,7 +438,7 @@ fn error_undefined_variable() {
     let result = compile_to_ir(
         &i,
         "{{ x = unknown }}{{_}}{{/}}",
-        &HashMap::new(),
+        &FxHashMap::default(),
         &ExternRegistry::new(),
     );
     assert!(result.is_err());
@@ -456,10 +493,13 @@ fn iter_object_destructure() {
 #[test]
 fn iter_tuple_destructure() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "pairs",
-        Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "pairs",
+            Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ (a, _) in @pairs }}{{ a }}{{/}}",
@@ -548,10 +588,13 @@ fn variable_new_ref_in_match_arm() {
 fn list_of_tuples_destructure() {
     let i = Interner::new();
     // Iterate over list of tuples, destructure each.
-    let context = ctx(&i, &[(
-        "pairs",
-        Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "pairs",
+            Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ (name, age) in @pairs }}{{ name }}{{/}}"#,
@@ -566,10 +609,13 @@ fn list_of_tuples_destructure() {
 fn list_head_with_object_elements() {
     let i = Interner::new();
     // List destructure where elements are objects.
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[("name", Ty::String)]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(&i, &[("name", Ty::String)]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
@@ -584,10 +630,13 @@ fn list_head_with_object_elements() {
 fn tuple_with_list_element() {
     let i = Interner::new();
     // Tuple containing a list, extract and iterate.
-    let context = ctx(&i, &[(
-        "data",
-        Ty::Tuple(vec![Ty::String, Ty::List(Box::new(Ty::Int))]),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "data",
+            Ty::Tuple(vec![Ty::String, Ty::List(Box::new(Ty::Int))]),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ (label, items) = @data }}{{ label }}{{ x in items }}{{ x | to_string }}{{/}}{{/}}"#,
@@ -732,10 +781,10 @@ fn variable_write_then_read() {
 #[test]
 fn nested_iteration_with_binding() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "matrix",
-        Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
-    )]);
+    let context = ctx(
+        &i,
+        &[("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))))],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}"#,
@@ -760,16 +809,19 @@ fn range_inclusive_iteration() {
 #[test]
 fn deeply_nested_object_access() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "data",
-        obj(&i, &[(
-            "user",
-            obj(&i, &[(
-                "address",
-                obj(&i, &[("city", Ty::String)]),
-            )]),
-        )]),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "data",
+            obj(
+                &i,
+                &[(
+                    "user",
+                    obj(&i, &[("address", obj(&i, &[("city", Ty::String)]))]),
+                )],
+            ),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ @data.user.address.city }}"#,
@@ -785,10 +837,13 @@ fn deeply_nested_object_access() {
 #[test]
 fn closure_capture_context() {
     let i = Interner::new();
-    let context = ctx(&i, &[
-        ("items", Ty::List(Box::new(Ty::Int))),
-        ("threshold", Ty::Int),
-    ]);
+    let context = ctx(
+        &i,
+        &[
+            ("items", Ty::List(Box::new(Ty::Int))),
+            ("threshold", Ty::Int),
+        ],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | len | to_string }}"#,
@@ -820,7 +875,11 @@ fn multi_arm_range_and_literal() {
 #[test]
 fn list_literal_expression() {
     let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#).unwrap();
+    let ir = compile_simple(
+        &i,
+        r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -907,10 +966,13 @@ fn list_destructure_head_and_tail() {
 #[test]
 fn nested_tuple_pattern() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "data",
-        Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "data",
+            Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
@@ -1037,13 +1099,13 @@ fn variable_write_in_iteration() {
 #[test]
 fn field_access_on_destructured() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "pair",
-        Ty::Tuple(vec![
-            obj(&i, &[("name", Ty::String)]),
-            Ty::Int,
-        ]),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "pair",
+            Ty::Tuple(vec![obj(&i, &[("name", Ty::String)]), Ty::Int]),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#,
@@ -1124,10 +1186,10 @@ fn object_destructure_match() {
 #[test]
 fn multiple_closures_same_capture() {
     let i = Interner::new();
-    let context = ctx(&i, &[
-        ("items", Ty::List(Box::new(Ty::Int))),
-        ("offset", Ty::Int),
-    ]);
+    let context = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int))), ("offset", Ty::Int)],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
@@ -1160,13 +1222,13 @@ fn string_equality_in_filter() {
 fn lambda_field_access() {
     let i = Interner::new();
     // Lambda body accesses field on captured object.
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[
-            ("name", Ty::String),
-            ("age", Ty::Int),
-        ]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @users | map(u -> u.name) }}{{ x | join(",") }}"#,
@@ -1233,13 +1295,13 @@ fn lambda_capture_local_var_ref() {
 fn lambda_multiple_field_access() {
     let i = Interner::new();
     // Lambda body accesses two fields on the same param.
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[
-            ("name", Ty::String),
-            ("age", Ty::Int),
-        ]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @users | map(u -> (u.name, u.age)) }}{{ x | len | to_string }}"#,
@@ -1255,13 +1317,16 @@ fn lambda_multiple_field_access() {
 #[test]
 fn lambda_chained_field_access() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[(
-            "address",
-            obj(&i, &[("city", Ty::String)]),
-        )]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(
+                &i,
+                &[("address", obj(&i, &[("city", Ty::String)]))],
+            ))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @users | map(u -> u.address.city) }}{{ x | join(",") }}"#,
@@ -1294,13 +1359,13 @@ fn lambda_string_concat() {
 #[test]
 fn pipe_filter_then_map_field() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[
-            ("name", Ty::String),
-            ("age", Ty::Int),
-        ]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)]))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(",") }}"#,
@@ -1317,7 +1382,12 @@ fn pipe_filter_then_map_field() {
 fn error_field_access_on_int() {
     let i = Interner::new();
     let context = ctx(&i, &[("n", Ty::Int)]);
-    let result = compile_to_ir(&i, "{{ @n.foo | to_string }}", &context, &ExternRegistry::new());
+    let result = compile_to_ir(
+        &i,
+        "{{ @n.foo | to_string }}",
+        &context,
+        &ExternRegistry::new(),
+    );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1329,7 +1399,12 @@ fn error_variable_write_type_mismatch() {
     let i = Interner::new();
     // Attempting to write to a context key (read-only).
     let context = ctx(&i, &[("count", Ty::Int)]);
-    let result = compile_to_ir(&i, r#"{{ @count = "hello" }}"#, &context, &ExternRegistry::new());
+    let result = compile_to_ir(
+        &i,
+        r#"{{ @count = "hello" }}"#,
+        &context,
+        &ExternRegistry::new(),
+    );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1371,13 +1446,16 @@ fn match_bool_literal() {
 #[test]
 fn filter_object_field_equality() {
     let i = Interner::new();
-    let context = ctx(&i, &[(
-        "users",
-        Ty::List(Box::new(obj(&i, &[
-            ("name", Ty::String),
-            ("active", Ty::Bool),
-        ]))),
-    )]);
+    let context = ctx(
+        &i,
+        &[(
+            "users",
+            Ty::List(Box::new(obj(
+                &i,
+                &[("name", Ty::String), ("active", Ty::Bool)],
+            ))),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @users | filter(u -> u.active) }}{{ x | len | to_string }}"#,
@@ -1398,10 +1476,7 @@ fn extern_fn_object_return() {
     ext.add_fn(
         i.intern("get_user"),
         vec![Ty::Int],
-        obj(&i, &[
-            ("name", Ty::String),
-            ("age", Ty::Int),
-        ]),
+        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
         false,
     );
     let mut registry = ExternRegistry::new();
@@ -1409,7 +1484,7 @@ fn extern_fn_object_return() {
     let ir = compile_to_ir(
         &i,
         r#"{{ u = get_user(1) }}{{ u.name }}"#,
-        &HashMap::new(),
+        &FxHashMap::default(),
         &registry,
     )
     .unwrap();
@@ -1577,10 +1652,10 @@ fn context_call_shorthand() {
 #[test]
 fn context_call_expr() {
     let i = Interner::new();
-    let context = ctx(&i, &[
-        ("node", Ty::String),
-        ("items", Ty::List(Box::new(Ty::Int))),
-    ]);
+    let context = ctx(
+        &i,
+        &[("node", Ty::String), ("items", Ty::List(Box::new(Ty::Int)))],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ @node { count: @items | len, } }}",

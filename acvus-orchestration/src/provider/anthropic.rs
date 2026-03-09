@@ -347,7 +347,8 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+
+    use rustc_hash::FxHashMap;
 
     use crate::kind::GenerationParams;
     use crate::message::{Message, ToolSpec};
@@ -389,7 +390,7 @@ mod tests {
             &[ToolSpec {
                 name: "search".into(),
                 description: "Search".into(),
-                params: HashMap::from([("query".into(), "string".into())]),
+                params: FxHashMap::from_iter([("query".into(), "string".into())]),
             }],
             &GenerationParams::default(),
             None,

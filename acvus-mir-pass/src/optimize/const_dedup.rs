@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use acvus_ast::Literal;
 use acvus_mir::ir::{InstKind, MirBody, MirModule, ValueId};
+use rustc_hash::FxHashMap;
 
 /// Hashable key for Literal values.
 /// Wraps f64 via to_bits() to provide Hash + Eq.
@@ -42,8 +41,8 @@ pub fn dedup(mut module: MirModule) -> MirModule {
 
 fn dedup_body(mut body: MirBody) -> MirBody {
     // 1. Scan Const instructions, build canonical map and remap table.
-    let mut canonical: HashMap<LiteralKey, ValueId> = HashMap::new();
-    let mut remap: HashMap<ValueId, ValueId> = HashMap::new();
+    let mut canonical: FxHashMap<LiteralKey, ValueId> = FxHashMap::default();
+    let mut remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
     for inst in &body.insts {
         if let InstKind::Const { dst, ref value } = inst.kind {
@@ -94,19 +93,19 @@ fn dedup_body(mut body: MirBody) -> MirBody {
     body
 }
 
-fn remap_val(v: &mut ValueId, remap: &HashMap<ValueId, ValueId>) {
+fn remap_val(v: &mut ValueId, remap: &FxHashMap<ValueId, ValueId>) {
     if let Some(&canon) = remap.get(v) {
         *v = canon;
     }
 }
 
-fn remap_vec(vs: &mut Vec<ValueId>, remap: &HashMap<ValueId, ValueId>) {
+fn remap_vec(vs: &mut Vec<ValueId>, remap: &FxHashMap<ValueId, ValueId>) {
     for v in vs.iter_mut() {
         remap_val(v, remap);
     }
 }
 
-fn remap_uses(kind: &mut InstKind, remap: &HashMap<ValueId, ValueId>) {
+fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
     match kind {
         // No uses
         InstKind::Const { .. }
@@ -223,7 +222,6 @@ mod tests {
     use super::*;
     use acvus_ast::Span;
     use acvus_mir::ir::{DebugInfo, Inst, MirBody};
-    use std::collections::HashMap;
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -232,7 +230,7 @@ mod tests {
     fn make_body(insts: Vec<Inst>) -> MirBody {
         MirBody {
             insts,
-            val_types: HashMap::new(),
+            val_types: FxHashMap::default(),
             debug: DebugInfo::new(),
             val_count: 100,
             label_count: 0,

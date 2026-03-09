@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinId;
 use crate::extern_module::ExternFnId;
@@ -233,7 +232,7 @@ pub enum ValOrigin {
 
 #[derive(Debug, Clone)]
 pub struct DebugInfo {
-    pub val_origins: HashMap<ValueId, ValOrigin>,
+    pub val_origins: FxHashMap<ValueId, ValOrigin>,
 }
 
 impl Default for DebugInfo {
@@ -245,7 +244,7 @@ impl Default for DebugInfo {
 impl DebugInfo {
     pub fn new() -> Self {
         Self {
-            val_origins: HashMap::new(),
+            val_origins: FxHashMap::default(),
         }
     }
 
@@ -273,7 +272,7 @@ impl DebugInfo {
 #[derive(Debug, Clone)]
 pub struct MirBody {
     pub insts: Vec<Inst>,
-    pub val_types: HashMap<ValueId, Ty>,
+    pub val_types: FxHashMap<ValueId, Ty>,
     pub debug: DebugInfo,
     pub val_count: u32,
     pub label_count: u32,
@@ -289,7 +288,7 @@ impl MirBody {
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
-            val_types: HashMap::new(),
+            val_types: FxHashMap::default(),
             debug: DebugInfo::new(),
             val_count: 0,
             label_count: 0,
@@ -307,9 +306,9 @@ pub struct ClosureBody {
 #[derive(Debug, Clone)]
 pub struct MirModule {
     pub main: MirBody,
-    pub closures: HashMap<Label, ClosureBody>,
+    pub closures: FxHashMap<Label, ClosureBody>,
     /// Tag name table: `VariantTagId(n)` -> `tag_names[n]`.
     pub tag_names: Vec<Astr>,
     /// Extern fn name table: `ExternFnId` -> name.
-    pub extern_names: HashMap<ExternFnId, Astr>,
+    pub extern_names: FxHashMap<ExternFnId, Astr>,
 }

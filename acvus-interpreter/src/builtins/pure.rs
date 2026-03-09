@@ -127,8 +127,8 @@ pub(crate) fn builtin_repeat_str(s: String, n: i64) -> String {
 }
 
 pub(crate) fn builtin_unwrap(v: Value) -> Value {
-    let interner = crate::interner_ctx::get_interner()
-        .expect("builtin_unwrap: requires interner context");
+    let interner =
+        crate::interner_ctx::get_interner().expect("builtin_unwrap: requires interner context");
     let some_tag = interner.intern("Some");
     let none_tag = interner.intern("None");
     match v {

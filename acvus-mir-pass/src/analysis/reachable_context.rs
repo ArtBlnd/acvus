@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
 use acvus_ast::{BinOp, Literal, RangeKind};
 use acvus_mir::ir::{InstKind, Label, MirModule, ValueId};
 use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
 use crate::analysis::val_def::ValDefMap;
 
@@ -27,7 +28,7 @@ pub struct ContextKeyPartition {
 /// already in `known`.
 pub fn reachable_context_keys(
     module: &MirModule,
-    known: &HashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, Literal>,
     val_def: &ValDefMap,
 ) -> HashSet<Astr> {
     let p = partition_context_keys(module, known, val_def);
@@ -45,7 +46,7 @@ pub fn reachable_context_keys(
 ///   — resolve on-demand via coroutine.
 pub fn partition_context_keys(
     module: &MirModule,
-    known: &HashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, Literal>,
     val_def: &ValDefMap,
 ) -> ContextKeyPartition {
     let mut partition = ContextKeyPartition::default();
@@ -164,7 +165,7 @@ enum Reach {
 
 fn partition_from_body(
     insts: &[acvus_mir::ir::Inst],
-    known: &HashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, Literal>,
     val_def: &ValDefMap,
     partition: &mut ContextKeyPartition,
 ) {
@@ -174,7 +175,7 @@ fn partition_from_body(
     }
 
     // label → block index
-    let label_to_block: HashMap<Label, usize> = blocks
+    let label_to_block: FxHashMap<Label, usize> = blocks
         .iter()
         .enumerate()
         .filter_map(|(i, b)| b.label.map(|l| (l, i)))
@@ -271,7 +272,7 @@ fn partition_from_body(
 fn enqueue_reach(
     label: Label,
     new_reach: Reach,
-    label_to_block: &HashMap<Label, usize>,
+    label_to_block: &FxHashMap<Label, usize>,
     reach: &mut [Reach],
     queue: &mut VecDeque<usize>,
 ) {
@@ -291,7 +292,7 @@ fn try_eval_condition(
     cond: ValueId,
     insts: &[acvus_mir::ir::Inst],
     val_def: &ValDefMap,
-    known: &HashMap<Astr, Literal>,
+    known: &FxHashMap<Astr, Literal>,
 ) -> Option<bool> {
     let &def_idx = val_def.0.get(&cond)?;
 
@@ -378,14 +379,14 @@ mod tests {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: HashMap::new(),
+                val_types: FxHashMap::default(),
                 debug: DebugInfo::new(),
                 val_count: 0,
                 label_count: 0,
             },
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             tag_names: Vec::new(),
-            extern_names: HashMap::new(),
+            extern_names: FxHashMap::default(),
         }
     }
 
@@ -419,7 +420,7 @@ mod tests {
             }),
         ]);
         let val_def = build_val_def(&module);
-        let needed = reachable_context_keys(&module, &HashMap::new(), &val_def);
+        let needed = reachable_context_keys(&module, &FxHashMap::default(), &val_def);
         assert_eq!(needed, HashSet::from([i.intern("user"), i.intern("role")]));
     }
 
@@ -440,7 +441,7 @@ mod tests {
             }),
         ]);
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("user"), Literal::String("alice".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("user"), Literal::String("alice".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
         assert_eq!(needed, HashSet::from([i.intern("role")]));
     }
@@ -490,7 +491,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("mode"), Literal::String("search".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("mode"), Literal::String("search".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("query")));
@@ -543,7 +544,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("mode"), Literal::String("other".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("mode"), Literal::String("other".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(!needed.contains(&i.intern("query")));
@@ -596,7 +597,7 @@ mod tests {
 
         let val_def = build_val_def(&module);
         // mode is NOT known -> can't evaluate condition
-        let needed = reachable_context_keys(&module, &HashMap::new(), &val_def);
+        let needed = reachable_context_keys(&module, &FxHashMap::default(), &val_def);
 
         assert!(needed.contains(&i.intern("mode")));
         assert!(needed.contains(&i.intern("query")));
@@ -658,7 +659,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("role"), Literal::String("admin".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("role"), Literal::String("admin".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("level")));
@@ -712,7 +713,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("level"), Literal::Int(5))]);
+        let known = FxHashMap::from_iter([(i.intern("level"), Literal::Int(5))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(needed.contains(&i.intern("low_data")));
@@ -803,7 +804,7 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = HashMap::from([(i.intern("role"), Literal::String("user".into()))]);
+        let known = FxHashMap::from_iter([(i.intern("role"), Literal::String("user".into()))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         assert!(!needed.contains(&i.intern("admin_data")));

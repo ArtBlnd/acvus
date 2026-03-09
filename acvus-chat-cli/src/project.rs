@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
 use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -20,7 +19,7 @@ pub struct ProjectSpec {
     pub nodes: Vec<String>,
     pub entrypoint: String,
     #[serde(default)]
-    pub providers: HashMap<String, ProviderConfig>,
+    pub providers: FxHashMap<String, ProviderConfig>,
     #[serde(default)]
     pub context: toml::Table,
     #[serde(default)]
@@ -56,7 +55,10 @@ pub fn toml_to_ty(interner: &Interner, value: &toml::Value) -> Ty {
         toml::Value::Float(_) => Ty::Float,
         toml::Value::Boolean(_) => Ty::Bool,
         toml::Value::Array(arr) => {
-            let elem_ty = arr.first().map(|v| toml_to_ty(interner, v)).unwrap_or(Ty::Unit);
+            let elem_ty = arr
+                .first()
+                .map(|v| toml_to_ty(interner, v))
+                .unwrap_or(Ty::Unit);
             Ty::List(Box::new(elem_ty))
         }
         toml::Value::Table(table) => {
@@ -112,7 +114,10 @@ mod tests {
     #[test]
     fn toml_to_ty_primitives() {
         let interner = Interner::new();
-        assert_eq!(toml_to_ty(&interner, &toml::Value::String("hi".into())), Ty::String);
+        assert_eq!(
+            toml_to_ty(&interner, &toml::Value::String("hi".into())),
+            Ty::String
+        );
         assert_eq!(toml_to_ty(&interner, &toml::Value::Integer(42)), Ty::Int);
         assert_eq!(toml_to_ty(&interner, &toml::Value::Float(3.14)), Ty::Float);
         assert_eq!(toml_to_ty(&interner, &toml::Value::Boolean(true)), Ty::Bool);
@@ -139,7 +144,7 @@ mod tests {
         table.insert("name".into(), toml::Value::String("alice".into()));
         table.insert("age".into(), toml::Value::Integer(30));
         let ty = toml_to_ty(&interner, &toml::Value::Table(table));
-        let expected = Ty::Object(HashMap::from([
+        let expected = Ty::Object(FxHashMap::from_iter([
             (interner.intern("age"), Ty::Int),
             (interner.intern("name"), Ty::String),
         ]));

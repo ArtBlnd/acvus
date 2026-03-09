@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_mir::hints::InstIdx;
 use acvus_mir::ir::{InstKind, MirModule, ValueId};
 use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
 use crate::AnalysisPass;
 use crate::analysis::val_def::ValDefMap;
@@ -29,7 +30,7 @@ pub struct VarDirtyEntry {
 /// Result of VarDirtyAnalysis — keyed by the VarStore's instruction index.
 #[derive(Debug, Clone)]
 pub struct VarDirtyTable {
-    pub entries: HashMap<InstIdx, VarDirtyEntry>,
+    pub entries: FxHashMap<InstIdx, VarDirtyEntry>,
 }
 
 pub struct VarDirtyAnalysis;
@@ -40,7 +41,7 @@ impl AnalysisPass for VarDirtyAnalysis {
 
     fn run(&self, module: &MirModule, (val_def,): (&ValDefMap,)) -> VarDirtyTable {
         let insts = &module.main.insts;
-        let mut entries = HashMap::new();
+        let mut entries = FxHashMap::default();
 
         for (idx, inst) in insts.iter().enumerate() {
             let InstKind::VarStore { name, src } = &inst.kind else {
@@ -147,14 +148,14 @@ mod tests {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: HashMap::new(),
+                val_types: FxHashMap::default(),
                 debug: DebugInfo::new(),
                 val_count: 0,
                 label_count: 0,
             },
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             tag_names: Vec::new(),
-            extern_names: HashMap::new(),
+            extern_names: FxHashMap::default(),
         }
     }
 
@@ -216,7 +217,10 @@ mod tests {
             // v3 = MakeObject { name: v1, age: v2 }
             inst(InstKind::MakeObject {
                 dst: ValueId(3),
-                fields: vec![(i.intern("name"), ValueId(1)), (i.intern("age"), ValueId(2))],
+                fields: vec![
+                    (i.intern("name"), ValueId(1)),
+                    (i.intern("age"), ValueId(2)),
+                ],
             }),
             // VarStore("user", v3)
             inst(InstKind::VarStore {
@@ -262,7 +266,10 @@ mod tests {
             // v3 = MakeObject { name: v1, email: v2 }
             inst(InstKind::MakeObject {
                 dst: ValueId(3),
-                fields: vec![(i.intern("name"), ValueId(1)), (i.intern("email"), ValueId(2))],
+                fields: vec![
+                    (i.intern("name"), ValueId(1)),
+                    (i.intern("email"), ValueId(2)),
+                ],
             }),
             // VarStore("user", v3)
             inst(InstKind::VarStore {

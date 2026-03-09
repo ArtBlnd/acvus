@@ -29,7 +29,10 @@ pub struct MultiStageDecryptTable {
 }
 
 /// Register 12 multi-stage decrypt closure bodies into the module.
-pub fn register_multistage_decrypt_closures(module: &mut MirModule, interner: &Interner) -> MultiStageDecryptTable {
+pub fn register_multistage_decrypt_closures(
+    module: &mut MirModule,
+    interner: &Interner,
+) -> MultiStageDecryptTable {
     let base_label = module.closures.keys().map(|l| l.0).max().unwrap_or(0) + 1;
     let base_label = base_label.max(module.main.label_count);
     for closure in module.closures.values() {
@@ -43,17 +46,23 @@ pub fn register_multistage_decrypt_closures(module: &mut MirModule, interner: &I
     for i in 0..4u32 {
         let label = Label(base_label + i);
         stage_a[i as usize] = label;
-        module.closures.insert(label, make_stage_a_closure_body(i, interner));
+        module
+            .closures
+            .insert(label, make_stage_a_closure_body(i, interner));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 4 + i);
         stage_b[i as usize] = label;
-        module.closures.insert(label, make_stage_b_closure_body(i, interner));
+        module
+            .closures
+            .insert(label, make_stage_b_closure_body(i, interner));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 8 + i);
         stage_c[i as usize] = label;
-        module.closures.insert(label, make_stage_c_closure_body(i, interner));
+        module
+            .closures
+            .insert(label, make_stage_c_closure_body(i, interner));
     }
 
     let max_label = base_label + 12;
@@ -1279,7 +1288,12 @@ fn make_factory_closure_body(rotation: u32, inner_fn_ty: &Ty, interner: &Interne
     body.debug = debug;
 
     ClosureBody {
-        capture_names: vec![interner.intern("fn0"), interner.intern("fn1"), interner.intern("fn2"), interner.intern("fn3")],
+        capture_names: vec![
+            interner.intern("fn0"),
+            interner.intern("fn1"),
+            interner.intern("fn2"),
+            interner.intern("fn3"),
+        ],
         param_names: vec![interner.intern("seed")],
         body,
     }

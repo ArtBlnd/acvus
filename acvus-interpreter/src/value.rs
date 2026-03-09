@@ -1,10 +1,11 @@
 use std::any::Any;
-use std::collections::HashMap;
+
 use std::fmt;
 use std::sync::Arc;
 
 use acvus_mir::ir::Label;
 use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
 /// Data-only value — no functions, no closures.
 /// Cloneable, used at context boundaries.
@@ -24,7 +25,7 @@ pub enum PureValue {
         inclusive: bool,
     },
     List(Vec<PureValue>),
-    Object(HashMap<Astr, PureValue>),
+    Object(FxHashMap<Astr, PureValue>),
     Tuple(Vec<PureValue>),
     Byte(u8),
     Variant {
@@ -51,7 +52,7 @@ pub enum Value {
         inclusive: bool,
     },
     List(Vec<Value>),
-    Object(HashMap<Astr, Value>),
+    Object(FxHashMap<Astr, Value>),
     Tuple(Vec<Value>),
     Byte(u8),
     Variant {

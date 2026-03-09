@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::Read;
 use std::{env, fs, process};
 
@@ -6,14 +5,15 @@ use acvus_mir::extern_module::{ExternModule, ExternRegistry};
 use acvus_mir::printer::dump;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
 struct Context {
     #[serde(default)]
-    context: HashMap<String, TypeDef>,
+    context: FxHashMap<String, TypeDef>,
     #[serde(default)]
-    extern_fns: HashMap<String, FnDef>,
+    extern_fns: FxHashMap<String, FnDef>,
 }
 
 #[derive(Deserialize)]
@@ -34,7 +34,7 @@ enum TypeDef {
     Unit,
     Range,
     List(Box<TypeDef>),
-    Object(HashMap<String, TypeDef>),
+    Object(FxHashMap<String, TypeDef>),
 }
 
 impl TypeDef {
@@ -47,9 +47,12 @@ impl TypeDef {
             TypeDef::Unit => Ty::Unit,
             TypeDef::Range => Ty::Range,
             TypeDef::List(inner) => Ty::List(Box::new(inner.to_ty(interner))),
-            TypeDef::Object(fields) => {
-                Ty::Object(fields.iter().map(|(k, v)| (interner.intern(k), v.to_ty(interner))).collect())
-            }
+            TypeDef::Object(fields) => Ty::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (interner.intern(k), v.to_ty(interner)))
+                    .collect(),
+            ),
         }
     }
 }
@@ -117,7 +120,12 @@ fn main() {
     let mut extern_module = ExternModule::new(interner.intern("cli"));
     for (name, def) in &ctx.extern_fns {
         let params: Vec<Ty> = def.params.iter().map(|p| p.to_ty(&interner)).collect();
-        extern_module.add_fn(interner.intern(name), params, def.ret.to_ty(&interner), def.effectful);
+        extern_module.add_fn(
+            interner.intern(name),
+            params,
+            def.ret.to_ty(&interner),
+            def.effectful,
+        );
     }
     let mut registry = ExternRegistry::new();
     registry.register(&extern_module);
@@ -155,7 +163,12 @@ fn main() {
         }
         Err(errors) => {
             for e in &errors {
-                eprintln!("error [{}..{}]: {}", e.span.start, e.span.end, e.display(&interner));
+                eprintln!(
+                    "error [{}..{}]: {}",
+                    e.span.start,
+                    e.span.end,
+                    e.display(&interner)
+                );
             }
             process::exit(1);
         }

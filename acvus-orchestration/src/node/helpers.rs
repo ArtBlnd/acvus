@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use acvus_utils::{Astr, Interner, YieldHandle};
 use acvus_interpreter::{ExternFnRegistry, Interpreter, Stepped, Value};
+use acvus_utils::{Astr, Interner, YieldHandle};
+use rustc_hash::FxHashMap;
 
 use crate::compile::CompiledScript;
 use crate::dsl::TokenBudget;
@@ -13,7 +13,7 @@ use crate::provider::{ApiKind, Fetch};
 pub async fn render_block_in_coroutine(
     interner: &Interner,
     module: &acvus_mir::ir::MirModule,
-    local: &HashMap<Astr, Arc<Value>>,
+    local: &FxHashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> String {
@@ -53,7 +53,7 @@ pub async fn render_block_in_coroutine(
 pub async fn eval_script_in_coroutine(
     interner: &Interner,
     script: &CompiledScript,
-    local: &HashMap<Astr, Arc<Value>>,
+    local: &FxHashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> Value {
@@ -99,7 +99,7 @@ pub async fn expand_iterator_in_coroutine(
     slice: &Option<Vec<i64>>,
     role_override: &Option<Astr>,
     interner: &Interner,
-    local: &HashMap<Astr, Arc<Value>>,
+    local: &FxHashMap<Astr, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
 ) -> Vec<Message> {
@@ -159,7 +159,7 @@ pub fn content_to_value(interner: &Interner, items: &[crate::message::ContentIte
                 Content::Text(s) => (s.clone(), "text".to_string()),
                 Content::Blob { mime_type, data } => (data.clone(), mime_type.clone()),
             };
-            Value::Object(HashMap::from([
+            Value::Object(FxHashMap::from_iter([
                 (role_key, Value::String(item.role.clone())),
                 (content_key, Value::String(content_str)),
                 (content_type_key, Value::String(content_type_str)),
@@ -174,7 +174,7 @@ pub fn value_to_tool_result(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Object(obj) => {
             // Try to find "content" key by iterating
-            for (_, v) in obj {
+            for v in obj.values() {
                 if let Value::String(s) = v {
                     return s.clone();
                 }

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 use crate::Astr;
 
@@ -17,7 +17,7 @@ enum Signal<V> {
     Yield(V),
     NeedContext {
         name: Astr,
-        bindings: HashMap<Astr, V>,
+        bindings: FxHashMap<Astr, V>,
     },
     ContextReady(Arc<V>),
 }
@@ -43,14 +43,14 @@ impl<V> YieldHandle<V> {
         ContextFuture {
             shared: &self.shared,
             name: Some(name),
-            bindings: HashMap::new(),
+            bindings: FxHashMap::default(),
         }
     }
 
     pub fn request_context_with(
         &self,
         name: Astr,
-        bindings: HashMap<Astr, V>,
+        bindings: FxHashMap<Astr, V>,
     ) -> ContextFuture<'_, V> {
         ContextFuture {
             shared: &self.shared,
@@ -93,7 +93,7 @@ where
 pub struct ContextFuture<'a, V> {
     shared: &'a Arc<Mutex<Signal<V>>>,
     name: Option<Astr>,
-    bindings: HashMap<Astr, V>,
+    bindings: FxHashMap<Astr, V>,
 }
 
 impl<V> Future for ContextFuture<'_, V>
@@ -154,7 +154,7 @@ impl<V> EmitStepped<V> {
 
 pub struct NeedContextStepped<V> {
     name: Astr,
-    bindings: HashMap<Astr, V>,
+    bindings: FxHashMap<Astr, V>,
 }
 
 impl<V> NeedContextStepped<V> {
@@ -162,11 +162,11 @@ impl<V> NeedContextStepped<V> {
         self.name
     }
 
-    pub fn bindings(&self) -> &HashMap<Astr, V> {
+    pub fn bindings(&self) -> &FxHashMap<Astr, V> {
         &self.bindings
     }
 
-    pub fn into_parts(self) -> (Astr, HashMap<Astr, V>) {
+    pub fn into_parts(self) -> (Astr, FxHashMap<Astr, V>) {
         (self.name, self.bindings)
     }
 
@@ -278,10 +278,7 @@ mod tests {
     use super::*;
     use crate::Interner;
 
-    async fn step<V, E>(
-        co: &mut Coroutine<V, E>,
-        key: ResumeKey<V>,
-    ) -> Stepped<V, E> {
+    async fn step<V, E>(co: &mut Coroutine<V, E>, key: ResumeKey<V>) -> Stepped<V, E> {
         co.resume(key).await
     }
 
@@ -361,11 +358,9 @@ mod tests {
         let user = interner.intern("user");
         let role = interner.intern("role");
         let (mut co, key) = coroutine::<_, (), _, _>(|handle| async move {
-            let mut bindings = HashMap::new();
+            let mut bindings = FxHashMap::default();
             bindings.insert(role, "admin".into());
-            let ctx = handle
-                .request_context_with(user, bindings)
-                .await;
+            let ctx = handle.request_context_with(user, bindings).await;
             handle.yield_val(format!("got: {ctx}")).await;
             Ok(())
         });

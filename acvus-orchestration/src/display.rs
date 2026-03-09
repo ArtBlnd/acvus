@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnRegistry, Interpreter, Value};
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::compile::{
     CompiledScript, compile_script, compile_script_with_hint, compile_template, expect_list,
@@ -70,7 +70,7 @@ pub struct CompiledIterableDisplay {
 fn compile_template_as_script(
     interner: &Interner,
     source: &str,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledScript, OrchError> {
     let block = compile_template(interner, source, 0, context_types, registry)?;
@@ -84,7 +84,7 @@ fn compile_template_as_script(
 fn compile_entries(
     interner: &Interner,
     entries: &[DisplayEntrySpec],
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<Vec<CompiledDisplayEntry>, Vec<OrchError>> {
     let mut compiled = Vec::new();
@@ -108,13 +108,14 @@ fn compile_entries(
                 }
             }
         };
-        let template = match compile_template_as_script(interner, &spec.template, context_types, registry) {
-            Ok(t) => t,
-            Err(e) => {
-                errors.push(e);
-                continue;
-            }
-        };
+        let template =
+            match compile_template_as_script(interner, &spec.template, context_types, registry) {
+                Ok(t) => t,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            };
         compiled.push(CompiledDisplayEntry {
             name: spec.name.clone(),
             condition,
@@ -132,18 +133,18 @@ fn compile_entries(
 pub fn compile_static_display(
     interner: &Interner,
     spec: &StaticDisplaySpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledStaticDisplay, Vec<OrchError>> {
-    let template =
-        compile_template_as_script(interner, &spec.template, context_types, registry).map_err(|e| vec![e])?;
+    let template = compile_template_as_script(interner, &spec.template, context_types, registry)
+        .map_err(|e| vec![e])?;
     Ok(CompiledStaticDisplay { template })
 }
 
 pub fn compile_iterable_display(
     interner: &Interner,
     spec: &IterableDisplaySpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledIterableDisplay, Vec<OrchError>> {
     let (iterator, iter_ty) =
@@ -171,7 +172,7 @@ async fn drive_from_storage<S>(
     interner: &Interner,
     script: &CompiledScript,
     storage: &S,
-    local: &HashMap<String, Arc<Value>>,
+    local: &FxHashMap<String, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
 ) -> Value
 where
@@ -187,11 +188,7 @@ where
             }
             acvus_interpreter::Stepped::NeedContext(need) => {
                 let name = interner.resolve(need.name()).to_string();
-                let Some(value) = local
-                    .get(&name)
-                    .cloned()
-                    .or_else(|| storage.get(&name))
-                else {
+                let Some(value) = local.get(&name).cloned().or_else(|| storage.get(&name)) else {
                     return Value::Unit;
                 };
                 key = need.into_key(value);
@@ -206,7 +203,7 @@ async fn drive_template_from_storage<S>(
     interner: &Interner,
     script: &CompiledScript,
     storage: &S,
-    local: &HashMap<String, Arc<Value>>,
+    local: &FxHashMap<String, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
 ) -> String
 where
@@ -227,11 +224,7 @@ where
             }
             acvus_interpreter::Stepped::NeedContext(need) => {
                 let name = interner.resolve(need.name()).to_string();
-                let Some(value) = local
-                    .get(&name)
-                    .cloned()
-                    .or_else(|| storage.get(&name))
-                else {
+                let Some(value) = local.get(&name).cloned().or_else(|| storage.get(&name)) else {
                     break;
                 };
                 key = need.into_key(value);
@@ -247,7 +240,7 @@ async fn eval_entries<S>(
     interner: &Interner,
     entries: &[CompiledDisplayEntry],
     storage: &S,
-    local: &HashMap<String, Arc<Value>>,
+    local: &FxHashMap<String, Arc<Value>>,
     extern_fns: &ExternFnRegistry,
 ) -> Vec<RenderedDisplayEntry>
 where
@@ -261,7 +254,9 @@ where
                 continue;
             };
         }
-        let content = drive_template_from_storage(interner, &entry.template, storage, local, extern_fns).await;
+        let content =
+            drive_template_from_storage(interner, &entry.template, storage, local, extern_fns)
+                .await;
         result.push(RenderedDisplayEntry {
             name: entry.name.clone(),
             content,
@@ -280,8 +275,9 @@ pub async fn render_display<S>(
 where
     S: Storage,
 {
-    let local = HashMap::new();
-    let content = drive_template_from_storage(interner, &display.template, storage, &local, extern_fns).await;
+    let local = FxHashMap::default();
+    let content =
+        drive_template_from_storage(interner, &display.template, storage, &local, extern_fns).await;
     vec![RenderedDisplayEntry {
         name: String::new(),
         content,
@@ -303,8 +299,15 @@ pub async fn render_display_with_idx<S>(
 where
     S: Storage,
 {
-    let empty_local = HashMap::new();
-    let list = drive_from_storage(interner, &display.iterator, storage, &empty_local, extern_fns).await;
+    let empty_local = FxHashMap::default();
+    let list = drive_from_storage(
+        interner,
+        &display.iterator,
+        storage,
+        &empty_local,
+        extern_fns,
+    )
+    .await;
 
     let Value::List(items) = list else {
         return Vec::new();
@@ -313,7 +316,7 @@ where
         return Vec::new();
     };
 
-    let mut local = HashMap::new();
+    let mut local = FxHashMap::default();
     local.insert("item".into(), Arc::new(item));
     local.insert("index".into(), Arc::new(Value::Int(index as i64)));
 
@@ -323,8 +326,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_utils::Interner;
     use crate::storage::HashMapStorage;
+    use acvus_utils::Interner;
 
     fn empty_registry() -> ExternRegistry {
         ExternRegistry::default()
@@ -346,7 +349,7 @@ mod tests {
     #[test]
     fn compile_static_display_ok() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("name"), Ty::String);
         let spec = StaticDisplaySpec {
             template: "hello {{ @name }}".into(),
@@ -358,7 +361,7 @@ mod tests {
     #[test]
     fn compile_iterable_display_ok() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("items"), Ty::List(Box::new(Ty::String)));
         let spec = IterableDisplaySpec {
             iterator: "@items".into(),
@@ -375,7 +378,7 @@ mod tests {
     #[test]
     fn compile_iterable_display_type_error() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("items"), Ty::String);
         let spec = IterableDisplaySpec {
             iterator: "@items".into(),
@@ -388,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn render_static() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("greeting"), Ty::String);
         let spec = StaticDisplaySpec {
             template: "hello {{ @greeting }}".into(),
@@ -404,11 +407,8 @@ mod tests {
     #[tokio::test]
     async fn render_iterable_with_idx() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
-        ctx.insert(
-            interner.intern("messages"),
-            Ty::List(Box::new(Ty::String)),
-        );
+        let mut ctx = FxHashMap::default();
+        ctx.insert(interner.intern("messages"), Ty::List(Box::new(Ty::String)));
         let spec = IterableDisplaySpec {
             iterator: "@messages".into(),
             entries: vec![DisplayEntrySpec {
@@ -426,11 +426,13 @@ mod tests {
                 Value::String("c".into()),
             ]),
         )]);
-        let r0 = render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
+        let r0 =
+            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
         assert_eq!(r0.len(), 1);
         assert_eq!(r0[0].name, "msg");
         assert_eq!(r0[0].content, "msg: a");
-        let r2 = render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 2).await;
+        let r2 =
+            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 2).await;
         assert_eq!(r2.len(), 1);
         assert_eq!(r2[0].content, "msg: c");
     }
@@ -438,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn render_iterable_condition_filters() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("nums"), Ty::List(Box::new(Ty::Int)));
         let spec = IterableDisplaySpec {
             iterator: "@nums".into(),
@@ -461,11 +463,13 @@ mod tests {
             Value::List(vec![Value::Int(3), Value::Int(10)]),
         )]);
 
-        let r0 = render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
+        let r0 =
+            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
         assert_eq!(r0.len(), 1, "3 <= 5, first entry skipped");
         assert_eq!(r0[0].content, "all: 3");
 
-        let r1 = render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 1).await;
+        let r1 =
+            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 1).await;
         assert_eq!(r1.len(), 2, "10 > 5, both entries pass");
         assert_eq!(r1[0].content, "big: 10");
         assert_eq!(r1[1].content, "all: 10");
@@ -474,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn render_iterable_out_of_bounds() {
         let interner = Interner::new();
-        let mut ctx = HashMap::new();
+        let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("items"), Ty::List(Box::new(Ty::String)));
         let spec = IterableDisplaySpec {
             iterator: "@items".into(),
@@ -489,7 +493,8 @@ mod tests {
             "items",
             Value::List(vec![Value::String("only".into())]),
         )]);
-        let result = render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 99).await;
+        let result =
+            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 99).await;
         assert!(result.is_empty(), "out of bounds returns empty");
     }
 }

@@ -14,7 +14,9 @@ pub fn json_to_value(interner: &Interner, v: &serde_json::Value) -> Value {
             }
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => Value::List(arr.iter().map(|v| json_to_value(interner, v)).collect()),
+        serde_json::Value::Array(arr) => {
+            Value::List(arr.iter().map(|v| json_to_value(interner, v)).collect())
+        }
         serde_json::Value::Object(obj) => Value::Object(
             obj.iter()
                 .map(|(k, v)| (interner.intern(k), json_to_value(interner, v)))

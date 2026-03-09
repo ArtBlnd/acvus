@@ -182,7 +182,7 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
     out.push(Inst {
         span,
         kind: InstKind::VarStore {
-            name: state_var.clone(),
+            name: state_var,
             src: v_init,
         },
     });
@@ -208,7 +208,7 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
         span,
         kind: InstKind::VarLoad {
             dst: v_state,
-            name: state_var.clone(),
+            name: state_var,
         },
     });
 
@@ -224,7 +224,7 @@ fn flatten_dispatcher(insts: Vec<Inst>, ctx: &mut PassState, rng: &mut StdRng) -
     out.push(Inst {
         span,
         kind: InstKind::VarStore {
-            name: state_var.clone(),
+            name: state_var,
             src: v_next,
         },
     });
@@ -460,7 +460,7 @@ mod tests {
     use acvus_mir::ir::{DebugInfo, ValueId};
     use acvus_utils::Interner;
     use rand::SeedableRng;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -470,7 +470,7 @@ mod tests {
         let interner = Interner::new();
         PassState {
             insts: Vec::new(),
-            val_types: HashMap::new(),
+            val_types: FxHashMap::default(),
             debug: DebugInfo::new(),
             next_val: 100,
             next_label: 100,

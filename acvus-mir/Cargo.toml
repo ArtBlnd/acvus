@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-utils = { path = "../acvus-utils" }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 insta = "1"

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_ast::Literal;
 use acvus_mir::extern_module::ExternRegistry;
@@ -10,6 +10,7 @@ use acvus_mir_pass::analysis::reachable_context::{
 };
 use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::TokenBudget;
 use crate::convert::value_to_literal;
@@ -85,7 +86,7 @@ impl CompiledBlock {
     ///
     /// Uses dead branch pruning: if a known value resolves a branch condition,
     /// context loads in the dead branch are excluded.
-    pub fn required_context_keys(&self, known: &HashMap<Astr, Literal>) -> HashSet<Astr> {
+    pub fn required_context_keys(&self, known: &FxHashMap<Astr, Literal>) -> HashSet<Astr> {
         reachable_context_keys(&self.module, known, &self.val_def)
     }
 }
@@ -97,7 +98,7 @@ impl CompiledNode {
     /// Keys in `resolvable` (e.g. dependency node names) are excluded.
     pub fn required_context_keys(
         &self,
-        known: &HashMap<Astr, Literal>,
+        known: &FxHashMap<Astr, Literal>,
         resolvable: &HashSet<Astr>,
     ) -> HashSet<Astr> {
         let mut needed = HashSet::new();
@@ -154,7 +155,11 @@ impl CompiledNode {
         merged
     }
 
-    pub(crate) fn known_from_storage<S>(&self, interner: &Interner, storage: &S) -> HashMap<Astr, Literal>
+    pub(crate) fn known_from_storage<S>(
+        &self,
+        interner: &Interner,
+        storage: &S,
+    ) -> FxHashMap<Astr, Literal>
     where
         S: Storage,
     {
@@ -174,7 +179,7 @@ impl CompiledNode {
 pub fn compile_script(
     interner: &Interner,
     source: &str,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<(CompiledScript, Ty), OrchError> {
     compile_script_with_hint(interner, source, context_types, registry, None)
@@ -184,7 +189,7 @@ pub fn compile_script(
 pub fn compile_script_with_hint(
     interner: &Interner,
     source: &str,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(CompiledScript, Ty), OrchError> {
@@ -261,7 +266,7 @@ pub(crate) fn compile_template(
     interner: &Interner,
     source: &str,
     block_idx: usize,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<CompiledBlock, OrchError> {
     let ast = acvus_ast::parse(interner, source).map_err(|e| {
@@ -300,7 +305,7 @@ pub(crate) fn compile_template(
 pub(crate) fn compile_messages(
     interner: &Interner,
     messages: &[MessageSpec],
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     iterator_elem_ty: &Ty,
 ) -> Result<(Vec<CompiledMessage>, HashSet<Astr>), Vec<OrchError>> {
@@ -331,13 +336,15 @@ pub(crate) fn compile_messages(
                 token_budget,
             } => {
                 let ctx = format!("iterator (block {i})");
-                let (expr, tail_ty) = match compile_script(interner, interner.resolve(*key), context_types, registry) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        errors.push(e);
-                        continue;
-                    }
-                };
+                let (expr, tail_ty) =
+                    match compile_script(interner, interner.resolve(*key), context_types, registry)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            errors.push(e);
+                            continue;
+                        }
+                    };
                 let elem_ty = match expect_list(&ctx, tail_ty) {
                     Ok(v) => v,
                     Err(e) => {
@@ -374,7 +381,7 @@ pub(crate) fn compile_messages(
 pub fn compile_node(
     interner: &Interner,
     spec: &NodeSpec,
-    context_types: &HashMap<Astr, Ty>,
+    context_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
     compiled_self: CompiledSelf,
     compiled_strategy: CompiledStrategy,
@@ -390,7 +397,8 @@ pub fn compile_node(
             (CompiledNodeKind::Llm(compiled), keys)
         }
         NodeKind::LlmCache(cache_spec) => {
-            let (compiled, keys) = compile_llm_cache(interner, cache_spec, context_types, registry)?;
+            let (compiled, keys) =
+                compile_llm_cache(interner, cache_spec, context_types, registry)?;
             (CompiledNodeKind::LlmCache(compiled), keys)
         }
         NodeKind::Expr(expr_spec) => {
@@ -409,8 +417,14 @@ pub fn compile_node(
         // assert context: @self = stored value (= raw output), plus all context
         let mut assert_ctx = context_types.clone();
         assert_ctx.insert(interner.intern("self"), stored_ty.clone());
-        let (script, _ty) = compile_script_with_hint(interner, interner.resolve(*assert_src), &assert_ctx, registry, Some(&Ty::Bool))
-            .map_err(|e| vec![e])?;
+        let (script, _ty) = compile_script_with_hint(
+            interner,
+            interner.resolve(*assert_src),
+            &assert_ctx,
+            registry,
+            Some(&Ty::Bool),
+        )
+        .map_err(|e| vec![e])?;
         all_context_keys.extend(script.context_keys.iter().copied());
         Some(script)
     } else {
@@ -455,12 +469,12 @@ pub struct NodeLocalTypes {
 }
 
 pub struct ExternalContextEnv {
-    pub context_types: HashMap<Astr, Ty>,
+    pub context_types: FxHashMap<Astr, Ty>,
     /// Types of values stored in storage (node self types + @turn).
     /// Does not include injected types (those come from the resolver, not storage).
-    pub storage_types: HashMap<Astr, Ty>,
+    pub storage_types: FxHashMap<Astr, Ty>,
     /// Per-node local types, indexed by node name.
-    pub node_locals: HashMap<Astr, NodeLocalTypes>,
+    pub node_locals: FxHashMap<Astr, NodeLocalTypes>,
     pub(crate) stored_types: Vec<Ty>,
 }
 
@@ -476,14 +490,17 @@ pub struct ExternalContextEnv {
 pub fn compute_external_context_env(
     interner: &Interner,
     specs: &[NodeSpec],
-    injected_types: &HashMap<Astr, Ty>,
+    injected_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<ExternalContextEnv, Vec<OrchError>> {
     let mut context_types = injected_types.clone();
 
     // 1. stored type = raw_output_ty for concrete nodes (LLM, Plain, LlmCache)
     //    Expr nodes start as Ty::Infer — resolved in step 3 after @turn is available.
-    let mut stored_types: Vec<Ty> = specs.iter().map(|s| s.kind.raw_output_ty(interner)).collect();
+    let mut stored_types: Vec<Ty> = specs
+        .iter()
+        .map(|s| s.kind.raw_output_ty(interner))
+        .collect();
 
     // 2. Register concrete (non-Infer) stored types so other nodes can reference @name
     for (spec, ty) in specs.iter().zip(stored_types.iter()) {
@@ -503,7 +520,7 @@ pub fn compute_external_context_env(
         .collect();
     if !history_specs.is_empty() {
         let store_ctx = context_types.clone();
-        let mut entry_fields = HashMap::new();
+        let mut entry_fields = FxHashMap::default();
         for &(i, bind_src) in &history_specs {
             let mut hist_ctx = store_ctx.clone();
             hist_ctx.insert(interner.intern("self"), stored_types[i].clone());
@@ -513,7 +530,7 @@ pub fn compute_external_context_env(
             entry_fields.insert(specs[i].name, ty);
         }
         let history_ty = Ty::List(Box::new(Ty::Object(entry_fields)));
-        let turn_fields = HashMap::from([
+        let turn_fields = FxHashMap::from_iter([
             (interner.intern("index"), Ty::Int),
             (interner.intern("history"), history_ty),
         ]);
@@ -533,7 +550,7 @@ pub fn compute_external_context_env(
         context_types.insert(spec.name, stored_types[i].clone());
     }
 
-    let mut node_locals = HashMap::new();
+    let mut node_locals = FxHashMap::default();
     for (spec, stored_ty) in specs.iter().zip(stored_types.iter()) {
         node_locals.insert(
             spec.name,
@@ -545,7 +562,7 @@ pub fn compute_external_context_env(
     }
 
     // storage_types = context_types minus injected_types
-    let storage_types: HashMap<Astr, Ty> = context_types
+    let storage_types: FxHashMap<Astr, Ty> = context_types
         .iter()
         .filter(|(k, _)| !injected_types.contains_key(k))
         .map(|(k, v)| (*k, v.clone()))
@@ -566,7 +583,7 @@ pub fn compute_external_context_env(
 pub fn compile_nodes(
     interner: &Interner,
     specs: &[NodeSpec],
-    injected_types: &HashMap<Astr, Ty>,
+    injected_types: &FxHashMap<Astr, Ty>,
     registry: &ExternRegistry,
 ) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
     let env = compute_external_context_env(interner, specs, injected_types, registry)?;
@@ -631,7 +648,12 @@ pub fn compile_nodes_with_env(
             Strategy::History { history_bind } => {
                 let mut hist_ctx = context_types.clone();
                 hist_ctx.insert(interner.intern("self"), stored_types[i].clone());
-                let (script, _ty) = match compile_script(interner, interner.resolve(*history_bind), &hist_ctx, registry) {
+                let (script, _ty) = match compile_script(
+                    interner,
+                    interner.resolve(*history_bind),
+                    &hist_ctx,
+                    registry,
+                ) {
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
@@ -644,7 +666,12 @@ pub fn compile_nodes_with_env(
                 }
             }
             Strategy::IfModified { key } => {
-                let (script, _ty) = match compile_script(interner, interner.resolve(*key), &context_types, registry) {
+                let (script, _ty) = match compile_script(
+                    interner,
+                    interner.resolve(*key),
+                    &context_types,
+                    registry,
+                ) {
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
@@ -665,13 +692,13 @@ pub fn compile_nodes_with_env(
     // Tool param types must be injected from the caller (LlmSpec) side because
     // the target node alone cannot know what types its params will have — the
     // param types are declared in ToolBinding, not in the target node itself.
-    let mut tool_param_types: HashMap<Astr, HashMap<Astr, Ty>> = HashMap::new();
+    let mut tool_param_types: FxHashMap<Astr, FxHashMap<Astr, Ty>> = FxHashMap::default();
     for spec in specs {
         let NodeKind::Llm(llm_spec) = &spec.kind else {
             continue;
         };
         for tool in &llm_spec.tools {
-            let params: HashMap<Astr, Ty> = tool
+            let params: FxHashMap<Astr, Ty> = tool
                 .params
                 .iter()
                 .filter_map(|(k, v)| Some((interner.intern(k), parse_type_name(v)?)))
@@ -697,7 +724,15 @@ pub fn compile_nodes_with_env(
             initial_value: initial_value_scripts[i].clone(),
         };
         let compiled_strategy = compiled_strategies[i].clone();
-        match compile_node(interner, spec, &node_ctx, registry, compiled_self, compiled_strategy, &stored_types[i]) {
+        match compile_node(
+            interner,
+            spec,
+            &node_ctx,
+            registry,
+            compiled_self,
+            compiled_strategy,
+            &stored_types[i],
+        ) {
             Ok(node) => nodes.push(node),
             Err(errs) => {
                 errors.extend(errs);

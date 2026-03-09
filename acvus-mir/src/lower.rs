@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use acvus_ast::{
     Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
@@ -6,6 +6,7 @@ use acvus_ast::{
     TuplePatternElem,
 };
 use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinId;
 use crate::extern_module::ExternRegistry;
@@ -22,11 +23,11 @@ pub struct Lowerer<'a> {
     /// Interner for string interning.
     interner: &'a Interner,
     /// Stack of scopes: variable name → register.
-    scopes: Vec<HashMap<Astr, ValueId>>,
+    scopes: Vec<FxHashMap<Astr, ValueId>>,
     /// Type map from type checker.
     type_map: TypeMap,
     /// Closures produced during lowering.
-    closures: HashMap<Label, ClosureBody>,
+    closures: FxHashMap<Label, ClosureBody>,
     /// Hint table.
     hints: HintTable,
     /// Variant registry for tag → VariantTagId resolution.
@@ -117,9 +118,9 @@ impl<'a> Lowerer<'a> {
         Self {
             body: MirBody::new(),
             interner,
-            scopes: vec![HashMap::new()],
+            scopes: vec![FxHashMap::default()],
             type_map,
-            closures: HashMap::new(),
+            closures: FxHashMap::default(),
             hints: HintTable::new(),
             variant_registry,
             extern_registry,
@@ -153,7 +154,7 @@ impl<'a> Lowerer<'a> {
     fn build_module(self) -> (MirModule, HintTable) {
         let tag_names = self.variant_registry.build_tag_names();
         let extern_names = self.extern_registry.build_name_table();
-        
+
         let module = MirModule {
             main: self.body,
             closures: self.closures,
@@ -184,7 +185,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(FxHashMap::default());
     }
 
     fn pop_scope(&mut self) {
@@ -267,7 +268,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit_label(&mut self, span: Span, label: Label) {
-        self.emit_inst(span, InstKind::BlockLabel { label, params: vec![] });
+        self.emit_inst(
+            span,
+            InstKind::BlockLabel {
+                label,
+                params: vec![],
+            },
+        );
     }
 
     /// Allocate a new value with type inferred from span.
@@ -294,7 +301,15 @@ impl<'a> Lowerer<'a> {
     fn emit_and(&mut self, span: Span, left: ValueId, right: ValueId) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::Bool);
-        self.emit_inst(span, InstKind::BinOp { dst, op: acvus_ast::BinOp::And, left, right });
+        self.emit_inst(
+            span,
+            InstKind::BinOp {
+                dst,
+                op: acvus_ast::BinOp::And,
+                left,
+                right,
+            },
+        );
         dst
     }
 
@@ -305,17 +320,32 @@ impl<'a> Lowerer<'a> {
         let result_param = self.alloc_val();
         self.set_val_type(result_param, Ty::Bool);
 
-        self.emit_inst(span, InstKind::Jump { label: result_label, args: vec![ok_val] });
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: result_label,
+                args: vec![ok_val],
+            },
+        );
 
         // Fail path.
         self.emit_label(span, fail_label);
         let false_val = self.emit_const_bool(span, false);
-        self.emit_inst(span, InstKind::Jump { label: result_label, args: vec![false_val] });
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: result_label,
+                args: vec![false_val],
+            },
+        );
 
         // Merge.
         self.emit_inst(
             span,
-            InstKind::BlockLabel { label: result_label, params: vec![result_param] },
+            InstKind::BlockLabel {
+                label: result_label,
+                params: vec![result_param],
+            },
         );
         result_param
     }
@@ -323,7 +353,13 @@ impl<'a> Lowerer<'a> {
     fn emit_const_bool(&mut self, span: Span, value: bool) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::Bool);
-        self.emit_inst(span, InstKind::Const { dst, value: Literal::Bool(value) });
+        self.emit_inst(
+            span,
+            InstKind::Const {
+                dst,
+                value: Literal::Bool(value),
+            },
+        );
         dst
     }
 
@@ -347,7 +383,10 @@ impl<'a> Lowerer<'a> {
                 self.set_origin(dst, ValOrigin::Expr);
                 self.emit_inst(
                     *span,
-                    InstKind::Const { dst, value: Literal::String(value.clone()) },
+                    InstKind::Const {
+                        dst,
+                        value: Literal::String(value.clone()),
+                    },
                 );
                 self.emit_inst(*span, InstKind::Yield(dst));
             }
@@ -367,17 +406,31 @@ impl<'a> Lowerer<'a> {
         match expr {
             Expr::Literal { value, span } => {
                 let dst = self.alloc_expr(*span);
-                self.emit_inst(*span, InstKind::Const { dst, value: value.clone() });
+                self.emit_inst(
+                    *span,
+                    InstKind::Const {
+                        dst,
+                        value: value.clone(),
+                    },
+                );
                 dst
             }
 
-            Expr::Ident { name, ref_kind, span } => match ref_kind {
+            Expr::Ident {
+                name,
+                ref_kind,
+                span,
+            } => match ref_kind {
                 RefKind::Context => {
                     let dst = self.alloc_typed(*span);
                     self.set_origin(dst, ValOrigin::Context(*name));
                     self.emit_inst(
                         *span,
-                        InstKind::ContextLoad { dst, name: *name, bindings: Vec::new() },
+                        InstKind::ContextLoad {
+                            dst,
+                            name: *name,
+                            bindings: Vec::new(),
+                        },
                     );
                     dst
                 }
@@ -398,7 +451,7 @@ impl<'a> Lowerer<'a> {
                     self.set_val_type(dst, Ty::Unit);
                     dst
                 }
-            }
+            },
 
             Expr::BinaryOp {
                 left,
@@ -409,14 +462,29 @@ impl<'a> Lowerer<'a> {
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
                 let dst = self.alloc_expr(*span);
-                self.emit_inst(*span, InstKind::BinOp { dst, op: *op, left: l, right: r });
+                self.emit_inst(
+                    *span,
+                    InstKind::BinOp {
+                        dst,
+                        op: *op,
+                        left: l,
+                        right: r,
+                    },
+                );
                 dst
             }
 
             Expr::UnaryOp { op, operand, span } => {
                 let o = self.lower_expr(operand);
                 let dst = self.alloc_expr(*span);
-                self.emit_inst(*span, InstKind::UnaryOp { dst, op: *op, operand: o });
+                self.emit_inst(
+                    *span,
+                    InstKind::UnaryOp {
+                        dst,
+                        op: *op,
+                        operand: o,
+                    },
+                );
                 dst
             }
 
@@ -431,7 +499,11 @@ impl<'a> Lowerer<'a> {
                 self.set_origin(dst, ValOrigin::Field(obj, *field));
                 self.emit_inst(
                     *span,
-                    InstKind::FieldGet { dst, object: obj, field: *field },
+                    InstKind::FieldGet {
+                        dst,
+                        object: obj,
+                        field: *field,
+                    },
                 );
                 dst
             }
@@ -444,9 +516,10 @@ impl<'a> Lowerer<'a> {
                     Expr::FuncCall { func, args, .. } => {
                         self.lower_func_call(func, args, Some(left), *span)
                     }
-                    Expr::Ident { ref_kind: RefKind::Value, .. } => {
-                        self.lower_func_call(right, &[], Some(left), *span)
-                    }
+                    Expr::Ident {
+                        ref_kind: RefKind::Value,
+                        ..
+                    } => self.lower_func_call(right, &[], Some(left), *span),
                     _ => {
                         // Fallback: evaluate both sides, call closure.
                         let l = self.lower_expr(left);
@@ -454,7 +527,11 @@ impl<'a> Lowerer<'a> {
                         let dst = self.alloc_typed(*span);
                         self.emit_inst(
                             *span,
-                            InstKind::CallClosure { dst, closure: r, args: vec![l] },
+                            InstKind::CallClosure {
+                                dst,
+                                closure: r,
+                                args: vec![l],
+                            },
                         );
                         dst
                     }
@@ -477,7 +554,7 @@ impl<'a> Lowerer<'a> {
 
                 // Build the closure body MIR in a sub-lowerer.
                 let mut sub_body = MirBody::new();
-                let mut sub_scopes = vec![HashMap::new()];
+                let mut sub_scopes = vec![FxHashMap::default()];
 
                 // Captures become the first registers.
                 for (i, name) in capture_names.iter().enumerate() {
@@ -527,7 +604,11 @@ impl<'a> Lowerer<'a> {
                 let dst = self.alloc_typed(*span);
                 self.emit_inst(
                     *span,
-                    InstKind::MakeClosure { dst, body: closure_label, captures: capture_regs },
+                    InstKind::MakeClosure {
+                        dst,
+                        body: closure_label,
+                        captures: capture_regs,
+                    },
                 );
                 dst
             }
@@ -559,7 +640,13 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect();
                 let dst = self.alloc_typed(*span);
-                self.emit_inst(*span, InstKind::MakeObject { dst, fields: field_regs });
+                self.emit_inst(
+                    *span,
+                    InstKind::MakeObject {
+                        dst,
+                        fields: field_regs,
+                    },
+                );
                 dst
             }
 
@@ -573,7 +660,15 @@ impl<'a> Lowerer<'a> {
                 let e = self.lower_expr(end);
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Range);
-                self.emit_inst(*span, InstKind::MakeRange { dst, start: s, end: e, kind: *kind });
+                self.emit_inst(
+                    *span,
+                    InstKind::MakeRange {
+                        dst,
+                        start: s,
+                        end: e,
+                        kind: *kind,
+                    },
+                );
                 dst
             }
 
@@ -585,13 +680,25 @@ impl<'a> Lowerer<'a> {
                         TupleElem::Wildcard(s) => {
                             let dst = self.alloc_val();
                             self.set_val_type(dst, Ty::Unit);
-                            self.emit_inst(*s, InstKind::Const { dst, value: Literal::Bool(false) });
+                            self.emit_inst(
+                                *s,
+                                InstKind::Const {
+                                    dst,
+                                    value: Literal::Bool(false),
+                                },
+                            );
                             dst
                         }
                     })
                     .collect();
                 let dst = self.alloc_typed(*span);
-                self.emit_inst(*span, InstKind::MakeTuple { dst, elements: elem_vals });
+                self.emit_inst(
+                    *span,
+                    InstKind::MakeTuple {
+                        dst,
+                        elements: elem_vals,
+                    },
+                );
                 dst
             }
 
@@ -600,7 +707,13 @@ impl<'a> Lowerer<'a> {
                 let Some(last) = elements.last() else {
                     let dst = self.alloc_val();
                     self.set_val_type(dst, Ty::Unit);
-                    self.emit_inst(*span, InstKind::Const { dst, value: Literal::Bool(false) });
+                    self.emit_inst(
+                        *span,
+                        InstKind::Const {
+                            dst,
+                            value: Literal::Bool(false),
+                        },
+                    );
                     return dst;
                 };
                 self.lower_expr(last)
@@ -619,7 +732,11 @@ impl<'a> Lowerer<'a> {
                 self.set_origin(dst, ValOrigin::Context(*name));
                 self.emit_inst(
                     *span,
-                    InstKind::ContextLoad { dst, name: *name, bindings: binding_vals },
+                    InstKind::ContextLoad {
+                        dst,
+                        name: *name,
+                        bindings: binding_vals,
+                    },
                 );
                 dst
             }
@@ -635,10 +752,16 @@ impl<'a> Lowerer<'a> {
                 let tag_id = self
                     .variant_registry
                     .resolve_tag(*enum_name, *tag)
-                    .unwrap_or_else(|| panic!("unknown variant tag: {}", self.interner.resolve(*tag)));
+                    .unwrap_or_else(|| {
+                        panic!("unknown variant tag: {}", self.interner.resolve(*tag))
+                    });
                 self.emit_inst(
                     *span,
-                    InstKind::MakeVariant { dst, tag: tag_id, payload: payload_val },
+                    InstKind::MakeVariant {
+                        dst,
+                        tag: tag_id,
+                        payload: payload_val,
+                    },
                 );
                 dst
             }
@@ -652,20 +775,30 @@ impl<'a> Lowerer<'a> {
         pipe_left: Option<&Box<Expr>>,
         call_span: Span,
     ) -> ValueId {
-        let mut arg_regs: Vec<ValueId> = Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
+        let mut arg_regs: Vec<ValueId> =
+            Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
         if let Some(left) = pipe_left {
             arg_regs.push(self.lower_expr(left));
         }
         arg_regs.extend(args.iter().map(|a| self.lower_expr(a)));
         let dst = self.alloc_typed(call_span);
 
-        let Expr::Ident { name, ref_kind: RefKind::Value, .. } = func else {
+        let Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } = func
+        else {
             // Expression call (closure).
             self.set_origin(dst, ValOrigin::Call(self.interner.intern("<closure>")));
             let func_reg = self.lower_expr(func);
             self.emit_inst(
                 call_span,
-                InstKind::CallClosure { dst, closure: func_reg, args: arg_regs },
+                InstKind::CallClosure {
+                    dst,
+                    closure: func_reg,
+                    args: arg_regs,
+                },
             );
             return dst;
         };
@@ -675,7 +808,11 @@ impl<'a> Lowerer<'a> {
         if let Some(builtin_id) = BuiltinId::resolve(self.interner.resolve(*name)) {
             self.emit_inst(
                 call_span,
-                InstKind::Call { dst, func: CallTarget::Builtin(builtin_id), args: arg_regs },
+                InstKind::Call {
+                    dst,
+                    func: CallTarget::Builtin(builtin_id),
+                    args: arg_regs,
+                },
             );
             let idx = self.body.insts.len() - 1;
             self.hints.add(idx, Hint::Pure);
@@ -685,7 +822,11 @@ impl<'a> Lowerer<'a> {
         if let Some(closure_reg) = self.lookup_var(*name) {
             self.emit_inst(
                 call_span,
-                InstKind::CallClosure { dst, closure: closure_reg, args: arg_regs },
+                InstKind::CallClosure {
+                    dst,
+                    closure: closure_reg,
+                    args: arg_regs,
+                },
             );
             return dst;
         }
@@ -699,11 +840,21 @@ impl<'a> Lowerer<'a> {
         self.set_val_type(future_reg, Ty::Unit);
         self.emit_inst(
             call_span,
-            InstKind::AsyncCall { dst: future_reg, func: CallTarget::Extern(extern_id), args: arg_regs },
+            InstKind::AsyncCall {
+                dst: future_reg,
+                func: CallTarget::Extern(extern_id),
+                args: arg_regs,
+            },
         );
         let idx = self.body.insts.len() - 1;
         self.hints.add(idx, Hint::Effectful);
-        self.emit_inst(call_span, InstKind::Await { dst, src: future_reg });
+        self.emit_inst(
+            call_span,
+            InstKind::Await {
+                dst,
+                src: future_reg,
+            },
+        );
 
         dst
     }
@@ -712,16 +863,21 @@ impl<'a> Lowerer<'a> {
 
     fn lower_match_block(&mut self, mb: &MatchBlock) {
         // Body-less binding shorthand (variable write or value binding).
-        if mb.arms.len() == 1 && mb.arms[0].body.is_empty() {
-            if let Pattern::Binding { name, ref_kind, span: pat_span } = &mb.arms[0].pattern {
-                let src = self.lower_expr(&mb.source);
-                if *ref_kind == RefKind::Variable {
-                    self.emit_inst(*pat_span, InstKind::VarStore { name: *name, src });
-                } else {
-                    self.define_var(*name, src);
-                }
-                return;
+        if mb.arms.len() == 1
+            && mb.arms[0].body.is_empty()
+            && let Pattern::Binding {
+                name,
+                ref_kind,
+                span: pat_span,
+            } = &mb.arms[0].pattern
+        {
+            let src = self.lower_expr(&mb.source);
+            if *ref_kind == RefKind::Variable {
+                self.emit_inst(*pat_span, InstKind::VarStore { name: *name, src });
+            } else {
+                self.define_var(*name, src);
             }
+            return;
         }
 
         // Pre-compute indent-adjusted arm bodies and catch-all body.
@@ -784,7 +940,13 @@ impl<'a> Lowerer<'a> {
             self.hoist_bodyless_bindings();
             self.pop_scope();
             // After body, jump to end (no loop).
-            self.emit_inst(arm.tag_span, InstKind::Jump { label: end_label, args: vec![] });
+            self.emit_inst(
+                arm.tag_span,
+                InstKind::Jump {
+                    label: end_label,
+                    args: vec![],
+                },
+            );
         }
 
         // Catch-all block.
@@ -820,7 +982,13 @@ impl<'a> Lowerer<'a> {
 
         let iter_reg = self.alloc_val();
         self.set_val_type(iter_reg, Ty::Unit);
-        self.emit_inst(ib.span, InstKind::IterInit { dst: iter_reg, src: source_reg });
+        self.emit_inst(
+            ib.span,
+            InstKind::IterInit {
+                dst: iter_reg,
+                src: source_reg,
+            },
+        );
 
         let loop_label = self.alloc_label();
         let catch_all_label = self.alloc_label();
@@ -835,7 +1003,11 @@ impl<'a> Lowerer<'a> {
         self.set_val_type(done_reg, Ty::Bool);
         self.emit_inst(
             ib.span,
-            InstKind::IterNext { dst_value: value_reg, dst_done: done_reg, iter: iter_reg },
+            InstKind::IterNext {
+                dst_value: value_reg,
+                dst_done: done_reg,
+                iter: iter_reg,
+            },
         );
 
         // If done, jump to catch-all.
@@ -864,7 +1036,13 @@ impl<'a> Lowerer<'a> {
         self.pop_scope();
 
         // Jump back to loop.
-        self.emit_inst(ib.span, InstKind::Jump { label: loop_label, args: vec![] });
+        self.emit_inst(
+            ib.span,
+            InstKind::Jump {
+                label: loop_label,
+                args: vec![],
+            },
+        );
 
         // Catch-all block.
         self.emit_label(ib.span, catch_all_label);
@@ -889,7 +1067,13 @@ impl<'a> Lowerer<'a> {
         match pattern {
             Pattern::Binding { name, ref_kind, .. } => {
                 if *ref_kind == RefKind::Variable {
-                    self.emit_inst(span, InstKind::VarStore { name: *name, src: src_reg });
+                    self.emit_inst(
+                        span,
+                        InstKind::VarStore {
+                            name: *name,
+                            src: src_reg,
+                        },
+                    );
                 }
                 self.emit_const_bool(span, true)
             }
@@ -897,7 +1081,14 @@ impl<'a> Lowerer<'a> {
             Pattern::Literal { value, .. } => {
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Bool);
-                self.emit_inst(span, InstKind::TestLiteral { dst, src: src_reg, value: value.clone() });
+                self.emit_inst(
+                    span,
+                    InstKind::TestLiteral {
+                        dst,
+                        src: src_reg,
+                        value: value.clone(),
+                    },
+                );
                 dst
             }
 
@@ -909,7 +1100,15 @@ impl<'a> Lowerer<'a> {
 
                 let len_ok = self.alloc_val();
                 self.set_val_type(len_ok, Ty::Bool);
-                self.emit_inst(span, InstKind::TestListLen { dst: len_ok, src: src_reg, min_len, exact });
+                self.emit_inst(
+                    span,
+                    InstKind::TestListLen {
+                        dst: len_ok,
+                        src: src_reg,
+                        min_len,
+                        exact,
+                    },
+                );
 
                 // If length doesn't match, short-circuit.
                 let check_elems_label = self.alloc_label();
@@ -938,7 +1137,12 @@ impl<'a> Lowerer<'a> {
 
                 // Check each tail element (indexed from end).
                 for (i, p) in tail.iter().enumerate() {
-                    let elem = self.emit_list_index(span, src_reg, -((tail.len() - i) as i32), elem_ty.clone());
+                    let elem = self.emit_list_index(
+                        span,
+                        src_reg,
+                        -((tail.len() - i) as i32),
+                        elem_ty.clone(),
+                    );
                     let value_id = self.lower_pattern_test(p, elem, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
@@ -955,14 +1159,22 @@ impl<'a> Lowerer<'a> {
                     self.set_val_type(key_ok, Ty::Bool);
                     self.emit_inst(
                         span,
-                        InstKind::TestObjectKey { dst: key_ok, src: src_reg, key: *key },
+                        InstKind::TestObjectKey {
+                            dst: key_ok,
+                            src: src_reg,
+                            key: *key,
+                        },
                     );
 
                     let field_val = self.alloc_val();
                     self.set_val_type(field_val, self.object_field_type(src_reg, *key));
                     self.emit_inst(
                         span,
-                        InstKind::ObjectGet { dst: field_val, object: src_reg, key: *key },
+                        InstKind::ObjectGet {
+                            dst: field_val,
+                            object: src_reg,
+                            key: *key,
+                        },
                     );
 
                     let sub_ok = self.lower_pattern_test(pattern, field_val, span);
@@ -980,7 +1192,13 @@ impl<'a> Lowerer<'a> {
                 self.set_val_type(dst, Ty::Bool);
                 self.emit_inst(
                     span,
-                    InstKind::TestRange { dst, src: src_reg, start: start_val, end: end_val, kind: *kind },
+                    InstKind::TestRange {
+                        dst,
+                        src: src_reg,
+                        start: start_val,
+                        end: end_val,
+                        kind: *kind,
+                    },
                 );
                 dst
             }
@@ -991,12 +1209,18 @@ impl<'a> Lowerer<'a> {
                 let mut all_ok = self.emit_const_bool(span, true);
 
                 for (i, elem) in elements.iter().enumerate() {
-                    let TuplePatternElem::Pattern(pat) = elem else { continue };
+                    let TuplePatternElem::Pattern(pat) = elem else {
+                        continue;
+                    };
                     let field_val = self.alloc_val();
                     self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
                     self.emit_inst(
                         span,
-                        InstKind::TupleIndex { dst: field_val, tuple: src_reg, index: i },
+                        InstKind::TupleIndex {
+                            dst: field_val,
+                            tuple: src_reg,
+                            index: i,
+                        },
                     );
                     let value_id = self.lower_pattern_test(pat, field_val, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
@@ -1015,10 +1239,19 @@ impl<'a> Lowerer<'a> {
                 let tag_id = self
                     .variant_registry
                     .resolve_tag(*enum_name, *tag)
-                    .unwrap_or_else(|| panic!("unknown variant tag: {}", self.interner.resolve(*tag)));
+                    .unwrap_or_else(|| {
+                        panic!("unknown variant tag: {}", self.interner.resolve(*tag))
+                    });
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
-                self.emit_inst(span, InstKind::TestVariant { dst: tag_ok, src: src_reg, tag: tag_id });
+                self.emit_inst(
+                    span,
+                    InstKind::TestVariant {
+                        dst: tag_ok,
+                        src: src_reg,
+                        tag: tag_id,
+                    },
+                );
 
                 let Some(inner_pat) = payload else {
                     // No payload (e.g. None) — tag test is the final result.
@@ -1044,7 +1277,13 @@ impl<'a> Lowerer<'a> {
                 self.emit_label(span, check_inner_label);
                 let inner_val = self.alloc_val();
                 self.set_val_type(inner_val, self.variant_inner_type(src_reg));
-                self.emit_inst(span, InstKind::UnwrapVariant { dst: inner_val, src: src_reg });
+                self.emit_inst(
+                    span,
+                    InstKind::UnwrapVariant {
+                        dst: inner_val,
+                        src: src_reg,
+                    },
+                );
                 let inner_ok = self.lower_pattern_test(inner_pat, inner_val, span);
 
                 self.emit_fail_merge(span, inner_ok, fail_label)
@@ -1054,7 +1293,10 @@ impl<'a> Lowerer<'a> {
 
     fn extract_range_bounds(&self, start: &Pattern, end: &Pattern) -> (i64, i64) {
         let extract = |p: &Pattern| match p {
-            Pattern::Literal { value: Literal::Int(n), .. } => *n,
+            Pattern::Literal {
+                value: Literal::Int(n),
+                ..
+            } => *n,
             _ => 0,
         };
         (extract(start), extract(end))
@@ -1063,14 +1305,21 @@ impl<'a> Lowerer<'a> {
     /// Emit instructions that bind pattern variables from a matched value.
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
-            Pattern::Binding { name, ref_kind: RefKind::Value, .. } => {
+            Pattern::Binding {
+                name,
+                ref_kind: RefKind::Value,
+                ..
+            } => {
                 self.set_origin(src_reg, ValOrigin::Named(*name));
                 self.define_var(*name, src_reg);
             }
             Pattern::Binding { .. } | Pattern::Literal { .. } => {}
 
             Pattern::List {
-                head, rest: _, tail, ..
+                head,
+                rest: _,
+                tail,
+                ..
             } => {
                 let elem_ty = self.list_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
@@ -1078,7 +1327,12 @@ impl<'a> Lowerer<'a> {
                     self.lower_pattern_bind(p, elem, span);
                 }
                 for (i, p) in tail.iter().enumerate() {
-                    let elem = self.emit_list_index(span, src_reg, -((tail.len() - i) as i32), elem_ty.clone());
+                    let elem = self.emit_list_index(
+                        span,
+                        src_reg,
+                        -((tail.len() - i) as i32),
+                        elem_ty.clone(),
+                    );
                     self.lower_pattern_bind(p, elem, span);
                 }
             }
@@ -1089,7 +1343,11 @@ impl<'a> Lowerer<'a> {
                     self.set_val_type(field_val, self.object_field_type(src_reg, *key));
                     self.emit_inst(
                         span,
-                        InstKind::ObjectGet { dst: field_val, object: src_reg, key: *key },
+                        InstKind::ObjectGet {
+                            dst: field_val,
+                            object: src_reg,
+                            key: *key,
+                        },
                     );
                     self.lower_pattern_bind(pattern, field_val, span);
                 }
@@ -1099,12 +1357,18 @@ impl<'a> Lowerer<'a> {
 
             Pattern::Tuple { elements, .. } => {
                 for (i, elem) in elements.iter().enumerate() {
-                    let TuplePatternElem::Pattern(pat) = elem else { continue };
+                    let TuplePatternElem::Pattern(pat) = elem else {
+                        continue;
+                    };
                     let field_val = self.alloc_val();
                     self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
                     self.emit_inst(
                         span,
-                        InstKind::TupleIndex { dst: field_val, tuple: src_reg, index: i },
+                        InstKind::TupleIndex {
+                            dst: field_val,
+                            tuple: src_reg,
+                            index: i,
+                        },
                     );
                     self.lower_pattern_bind(pat, field_val, span);
                 }
@@ -1116,7 +1380,13 @@ impl<'a> Lowerer<'a> {
                 };
                 let inner_val = self.alloc_val();
                 self.set_val_type(inner_val, self.variant_inner_type(src_reg));
-                self.emit_inst(span, InstKind::UnwrapVariant { dst: inner_val, src: src_reg });
+                self.emit_inst(
+                    span,
+                    InstKind::UnwrapVariant {
+                        dst: inner_val,
+                        src: src_reg,
+                    },
+                );
                 self.lower_pattern_bind(inner_pat, inner_val, span);
             }
         }
@@ -1139,7 +1409,11 @@ impl<'a> Lowerer<'a> {
         seen: &mut HashSet<Astr>,
     ) {
         match expr {
-            Expr::Ident { name, ref_kind: RefKind::Value, .. } => {
+            Expr::Ident {
+                name,
+                ref_kind: RefKind::Value,
+                ..
+            } => {
                 if bound.contains(name) || seen.contains(name) {
                     return;
                 }
@@ -1149,7 +1423,10 @@ impl<'a> Lowerer<'a> {
                 }
             }
             // Variable/context refs resolve at runtime — no capture needed.
-            Expr::Ident { ref_kind: RefKind::Variable | RefKind::Context, .. } => {}
+            Expr::Ident {
+                ref_kind: RefKind::Variable | RefKind::Context,
+                ..
+            } => {}
             Expr::BinaryOp { left, right, .. } => {
                 self.collect_free_vars(left, bound, free, seen);
                 self.collect_free_vars(right, bound, free, seen);
@@ -1211,7 +1488,10 @@ impl<'a> Lowerer<'a> {
                     self.collect_free_vars(e, bound, free, seen);
                 }
             }
-            Expr::Variant { payload: Some(inner), .. } => {
+            Expr::Variant {
+                payload: Some(inner),
+                ..
+            } => {
                 self.collect_free_vars(inner, bound, free, seen);
             }
             Expr::Variant { payload: None, .. } => {}
@@ -1225,16 +1505,20 @@ mod tests {
     use crate::extern_module::ExternRegistry;
     use crate::typeck::TypeChecker;
     use crate::user_type::UserTypeRegistry;
-    use std::collections::HashMap;
 
-    fn lower(interner: &Interner,source: &str) -> MirModule {
-        lower_with(interner, source, &HashMap::new(), &ExternRegistry::new())
+    fn lower(interner: &Interner, source: &str) -> MirModule {
+        lower_with(
+            interner,
+            source,
+            &FxHashMap::default(),
+            &ExternRegistry::new(),
+        )
     }
 
     fn lower_with(
         interner: &Interner,
         source: &str,
-        context: &HashMap<Astr, Ty>,
+        context: &FxHashMap<Astr, Ty>,
         registry: &ExternRegistry,
     ) -> MirModule {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
@@ -1284,7 +1568,7 @@ mod tests {
     #[test]
     fn lower_match_block() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         // Use a non-binding pattern to trigger full match block (no iteration).
         let module = lower_with(
             &interner,
@@ -1313,13 +1597,18 @@ mod tests {
         use crate::extern_module::ExternModule;
         let interner = Interner::new();
         let mut ext = ExternModule::new(interner.intern("test"));
-        ext.add_fn(interner.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
+        ext.add_fn(
+            interner.intern("fetch_user"),
+            vec![Ty::Int],
+            Ty::String,
+            false,
+        );
         let mut registry = ExternRegistry::new();
         registry.register(&ext);
         let module = lower_with(
             &interner,
             r#"{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-            &HashMap::new(),
+            &FxHashMap::default(),
             &registry,
         );
         let has_async_call = module
@@ -1333,8 +1622,13 @@ mod tests {
     #[test]
     fn lower_builtin_call() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("n"), Ty::Int)]);
-        let module = lower_with(&interner, r#"{{ @n | to_string }}"#, &context, &ExternRegistry::new());
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let module = lower_with(
+            &interner,
+            r#"{{ @n | to_string }}"#,
+            &context,
+            &ExternRegistry::new(),
+        );
         let has_call = module
             .main
             .insts
@@ -1381,7 +1675,7 @@ mod tests {
     #[test]
     fn lower_match_block_indent_decrease() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         let source = "{{ true = @name == \"test\" }}\n    matched\n    here{{/-2}}";
         let module = lower_with(&interner, source, &context, &ExternRegistry::new());
         let texts: Vec<&str> = module
@@ -1402,7 +1696,7 @@ mod tests {
     #[test]
     fn lower_match_block_indent_increase() {
         let interner = Interner::new();
-        let context = HashMap::from([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         let source = "{{ true = @name == \"test\" }}\nmatched{{/+4}}";
         let module = lower_with(&interner, source, &context, &ExternRegistry::new());
         let texts: Vec<&str> = module

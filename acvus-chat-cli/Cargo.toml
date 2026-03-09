@@ -10,6 +10,7 @@ acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-orchestration = { path = "../acvus-orchestration" }
 acvus-utils = { path = "../acvus-utils" }
+rustc-hash = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
