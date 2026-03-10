@@ -659,13 +659,9 @@ impl<'a> TypeChecker<'a> {
                         ..
                     } => self.check_func_call(right, &[], pipe_left, *span),
                     _ => {
-                        let _lt = self.check_expr(left);
-                        let _rt = self.check_expr(right);
-                        self.error(
-                            MirErrorKind::UndefinedFunction("<pipe rhs>".to_string()),
-                            *span,
-                        );
-                        Ty::Error
+                        let lt = self.check_expr(left);
+                        let rt = self.check_expr(right);
+                        self.check_callable(&rt, &[], &Some(lt), *span)
                     }
                 };
                 self.record_ret(*span, ty)
@@ -865,6 +861,25 @@ impl<'a> TypeChecker<'a> {
                     self.check_expr(expr);
                 }
                 self.record_ret(*span, result_ty)
+            }
+
+            Expr::Block { stmts, tail, span } => {
+                self.push_scope();
+                for stmt in stmts {
+                    match stmt {
+                        acvus_ast::Stmt::Bind { name, expr, span } => {
+                            let ty = self.check_expr(expr);
+                            self.define_var(*name, ty.clone());
+                            self.record(*span, ty);
+                        }
+                        acvus_ast::Stmt::Expr(expr) => {
+                            self.check_expr(expr);
+                        }
+                    }
+                }
+                let ty = self.check_expr(tail);
+                self.pop_scope();
+                self.record_ret(*span, ty)
             }
         }
     }

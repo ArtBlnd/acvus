@@ -92,24 +92,24 @@ pub TagContent: TagContent = {
 // ── Expressions (precedence climbing) ──────────────────────────────────
 
 Expr: Expr = {
-    LambdaExpr,
-};
-
-// Lambda: PipeExpr -> LambdaExpr (right-associative)
-LambdaExpr: Expr = {
-    <l:@L> <params:PipeExpr> "->" <body:LambdaExpr> <r:@R> =>
-        expr_to_lambda(interner, params, body, Span::new(l, r)),
     PipeExpr,
 };
 
-// Pipe: left-associative
+// Pipe: left-associative (lowest precedence)
 PipeExpr: Expr = {
-    <l:@L> <left:PipeExpr> "|" <right:OrExpr> <r:@R> =>
+    <l:@L> <left:PipeExpr> "|" <right:LambdaExpr> <r:@R> =>
         Expr::Pipe {
             left: Box::new(left),
             right: Box::new(right),
             span: Span::new(l, r),
         },
+    LambdaExpr,
+};
+
+// Lambda: OrExpr -> LambdaExpr (right-associative)
+LambdaExpr: Expr = {
+    <l:@L> <params:OrExpr> "->" <body:LambdaExpr> <r:@R> =>
+        expr_to_lambda(interner, params, body, Span::new(l, r)),
     OrExpr,
 };
 
@@ -249,6 +249,13 @@ PrimaryExpr: Expr = {
     // List: [a, b, c], [a, b, ..], [.., a, b], [a, .., b]
     <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
         build_list(items, Span::new(l, r)),
+
+    // Block expression with statements: { stmt; stmt; expr }
+    <l:@L> "{" <stmts:(<Stmt> ";")+> <tail:Expr> "}" <r:@R> =>
+        Expr::Block { stmts, tail: Box::new(tail), span: Span::new(l, r) },
+    // Block expression with single expression: { expr }
+    <l:@L> "{" <tail:Expr> "}" <r:@R> =>
+        Expr::Block { stmts: vec![], tail: Box::new(tail), span: Span::new(l, r) },
 
     // Object literal: { field1, $field2, } — trailing comma required (empty {} allowed)
     <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>

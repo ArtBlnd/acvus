@@ -1239,4 +1239,25 @@ mod tests {
         assert!(result.ok);
         assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"unsupported","raw":"?"}"#);
     }
+
+    #[test]
+    fn test_analyze_enum_from_match_arms() {
+        let interner = test_interner();
+        let ctx = FxHashMap::default();
+        // Template with match block: two arms, one with payload.
+        let template = "{{ Status::Active(msg) = @status }}{{ msg }}{{ Status::Inactive = }}inactive{{/}}";
+        let result = do_analyze_test(&interner, template, "template", &ctx);
+        if !result.ok {
+            eprintln!("errors: {:?}", result.errors);
+        }
+        assert!(result.ok, "template should compile");
+        assert_eq!(result.context_keys.len(), 1, "should have one context key");
+        assert_eq!(result.context_keys[0].name, "status");
+        let ty_json = desc_json(&result.context_keys[0].ty);
+        eprintln!("enum type JSON: {ty_json}");
+        // Should be an Enum with two variants: Active(String) and Inactive
+        assert!(ty_json.contains(r#""kind":"enum""#), "should be enum type, got: {ty_json}");
+        assert!(ty_json.contains(r#""hasPayload":true"#), "Active should have payload, got: {ty_json}");
+        assert!(ty_json.contains(r#""hasPayload":false"#), "Inactive should have no payload, got: {ty_json}");
+    }
 }

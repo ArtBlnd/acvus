@@ -126,27 +126,16 @@ pub(crate) fn builtin_repeat_str(s: String, n: i64) -> String {
     s.repeat(n.max(0) as usize)
 }
 
-pub(crate) fn builtin_first(items: Vec<Value>) -> Value {
-    items.into_iter().next().expect("first: empty list")
+pub(crate) fn builtin_first(items: Vec<Value>) -> Option<Value> {
+    items.into_iter().next()
 }
 
-pub(crate) fn builtin_last(items: Vec<Value>) -> Value {
-    items.into_iter().next_back().expect("last: empty list")
+pub(crate) fn builtin_last(items: Vec<Value>) -> Option<Value> {
+    items.into_iter().next_back()
 }
 
-pub(crate) fn builtin_unwrap_or(v: Value, default: Value) -> Value {
-    let interner =
-        crate::interner_ctx::get_interner().expect("builtin_unwrap_or: requires interner context");
-    let some_tag = interner.intern("Some");
-    let none_tag = interner.intern("None");
-    match v {
-        Value::Variant {
-            tag,
-            payload: Some(inner),
-        } if tag == some_tag => *inner,
-        Value::Variant { tag, .. } if tag == none_tag => default,
-        _ => panic!("unwrap_or: expected Option variant, got {v:?}"),
-    }
+pub(crate) fn builtin_unwrap_or(v: Option<Value>, default: Value) -> Value {
+    v.unwrap_or(default)
 }
 
 pub(crate) fn builtin_unwrap(v: Value) -> Value {

@@ -164,6 +164,12 @@ pub enum Expr {
         bindings: Vec<(Astr, Expr)>,
         span: Span,
     },
+    /// A block expression: `{ stmt; stmt; expr }`.
+    Block {
+        stmts: Vec<Stmt>,
+        tail: Box<Expr>,
+        span: Span,
+    },
     /// A variant constructor: `Some(expr)`, `None`, or `Color::Red`.
     Variant {
         enum_name: Option<Astr>,
@@ -198,7 +204,8 @@ impl Expr {
             | Expr::Range { span, .. }
             | Expr::Tuple { span, .. }
             | Expr::ContextCall { span, .. }
-            | Expr::Variant { span, .. } => *span,
+            | Expr::Variant { span, .. }
+            | Expr::Block { span, .. } => *span,
         }
     }
 }

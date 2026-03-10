@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @items | filter(i -> i > @threshold) }}{{ x | map(i -> i | to_string) | join(\", \") }}",
+  "template": "{{ x = @items | filter(i -> i > @threshold) }}{{ x | map(i -> (i | to_string)) | join(\", \") }}",
   "context": { "items": [1, 5, 10], "threshold": 3 },
   "expected": "5, 10"
 }

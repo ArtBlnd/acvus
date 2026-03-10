@@ -742,6 +742,24 @@ impl<'a> Lowerer<'a> {
                 );
                 dst
             }
+
+            Expr::Block { stmts, tail, .. } => {
+                self.push_scope();
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Bind { name, expr, .. } => {
+                            let val = self.lower_expr(expr);
+                            self.scopes.last_mut().unwrap().insert(*name, val);
+                        }
+                        Stmt::Expr(expr) => {
+                            self.lower_expr(expr);
+                        }
+                    }
+                }
+                let val = self.lower_expr(tail);
+                self.pop_scope();
+                val
+            }
         }
     }
 
@@ -1471,6 +1489,21 @@ impl<'a> Lowerer<'a> {
                 self.collect_free_vars(inner, bound, free, seen);
             }
             Expr::Variant { payload: None, .. } => {}
+            Expr::Block { stmts, tail, .. } => {
+                let mut inner_bound = bound.clone();
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Bind { name, expr, .. } => {
+                            self.collect_free_vars(expr, &inner_bound, free, seen);
+                            inner_bound.insert(*name);
+                        }
+                        Stmt::Expr(e) => {
+                            self.collect_free_vars(e, &inner_bound, free, seen);
+                        }
+                    }
+                }
+                self.collect_free_vars(tail, &inner_bound, free, seen);
+            }
         }
     }
 }

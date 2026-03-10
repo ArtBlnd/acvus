@@ -859,7 +859,7 @@ async fn lambda_filter() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 0, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | filter(x -> x != 0) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             ty,
             val
         )
@@ -875,7 +875,7 @@ async fn lambda_map() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | map(i -> i + 1) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> i + 1) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             ty,
             val
         )
@@ -891,7 +891,7 @@ async fn lambda_pmap() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | pmap(i -> i | to_string) }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | pmap(i -> (i | to_string)) }}{{ x | join(", ") }}"#,
             ty,
             val
         )
@@ -906,7 +906,7 @@ async fn pipe_filter_map() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 0, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | filter(x -> x != 0) | map(x -> x | to_string) }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -921,7 +921,7 @@ async fn triple_pipe_chain() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> i | to_string) }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> (i | to_string)) }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -936,7 +936,7 @@ async fn closure_capture_local() {
     let (ty, val) = items_context(&i, vec![1, 3, 5, 7, 10]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) }}{{ x | map(i -> i | to_string) | join(", ") }}{{_}}{{/}}"#,
+            r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) }}{{ x | map(i -> (i | to_string)) | join(", ") }}{{_}}{{/}}"#,
             ty,
             val,
         )
@@ -967,7 +967,7 @@ async fn closure_capture_context() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             types,
             values
         )
@@ -999,7 +999,7 @@ async fn lambda_negate_param() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | map(i -> -i) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> -i) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             ty,
             val
         )
@@ -1026,7 +1026,7 @@ async fn lambda_not_param() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @flags | map(i -> !i) }}{{ x | map(b -> b | to_string) | join(", ") }}"#,
+            r#"{{ x = @flags | map(i -> !i) }}{{ x | map(b -> (b | to_string)) | join(", ") }}"#,
             types,
             values
         )
@@ -1075,7 +1075,7 @@ async fn lambda_float_arithmetic() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | map(v -> v | to_string) | join(", ") }}"#,
+            r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | map(v -> (v | to_string)) | join(", ") }}"#,
             types,
             values
         )
@@ -1124,7 +1124,7 @@ async fn multiple_closures_same_capture() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             types,
             values,
         )
@@ -1269,7 +1269,7 @@ async fn logical_in_filter() {
     let (ty, val) = items_context(&i, vec![1, 5, 10, 15, 20, 25]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | filter(i -> i > 5 && i < 20) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i > 5 && i < 20) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
             ty,
             val
         )
@@ -1446,7 +1446,7 @@ async fn chained_pipe_with_logical_filter() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) }}{{ x | map(n -> n | to_string) | join(", ") }}"#,
+            r#"{{ x = @nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) }}{{ x | map(n -> (n | to_string)) | join(", ") }}"#,
             types,
             values,
         )
@@ -1507,7 +1507,7 @@ async fn extern_fn_in_pipe_chain() {
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     let output = run(
         &i,
-        r#"{{ x = @items | map(i -> double(i)) }}{{ x | map(i -> i | to_string) | join(", ") }}"#,
+        r#"{{ x = @items | map(i -> double(i)) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
         ty,
         val,
         extern_fns,
@@ -1586,7 +1586,7 @@ async fn complex_object_filter_format() {
 async fn list_literal_expression() {
     assert_eq!(
         run_simple(
-            r#"{{ x = [1, 2, 3] }}{{ x | map(i -> i | to_string) | join(", ") }}{{_}}{{/}}"#
+            r#"{{ x = [1, 2, 3] }}{{ x | map(i -> (i | to_string)) | join(", ") }}{{_}}{{/}}"#
         )
         .await,
         "1, 2, 3"
@@ -1788,7 +1788,7 @@ async fn obf_lambda_filter_map() {
     assert_eq!(
         run_obfuscated(
             &i,
-            r#"{{ x = @items | filter(x -> x != 0) | map(x -> x | to_string) }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) }}{{ x | join(", ") }}"#,
             ty,
             val,
             ExternFnRegistry::new(&i),
@@ -2739,4 +2739,117 @@ async fn script_hint_flatten_with_context() {
     let mir_registry = ExternRegistry::new();
     let result = acvus_mir::compile_script_with_hint(&i, &ast, &context_types, &mir_registry, None);
     assert!(result.is_ok(), "compile without hint failed: {:?}", result.err());
+}
+
+// ── Block expressions ───────────────────────────────────────────
+
+#[tokio::test]
+async fn block_single_expr() {
+    assert_eq!(run_simple(r#"{{ { "hello" } }}"#).await, "hello");
+}
+
+#[tokio::test]
+async fn block_bind_and_return() {
+    assert_eq!(
+        run_simple(r#"{{ { a = 1; a | to_string } }}"#).await,
+        "1"
+    );
+}
+
+#[tokio::test]
+async fn block_chained_binds() {
+    assert_eq!(
+        run_simple(r#"{{ { a = 1; b = a + 1; b | to_string } }}"#).await,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn block_nested() {
+    assert_eq!(
+        run_simple(r#"{{ { a = { b = 10; b + 5 }; a | to_string } }}"#).await,
+        "15"
+    );
+}
+
+#[tokio::test]
+async fn block_scope_isolation() {
+    // Inner block defines `a`, outer block defines a different `a`.
+    assert_eq!(
+        run_simple(r#"{{ { a = 100; x = { a = 1; a }; a + x | to_string } }}"#).await,
+        "101"
+    );
+}
+
+#[tokio::test]
+async fn block_in_lambda() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | map(x -> { y = x * 10; y }) | map(x -> (x | to_string)) | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "10, 20, 30"
+    );
+}
+
+#[tokio::test]
+async fn block_in_pipe() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | x -> { a = last(x); unwrap_or(a, 0) } | to_string }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "30"
+    );
+}
+
+#[tokio::test]
+async fn block_with_field_access() {
+    let i = Interner::new();
+    let (ty, val) = users_list_context(&i);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ { a = last(@users); unwrap(a).name } }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "bob"
+    );
+}
+
+#[tokio::test]
+async fn block_string_operations() {
+    assert_eq!(
+        run_simple(r#"{{ { a = "hello"; b = " world"; a + b | upper } }}"#).await,
+        "HELLO WORLD"
+    );
+}
+
+#[tokio::test]
+async fn block_with_boolean_logic() {
+    assert_eq!(
+        run_simple(r#"{{ { a = 5; b = 10; a < b | to_string } }}"#).await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn block_discard_intermediate_exprs() {
+    // Stmt::Expr results are discarded; only tail matters.
+    assert_eq!(
+        run_simple(r#"{{ { 1 + 2; 3 + 4; "result" } }}"#).await,
+        "result"
+    );
 }

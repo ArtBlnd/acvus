@@ -744,7 +744,7 @@ impl BuiltinSig for First {
     }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
-        (vec![Ty::List(Box::new(t.clone()))], t)
+        (vec![Ty::List(Box::new(t.clone()))], Ty::Option(Box::new(t)))
     }
 }
 
@@ -758,7 +758,7 @@ impl BuiltinSig for Last {
     }
     fn signature(&self, subst: &mut TySubst) -> (Vec<Ty>, Ty) {
         let t = subst.fresh_var();
-        (vec![Ty::List(Box::new(t.clone()))], t)
+        (vec![Ty::List(Box::new(t.clone()))], Ty::Option(Box::new(t)))
     }
 }
 
