@@ -15,7 +15,7 @@ pub use builtins::{FromValue, IntoValue};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use extern_fn::{ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, IntoExternFnBody};
 pub use interpreter::Interpreter;
-pub use value::{FnValue, OpaqueValue, PureValue, Value};
+pub use value::{ConcreteValue, FnValue, OpaqueValue, PureValue, Value};
 
 /// Set the thread-local interner context for `IntoValue<Option>` / `FromValue<Option>`
 /// and `builtin_unwrap`. Must be called before executing extern fns that return Option.

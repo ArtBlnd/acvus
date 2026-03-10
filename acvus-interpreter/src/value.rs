@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 /// Data-only value — no functions, no closures.
 /// Cloneable, used at context boundaries.
 ///
-/// For serialization, use explicit conversion functions (e.g. `pure_to_json`).
+/// For serialization, convert to [`ConcreteValue`] via [`PureValue::to_concrete`].
 /// `Astr` fields require an interner for resolution.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PureValue {
@@ -32,6 +32,100 @@ pub enum PureValue {
         tag: Astr,
         payload: Option<Box<PureValue>>,
     },
+}
+
+/// Serialization-safe mirror of [`PureValue`].
+///
+/// All `Astr` fields are resolved to `String`. Derives `Serialize`/`Deserialize`
+/// with `#[serde(tag = "t")]` so the JSON format is self-describing and round-trips
+/// correctly (no ambiguity between e.g. String vs Variant).
+///
+/// When adding a new variant to [`PureValue`], add the corresponding variant here
+/// and update `to_concrete`/`from_concrete` — the compiler enforces exhaustive matching.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "t")]
+pub enum ConcreteValue {
+    Int { v: i64 },
+    Float { v: f64 },
+    String { v: String },
+    Bool { v: bool },
+    Unit,
+    Range { start: i64, end: i64, inclusive: bool },
+    List { items: Vec<ConcreteValue> },
+    Object { fields: Vec<(String, ConcreteValue)> },
+    Tuple { items: Vec<ConcreteValue> },
+    Byte { v: u8 },
+    Variant { tag: String, payload: Option<Box<ConcreteValue>> },
+}
+
+impl PureValue {
+    /// Convert to a serialization-safe [`ConcreteValue`].
+    /// Every variant is matched explicitly — no `_` catch-all.
+    pub fn to_concrete(&self, interner: &acvus_utils::Interner) -> ConcreteValue {
+        match self {
+            PureValue::Int(v) => ConcreteValue::Int { v: *v },
+            PureValue::Float(v) => ConcreteValue::Float { v: *v },
+            PureValue::String(v) => ConcreteValue::String { v: v.clone() },
+            PureValue::Bool(v) => ConcreteValue::Bool { v: *v },
+            PureValue::Unit => ConcreteValue::Unit,
+            PureValue::Range { start, end, inclusive } => ConcreteValue::Range {
+                start: *start,
+                end: *end,
+                inclusive: *inclusive,
+            },
+            PureValue::List(items) => ConcreteValue::List {
+                items: items.iter().map(|i| i.to_concrete(interner)).collect(),
+            },
+            PureValue::Object(fields) => ConcreteValue::Object {
+                fields: fields
+                    .iter()
+                    .map(|(k, v)| (interner.resolve(*k).to_string(), v.to_concrete(interner)))
+                    .collect(),
+            },
+            PureValue::Tuple(items) => ConcreteValue::Tuple {
+                items: items.iter().map(|i| i.to_concrete(interner)).collect(),
+            },
+            PureValue::Byte(v) => ConcreteValue::Byte { v: *v },
+            PureValue::Variant { tag, payload } => ConcreteValue::Variant {
+                tag: interner.resolve(*tag).to_string(),
+                payload: payload.as_ref().map(|p| Box::new(p.to_concrete(interner))),
+            },
+        }
+    }
+
+    /// Restore from a [`ConcreteValue`].
+    /// Every variant is matched explicitly — no `_` catch-all.
+    pub fn from_concrete(cv: &ConcreteValue, interner: &acvus_utils::Interner) -> Self {
+        match cv {
+            ConcreteValue::Int { v } => PureValue::Int(*v),
+            ConcreteValue::Float { v } => PureValue::Float(*v),
+            ConcreteValue::String { v } => PureValue::String(v.clone()),
+            ConcreteValue::Bool { v } => PureValue::Bool(*v),
+            ConcreteValue::Unit => PureValue::Unit,
+            ConcreteValue::Range { start, end, inclusive } => PureValue::Range {
+                start: *start,
+                end: *end,
+                inclusive: *inclusive,
+            },
+            ConcreteValue::List { items } => PureValue::List(
+                items.iter().map(|i| PureValue::from_concrete(i, interner)).collect(),
+            ),
+            ConcreteValue::Object { fields } => PureValue::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (interner.intern(k), PureValue::from_concrete(v, interner)))
+                    .collect(),
+            ),
+            ConcreteValue::Tuple { items } => PureValue::Tuple(
+                items.iter().map(|i| PureValue::from_concrete(i, interner)).collect(),
+            ),
+            ConcreteValue::Byte { v } => PureValue::Byte(*v),
+            ConcreteValue::Variant { tag, payload } => PureValue::Variant {
+                tag: interner.intern(tag),
+                payload: payload.as_ref().map(|p| Box::new(PureValue::from_concrete(p, interner))),
+            },
+        }
+    }
 }
 
 /// Runtime value — flat enum for fast dispatch.

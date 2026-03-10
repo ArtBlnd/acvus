@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, PureValue, Value};
+use acvus_interpreter::{ConcreteValue, ExternFnRegistry, PureValue, Value};
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
@@ -55,42 +55,6 @@ pub(crate) fn pure_to_json(interner: &Interner, v: &PureValue) -> serde_json::Va
     }
 }
 
-/// serde_json::Value -> PureValue (reverse of pure_to_json)
-fn json_to_pure(interner: &Interner, v: &serde_json::Value) -> Option<PureValue> {
-    match v {
-        serde_json::Value::Null => Some(PureValue::Unit),
-        serde_json::Value::Bool(b) => Some(PureValue::Bool(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(PureValue::Int(i))
-            } else {
-                Some(PureValue::Float(n.as_f64()?))
-            }
-        }
-        serde_json::Value::String(s) => Some(PureValue::String(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let items: Option<Vec<PureValue>> =
-                arr.iter().map(|i| json_to_pure(interner, i)).collect();
-            Some(PureValue::List(items?))
-        }
-        serde_json::Value::Object(map) => {
-            // Variant: {"__variant": "Tag"} or {"__variant": "Tag", "__payload": ...}
-            if let Some(serde_json::Value::String(tag)) = map.get("__variant") {
-                let tag = interner.intern(tag);
-                let payload = map
-                    .get("__payload")
-                    .and_then(|p| json_to_pure(interner, p))
-                    .map(Box::new);
-                return Some(PureValue::Variant { tag, payload });
-            }
-            let items: Option<FxHashMap<Astr, PureValue>> = map
-                .iter()
-                .map(|(k, v)| json_to_pure(interner, v).map(|pv| (interner.intern(k), pv)))
-                .collect();
-            Some(PureValue::Object(items?))
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // UnsafeSend -- WASM is single-threaded, safe to mark as Send
@@ -241,6 +205,22 @@ impl Storage for SessionStorage {
 
 impl SessionStorage {
     pub fn export(&self) -> JsValue {
+        let map: FxHashMap<&str, ConcreteValue> = self
+            .entries
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str(),
+                    v.as_ref().clone().into_pure().to_concrete(&self.interner),
+                )
+            })
+            .collect();
+        let json_str = serde_json::to_string(&map).expect("internal serialization should not fail");
+        js_sys::JSON::parse(&json_str).expect("serde_json output is always valid JSON")
+    }
+
+    /// Export as plain JSON (for display rendering — JS needs plain objects/arrays).
+    pub fn export_json(&self) -> JsValue {
         let map: FxHashMap<&str, serde_json::Value> = self
             .entries
             .iter()
@@ -255,10 +235,6 @@ impl SessionStorage {
         js_sys::JSON::parse(&json_str).expect("serde_json output is always valid JSON")
     }
 
-    pub fn export_json(&self) -> JsValue {
-        self.export()
-    }
-
     pub fn import(js: JsValue, on_change: Option<js_sys::Function>, interner: &Interner) -> Self {
         let json_str = js_sys::JSON::stringify(&js)
             .ok()
@@ -268,13 +244,12 @@ impl SessionStorage {
         let map: FxHashMap<String, serde_json::Value> =
             serde_json::from_str(&json_str).expect("storage JSON must be a valid object");
 
-        // Convert JSON values back to PureValue -> Value
         let entries: FxHashMap<String, Arc<Value>> = map
             .into_iter()
             .filter_map(|(k, v)| {
-                let pure = json_to_pure(interner, &v)?;
-                let value = Value::from_pure(pure);
-                Some((k, Arc::new(value)))
+                let cv: ConcreteValue = serde_json::from_value(v).ok()?;
+                let pure = PureValue::from_concrete(&cv, interner);
+                Some((k, Arc::new(Value::from_pure(pure))))
             })
             .collect();
 
