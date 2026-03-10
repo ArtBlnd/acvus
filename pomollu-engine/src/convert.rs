@@ -3,6 +3,7 @@ use acvus_orchestration::{
     SelfSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 
 /// JSON-deserializable node definition from the web UI.
@@ -13,7 +14,11 @@ pub struct WebNode {
     pub kind: String,
     pub api: String,
     pub model: String,
-    pub temperature: f64,
+    pub temperature: Decimal,
+    pub top_p: Option<Decimal>,
+    pub top_k: Option<u32>,
+    #[serde(default)]
+    pub grounding: bool,
     pub max_tokens: WebMaxTokens,
     pub self_spec: WebSelfSpec,
     pub strategy: WebStrategy,
@@ -137,7 +142,9 @@ pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, Stri
                 .collect(),
             generation: GenerationParams {
                 temperature: Some(web.temperature),
-                ..Default::default()
+                top_p: web.top_p,
+                top_k: web.top_k,
+                grounding: web.grounding,
             },
             cache_key: None,
             max_tokens: MaxTokens {

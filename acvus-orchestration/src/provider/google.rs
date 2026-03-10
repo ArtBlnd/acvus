@@ -217,10 +217,10 @@ fn format_cached_body(
 
     let mut gen_config = serde_json::Map::new();
     if let Some(t) = generation.temperature {
-        gen_config.insert("temperature".into(), serde_json::json!(t));
+        gen_config.insert("temperature".into(), serde_json::to_value(t).unwrap());
     }
     if let Some(p) = generation.top_p {
-        gen_config.insert("topP".into(), serde_json::json!(p));
+        gen_config.insert("topP".into(), serde_json::to_value(p).unwrap());
     }
     if let Some(k) = generation.top_k {
         gen_config.insert("topK".into(), serde_json::json!(k));
@@ -308,10 +308,10 @@ fn format_body(
 
     let mut gen_config = serde_json::Map::new();
     if let Some(t) = generation.temperature {
-        gen_config.insert("temperature".into(), serde_json::json!(t));
+        gen_config.insert("temperature".into(), serde_json::to_value(t).unwrap());
     }
     if let Some(p) = generation.top_p {
-        gen_config.insert("topP".into(), serde_json::json!(p));
+        gen_config.insert("topP".into(), serde_json::to_value(p).unwrap());
     }
     if let Some(k) = generation.top_k {
         gen_config.insert("topK".into(), serde_json::json!(k));

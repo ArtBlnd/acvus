@@ -112,8 +112,8 @@ struct MaxTokensDef {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct GenerationParamsDef {
-    temperature: Option<f64>,
-    top_p: Option<f64>,
+    temperature: Option<rust_decimal::Decimal>,
+    top_p: Option<rust_decimal::Decimal>,
     top_k: Option<u32>,
     #[serde(default)]
     grounding: bool,

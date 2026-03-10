@@ -86,6 +86,9 @@ export type WebNode = {
 	api: string;
 	model: string;
 	temperature: number;
+	topP: number | null;
+	topK: number | null;
+	grounding: boolean;
 	maxTokens: { input: number; output: number };
 	selfSpec: { initialValue?: string };
 	strategy:
@@ -157,6 +160,9 @@ export type NodeConfig = {
 	api?: string;
 	model?: string;
 	temperature?: number;
+	top_p?: number | null;
+	top_k?: number | null;
+	grounding?: boolean;
 	max_tokens?: { input?: number; output?: number };
 	messages?: MessageConfig[];
 	tools?: { name: string; description: string; node: string; params: Record<string, string> }[];

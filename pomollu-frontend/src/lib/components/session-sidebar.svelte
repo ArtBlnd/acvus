@@ -34,9 +34,9 @@
 			{/each}
 		</div>
 	</ScrollArea>
-	<div class="border-t p-2">
+	<div class="flex flex-col items-stretch border-t p-2">
 		<button
-			class="w-full rounded-md px-2.5 py-1.5 text-left text-sm transition-colors
+			class="flex h-9 items-center rounded-md px-2.5 text-left text-sm transition-colors
 				{uiState.activeTab?.kind === 'bot-settings'
 				? 'bg-accent text-accent-foreground'
 				: 'text-muted-foreground hover:bg-accent/50'}"

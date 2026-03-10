@@ -127,10 +127,10 @@ fn format_body(
     });
 
     if let Some(t) = generation.temperature {
-        body["temperature"] = serde_json::json!(t);
+        body["temperature"] = serde_json::to_value(t).unwrap();
     }
     if let Some(p) = generation.top_p {
-        body["top_p"] = serde_json::json!(p);
+        body["top_p"] = serde_json::to_value(p).unwrap();
     }
     if let Some(m) = max_output_tokens {
         body["max_tokens"] = serde_json::json!(m);

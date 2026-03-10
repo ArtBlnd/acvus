@@ -154,6 +154,9 @@ export type Node = {
 	providerId: string;
 	model: string;
 	temperature: number;
+	topP: number | null;
+	topK: number | null;
+	grounding: boolean;
 	maxTokens: MaxTokens;
 	selfSpec: SelfSpec;
 	strategy: Strategy;

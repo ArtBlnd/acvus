@@ -69,6 +69,9 @@ function convertNode(
 		api: provider?.api,
 		model: node.model,
 		temperature: node.temperature,
+		top_p: node.topP,
+		top_k: node.topK,
+		grounding: node.grounding,
 		max_tokens: { input: node.maxTokens.input, output: node.maxTokens.output },
 		messages: node.messages.map((m) => convertMessage(m, blockLookup)),
 		tools

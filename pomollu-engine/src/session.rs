@@ -10,6 +10,7 @@ use acvus_orchestration::{
     compile_iterable_display, compile_static_display, render_display, render_display_with_idx,
 };
 use acvus_utils::{Astr, Interner};
+use rust_decimal::Decimal;
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -329,7 +330,11 @@ enum NodeKindConfig {
         provider: String,
         api: String,
         model: String,
-        temperature: Option<f64>,
+        temperature: Option<Decimal>,
+        top_p: Option<Decimal>,
+        top_k: Option<u32>,
+        #[serde(default)]
+        grounding: bool,
         max_tokens: Option<MaxTokensJson>,
         messages: Vec<MessageConfig>,
         #[serde(default)]
@@ -404,6 +409,9 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
             api,
             model,
             temperature,
+            top_p,
+            top_k,
+            grounding,
             max_tokens,
             messages,
             tools,
@@ -455,7 +463,9 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
                     .collect(),
                 generation: GenerationParams {
                     temperature: *temperature,
-                    ..Default::default()
+                    top_p: *top_p,
+                    top_k: *top_k,
+                    grounding: *grounding,
                 },
                 cache_key: None,
                 max_tokens: max_tokens

@@ -3,6 +3,7 @@
 use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
+use rust_decimal::Decimal;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::compile::{self, CompiledMessage, CompiledScript};
@@ -45,8 +46,8 @@ impl LlmSpec {
 /// Generation parameters for model calls.
 #[derive(Debug, Clone, Default)]
 pub struct GenerationParams {
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
+    pub temperature: Option<Decimal>,
+    pub top_p: Option<Decimal>,
     pub top_k: Option<u32>,
     pub grounding: bool,
 }

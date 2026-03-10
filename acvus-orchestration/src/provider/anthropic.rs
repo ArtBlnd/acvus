@@ -158,10 +158,10 @@ fn format_body(
     });
 
     if let Some(t) = generation.temperature {
-        body["temperature"] = serde_json::json!(t);
+        body["temperature"] = serde_json::to_value(t).unwrap();
     }
     if let Some(p) = generation.top_p {
-        body["top_p"] = serde_json::json!(p);
+        body["top_p"] = serde_json::to_value(p).unwrap();
     }
     if let Some(k) = generation.top_k {
         body["top_k"] = serde_json::json!(k);

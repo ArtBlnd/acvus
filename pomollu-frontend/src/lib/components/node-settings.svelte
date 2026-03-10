@@ -9,6 +9,7 @@
 	import { getOwnerChildren, updateOwnerNodeItem, uiState, providerStore } from '$lib/stores.svelte.js';
 	import { findNodeItem, collectBlocks } from '$lib/block-tree.js';
 	import { Plus, Trash2 } from 'lucide-svelte';
+	import { Switch } from '$lib/components/ui/switch';
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import BasePage from './base-page.svelte';
 	import { collectOwnerDeps } from '$lib/dependencies.js';
@@ -228,16 +229,55 @@
 									placeholder="gemini-2.5-flash, gpt-4o, ..."
 								/>
 							</div>
-							<div class="field">
-								<Label>Temperature</Label>
-								<Input
-									type="number"
-									step="0.1"
-									min="0"
-									max="2"
-									value={String(node.temperature)}
-									oninput={(e) => updateNode((n) => ({ ...n, temperature: Number(e.currentTarget.value) || 0 }))}
+							<div class="grid grid-cols-3 gap-2">
+								<div class="field">
+									<Label>Temperature</Label>
+									<Input
+										type="number"
+										step="0.1"
+										min="0"
+										max="2"
+										value={String(node.temperature)}
+										oninput={(e) => updateNode((n) => ({ ...n, temperature: Math.round(Number(e.currentTarget.value) * 100) / 100 || 0 }))}
+									/>
+								</div>
+								<div class="field">
+									<Label>Top P</Label>
+									<Input
+										type="number"
+										step="0.05"
+										min="0"
+										max="1"
+										value={node.topP != null ? String(node.topP) : ''}
+										oninput={(e) => {
+											const v = e.currentTarget.value.trim();
+											const num = Number(v);
+											updateNode((n) => ({ ...n, topP: v === '' ? null : num ? Math.round(num * 100) / 100 : null }));
+										}}
+										placeholder="—"
+									/>
+								</div>
+								<div class="field">
+									<Label>Top K</Label>
+									<Input
+										type="number"
+										step="1"
+										min="0"
+										value={node.topK != null ? String(node.topK) : ''}
+										oninput={(e) => {
+											const v = e.currentTarget.value.trim();
+											updateNode((n) => ({ ...n, topK: v === '' ? null : Math.round(Number(v)) || null }));
+										}}
+										placeholder="—"
+									/>
+								</div>
+							</div>
+							<div class="flex items-center gap-2">
+								<Switch
+									checked={node.grounding}
+									onCheckedChange={(v) => updateNode((n) => ({ ...n, grounding: v }))}
 								/>
+								<Label class="text-sm">Grounding</Label>
 							</div>
 							<div class="grid grid-cols-2 gap-2">
 								<div class="field">
