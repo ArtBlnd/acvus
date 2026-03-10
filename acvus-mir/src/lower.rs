@@ -185,18 +185,6 @@ impl<'a> Lowerer<'a> {
         self.scopes.pop();
     }
 
-    /// Copy variables defined in the current (top) scope to the parent scope.
-    /// This hoists body-less variable bindings out of match arm scopes.
-    fn hoist_bodyless_bindings(&mut self) {
-        let len = self.scopes.len();
-        if len >= 2 {
-            let (parent, top) = self.scopes.split_at_mut(len - 1);
-            for (name, val) in &top[0] {
-                parent[len - 2].insert(*name, *val);
-            }
-        }
-    }
-
     fn define_var(&mut self, name: Astr, reg: ValueId) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, reg);
@@ -925,8 +913,6 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or(&arm.body);
             self.lower_nodes(body);
 
-            // Hoist body-less variable bindings to the outer scope.
-            self.hoist_bodyless_bindings();
             self.pop_scope();
             // After body, jump to end (no loop).
             self.emit_inst(
@@ -946,7 +932,6 @@ impl<'a> Lowerer<'a> {
                 .as_deref()
                 .unwrap_or(&catch_all.body);
             self.lower_nodes(body);
-            self.hoist_bodyless_bindings();
             self.pop_scope();
         }
 
@@ -1032,7 +1017,6 @@ impl<'a> Lowerer<'a> {
         let body = adjusted_body.as_deref().unwrap_or(&ib.body);
         self.lower_nodes(body);
 
-        self.hoist_bodyless_bindings();
         self.pop_scope();
 
         // Jump back to loop.
@@ -1052,7 +1036,6 @@ impl<'a> Lowerer<'a> {
                 .as_deref()
                 .unwrap_or(&catch_all.body);
             self.lower_nodes(ca_body);
-            self.hoist_bodyless_bindings();
             self.pop_scope();
         }
 

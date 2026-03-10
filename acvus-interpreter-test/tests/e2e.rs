@@ -1,9 +1,11 @@
 use acvus_interpreter::{
-    ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, RuntimeError, RuntimeErrorKind, Value,
+    ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, Interpreter, RuntimeError,
+    RuntimeErrorKind, Stepped, Value,
 };
 use acvus_interpreter_test::*;
 #[allow(unused_imports)]
 use acvus_interpreter_test::{run_capturing_context_calls, run_obfuscated, run_simple_obfuscated};
+use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -2434,4 +2436,307 @@ async fn structural_enum_separate_blocks_both_match() {
         run_ctx(&i, "{{ AB::A = @s }}a{{/}}{{ AB::B = @s }}b{{/}}", types, values).await,
         "b"
     );
+}
+
+// ── Script with output_ty hint (Val(N) not yet defined repro) ───
+
+/// Helper: compile a script with output_ty hint and execute it.
+async fn run_script_with_hint(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<acvus_utils::Astr, Ty>,
+    hint: Option<&Ty>,
+) -> Value {
+    let script = acvus_ast::parse_script(interner, source).expect("parse failed");
+    let mir_registry = ExternRegistry::new();
+    let (module, _hints, _tail_ty) =
+        acvus_mir::compile_script_with_hint(interner, &script, context_types, &mir_registry, hint)
+            .expect("compile failed");
+
+    let extern_fns = ExternFnRegistry::new(interner);
+    let interp = Interpreter::new(interner, module, &extern_fns);
+    let mut coroutine = interp.execute();
+    let mut result = Value::Unit;
+    loop {
+        match coroutine.resume().await {
+            Stepped::Emit(value) => {
+                result = value;
+            }
+            Stepped::NeedContext(request) => {
+                let name = request.name();
+                panic!("unexpected context request: @{}", interner.resolve(name));
+            }
+            Stepped::Done => break,
+            Stepped::Error(e) => panic!("runtime error: {e}"),
+        }
+    }
+    result
+}
+
+#[tokio::test]
+async fn script_hint_enum_variant() {
+    let i = Interner::new();
+    let focus_ty = Ty::Enum {
+        name: i.intern("Focus"),
+        variants: FxHashMap::from_iter([
+            (i.intern("User"), None),
+            (i.intern("System"), None),
+            (i.intern("Character"), None),
+        ]),
+    };
+    let result = run_script_with_hint(&i, "Focus::User", &FxHashMap::default(), Some(&focus_ty)).await;
+    match result {
+        Value::Variant { tag, .. } => assert_eq!(i.resolve(tag), "User"),
+        other => panic!("expected Variant, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn script_hint_bool() {
+    let i = Interner::new();
+    let result = run_script_with_hint(&i, "false", &FxHashMap::default(), Some(&Ty::Bool)).await;
+    assert_eq!(result, Value::Bool(false));
+}
+
+#[tokio::test]
+async fn script_hint_string() {
+    let i = Interner::new();
+    let result = run_script_with_hint(&i, "\"\"", &FxHashMap::default(), Some(&Ty::String)).await;
+    assert_eq!(result, Value::String("".into()));
+}
+
+#[tokio::test]
+async fn script_hint_context_object_with_empty_lists() {
+    let i = Interner::new();
+    let entry_ty = Ty::Object(FxHashMap::from_iter([
+        (i.intern("name"), Ty::String),
+        (i.intern("description"), Ty::String),
+        (i.intern("content"), Ty::String),
+        (i.intern("content_type"), Ty::String),
+    ]));
+    let context_ty = Ty::Object(FxHashMap::from_iter([
+        (i.intern("system"), Ty::List(Box::new(entry_ty.clone()))),
+        (i.intern("character"), Ty::List(Box::new(entry_ty.clone()))),
+        (i.intern("world_info"), Ty::List(Box::new(entry_ty.clone()))),
+        (i.intern("lorebook"), Ty::List(Box::new(entry_ty.clone()))),
+        (i.intern("memory"), Ty::List(Box::new(entry_ty.clone()))),
+        (i.intern("custom"), Ty::List(Box::new(entry_ty))),
+    ]));
+    let result = run_script_with_hint(
+        &i,
+        "{system: [], character: [], world_info: [], lorebook: [], memory: [], custom: [],}",
+        &FxHashMap::default(),
+        Some(&context_ty),
+    ).await;
+    match result {
+        Value::Object(fields) => {
+            assert_eq!(fields.len(), 6);
+        }
+        other => panic!("expected Object, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn script_hint_enum_with_payload() {
+    let i = Interner::new();
+    let length_ty = Ty::Enum {
+        name: i.intern("Length"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Dynamic"), None),
+            (i.intern("Short"), None),
+            (i.intern("Medium"), None),
+            (i.intern("Long"), None),
+            (i.intern("Custom"), Some(Box::new(Ty::Int))),
+        ]),
+    };
+    let result = run_script_with_hint(&i, "Length::Dynamic", &FxHashMap::default(), Some(&length_ty)).await;
+    match result {
+        Value::Variant { tag, .. } => assert_eq!(i.resolve(tag), "Dynamic"),
+        other => panic!("expected Variant, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn script_no_hint_enum_variant() {
+    // Same as above but WITHOUT hint — should also work (CLI path)
+    let i = Interner::new();
+    let result = run_script_with_hint(&i, "Focus::User", &FxHashMap::default(), None).await;
+    match result {
+        Value::Variant { tag, .. } => assert_eq!(i.resolve(tag), "User"),
+        other => panic!("expected Variant, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn template_enum_multi_arm_match_full_type() {
+    // Reproduces frontend path: context has FULL enum type (all variants)
+    // Template matches multiple arms against it
+    let i = Interner::new();
+    let focus_ty = Ty::Enum {
+        name: i.intern("Focus"),
+        variants: FxHashMap::from_iter([
+            (i.intern("User"), None),
+            (i.intern("Char"), None),
+            (i.intern("System"), None),
+        ]),
+    };
+    let types = ctx(&i, &[("Focus", focus_ty.clone())]);
+    let values = vals(&i, &[("Focus", Value::Variant { tag: i.intern("User"), payload: None })]);
+
+    let output = run_ctx(
+        &i,
+        "{-{ Focus::User = @Focus }}user{-{ Focus::Char = }}char{-{ Focus::System = }}sys{-{ / }}",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "user");
+}
+
+#[tokio::test]
+async fn template_enum_tuple_match_full_type() {
+    // Reproduces: {-{ (true, Impersonation::Deny) = (@Attempt, @Impersonation) }}
+    let i = Interner::new();
+    let imp_ty = Ty::Enum {
+        name: i.intern("Impersonation"),
+        variants: FxHashMap::from_iter([
+            (i.intern("Deny"), None),
+            (i.intern("Allowed"), None),
+            (i.intern("AllowActionOnly"), None),
+            (i.intern("NoPersona"), None),
+        ]),
+    };
+    let types = ctx(&i, &[
+        ("Attempt", Ty::Bool),
+        ("Impersonation", imp_ty.clone()),
+    ]);
+    let values = vals(&i, &[
+        ("Attempt", Value::Bool(true)),
+        ("Impersonation", Value::Variant { tag: i.intern("Deny"), payload: None }),
+    ]);
+
+    let output = run_ctx(
+        &i,
+        "{-{ (true, Impersonation::Deny) = (@Attempt, @Impersonation) }}deny{-{ (true, Impersonation::Allowed) = }}allow{-{ (false, Impersonation::Deny) = }}fdenial{-{ / }}",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "deny");
+}
+
+#[tokio::test]
+async fn template_enum_match_with_payload_full_type() {
+    // Focus::Custom({ custom, }) pattern — enum with payload
+    let i = Interner::new();
+    let focus_ty = Ty::Enum {
+        name: i.intern("Focus"),
+        variants: FxHashMap::from_iter([
+            (i.intern("User"), None),
+            (i.intern("Char"), None),
+            (i.intern("Custom"), Some(Box::new(Ty::Object(FxHashMap::from_iter([
+                (i.intern("custom"), Ty::String),
+            ]))))),
+        ]),
+    };
+    let types = ctx(&i, &[("Focus", focus_ty.clone())]);
+
+    // Test with Custom variant
+    let values = vals(&i, &[("Focus", Value::Variant {
+        tag: i.intern("Custom"),
+        payload: Some(Box::new(Value::Object(FxHashMap::from_iter([
+            (i.intern("custom"), Value::String("hello".into())),
+        ])))),
+    })]);
+
+    let output = run_ctx(
+        &i,
+        "{-{ Focus::User = @Focus }}user{-{ Focus::Char = }}char{-{ Focus::Custom({custom,}) = }}{{ custom }}{-{ / }}",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "hello");
+}
+
+#[tokio::test]
+async fn template_var_scoped_inside_match_arm() {
+    // Variable defined inside a match arm body is properly scoped.
+    // It's usable INSIDE the arm, not outside.
+    let i = Interner::new();
+    let types = ctx(&i, &[("cond", Ty::Bool)]);
+    let values = vals(&i, &[("cond", Value::Bool(true))]);
+
+    // x is defined and used INSIDE the same arm — this must work
+    let output = run_ctx(
+        &i,
+        "before{-{ true = @cond }}{{ x = \"hello\" }}{{ x }}{-{ / }}after",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "beforehelloafter");
+}
+
+#[tokio::test]
+async fn template_var_scoped_inside_match_arm_not_taken() {
+    // When arm is not taken, variables inside it are never accessed
+    let i = Interner::new();
+    let types = ctx(&i, &[("cond", Ty::Bool)]);
+    let values = vals(&i, &[("cond", Value::Bool(false))]);
+
+    let output = run_ctx(
+        &i,
+        "before{-{ true = @cond }}{{ x = \"hello\" }}{{ x }}{-{ / }}after",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "beforeafter");
+}
+
+#[tokio::test]
+async fn template_enum_single_variant_context_type() {
+    // CLI path: context has SINGLE-variant enum type (only the variant used in the expr)
+    let i = Interner::new();
+    let focus_ty = Ty::Enum {
+        name: i.intern("Focus"),
+        variants: FxHashMap::from_iter([
+            (i.intern("User"), None),  // only one variant!
+        ]),
+    };
+    let types = ctx(&i, &[("Focus", focus_ty)]);
+    let values = vals(&i, &[("Focus", Value::Variant { tag: i.intern("User"), payload: None })]);
+
+    // Template tries to match multiple variants — typechecker should handle this
+    let output = run_ctx(
+        &i,
+        "{-{ Focus::User = @Focus }}user{-{ Focus::Char = }}char{-{ Focus::System = }}sys{-{ / }}",
+        types,
+        values,
+    ).await;
+    assert_eq!(output, "user");
+}
+
+#[tokio::test]
+async fn script_hint_flatten_with_context() {
+    // Simulates: @turn.history | map(v -> v.entrypoint) | flatten | flatten
+    let i = Interner::new();
+    let entry_ty = Ty::Object(FxHashMap::from_iter([
+        (i.intern("entrypoint"), Ty::List(Box::new(
+            Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
+                (i.intern("role"), Ty::String),
+                (i.intern("content"), Ty::String),
+            ]))))
+        ))),
+    ]));
+    let turn_ty = Ty::Object(FxHashMap::from_iter([
+        (i.intern("index"), Ty::Int),
+        (i.intern("history"), Ty::List(Box::new(entry_ty))),
+    ]));
+    let context_types = FxHashMap::from_iter([
+        (i.intern("turn"), turn_ty),
+    ]);
+    let script = "@turn.history | map(v -> v.entrypoint) | flatten | flatten";
+
+    // Compile with no hint — should work (this is the CLI path)
+    let ast = acvus_ast::parse_script(&i, script).expect("parse failed");
+    let mir_registry = ExternRegistry::new();
+    let result = acvus_mir::compile_script_with_hint(&i, &ast, &context_types, &mir_registry, None);
+    assert!(result.is_ok(), "compile without hint failed: {:?}", result.err());
 }
