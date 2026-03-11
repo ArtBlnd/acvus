@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Interpreter, Stepped, Value};
+use acvus_interpreter::{Interpreter, RuntimeError, Stepped, Value};
 use acvus_utils::{Astr, Interner, YieldHandle};
 use rustc_hash::FxHashMap;
 
@@ -14,10 +14,9 @@ pub async fn render_block_in_coroutine(
     interner: &Interner,
     module: &acvus_mir::ir::MirModule,
     local: &FxHashMap<Astr, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
-) -> String {
-    let interp = Interpreter::new(interner, module.clone(), extern_fns);
+) -> Result<String, RuntimeError> {
+    let interp = Interpreter::new(interner, module.clone());
     let mut inner = interp.execute();
     let mut output = String::new();
     loop {
@@ -33,51 +32,52 @@ pub async fn render_block_in_coroutine(
                 if let Some(arc) = local.get(&name) {
                     request.resolve(Arc::clone(arc));
                 } else {
-                    let bindings = request.bindings().clone();
-                    let value = if bindings.is_empty() {
-                        handle.request_context(name).await
-                    } else {
-                        handle.request_context_with(name, bindings).await
-                    };
+                    let value = handle.request_context(name).await;
                     request.resolve(value);
                 }
             }
-            Stepped::Done => return output,
-            Stepped::Error(e) => panic!("runtime error in render_block: {e}"),
+            Stepped::NeedExternCall(request) => {
+                let value = handle
+                    .request_extern_call(request.name(), request.args().to_vec())
+                    .await;
+                request.resolve(value);
+            }
+            Stepped::Done => return Ok(output),
+            Stepped::Error(e) => return Err(e),
         }
     }
 }
 
 pub async fn eval_script_in_coroutine(
     interner: &Interner,
-    script: &CompiledScript,
+    module: &acvus_mir::ir::MirModule,
     local: &FxHashMap<Astr, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
-) -> Value {
-    let interp = Interpreter::new(interner, script.module.clone(), extern_fns);
+) -> Result<Value, RuntimeError> {
+    let interp = Interpreter::new(interner, module.clone());
     let mut inner = interp.execute();
     loop {
         match inner.resume().await {
             Stepped::Emit(value) => {
-                return value;
+                return Ok(value);
             }
             Stepped::NeedContext(request) => {
                 let name = request.name();
                 if let Some(arc) = local.get(&name) {
                     request.resolve(Arc::clone(arc));
                 } else {
-                    let bindings = request.bindings().clone();
-                    let value = if bindings.is_empty() {
-                        handle.request_context(name).await
-                    } else {
-                        handle.request_context_with(name, bindings).await
-                    };
+                    let value = handle.request_context(name).await;
                     request.resolve(value);
                 }
             }
-            Stepped::Done => return Value::Unit,
-            Stepped::Error(e) => panic!("runtime error in eval_script: {e}"),
+            Stepped::NeedExternCall(request) => {
+                let value = handle
+                    .request_extern_call(request.name(), request.args().to_vec())
+                    .await;
+                request.resolve(value);
+            }
+            Stepped::Done => return Ok(Value::Unit),
+            Stepped::Error(e) => return Err(e),
         }
     }
 }
@@ -97,14 +97,13 @@ pub async fn expand_iterator_in_coroutine(
     role_override: &Option<Astr>,
     interner: &Interner,
     local: &FxHashMap<Astr, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
     handle: &YieldHandle<Value>,
-) -> Vec<Message> {
-    let evaluated = eval_script_in_coroutine(interner, expr, local, extern_fns, handle).await;
+) -> Result<Vec<Message>, RuntimeError> {
+    let evaluated = eval_script_in_coroutine(interner, &expr.module, local, handle).await?;
 
     let all_items = match &evaluated {
         Value::List(items) => items.as_slice(),
-        _ => return Vec::new(),
+        _ => return Ok(Vec::new()),
     };
 
     let items: &[Value] = if let Some(s) = slice {
@@ -142,7 +141,7 @@ pub async fn expand_iterator_in_coroutine(
             });
         }
     }
-    messages
+    Ok(messages)
 }
 
 pub fn content_to_value(interner: &Interner, items: &[crate::message::ContentItem]) -> Value {

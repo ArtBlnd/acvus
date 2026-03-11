@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Interpreter, Value};
-use acvus_mir::extern_module::ExternRegistry;
+use acvus_interpreter::{Interpreter, Value};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -71,9 +70,8 @@ fn compile_template_as_script(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<CompiledScript, OrchError> {
-    let block = compile_template(interner, source, 0, context_types, registry)?;
+    let block = compile_template(interner, source, 0, context_types)?;
     Ok(CompiledScript {
         module: block.module,
         context_keys: block.context_keys,
@@ -85,7 +83,6 @@ fn compile_entries(
     interner: &Interner,
     entries: &[DisplayEntrySpec],
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<Vec<CompiledDisplayEntry>, Vec<OrchError>> {
     let mut compiled = Vec::new();
     let mut errors = Vec::new();
@@ -98,7 +95,6 @@ fn compile_entries(
                 interner,
                 &spec.condition,
                 context_types,
-                registry,
                 Some(&Ty::Bool),
             ) {
                 Ok((script, _)) => Some(script),
@@ -109,7 +105,7 @@ fn compile_entries(
             }
         };
         let template =
-            match compile_template_as_script(interner, &spec.template, context_types, registry) {
+            match compile_template_as_script(interner, &spec.template, context_types) {
                 Ok(t) => t,
                 Err(e) => {
                     errors.push(e);
@@ -134,9 +130,8 @@ pub fn compile_static_display(
     interner: &Interner,
     spec: &StaticDisplaySpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<CompiledStaticDisplay, Vec<OrchError>> {
-    let template = compile_template_as_script(interner, &spec.template, context_types, registry)
+    let template = compile_template_as_script(interner, &spec.template, context_types)
         .map_err(|e| vec![e])?;
     Ok(CompiledStaticDisplay { template })
 }
@@ -145,17 +140,16 @@ pub fn compile_iterable_display(
     interner: &Interner,
     spec: &IterableDisplaySpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<CompiledIterableDisplay, Vec<OrchError>> {
     let (iterator, iter_ty) =
-        compile_script(interner, &spec.iterator, context_types, registry).map_err(|e| vec![e])?;
+        compile_script(interner, &spec.iterator, context_types).map_err(|e| vec![e])?;
     let item_ty = expect_list("display iterator", iter_ty).map_err(|e| vec![e])?;
 
     let mut entry_ctx = context_types.clone();
     entry_ctx.insert(interner.intern("item"), item_ty.clone());
     entry_ctx.insert(interner.intern("index"), Ty::Int);
 
-    let entries = compile_entries(interner, &spec.entries, &entry_ctx, registry)?;
+    let entries = compile_entries(interner, &spec.entries, &entry_ctx)?;
 
     Ok(CompiledIterableDisplay {
         iterator,
@@ -173,12 +167,11 @@ async fn drive_from_storage<S>(
     script: &CompiledScript,
     storage: &S,
     local: &FxHashMap<String, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
 ) -> Value
 where
     S: Storage,
 {
-    let interp = Interpreter::new(interner, script.module.clone(), extern_fns);
+    let interp = Interpreter::new(interner, script.module.clone());
     let mut coroutine = interp.execute();
     loop {
         match coroutine.resume().await {
@@ -192,6 +185,9 @@ where
                 };
                 request.resolve(value);
             }
+            acvus_interpreter::Stepped::NeedExternCall(_) => {
+                panic!("display: unexpected extern call")
+            }
             acvus_interpreter::Stepped::Done => return Value::Unit,
             acvus_interpreter::Stepped::Error(e) => panic!("display runtime error: {e}"),
         }
@@ -203,12 +199,11 @@ async fn drive_template_from_storage<S>(
     script: &CompiledScript,
     storage: &S,
     local: &FxHashMap<String, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
 ) -> String
 where
     S: Storage,
 {
-    let interp = Interpreter::new(interner, script.module.clone(), extern_fns);
+    let interp = Interpreter::new(interner, script.module.clone());
     let mut coroutine = interp.execute();
     let mut output = String::new();
     loop {
@@ -224,6 +219,9 @@ where
                 };
                 request.resolve(value);
             }
+            acvus_interpreter::Stepped::NeedExternCall(_) => {
+                panic!("display: unexpected extern call")
+            }
             acvus_interpreter::Stepped::Done => break,
             acvus_interpreter::Stepped::Error(e) => panic!("display runtime error: {e}"),
         }
@@ -236,7 +234,6 @@ async fn eval_entries<S>(
     entries: &[CompiledDisplayEntry],
     storage: &S,
     local: &FxHashMap<String, Arc<Value>>,
-    extern_fns: &ExternFnRegistry,
 ) -> Vec<RenderedDisplayEntry>
 where
     S: Storage,
@@ -244,14 +241,13 @@ where
     let mut result = Vec::new();
     for entry in entries {
         if let Some(ref cond) = entry.condition {
-            let val = drive_from_storage(interner, cond, storage, local, extern_fns).await;
+            let val = drive_from_storage(interner, cond, storage, local).await;
             let Value::Bool(true) = val else {
                 continue;
             };
         }
         let content =
-            drive_template_from_storage(interner, &entry.template, storage, local, extern_fns)
-                .await;
+            drive_template_from_storage(interner, &entry.template, storage, local).await;
         result.push(RenderedDisplayEntry {
             name: entry.name.clone(),
             content,
@@ -265,14 +261,13 @@ pub async fn render_display<S>(
     interner: &Interner,
     display: &CompiledStaticDisplay,
     storage: &S,
-    extern_fns: &ExternFnRegistry,
 ) -> Vec<RenderedDisplayEntry>
 where
     S: Storage,
 {
     let local = FxHashMap::default();
     let content =
-        drive_template_from_storage(interner, &display.template, storage, &local, extern_fns).await;
+        drive_template_from_storage(interner, &display.template, storage, &local).await;
     vec![RenderedDisplayEntry {
         name: String::new(),
         content,
@@ -288,7 +283,6 @@ pub async fn render_display_with_idx<S>(
     interner: &Interner,
     display: &CompiledIterableDisplay,
     storage: &S,
-    extern_fns: &ExternFnRegistry,
     index: usize,
 ) -> Vec<RenderedDisplayEntry>
 where
@@ -300,7 +294,6 @@ where
         &display.iterator,
         storage,
         &empty_local,
-        extern_fns,
     )
     .await;
 
@@ -315,7 +308,7 @@ where
     local.insert("item".into(), Arc::new(item));
     local.insert("index".into(), Arc::new(Value::Int(index as i64)));
 
-    eval_entries(interner, &display.entries, storage, &local, extern_fns).await
+    eval_entries(interner, &display.entries, storage, &local).await
 }
 
 #[cfg(test)]
@@ -323,15 +316,6 @@ mod tests {
     use super::*;
     use crate::storage::HashMapStorage;
     use acvus_utils::Interner;
-
-    fn empty_registry() -> ExternRegistry {
-        ExternRegistry::default()
-    }
-
-    fn empty_extern_fns() -> ExternFnRegistry {
-        let interner = Interner::new();
-        ExternFnRegistry::new(&interner)
-    }
 
     fn storage_with(entries: Vec<(&str, Value)>) -> HashMapStorage {
         let mut s = HashMapStorage::new();
@@ -349,7 +333,7 @@ mod tests {
         let spec = StaticDisplaySpec {
             template: "hello {{ @name }}".into(),
         };
-        let result = compile_static_display(&interner, &spec, &ctx, &empty_registry());
+        let result = compile_static_display(&interner, &spec, &ctx);
         assert!(result.is_ok());
     }
 
@@ -366,7 +350,7 @@ mod tests {
                 template: "{{ @item }}".into(),
             }],
         };
-        let result = compile_iterable_display(&interner, &spec, &ctx, &empty_registry());
+        let result = compile_iterable_display(&interner, &spec, &ctx);
         assert!(result.is_ok());
     }
 
@@ -379,7 +363,7 @@ mod tests {
             iterator: "@items".into(),
             entries: vec![],
         };
-        let result = compile_iterable_display(&interner, &spec, &ctx, &empty_registry());
+        let result = compile_iterable_display(&interner, &spec, &ctx);
         assert!(result.is_err(), "iterator must be List<_>");
     }
 
@@ -391,9 +375,9 @@ mod tests {
         let spec = StaticDisplaySpec {
             template: "hello {{ @greeting }}".into(),
         };
-        let compiled = compile_static_display(&interner, &spec, &ctx, &empty_registry()).unwrap();
+        let compiled = compile_static_display(&interner, &spec, &ctx).unwrap();
         let storage = storage_with(vec![("greeting", Value::String("world".into()))]);
-        let result = render_display(&interner, &compiled, &storage, &empty_extern_fns()).await;
+        let result = render_display(&interner, &compiled, &storage).await;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "hello world");
         assert_eq!(result[0].name, "");
@@ -412,7 +396,7 @@ mod tests {
                 template: "msg: {{ @item }}".into(),
             }],
         };
-        let compiled = compile_iterable_display(&interner, &spec, &ctx, &empty_registry()).unwrap();
+        let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
         let storage = storage_with(vec![(
             "messages",
             Value::List(vec![
@@ -422,12 +406,12 @@ mod tests {
             ]),
         )]);
         let r0 =
-            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
+            render_display_with_idx(&interner, &compiled, &storage, 0).await;
         assert_eq!(r0.len(), 1);
         assert_eq!(r0[0].name, "msg");
         assert_eq!(r0[0].content, "msg: a");
         let r2 =
-            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 2).await;
+            render_display_with_idx(&interner, &compiled, &storage, 2).await;
         assert_eq!(r2.len(), 1);
         assert_eq!(r2[0].content, "msg: c");
     }
@@ -452,19 +436,19 @@ mod tests {
                 },
             ],
         };
-        let compiled = compile_iterable_display(&interner, &spec, &ctx, &empty_registry()).unwrap();
+        let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
         let storage = storage_with(vec![(
             "nums",
             Value::List(vec![Value::Int(3), Value::Int(10)]),
         )]);
 
         let r0 =
-            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 0).await;
+            render_display_with_idx(&interner, &compiled, &storage, 0).await;
         assert_eq!(r0.len(), 1, "3 <= 5, first entry skipped");
         assert_eq!(r0[0].content, "all: 3");
 
         let r1 =
-            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 1).await;
+            render_display_with_idx(&interner, &compiled, &storage, 1).await;
         assert_eq!(r1.len(), 2, "10 > 5, both entries pass");
         assert_eq!(r1[0].content, "big: 10");
         assert_eq!(r1[1].content, "all: 10");
@@ -483,13 +467,13 @@ mod tests {
                 template: "{{ @item }}".into(),
             }],
         };
-        let compiled = compile_iterable_display(&interner, &spec, &ctx, &empty_registry()).unwrap();
+        let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
         let storage = storage_with(vec![(
             "items",
             Value::List(vec![Value::String("only".into())]),
         )]);
         let result =
-            render_display_with_idx(&interner, &compiled, &storage, &empty_extern_fns(), 99).await;
+            render_display_with_idx(&interner, &compiled, &storage, 99).await;
         assert!(result.is_empty(), "out of bounds returns empty");
     }
 }

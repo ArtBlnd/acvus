@@ -4,8 +4,7 @@ use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::extern_module::ExternFnId;
-use crate::ir::{CallTarget, ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
 
 fn fmt_val(r: ValueId) -> String {
     format!("r{}", r.0)
@@ -70,21 +69,9 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
 struct PrintCtx<'a> {
     interner: &'a Interner,
     lit_to_tidx: &'a FxHashMap<String, usize>,
-    extern_names: &'a FxHashMap<ExternFnId, Astr>,
 }
 
 impl PrintCtx<'_> {
-    fn fmt_call_target(&self, target: &CallTarget) -> String {
-        match target {
-            CallTarget::Builtin(id) => id.name().to_string(),
-            CallTarget::Extern(id) => self
-                .extern_names
-                .get(id)
-                .map(|v| self.interner.resolve(*v).to_string())
-                .unwrap_or_else(|| format!("extern#{}", id.0)),
-        }
-    }
-
     fn tag_name(&self, tag: &Astr) -> String {
         self.interner.resolve(*tag).to_string()
     }
@@ -194,29 +181,9 @@ fn write_body(
             InstKind::ContextLoad {
                 dst,
                 name,
-                bindings,
             } => {
                 let name_str = ctx.interner.resolve(*name);
-                if bindings.is_empty() {
-                    writeln!(f, "{} = context_load @{name_str}", fmt_val(*dst))?
-                } else {
-                    let args: Vec<String> = bindings
-                        .iter()
-                        .map(|(k, v)| {
-                            format!(
-                                "{}: {}",
-                                ctx.interner.resolve(*k),
-                                fmt_use(*v, &consts, &texts)
-                            )
-                        })
-                        .collect();
-                    writeln!(
-                        f,
-                        "{} = context_call @{name_str} {{ {} }}",
-                        fmt_val(*dst),
-                        args.join(", ")
-                    )?
-                }
+                writeln!(f, "{} = context_load @{name_str}", fmt_val(*dst))?
             }
             InstKind::VarLoad { dst, name } => writeln!(
                 f,
@@ -261,25 +228,19 @@ fn write_body(
             )?,
 
             // Calls
-            InstKind::Call { dst, func, args } => writeln!(
+            InstKind::BuiltinCall { dst, builtin, args } => writeln!(
                 f,
                 "{} = call {}({})",
                 fmt_val(*dst),
-                ctx.fmt_call_target(func),
+                builtin.name(),
                 fmt_uses(args, &consts, &texts)
             )?,
-            InstKind::AsyncCall { dst, func, args } => writeln!(
+            InstKind::ExternCall { dst, name, args } => writeln!(
                 f,
-                "{} = async_call {}({})",
+                "{} = extern_call {}({})",
                 fmt_val(*dst),
-                ctx.fmt_call_target(func),
+                ctx.interner.resolve(*name),
                 fmt_uses(args, &consts, &texts)
-            )?,
-            InstKind::Await { dst, src } => writeln!(
-                f,
-                "{} = await {}",
-                fmt_val(*dst),
-                fmt_use(*src, &consts, &texts)
             )?,
 
             // Composite constructors
@@ -446,7 +407,7 @@ fn write_body(
                 fmt_label(*body),
                 fmt_uses(captures, &consts, &texts)
             )?,
-            InstKind::CallClosure { dst, closure, args } => writeln!(
+            InstKind::ClosureCall { dst, closure, args } => writeln!(
                 f,
                 "{} = call_closure {}({})",
                 fmt_val(*dst),
@@ -602,7 +563,6 @@ impl fmt::Display for MirModuleDisplay<'_> {
         let ctx = PrintCtx {
             interner: self.interner,
             lit_to_tidx: &lit_to_tidx,
-            extern_names: &module.extern_names,
         };
 
         writeln!(f, "=== main ===")?;
@@ -664,11 +624,9 @@ pub struct MirBodyDisplay<'a> {
 impl fmt::Display for MirBodyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let empty_lits = FxHashMap::default();
-        let empty_externs = FxHashMap::default();
         let ctx = PrintCtx {
             interner: self.interner,
             lit_to_tidx: &empty_lits,
-            extern_names: &empty_externs,
         };
         write_body(f, self.body, "", &ctx)
     }
@@ -697,18 +655,16 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extern_module::{ExternModule, ExternRegistry};
     use crate::ty::Ty;
     use acvus_utils::Interner;
 
     fn compile_and_dump(
         source: &str,
         context: &FxHashMap<Astr, Ty>,
-        registry: &ExternRegistry,
         interner: &Interner,
     ) -> String {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let (module, _) = crate::compile(interner, &template, context, registry)
+        let (module, _) = crate::compile(interner, &template, context)
             .expect("compile failed");
         dump(interner, &module)
     }
@@ -716,12 +672,7 @@ mod tests {
     #[test]
     fn print_text_only() {
         let interner = Interner::new();
-        let out = compile_and_dump(
-            "hello world",
-            &FxHashMap::default(),
-            &ExternRegistry::new(),
-            &interner,
-        );
+        let out = compile_and_dump("hello world", &FxHashMap::default(), &interner);
         assert!(out.contains("=== literals ==="));
         assert!(out.contains("T0 = \"hello world\""));
         assert!(out.contains("yield T0"));
@@ -730,12 +681,7 @@ mod tests {
     #[test]
     fn print_string_emit() {
         let interner = Interner::new();
-        let out = compile_and_dump(
-            r#"{{ "hello" }}"#,
-            &FxHashMap::default(),
-            &ExternRegistry::new(),
-            &interner,
-        );
+        let out = compile_and_dump(r#"{{ "hello" }}"#, &FxHashMap::default(), &interner);
         assert!(out.contains("T0 = \"hello\""));
         assert!(out.contains("yield T0"));
     }
@@ -750,7 +696,6 @@ mod tests {
         let out = compile_and_dump(
             "{{ x = @a + @b }}{{ x | to_string }}{{_}}{{/}}",
             &context,
-            &ExternRegistry::new(),
             &interner,
         );
         assert!(out.contains("+"));
@@ -764,7 +709,6 @@ mod tests {
         let out = compile_and_dump(
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
-            &ExternRegistry::new(),
             &interner,
         );
         assert!(!out.contains("iter_init"));
@@ -781,7 +725,6 @@ mod tests {
         let out = compile_and_dump(
             "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}",
             &context,
-            &ExternRegistry::new(),
             &interner,
         );
         assert!(out.contains("closure L"));
@@ -791,20 +734,22 @@ mod tests {
     }
 
     #[test]
-    fn print_async_call() {
+    fn print_extern_call() {
         let interner = Interner::new();
-        let mut ext = ExternModule::new(interner.intern("test"));
-        ext.add_fn(interner.intern("fetch"), vec![Ty::Int], Ty::String, false);
-        let mut registry = ExternRegistry::new();
-        registry.register(&ext);
+        let context = FxHashMap::from_iter([(
+            interner.intern("fetch"),
+            Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::String),
+                is_extern: true,
+            },
+        )]);
         let out = compile_and_dump(
-            "{{ x = fetch(1) }}{{ x }}{{_}}{{/}}",
-            &FxHashMap::default(),
-            &registry,
+            "{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}",
+            &context,
             &interner,
         );
-        assert!(out.contains("async_call fetch"));
-        assert!(out.contains("await"));
+        assert!(out.contains("call_closure"));
     }
 
     #[test]
@@ -817,24 +762,14 @@ mod tests {
                 (interner.intern("age"), Ty::Int),
             ])),
         )]);
-        let out = compile_and_dump(
-            "{{ @user.name }}",
-            &context,
-            &ExternRegistry::new(),
-            &interner,
-        );
+        let out = compile_and_dump("{{ @user.name }}", &context, &interner);
         assert!(out.contains(".name"));
     }
 
     #[test]
     fn print_var_write() {
         let interner = Interner::new();
-        let out = compile_and_dump(
-            "{{ $count = 42 }}",
-            &FxHashMap::default(),
-            &ExternRegistry::new(),
-            &interner,
-        );
+        let out = compile_and_dump("{{ $count = 42 }}", &FxHashMap::default(), &interner);
         assert!(out.contains("var_store $count"));
     }
 
@@ -851,7 +786,6 @@ mod tests {
         let out = compile_and_dump(
             r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
             &context,
-            &ExternRegistry::new(),
             &interner,
         );
         assert!(out.contains("=== main ==="));
@@ -865,7 +799,6 @@ mod tests {
         let out = compile_and_dump(
             r#"{{ "hello" }}{{ "hello" }}"#,
             &FxHashMap::default(),
-            &ExternRegistry::new(),
             &interner,
         );
         // Same literal should share one T-index.

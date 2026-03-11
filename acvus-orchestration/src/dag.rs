@@ -111,6 +111,8 @@ mod tests {
             strategy: CompiledStrategy::Always,
             retry: 0,
             assert: None,
+            is_function: false,
+            fn_params: vec![],
         }
     }
 

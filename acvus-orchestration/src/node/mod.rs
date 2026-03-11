@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Coroutine, ExternFnRegistry, RuntimeError, Value};
+use acvus_interpreter::{Coroutine, RuntimeError, Value};
 
 use crate::provider::{Fetch, ProviderConfig};
 
@@ -32,7 +32,6 @@ pub fn build_node_table<F>(
     compiled: &[crate::compile::CompiledNode],
     providers: &FxHashMap<String, ProviderConfig>,
     fetch: Arc<F>,
-    extern_fns: &ExternFnRegistry,
     interner: &Interner,
 ) -> Vec<Arc<dyn Node>>
 where
@@ -44,12 +43,10 @@ where
             match &node.kind {
                 crate::kind::CompiledNodeKind::Plain(plain) => Arc::new(PlainNode::new(
                     plain.block.module.clone(),
-                    extern_fns,
                     interner,
                 )),
                 crate::kind::CompiledNodeKind::Expr(expr) => Arc::new(ExprNode::new(
                     expr.script.module.clone(),
-                    extern_fns,
                     interner,
                 )),
                 crate::kind::CompiledNodeKind::Llm(llm) => {
@@ -61,7 +58,6 @@ where
                         llm,
                         provider_config,
                         Arc::clone(&fetch),
-                        extern_fns,
                         interner,
                     ))
                 }
@@ -74,7 +70,6 @@ where
                         cache,
                         provider_config,
                         Arc::clone(&fetch),
-                        extern_fns,
                         interner,
                     ))
                 }

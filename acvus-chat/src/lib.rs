@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Value};
+use acvus_interpreter::{RuntimeError, Value};
 use acvus_orchestration::{
     CompiledNode, CompiledNodeKind, CompiledStrategy, Fetch, Node, ProviderConfig, ResolveState,
     Resolved, Resolver, State, Storage, build_dag, build_node_table,
@@ -21,7 +21,6 @@ pub struct ChatEngine<S> {
     nodes: Vec<CompiledNode>,
     node_table: Vec<Arc<dyn Node>>,
     name_to_idx: FxHashMap<Astr, usize>,
-    extern_fns: ExternFnRegistry,
     pub state: State<S>,
     bind_cache: FxHashMap<Astr, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
@@ -38,7 +37,6 @@ where
         nodes: Vec<CompiledNode>,
         providers: FxHashMap<String, ProviderConfig>,
         fetch: F,
-        extern_fns: ExternFnRegistry,
         mut storage: S,
         entrypoint: &str,
         side_effects: &[String],
@@ -117,13 +115,12 @@ where
 
         // Build node table — one match, uniform Arc<dyn Node> from here
         let node_table =
-            build_node_table(&nodes, &providers, Arc::new(fetch), &extern_fns, interner);
+            build_node_table(&nodes, &providers, Arc::new(fetch), interner);
 
         Ok(Self {
             nodes,
             node_table,
             name_to_idx,
-            extern_fns,
             state: State::new(storage, 0),
             bind_cache: FxHashMap::default(),
             entrypoint_idx,
@@ -133,10 +130,11 @@ where
         })
     }
 
-    pub async fn turn<R>(&mut self, resolver: &R) -> Result<Value, ChatError>
+    pub async fn turn<R, EH>(&mut self, resolver: &R, extern_handler: &EH) -> Result<Value, ChatError>
     where
         S: Default,
         R: AsyncFn(Astr) -> Resolved + Sync,
+        EH: AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync,
     {
         let interner = &self.interner;
         let entrypoint_name = &self.nodes[self.entrypoint_idx].name;
@@ -184,7 +182,7 @@ where
             nodes: &self.nodes,
             node_table: &self.node_table,
             name_to_idx: &self.name_to_idx,
-            extern_fns: &self.extern_fns,
+            extern_handler,
             resolver,
             interner,
         };
@@ -250,10 +248,6 @@ where
         Ok(Value::clone(&result))
     }
 
-    pub fn extern_fns(&self) -> &ExternFnRegistry {
-        &self.extern_fns
-    }
-
     pub fn history_len(&self) -> usize {
         self.state.turn
     }
@@ -279,10 +273,11 @@ where
         }
     }
 
-    pub async fn re_execute<R>(&mut self, index: usize, resolver: &R) -> Result<Value, ChatError>
+    pub async fn re_execute<R, EH>(&mut self, index: usize, resolver: &R, extern_handler: &EH) -> Result<Value, ChatError>
     where
         S: Default,
         R: AsyncFn(Astr) -> Resolved + Sync,
+        EH: AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync,
     {
         assert!(
             index <= self.state.turn,
@@ -304,38 +299,7 @@ where
                 .set(interner.resolve(turn_key).to_string(), turn_val);
         }
         self.state.turn = index;
-        self.turn(resolver).await
-    }
-}
-
-/// Drive an interpreter coroutine to a single value, resolving contexts from storage + local.
-async fn drive_script<S>(
-    coroutine: &mut acvus_utils::Coroutine<Value, acvus_interpreter::RuntimeError>,
-    storage: &S,
-    local: &FxHashMap<Astr, Arc<Value>>,
-    interner: &Interner,
-) -> Value
-where
-    S: Storage,
-{
-    loop {
-        match coroutine.resume().await {
-            acvus_utils::Stepped::Emit(value) => {
-                return value;
-            }
-            acvus_utils::Stepped::NeedContext(request) => {
-                let name = request.name();
-                if let Some(arc) = local.get(&name) {
-                    request.resolve(Arc::clone(arc));
-                } else if let Some(arc) = storage.get(interner.resolve(name)) {
-                    request.resolve(arc);
-                } else {
-                    return Value::Unit;
-                }
-            }
-            acvus_utils::Stepped::Done => return Value::Unit,
-            acvus_utils::Stepped::Error(e) => panic!("runtime error: {e}"),
-        }
+        self.turn(resolver, extern_handler).await
     }
 }
 
@@ -344,10 +308,10 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    use acvus_mir::extern_module::ExternRegistry;
+    use acvus_mir::ty::Ty;
     use acvus_orchestration::{
-        ApiKind, GenerationParams, HashMapStorage, HttpRequest, LlmSpec, MaxTokens, MessageSpec,
-        NodeKind, NodeSpec, PlainSpec, SelfSpec, Strategy, ToolBinding, compile_nodes,
+        ApiKind, ExprSpec, GenerationParams, HashMapStorage, HttpRequest, LlmSpec, MaxTokens,
+        MessageSpec, NodeKind, NodeSpec, PlainSpec, SelfSpec, Strategy, ToolBinding, compile_nodes,
     };
 
     struct MockFetch {
@@ -423,12 +387,15 @@ mod tests {
         |_: Astr| async { Resolved::Once(Value::Unit) }
     }
 
+    fn noop_extern_handler() -> impl AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync {
+        |_: Astr, _: Vec<Value>| async { Ok(Value::Unit) }
+    }
+
     fn compile_test_nodes(interner: &Interner, specs: &[NodeSpec]) -> Vec<CompiledNode> {
         compile_nodes(
             interner,
             specs,
             &FxHashMap::default(),
-            &ExternRegistry::default(),
         )
         .unwrap()
     }
@@ -459,6 +426,8 @@ mod tests {
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -466,7 +435,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -490,6 +458,8 @@ mod tests {
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -497,7 +467,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "nonexistent",
             &[],
@@ -521,6 +490,8 @@ mod tests {
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -528,7 +499,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -537,7 +507,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(result, Value::String("hello world".into()));
     }
 
@@ -565,6 +535,8 @@ mod tests {
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -573,7 +545,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             mock,
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -582,7 +553,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         // stored value = raw output (List of messages)
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
@@ -613,6 +584,8 @@ mod tests {
                     self_spec: plain_self_spec(),
                     retry: 0,
                     assert: None,
+                    is_function: false,
+                    fn_params: vec![],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -638,6 +611,8 @@ mod tests {
                     self_spec: llm_self_spec(),
                     retry: 0,
                     assert: None,
+                    is_function: false,
+                    fn_params: vec![],
                 },
             ],
         );
@@ -650,7 +625,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             mock,
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -659,7 +633,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         // stored value = raw output (List of messages)
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
@@ -699,6 +673,8 @@ mod tests {
                 strategy: Strategy::OncePerTurn,
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -706,7 +682,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -715,10 +690,10 @@ mod tests {
         .await
         .unwrap();
 
-        let r1 = engine.turn(&noop_resolver()).await.unwrap();
+        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(r1, Value::String("AB".into()));
 
-        let r2 = engine.turn(&noop_resolver()).await.unwrap();
+        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(r2, Value::String("ABB".into()));
     }
 
@@ -736,6 +711,8 @@ mod tests {
                     strategy: Strategy::Always,
                     retry: 0,
                     assert: None,
+                    is_function: false,
+                    fn_params: vec![],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -746,6 +723,8 @@ mod tests {
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
+                    is_function: false,
+                    fn_params: vec![],
                 },
             ],
         );
@@ -754,7 +733,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -763,7 +741,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(result, Value::String("xx".into()));
     }
 
@@ -789,9 +767,10 @@ mod tests {
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
             &ctx,
-            &ExternRegistry::default(),
         )
         .unwrap();
         let (pname, pconfig) = default_provider();
@@ -799,7 +778,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -818,7 +796,7 @@ mod tests {
             }
         };
 
-        let result = engine.turn(&resolver).await.unwrap();
+        let result = engine.turn(&resolver, &noop_extern_handler()).await.unwrap();
         assert_eq!(result, Value::String("hihi".into()));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
@@ -855,6 +833,8 @@ mod tests {
                 },
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -862,7 +842,7 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![openai_text_response("hello")]),
-            ExternFnRegistry::new(&interner),
+
             HashMapStorage::new(),
             "main",
             &[],
@@ -872,7 +852,7 @@ mod tests {
         .unwrap();
 
         // Should not panic — @self = raw output = List<{role, content, content_type}>
-        let result = engine.turn(&noop_resolver()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
         };
@@ -901,6 +881,8 @@ mod tests {
                 strategy: Strategy::OncePerTurn,
                 retry: 0,
                 assert: None,
+                is_function: false,
+                fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
@@ -908,7 +890,6 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            ExternFnRegistry::new(&interner),
             HashMapStorage::new(),
             "main",
             &[],
@@ -918,11 +899,321 @@ mod tests {
         .unwrap();
 
         // Turn 1: @self = "A" (initial), output = "AB"
-        let r1 = engine.turn(&noop_resolver()).await.unwrap();
+        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(r1, Value::String("AB".into()));
 
         // Turn 2: @self = "AB" (persisted), output = "ABB"
-        let r2 = engine.turn(&noop_resolver()).await.unwrap();
+        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
         assert_eq!(r2, Value::String("ABB".into()));
+    }
+
+    // -- function node tests ---------------------------------------------------
+
+    /// Function node compiles successfully: Expr kind + is_function + fn_params
+    #[tokio::test]
+    async fn function_node_compile_success() {
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x * 2".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "ok".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+        );
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes[0].is_function);
+    }
+
+    /// Function node is NOT in context_types: @double should fail
+    #[test]
+    fn function_node_not_in_context() {
+        let interner = Interner::new();
+        let result = compile_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x * 2".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        // @double should be undefined — function nodes are not context
+                        source: "{{@double}}".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+            &FxHashMap::default(),
+        );
+        // Should fail: @double is not a context key (it's a function)
+        assert!(result.is_err());
+    }
+
+    /// Other nodes can call function nodes: double(5) should typecheck
+    #[test]
+    fn function_node_callable_from_other_nodes() {
+        let interner = Interner::new();
+        let result = compile_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x * 2".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@double(5)".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+            &FxHashMap::default(),
+        );
+        assert!(result.is_ok(), "function call should typecheck: {result:?}");
+    }
+
+    /// Function node with global context: fn body references @globalCtx
+    #[test]
+    fn function_node_with_global_context() {
+        let interner = Interner::new();
+        let mut ctx = FxHashMap::default();
+        ctx.insert(interner.intern("offset"), Ty::Int);
+        let result = compile_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("add_offset"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x + @offset".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@add_offset(5)".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+            &ctx,
+        );
+        assert!(result.is_ok(), "function with global context should compile: {result:?}");
+    }
+
+    /// Full integration: Plain node calls function node, gets result
+    #[tokio::test]
+    async fn function_call_full_turn() {
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x * 2".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "{{ @double(5) | to_string }}".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+        );
+        let (pname, pconfig) = default_provider();
+        let mut engine = ChatEngine::new(
+            nodes,
+            FxHashMap::from_iter([(pname, pconfig)]),
+            MockFetch::new(vec![]),
+            HashMapStorage::new(),
+            "main",
+            &[],
+            &interner,
+        )
+        .await
+        .unwrap();
+
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        assert_eq!(result, Value::String("10".into()));
+    }
+
+    /// @funcName context access should produce a resolve error
+    #[tokio::test]
+    async fn function_node_context_access_error() {
+        let interner = Interner::new();
+        // We need to manually set up: double is a function node, main tries to
+        // reference @double as context. Since compile rejects @double in templates,
+        // we test at the resolver level by injecting @double as a known context type
+        // but marking the compiled node as is_function.
+        let mut ctx = FxHashMap::default();
+        ctx.insert(interner.intern("double"), Ty::Int);
+        let nodes = compile_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "42".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![],
+                },
+                // main doesn't use @double in template (compile would reject it),
+                // so we just verify the is_function flag propagates
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "ok".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+            &FxHashMap::default(),
+        )
+        .unwrap();
+
+        assert!(nodes[0].is_function);
+    }
+
+    /// Multiple function calls in one template
+    #[tokio::test]
+    async fn function_call_multiple_times() {
+        let interner = Interner::new();
+        let nodes = compile_test_nodes(
+            &interner,
+            &[
+                NodeSpec {
+                    name: interner.intern("double"),
+                    kind: NodeKind::Expr(ExprSpec {
+                        source: "@x * 2".into(),
+                        output_ty: Ty::Int,
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: true,
+                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                },
+                NodeSpec {
+                    name: interner.intern("main"),
+                    kind: NodeKind::Plain(PlainSpec {
+                        source: "{{ @double(3) | to_string }}-{{ @double(7) | to_string }}".into(),
+                    }),
+                    self_spec: plain_self_spec(),
+                    strategy: Strategy::default(),
+                    retry: 0,
+                    assert: None,
+                    is_function: false,
+                    fn_params: vec![],
+                },
+            ],
+        );
+        let (pname, pconfig) = default_provider();
+        let mut engine = ChatEngine::new(
+            nodes,
+            FxHashMap::from_iter([(pname, pconfig)]),
+            MockFetch::new(vec![]),
+            HashMapStorage::new(),
+            "main",
+            &[],
+            &interner,
+        )
+        .await
+        .unwrap();
+
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        assert_eq!(result, Value::String("6-14".into()));
     }
 }

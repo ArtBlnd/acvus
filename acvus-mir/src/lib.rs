@@ -1,6 +1,5 @@
 pub mod builtins;
 pub mod error;
-pub mod extern_module;
 pub mod hints;
 pub mod ir;
 pub mod lower;
@@ -15,7 +14,6 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::error::MirError;
-use crate::extern_module::ExternRegistry;
 use crate::hints::HintTable;
 use crate::ir::MirModule;
 use crate::lower::Lowerer;
@@ -26,18 +24,16 @@ use crate::typeck::TypeChecker;
 ///
 /// - `template`: the parsed AST from `acvus_ast::parse()`.
 /// - `context_types`: types for each `@name` context variable.
-/// - `registry`: external function definitions.
 ///
 /// Returns a `MirModule` and `HintTable`, or a list of errors.
 pub fn compile(
     interner: &Interner,
     template: &Template,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry);
+    let checker = TypeChecker::new(interner, context_types);
     let type_map = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -47,22 +43,20 @@ pub fn compile_script(
     interner: &Interner,
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_with_hint(interner, script, context_types, registry, None)
+    compile_script_with_hint(interner, script, context_types, None)
 }
 
 pub fn compile_script_with_hint(
     interner: &Interner,
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    let checker = TypeChecker::new(interner, context_types, registry);
+    let checker = TypeChecker::new(interner, context_types);
     let (type_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -73,12 +67,11 @@ pub fn compile_analysis(
     interner: &Interner,
     template: &Template,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let checker =
-        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+        TypeChecker::new(interner, context_types).with_analysis_mode();
     let type_map = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -89,12 +82,11 @@ pub fn compile_analysis_partial(
     interner: &Interner,
     template: &Template,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> (MirModule, HintTable, Vec<MirError>) {
     let checker =
-        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+        TypeChecker::new(interner, context_types).with_analysis_mode();
     let (type_map, errors) = checker.check_template_partial(template);
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_template(template);
     (module, hints, errors)
 }
@@ -104,9 +96,8 @@ pub fn compile_script_analysis(
     interner: &Interner,
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
-    compile_script_analysis_with_tail(interner, script, context_types, registry, None)
+    compile_script_analysis_with_tail(interner, script, context_types, None)
 }
 
 /// Compile a script in analysis mode with an expected tail type hint.
@@ -114,14 +105,13 @@ pub fn compile_script_analysis_with_tail(
     interner: &Interner,
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let checker =
-        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+        TypeChecker::new(interner, context_types).with_analysis_mode();
     let (type_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -131,14 +121,13 @@ pub fn compile_script_analysis_with_tail_partial(
     interner: &Interner,
     script: &Script,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> (MirModule, HintTable, Ty, Vec<MirError>) {
     let checker =
-        TypeChecker::new(interner, context_types, registry).with_analysis_mode();
+        TypeChecker::new(interner, context_types).with_analysis_mode();
     let (type_map, tail_ty, errors) =
         checker.check_script_with_hint_partial(script, expected_tail);
-    let lowerer = Lowerer::new(interner, type_map, registry);
+    let lowerer = Lowerer::new(interner, type_map);
     let (module, hints) = lowerer.lower_script(script);
     (module, hints, tail_ty, errors)
 }
@@ -147,26 +136,19 @@ pub fn compile_script_analysis_with_tail_partial(
 mod tests {
     use super::*;
 
-    use crate::extern_module::{ExternModule, ExternRegistry};
-
     fn compile_src(
         interner: &Interner,
         source: &str,
         context: &FxHashMap<Astr, Ty>,
-        registry: &ExternRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        compile(interner, &template, context, registry)
-    }
-
-    fn empty_registry() -> ExternRegistry {
-        ExternRegistry::new()
+        compile(interner, &template, context)
     }
 
     #[test]
     fn integration_text_only() {
         let i = Interner::new();
-        let result = compile_src(&i, "hello world", &FxHashMap::default(), &empty_registry());
+        let result = compile_src(&i, "hello world", &FxHashMap::default());
         assert!(result.is_ok());
     }
 
@@ -177,7 +159,6 @@ mod tests {
             &i,
             r#"{{ "hello" }}"#,
             &FxHashMap::default(),
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -189,12 +170,11 @@ mod tests {
             &i,
             "{{ $count = 42 }}",
             &FxHashMap::default(),
-            &empty_registry(),
         );
         assert!(result.is_ok());
 
         let context = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
-        let result = compile_src(&i, "{{ @count | to_string }}", &context, &empty_registry());
+        let result = compile_src(&i, "{{ @count | to_string }}", &context);
         assert!(result.is_ok());
     }
 
@@ -206,7 +186,6 @@ mod tests {
             &i,
             r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -215,22 +194,26 @@ mod tests {
     fn integration_variable_binding() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
-        let result = compile_src(&i, r#"{{ x = @name }}{{ x }}"#, &context, &empty_registry());
+        let result = compile_src(&i, r#"{{ x = @name }}{{ x }}"#, &context);
         assert!(result.is_ok());
     }
 
     #[test]
     fn integration_extern_fn() {
         let i = Interner::new();
-        let mut module = ExternModule::new(i.intern("test"));
-        module.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
-        let mut registry = ExternRegistry::new();
-        registry.register(&module);
+        // Extern functions are now provided via context_types with Ty::Fn { is_extern: true }
+        let context = FxHashMap::from_iter([(
+            i.intern("fetch_user"),
+            Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::String),
+                is_extern: true,
+            },
+        )]);
         let result = compile_src(
             &i,
-            r#"{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-            &FxHashMap::default(),
-            &registry,
+            r#"{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
+            &context,
         );
         assert!(result.is_ok());
     }
@@ -243,7 +226,6 @@ mod tests {
             &i,
             r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -258,7 +240,7 @@ mod tests {
                 (i.intern("age"), Ty::Int),
             ])),
         )]);
-        let result = compile_src(&i, "{{ @user.name }}", &context, &empty_registry());
+        let result = compile_src(&i, "{{ @user.name }}", &context);
         assert!(result.is_ok());
     }
 
@@ -276,7 +258,6 @@ mod tests {
             &i,
             r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -284,7 +265,7 @@ mod tests {
     #[test]
     fn integration_type_error_int_emit() {
         let i = Interner::new();
-        let result = compile_src(&i, "{{ 42 }}", &FxHashMap::default(), &empty_registry());
+        let result = compile_src(&i, "{{ 42 }}", &FxHashMap::default());
         assert!(result.is_err());
     }
 
@@ -295,7 +276,6 @@ mod tests {
             &i,
             "{{ x in 0..10 }}{{ x | to_string }}{{/}}",
             &FxHashMap::default(),
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -314,7 +294,6 @@ mod tests {
             &i,
             r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -327,7 +306,6 @@ mod tests {
             &i,
             r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -340,7 +318,6 @@ mod tests {
             &i,
             r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}"#,
             &context,
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -352,7 +329,6 @@ mod tests {
             &i,
             r#"{{ "hello" + " " + "world" }}"#,
             &FxHashMap::default(),
-            &empty_registry(),
         );
         assert!(result.is_ok());
     }
@@ -360,7 +336,7 @@ mod tests {
     #[test]
     fn integration_boolean_logic() {
         let i = Interner::new();
-        let result = compile_src(&i, "{{ true }}", &FxHashMap::default(), &empty_registry());
+        let result = compile_src(&i, "{{ true }}", &FxHashMap::default());
         assert!(result.is_err());
     }
 
@@ -368,7 +344,7 @@ mod tests {
         let i = Interner::new();
         let script = acvus_ast::parse_script(&i, source).unwrap();
         let ctx = FxHashMap::from_iter([(i.intern("data"), Ty::String)]);
-        let (module, _, _) = compile_script(&i, &script, &ctx, &empty_registry())
+        let (module, _, _) = compile_script(&i, &script, &ctx)
             .unwrap();
         module
     }

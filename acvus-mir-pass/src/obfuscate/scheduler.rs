@@ -162,8 +162,7 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         InstKind::BinOp { left, right, .. } => vec![*left, *right],
         InstKind::UnaryOp { operand, .. } => vec![*operand],
         InstKind::FieldGet { object, .. } => vec![*object],
-        InstKind::Call { args, .. } | InstKind::AsyncCall { args, .. } => args.clone(),
-        InstKind::Await { src, .. } => vec![*src],
+        InstKind::BuiltinCall { args, .. } | InstKind::ExternCall { args, .. } => args.clone(),
         InstKind::MakeList { elements, .. } => elements.clone(),
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         InstKind::MakeRange { start, end, .. } => vec![*start, *end],
@@ -178,7 +177,7 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         InstKind::ListSlice { list, .. } => vec![*list],
         InstKind::ObjectGet { object, .. } => vec![*object],
         InstKind::MakeClosure { captures, .. } => captures.clone(),
-        InstKind::CallClosure { closure, args, .. } => {
+        InstKind::ClosureCall { closure, args, .. } => {
             let mut v = vec![*closure];
             v.extend(args);
             v
@@ -203,7 +202,7 @@ fn used_vals(kind: &InstKind) -> Vec<ValueId> {
         | InstKind::VarLoad { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop => vec![],
-        InstKind::ContextLoad { bindings, .. } => bindings.iter().map(|(_, v)| *v).collect(),
+        InstKind::ContextLoad { .. } => vec![],
         InstKind::MakeVariant { payload, .. } => payload.iter().copied().collect(),
         InstKind::TestVariant { src, .. } => vec![*src],
         InstKind::UnwrapVariant { src, .. } => vec![*src],
@@ -219,9 +218,8 @@ fn defined_val(kind: &InstKind) -> Option<ValueId> {
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
         | InstKind::FieldGet { dst, .. }
-        | InstKind::Call { dst, .. }
-        | InstKind::AsyncCall { dst, .. }
-        | InstKind::Await { dst, .. }
+        | InstKind::BuiltinCall { dst, .. }
+        | InstKind::ExternCall { dst, .. }
         | InstKind::MakeList { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeRange { dst, .. }
@@ -236,7 +234,7 @@ fn defined_val(kind: &InstKind) -> Option<ValueId> {
         | InstKind::ListSlice { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
-        | InstKind::CallClosure { dst, .. }
+        | InstKind::ClosureCall { dst, .. }
         | InstKind::IterInit { dst, .. }
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
@@ -252,9 +250,9 @@ fn has_side_effect(kind: &InstKind) -> bool {
         InstKind::Yield(_)
             | InstKind::VarStore { .. }
             | InstKind::VarLoad { .. }
-            | InstKind::Call { .. }
-            | InstKind::AsyncCall { .. }
-            | InstKind::CallClosure { .. }
+            | InstKind::BuiltinCall { .. }
+            | InstKind::ExternCall { .. }
+            | InstKind::ClosureCall { .. }
     )
 }
 

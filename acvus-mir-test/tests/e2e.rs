@@ -1,4 +1,3 @@
-use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Interner};
@@ -49,7 +48,7 @@ fn string_concat() {
 fn mixed_text_and_expr() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
-    let ir = compile_to_ir(&i, "Hello, {{ @name }}!", &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(&i, "Hello, {{ @name }}!", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -63,7 +62,6 @@ fn context_read() {
         &i,
         "{{ @count | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -83,7 +81,6 @@ fn context_field_access() {
         &i,
         "{{ @user.name }}",
         &user_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -99,7 +96,6 @@ fn arithmetic_to_string() {
         &i,
         "{{ @a + @b | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -116,7 +112,6 @@ fn simple_match_binding() {
         &i,
         r#"{{ x = @name }}{{ x }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -130,7 +125,6 @@ fn match_literal_filter() {
         &i,
         r#"{{ "admin" = @role }}admin page{{_}}guest page{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -144,7 +138,6 @@ fn multi_arm_match() {
         &i,
         r#"{{ "admin" = @role }}admin{{ "user" = }}user{{_}}guest{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -158,7 +151,6 @@ fn iteration_over_list() {
         &i,
         r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
         &users_list_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -188,7 +180,6 @@ fn nested_match() {
         &i,
         r#"{{ { name, posts, } in @users }}{{ { title, } in posts }}{{ title }}{{/}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -203,7 +194,6 @@ fn list_destructure_head() {
         &i,
         r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -218,7 +208,6 @@ fn object_pattern() {
         &i,
         r#"{{ { name, age, } = @user }}{{ name }}{{/}}"#,
         &user_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -250,7 +239,6 @@ fn range_pattern() {
         &i,
         r#"{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -266,7 +254,6 @@ fn pipe_filter_map() {
         &i,
         r#"{{ x = @items | filter(x -> x != 0) | map(x -> x + 1) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -276,7 +263,7 @@ fn pipe_filter_map() {
 fn pipe_to_string() {
     let i = Interner::new();
     let context = ctx(&i, &[("n", Ty::Int)]);
-    let ir = compile_to_ir(&i, "{{ @n | to_string }}", &context, &ExternRegistry::new()).unwrap();
+    let ir = compile_to_ir(&i, "{{ @n | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -290,7 +277,6 @@ fn lambda_in_filter() {
         &i,
         r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -300,18 +286,17 @@ fn lambda_in_filter() {
 
 #[test]
 fn extern_async_call() {
-    use acvus_mir::extern_module::ExternModule;
     let i = Interner::new();
-    let mut ext = ExternModule::new(i.intern("test"));
-    ext.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
-    let mut registry = ExternRegistry::new();
-    registry.register(&ext);
+    let context = ctx(&i, &[("fetch_user", Ty::Fn {
+        params: vec![Ty::Int],
+        ret: Box::new(Ty::String),
+        is_extern: true,
+    })]);
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ user = fetch_user(1) }}{{ user }}"#,
-        &FxHashMap::default(),
-        &registry,
+        r#"{{ user = @fetch_user(1) }}{{ user }}"#,
+        &context,
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -327,7 +312,6 @@ fn tuple_expression() {
         &i,
         r#"{{ (a, b) = (@a, @b) }}{{ a | to_string }}{{ b }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -341,7 +325,6 @@ fn tuple_pattern_binding() {
         &i,
         r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -355,7 +338,6 @@ fn tuple_pattern_wildcard() {
         &i,
         r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -369,7 +351,6 @@ fn tuple_pattern_literal_match() {
         &i,
         r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -389,7 +370,6 @@ fn tuple_nested_destructure() {
         &i,
         r#"{{ (label, { x, }) = @data }}{{ label }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -403,7 +383,6 @@ fn error_tuple_arity_mismatch() {
         &i,
         r#"{{ (a, b, c) = @pair }}{{ a | to_string }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -426,7 +405,6 @@ fn error_undefined_context() {
         &i,
         "{{ @unknown | to_string }}",
         &FxHashMap::default(),
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -439,7 +417,6 @@ fn error_undefined_variable() {
         &i,
         "{{ x = unknown }}{{_}}{{/}}",
         &FxHashMap::default(),
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -471,7 +448,6 @@ fn iter_list_binding() {
         &i,
         "{{ x in @items }}{{ x | to_string }}{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -484,7 +460,6 @@ fn iter_object_destructure() {
         &i,
         "{{ { name, } in @users }}{{ name }}{{/}}",
         &users_list_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -504,7 +479,6 @@ fn iter_tuple_destructure() {
         &i,
         "{{ (a, _) in @pairs }}{{ a }}{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -518,7 +492,6 @@ fn iter_with_catch_all() {
         &i,
         "{{ x in @items }}{{ x | to_string }}{{_}}empty{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -532,7 +505,6 @@ fn error_iter_refutable_pattern() {
         &i,
         r#"{{ "admin" in @roles }}...{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
 }
@@ -545,7 +517,6 @@ fn error_iter_not_iterable() {
         &i,
         "{{ x in @name }}{{ x }}{{/}}",
         &context,
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
 }
@@ -561,7 +532,6 @@ fn variable_new_ref_binding() {
         &i,
         r#"{{ $result = @name }}{{ $result }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -576,7 +546,6 @@ fn variable_new_ref_in_match_arm() {
         &i,
         r#"{{ "admin" = @role }}{{ $selected = "yes" }}{{_}}{{ $selected = "no" }}{{/}}{{ $selected }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -599,7 +568,6 @@ fn list_of_tuples_destructure() {
         &i,
         r#"{{ (name, age) in @pairs }}{{ name }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -620,7 +588,6 @@ fn list_head_with_object_elements() {
         &i,
         r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -641,7 +608,6 @@ fn tuple_with_list_element() {
         &i,
         r#"{{ (label, items) = @data }}{{ label }}{{ x in items }}{{ x | to_string }}{{/}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -657,7 +623,6 @@ fn object_literal_field_access() {
         &i,
         r#"{{ o = { @name, } }}{{ o.name }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -673,7 +638,6 @@ fn comparison_operators() {
         &i,
         r#"{{ x = @a > @b }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -687,7 +651,6 @@ fn unary_negation() {
         &i,
         r#"{{ x = -@n }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -701,7 +664,6 @@ fn boolean_not() {
         &i,
         r#"{{ x = !@flag }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -717,7 +679,6 @@ fn to_float_conversion() {
         &i,
         r#"{{ x = @n | to_float }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -731,7 +692,6 @@ fn to_int_conversion() {
         &i,
         r#"{{ x = @f | to_int }}{{ x | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -746,7 +706,6 @@ fn pmap_builtin() {
         &i,
         r#"{{ x = @items | pmap(i -> i + 1) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -761,7 +720,6 @@ fn list_destructure_tail() {
         &i,
         r#"{{ [.., a, b] = @items }}{{ a | to_string }}{{_}}empty{{/}}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -789,7 +747,6 @@ fn nested_iteration_with_binding() {
         &i,
         r#"{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -826,7 +783,6 @@ fn deeply_nested_object_access() {
         &i,
         r#"{{ @data.user.address.city }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -848,7 +804,6 @@ fn closure_capture_context() {
         &i,
         r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -864,7 +819,6 @@ fn multi_arm_range_and_literal() {
         &i,
         r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -893,7 +847,6 @@ fn lambda_map_arithmetic() {
         &i,
         r#"{{ x = @items | map(i -> i + 1) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -907,7 +860,6 @@ fn lambda_filter_comparison() {
         &i,
         r#"{{ x = @items | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -923,7 +875,6 @@ fn closure_capture_local() {
         &i,
         r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -939,7 +890,6 @@ fn list_exact_match() {
         &i,
         r#"{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -955,7 +905,6 @@ fn list_destructure_head_and_tail() {
         &i,
         r#"{{ [first, .., last] = @items }}{{ first | to_string }}{{_}}empty{{/}}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -977,7 +926,6 @@ fn nested_tuple_pattern() {
         &i,
         r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -993,7 +941,6 @@ fn variable_write_computed() {
         &i,
         r#"{{ $result = @a + @b }}{{ $result | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1009,7 +956,6 @@ fn match_binding_with_body() {
         &i,
         r#"{{ { name, } = @user }}{{ name }} is here{{_}}no user{{/}}"#,
         &user_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1025,7 +971,6 @@ fn variable_shadowing() {
         &i,
         r#"{{ x = "outer" }}{{ x = @name }}{{ x }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1041,7 +986,6 @@ fn nested_match_blocks() {
         &i,
         r#"{{ "admin" = @role }}{{ 1..10 = @level }}low{{_}}high{{/}}{{_}}guest{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1057,7 +1001,6 @@ fn catch_all_with_binding() {
         &i,
         r#"{{ "admin" = @role }}admin{{_}}{{ fallback = "guest" }}{{ fallback }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1072,7 +1015,6 @@ fn triple_pipe_chain() {
         &i,
         r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> i * 2) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1088,7 +1030,6 @@ fn variable_write_in_iteration() {
         &i,
         r#"{{ x in @items }}{{ $last = x }}{{/}}{{ $last | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1110,7 +1051,6 @@ fn field_access_on_destructured() {
         &i,
         r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1126,7 +1066,6 @@ fn equality_as_match_source() {
         &i,
         r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1142,7 +1081,6 @@ fn lambda_negate_param() {
         &i,
         r#"{{ x = @items | map(i -> -i) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1159,7 +1097,6 @@ fn lambda_not_param() {
         &i,
         r#"{{ x = @flags | map(i -> !i) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1175,7 +1112,6 @@ fn object_destructure_match() {
         &i,
         r#"{{ { name, age, } = @user }}{{ name }}{{ age | to_string }}{{_}}none{{/}}"#,
         &user_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1194,7 +1130,6 @@ fn multiple_closures_same_capture() {
         &i,
         r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1210,7 +1145,6 @@ fn string_equality_in_filter() {
         &i,
         r#"{{ x = @names | filter(n -> n != "admin") }}{{ x | join(",") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1233,7 +1167,6 @@ fn lambda_field_access() {
         &i,
         r#"{{ x = @users | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1250,7 +1183,6 @@ fn variable_accumulate_in_loop() {
         &i,
         r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1265,7 +1197,6 @@ fn pipe_map_to_string_then_filter() {
         &i,
         r#"{{ x = @items | map(i -> i + 1) | filter(i -> i != 0) }}{{ x | len | to_string }}"#,
         &items_context(&i),
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1283,7 +1214,6 @@ fn lambda_capture_local_var_ref() {
         &i,
         r#"{{ $offset = 10 }}{{ x = @items | filter(i -> i > $offset) }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1306,7 +1236,6 @@ fn lambda_multiple_field_access() {
         &i,
         r#"{{ x = @users | map(u -> (u.name, u.age)) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1331,7 +1260,6 @@ fn lambda_chained_field_access() {
         &i,
         r#"{{ x = @users | map(u -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1348,7 +1276,6 @@ fn lambda_string_concat() {
         &i,
         r#"{{ x = @names | map(n -> n + "!") }}{{ x | join(",") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1370,7 +1297,6 @@ fn pipe_filter_then_map_field() {
         &i,
         r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1386,7 +1312,6 @@ fn error_field_access_on_int() {
         &i,
         "{{ @n.foo | to_string }}",
         &context,
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -1403,7 +1328,6 @@ fn error_variable_write_type_mismatch() {
         &i,
         r#"{{ @count = "hello" }}"#,
         &context,
-        &ExternRegistry::new(),
     );
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -1419,7 +1343,6 @@ fn lambda_float_arithmetic() {
         &i,
         r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1435,7 +1358,6 @@ fn match_bool_literal() {
         &i,
         r#"{{ true = @flag }}on{{_}}off{{/}}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1460,7 +1382,6 @@ fn filter_object_field_equality() {
         &i,
         r#"{{ x = @users | filter(u -> u.active) }}{{ x | len | to_string }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1470,22 +1391,16 @@ fn filter_object_field_equality() {
 
 #[test]
 fn extern_fn_object_return() {
-    use acvus_mir::extern_module::ExternModule;
     let i = Interner::new();
-    let mut ext = ExternModule::new(i.intern("test"));
-    ext.add_fn(
-        i.intern("get_user"),
-        vec![Ty::Int],
-        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
-        false,
-    );
-    let mut registry = ExternRegistry::new();
-    registry.register(&ext);
+    let context = ctx(&i, &[("get_user", Ty::Fn {
+        params: vec![Ty::Int],
+        ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+        is_extern: true,
+    })]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ u = get_user(1) }}{{ u.name }}"#,
-        &FxHashMap::default(),
-        &registry,
+        r#"{{ u = @get_user(1) }}{{ u.name }}"#,
+        &context,
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1501,7 +1416,6 @@ fn builtin_len() {
         &i,
         "{{ @items | len | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1515,7 +1429,6 @@ fn builtin_reverse() {
         &i,
         "{{ x in @items | reverse }}{{ x | to_string }}{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1529,7 +1442,6 @@ fn builtin_join() {
         &i,
         r#"{{ @names | join(", ") }}"#,
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1543,7 +1455,6 @@ fn builtin_contains() {
         &i,
         "{{ @items | contains(3) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1557,7 +1468,6 @@ fn builtin_find() {
         &i,
         "{{ @items | find(x -> x > 10) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1571,7 +1481,6 @@ fn builtin_reduce() {
         &i,
         "{{ @items | reduce((a, b) -> a + b) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1585,7 +1494,6 @@ fn builtin_fold() {
         &i,
         "{{ @items | fold(0, (acc, x) -> acc + x) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1599,7 +1507,6 @@ fn builtin_any() {
         &i,
         "{{ @items | any(x -> x > 10) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1613,58 +1520,12 @@ fn builtin_all() {
         &i,
         "{{ @items | all(x -> x > 0) | to_string }}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
 }
 
 // ── Context Call ────────────────────────────────────────────────
-
-#[test]
-fn context_call_simple() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("node", Ty::String)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ @node { key: "value", } }}"#,
-        &context,
-        &ExternRegistry::new(),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[test]
-fn context_call_shorthand() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("node", Ty::String), ("other", Ty::String)]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ $var = 42 }}{{ @node { $var, @other, } }}",
-        &context,
-        &ExternRegistry::new(),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[test]
-fn context_call_expr() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[("node", Ty::String), ("items", Ty::List(Box::new(Ty::Int)))],
-    );
-    let ir = compile_to_ir(
-        &i,
-        "{{ @node { count: @items | len, } }}",
-        &context,
-        &ExternRegistry::new(),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
 
 // ── Variant (Option) ────────────────────────────────────────────
 
@@ -1690,7 +1551,6 @@ fn variant_some_pattern() {
         &i,
         "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}nope{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1704,7 +1564,6 @@ fn variant_none_pattern() {
         &i,
         "{{ None = @opt }}none{{_}}has value{{/}}",
         &context,
-        &ExternRegistry::new(),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1718,7 +1577,6 @@ fn structural_enum_variant_merge() {
         &i,
         &template,
         &FxHashMap::default(),
-        &ExternRegistry::new(),
     )
     .unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
@@ -1733,7 +1591,7 @@ fn structural_enum_single_variant() {
     let i = Interner::new();
     let template = acvus_ast::parse(&i, "{{ A::B = @a }}yes{{_}}no{{/}}").unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
@@ -1745,7 +1603,7 @@ fn structural_enum_three_variants_merge() {
     let src = "{{ S::X = @v }}x{{/}}{{ S::Y = @v }}y{{/}}{{ S::Z = @v }}z{{/}}";
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1759,7 +1617,7 @@ fn structural_enum_with_payload() {
     let src = r#"{{ R::Ok(v) = @r }}{{ v | to_string }}{{_}}err{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
@@ -1771,7 +1629,7 @@ fn structural_enum_mixed_payload_and_unit() {
     let src = r#"{{ R::Ok(v) = @r }}{{ v | to_string }}{{ R::Err = }}fail{{_}}??{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
@@ -1785,7 +1643,7 @@ fn structural_enum_same_var_different_blocks_merge() {
     let src = "{{ A::B = @a }}b{{/}}{{ A::C = @a }}c{{/}}";
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing:\n{ir}");
@@ -1798,7 +1656,7 @@ fn structural_enum_different_enums_different_vars() {
     let src = "{{ X::A = @x }}xa{{/}}{{ Y::B = @y }}yb{{/}}";
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("A"), "variant A missing:\n{ir}");
@@ -1812,7 +1670,7 @@ fn structural_enum_name_mismatch_is_error() {
     let src = "{{ X::A = @v }}a{{/}}{{ Y::B = @v }}b{{/}}";
     let template = acvus_ast::parse(&i, src).unwrap();
     let result = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     );
     assert!(result.is_err(), "should fail: different enum names on same var");
 }
@@ -1824,7 +1682,7 @@ fn structural_enum_payload_unifies_with_inner_match() {
     let src = r#"{{ A::X(x) = @a }}{{ 0 = x }}zero{{_}}other{{/}}{{_}}none{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1837,7 +1695,7 @@ fn structural_enum_payload_unifies_with_emit() {
     let src = r#"{{ A::Val(v) = @a }}{{ v + 1 | to_string }}{{_}}n/a{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Val"), "variant Val missing:\n{ir}");
@@ -1854,7 +1712,7 @@ fn structural_enum_payload_type_propagates_through_context() {
     let src = r#"{{ R::Ok(v) = @r }}{{ v + 1 | to_string }}{{ R::Err = }}err{{_}}??{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &ctx_types, &ExternRegistry::new(),
+        &i, &template, &ctx_types,
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
@@ -1873,7 +1731,7 @@ fn variant_merge_inside_tuple_pattern() {
     let src = r#"{{ (S::A, x) = @t }}{{ x }}{{ (S::B, y) = }}{{ y }}{{_}}??{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     eprintln!("=== TUPLE VARIANT IR ===\n{ir}\n=== END ===");
@@ -1887,7 +1745,7 @@ fn variant_merge_inside_tuple_three_arms() {
     let src = r#"{{ (S::X, _) = @t }}x{{ (S::Y, _) = }}y{{ (S::Z, _) = }}z{{_}}??{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1902,7 +1760,7 @@ fn variant_merge_inside_list_pattern() {
     let src = r#"{{ [S::A, ..] = @lst }}a{{ [S::B, ..] = }}b{{_}}??{{/}}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("A"), "variant A missing:\n{ir}");
@@ -1920,7 +1778,7 @@ fn infer_unifies_with_concrete_type() {
     let template = acvus_ast::parse(&i, src).unwrap();
     // Should compile without error — Infer payload unifies with Int from `x + 1`.
     acvus_mir::compile_analysis(
-        &i, &template, &ctx_types, &ExternRegistry::new(),
+        &i, &template, &ctx_types,
     ).unwrap();
 }
 
@@ -1937,7 +1795,7 @@ fn pruned_context_keys_in_dead_catch_all() {
     let src = r#"{-{ Impersonation::NoPersona = @Impersonation }}{-{_}}{-{ Pov::User = @Pov }}user{-{ Pov::Char = }}char{-{_}}other{-{ / }}{-{ / }}"#;
     let template = acvus_ast::parse(&i, src).unwrap();
     let (module, _) = acvus_mir::compile_analysis(
-        &i, &template, &FxHashMap::default(), &ExternRegistry::new(),
+        &i, &template, &FxHashMap::default(),
     ).unwrap();
 
     let ir = acvus_mir::printer::dump_with(&i, &module);

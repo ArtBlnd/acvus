@@ -460,6 +460,8 @@ export function toWebNode(node: Node, api: string): WebNode {
 			node: t.nodeId,
 			params: t.params,
 		})),
+		isFunction: node.isFunction,
+		fnParams: node.fnParams,
 	};
 }
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Interpreter, PureValue, Stepped, Value};
+use acvus_interpreter::{Interpreter, PureValue, Stepped, Value};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -14,19 +14,16 @@ pub async fn run(
     source: &str,
     context_types: FxHashMap<Astr, Ty>,
     context_values: FxHashMap<Astr, Value>,
-    extern_fns: ExternFnRegistry,
 ) -> String {
     let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let mir_registry = extern_fns.to_mir_registry();
     let (module, _hints) = acvus_mir::compile(
         interner,
         &template,
         &context_types,
-        &mir_registry,
-        )
+    )
     .expect("compile failed");
 
-    let interp = Interpreter::new(interner, module, &extern_fns);
+    let interp = Interpreter::new(interner, module);
     interp.execute_to_string(context_values).await
 }
 
@@ -38,7 +35,6 @@ pub async fn run_simple(source: &str) -> String {
         source,
         FxHashMap::default(),
         FxHashMap::default(),
-        ExternFnRegistry::new(&interner),
     )
     .await
 }
@@ -55,7 +51,6 @@ pub async fn run_ctx(
         source,
         types,
         values,
-        ExternFnRegistry::new(interner),
     )
     .await
 }
@@ -66,19 +61,16 @@ pub async fn run_obfuscated(
     source: &str,
     context_types: FxHashMap<Astr, Ty>,
     context_values: FxHashMap<Astr, Value>,
-    extern_fns: ExternFnRegistry,
 ) -> String {
     use acvus_mir_pass::TransformPass;
     use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
 
     let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let mir_registry = extern_fns.to_mir_registry();
     let (module, _hints) = acvus_mir::compile(
         interner,
         &template,
         &context_types,
-        &mir_registry,
-        )
+    )
     .expect("compile failed");
 
     let module = ObfuscatePass {
@@ -90,7 +82,7 @@ pub async fn run_obfuscated(
     }
     .transform(module, ());
 
-    let interp = Interpreter::new(interner, module, &extern_fns);
+    let interp = Interpreter::new(interner, module);
     interp.execute_to_string(context_values).await
 }
 
@@ -102,7 +94,6 @@ pub async fn run_simple_obfuscated(source: &str) -> String {
         source,
         FxHashMap::default(),
         FxHashMap::default(),
-        ExternFnRegistry::new(&interner),
     )
     .await
 }
@@ -119,7 +110,6 @@ pub async fn run_obf_ctx(
         source,
         types,
         values,
-        ExternFnRegistry::new(interner),
     )
     .await
 }
@@ -128,10 +118,10 @@ pub async fn run_obf_ctx(
 #[derive(Debug)]
 pub struct ContextCallResult {
     pub output: String,
-    pub calls: Vec<(String, FxHashMap<Astr, Value>)>,
+    pub calls: Vec<String>,
 }
 
-/// Run a template and capture context calls with their bindings.
+/// Run a template and capture context calls (names only).
 pub async fn run_capturing_context_calls(
     interner: &Interner,
     source: &str,
@@ -143,11 +133,9 @@ pub async fn run_capturing_context_calls(
         interner,
         &template,
         &types,
-        &ExternFnRegistry::new(interner).to_mir_registry(),
-        )
+    )
     .expect("compile failed");
-    let ext = ExternFnRegistry::new(interner);
-    let interp = Interpreter::new(interner, module, &ext);
+    let interp = Interpreter::new(interner, module);
     let mut coroutine = interp.execute();
     let mut output = String::new();
     let mut calls = Vec::new();
@@ -159,15 +147,13 @@ pub async fn run_capturing_context_calls(
             },
             Stepped::NeedContext(request) => {
                 let name = request.name();
-                let bindings = request.bindings().clone();
-                if !bindings.is_empty() {
-                    calls.push((interner.resolve(name).to_string(), bindings));
-                }
+                calls.push(interner.resolve(name).to_string());
                 let v = values
                     .get(&name)
                     .unwrap_or_else(|| panic!("undefined context @{}", interner.resolve(name)));
                 request.resolve(Arc::new(v.clone()));
             }
+            Stepped::NeedExternCall(_) => panic!("unexpected extern call"),
             Stepped::Done => break,
             Stepped::Error(e) => panic!("runtime error: {e}"),
         }
@@ -181,19 +167,16 @@ pub async fn run_expect_error(
     source: &str,
     context_types: FxHashMap<Astr, Ty>,
     context_values: FxHashMap<Astr, Value>,
-    extern_fns: ExternFnRegistry,
 ) -> acvus_interpreter::RuntimeError {
     let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let mir_registry = extern_fns.to_mir_registry();
     let (module, _hints) = acvus_mir::compile(
         interner,
         &template,
         &context_types,
-        &mir_registry,
-        )
+    )
     .expect("compile failed");
 
-    let interp = Interpreter::new(interner, module, &extern_fns);
+    let interp = Interpreter::new(interner, module);
     let mut coroutine = interp.execute();
     loop {
         match coroutine.resume().await {
@@ -205,6 +188,7 @@ pub async fn run_expect_error(
                     .unwrap_or_else(|| panic!("undefined context @{}", interner.resolve(name)));
                 request.resolve(Arc::new(v.clone()));
             }
+            Stepped::NeedExternCall(_) => panic!("unexpected extern call"),
             Stepped::Done => panic!("expected error, got Done"),
             Stepped::Error(e) => return e,
         }
@@ -254,7 +238,6 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
         template,
         types,
         values,
-        ExternFnRegistry::new(&interner),
     )
     .await;
 

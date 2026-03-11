@@ -1,6 +1,5 @@
 
 
-use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -31,10 +30,9 @@ pub fn compile_plain(
     interner: &Interner,
     spec: &PlainSpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(CompiledPlain, FxHashSet<Astr>), Vec<OrchError>> {
     let block =
-        crate::compile::compile_template(interner, &spec.source, 0, context_types, registry)
+        crate::compile::compile_template(interner, &spec.source, 0, context_types)
             .map_err(|e| vec![e])?;
     let keys = block.context_keys.clone();
     Ok((CompiledPlain { block }, keys))

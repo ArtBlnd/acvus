@@ -1,6 +1,5 @@
 
 
-use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rust_decimal::Decimal;
@@ -99,15 +98,14 @@ pub fn compile_llm(
     interner: &Interner,
     spec: &LlmSpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(CompiledLlm, FxHashSet<Astr>), Vec<OrchError>> {
     let elem_ty = spec.api.message_elem_ty(interner);
     let (compiled_messages, mut all_keys) =
-        compile::compile_messages(interner, &spec.messages, context_types, registry, &elem_ty)?;
+        compile::compile_messages(interner, &spec.messages, context_types, &elem_ty)?;
     let compiled_tools = compile_tool_bindings(&spec.tools)?;
     let compiled_cache_key = match &spec.cache_key {
         Some(ck) => {
-            let (expr, ck_ty) = compile::compile_script(interner, ck, context_types, registry)
+            let (expr, ck_ty) = compile::compile_script(interner, ck, context_types)
                 .map_err(|e| vec![e])?;
             compile::expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
             all_keys.extend(expr.context_keys.iter().cloned());

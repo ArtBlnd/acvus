@@ -147,6 +147,11 @@ export type SelfSpec = {
 	initialValue: string;
 };
 
+export type FnParam = {
+	name: string;
+	type: string;
+};
+
 export type Node = {
 	id: string;
 	name: string;
@@ -164,6 +169,8 @@ export type Node = {
 	assert: string;
 	messages: MessageDef[];
 	tools: NodeToolBinding[];
+	isFunction: boolean;
+	fnParams: FnParam[];
 };
 
 // --- Context parameter resolution ---

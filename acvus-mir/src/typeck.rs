@@ -7,7 +7,6 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::builtins;
 use crate::error::{MirError, MirErrorKind};
-use crate::extern_module::ExternRegistry;
 use crate::ty::{Ty, TySubst};
 use crate::variant::VariantPayload;
 
@@ -19,9 +18,6 @@ pub struct TypeChecker<'a> {
     interner: &'a Interner,
     /// Context variable types (`@name`, externally declared).
     context_types: &'a FxHashMap<Astr, Ty>,
-    /// External function definitions.
-    extern_registry: &'a ExternRegistry,
-
     /// Stack of scopes: each scope maps variable names to types.
     scopes: Vec<FxHashMap<Astr, Ty>>,
     /// Variable types (`$name`, inferred at first assignment).
@@ -42,14 +38,12 @@ impl<'a> TypeChecker<'a> {
     pub fn new(
         interner: &'a Interner,
         context_types: &'a FxHashMap<Astr, Ty>,
-        registry: &'a ExternRegistry,
     ) -> Self {
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
             context_types,
             variable_types: FxHashMap::default(),
-            extern_registry: registry,
             subst: TySubst::new(),
             infer_vars: FxHashMap::default(),
             type_map: TypeMap::default(),
@@ -745,6 +739,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = Ty::Fn {
                     params: param_types,
                     ret: Box::new(ret),
+                    is_extern: false,
                 };
                 self.record_ret(*span, ty)
             }
@@ -915,18 +910,6 @@ impl<'a> TypeChecker<'a> {
                 self.record_ret(*span, ty)
             }
 
-            Expr::ContextCall {
-                name,
-                bindings,
-                span,
-            } => {
-                let result_ty = self.resolve_context_type(*name, *span);
-                for (_, expr) in bindings {
-                    self.check_expr(expr);
-                }
-                self.record_ret(*span, result_ty)
-            }
-
             Expr::Block { stmts, tail, span } => {
                 self.push_scope();
                 for stmt in stmts {
@@ -996,37 +979,17 @@ impl<'a> TypeChecker<'a> {
             return self.subst.resolve(&ret_ty);
         }
 
-        // Check extern functions.
-        let Some(def) = self.extern_registry.get(*name).cloned() else {
-            // Not an extern fn — check if it's a local variable with function type.
-            if let Some(var_ty) = self.lookup_var(*name) {
-                let resolved = self.subst.resolve(&var_ty);
-                return self.check_callable(&resolved, args, &pipe_ty, call_span);
-            }
-
-            self.error(
-                MirErrorKind::UndefinedFunction(self.interner.resolve(*name).to_string()),
-                call_span,
-            );
-            return Ty::Error;
-        };
-
-        let arg_types: Vec<Ty> = pipe_ty
-            .iter()
-            .cloned()
-            .chain(args.iter().map(|a| self.check_expr(a)))
-            .collect();
-
-        if !self.check_args(
-            self.interner.resolve(*name),
-            &arg_types,
-            &def.params,
-            call_span,
-        ) {
-            return Ty::Error;
+        // Check local variable with function type.
+        if let Some(var_ty) = self.lookup_var(*name) {
+            let resolved = self.subst.resolve(&var_ty);
+            return self.check_callable(&resolved, args, &pipe_ty, call_span);
         }
 
-        self.subst.resolve(&def.ret)
+        self.error(
+            MirErrorKind::UndefinedFunction(self.interner.resolve(*name).to_string()),
+            call_span,
+        );
+        return Ty::Error;
     }
 
     fn check_callable(
@@ -1061,7 +1024,7 @@ impl<'a> TypeChecker<'a> {
             .collect();
 
         match func_ty {
-            Ty::Fn { params, ret } => {
+            Ty::Fn { params, ret, .. } => {
                 if !self.check_args("<closure>", &arg_types, params, call_span) {
                     return Ty::Error;
                 }
@@ -1072,6 +1035,7 @@ impl<'a> TypeChecker<'a> {
                 let fn_ty = Ty::Fn {
                     params: arg_types,
                     ret: Box::new(ret.clone()),
+                    is_extern: false,
                 };
                 if self.subst.unify(func_ty, &fn_ty).is_err() {
                     self.error(
@@ -1400,7 +1364,7 @@ fn contains_var(ty: &Ty) -> bool {
         Ty::List(inner) | Ty::Option(inner) => contains_var(inner),
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
-        Ty::Fn { params, ret } => params.iter().any(contains_var) || contains_var(ret),
+        Ty::Fn { params, ret, .. } => params.iter().any(contains_var) || contains_var(ret),
         Ty::Enum { variants, .. } => variants
             .values()
             .any(|p| p.as_ref().map_or(false, |ty| contains_var(ty))),
@@ -1434,27 +1398,20 @@ fn op_str(op: BinOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extern_module::{ExternModule, ExternRegistry};
     use acvus_ast::parse;
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
         let interner = Interner::new();
-        check_with_interner(
-            source,
-            &FxHashMap::default(),
-            &ExternRegistry::new(),
-            &interner,
-        )
+        check_with_interner(source, &FxHashMap::default(), &interner)
     }
 
     fn check_with_interner(
         source: &str,
         context: &FxHashMap<Astr, Ty>,
-        registry: &ExternRegistry,
         interner: &Interner,
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(interner, source).expect("parse failed");
-        let checker = TypeChecker::new(interner, context, registry);
+        let checker = TypeChecker::new(interner, context);
         checker.check_template(&template)
     }
 
@@ -1508,7 +1465,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let src = "{{ @name }}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1527,12 +1484,16 @@ mod tests {
     #[test]
     fn extern_fn_call() {
         let i = Interner::new();
-        let mut module = ExternModule::new(i.intern("test"));
-        module.add_fn(i.intern("fetch_user"), vec![Ty::Int], Ty::String, false);
-        let mut registry = ExternRegistry::new();
-        registry.register(&module);
-        let src = "{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &FxHashMap::default(), &registry, &i).is_ok());
+        let context = FxHashMap::from_iter([(
+            i.intern("fetch_user"),
+            Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::String),
+                is_extern: true,
+            },
+        )]);
+        let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1540,7 +1501,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
         let src = "{{ @count | to_string }}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1554,7 +1515,7 @@ mod tests {
             ])),
         )]);
         let src = "{{ @user.name }}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1565,7 +1526,7 @@ mod tests {
             Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)])),
         )]);
         let src = "{{ @user.unknown }}";
-        let result = check_with_interner(src, &context, &ExternRegistry::new(), &i);
+        let result = check_with_interner(src, &context, &i);
         assert!(result.is_err());
     }
 
@@ -1574,7 +1535,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let src = "{{ x = @name }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1582,7 +1543,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1590,7 +1551,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}";
-        let result = check_with_interner(src, &context, &ExternRegistry::new(), &i);
+        let result = check_with_interner(src, &context, &i);
         assert!(result.is_ok());
     }
 
@@ -1613,7 +1574,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::String)))]);
         let src = "{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1621,7 +1582,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ None = @opt }}none{{_}}has value{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1630,7 +1591,7 @@ mod tests {
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         // match Some(v) against Option<Int> → v : Int
         let src = "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_ok());
+        assert!(check_with_interner(src, &context, &i).is_ok());
     }
 
     #[test]
@@ -1639,6 +1600,6 @@ mod tests {
         // Some(42) is Option<Int>, cannot match against String
         let context = FxHashMap::from_iter([(i.intern("s"), Ty::String)]);
         let src = "{{ Some(x) = @s }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &ExternRegistry::new(), &i).is_err());
+        assert!(check_with_interner(src, &context, &i).is_err());
     }
 }

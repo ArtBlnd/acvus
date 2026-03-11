@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, RuntimeError, Value};
+use acvus_interpreter::{RuntimeError, Value};
 use acvus_utils::{Astr, Interner};
 
 use rustc_hash::FxHashMap;
@@ -29,7 +29,6 @@ pub struct LlmNode<F> {
     max_tokens: MaxTokens,
     cache_key: Option<CompiledScript>,
     fetch: Arc<F>,
-    extern_fns: ExternFnRegistry,
     interner: Interner,
 }
 
@@ -41,7 +40,6 @@ where
         llm: &crate::kind::CompiledLlm,
         provider_config: ProviderConfig,
         fetch: Arc<F>,
-        extern_fns: &ExternFnRegistry,
         interner: &Interner,
     ) -> Self {
         Self {
@@ -54,7 +52,6 @@ where
             max_tokens: llm.max_tokens.clone(),
             cache_key: llm.cache_key.clone(),
             fetch,
-            extern_fns: extern_fns.clone(),
             interner: interner.clone(),
         }
     }
@@ -77,7 +74,6 @@ where
         let cache_key_script = self.cache_key.clone();
         let provider_config = self.provider_config.clone();
         let fetch = Arc::clone(&self.fetch);
-        let extern_fns = self.extern_fns.clone();
         let interner = self.interner.clone();
 
         acvus_utils::coroutine(move |handle| async move {
@@ -86,8 +82,8 @@ where
 
             let cached_content = if let Some(ref ck_script) = cache_key_script {
                 let val =
-                    eval_script_in_coroutine(&interner, ck_script, &local, &extern_fns, &handle)
-                        .await;
+                    eval_script_in_coroutine(&interner, &ck_script.module, &local, &handle)
+                        .await?;
                 match val {
                     Value::String(s) => Some(s),
                     _ => None,
@@ -105,10 +101,9 @@ where
                             &interner,
                             &block.module,
                             &local,
-                            &extern_fns,
                             &handle,
                         )
-                        .await;
+                        .await?;
                         segments.push(MessageSegment::Single(Message::Content {
                             role: interner.resolve(block.role).to_string(),
                             content: Content::Text(text),
@@ -127,10 +122,9 @@ where
                             role,
                             &interner,
                             &local,
-                            &extern_fns,
                             &handle,
                         )
-                        .await;
+                        .await?;
                         segments.push(MessageSegment::Iterator {
                             messages: expanded,
                             budget: token_budget.clone(),
@@ -195,8 +189,12 @@ where
                                         .collect(),
                                     _ => FxHashMap::default(),
                                 };
+                                let tool_value = Value::Object(tool_args);
                                 let result = handle
-                                    .request_context_with(interner.intern(&binding.node), tool_args)
+                                    .request_extern_call(
+                                        interner.intern(&binding.node),
+                                        vec![tool_value],
+                                    )
                                     .await;
                                 value_to_tool_result(&result)
                             } else {

@@ -154,6 +154,9 @@ pub enum Value {
         payload: Option<Box<Value>>,
     },
     Fn(FnValue),
+    /// Opaque handle to an extern function, identified by name.
+    /// Produced by ContextLoad for extern/function-node entries.
+    ExternFn(Astr),
     Opaque(OpaqueValue),
 }
 
@@ -281,6 +284,7 @@ impl Value {
                 payload: payload.map(|p| Box::new((*p).into_pure())),
             },
             Value::Fn(_) => panic!("cannot convert Fn to PureValue"),
+            Value::ExternFn(_) => panic!("cannot convert ExternFn to PureValue"),
             Value::Opaque(o) => panic!("cannot convert Opaque<{}> to PureValue", o.type_name),
         }
     }

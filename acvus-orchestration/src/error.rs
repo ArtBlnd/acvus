@@ -56,6 +56,12 @@ pub enum OrchErrorKind {
         type_name: String,
     },
 
+    // Function
+    FnParamConflict {
+        node: String,
+        param: String,
+    },
+
     // Runtime
     FuelExhausted,
     ModelError(String),
@@ -150,6 +156,9 @@ impl<'a> fmt::Display for OrchErrorDisplay<'a> {
                     f,
                     "tool '{tool}' param '{param}': unknown type '{type_name}'"
                 )
+            }
+            OrchErrorKind::FnParamConflict { node, param } => {
+                write!(f, "function node '{node}': param '{param}' conflicts with existing context key")
             }
             OrchErrorKind::FuelExhausted => write!(f, "fuel exhausted"),
             OrchErrorKind::ModelError(msg) => write!(f, "model error: {msg}"),

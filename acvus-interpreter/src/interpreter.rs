@@ -6,14 +6,13 @@ use futures::future::BoxFuture;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_mir::builtins::BuiltinId;
-use acvus_mir::ir::{CallTarget, Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_mir::ir::{Inst, InstKind, Label, MirBody, MirModule, ValueId};
 use acvus_utils::Astr;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::builtins;
 use crate::error::RuntimeError;
-use crate::extern_fn::{ExternFnBody, ExternFnRegistry};
 use crate::value::{FnValue, Value};
 use acvus_utils::{Coroutine, Stepped, YieldHandle};
 
@@ -21,7 +20,6 @@ pub struct Interpreter {
     interner: Interner,
     module: MirModule,
     variables: FxHashMap<Astr, Arc<Value>>,
-    extern_fn_table: Vec<ExternFnBody>,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,13 +201,11 @@ fn build_label_map(body: &MirBody) -> FxHashMap<Label, usize> {
 // ---------------------------------------------------------------------------
 
 impl Interpreter {
-    pub fn new(interner: &Interner, module: MirModule, extern_fns: &ExternFnRegistry) -> Self {
-        let extern_fn_table = extern_fns.build_id_table(&module.extern_names);
+    pub fn new(interner: &Interner, module: MirModule) -> Self {
         Self {
             interner: interner.clone(),
             module,
             variables: FxHashMap::default(),
-            extern_fn_table,
         }
     }
 
@@ -239,6 +235,9 @@ impl Interpreter {
                         .get(&name)
                         .unwrap_or_else(|| panic!("ContextLoad: undefined context @{:?}", name));
                     request.resolve(Arc::new(v.clone()));
+                }
+                Stepped::NeedExternCall(_) => {
+                    panic!("execute_to_string: unexpected extern call");
                 }
                 Stepped::Done => break,
                 Stepped::Error(e) => panic!("runtime error: {e}"),
@@ -472,22 +471,9 @@ impl Interpreter {
                 }
 
                 // -- context / variable I/O --
-                InstKind::ContextLoad {
-                    dst,
-                    name,
-                    bindings,
-                } => {
-                    if bindings.is_empty() {
-                        let arc = handle.request_context(*name).await;
-                        frame.set(*dst, arc);
-                    } else {
-                        let binding_values: FxHashMap<Astr, Value> = bindings
-                            .iter()
-                            .map(|(k, vid)| (*k, frame.get(*vid).clone()))
-                            .collect();
-                        let arc = handle.request_context_with(*name, binding_values).await;
-                        frame.set(*dst, arc);
-                    }
+                InstKind::ContextLoad { dst, name } => {
+                    let arc = handle.request_context(*name).await;
+                    frame.set(*dst, arc);
                 }
                 InstKind::VarLoad { dst, name } => {
                     let v = this.variables.get(name).unwrap_or_else(|| {
@@ -503,37 +489,34 @@ impl Interpreter {
                 }
 
                 // -- calls (async, ownership-passing) --
-                InstKind::Call { dst, func, args } => {
+                InstKind::BuiltinCall { dst, builtin, args } => {
                     let arg_values = frame.collect_args(args);
                     let result;
-                    match func {
-                        CallTarget::Builtin(id) => {
-                            (this, result) =
-                                Self::exec_builtin(this, *id, arg_values, handle).await?;
+                    (this, result) =
+                        Self::exec_builtin(this, *builtin, arg_values, handle).await?;
+                    frame.set_new(*dst, result);
+                }
+                InstKind::ExternCall { dst, name, args } => {
+                    let arg_values = frame.collect_args(args);
+                    let arc = handle.request_extern_call(*name, arg_values).await;
+                    frame.set_new(*dst, Arc::unwrap_or_clone(arc));
+                }
+                InstKind::ClosureCall { dst, closure, args } => {
+                    let callee = frame.take_owned(*closure);
+                    match callee {
+                        Value::Fn(fn_val) => {
+                            let arg_values = frame.collect_args_arc(args);
+                            let result;
+                            (this, result) = Self::call_closure(this, fn_val, arg_values, handle).await?;
+                            frame.set_new(*dst, result);
                         }
-                        CallTarget::Extern(id) => {
-                            result = this.extern_fn_table[id.0 as usize].call(arg_values).await?;
+                        Value::ExternFn(name) => {
+                            let arg_values = frame.collect_args(args);
+                            let arc = handle.request_extern_call(name, arg_values).await;
+                            frame.set_new(*dst, Arc::unwrap_or_clone(arc));
                         }
+                        _ => panic!("ClosureCall: expected Fn or ExternFn, got {callee:?}"),
                     }
-                    frame.set_new(*dst, result);
-                }
-                InstKind::AsyncCall { dst, func, args } => {
-                    let arg_values = frame.collect_args(args);
-                    let CallTarget::Extern(id) = func else {
-                        panic!("AsyncCall with non-extern target");
-                    };
-                    let result = this.extern_fn_table[id.0 as usize].call(arg_values).await?;
-                    frame.set_new(*dst, result);
-                }
-                InstKind::CallClosure { dst, closure, args } => {
-                    let fn_val = expect_fn(frame.take_owned(*closure), "CallClosure");
-                    let arg_values = frame.collect_args_arc(args);
-                    let result;
-                    (this, result) = Self::call_closure(this, fn_val, arg_values, handle).await?;
-                    frame.set_new(*dst, result);
-                }
-                InstKind::Await { dst, src } => {
-                    frame.set(*dst, frame.take(*src));
                 }
 
                 // -- control flow --
@@ -817,13 +800,6 @@ fn expect_int(v: &Value, ctx: &str) -> i64 {
     match v {
         Value::Int(n) => *n,
         _ => panic!("{ctx}: expected Int, got {v:?}"),
-    }
-}
-
-fn expect_fn(v: Value, ctx: &str) -> FnValue {
-    match v {
-        Value::Fn(f) => f,
-        _ => panic!("{ctx}: expected Fn, got {v:?}"),
     }
 }
 

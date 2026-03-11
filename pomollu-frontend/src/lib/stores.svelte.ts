@@ -98,7 +98,9 @@ export function createNode(name: string): Node {
 		retry: 0,
 		assert: 'true',
 		messages: [],
-		tools: []
+		tools: [],
+		isFunction: false,
+		fnParams: []
 	};
 }
 

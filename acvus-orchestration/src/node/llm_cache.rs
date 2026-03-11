@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, RuntimeError, Value};
+use acvus_interpreter::{RuntimeError, Value};
 use acvus_utils::{Astr, Interner};
 
 use rustc_hash::FxHashMap;
@@ -19,7 +19,6 @@ pub struct LlmCacheNode<F> {
     ttl: String,
     cache_config: FxHashMap<String, serde_json::Value>,
     fetch: Arc<F>,
-    extern_fns: ExternFnRegistry,
     interner: Interner,
 }
 
@@ -31,7 +30,6 @@ where
         cache: &crate::kind::CompiledLlmCache,
         provider_config: ProviderConfig,
         fetch: Arc<F>,
-        extern_fns: &ExternFnRegistry,
         interner: &Interner,
     ) -> Self {
         Self {
@@ -41,7 +39,6 @@ where
             ttl: cache.ttl.clone(),
             cache_config: cache.cache_config.clone(),
             fetch,
-            extern_fns: extern_fns.clone(),
             interner: interner.clone(),
         }
     }
@@ -61,7 +58,6 @@ where
         let cache_config = self.cache_config.clone();
         let provider_config = self.provider_config.clone();
         let fetch = Arc::clone(&self.fetch);
-        let extern_fns = self.extern_fns.clone();
         let interner = self.interner.clone();
 
         acvus_utils::coroutine(move |handle| async move {
@@ -74,10 +70,9 @@ where
                     &interner,
                     &block.module,
                     &local,
-                    &extern_fns,
                     &handle,
                 )
-                .await;
+                .await?;
                 rendered.push(Message::Content {
                     role: interner.resolve(block.role).to_string(),
                     content: Content::Text(text),

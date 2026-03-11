@@ -26,6 +26,10 @@ pub struct WebNode {
     pub assert: String,
     pub messages: Vec<WebMessage>,
     pub tools: Vec<WebToolBinding>,
+    #[serde(default)]
+    pub is_function: bool,
+    #[serde(default)]
+    pub fn_params: Vec<WebFnParam>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +91,13 @@ pub struct WebToolBinding {
 
 #[derive(Deserialize)]
 pub struct WebToolParam {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+}
+
+#[derive(Deserialize)]
+pub struct WebFnParam {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
@@ -194,5 +205,10 @@ pub fn convert_node(interner: &Interner, web: &WebNode) -> Result<NodeSpec, Stri
         } else {
             Some(interner.intern(&web.assert))
         },
+        is_function: web.is_function,
+        fn_params: web.fn_params.iter().map(|p| {
+            let ty = crate::parse_type_string(&interner, &p.ty);
+            (interner.intern(&p.name), ty)
+        }).collect(),
     })
 }

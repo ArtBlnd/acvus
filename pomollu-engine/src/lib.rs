@@ -6,7 +6,6 @@ fn init() {
     console_error_panic_hook::set_once();
 }
 
-use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir_pass::analysis::reachable_context::KnownValue;
 use acvus_mir::ty::Ty;
@@ -22,12 +21,8 @@ fn to_js<T: Serialize>(value: &T) -> JsValue {
     js_sys::JSON::parse(&json_str).expect("serde_json output is always valid JSON")
 }
 
-fn default_registry(interner: &Interner) -> ExternRegistry {
-    let mut registry = ExternRegistry::new();
-    let mut fn_reg = acvus_interpreter::ExternFnRegistry::new(interner);
-    let regex_mod = acvus_ext::regex_module(interner, &mut fn_reg);
-    registry.register(&regex_mod);
-    registry
+fn inject_extern_types(interner: &Interner, context_types: &mut FxHashMap<Astr, Ty>) {
+    context_types.extend(acvus_ext::regex_context_types(interner));
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -157,19 +152,31 @@ pub(crate) fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
     }
 }
 
+/// Parse a simple type string (e.g. "String", "Int", "Bool") into a Ty.
+/// Falls back to Ty::Infer for unknown types.
+pub(crate) fn parse_type_string(_interner: &Interner, s: &str) -> Ty {
+    match s {
+        "String" => Ty::String,
+        "Int" => Ty::Int,
+        "Float" => Ty::Float,
+        "Bool" => Ty::Bool,
+        "Byte" => Ty::Byte,
+        _ => Ty::Infer,
+    }
+}
+
 /// Try to compile a short script and extract a known value (literal or variant).
 /// Returns None if the script is not a simple constant expression.
 fn try_extract_known(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Option<KnownValue> {
     if source.trim().is_empty() {
         return None;
     }
     let script = acvus_ast::parse_script(interner, source).ok()?;
-    let (module, _, _) = acvus_mir::compile_script_analysis(interner, &script, context_types, registry).ok()?;
+    let (module, _, _) = acvus_mir::compile_script_analysis(interner, &script, context_types).ok()?;
     // Look for a Const or MakeVariant instruction in the main body
     for inst in &module.main.insts {
         match &inst.kind {
@@ -306,8 +313,6 @@ fn do_analyze(
     expected_tail: Option<&Ty>,
     known: &FxHashMap<Astr, KnownValue>,
 ) -> AnalyzeResult {
-    let registry = default_registry(interner);
-
     match mode {
         "template" => {
             let ast = match acvus_ast::parse(interner, source) {
@@ -322,7 +327,7 @@ fn do_analyze(
                 }
             };
             let (module, _hints, errs) =
-                acvus_mir::compile_analysis_partial(interner, &ast, context_types, &registry);
+                acvus_mir::compile_analysis_partial(interner, &ast, context_types);
             let keys = extract_context_keys_with_types(interner, &module, known);
             let errors: Vec<String> = errs.iter().map(|e| e.display(interner).to_string()).collect();
             AnalyzeResult {
@@ -349,7 +354,6 @@ fn do_analyze(
                     interner,
                     &script,
                     context_types,
-                    &registry,
                     expected_tail,
                 );
             let keys = extract_context_keys_with_types(interner, &module, known);
@@ -369,7 +373,8 @@ fn do_analyze(
 #[wasm_bindgen]
 pub fn analyze(source: &str, mode: &str) -> JsValue {
     let interner = Interner::new();
-    let context_types = FxHashMap::default();
+    let mut context_types = FxHashMap::default();
+    inject_extern_types(&interner, &mut context_types);
     let result = do_analyze(&interner, source, mode, &context_types, None, &FxHashMap::default());
     to_js(&result)
 }
@@ -379,7 +384,7 @@ pub fn analyze(source: &str, mode: &str) -> JsValue {
 #[wasm_bindgen]
 pub fn analyze_with_types(source: &str, mode: &str, context_types_json: &str) -> JsValue {
     let interner = Interner::new();
-    let context_types = match parse_context_types(&interner, context_types_json) {
+    let mut context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = AnalyzeResult {
@@ -391,6 +396,7 @@ pub fn analyze_with_types(source: &str, mode: &str, context_types_json: &str) ->
             return to_js(&result);
         }
     };
+    inject_extern_types(&interner, &mut context_types);
     let result = do_analyze(&interner, source, mode, &context_types, None, &FxHashMap::default());
     to_js(&result)
 }
@@ -404,7 +410,7 @@ pub fn analyze_with_tail(
     expected_tail_type: &str,
 ) -> JsValue {
     let interner = Interner::new();
-    let context_types = match parse_context_types(&interner, context_types_json) {
+    let mut context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = AnalyzeResult {
@@ -416,6 +422,7 @@ pub fn analyze_with_tail(
             return to_js(&result);
         }
     };
+    inject_extern_types(&interner, &mut context_types);
     let expected_tail: Option<Ty> = if expected_tail_type.is_empty() {
         None
     } else {
@@ -453,7 +460,7 @@ pub fn analyze_with_known(
     known_scripts_json: &str,
 ) -> JsValue {
     let interner = Interner::new();
-    let context_types = match parse_context_types(&interner, context_types_json) {
+    let mut context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = AnalyzeResult {
@@ -465,17 +472,17 @@ pub fn analyze_with_known(
             return to_js(&result);
         }
     };
+    inject_extern_types(&interner, &mut context_types);
 
     // Parse known scripts and try to extract literals
     let known_scripts: FxHashMap<String, String> = match serde_json::from_str(known_scripts_json) {
         Ok(v) => v,
         Err(_) => FxHashMap::default(),
     };
-    let registry = default_registry(&interner);
     let mut known = FxHashMap::default();
     let mut failed = Vec::new();
     for (name, script) in &known_scripts {
-        if let Some(kv) = try_extract_known(&interner, script, &context_types, &registry) {
+        if let Some(kv) = try_extract_known(&interner, script, &context_types) {
             known.insert(interner.intern(name), kv);
         } else {
             failed.push(name.as_str());
@@ -499,8 +506,6 @@ fn do_typecheck(
     context_types: &FxHashMap<Astr, Ty>,
     expected_tail: Option<&Ty>,
 ) -> CheckResult {
-    let registry = default_registry(interner);
-
     let result = match mode {
         "template" => {
             let ast = match acvus_ast::parse(interner, source) {
@@ -512,7 +517,7 @@ fn do_typecheck(
                     };
                 }
             };
-            acvus_mir::compile(interner, &ast, context_types, &registry).map(|_| ())
+            acvus_mir::compile(interner, &ast, context_types).map(|_| ())
         }
         _ => {
             let script = match acvus_ast::parse_script(interner, source) {
@@ -528,7 +533,6 @@ fn do_typecheck(
                 interner,
                 &script,
                 context_types,
-                &registry,
                 expected_tail,
             )
             .map(|_| ())
@@ -556,7 +560,8 @@ fn do_typecheck(
 #[wasm_bindgen]
 pub fn typecheck(source: &str, mode: &str) -> JsValue {
     let interner = Interner::new();
-    let context_types = FxHashMap::default();
+    let mut context_types = FxHashMap::default();
+    inject_extern_types(&interner, &mut context_types);
     let check = do_typecheck(&interner, source, mode, &context_types, None);
     to_js(&check)
 }
@@ -565,7 +570,7 @@ pub fn typecheck(source: &str, mode: &str) -> JsValue {
 #[wasm_bindgen]
 pub fn typecheck_with_types(source: &str, mode: &str, context_types_json: &str) -> JsValue {
     let interner = Interner::new();
-    let context_types = match parse_context_types(&interner, context_types_json) {
+    let mut context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let check = CheckResult {
@@ -575,6 +580,7 @@ pub fn typecheck_with_types(source: &str, mode: &str, context_types_json: &str) 
             return to_js(&check);
         }
     };
+    inject_extern_types(&interner, &mut context_types);
     let check = do_typecheck(&interner, source, mode, &context_types, None);
     to_js(&check)
 }
@@ -588,7 +594,7 @@ pub fn typecheck_with_tail(
     expected_tail_type: &str,
 ) -> JsValue {
     let interner = Interner::new();
-    let context_types = match parse_context_types(&interner, context_types_json) {
+    let mut context_types = match parse_context_types(&interner, context_types_json) {
         Ok(t) => t,
         Err(e) => {
             let check = CheckResult {
@@ -598,6 +604,7 @@ pub fn typecheck_with_tail(
             return to_js(&check);
         }
     };
+    inject_extern_types(&interner, &mut context_types);
     let expected_tail: Ty = match serde_json::from_str::<TypeDesc>(expected_tail_type) {
         Ok(desc) => desc_to_ty(&interner, &desc),
         Err(e) => {
@@ -643,7 +650,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
         }
     };
 
-    let injected_types = match parse_context_types(&interner, injected_types_json) {
+    let mut injected_types = match parse_context_types(&interner, injected_types_json) {
         Ok(t) => t,
         Err(e) => {
             let result = FxHashMap::from_iter([("error".to_string(), e)]);
@@ -652,6 +659,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             return js_sys::JSON::parse(&json).expect("serde_json output is always valid JSON");
         }
     };
+    inject_extern_types(&interner, &mut injected_types);
 
     let specs: Vec<NodeSpec> = match web_nodes
         .iter()
@@ -666,14 +674,11 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             return js_sys::JSON::parse(&json).expect("serde_json output is always valid JSON");
         }
     };
-    let registry = default_registry(&interner);
-
     // 1. Compute external context env (this gives us context_types + per-node locals)
     let env = match acvus_orchestration::compute_external_context_env(
         &interner,
         &specs,
         &injected_types,
-        &registry,
     ) {
         Ok(env) => env,
         Err(errs) => {
@@ -731,8 +736,6 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                 &interner,
                 interner.resolve(*init_src),
                 &env.context_types,
-                &registry,
-
                 hint,
             ) {
                 field_errors.insert("initialValue".into(), err);
@@ -748,8 +751,6 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                     &interner,
                     interner.resolve(*history_bind),
                     &strategy_ctx,
-                    &registry,
-    
                     None,
                 ) {
                     field_errors.insert("historyBind".into(), err);
@@ -760,8 +761,6 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                     &interner,
                     interner.resolve(*key),
                     &env.context_types,
-                    &registry,
-    
                     None,
                 ) {
                     field_errors.insert("ifModifiedKey".into(), err);
@@ -778,8 +777,6 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                 &interner,
                 interner.resolve(*assert_src),
                 &assert_ctx,
-                &registry,
-
                 Some(&Ty::Bool),
             ) {
                 field_errors.insert("assert".into(), err);
@@ -797,7 +794,7 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
             match msg {
                 acvus_orchestration::MessageSpec::Block { source, .. } => {
                     if let Some(err) =
-                        check_template(&interner, source, &node_ctx, &registry)
+                        check_template(&interner, source, &node_ctx)
                     {
                         msg_errors.insert(mi.to_string(), err);
                     }
@@ -807,8 +804,6 @@ pub fn typecheck_nodes(nodes_json: &str, injected_types_json: &str) -> JsValue {
                         &interner,
                         interner.resolve(*key),
                         &node_ctx,
-                        &registry,
-        
                         None,
                     ) {
                         msg_errors.insert(mi.to_string(), err);
@@ -851,7 +846,6 @@ fn check_script(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Option<String> {
     if source.trim().is_empty() {
@@ -865,7 +859,6 @@ fn check_script(
         interner,
         &script,
         context_types,
-        registry,
         expected_tail,
     ) {
         Ok(_) => None,
@@ -883,7 +876,6 @@ fn check_template(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Option<String> {
     if source.trim().is_empty() {
         return None;
@@ -892,7 +884,7 @@ fn check_template(
         Ok(a) => a,
         Err(e) => return Some(format!("{e}")),
     };
-    match acvus_mir::compile(interner, &ast, context_types, registry) {
+    match acvus_mir::compile(interner, &ast, context_types) {
         Ok(_) => None,
         Err(errs) => Some(
             errs.into_iter()
@@ -907,7 +899,7 @@ fn check_template(
 /// `context_json`: JSON object mapping names to values, e.g. `{"role": "user", "content": "hi"}`
 #[wasm_bindgen]
 pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<JsValue, JsValue> {
-    use acvus_interpreter::{ExternFnRegistry, Interpreter, Value};
+    use acvus_interpreter::{Interpreter, Value};
     use acvus_utils::Stepped;
     use session::pure_to_json;
     use std::sync::Arc;
@@ -924,13 +916,13 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
         context_types.insert(interner.intern(k), json_to_ty(&interner, v));
     }
 
-    let registry = default_registry(&interner);
+    inject_extern_types(&interner, &mut context_types);
 
     let module = match mode {
         "template" => {
             let ast = acvus_ast::parse(&interner, source)
                 .map_err(|e| JsValue::from_str(&format!("parse error: {e}")))?;
-            acvus_mir::compile_analysis(&interner, &ast, &context_types, &registry)
+            acvus_mir::compile_analysis(&interner, &ast, &context_types)
                 .map(|(module, _)| module)
                 .map_err(|errs| {
                     let msg = errs
@@ -948,8 +940,6 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                 &interner,
                 &script,
                 &context_types,
-                &registry,
-
             )
             .map(|(module, _, _)| module)
             .map_err(|errs| {
@@ -969,10 +959,7 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
         .map(|(k, v)| (interner.intern(k), json_to_value(&interner, v)))
         .collect();
 
-    let mut extern_fns = ExternFnRegistry::new(&interner);
-    let _regex_mod = acvus_ext::regex_module(&interner, &mut extern_fns);
-
-    let interp = Interpreter::new(&interner, module, &extern_fns);
+    let interp = Interpreter::new(&interner, module);
 
     if mode == "template" {
         // Template: concatenate all emits into a string
@@ -997,6 +984,9 @@ pub async fn evaluate(source: &str, mode: &str, context_json: &str) -> Result<Js
                         ))
                     })?;
                     request.resolve(Arc::new(v));
+                }
+                Stepped::NeedExternCall(_) => {
+                    panic!("unexpected extern call in evaluate");
                 }
                 Stepped::Done => break,
                 Stepped::Error(e) => {

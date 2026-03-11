@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
 
 use crate::Astr;
 
@@ -15,6 +14,7 @@ use crate::Astr;
 
 struct CoroutineShared<V> {
     new_requests: VecDeque<ContextRequest<V>>,
+    new_extern_requests: VecDeque<ExternCallRequest<V>>,
     yield_slot: Option<V>,
 }
 
@@ -51,22 +51,18 @@ impl<V> YieldHandle<V> {
                 value: None,
                 waker: None,
             })),
-            request_data: Some((name, FxHashMap::default())),
+            request_data: Some(name),
         }
     }
 
-    pub fn request_context_with(
-        &self,
-        name: Astr,
-        bindings: FxHashMap<Astr, V>,
-    ) -> ContextFuture<'_, V> {
-        ContextFuture {
+    pub fn request_extern_call(&self, name: Astr, args: Vec<V>) -> ExternCallFuture<'_, V> {
+        ExternCallFuture {
             shared: &self.shared,
             slot: Arc::new(Mutex::new(ContextSlot {
                 value: None,
                 waker: None,
             })),
-            request_data: Some((name, bindings)),
+            request_data: Some((name, args)),
         }
     }
 }
@@ -104,8 +100,7 @@ where
 pub struct ContextFuture<'a, V> {
     shared: &'a Arc<Mutex<CoroutineShared<V>>>,
     slot: Arc<Mutex<ContextSlot<V>>>,
-    /// (name, bindings) — consumed on first poll to register the request.
-    request_data: Option<(Astr, FxHashMap<Astr, V>)>,
+    request_data: Option<Astr>,
 }
 
 impl<V> Future for ContextFuture<'_, V>
@@ -117,11 +112,10 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<V>> {
         let this = self.get_mut();
 
-        if let Some((name, bindings)) = this.request_data.take() {
+        if let Some(name) = this.request_data.take() {
             // First poll: register the request
             this.shared.lock().new_requests.push_back(ContextRequest {
                 name,
-                bindings,
                 slot: Arc::clone(&this.slot),
             });
             this.slot.lock().waker = Some(cx.waker().clone());
@@ -157,17 +151,12 @@ impl<V> Drop for ContextFuture<'_, V> {
 
 pub struct ContextRequest<V> {
     name: Astr,
-    bindings: FxHashMap<Astr, V>,
     slot: Arc<Mutex<ContextSlot<V>>>,
 }
 
 impl<V> ContextRequest<V> {
     pub fn name(&self) -> Astr {
         self.name
-    }
-
-    pub fn bindings(&self) -> &FxHashMap<Astr, V> {
-        &self.bindings
     }
 
     /// Provide the resolved value. Wakes the coroutine if it is waiting.
@@ -181,12 +170,98 @@ impl<V> ContextRequest<V> {
 }
 
 // ---------------------------------------------------------------------------
+// ExternCallRequest — public, returned to executor via Stepped::NeedExternCall
+// ---------------------------------------------------------------------------
+
+pub struct ExternCallRequest<V> {
+    name: Astr,
+    args: Vec<V>,
+    slot: Arc<Mutex<ContextSlot<V>>>,
+}
+
+impl<V> ExternCallRequest<V> {
+    pub fn name(&self) -> Astr {
+        self.name
+    }
+
+    pub fn args(&self) -> &[V] {
+        &self.args
+    }
+
+    /// Provide the resolved value. Wakes the coroutine if it is waiting.
+    pub fn resolve(self, value: Arc<V>) {
+        let mut slot = self.slot.lock();
+        slot.value = Some(value);
+        if let Some(waker) = slot.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExternCallFuture
+// ---------------------------------------------------------------------------
+
+pub struct ExternCallFuture<'a, V> {
+    shared: &'a Arc<Mutex<CoroutineShared<V>>>,
+    slot: Arc<Mutex<ContextSlot<V>>>,
+    request_data: Option<(Astr, Vec<V>)>,
+}
+
+impl<V> Future for ExternCallFuture<'_, V>
+where
+    V: Unpin,
+{
+    type Output = Arc<V>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<V>> {
+        let this = self.get_mut();
+
+        if let Some((name, args)) = this.request_data.take() {
+            // First poll: register the request
+            this.shared
+                .lock()
+                .new_extern_requests
+                .push_back(ExternCallRequest {
+                    name,
+                    args,
+                    slot: Arc::clone(&this.slot),
+                });
+            this.slot.lock().waker = Some(cx.waker().clone());
+            Poll::Pending
+        } else {
+            // Subsequent polls: check if resolved
+            let mut slot = this.slot.lock();
+            if let Some(value) = slot.value.take() {
+                Poll::Ready(value)
+            } else {
+                slot.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<V> Drop for ExternCallFuture<'_, V> {
+    fn drop(&mut self) {
+        if self.request_data.is_none() {
+            // Was registered; remove from new_extern_requests if still pending
+            let mut shared = self.shared.lock();
+            shared
+                .new_extern_requests
+                .retain(|r| !Arc::ptr_eq(&r.slot, &self.slot));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Stepped — resume result
 // ---------------------------------------------------------------------------
 
 pub enum Stepped<V, E> {
     Emit(V),
     NeedContext(ContextRequest<V>),
+    NeedExternCall(ExternCallRequest<V>),
     Done,
     Error(E),
 }
@@ -248,6 +323,11 @@ impl<V, E> Future for ResumeFuture<'_, V, E> {
             return Poll::Ready(Stepped::NeedContext(request));
         }
 
+        // Check for new extern call requests
+        if let Some(request) = shared.new_extern_requests.pop_front() {
+            return Poll::Ready(Stepped::NeedExternCall(request));
+        }
+
         // No signals
         match poll_result {
             Poll::Ready(Ok(())) => {
@@ -276,6 +356,7 @@ where
 {
     let shared = Arc::new(Mutex::new(CoroutineShared {
         new_requests: VecDeque::new(),
+        new_extern_requests: VecDeque::new(),
         yield_slot: None,
     }));
     let handle = YieldHandle {
@@ -355,7 +436,6 @@ mod tests {
             panic!("expected NeedContext");
         };
         assert_eq!(request.name(), user);
-        assert!(request.bindings().is_empty());
         request.resolve(Arc::new("alice".to_string()));
 
         let Stepped::Emit(value) = step(&mut co).await else {
@@ -367,29 +447,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_request_with_bindings() {
+    async fn extern_call_request() {
         let interner = Interner::new();
-        let user = interner.intern("user");
-        let role = interner.intern("role");
-        let mut co = coroutine::<_, (), _, _>(|handle| async move {
-            let mut bindings = FxHashMap::default();
-            bindings.insert(role, "admin".into());
-            let ctx = handle.request_context_with(user, bindings).await;
-            handle.yield_val(format!("got: {ctx}")).await;
+        let add = interner.intern("add");
+        let mut co = coroutine::<String, (), _, _>(|handle| async move {
+            let result = handle
+                .request_extern_call(add, vec!["1".to_string(), "2".to_string()])
+                .await;
+            handle.yield_val(format!("result: {result}")).await;
             Ok(())
         });
 
-        let Stepped::NeedContext(request) = step(&mut co).await else {
-            panic!("expected NeedContext");
+        let Stepped::NeedExternCall(request) = step(&mut co).await else {
+            panic!("expected NeedExternCall");
         };
-        assert_eq!(request.name(), user);
-        assert_eq!(request.bindings().get(&role), Some(&"admin".to_string()));
-        request.resolve(Arc::new("bob".to_string()));
+        assert_eq!(request.name(), add);
+        assert_eq!(request.args(), &["1".to_string(), "2".to_string()]);
+        request.resolve(Arc::new("3".to_string()));
 
         let Stepped::Emit(value) = step(&mut co).await else {
             panic!("expected Emit");
         };
-        assert_eq!(value, "got: bob");
+        assert_eq!(value, "result: 3");
 
         assert!(matches!(step(&mut co).await, Stepped::Done));
     }

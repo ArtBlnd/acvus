@@ -165,8 +165,6 @@ where
                 MirModule {
                     main: MirBody::new(),
                     closures: FxHashMap::default(),
-
-                    extern_names: FxHashMap::default(),
                 },
             );
             *module = self.0.0.transform(old, deps);
@@ -293,7 +291,6 @@ mod tests {
             main: MirBody::new(),
             closures: FxHashMap::default(),
 
-            extern_names: FxHashMap::default(),
         }
     }
 

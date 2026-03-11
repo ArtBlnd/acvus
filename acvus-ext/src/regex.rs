@@ -1,9 +1,7 @@
-use acvus_interpreter::{
-    ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, OpaqueValue, Value,
-};
-use acvus_mir::extern_module::ExternModule;
+use acvus_interpreter::{IntoValue, OpaqueValue, RuntimeError, Value};
 use acvus_mir::ty::Ty;
-use acvus_utils::Interner;
+use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 const OPAQUE_NAME: &str = "Regex";
 
@@ -23,252 +21,179 @@ fn compile_regex(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"))
 }
 
-/// Build the compile-time `ExternModule` and register runtime functions.
-pub fn regex_module(interner: &Interner, fn_reg: &mut ExternFnRegistry) -> ExternModule {
-    let mut module = ExternModule::new(interner.intern("regex"));
-    module.add_opaque(interner.intern(OPAQUE_NAME));
-
-    module.add_fn(
-        interner.intern("regex"),
-        vec![Ty::String],
-        opaque_ty(),
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_match"),
-        vec![opaque_ty(), Ty::String],
-        Ty::Bool,
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_find"),
-        vec![opaque_ty(), Ty::String],
-        Ty::String,
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_find_all"),
-        vec![opaque_ty(), Ty::String],
-        Ty::List(Box::new(Ty::String)),
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_replace"),
-        vec![Ty::String, opaque_ty(), Ty::String],
-        Ty::String,
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_split"),
-        vec![opaque_ty(), Ty::String],
-        Ty::List(Box::new(Ty::String)),
-        false,
-    );
-    module.add_fn(
-        interner.intern("regex_extract"),
-        vec![Ty::String, opaque_ty()],
-        Ty::List(Box::new(Ty::String)),
-        false,
-    );
-
-    fn_reg.register(RegexCompile);
-    fn_reg.register(RegexMatch);
-    fn_reg.register(RegexFind);
-    fn_reg.register(RegexFindAll);
-    fn_reg.register(RegexReplace);
-    fn_reg.register(RegexSplit);
-    fn_reg.register(RegexExtract);
-
-    module
+/// Build the compile-time context types for regex functions.
+pub fn regex_context_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
+    let mut types = FxHashMap::default();
+    types.insert(interner.intern("regex"), Ty::Fn {
+        params: vec![Ty::String],
+        ret: Box::new(opaque_ty()),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_match"), Ty::Fn {
+        params: vec![opaque_ty(), Ty::String],
+        ret: Box::new(Ty::Bool),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_find"), Ty::Fn {
+        params: vec![opaque_ty(), Ty::String],
+        ret: Box::new(Ty::String),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_find_all"), Ty::Fn {
+        params: vec![opaque_ty(), Ty::String],
+        ret: Box::new(Ty::List(Box::new(Ty::String))),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_replace"), Ty::Fn {
+        params: vec![Ty::String, opaque_ty(), Ty::String],
+        ret: Box::new(Ty::String),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_split"), Ty::Fn {
+        params: vec![opaque_ty(), Ty::String],
+        ret: Box::new(Ty::List(Box::new(Ty::String))),
+        is_extern: true,
+    });
+    types.insert(interner.intern("regex_extract"), Ty::Fn {
+        params: vec![Ty::String, opaque_ty()],
+        ret: Box::new(Ty::List(Box::new(Ty::String))),
+        is_extern: true,
+    });
+    types
 }
 
-// -- ExternFn implementations ------------------------------------------------
-
-struct RegexCompile;
-impl ExternFn for RegexCompile {
-    fn name(&self) -> &str {
-        "regex"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![Ty::String],
-            ret: opaque_ty(),
-            effectful: false,
+/// Runtime dispatch for regex extern functions.
+pub async fn regex_call(
+    interner: &Interner,
+    name: Astr,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let name_str = interner.resolve(name);
+    match name_str {
+        "regex" => {
+            let Value::String(pattern) = &args[0] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex",
+                    "String",
+                    &format!("{:?}", args[0]),
+                ));
+            };
+            Ok(Value::Opaque(OpaqueValue::new(
+                OPAQUE_NAME,
+                compile_regex(pattern),
+            )))
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|pattern: String| async move {
-            Value::Opaque(OpaqueValue::new(OPAQUE_NAME, compile_regex(&pattern)))
-        })
-    }
-}
-
-struct RegexMatch;
-impl ExternFn for RegexMatch {
-    fn name(&self) -> &str {
-        "regex_match"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![opaque_ty(), Ty::String],
-            ret: Ty::Bool,
-            effectful: false,
+        "regex_match" => {
+            let re = extract_regex(&args[0]);
+            let Value::String(s) = &args[1] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_match",
+                    "String",
+                    &format!("{:?}", args[1]),
+                ));
+            };
+            Ok(Value::Bool(re.is_match(s)))
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|re: Value, s: String| async move { extract_regex(&re).is_match(&s) })
-    }
-}
-
-struct RegexFind;
-impl ExternFn for RegexFind {
-    fn name(&self) -> &str {
-        "regex_find"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![opaque_ty(), Ty::String],
-            ret: Ty::Option(Box::new(Ty::String)),
-            effectful: false,
+        "regex_find" => {
+            acvus_interpreter::set_interner_ctx(interner);
+            let re = extract_regex(&args[0]);
+            let Value::String(s) = &args[1] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_find",
+                    "String",
+                    &format!("{:?}", args[1]),
+                ));
+            };
+            let result: Option<String> = re.find(s).map(|m| m.as_str().to_string());
+            Ok(result.into_value())
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|re: Value, s: String| async move {
-            extract_regex(&re).find(&s).map(|m| m.as_str().to_string())
-        })
-    }
-}
-
-struct RegexFindAll;
-impl ExternFn for RegexFindAll {
-    fn name(&self) -> &str {
-        "regex_find_all"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![opaque_ty(), Ty::String],
-            ret: Ty::List(Box::new(Ty::String)),
-            effectful: false,
-        }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|re: Value, s: String| async move {
-            let matches: Vec<Value> = extract_regex(&re)
-                .find_iter(&s)
+        "regex_find_all" => {
+            let re = extract_regex(&args[0]);
+            let Value::String(s) = &args[1] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_find_all",
+                    "String",
+                    &format!("{:?}", args[1]),
+                ));
+            };
+            let matches: Vec<Value> = re
+                .find_iter(s)
                 .map(|m| Value::String(m.as_str().to_string()))
                 .collect();
-            Value::List(matches)
-        })
-    }
-}
-
-struct RegexReplace;
-impl ExternFn for RegexReplace {
-    fn name(&self) -> &str {
-        "regex_replace"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![Ty::String, opaque_ty(), Ty::String],
-            ret: Ty::String,
-            effectful: false,
+            Ok(Value::List(matches))
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|s: String, re: Value, rep: String| async move {
-            extract_regex(&re)
-                .replace_all(&s, rep.as_str())
-                .into_owned()
-        })
-    }
-}
-
-struct RegexSplit;
-impl ExternFn for RegexSplit {
-    fn name(&self) -> &str {
-        "regex_split"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![opaque_ty(), Ty::String],
-            ret: Ty::List(Box::new(Ty::String)),
-            effectful: false,
+        "regex_replace" => {
+            let Value::String(s) = &args[0] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_replace",
+                    "String",
+                    &format!("{:?}", args[0]),
+                ));
+            };
+            let re = extract_regex(&args[1]);
+            let Value::String(rep) = &args[2] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_replace",
+                    "String",
+                    &format!("{:?}", args[2]),
+                ));
+            };
+            Ok(Value::String(re.replace_all(s, rep.as_str()).into_owned()))
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|re: Value, s: String| async move {
-            let parts: Vec<Value> = extract_regex(&re)
-                .split(&s)
-                .map(|p| Value::String(p.to_string()))
-                .collect();
-            Value::List(parts)
-        })
-    }
-}
-
-struct RegexExtract;
-impl ExternFn for RegexExtract {
-    fn name(&self) -> &str {
-        "regex_extract"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![Ty::String, opaque_ty()],
-            ret: Ty::List(Box::new(Ty::String)),
-            effectful: false,
+        "regex_split" => {
+            let re = extract_regex(&args[0]);
+            let Value::String(s) = &args[1] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_split",
+                    "String",
+                    &format!("{:?}", args[1]),
+                ));
+            };
+            let parts: Vec<Value> = re.split(s).map(|p| Value::String(p.to_string())).collect();
+            Ok(Value::List(parts))
         }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::from_fn(|s: String, re: Value| async move {
-            let re = extract_regex(&re);
+        "regex_extract" => {
+            let Value::String(s) = &args[0] else {
+                return Err(RuntimeError::type_mismatch(
+                    "regex_extract",
+                    "String",
+                    &format!("{:?}", args[0]),
+                ));
+            };
+            let re = extract_regex(&args[1]);
             let parts: Vec<Value> = re
-                .captures_iter(&s)
+                .captures_iter(s)
                 .filter_map(|c| c.get(1).map(|m| Value::String(m.as_str().to_string())))
                 .collect();
-            Value::List(parts)
-        })
+            Ok(Value::List(parts))
+        }
+        _ => Err(RuntimeError::other(&format!(
+            "unknown regex function: {name_str}"
+        ))),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use acvus_interpreter::ExternFnRegistry;
-    use acvus_mir::extern_module::ExternRegistry;
-
     use super::*;
 
-    fn setup() -> (Interner, ExternRegistry, ExternFnRegistry) {
-        let interner = Interner::new();
-        let mut fn_reg = ExternFnRegistry::new(&interner);
-        let module = regex_module(&interner, &mut fn_reg);
-        let mut mir_reg = ExternRegistry::new();
-        mir_reg.register(&module);
-        (interner, mir_reg, fn_reg)
+    fn setup() -> Interner {
+        Interner::new()
     }
 
-    async fn call(
-        interner: &Interner,
-        fn_reg: &ExternFnRegistry,
-        name: &str,
-        args: Vec<Value>,
-    ) -> Value {
+    async fn call(interner: &Interner, name: &str, args: Vec<Value>) -> Value {
         acvus_interpreter::set_interner_ctx(interner);
-        let result = fn_reg
-            .get(interner.intern(name))
-            .unwrap()
-            .call(args)
+        regex_call(interner, interner.intern(name), args)
             .await
-            .unwrap();
-        result
+            .unwrap()
     }
 
     #[tokio::test]
     async fn compile_and_match() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_match",
             vec![re, Value::String("abc123".into())],
         )
@@ -278,11 +203,10 @@ mod tests {
 
     #[tokio::test]
     async fn match_no_hit() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_match",
             vec![re, Value::String("abc".into())],
         )
@@ -292,11 +216,10 @@ mod tests {
 
     #[tokio::test]
     async fn find_first() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_find",
             vec![re, Value::String("abc123def456".into())],
         )
@@ -311,11 +234,10 @@ mod tests {
 
     #[tokio::test]
     async fn find_all_matches() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_find_all",
             vec![re, Value::String("a1b22c333".into())],
         )
@@ -331,11 +253,10 @@ mod tests {
 
     #[tokio::test]
     async fn replace_all() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\s+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\s+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_replace",
             vec![
                 Value::String("hello   world  !".into()),
@@ -349,17 +270,15 @@ mod tests {
 
     #[tokio::test]
     async fn split_by_pattern() {
-        let (interner, _mir, fns) = setup();
+        let interner = setup();
         let re = call(
             &interner,
-            &fns,
             "regex",
             vec![Value::String(r"[,;]\s*".into())],
         )
         .await;
         let result = call(
             &interner,
-            &fns,
             "regex_split",
             vec![re, Value::String("a, b;c; d".into())],
         )
@@ -380,17 +299,15 @@ mod tests {
 
     #[tokio::test]
     async fn extract_capture_groups() {
-        let (interner, _mir, fns) = setup();
+        let interner = setup();
         let re = call(
             &interner,
-            &fns,
             "regex",
             vec![Value::String(r"(?s)<thinking>(.*?)</thinking>".into())],
         )
         .await;
         let result = call(
             &interner,
-            &fns,
             "regex_extract",
             vec![
                 Value::String(
@@ -410,11 +327,10 @@ mod tests {
 
     #[tokio::test]
     async fn extract_no_capture_group() {
-        let (interner, _mir, fns) = setup();
-        let re = call(&interner, &fns, "regex", vec![Value::String(r"\d+".into())]).await;
+        let interner = setup();
+        let re = call(&interner, "regex", vec![Value::String(r"\d+".into())]).await;
         let result = call(
             &interner,
-            &fns,
             "regex_extract",
             vec![Value::String("abc123def".into()), re],
         )

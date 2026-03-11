@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use std::process;
 
 use acvus_chat::ChatEngine;
-use acvus_interpreter::{ExternFnRegistry, Value};
-use acvus_mir::extern_module::ExternRegistry;
+use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     ApiKind, ExprSpec, Fetch, HashMapStorage, HttpRequest, NodeKind, NodeSpec, ProviderConfig,
@@ -146,10 +145,7 @@ async fn main() {
     }
 
     // Compile expr definitions → NodeSpec with NodeKind::Expr
-    let mut fn_reg_for_compile = ExternFnRegistry::new(&interner);
-    let regex_mod = acvus_ext::regex_module(&interner, &mut fn_reg_for_compile);
-    let mut registry = ExternRegistry::new();
-    registry.register(&regex_mod);
+    context_types.extend(acvus_ext::regex_context_types(&interner));
     let mut expr_node_specs: Vec<NodeSpec> = Vec::new();
     for expr_def in &spec.expr {
         let source = if let Some(path) = &expr_def.source {
@@ -166,7 +162,7 @@ async fn main() {
             );
             process::exit(1);
         };
-        let (_script, tail_ty) = compile_script(&interner, &source, &context_types, &registry)
+        let (_script, tail_ty) = compile_script(&interner, &source, &context_types)
             .unwrap_or_else(|e| {
                 eprintln!(
                     "expr '{}' compile error: {}",
@@ -189,6 +185,8 @@ async fn main() {
             strategy: Strategy::default(),
             retry: 0,
             assert: None,
+            is_function: false,
+            fn_params: vec![],
         });
     }
 
@@ -220,7 +218,7 @@ async fn main() {
     // Merge expr node specs into node specs
     node_specs.extend(expr_node_specs);
 
-    let compiled_nodes = match compile_nodes(&interner, &node_specs, &context_types, &registry) {
+    let compiled_nodes = match compile_nodes(&interner, &node_specs, &context_types) {
         Ok(nodes) => nodes,
         Err(errors) => {
             for e in &errors {
@@ -261,8 +259,6 @@ async fn main() {
         );
     }
 
-    let extern_fns = fn_reg_for_compile;
-
     let resolver = {
         let defaults = context_defaults.clone();
         let context_args_astr: FxHashMap<Astr, String> = context_args
@@ -293,6 +289,16 @@ async fn main() {
         }
     };
 
+    let extern_handler = {
+        let interner = interner.clone();
+        move |name: Astr, args: Vec<Value>| {
+            let interner = interner.clone();
+            async move {
+                acvus_ext::regex_call(&interner, name, args).await
+            }
+        }
+    };
+
     if render_only {
         let fetch = RenderOnlyFetch {
             endpoints: endpoint_apis,
@@ -301,7 +307,6 @@ async fn main() {
             compiled_nodes,
             providers,
             fetch,
-            extern_fns,
             storage,
             &spec.entrypoint,
             &[],
@@ -312,7 +317,7 @@ async fn main() {
             eprintln!("engine init error: {e}");
             process::exit(1);
         });
-        let response = engine.turn(&resolver).await.unwrap_or_else(|e| {
+        let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
             eprintln!("turn error: {e}");
             process::exit(1);
         });
@@ -325,7 +330,6 @@ async fn main() {
             compiled_nodes,
             providers,
             fetch,
-            extern_fns,
             storage,
             &spec.entrypoint,
             &[],
@@ -339,7 +343,7 @@ async fn main() {
 
         if context_args.is_empty() {
             loop {
-                let response = engine.turn(&resolver).await.unwrap_or_else(|e| {
+                let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
                     eprintln!("turn error: {e}");
                     process::exit(1);
                 });
@@ -347,7 +351,7 @@ async fn main() {
                 println!("{:#?}", engine.state.storage.entries);
             }
         } else {
-            let response = engine.turn(&resolver).await.unwrap_or_else(|e| {
+            let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
                 eprintln!("turn error: {e}");
                 process::exit(1);
             });

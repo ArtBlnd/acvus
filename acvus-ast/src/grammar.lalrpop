@@ -210,9 +210,6 @@ PrimaryExpr: Expr = {
         Expr::Ident { name, ref_kind: RefKind::Value, span: Span::new(l, r) },
     <l:@L> <name:"$ref"> <r:@R> =>
         Expr::Ident { name, ref_kind: RefKind::Variable, span: Span::new(l, r) },
-    // Context call: @name { key: expr, ... } — must appear before plain @ref
-    <l:@L> <name:"@ref"> "{" <bindings:CommaSep<ContextBinding>> "}" <r:@R> =>
-        Expr::ContextCall { name, bindings, span: Span::new(l, r) },
     <l:@L> <name:"@ref"> <r:@R> =>
         Expr::Ident { name, ref_kind: RefKind::Context, span: Span::new(l, r) },
     <l:@L> <n:"int"> <r:@R> =>
@@ -341,17 +338,6 @@ ObjectField: ObjectExprField = {
             span,
         }
     },
-};
-
-// Context binding: key: expr, or shorthand name / $name / @name
-ContextBinding: (Astr, Expr) = {
-    <name:"ident"> ":" <value:Expr> => (name, value),
-    <l:@L> <name:"ident"> <r:@R> =>
-        (name, Expr::Ident { name, ref_kind: RefKind::Value, span: Span::new(l, r) }),
-    <l:@L> <name:"$ref"> <r:@R> =>
-        (name, Expr::Ident { name, ref_kind: RefKind::Variable, span: Span::new(l, r) }),
-    <l:@L> <name:"@ref"> <r:@R> =>
-        (name, Expr::Ident { name, ref_kind: RefKind::Context, span: Span::new(l, r) }),
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────

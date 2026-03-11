@@ -38,9 +38,8 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
         | InstKind::FieldGet { dst, .. }
-        | InstKind::Call { dst, .. }
-        | InstKind::AsyncCall { dst, .. }
-        | InstKind::Await { dst, .. }
+        | InstKind::BuiltinCall { dst, .. }
+        | InstKind::ExternCall { dst, .. }
         | InstKind::MakeList { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeRange { dst, .. }
@@ -55,7 +54,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::ListSlice { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
-        | InstKind::CallClosure { dst, .. }
+        | InstKind::ClosureCall { dst, .. }
         | InstKind::IterInit { dst, .. }
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
@@ -103,8 +102,6 @@ mod tests {
                 label_count: 0,
             },
             closures: FxHashMap::default(),
-
-            extern_names: FxHashMap::default(),
         }
     }
 
@@ -121,7 +118,6 @@ mod tests {
         let module = make_module(vec![inst(InstKind::ContextLoad {
             dst: ValueId(0),
             name: i.intern("user"),
-            bindings: Vec::new(),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
         assert_eq!(result.0[&ValueId(0)], 0);

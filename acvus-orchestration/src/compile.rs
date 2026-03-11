@@ -1,6 +1,7 @@
 
 
-use acvus_mir::extern_module::ExternRegistry;
+use std::collections::VecDeque;
+
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::Ty;
 use acvus_mir_pass::AnalysisPass;
@@ -49,6 +50,8 @@ pub struct CompiledNode {
     pub strategy: CompiledStrategy,
     pub retry: u32,
     pub assert: Option<CompiledScript>,
+    pub is_function: bool,
+    pub fn_params: Vec<(Astr, Ty)>,
 }
 
 /// Compiled expression (Script → MIR).
@@ -179,9 +182,8 @@ pub fn compile_script(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(CompiledScript, Ty), OrchError> {
-    compile_script_with_hint(interner, source, context_types, registry, None)
+    compile_script_with_hint(interner, source, context_types, None)
 }
 
 /// Compile a script with an optional expected tail type hint for unification.
@@ -189,7 +191,6 @@ pub fn compile_script_with_hint(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     expected_tail: Option<&Ty>,
 ) -> Result<(CompiledScript, Ty), OrchError> {
     let script = acvus_ast::parse_script(interner, source).map_err(|e| {
@@ -201,7 +202,6 @@ pub fn compile_script_with_hint(
         interner,
         &script,
         context_types,
-        registry,
         expected_tail,
     )
     .map_err(|errs| {
@@ -265,7 +265,6 @@ pub(crate) fn compile_template(
     source: &str,
     block_idx: usize,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<CompiledBlock, OrchError> {
     let ast = acvus_ast::parse(interner, source).map_err(|e| {
         OrchError::new(OrchErrorKind::TemplateParse {
@@ -278,7 +277,6 @@ pub(crate) fn compile_template(
         interner,
         &ast,
         context_types,
-        registry,
     )
     .map_err(|errs| {
         OrchError::new(OrchErrorKind::TemplateCompile {
@@ -303,7 +301,6 @@ pub(crate) fn compile_messages(
     interner: &Interner,
     messages: &[MessageSpec],
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     iterator_elem_ty: &Ty,
 ) -> Result<(Vec<CompiledMessage>, FxHashSet<Astr>), Vec<OrchError>> {
     let mut compiled_messages = Vec::new();
@@ -313,7 +310,7 @@ pub(crate) fn compile_messages(
     for (i, msg) in messages.iter().enumerate() {
         match msg {
             MessageSpec::Block { role, source } => {
-                let block = match compile_template(interner, source, i, context_types, registry) {
+                let block = match compile_template(interner, source, i, context_types) {
                     Ok(b) => b,
                     Err(e) => {
                         errors.push(e);
@@ -334,8 +331,7 @@ pub(crate) fn compile_messages(
             } => {
                 let ctx = format!("iterator (block {i})");
                 let (expr, tail_ty) =
-                    match compile_script(interner, interner.resolve(*key), context_types, registry)
-                    {
+                    match compile_script(interner, interner.resolve(*key), context_types) {
                         Ok(v) => v,
                         Err(e) => {
                             errors.push(e);
@@ -379,27 +375,26 @@ pub fn compile_node(
     interner: &Interner,
     spec: &NodeSpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
     compiled_self: CompiledSelf,
     compiled_strategy: CompiledStrategy,
     stored_ty: &Ty,
 ) -> Result<CompiledNode, Vec<OrchError>> {
     let (kind, mut all_context_keys): (_, FxHashSet<_>) = match &spec.kind {
         NodeKind::Plain(plain_spec) => {
-            let (compiled, keys) = compile_plain(interner, plain_spec, context_types, registry)?;
+            let (compiled, keys) = compile_plain(interner, plain_spec, context_types)?;
             (CompiledNodeKind::Plain(compiled), keys)
         }
         NodeKind::Llm(llm_spec) => {
-            let (compiled, keys) = compile_llm(interner, llm_spec, context_types, registry)?;
+            let (compiled, keys) = compile_llm(interner, llm_spec, context_types)?;
             (CompiledNodeKind::Llm(compiled), keys)
         }
         NodeKind::LlmCache(cache_spec) => {
             let (compiled, keys) =
-                compile_llm_cache(interner, cache_spec, context_types, registry)?;
+                compile_llm_cache(interner, cache_spec, context_types)?;
             (CompiledNodeKind::LlmCache(compiled), keys)
         }
         NodeKind::Expr(expr_spec) => {
-            let (compiled, keys) = compile_expr(interner, expr_spec, context_types, registry)?;
+            let (compiled, keys) = compile_expr(interner, expr_spec, context_types)?;
             (CompiledNodeKind::Expr(compiled), keys)
         }
     };
@@ -418,7 +413,6 @@ pub fn compile_node(
             interner,
             interner.resolve(*assert_src),
             &assert_ctx,
-            registry,
             Some(&Ty::Bool),
         )
         .map_err(|e| vec![e])?;
@@ -447,6 +441,8 @@ pub fn compile_node(
         strategy: compiled_strategy,
         retry: spec.retry,
         assert: compiled_assert,
+        is_function: spec.is_function,
+        fn_params: spec.fn_params.clone(),
     })
 }
 
@@ -488,7 +484,6 @@ pub fn compute_external_context_env(
     interner: &Interner,
     specs: &[NodeSpec],
     injected_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<ExternalContextEnv, Vec<OrchError>> {
     let mut context_types = injected_types.clone();
 
@@ -500,8 +495,19 @@ pub fn compute_external_context_env(
         .collect();
 
     // 2. Register concrete (non-Infer) stored types so other nodes can reference @name
+    //    Function nodes are registered as Ty::Fn { is_extern: true, ... }
     for (spec, ty) in specs.iter().zip(stored_types.iter()) {
-        if *ty != Ty::Infer {
+        if *ty == Ty::Infer {
+            continue;
+        }
+        if spec.is_function {
+            let param_types: Vec<Ty> = spec.fn_params.iter().map(|(_, ty)| ty.clone()).collect();
+            context_types.insert(spec.name, Ty::Fn {
+                params: param_types,
+                ret: Box::new(ty.clone()),
+                is_extern: true,
+            });
+        } else {
             context_types.insert(spec.name, ty.clone());
         }
     }
@@ -521,7 +527,7 @@ pub fn compute_external_context_env(
         for &(i, bind_src) in &history_specs {
             let mut hist_ctx = store_ctx.clone();
             hist_ctx.insert(interner.intern("self"), stored_types[i].clone());
-            let ty = compile_script(interner, bind_src, &hist_ctx, registry)
+            let ty = compile_script(interner, bind_src, &hist_ctx)
                 .map(|(_, ty)| ty)
                 .unwrap_or(Ty::Error);
             entry_fields.insert(specs[i].name, ty);
@@ -534,17 +540,106 @@ pub fn compute_external_context_env(
         context_types.insert(interner.intern("turn"), Ty::Object(turn_fields));
     }
 
-    // 4. Resolve Expr node types: compile source with full context (including @turn)
-    for (i, spec) in specs.iter().enumerate() {
-        if stored_types[i] != Ty::Infer {
-            continue;
+    // 4. Resolve Expr node types in dependency order (DAG topo sort).
+    //    Expr nodes start as Ty::Infer. If Expr A depends on Expr B,
+    //    B must be compiled first so its type is available.
+    let infer_indices: Vec<usize> = (0..specs.len())
+        .filter(|&i| stored_types[i] == Ty::Infer)
+        .collect();
+
+    if !infer_indices.is_empty() {
+        let node_name_to_idx: FxHashMap<Astr, usize> =
+            specs.iter().enumerate().map(|(i, s)| (s.name, i)).collect();
+        let infer_set: FxHashSet<usize> = infer_indices.iter().copied().collect();
+
+        // Extract context deps for each Infer node using analysis mode.
+        // Only deps on OTHER Infer nodes matter for ordering.
+        let n = specs.len();
+        let mut deps: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); n];
+        let mut rdeps: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); n];
+
+        for &idx in &infer_indices {
+            if let NodeKind::Expr(expr_spec) = &specs[idx].kind {
+                let keys =
+                    analysis_extract_script_keys(interner, &expr_spec.source, &context_types);
+                for key in keys {
+                    if let Some(&dep_idx) = node_name_to_idx.get(&key) {
+                        if infer_set.contains(&dep_idx) && dep_idx != idx {
+                            deps[idx].insert(dep_idx);
+                            rdeps[dep_idx].insert(idx);
+                        }
+                    }
+                }
+            }
         }
-        if let NodeKind::Expr(expr_spec) = &spec.kind {
-            stored_types[i] = compile_script(interner, &expr_spec.source, &context_types, registry)
+
+        // Kahn's algorithm on Infer nodes
+        let mut in_degree: FxHashMap<usize, usize> = infer_indices
+            .iter()
+            .map(|&i| (i, deps[i].len()))
+            .collect();
+        let mut queue: VecDeque<usize> = infer_indices
+            .iter()
+            .filter(|&&i| deps[i].is_empty())
+            .copied()
+            .collect();
+        let mut topo = Vec::with_capacity(infer_indices.len());
+
+        while let Some(u) = queue.pop_front() {
+            topo.push(u);
+            for &v in &rdeps[u] {
+                if let Some(deg) = in_degree.get_mut(&v) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(v);
+                    }
+                }
+            }
+        }
+
+        if topo.len() != infer_indices.len() {
+            let in_cycle: Vec<String> = infer_indices
+                .iter()
+                .filter(|&&i| in_degree[&i] > 0)
+                .map(|&i| interner.resolve(specs[i].name).to_string())
+                .collect();
+            return Err(vec![OrchError::new(OrchErrorKind::CycleDetected {
+                nodes: in_cycle,
+            })]);
+        }
+
+        // Compile in topo order, registering types progressively
+        for &idx in &topo {
+            if let NodeKind::Expr(expr_spec) = &specs[idx].kind {
+                let hint = match &expr_spec.output_ty {
+                    Ty::Infer => None,
+                    ty => Some(ty),
+                };
+                stored_types[idx] = compile_script_with_hint(
+                    interner,
+                    &expr_spec.source,
+                    &context_types,
+                    hint,
+                )
                 .map(|(_, ty)| ty)
                 .unwrap_or(Ty::Error);
+            }
+            let spec = &specs[idx];
+            if spec.is_function {
+                let param_types: Vec<Ty> =
+                    spec.fn_params.iter().map(|(_, ty)| ty.clone()).collect();
+                context_types.insert(
+                    spec.name,
+                    Ty::Fn {
+                        params: param_types,
+                        ret: Box::new(stored_types[idx].clone()),
+                        is_extern: true,
+                    },
+                );
+            } else {
+                context_types.insert(spec.name, stored_types[idx].clone());
+            }
         }
-        context_types.insert(spec.name, stored_types[i].clone());
     }
 
     let mut node_locals = FxHashMap::default();
@@ -581,10 +676,9 @@ pub fn compile_nodes(
     interner: &Interner,
     specs: &[NodeSpec],
     injected_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
-    let env = compute_external_context_env(interner, specs, injected_types, registry)?;
-    compile_nodes_with_env(interner, specs, registry, env)
+    let env = compute_external_context_env(interner, specs, injected_types)?;
+    compile_nodes_with_env(interner, specs, env)
 }
 
 /// Compile nodes using a pre-computed external context environment.
@@ -594,7 +688,6 @@ pub fn compile_nodes(
 pub fn compile_nodes_with_env(
     interner: &Interner,
     specs: &[NodeSpec],
-    registry: &ExternRegistry,
     env: ExternalContextEnv,
 ) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
     let context_types = env.context_types;
@@ -616,7 +709,6 @@ pub fn compile_nodes_with_env(
             interner,
             interner.resolve(*init_src),
             &context_types,
-            registry,
             hint,
         ) {
             Ok(v) => v,
@@ -649,7 +741,6 @@ pub fn compile_nodes_with_env(
                     interner,
                     interner.resolve(*history_bind),
                     &hist_ctx,
-                    registry,
                 ) {
                     Ok(v) => v,
                     Err(e) => {
@@ -667,7 +758,6 @@ pub fn compile_nodes_with_env(
                     interner,
                     interner.resolve(*key),
                     &context_types,
-                    registry,
                 ) {
                     Ok(v) => v,
                     Err(e) => {
@@ -713,6 +803,18 @@ pub fn compile_nodes_with_env(
         if let Some(params) = tool_param_types.get(&spec.name) {
             node_ctx.extend(params.iter().map(|(k, v)| (*k, v.clone())));
         }
+        if spec.is_function {
+            for (param_name, param_ty) in &spec.fn_params {
+                if context_types.contains_key(param_name) {
+                    errors.push(OrchError::new(OrchErrorKind::FnParamConflict {
+                        node: interner.resolve(spec.name).to_string(),
+                        param: interner.resolve(*param_name).to_string(),
+                    }));
+                    continue;
+                }
+                node_ctx.insert(*param_name, param_ty.clone());
+            }
+        }
         // When initial_value is Some, @self is available in the node body
         if initial_value_scripts[i].is_some() {
             node_ctx.insert(interner.intern("self"), stored_types[i].clone());
@@ -725,7 +827,6 @@ pub fn compile_nodes_with_env(
             interner,
             spec,
             &node_ctx,
-            registry,
             compiled_self,
             compiled_strategy,
             &stored_types[i],
@@ -764,6 +865,27 @@ pub fn compile_nodes_with_env(
     } else {
         Err(errors)
     }
+}
+
+/// Extract context keys from a script source using analysis mode.
+///
+/// Analysis mode assigns fresh type variables for unknown `@context` refs,
+/// so context keys can be discovered even before all types are known.
+fn analysis_extract_script_keys(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+) -> FxHashSet<Astr> {
+    let Ok(script) = acvus_ast::parse_script(interner, source) else {
+        return FxHashSet::default();
+    };
+    let (module, _, _, _) = acvus_mir::compile_script_analysis_with_tail_partial(
+        interner,
+        &script,
+        context_types,
+        None,
+    );
+    extract_context_keys(&module)
 }
 
 /// Extract all context keys referenced by `ContextLoad` instructions in a module.

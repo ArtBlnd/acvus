@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{ConcreteValue, ExternFnRegistry, PureValue, Value};
-use acvus_mir::extern_module::ExternRegistry;
+use acvus_interpreter::{ConcreteValue, PureValue, Value};
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     ApiKind, DisplayEntrySpec, ExprSpec, GenerationParams, HttpRequest, IterableDisplaySpec,
@@ -16,7 +15,7 @@ use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::default_registry;
+use crate::inject_extern_types;
 
 // ---------------------------------------------------------------------------
 // PureValue -> serde_json::Value (plain JS-compatible representation)
@@ -318,8 +317,19 @@ struct NodeConfig {
     #[serde(default)]
     retry: u32,
     assert_script: Option<String>,
+    #[serde(default)]
+    is_function: bool,
+    #[serde(default)]
+    fn_params: Vec<FnParamConfig>,
     #[serde(flatten)]
     kind: NodeKindConfig,
+}
+
+#[derive(Deserialize)]
+struct FnParamConfig {
+    name: String,
+    #[serde(rename = "type")]
+    ty: String,
 }
 
 #[derive(Deserialize)]
@@ -515,6 +525,11 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
         strategy,
         retry: cfg.retry,
         assert: cfg.assert_script.as_ref().map(|s| interner.intern(s)),
+        is_function: cfg.is_function,
+        fn_params: cfg.fn_params.iter().map(|p| {
+            let ty = crate::parse_type_string(&interner, &p.ty);
+            (interner.intern(&p.name), ty)
+        }).collect(),
     })
 }
 
@@ -556,12 +571,11 @@ impl ChatSession {
             .map_err(|e| JsValue::from_str(&e))?;
 
         // Compile -- also compute full context_types (including node-derived @turn, @nodeName, etc.)
-        let extern_registry = default_registry(&interner);
+        inject_extern_types(&interner, &mut context_types);
         let env = acvus_orchestration::compute_external_context_env(
             &interner,
             &specs,
             &context_types,
-            &extern_registry,
         )
         .map_err(|errs| {
             let msg = errs
@@ -574,7 +588,7 @@ impl ChatSession {
         let storage_types = env.storage_types.clone();
 
         let compiled =
-            acvus_orchestration::compile_nodes_with_env(&interner, &specs, &extern_registry, env)
+            acvus_orchestration::compile_nodes_with_env(&interner, &specs, env)
                 .map_err(|errs| {
                 let msg = errs
                     .iter()
@@ -614,17 +628,10 @@ impl ChatSession {
             SessionStorage::import(storage_js, on_storage_change, &interner)
         };
 
-        let mut extern_fns = ExternFnRegistry::new(&interner);
-        let regex_mod = acvus_ext::regex_module(&interner, &mut extern_fns);
-        let mut extern_reg = ExternRegistry::new();
-        extern_reg.register(&regex_mod);
-        drop(extern_reg); // only needed for compile, not runtime
-
         let engine = acvus_chat::ChatEngine::new(
             compiled,
             providers,
             WebFetch,
-            extern_fns,
             storage,
             &config.entrypoint,
             &config.side_effects,
@@ -676,9 +683,19 @@ impl ChatSession {
             })
         };
 
+        let extern_handler = {
+            let interner = self.interner.clone();
+            move |name: Astr, args: Vec<acvus_interpreter::Value>| {
+                let interner = interner.clone();
+                UnsafeSend(async move {
+                    acvus_ext::regex_call(&interner, name, args).await
+                })
+            }
+        };
+
         let result = self
             .engine
-            .turn(&resolver)
+            .turn(&resolver, &extern_handler)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
@@ -710,19 +727,16 @@ impl ChatSession {
         use acvus_interpreter::Interpreter;
         use acvus_utils::Stepped;
 
-        let registry = default_registry(&self.interner);
         let (compiled, _) = acvus_orchestration::compile_script(
             &self.interner,
             iterator_script,
             &self.storage_types,
-            &registry,
         )
         .map_err(|e| JsValue::from_str(&e.display(&self.interner).to_string()))?;
 
         let interp = Interpreter::new(
             &self.interner,
             compiled.module.clone(),
-            self.engine.extern_fns(),
         );
         let mut coroutine = interp.execute();
         loop {
@@ -740,6 +754,9 @@ impl ChatSession {
                         return Ok(0);
                     };
                     request.resolve(value);
+                }
+                Stepped::NeedExternCall(_) => {
+                    panic!("unexpected extern call in display_list_len");
                 }
                 Stepped::Done => return Ok(0),
                 Stepped::Error(e) => return Err(JsValue::from_str(&format!("display error: {e}"))),
@@ -771,9 +788,8 @@ impl ChatSession {
                 })
                 .collect(),
         };
-        let registry = default_registry(&self.interner);
         let compiled =
-            compile_iterable_display(&self.interner, &spec, &self.storage_types, &registry)
+            compile_iterable_display(&self.interner, &spec, &self.storage_types)
                 .map_err(|errs| {
                     let msg = errs
                         .iter()
@@ -786,7 +802,6 @@ impl ChatSession {
             &self.interner,
             &compiled,
             &self.engine.state.storage,
-            self.engine.extern_fns(),
             index,
         )
         .await;
@@ -800,9 +815,8 @@ impl ChatSession {
         let spec = StaticDisplaySpec {
             template: template.to_string(),
         };
-        let registry = default_registry(&self.interner);
         let compiled =
-            compile_static_display(&self.interner, &spec, &self.storage_types, &registry).map_err(
+            compile_static_display(&self.interner, &spec, &self.storage_types).map_err(
                 |errs| {
                     let msg = errs
                         .iter()
@@ -816,7 +830,6 @@ impl ChatSession {
             &self.interner,
             &compiled,
             &self.engine.state.storage,
-            self.engine.extern_fns(),
         )
         .await;
         let json_str =

@@ -1,11 +1,10 @@
 use acvus_interpreter::{
-    ExternFn, ExternFnBody, ExternFnRegistry, ExternFnSig, Interpreter, RuntimeError,
+    Interpreter,
     RuntimeErrorKind, Stepped, Value,
 };
 use acvus_interpreter_test::*;
 #[allow(unused_imports)]
-use acvus_interpreter_test::{run_capturing_context_calls, run_obfuscated, run_simple_obfuscated};
-use acvus_mir::extern_module::ExternRegistry;
+use acvus_interpreter_test::{run_obfuscated, run_simple_obfuscated};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -1133,47 +1132,6 @@ async fn multiple_closures_same_capture() {
     );
 }
 
-// ── Extern functions ─────────────────────────────────────────────
-
-struct DoubleIt;
-
-impl ExternFn for DoubleIt {
-    fn name(&self) -> &str {
-        "double"
-    }
-    fn sig(&self) -> ExternFnSig {
-        ExternFnSig {
-            params: vec![Ty::Int],
-            ret: Ty::Int,
-            effectful: false,
-        }
-    }
-    fn into_body(self) -> ExternFnBody {
-        ExternFnBody::new(|args| async move {
-            Ok(match &args[0] {
-                Value::Int(n) => Value::Int(n * 2),
-                _ => panic!("expected Int"),
-            })
-        })
-    }
-}
-
-#[tokio::test]
-async fn extern_fn_call() {
-    let i = Interner::new();
-    let mut extern_fns = ExternFnRegistry::new(&i);
-    extern_fns.register(DoubleIt);
-    let (ty, val) = int_context(&i, "n", 21);
-    let output = run(
-        &i,
-        r#"{{ x = double(@n) }}{{ x | to_string }}{{_}}{{/}}"#,
-        ty,
-        val,
-        extern_fns,
-    )
-    .await;
-    assert_eq!(output, "42");
-}
 
 // ── Logical operators (&&, ||) ───────────────────────────────────
 
@@ -1499,22 +1457,6 @@ async fn map_then_iterate_with_match() {
     );
 }
 
-#[tokio::test]
-async fn extern_fn_in_pipe_chain() {
-    let i = Interner::new();
-    let mut extern_fns = ExternFnRegistry::new(&i);
-    extern_fns.register(DoubleIt);
-    let (ty, val) = items_context(&i, vec![1, 2, 3]);
-    let output = run(
-        &i,
-        r#"{{ x = @items | map(i -> double(i)) }}{{ x | map(i -> (i | to_string)) | join(", ") }}"#,
-        ty,
-        val,
-        extern_fns,
-    )
-    .await;
-    assert_eq!(output, "2, 4, 6");
-}
 
 #[tokio::test]
 async fn complex_object_filter_format() {
@@ -1673,7 +1615,6 @@ async fn obf_mixed_text_and_expr() {
             "Hello, {{ @name }}!",
             ty,
             val,
-            ExternFnRegistry::new(&i)
         )
         .await,
         "Hello, alice!"
@@ -1691,7 +1632,6 @@ async fn obf_int_arithmetic() {
             "{{ @a + @b | to_string }}",
             types,
             values,
-            ExternFnRegistry::new(&i)
         )
         .await,
         "10"
@@ -1708,7 +1648,6 @@ async fn obf_match_literal() {
             r#"{{ 42 = @n }}yes{{_}}no{{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "yes"
@@ -1725,7 +1664,6 @@ async fn obf_match_string_literal() {
             r#"{{ "alice" = @name }}found{{_}}nope{{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "found"
@@ -1750,7 +1688,6 @@ async fn obf_iteration() {
             r#"{{ x in @items }}{{ x | to_string }} {{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "1 2 3 "
@@ -1774,7 +1711,6 @@ async fn obf_nested_match_with_variable() {
             r#"{{ "admin" = @role }}{{ 0..10 = @level }}{{ $result = "low-admin" }}{{_}}{{ $result = "high-admin" }}{{/}}{{_}}{{ $result = "guest" }}{{/}}{{ $result }}"#,
             types,
             values,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "low-admin"
@@ -1791,7 +1727,6 @@ async fn obf_lambda_filter_map() {
             r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) }}{{ x | join(", ") }}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "1, 2, 3"
@@ -1810,7 +1745,6 @@ async fn obf_variable_accumulate_in_loop() {
             r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "60"
@@ -1840,7 +1774,6 @@ async fn obf_nested_iteration_with_match() {
             r#"{{ row in @rows }}[{{ x in row }}{{ 3 = x }}three{{_}}{{ x | to_string }}{{/}} {{/}}]{{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "[1 2 ][three 4 ]"
@@ -1857,7 +1790,6 @@ async fn obf_object_destructure_and_format() {
             r#"{{ { name, age, } in @users }}{{ name }}({{ age | to_string }}) {{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "alice(30) bob(25) "
@@ -1885,7 +1817,6 @@ async fn obf_string_match_multi_arm() {
             r#"{{ "go" = @lang }}Go{{ "rust" = }}Rust{{ "python" = }}Python{{_}}Other{{/}}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "Rust"
@@ -1903,7 +1834,6 @@ async fn obf_range_pattern_with_variable() {
             r#"{{ 90..=100 = @score }}{{ $grade = "A" }}{{ 80..90 = }}{{ $grade = "B" }}{{ 70..80 = }}{{ $grade = "C" }}{{_}}{{ $grade = "F" }}{{/}}{{ $grade }}"#,
             types,
             values,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "B"
@@ -1920,7 +1850,6 @@ async fn obf_filter_accumulate_complex() {
             r#"{{ $sum = 0 }}{{ x in @items | filter(x -> x > 5) }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
             ty,
             val,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "40"
@@ -1948,7 +1877,6 @@ async fn obf_pipe_chain_with_context() {
             r#"{{ @names | join(", ") }}"#,
             types,
             values,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "alice, bob, charlie"
@@ -1966,101 +1894,10 @@ async fn obf_boolean_logic_in_match() {
             r#"{{ $result = "none" }}{{ 1..10 = @a }}{{ 5..15 = @b }}{{ $result = "both" }}{{_}}{{ $result = "a-only" }}{{/}}{{_}}{{ $result = "other" }}{{/}}{{ $result }}"#,
             types,
             values,
-            ExternFnRegistry::new(&i),
         )
         .await,
         "both"
     );
-}
-
-// ── Context Call ────────────────────────────────────────────────
-
-#[tokio::test]
-async fn context_call_bindings_carried() {
-    let i = Interner::new();
-    let types = ctx(
-        &i,
-        &[("node", Ty::String), ("items", Ty::List(Box::new(Ty::Int)))],
-    );
-    let values = vals(
-        &i,
-        &[
-            ("node", Value::String("resolved".into())),
-            (
-                "items",
-                Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
-            ),
-        ],
-    );
-    let result =
-        run_capturing_context_calls(&i, "{{ @node { count: @items | len, } }}", types, values)
-            .await;
-    assert_eq!(result.output, "resolved");
-    assert_eq!(result.calls.len(), 1);
-    assert_eq!(result.calls[0].0, "node");
-    // Note: bindings use Astr keys, check by iterating
-    let has_count = result.calls[0]
-        .1
-        .values()
-        .any(|v| matches!(v, Value::Int(3)));
-    assert!(has_count);
-}
-
-#[tokio::test]
-async fn context_call_multiple_bindings() {
-    let i = Interner::new();
-    let types = ctx(&i, &[("target", Ty::String), ("name", Ty::String)]);
-    let values = vals(
-        &i,
-        &[
-            ("target", Value::String("done".into())),
-            ("name", Value::String("alice".into())),
-        ],
-    );
-    let result = run_capturing_context_calls(
-        &i,
-        r#"{{ @target { greeting: "hello", @name, } }}"#,
-        types,
-        values,
-    )
-    .await;
-    assert_eq!(result.output, "done");
-    assert_eq!(result.calls.len(), 1);
-    let bindings = &result.calls[0].1;
-    let has_greeting = bindings
-        .values()
-        .any(|v| matches!(v, Value::String(s) if s == "hello"));
-    let has_name = bindings
-        .values()
-        .any(|v| matches!(v, Value::String(s) if s == "alice"));
-    assert!(has_greeting);
-    assert!(has_name);
-}
-
-#[tokio::test]
-async fn context_call_variable_shorthand() {
-    let i = Interner::new();
-    let types = ctx(&i, &[("node", Ty::String)]);
-    let values = vals(&i, &[("node", Value::String("ok".into()))]);
-    let result =
-        run_capturing_context_calls(&i, "{{ $x = 42 }}{{ @node { $x, } }}", types, values).await;
-    assert_eq!(result.output, "ok");
-    assert_eq!(result.calls.len(), 1);
-    let has_x = result.calls[0]
-        .1
-        .values()
-        .any(|v| matches!(v, Value::Int(42)));
-    assert!(has_x);
-}
-
-#[tokio::test]
-async fn context_call_no_bindings_not_captured() {
-    let i = Interner::new();
-    let types = ctx(&i, &[("data", Ty::String)]);
-    let values = vals(&i, &[("data", Value::String("hi".into()))]);
-    let result = run_capturing_context_calls(&i, "{{ @data }}", types, values).await;
-    assert_eq!(result.output, "hi");
-    assert!(result.calls.is_empty());
 }
 
 // ── Variant (Option) ────────────────────────────────────────────
@@ -2221,51 +2058,6 @@ async fn to_utf8_none_on_invalid() {
 
 // ── Error propagation ───────────────────────────────────────────
 
-/// Extern fn returning Err propagates as Stepped::Error.
-#[tokio::test]
-async fn error_extern_fn_propagates() {
-    struct FailingFn;
-
-    impl ExternFn for FailingFn {
-        fn name(&self) -> &str {
-            "fail_fn"
-        }
-        fn sig(&self) -> ExternFnSig {
-            ExternFnSig {
-                params: vec![Ty::Int],
-                ret: Ty::String,
-                effectful: false,
-            }
-        }
-        fn into_body(self) -> ExternFnBody {
-            ExternFnBody::new(|_args| async move {
-                Err(RuntimeError::extern_call(
-                    "fail_fn",
-                    "intentional failure".into(),
-                ))
-            })
-        }
-    }
-
-    let i = Interner::new();
-    let mut extern_fns = ExternFnRegistry::new(&i);
-    extern_fns.register(FailingFn);
-
-    let err = run_expect_error(
-        &i,
-        r#"{{ x = fail_fn(1) }}{{ x }}{{_}}{{/}}"#,
-        FxHashMap::default(),
-        FxHashMap::default(),
-        extern_fns,
-    )
-    .await;
-
-    assert!(
-        matches!(err.kind, RuntimeErrorKind::ExternCall { ref name, .. } if name == "fail_fn"),
-        "expected ExternCall error, got: {err}",
-    );
-}
-
 /// HOF find on empty list -> Stepped::Error (not panic).
 #[tokio::test]
 async fn error_find_empty_list() {
@@ -2278,7 +2070,6 @@ async fn error_find_empty_list() {
         r#"{{ x = @items | find(x -> x == 99) }}{{ x | to_string }}{{_}}{{/}}"#,
         types,
         values,
-        ExternFnRegistry::new(&i),
     )
     .await;
 
@@ -2300,7 +2091,6 @@ async fn error_reduce_empty_list() {
         r#"{{ x = @items | reduce((a, b) -> a + b) }}{{ x | to_string }}{{_}}{{/}}"#,
         types,
         values,
-        ExternFnRegistry::new(&i),
     )
     .await;
 
@@ -2448,13 +2238,11 @@ async fn run_script_with_hint(
     hint: Option<&Ty>,
 ) -> Value {
     let script = acvus_ast::parse_script(interner, source).expect("parse failed");
-    let mir_registry = ExternRegistry::new();
     let (module, _hints, _tail_ty) =
-        acvus_mir::compile_script_with_hint(interner, &script, context_types, &mir_registry, hint)
+        acvus_mir::compile_script_with_hint(interner, &script, context_types, hint)
             .expect("compile failed");
 
-    let extern_fns = ExternFnRegistry::new(interner);
-    let interp = Interpreter::new(interner, module, &extern_fns);
+    let interp = Interpreter::new(interner, module);
     let mut coroutine = interp.execute();
     let mut result = Value::Unit;
     loop {
@@ -2466,6 +2254,7 @@ async fn run_script_with_hint(
                 let name = request.name();
                 panic!("unexpected context request: @{}", interner.resolve(name));
             }
+            Stepped::NeedExternCall(_) => panic!("unexpected extern call"),
             Stepped::Done => break,
             Stepped::Error(e) => panic!("runtime error: {e}"),
         }
@@ -2736,8 +2525,7 @@ async fn script_hint_flatten_with_context() {
 
     // Compile with no hint — should work (this is the CLI path)
     let ast = acvus_ast::parse_script(&i, script).expect("parse failed");
-    let mir_registry = ExternRegistry::new();
-    let result = acvus_mir::compile_script_with_hint(&i, &ast, &context_types, &mir_registry, None);
+    let result = acvus_mir::compile_script_with_hint(&i, &ast, &context_types, None);
     assert!(result.is_ok(), "compile without hint failed: {:?}", result.err());
 }
 

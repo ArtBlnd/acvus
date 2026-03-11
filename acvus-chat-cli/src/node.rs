@@ -307,5 +307,7 @@ pub fn resolve_node(
         strategy,
         retry: def.retry,
         assert: def.assert.map(|a| interner.intern(&a)),
+        is_function: false,
+        fn_params: vec![],
     })
 }

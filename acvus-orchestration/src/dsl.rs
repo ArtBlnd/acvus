@@ -1,3 +1,4 @@
+use acvus_mir::ty::Ty;
 use acvus_utils::Astr;
 
 use crate::kind::NodeKind;
@@ -24,6 +25,10 @@ pub struct NodeSpec {
     pub retry: u32,
     /// Assert script (must evaluate to Bool). If false, triggers retry.
     pub assert: Option<Astr>,
+    /// Whether this node is a function node.
+    pub is_function: bool,
+    /// Function parameters (name, type) pairs.
+    pub fn_params: Vec<(Astr, Ty)>,
 }
 
 /// Execution strategy — determines execution timing and @self storage location.

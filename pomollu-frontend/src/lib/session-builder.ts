@@ -74,7 +74,9 @@ function convertNode(
 		grounding: node.grounding,
 		max_tokens: { input: node.maxTokens.input, output: node.maxTokens.output },
 		messages: node.messages.map((m) => convertMessage(m, blockLookup)),
-		tools
+		tools,
+		is_function: node.isFunction || undefined,
+		fn_params: node.isFunction ? node.fnParams.map(p => ({ name: p.name, type: p.type })) : undefined
 	};
 }
 

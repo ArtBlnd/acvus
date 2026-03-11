@@ -2,7 +2,7 @@ use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::DebugInfo;
 use acvus_mir::ir::{
-    CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+    ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -677,9 +677,9 @@ fn make_stage_c_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
 
     insts.push(Inst {
         span,
-        kind: InstKind::Call {
+        kind: InstKind::BuiltinCall {
             dst: v_len,
-            func: CallTarget::Builtin(BuiltinId::Len),
+            builtin: BuiltinId::Len,
             args: vec![v_bytes],
         },
     });
@@ -783,9 +783,9 @@ fn make_stage_c_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let v_byte = alloc(Ty::Int);
     insts.push(Inst {
         span,
-        kind: InstKind::Call {
+        kind: InstKind::BuiltinCall {
             dst: v_byte,
-            func: CallTarget::Builtin(BuiltinId::ToInt),
+            builtin: BuiltinId::ToInt,
             args: vec![v_byte_raw],
         },
     });
@@ -1009,9 +1009,9 @@ fn make_stage_c_closure_body(variant: u32, interner: &Interner) -> ClosureBody {
     let v_char = alloc(Ty::String);
     insts.push(Inst {
         span,
-        kind: InstKind::Call {
+        kind: InstKind::BuiltinCall {
             dst: v_char,
-            func: CallTarget::Builtin(BuiltinId::IntToChar),
+            builtin: BuiltinId::IntToChar,
             args: vec![v_plain],
         },
     });
@@ -1339,6 +1339,7 @@ pub fn emit_factory_dispatch_setup(
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
+        is_extern: false,
     };
 
     // Make 4 factory closures, each capturing all 4 inner closures
@@ -1388,6 +1389,7 @@ fn emit_two_level_dispatch(
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
+        is_extern: false,
     };
 
     // v_factory = ListGet(meta_table, factory_idx)
@@ -1406,7 +1408,7 @@ fn emit_two_level_dispatch(
     let v_inner_table = ctx.alloc_val(inner_table_ty);
     ctx.emit(
         span,
-        InstKind::CallClosure {
+        InstKind::ClosureCall {
             dst: v_inner_table,
             closure: v_factory,
             args: vec![seed],
@@ -1428,7 +1430,7 @@ fn emit_two_level_dispatch(
     let v_result = ctx.alloc_val(result_ty.clone());
     ctx.emit(
         span,
-        InstKind::CallClosure {
+        InstKind::ClosureCall {
             dst: v_result,
             closure: v_fn,
             args,
@@ -1558,6 +1560,7 @@ fn emit_multistage_decrypt_call(
     let stage_a_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::Int),
+        is_extern: false,
     };
     let v_subkey = emit_two_level_dispatch(
         ctx,
@@ -1602,6 +1605,7 @@ fn emit_multistage_decrypt_call(
     let stage_b_fn_ty = Ty::Fn {
         params: vec![Ty::Int, Ty::Int],
         ret: Box::new(Ty::Int),
+        is_extern: false,
     };
     let v_combined = emit_two_level_dispatch(
         ctx,
@@ -1655,6 +1659,7 @@ fn emit_multistage_decrypt_call(
     let stage_c_fn_ty = Ty::Fn {
         params: vec![Ty::bytes(), Ty::Int],
         ret: Box::new(Ty::String),
+        is_extern: false,
     };
     emit_two_level_dispatch(
         ctx,

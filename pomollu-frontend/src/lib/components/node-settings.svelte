@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Node, MessageDef, Strategy } from '$lib/types.js';
+	import type { Node, MessageDef, Strategy, FnParam } from '$lib/types.js';
 	import { blockLabel } from '$lib/types.js';
 	import type { BlockOwner } from '$lib/stores.svelte.js';
 	import { Input } from '$lib/components/ui/input';
@@ -204,6 +204,64 @@
 								</Select.Content>
 							</Select.Root>
 						</div>
+						<div class="flex items-center gap-2">
+							<Switch
+								checked={node.isFunction}
+								onCheckedChange={(v) => updateNode((n) => ({ ...n, isFunction: v }))}
+							/>
+							<Label class="text-sm">Function</Label>
+						</div>
+						{#if node.isFunction}
+							<div class="field">
+								<Label>Parameters</Label>
+								<div class="space-y-1.5">
+									{#each node.fnParams as param, i (i)}
+										<div class="flex items-center gap-1.5">
+											<Input
+												class="flex-1"
+												placeholder="name"
+												value={param.name}
+												oninput={(e) => {
+													const params = [...node.fnParams];
+													params[i] = { ...params[i], name: e.currentTarget.value };
+													updateNode((n) => ({ ...n, fnParams: params }));
+												}}
+											/>
+											<Select.Root type="single" value={param.type} onValueChange={(v) => {
+												const params = [...node.fnParams];
+												params[i] = { ...params[i], type: v };
+												updateNode((n) => ({ ...n, fnParams: params }));
+											}}>
+												<Select.Trigger class="w-24">{param.type || '...'}</Select.Trigger>
+												<Select.Content>
+													<Select.Item value="String">String</Select.Item>
+													<Select.Item value="Int">Int</Select.Item>
+													<Select.Item value="Float">Float</Select.Item>
+													<Select.Item value="Bool">Bool</Select.Item>
+												</Select.Content>
+											</Select.Root>
+											<button
+												class="rounded p-0.5 text-muted-foreground hover:text-destructive"
+												onclick={() => {
+													const params = node.fnParams.filter((_, idx) => idx !== i);
+													updateNode((n) => ({ ...n, fnParams: params }));
+												}}
+												title="Remove parameter"
+											>
+												<Trash2 class="h-3.5 w-3.5" />
+											</button>
+										</div>
+									{/each}
+									<Button variant="outline" size="sm" class="h-6 text-xs" onclick={() => {
+										updateNode((n) => ({ ...n, fnParams: [...n.fnParams, { name: '', type: 'String' }] }));
+									}}>
+										<Plus class="mr-1 h-3 w-3" />
+										Add Parameter
+									</Button>
+								</div>
+								<p class="hint">Callable as {node.name}(args...) from other nodes.</p>
+							</div>
+						{/if}
 						{#if node.kind === 'llm'}
 							<div class="field">
 								<Label>Provider</Label>

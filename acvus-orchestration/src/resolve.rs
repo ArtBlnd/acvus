@@ -1,9 +1,9 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnRegistry, Interpreter, RuntimeError, Stepped, Value};
+use acvus_interpreter::{Interpreter, RuntimeError, Stepped, Value};
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
-use acvus_utils::{Astr, ContextRequest, Coroutine, Interner};
+use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, info, warn};
@@ -75,12 +75,17 @@ struct StepOutput {
     local: FxHashMap<Astr, Arc<Value>>,
 }
 
+enum PendingRequest {
+    Context(ContextRequest<Value>),
+    ExternCall(ExternCallRequest<Value>),
+}
+
 /// A parked coroutine waiting for a dependency to be resolved.
 struct PendingWork {
     node_idx: usize,
     coroutine: Coroutine<Value, RuntimeError>,
     local: FxHashMap<Astr, Arc<Value>>,
-    request: ContextRequest<Value>,
+    request: PendingRequest,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,18 +96,19 @@ struct PendingWork {
 ///
 /// Uses a flat FuturesUnordered event loop to drive coroutines and resolve
 /// dependencies without recursive Box::pin calls.
-pub struct Resolver<'a, R> {
+pub struct Resolver<'a, R, EH> {
     pub nodes: &'a [CompiledNode],
     pub node_table: &'a [Arc<dyn Node>],
     pub name_to_idx: &'a FxHashMap<Astr, usize>,
-    pub extern_fns: &'a ExternFnRegistry,
     pub resolver: &'a R,
+    pub extern_handler: &'a EH,
     pub interner: &'a Interner,
 }
 
-impl<'a, R> Resolver<'a, R>
+impl<'a, R, EH> Resolver<'a, R, EH>
 where
     R: AsyncFn(Astr) -> Resolved + Sync,
+    EH: AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync,
 {
     // -----------------------------------------------------------------------
     // Public entry point
@@ -311,13 +317,29 @@ where
                     let name = self.nodes[node_idx].name;
                     if let Some(waiters) = pending.remove(&name) {
                         for w in waiters {
-                            w.request.resolve(Arc::clone(&arc));
+                            match w.request {
+                                PendingRequest::Context(req) => req.resolve(Arc::clone(&arc)),
+                                PendingRequest::ExternCall(req) => req.resolve(Arc::clone(&arc)),
+                            }
                             enqueue_step(&mut futs, w.node_idx, w.coroutine, w.local);
                         }
                     }
                 }
                 Stepped::NeedContext(request) => {
                     self.handle_need_context(
+                        node_idx,
+                        coroutine,
+                        local,
+                        request,
+                        state,
+                        &mut futs,
+                        &mut pending,
+                        &mut in_flight,
+                    )
+                    .await?;
+                }
+                Stepped::NeedExternCall(request) => {
+                    self.handle_need_extern_call(
                         node_idx,
                         coroutine,
                         local,
@@ -340,7 +362,10 @@ where
                     let arc = Arc::new(Value::Unit);
                     if let Some(waiters) = pending.remove(&name) {
                         for w in waiters {
-                            w.request.resolve(Arc::clone(&arc));
+                            match w.request {
+                                PendingRequest::Context(req) => req.resolve(Arc::clone(&arc)),
+                                PendingRequest::ExternCall(req) => req.resolve(Arc::clone(&arc)),
+                            }
                             enqueue_step(&mut futs, w.node_idx, w.coroutine, w.local);
                         }
                     }
@@ -381,7 +406,17 @@ where
         let name = request.name();
         let name_str = self.interner.resolve(name);
 
-        // 1. Try local context
+        // 1. Function nodes always return ExternFn handles (before any caching).
+        // Actual execution happens via NeedExternCall → ClosureCall.
+        if let Some(&dep_idx) = self.name_to_idx.get(&name) {
+            if self.nodes[dep_idx].is_function {
+                request.resolve(Arc::new(Value::ExternFn(name)));
+                enqueue_step(futs, node_idx, coroutine, local);
+                return Ok(());
+            }
+        }
+
+        // 2. Try local context
         if let Some(arc) = local.get(&name) {
             debug!(context = %name_str, "resolved from local");
             request.resolve(Arc::clone(arc));
@@ -389,7 +424,7 @@ where
             return Ok(());
         }
 
-        // 2. Try turn_context
+        // 3. Try turn_context
         if let Some(arc) = state.turn_context.get(&name).cloned() {
             debug!(context = %name_str, "resolved from turn_context");
             request.resolve(arc);
@@ -397,7 +432,7 @@ where
             return Ok(());
         }
 
-        // 3. Try storage
+        // 4. Try storage
         if let Some(arc) = state.storage.get(name_str) {
             debug!(context = %name_str, "resolved from storage");
             request.resolve(arc);
@@ -405,29 +440,17 @@ where
             return Ok(());
         }
 
-        // 4. Is it a node?
-        let bindings = request.bindings().clone();
+        // 5. Is it a node?
         if let Some(&dep_idx) = self.name_to_idx.get(&name) {
-            let is_tool_call = !bindings.is_empty();
-            let needs_spawn = is_tool_call
-                || !in_flight.contains(&dep_idx) && self.needs_resolve(dep_idx, state);
+
+            let needs_spawn = !in_flight.contains(&dep_idx) && self.needs_resolve(dep_idx, state);
 
             if needs_spawn {
-                debug!(context = %name_str, tool_call = is_tool_call, "spawning dependency node");
-                let dep_local: FxHashMap<Astr, Arc<Value>> = if is_tool_call {
-                    bindings.into_iter().map(|(k, v)| (k, Arc::new(v))).collect()
+                debug!(context = %name_str, "spawning dependency node");
+                if let Some(dep_co) = self.prepare_dep(dep_idx, state, FxHashMap::default()).await? {
+                    in_flight.insert(dep_idx);
+                    enqueue_step(futs, dep_idx, dep_co, FxHashMap::default());
                 } else {
-                    FxHashMap::default()
-                };
-
-                // Prepare the dependency (pre-phases inline)
-                if let Some(dep_co) = self.prepare_dep(dep_idx, state, dep_local.clone()).await? {
-                    if !is_tool_call {
-                        in_flight.insert(dep_idx);
-                    }
-                    enqueue_step(futs, dep_idx, dep_co, dep_local);
-                } else {
-                    // IfModified cache hit — value already in storage
                     let value = self.lookup(name, state).await?;
                     request.resolve(value);
                     enqueue_step(futs, node_idx, coroutine, local);
@@ -435,12 +458,11 @@ where
                 }
             }
 
-            // Park this coroutine until the dependency completes
             pending.entry(name).or_default().push(PendingWork {
                 node_idx,
                 coroutine,
                 local,
-                request,
+                request: PendingRequest::Context(request),
             });
             return Ok(());
         }
@@ -450,6 +472,81 @@ where
         let value = self.lookup(name, state).await?;
         request.resolve(value);
         enqueue_step(futs, node_idx, coroutine, local);
+        Ok(())
+    }
+
+    /// Handle a NeedExternCall from a coroutine in the event loop.
+    async fn handle_need_extern_call<S>(
+        &self,
+        node_idx: usize,
+        coroutine: Coroutine<Value, RuntimeError>,
+        local: FxHashMap<Astr, Arc<Value>>,
+        request: ExternCallRequest<Value>,
+        state: &mut ResolveState<S>,
+        futs: &mut FuturesUnordered<Pin<Box<dyn Future<Output = StepOutput> + Send + '_>>>,
+        pending: &mut FxHashMap<Astr, Vec<PendingWork>>,
+        in_flight: &mut FxHashSet<usize>,
+    ) -> Result<(), ResolveError>
+    where
+        S: Storage,
+    {
+        let name = request.name();
+        let name_str = self.interner.resolve(name);
+
+        // 1. Is it a node? (tool call — args passed as Object in first arg)
+        if let Some(&dep_idx) = self.name_to_idx.get(&name) {
+            let args = request.args().to_vec();
+            let node = &self.nodes[dep_idx];
+            let dep_local: FxHashMap<Astr, Arc<Value>> = if node.is_function {
+                // Function call: positional args → param names
+                node.fn_params.iter()
+                    .zip(args.into_iter())
+                    .map(|((name, _), val)| (*name, Arc::new(val)))
+                    .collect()
+            } else {
+                // Tool call: first arg as Object
+                if let Some(Value::Object(obj)) = args.first() {
+                    obj.iter().map(|(k, v)| (*k, Arc::new(v.clone()))).collect()
+                } else {
+                    FxHashMap::default()
+                }
+            };
+
+            debug!(context = %name_str, "spawning tool node via extern call");
+            if let Some(dep_co) = self.prepare_dep(dep_idx, state, dep_local.clone()).await? {
+                enqueue_step(futs, dep_idx, dep_co, dep_local);
+            } else {
+                // IfModified cache hit
+                let value = self.lookup(name, state).await?;
+                request.resolve(value);
+                enqueue_step(futs, node_idx, coroutine, local);
+                return Ok(());
+            }
+
+            pending.entry(name).or_default().push(PendingWork {
+                node_idx,
+                coroutine,
+                local,
+                request: PendingRequest::ExternCall(request),
+            });
+            return Ok(());
+        }
+
+        // 2. extern_handler (regex etc.)
+        let args = request.args().to_vec();
+        debug!(context = %name_str, "calling extern_handler");
+        match (self.extern_handler)(name, args).await {
+            Ok(value) => {
+                request.resolve(Arc::new(value));
+                enqueue_step(futs, node_idx, coroutine, local);
+            }
+            Err(e) => {
+                return Err(ResolveError::Runtime {
+                    node: self.interner.resolve(self.nodes[node_idx].name).to_string(),
+                    error: e,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -538,7 +635,7 @@ where
     where
         S: Storage,
     {
-        let interp = Interpreter::new(self.interner, script.module.clone(), self.extern_fns);
+        let interp = Interpreter::new(self.interner, script.module.clone());
         let mut coroutine = interp.execute();
         loop {
             match coroutine.resume().await {
@@ -550,6 +647,14 @@ where
                     } else {
                         let value = self.lookup(name, state).await?;
                         request.resolve(value);
+                    }
+                }
+                Stepped::NeedExternCall(request) => {
+                    let name = request.name();
+                    let args = request.args().to_vec();
+                    match (self.extern_handler)(name, args).await {
+                        Ok(value) => request.resolve(Arc::new(value)),
+                        Err(e) => return Err(ResolveError::Runtime { node: String::new(), error: e }),
                     }
                 }
                 Stepped::Done => return Ok(Value::Unit),

@@ -158,12 +158,6 @@ pub enum Expr {
         elements: Vec<TupleElem>,
         span: Span,
     },
-    /// Context call with bindings: `@name { key: expr, ... }`.
-    ContextCall {
-        name: Astr,
-        bindings: Vec<(Astr, Expr)>,
-        span: Span,
-    },
     /// A block expression: `{ stmt; stmt; expr }`.
     Block {
         stmts: Vec<Stmt>,
@@ -203,7 +197,6 @@ impl Expr {
             | Expr::Object { span, .. }
             | Expr::Range { span, .. }
             | Expr::Tuple { span, .. }
-            | Expr::ContextCall { span, .. }
             | Expr::Variant { span, .. }
             | Expr::Block { span, .. } => *span,
         }

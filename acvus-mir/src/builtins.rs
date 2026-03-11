@@ -195,6 +195,7 @@ impl BuiltinSig for Filter {
                 Ty::Fn {
                     params: vec![t.clone()],
                     ret: Box::new(Ty::Bool),
+                    is_extern: false,
                 },
             ],
             Ty::List(Box::new(t)),
@@ -219,6 +220,7 @@ impl BuiltinSig for Map {
                 Ty::Fn {
                     params: vec![t],
                     ret: Box::new(u.clone()),
+                    is_extern: false,
                 },
             ],
             Ty::List(Box::new(u)),
@@ -243,6 +245,7 @@ impl BuiltinSig for Pmap {
                 Ty::Fn {
                     params: vec![t],
                     ret: Box::new(u.clone()),
+                    is_extern: false,
                 },
             ],
             Ty::List(Box::new(u)),
@@ -313,6 +316,7 @@ impl BuiltinSig for Find {
                 Ty::Fn {
                     params: vec![t.clone()],
                     ret: Box::new(Ty::Bool),
+                    is_extern: false,
                 },
             ],
             t,
@@ -336,6 +340,7 @@ impl BuiltinSig for Reduce {
                 Ty::Fn {
                     params: vec![t.clone(), t.clone()],
                     ret: Box::new(t.clone()),
+                    is_extern: false,
                 },
             ],
             t,
@@ -361,6 +366,7 @@ impl BuiltinSig for Fold {
                 Ty::Fn {
                     params: vec![u.clone(), t],
                     ret: Box::new(u.clone()),
+                    is_extern: false,
                 },
             ],
             u,
@@ -384,6 +390,7 @@ impl BuiltinSig for Any {
                 Ty::Fn {
                     params: vec![t],
                     ret: Box::new(Ty::Bool),
+                    is_extern: false,
                 },
             ],
             Ty::Bool,
@@ -407,6 +414,7 @@ impl BuiltinSig for All {
                 Ty::Fn {
                     params: vec![t],
                     ret: Box::new(Ty::Bool),
+                    is_extern: false,
                 },
             ],
             Ty::Bool,

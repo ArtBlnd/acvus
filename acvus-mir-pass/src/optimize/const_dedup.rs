@@ -113,11 +113,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         | InstKind::BlockLabel { .. }
         | InstKind::Nop => {}
 
-        InstKind::ContextLoad { bindings, .. } => {
-            for (_, v) in bindings.iter_mut() {
-                remap_val(v, remap);
-            }
-        }
+        InstKind::ContextLoad { .. } => {}
 
         // Single use
         InstKind::Yield(v) | InstKind::Return(v) => remap_val(v, remap),
@@ -127,8 +123,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         InstKind::UnaryOp { operand, .. } => remap_val(operand, remap),
 
         InstKind::FieldGet { object, .. } => remap_val(object, remap),
-
-        InstKind::Await { src, .. } => remap_val(src, remap),
 
         InstKind::TupleIndex { tuple, .. } => remap_val(tuple, remap),
 
@@ -167,7 +161,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         }
 
         // Vec uses
-        InstKind::Call { args, .. } | InstKind::AsyncCall { args, .. } => {
+        InstKind::BuiltinCall { args, .. } | InstKind::ExternCall { args, .. } => {
             remap_vec(args, remap);
         }
 
@@ -185,7 +179,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_vec(captures, remap);
         }
 
-        InstKind::CallClosure { closure, args, .. } => {
+        InstKind::ClosureCall { closure, args, .. } => {
             remap_val(closure, remap);
             remap_vec(args, remap);
         }

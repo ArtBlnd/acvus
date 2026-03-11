@@ -1,7 +1,6 @@
 use std::io::Read;
 use std::{env, fs, process};
 
-use acvus_mir::extern_module::{ExternModule, ExternRegistry};
 use acvus_mir::printer::dump;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -111,24 +110,23 @@ fn main() {
         Context::default()
     };
 
-    let context_types = ctx
+    let mut context_types: FxHashMap<_, _> = ctx
         .context
         .iter()
         .map(|(k, v)| (interner.intern(k), v.to_ty(&interner)))
         .collect();
 
-    let mut extern_module = ExternModule::new(interner.intern("cli"));
     for (name, def) in &ctx.extern_fns {
         let params: Vec<Ty> = def.params.iter().map(|p| p.to_ty(&interner)).collect();
-        extern_module.add_fn(
+        context_types.insert(
             interner.intern(name),
-            params,
-            def.ret.to_ty(&interner),
-            def.effectful,
+            Ty::Fn {
+                params,
+                ret: Box::new(def.ret.to_ty(&interner)),
+                is_extern: true,
+            },
         );
     }
-    let mut registry = ExternRegistry::new();
-    registry.register(&extern_module);
 
     // Parse.
     let template = match acvus_ast::parse(&interner, &source) {
@@ -144,7 +142,6 @@ fn main() {
         &interner,
         &template,
         &context_types,
-        &registry,
     ) {
         Ok((mut module, _hints)) => {
             if obfuscate {

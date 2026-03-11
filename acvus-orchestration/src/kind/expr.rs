@@ -1,6 +1,5 @@
 
 
-use acvus_mir::extern_module::ExternRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -26,14 +25,13 @@ pub fn compile_expr(
     interner: &Interner,
     spec: &ExprSpec,
     context_types: &FxHashMap<Astr, Ty>,
-    registry: &ExternRegistry,
 ) -> Result<(CompiledExpr, FxHashSet<Astr>), Vec<OrchError>> {
     let hint = match &spec.output_ty {
         Ty::Infer => None,
         ty => Some(ty),
     };
     let (script, _ty) =
-        compile_script_with_hint(interner, &spec.source, context_types, registry, hint)
+        compile_script_with_hint(interner, &spec.source, context_types, hint)
             .map_err(|e| vec![e])?;
     let keys = script.context_keys.clone();
     Ok((CompiledExpr { script }, keys))

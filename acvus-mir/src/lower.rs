@@ -9,10 +9,9 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builtins::BuiltinId;
-use crate::extern_module::ExternRegistry;
 use crate::hints::{Hint, HintTable};
 use crate::ir::{
-    CallTarget, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+    ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use crate::ty::Ty;
 use crate::typeck::TypeMap;
@@ -29,8 +28,6 @@ pub struct Lowerer<'a> {
     closures: FxHashMap<Label, ClosureBody>,
     /// Hint table.
     hints: HintTable,
-    /// Extern registry for name → ExternFnId resolution.
-    extern_registry: &'a ExternRegistry,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -109,7 +106,6 @@ impl<'a> Lowerer<'a> {
     pub fn new(
         interner: &'a Interner,
         type_map: TypeMap,
-        extern_registry: &'a ExternRegistry,
     ) -> Self {
         Self {
             body: MirBody::new(),
@@ -118,7 +114,6 @@ impl<'a> Lowerer<'a> {
             type_map,
             closures: FxHashMap::default(),
             hints: HintTable::new(),
-            extern_registry,
         }
     }
 
@@ -147,12 +142,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn build_module(self) -> (MirModule, HintTable) {
-        let extern_names = self.extern_registry.build_name_table();
-
         let module = MirModule {
             main: self.body,
             closures: self.closures,
-            extern_names,
         };
         (module, self.hints)
     }
@@ -412,7 +404,6 @@ impl<'a> Lowerer<'a> {
                         InstKind::ContextLoad {
                             dst,
                             name: *name,
-                            bindings: Vec::new(),
                         },
                     );
                     dst
@@ -510,7 +501,7 @@ impl<'a> Lowerer<'a> {
                         let dst = self.alloc_typed(*span);
                         self.emit_inst(
                             *span,
-                            InstKind::CallClosure {
+                            InstKind::ClosureCall {
                                 dst,
                                 closure: r,
                                 args: vec![l],
@@ -702,28 +693,6 @@ impl<'a> Lowerer<'a> {
                 self.lower_expr(last)
             }
 
-            Expr::ContextCall {
-                name,
-                bindings,
-                span,
-            } => {
-                let binding_vals = bindings
-                    .iter()
-                    .map(|(k, expr)| (*k, self.lower_expr(expr)))
-                    .collect();
-                let dst = self.alloc_typed(*span);
-                self.set_origin(dst, ValOrigin::Context(*name));
-                self.emit_inst(
-                    *span,
-                    InstKind::ContextLoad {
-                        dst,
-                        name: *name,
-                        bindings: binding_vals,
-                    },
-                );
-                dst
-            }
-
             Expr::Variant {
                 tag,
                 payload,
@@ -789,7 +758,7 @@ impl<'a> Lowerer<'a> {
             let func_reg = self.lower_expr(func);
             self.emit_inst(
                 call_span,
-                InstKind::CallClosure {
+                InstKind::ClosureCall {
                     dst,
                     closure: func_reg,
                     args: arg_regs,
@@ -803,9 +772,9 @@ impl<'a> Lowerer<'a> {
         if let Some(builtin_id) = BuiltinId::resolve(self.interner.resolve(*name)) {
             self.emit_inst(
                 call_span,
-                InstKind::Call {
+                InstKind::BuiltinCall {
                     dst,
-                    func: CallTarget::Builtin(builtin_id),
+                    builtin: builtin_id,
                     args: arg_regs,
                 },
             );
@@ -817,7 +786,7 @@ impl<'a> Lowerer<'a> {
         if let Some(closure_reg) = self.lookup_var(*name) {
             self.emit_inst(
                 call_span,
-                InstKind::CallClosure {
+                InstKind::ClosureCall {
                     dst,
                     closure: closure_reg,
                     args: arg_regs,
@@ -826,32 +795,7 @@ impl<'a> Lowerer<'a> {
             return dst;
         }
 
-        // External function: async call + await.
-        let extern_id = self
-            .extern_registry
-            .resolve(*name)
-            .unwrap_or_else(|| panic!("unknown function: {}", self.interner.resolve(*name)));
-        let future_reg = self.alloc_val();
-        self.set_val_type(future_reg, Ty::Unit);
-        self.emit_inst(
-            call_span,
-            InstKind::AsyncCall {
-                dst: future_reg,
-                func: CallTarget::Extern(extern_id),
-                args: arg_regs,
-            },
-        );
-        let idx = self.body.insts.len() - 1;
-        self.hints.add(idx, Hint::Effectful);
-        self.emit_inst(
-            call_span,
-            InstKind::Await {
-                dst,
-                src: future_reg,
-            },
-        );
-
-        dst
+        panic!("unknown function: {}", self.interner.resolve(*name));
     }
 
     // --- Match block lowering ---
@@ -1477,11 +1421,6 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Expr::Literal { .. } => {}
-            Expr::ContextCall { bindings, .. } => {
-                for (_, e) in bindings {
-                    self.collect_free_vars(e, bound, free, seen);
-                }
-            }
             Expr::Variant {
                 payload: Some(inner),
                 ..
@@ -1511,7 +1450,6 @@ impl<'a> Lowerer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extern_module::ExternRegistry;
     use crate::typeck::TypeChecker;
 
     fn lower(interner: &Interner, source: &str) -> MirModule {
@@ -1519,7 +1457,6 @@ mod tests {
             interner,
             source,
             &FxHashMap::default(),
-            &ExternRegistry::new(),
         )
     }
 
@@ -1527,14 +1464,13 @@ mod tests {
         interner: &Interner,
         source: &str,
         context: &FxHashMap<Astr, Ty>,
-        registry: &ExternRegistry,
     ) -> MirModule {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let checker = TypeChecker::new(interner, context, registry);
+        let checker = TypeChecker::new(interner, context);
         let type_map = checker
             .check_template(&template)
             .expect("type check failed");
-        let lowerer = Lowerer::new(interner, type_map, registry);
+        let lowerer = Lowerer::new(interner, type_map);
         let (module, _hints) = lowerer.lower_template(&template);
         module
     }
@@ -1581,7 +1517,6 @@ mod tests {
             &interner,
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
-            &ExternRegistry::new(),
         );
         // Match block should NOT have IterInit/IterNext — it's single-value matching.
         let has_iter_init = module
@@ -1600,33 +1535,6 @@ mod tests {
     }
 
     #[test]
-    fn lower_extern_call() {
-        use crate::extern_module::ExternModule;
-        let interner = Interner::new();
-        let mut ext = ExternModule::new(interner.intern("test"));
-        ext.add_fn(
-            interner.intern("fetch_user"),
-            vec![Ty::Int],
-            Ty::String,
-            false,
-        );
-        let mut registry = ExternRegistry::new();
-        registry.register(&ext);
-        let module = lower_with(
-            &interner,
-            r#"{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-            &FxHashMap::default(),
-            &registry,
-        );
-        let has_async_call = module
-            .main
-            .insts
-            .iter()
-            .any(|i| matches!(&i.kind, InstKind::AsyncCall { .. }));
-        assert!(has_async_call);
-    }
-
-    #[test]
     fn lower_builtin_call() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
@@ -1634,13 +1542,12 @@ mod tests {
             &interner,
             r#"{{ @n | to_string }}"#,
             &context,
-            &ExternRegistry::new(),
         );
         let has_call = module
             .main
             .insts
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::Call { func, .. } if *func == CallTarget::Builtin(crate::builtins::BuiltinId::ToString)));
+            .any(|i| matches!(&i.kind, InstKind::BuiltinCall { builtin, .. } if *builtin == crate::builtins::BuiltinId::ToString));
         assert!(has_call);
     }
 
@@ -1684,7 +1591,7 @@ mod tests {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         let source = "{{ true = @name == \"test\" }}\n    matched\n    here{{/-2}}";
-        let module = lower_with(&interner, source, &context, &ExternRegistry::new());
+        let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module
             .main
             .insts
@@ -1705,7 +1612,7 @@ mod tests {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
         let source = "{{ true = @name == \"test\" }}\nmatched{{/+4}}";
-        let module = lower_with(&interner, source, &context, &ExternRegistry::new());
+        let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module
             .main
             .insts

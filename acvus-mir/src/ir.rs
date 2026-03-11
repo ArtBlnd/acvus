@@ -3,7 +3,6 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinId;
-use crate::extern_module::ExternFnId;
 use crate::ty::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,12 +10,6 @@ pub struct ValueId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CallTarget {
-    Builtin(BuiltinId),
-    Extern(ExternFnId),
-}
 
 #[derive(Debug, Clone)]
 pub struct Inst {
@@ -37,7 +30,6 @@ pub enum InstKind {
     ContextLoad {
         dst: ValueId,
         name: Astr,
-        bindings: Vec<(Astr, ValueId)>,
     },
     VarLoad {
         dst: ValueId,
@@ -67,19 +59,15 @@ pub enum InstKind {
     },
 
     // Calls
-    Call {
+    BuiltinCall {
         dst: ValueId,
-        func: CallTarget,
+        builtin: BuiltinId,
         args: Vec<ValueId>,
     },
-    AsyncCall {
+    ExternCall {
         dst: ValueId,
-        func: CallTarget,
+        name: Astr,
         args: Vec<ValueId>,
-    },
-    Await {
-        dst: ValueId,
-        src: ValueId,
     },
 
     // Composite constructors
@@ -159,7 +147,7 @@ pub enum InstKind {
         body: Label,
         captures: Vec<ValueId>,
     },
-    CallClosure {
+    ClosureCall {
         dst: ValueId,
         closure: ValueId,
         args: Vec<ValueId>,
@@ -311,6 +299,4 @@ pub struct ClosureBody {
 pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, ClosureBody>,
-    /// Extern fn name table: `ExternFnId` -> name.
-    pub extern_names: FxHashMap<ExternFnId, Astr>,
 }

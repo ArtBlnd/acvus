@@ -140,8 +140,7 @@ fn traces_to_var_load(
 mod tests {
     use super::*;
     use acvus_ast::Span;
-    use acvus_mir::extern_module::ExternFnId;
-    use acvus_mir::ir::{CallTarget, DebugInfo, Inst, MirBody};
+    use acvus_mir::ir::{DebugInfo, Inst, MirBody};
     use acvus_utils::Interner;
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
@@ -154,8 +153,6 @@ mod tests {
                 label_count: 0,
             },
             closures: FxHashMap::default(),
-
-            extern_names: FxHashMap::default(),
         }
     }
 
@@ -335,10 +332,10 @@ mod tests {
     fn non_make_object_src_is_all_dirty() {
         let i = Interner::new();
         let module = make_module(vec![
-            // v0 = Call("make_user", [])
-            inst(InstKind::Call {
+            // v0 = ExternCall("make_user", [])
+            inst(InstKind::ExternCall {
                 dst: ValueId(0),
-                func: CallTarget::Extern(ExternFnId(0)),
+                name: i.intern("make_user"),
                 args: vec![],
             }),
             // VarStore("user", v0)
@@ -437,9 +434,9 @@ mod tests {
                 object: ValueId(0),
                 field: i.intern("name"),
             }),
-            inst(InstKind::Call {
+            inst(InstKind::ExternCall {
                 dst: ValueId(2),
-                func: CallTarget::Extern(ExternFnId(1)),
+                name: i.intern("transform"),
                 args: vec![ValueId(1)],
             }),
             inst(InstKind::MakeObject {

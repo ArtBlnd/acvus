@@ -103,6 +103,8 @@ export type WebNode = {
 		| { kind: 'iterator'; iterator: string; role?: string; slice?: number[]; tokenBudget?: { priority: number; min?: number; max?: number } }
 	)[];
 	tools: { name: string; description: string; node: string; params: { name: string; type: string }[] }[];
+	isFunction: boolean;
+	fnParams: { name: string; type: string }[];
 };
 
 export type NodeFieldErrors = Record<string, string>;
@@ -166,6 +168,10 @@ export type NodeConfig = {
 	max_tokens?: { input?: number; output?: number };
 	messages?: MessageConfig[];
 	tools?: { name: string; description: string; node: string; params: Record<string, string> }[];
+
+	// Function node
+	is_function?: boolean;
+	fn_params?: { name: string; type: string }[];
 
 	// Plain/Expr-specific
 	template?: string;

@@ -20,6 +20,7 @@ pub enum Ty {
     Fn {
         params: Vec<Ty>,
         ret: Box<Ty>,
+        is_extern: bool,
     },
     Byte,
     /// Opaque type: user-defined, identified by name. No internal structure.
@@ -100,8 +101,9 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ")")
             }
-            Ty::Fn { params, ret } => {
-                write!(f, "Fn(")?;
+            Ty::Fn { params, ret, is_extern } => {
+                let prefix = if *is_extern { "ExternFn(" } else { "Fn(" };
+                write!(f, "{prefix}")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -171,9 +173,10 @@ impl TySubst {
                 Ty::Object(resolved)
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
-            Ty::Fn { params, ret } => Ty::Fn {
+            Ty::Fn { params, ret, is_extern } => Ty::Fn {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(ret)),
+                is_extern: *is_extern,
             },
             Ty::Enum { name, variants } => {
                 let resolved: FxHashMap<_, _> = variants
@@ -372,13 +375,15 @@ impl TySubst {
                 Ty::Fn {
                     params: pa,
                     ret: ra,
+                    is_extern: ea,
                 },
                 Ty::Fn {
                     params: pb,
                     ret: rb,
+                    is_extern: eb,
                 },
             ) => {
-                if pa.len() != pb.len() {
+                if ea != eb || pa.len() != pb.len() {
                     return Err((a.clone(), b.clone()));
                 }
                 for (ta, tb) in pa.iter().zip(pb.iter()) {
@@ -408,7 +413,7 @@ impl TySubst {
             Ty::Option(inner) => self.occurs_in(var, inner),
             Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(var, e)),
             Ty::Object(fields) => fields.values().any(|v| self.occurs_in(var, v)),
-            Ty::Fn { params, ret } => {
+            Ty::Fn { params, ret, .. } => {
                 params.iter().any(|p| self.occurs_in(var, p)) || self.occurs_in(var, ret)
             }
             Ty::Enum { variants, .. } => variants
@@ -469,10 +474,12 @@ mod tests {
         let fn_tu = Ty::Fn {
             params: vec![t.clone()],
             ret: Box::new(u.clone()),
+            is_extern: false,
         };
         let fn_int_bool = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Bool),
+            is_extern: false,
         };
         assert!(s.unify(&fn_tu, &fn_int_bool).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
@@ -485,10 +492,12 @@ mod tests {
         let fn1 = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
+            is_extern: false,
         };
         let fn2 = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
+            is_extern: false,
         };
         assert!(s.unify(&fn1, &fn2).is_err());
     }

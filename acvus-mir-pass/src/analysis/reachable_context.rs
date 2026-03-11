@@ -531,8 +531,6 @@ mod tests {
                 label_count: 0,
             },
             closures: FxHashMap::default(),
-
-            extern_names: FxHashMap::default(),
         }
     }
 
@@ -557,12 +555,10 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("user"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(1),
                 name: i.intern("role"),
-                bindings: Vec::new(),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -578,12 +574,10 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("user"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::ContextLoad {
                 dst: ValueId(1),
                 name: i.intern("role"),
-                bindings: Vec::new(),
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -600,7 +594,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("mode"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
@@ -622,7 +615,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("query"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
             inst(InstKind::BlockLabel {
@@ -633,7 +625,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
                 name: i.intern("fallback"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
@@ -655,7 +646,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("mode"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
@@ -677,7 +667,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("query"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
             inst(InstKind::BlockLabel {
@@ -688,7 +677,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
                 name: i.intern("fallback"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
@@ -709,7 +697,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("mode"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
@@ -731,7 +718,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("query"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
             inst(InstKind::BlockLabel {
@@ -742,7 +728,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
                 name: i.intern("fallback"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
@@ -764,7 +749,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("role"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
@@ -786,7 +770,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("level"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -800,7 +783,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
                 name: i.intern("guest_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -829,7 +811,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("level"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestRange {
                 dst: ValueId(1),
@@ -853,7 +834,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("low_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(2))),
             inst(InstKind::BlockLabel {
@@ -864,7 +844,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(3),
                 name: i.intern("high_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Return(ValueId(3))),
         ]);
@@ -885,7 +864,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(0),
                 name: i.intern("role"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::TestLiteral {
                 dst: ValueId(1),
@@ -907,7 +885,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(2),
                 name: i.intern("admin_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -938,7 +915,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(4),
                 name: i.intern("user_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -952,7 +928,6 @@ mod tests {
             inst(InstKind::ContextLoad {
                 dst: ValueId(5),
                 name: i.intern("default_data"),
-                bindings: Vec::new(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -987,7 +962,6 @@ mod tests {
                 label_count: 0,
             },
             closures: FxHashMap::default(),
-            extern_names: FxHashMap::default(),
         }
     }
 
@@ -1019,8 +993,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("val"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 // %1 = TestVariant(%0, "D")  — D not in {A,B,C} → always false
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
@@ -1043,8 +1016,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("dead_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1058,8 +1030,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(3),
                     name: i.intern("live_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1101,8 +1072,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("w"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
                     src: ValueId(0),
@@ -1123,8 +1093,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("then_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Return(ValueId(2))),
                 inst(InstKind::BlockLabel {
                     label: Label(2),
@@ -1134,8 +1103,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(3),
                     name: i.intern("else_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Return(ValueId(3))),
             ],
             val_types,
@@ -1179,8 +1147,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("src"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 // TestVariant A
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
@@ -1203,8 +1170,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("data_a"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1236,8 +1202,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(4),
                     name: i.intern("data_b"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1251,8 +1216,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(5),
                     name: i.intern("data_c"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1304,8 +1268,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("src"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 // Test A
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
@@ -1328,8 +1291,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("data_a"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1361,8 +1323,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(4),
                     name: i.intern("data_c"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1376,8 +1337,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(5),
                     name: i.intern("data_fallback"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1433,13 +1393,11 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(10),
                     name: i.intern("pre"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("src"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
                     src: ValueId(0),
@@ -1460,8 +1418,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("a_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Return(ValueId(2))),
                 inst(InstKind::BlockLabel {
                     label: Label(20),
@@ -1471,8 +1428,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(3),
                     name: i.intern("b_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Return(ValueId(3))),
             ],
             val_types,
@@ -1522,8 +1478,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("scrutinee"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(1),
                     args: vec![],
@@ -1555,8 +1510,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("arm_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1570,8 +1524,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(3),
                     name: i.intern("other_arm"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1585,8 +1538,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(4),
                     name: i.intern("post_match"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Return(ValueId(4))),
             ],
             val_types,
@@ -1633,8 +1585,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("flag"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::TestLiteral {
                     dst: ValueId(1),
                     src: ValueId(0),
@@ -1656,8 +1607,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(10),
                     name: i.intern("scrutinee"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::TestVariant {
                     dst: ValueId(11),
                     src: ValueId(10),
@@ -1679,8 +1629,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(12),
                     name: i.intern("arm_a"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1694,8 +1643,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(13),
                     name: i.intern("arm_b"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1709,8 +1657,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(14),
                     name: i.intern("post_match"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(50),
                     args: vec![],
@@ -1769,8 +1716,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(0),
                     name: i.intern("Output"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 // Test Normal
                 inst(InstKind::TestVariant {
                     dst: ValueId(1),
@@ -1793,8 +1739,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(2),
                     name: i.intern("normal_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1808,8 +1753,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(3),
                     name: i.intern("ooc_data"),
-                    bindings: Vec::new(),
-                }),
+                    }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1823,8 +1767,7 @@ mod tests {
                 inst(InstKind::ContextLoad {
                     dst: ValueId(4),
                     name: i.intern("post_match"),
-                    bindings: Vec::new(),
-                }),
+                    }),
             ],
             val_types,
         );

@@ -18,8 +18,7 @@
 use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::{
-    CallTarget, ClosureBody, DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin,
-    ValueId,
+    ClosureBody, DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -393,10 +392,12 @@ fn make_closure_predicate(
     let inner_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::Int),
+        is_extern: false,
     };
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
+        is_extern: false,
     };
 
     // Load opaque meta table from variable (stores factory dispatch table).
@@ -456,7 +457,7 @@ fn make_closure_predicate(
     let v_inner_table = ctx.alloc_val(inner_table_ty);
     out.push(Inst {
         span,
-        kind: InstKind::CallClosure {
+        kind: InstKind::ClosureCall {
             dst: v_inner_table,
             closure: v_factory,
             args: vec![v_seed],
@@ -488,7 +489,7 @@ fn make_closure_predicate(
     let v_entangle = ctx.alloc_val(Ty::Int);
     out.push(Inst {
         span,
-        kind: InstKind::CallClosure {
+        kind: InstKind::ClosureCall {
             dst: v_entangle,
             closure: v_fn,
             args: vec![v_arg],
@@ -576,8 +577,9 @@ fn find_last_defined_val(insts: &[Inst]) -> Option<ValueId> {
             InstKind::Const { dst, .. }
             | InstKind::BinOp { dst, .. }
             | InstKind::UnaryOp { dst, .. }
-            | InstKind::Call { dst, .. }
-            | InstKind::CallClosure { dst, .. } => Some(*dst),
+            | InstKind::BuiltinCall { dst, .. }
+            | InstKind::ExternCall { dst, .. }
+            | InstKind::ClosureCall { dst, .. } => Some(*dst),
             _ => None,
         };
         if val.is_some() {
@@ -638,10 +640,12 @@ fn make_dead_block(
             let inner_fn_ty = Ty::Fn {
                 params: vec![Ty::bytes(), Ty::Int],
                 ret: Box::new(Ty::String),
+                is_extern: false,
             };
             let factory_fn_ty = Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
+                is_extern: false,
             };
 
             let v_factory = ctx.alloc_val(factory_fn_ty);
@@ -666,7 +670,7 @@ fn make_dead_block(
             let v_inner_table = ctx.alloc_val(Ty::List(Box::new(inner_fn_ty.clone())));
             out.push(Inst {
                 span,
-                kind: InstKind::CallClosure {
+                kind: InstKind::ClosureCall {
                     dst: v_inner_table,
                     closure: v_factory,
                     args: vec![v_seed],
@@ -695,7 +699,7 @@ fn make_dead_block(
             let v_result = ctx.alloc_val(Ty::String);
             out.push(Inst {
                 span,
-                kind: InstKind::CallClosure {
+                kind: InstKind::ClosureCall {
                     dst: v_result,
                     closure: v_fn,
                     args: vec![v_bytes, v_key],
@@ -747,9 +751,9 @@ fn make_dead_block(
                 let v_char = ctx.alloc_val(Ty::String);
                 out.push(Inst {
                     span,
-                    kind: InstKind::Call {
+                    kind: InstKind::BuiltinCall {
                         dst: v_char,
-                        func: CallTarget::Builtin(BuiltinId::IntToChar),
+                        builtin: BuiltinId::IntToChar,
                         args: vec![v_dec],
                     },
                 });
@@ -850,7 +854,7 @@ mod tests {
 
         let has_call_closure = pred
             .iter()
-            .any(|i| matches!(i.kind, InstKind::CallClosure { .. }));
+            .any(|i| matches!(i.kind, InstKind::ClosureCall { .. }));
         assert!(has_call_closure, "expected CallClosure in predicate");
 
         // Entangle: VarStore __entangle should exist
@@ -898,7 +902,6 @@ mod tests {
             kind: InstKind::ContextLoad {
                 dst: rv,
                 name: ctx.interner.intern("count"),
-                bindings: Vec::new(),
             },
         }];
         for i in 1..8u32 {

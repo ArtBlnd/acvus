@@ -3,10 +3,10 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   r2 = async_call fetch_user(1 (r0))
-     2 │   r1 = await r2
+     1 │   r2 = context_load @fetch_user
+     2 │   r1 = call_closure r2(1 (r0))
      3 │   yield r1
 
     ; r0 (v0) : Int
-    ; r1 (fetch_user(...)) : String
-    ; r2 (v2) : Unit
+    ; r1 (<closure>(...)) : String
+    ; r2 (@fetch_user) : ExternFn(Int) -> String
