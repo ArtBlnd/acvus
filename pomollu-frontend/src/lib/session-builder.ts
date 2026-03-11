@@ -123,9 +123,8 @@ function escapeAcvusString(s: string): string {
 }
 
 function tagsToAcvus(tags: Record<string, string>): string {
-	const entries = Object.entries(tags).map(([k, v]) => `${k}: ${escapeAcvusString(v)}`);
-	if (entries.length === 0) return '{}';
-	return `{${entries.join(', ')},}`;
+	const entries = Object.entries(tags).map(([k, v]) => `{key: ${escapeAcvusString(k)}, value: ${escapeAcvusString(v)},}`);
+	return `[${entries.join(', ')}]`;
 }
 
 /**
@@ -139,6 +138,7 @@ function buildContextNodes(allBlocks: Block[]): NodeConfig[] {
 	const nodes: NodeConfig[] = [];
 	// Group entries by type: type → list of acvus object literals
 	const groups = new Map<string, string[]>();
+	let ctxIdx = 0;
 
 	for (const b of allBlocks) {
 		if (!isContextBlock(b)) continue;
@@ -149,7 +149,7 @@ function buildContextNodes(allBlocks: Block[]): NodeConfig[] {
 			if (part.content_type !== 'text') continue;
 
 			// Each text content part → plain node (template mode → String)
-			const partNodeName = `__ctx_${b.name}_${i}`;
+			const partNodeName = `__ctx_${ctxIdx++}`;
 			nodes.push({
 				name: partNodeName,
 				kind: 'plain',

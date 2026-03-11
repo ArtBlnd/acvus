@@ -206,12 +206,22 @@ export const HISTORY_ENTRY_TYPE: TypeDesc = {
 	},
 };
 
+/** Type of a tag entry: {key: String, value: String}. */
+const TAG_ENTRY_TYPE: TypeDesc = {
+	kind: 'object',
+	fields: [
+		{ name: 'key', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'value', type: { kind: 'primitive', name: 'String' } },
+	],
+};
+
 /** Type of each entry in @context lists. */
 const CONTEXT_ENTRY_TYPE: TypeDesc = {
 	kind: 'object',
 	fields: [
 		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
 		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'tags', type: { kind: 'list', elem: TAG_ENTRY_TYPE } },
 		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
 		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
 	],
@@ -223,6 +233,7 @@ const CONTEXT_CUSTOM_ENTRY_TYPE: TypeDesc = {
 	fields: [
 		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
 		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'tags', type: { kind: 'list', elem: TAG_ENTRY_TYPE } },
 		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
 		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
 		{ name: 'type', type: { kind: 'primitive', name: 'String' } },
