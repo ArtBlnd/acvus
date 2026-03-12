@@ -133,7 +133,7 @@ function tagsToAcvus(tags: Record<string, string>): string {
  *
  * @context.{type} = List<{ name, description, tags, content, content_type }>
  */
-function buildContextNodes(allBlocks: Block[]): NodeConfig[] {
+function buildContextNodes(allBlocks: Block[], bot: Bot): NodeConfig[] {
 	const nodes: NodeConfig[] = [];
 	// Group entries by type: type → list of acvus object literals
 	const groups = new Map<string, string[]>();
@@ -180,6 +180,7 @@ function buildContextNodes(allBlocks: Block[]): NodeConfig[] {
 		}
 	}
 	fields.push(`custom: [${customEntries.join(', ')}]`);
+	fields.push(`bot_name: ${escapeAcvusString(bot.name)}`);
 
 	nodes.push({
 		name: 'context',
@@ -248,7 +249,7 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 	}
 
 	// ContextBlocks → @context object grouped by type
-	nodeConfigs.push(...buildContextNodes(allBlocks));
+	nodeConfigs.push(...buildContextNodes(allBlocks, bot));
 
 	if (nodeConfigs.length === 0) return null;
 
@@ -285,7 +286,7 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 				name: param.name,
 				kind: 'expr',
 				template: script,
-				strategy: { mode: 'always' },
+				strategy: { mode: 'once-per-turn' },
 				retry: 0,
 				output_ty: ty
 			});

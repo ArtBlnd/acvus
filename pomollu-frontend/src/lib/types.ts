@@ -248,6 +248,7 @@ export const CONTEXT_TYPE: TypeDesc = {
 		{ name: 'lorebook', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
 		{ name: 'memory', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
 		{ name: 'custom', type: { kind: 'list', elem: CONTEXT_CUSTOM_ENTRY_TYPE } },
+		{ name: 'bot_name', type: { kind: 'primitive', name: 'String' } },
 	],
 };
 
