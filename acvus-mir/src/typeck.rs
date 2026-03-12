@@ -5,13 +5,17 @@ use acvus_ast::{
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::builtins::builtins;
+use crate::builtins::{BuiltinId, registry};
 use crate::error::{MirError, MirErrorKind};
 use crate::ty::{Ty, TySubst};
 use crate::variant::VariantPayload;
 
 /// Maps each AST Span to its inferred type.
 pub type TypeMap = FxHashMap<Span, Ty>;
+
+/// Maps each builtin-call Span to the resolved BuiltinId.
+/// Produced by the type checker, consumed by the lowerer.
+pub type BuiltinMap = FxHashMap<Span, BuiltinId>;
 
 pub struct TypeChecker<'a> {
     /// Interner for string interning.
@@ -28,6 +32,8 @@ pub struct TypeChecker<'a> {
     infer_vars: FxHashMap<Astr, Ty>,
     /// Accumulated type map.
     type_map: TypeMap,
+    /// Accumulated builtin resolutions (call_span → BuiltinId).
+    builtin_map: BuiltinMap,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// Analysis mode: unknown contexts get fresh Vars instead of errors.
@@ -47,6 +53,7 @@ impl<'a> TypeChecker<'a> {
             subst: TySubst::new(),
             infer_vars: FxHashMap::default(),
             type_map: TypeMap::default(),
+            builtin_map: BuiltinMap::default(),
             errors: Vec::new(),
             analysis_mode: false,
         }
@@ -62,7 +69,7 @@ impl<'a> TypeChecker<'a> {
     pub fn check_template(
         mut self,
         template: &Template,
-    ) -> Result<TypeMap, Vec<MirError>> {
+    ) -> Result<(TypeMap, BuiltinMap), Vec<MirError>> {
         self.check_nodes(&template.body);
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -73,13 +80,13 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok(resolved)
+        Ok((resolved, self.builtin_map))
     }
 
     pub fn check_script(
         self,
         script: &acvus_ast::Script,
-    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
+    ) -> Result<(TypeMap, BuiltinMap, Ty), Vec<MirError>> {
         self.check_script_with_hint(script, None)
     }
 
@@ -87,7 +94,7 @@ impl<'a> TypeChecker<'a> {
         mut self,
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
-    ) -> Result<(TypeMap, Ty), Vec<MirError>> {
+    ) -> Result<(TypeMap, BuiltinMap, Ty), Vec<MirError>> {
         for stmt in &script.stmts {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
@@ -141,7 +148,7 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        Ok((resolved, resolved_tail))
+        Ok((resolved, self.builtin_map, resolved_tail))
     }
 
     /// Like `check_template`, but always returns a (partial) TypeMap and collects errors separately.
@@ -150,14 +157,14 @@ impl<'a> TypeChecker<'a> {
     pub fn check_template_partial(
         mut self,
         template: &Template,
-    ) -> (TypeMap, Vec<MirError>) {
+    ) -> (TypeMap, BuiltinMap, Vec<MirError>) {
         self.check_nodes(&template.body);
         let resolved: TypeMap = self
             .type_map
             .iter()
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
-        (resolved, self.errors)
+        (resolved, self.builtin_map, self.errors)
     }
 
     /// Like `check_script_with_hint`, but always returns a (partial) TypeMap and collects errors separately.
@@ -165,7 +172,7 @@ impl<'a> TypeChecker<'a> {
         mut self,
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
-    ) -> (TypeMap, Ty, Vec<MirError>) {
+    ) -> (TypeMap, BuiltinMap, Ty, Vec<MirError>) {
         for stmt in &script.stmts {
             match stmt {
                 acvus_ast::Stmt::Bind { name, expr, span } => {
@@ -205,7 +212,7 @@ impl<'a> TypeChecker<'a> {
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
         let resolved_tail = self.subst.resolve(&tail_ty);
-        (resolved, resolved_tail, self.errors)
+        (resolved, self.builtin_map, resolved_tail, self.errors)
     }
 
     fn push_scope(&mut self) {
@@ -971,27 +978,79 @@ impl<'a> TypeChecker<'a> {
 
         // Check builtins first.
         let name_str = self.interner.resolve(*name);
-        if let Some((_, b)) = builtins().into_iter().find(|(_, b)| b.name() == name_str) {
-            let (param_tys, ret_ty) = b.signature(&mut self.subst);
+        let candidates = registry().candidates(name_str);
+        if !candidates.is_empty() {
+            // Evaluate argument types eagerly (needed for overload resolution).
             let arg_types: Vec<Ty> = pipe_ty
                 .iter()
                 .cloned()
-                .chain(args.iter().map(|a| self.check_expr(false,a)))
+                .chain(args.iter().map(|a| self.check_expr(false, a)))
                 .collect();
 
-            if !self.check_args(name_str, &arg_types, &param_tys, call_span) {
-                return Ty::Error;
-            }
-
-            if let Some(check) = b.constraint() {
-                let resolved_args: Vec<Ty> =
-                    arg_types.iter().map(|t| self.subst.resolve(t)).collect();
-                if let Some(msg) = check(&resolved_args, self.interner) {
-                    self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
+            if candidates.len() == 1 {
+                // Fast path: single candidate, no overload resolution needed.
+                let entry = registry().get(candidates[0]);
+                let (param_tys, ret_ty) = (entry.signature)(&mut self.subst);
+                if !self.check_args(name_str, &arg_types, &param_tys, call_span) {
+                    return Ty::Error;
                 }
+                if let Some(check) = entry.constraint {
+                    let resolved_args: Vec<Ty> =
+                        arg_types.iter().map(|t| self.subst.resolve(t)).collect();
+                    if let Some(msg) = check(&resolved_args, self.interner) {
+                        self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
+                    }
+                }
+                self.builtin_map.insert(call_span, candidates[0]);
+                return self.subst.resolve(&ret_ty);
             }
 
-            return self.subst.resolve(&ret_ty);
+            // Multiple candidates: try each with snapshot/rollback.
+            for &cand_id in candidates {
+                let snap = self.subst.snapshot();
+                let entry = registry().get(cand_id);
+                let (param_tys, ret_ty) = (entry.signature)(&mut self.subst);
+
+                if arg_types.len() != param_tys.len() {
+                    self.subst.rollback(snap);
+                    continue;
+                }
+
+                let mut ok = true;
+                for (arg, param) in arg_types.iter().zip(param_tys.iter()) {
+                    if self.subst.unify(arg, param).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if ok {
+                    // Check constraint if present.
+                    if let Some(check) = entry.constraint {
+                        let resolved_args: Vec<Ty> =
+                            arg_types.iter().map(|t| self.subst.resolve(t)).collect();
+                        if let Some(msg) = check(&resolved_args, self.interner) {
+                            self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
+                        }
+                    }
+                    self.builtin_map.insert(call_span, cand_id);
+                    return self.subst.resolve(&ret_ty);
+                }
+
+                self.subst.rollback(snap);
+            }
+
+            // No candidate matched.
+            let resolved_args: Vec<Ty> =
+                arg_types.iter().map(|t| self.subst.resolve(t)).collect();
+            self.error(
+                MirErrorKind::NoMatchingOverload {
+                    name: name_str.to_string(),
+                    arg_tys: resolved_args,
+                },
+                call_span,
+            );
+            return Ty::Error;
         }
 
         // Check local variable with function type.
@@ -1427,7 +1486,7 @@ mod tests {
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = parse(interner, source).expect("parse failed");
         let checker = TypeChecker::new(interner, context);
-        checker.check_template(&template)
+        checker.check_template(&template).map(|(tm, _bm)| tm)
     }
 
     #[test]
@@ -1565,7 +1624,7 @@ mod tests {
     fn lambda_type_check() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src = "{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}";
+        let src = "{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
         let result = check_with_interner(src, &context, &i);
         assert!(result.is_ok());
     }

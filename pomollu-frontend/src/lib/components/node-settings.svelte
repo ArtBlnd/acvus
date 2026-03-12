@@ -188,9 +188,9 @@
 	$effect(() => {
 		if (!node) return;
 		const liveNames = new Set(discoveredFnParams.map(dp => dp.name));
-		const stale = node.fnParams.filter(fp => !liveNames.has(fp.name));
+		const stale = (node.fnParams ?? []).filter(fp => !liveNames.has(fp.name));
 		if (stale.length > 0) {
-			updateNode((n) => ({ ...n, fnParams: n.fnParams.filter(fp => liveNames.has(fp.name)) }));
+			updateNode((n) => ({ ...n, fnParams: (n.fnParams ?? []).filter(fp => liveNames.has(fp.name)) }));
 		}
 	});
 </script>

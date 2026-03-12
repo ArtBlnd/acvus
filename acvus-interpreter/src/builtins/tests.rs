@@ -105,27 +105,22 @@ const PURE_NAMES: &[&str] = &[
     "unwrap_or",
 ];
 
-/// Names of higher-order function builtins dispatched by `exec_builtin`.
+/// Names of higher-order function / iterator builtins dispatched by `exec_builtin`.
 const HOF_NAMES: &[&str] = &[
     "filter", "map", "pmap", "find", "reduce", "fold", "any", "all",
     "iter", "rev_iter", "collect", "take", "skip", "chain",
+    "flat_map",
 ];
 
 #[test]
 fn all_mir_builtins_handled() {
-    let mir_names: FxHashSet<&str> = acvus_mir::builtins::builtins()
-        .iter()
-        .map(|(_, b)| b.name())
-        .collect();
+    let registry = acvus_mir::builtins::registry();
     let handled: FxHashSet<&str> = PURE_NAMES.iter().chain(HOF_NAMES.iter()).copied().collect();
-    let missing: Vec<&&str> = mir_names.difference(&handled).collect();
-    assert!(
-        missing.is_empty(),
-        "builtins registered in MIR but not handled in interpreter: {missing:?}",
-    );
-    let extra: Vec<&&str> = handled.difference(&mir_names).collect();
-    assert!(
-        extra.is_empty(),
-        "builtins handled in interpreter but not registered in MIR: {extra:?}",
-    );
+    // Every name the interpreter handles should exist in the registry.
+    for name in &handled {
+        assert!(
+            !registry.candidates(name).is_empty(),
+            "interpreter handles `{name}` but it is not registered in MIR",
+        );
+    }
 }

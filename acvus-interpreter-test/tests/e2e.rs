@@ -2627,3 +2627,1021 @@ async fn block_discard_intermediate_exprs() {
         "result"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Builtin E2E Tests
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Type Conversions ────────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_to_string_int() {
+    assert_eq!(run_simple("{{ 42 | to_string }}").await, "42");
+}
+
+#[tokio::test]
+async fn builtin_to_string_float() {
+    assert_eq!(run_simple("{{ 3.14 | to_string }}").await, "3.14");
+}
+
+#[tokio::test]
+async fn builtin_to_string_bool() {
+    assert_eq!(run_simple("{{ true | to_string }}").await, "true");
+}
+
+#[tokio::test]
+async fn builtin_to_string_string() {
+    assert_eq!(run_simple(r#"{{ "hello" | to_string }}"#).await, "hello");
+}
+
+#[tokio::test]
+async fn builtin_to_int_from_float() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("f", Ty::Float)]);
+    let values = vals(&i, &[("f", Value::Float(9.99))]);
+    assert_eq!(
+        run_ctx(&i, "{{ @f | to_int | to_string }}", types, values).await,
+        "9"
+    );
+}
+
+#[tokio::test]
+async fn builtin_to_int_from_byte() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("b", Ty::Byte)]);
+    let values = vals(&i, &[("b", Value::Byte(65))]);
+    assert_eq!(
+        run_ctx(&i, "{{ @b | to_int | to_string }}", types, values).await,
+        "65"
+    );
+}
+
+#[tokio::test]
+async fn builtin_to_float_from_int() {
+    assert_eq!(
+        run_simple(r#"{{ x = 5 | to_float }}{{ x | to_string }}{{_}}{{/}}"#).await,
+        "5"
+    );
+}
+
+#[tokio::test]
+async fn builtin_char_to_int() {
+    assert_eq!(
+        run_simple(r#"{{ "A" | char_to_int | to_string }}"#).await,
+        "65"
+    );
+}
+
+#[tokio::test]
+async fn builtin_int_to_char() {
+    assert_eq!(run_simple("{{ 65 | int_to_char }}").await, "A");
+}
+
+#[tokio::test]
+async fn builtin_char_to_int_roundtrip() {
+    assert_eq!(
+        run_simple(r#"{{ "Z" | char_to_int | int_to_char }}"#).await,
+        "Z"
+    );
+}
+
+// ── List Operations ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_len_list() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | len | to_string }}", ty, val).await,
+        "3"
+    );
+}
+
+#[tokio::test]
+async fn builtin_len_empty_list() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let values = vals(&i, &[("items", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | len | to_string }}", types, values).await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn builtin_reverse_list() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | reverse | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "3, 2, 1"
+    );
+}
+
+#[tokio::test]
+async fn builtin_flatten_list() {
+    let i = Interner::new();
+    let types = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
+        )],
+    );
+    let values = vals(
+        &i,
+        &[(
+            "items",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3)]),
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | flatten | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "1, 2, 3"
+    );
+}
+
+#[tokio::test]
+async fn builtin_join_list() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("words", Ty::List(Box::new(Ty::String)))]);
+    let values = vals(
+        &i,
+        &[(
+            "words",
+            Value::List(vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into()),
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(&i, r#"{{ @words | join("-") }}"#, types, values).await,
+        "a-b-c"
+    );
+}
+
+#[tokio::test]
+async fn builtin_join_empty_list() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("words", Ty::List(Box::new(Ty::String)))]);
+    let values = vals(&i, &[("words", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(&i, r#"{{ @words | join(", ") }}"#, types, values).await,
+        ""
+    );
+}
+
+#[tokio::test]
+async fn builtin_contains_list_found() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | contains(2) | to_string }}", ty, val).await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_contains_list_not_found() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | contains(99) | to_string }}", ty, val).await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_first_list_some() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | first | unwrap | to_string }}", ty, val).await,
+        "10"
+    );
+}
+
+#[tokio::test]
+async fn builtin_first_list_none() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let values = vals(&i, &[("items", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ None = @items | first }}empty{{_}}has{{/}}",
+            types,
+            values,
+        )
+        .await,
+        "empty"
+    );
+}
+
+#[tokio::test]
+async fn builtin_last_list_some() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(&i, "{{ @items | last | unwrap | to_string }}", ty, val).await,
+        "30"
+    );
+}
+
+#[tokio::test]
+async fn builtin_last_list_none() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let values = vals(&i, &[("items", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ None = @items | last }}empty{{_}}has{{/}}",
+            types,
+            values,
+        )
+        .await,
+        "empty"
+    );
+}
+
+// ── String Operations ───────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_contains_str_found() {
+    assert_eq!(
+        run_simple(r#"{{ "hello world" | contains_str("world") | to_string }}"#).await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_contains_str_not_found() {
+    assert_eq!(
+        run_simple(r#"{{ "hello world" | contains_str("xyz") | to_string }}"#).await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_substring() {
+    assert_eq!(
+        run_simple(r#"{{ "hello world" | substring(6, 5) }}"#).await,
+        "world"
+    );
+}
+
+#[tokio::test]
+async fn builtin_substring_zero_len() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | substring(0, 0) }}"#).await,
+        ""
+    );
+}
+
+#[tokio::test]
+async fn builtin_len_str() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | len_str | to_string }}"#).await,
+        "5"
+    );
+}
+
+#[tokio::test]
+async fn builtin_len_str_unicode() {
+    assert_eq!(
+        run_simple(r#"{{ "한글" | len_str | to_string }}"#).await,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn builtin_trim() {
+    assert_eq!(
+        run_simple(r#"{{ "  hello  " | trim }}"#).await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn builtin_trim_start() {
+    assert_eq!(
+        run_simple(r#"{{ "  hello  " | trim_start }}"#).await,
+        "hello  "
+    );
+}
+
+#[tokio::test]
+async fn builtin_trim_end() {
+    assert_eq!(
+        run_simple(r#"{{ "  hello  " | trim_end }}"#).await,
+        "  hello"
+    );
+}
+
+#[tokio::test]
+async fn builtin_upper() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | upper }}"#).await,
+        "HELLO"
+    );
+}
+
+#[tokio::test]
+async fn builtin_lower() {
+    assert_eq!(
+        run_simple(r#"{{ "HELLO" | lower }}"#).await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn builtin_replace_str() {
+    assert_eq!(
+        run_simple(r#"{{ "hello world" | replace_str("world", "rust") }}"#).await,
+        "hello rust"
+    );
+}
+
+#[tokio::test]
+async fn builtin_replace_str_multiple() {
+    assert_eq!(
+        run_simple(r#"{{ "aaa" | replace_str("a", "bb") }}"#).await,
+        "bbbbbb"
+    );
+}
+
+#[tokio::test]
+async fn builtin_split_str() {
+    assert_eq!(
+        run_simple(r#"{{ "a,b,c" | split_str(",") | join(" ") }}"#).await,
+        "a b c"
+    );
+}
+
+#[tokio::test]
+async fn builtin_starts_with_str_true() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | starts_with_str("hel") | to_string }}"#).await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_starts_with_str_false() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | starts_with_str("xyz") | to_string }}"#).await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_ends_with_str_true() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | ends_with_str("llo") | to_string }}"#).await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_ends_with_str_false() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | ends_with_str("xyz") | to_string }}"#).await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_repeat_str() {
+    assert_eq!(
+        run_simple(r#"{{ "ab" | repeat_str(3) }}"#).await,
+        "ababab"
+    );
+}
+
+#[tokio::test]
+async fn builtin_repeat_str_zero() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | repeat_str(0) }}"#).await,
+        ""
+    );
+}
+
+// ── Byte Operations ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_to_bytes_and_back() {
+    assert_eq!(
+        run_simple(r#"{{ "hello" | to_bytes | to_utf8 | unwrap }}"#).await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn builtin_to_utf8_lossy() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("data", Ty::List(Box::new(Ty::Byte)))]);
+    let values = vals(
+        &i,
+        &[(
+            "data",
+            Value::List(vec![
+                Value::Byte(0x48), // H
+                Value::Byte(0x69), // i
+                Value::Byte(0xFF), // invalid
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(&i, "{{ @data | to_utf8_lossy }}", types, values).await,
+        "Hi\u{FFFD}"
+    );
+}
+
+// ── Option Operations ───────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_unwrap_some() {
+    assert_eq!(
+        run_simple("{{ Some(42) | unwrap | to_string }}").await,
+        "42"
+    );
+}
+
+#[tokio::test]
+async fn builtin_unwrap_or_some() {
+    assert_eq!(
+        run_simple("{{ Some(42) | unwrap_or(0) | to_string }}").await,
+        "42"
+    );
+}
+
+#[tokio::test]
+async fn builtin_unwrap_or_none() {
+    assert_eq!(
+        run_simple("{{ None | unwrap_or(99) | to_string }}").await,
+        "99"
+    );
+}
+
+// ── Iterator Constructors & Basic Ops ───────────────────────────
+
+#[tokio::test]
+async fn builtin_iter_collect_roundtrip() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | collect | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "1, 2, 3"
+    );
+}
+
+#[tokio::test]
+async fn builtin_rev_iter() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | rev_iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "3, 2, 1"
+    );
+}
+
+#[tokio::test]
+async fn builtin_take() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30, 40, 50]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "10, 20, 30"
+    );
+}
+
+#[tokio::test]
+async fn builtin_skip() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30, 40, 50]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | skip(2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "30, 40, 50"
+    );
+}
+
+#[tokio::test]
+async fn builtin_chain() {
+    let i = Interner::new();
+    let types = ctx(
+        &i,
+        &[
+            ("a", Ty::List(Box::new(Ty::Int))),
+            ("b", Ty::List(Box::new(Ty::Int))),
+        ],
+    );
+    let values = vals(
+        &i,
+        &[
+            ("a", Value::List(vec![Value::Int(1), Value::Int(2)])),
+            ("b", Value::List(vec![Value::Int(3), Value::Int(4)])),
+        ],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @a | iter | chain(@b | iter) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "1, 2, 3, 4"
+    );
+}
+
+// ── Iterator HOFs ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_filter() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | filter(x -> x > 3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "4, 5"
+    );
+}
+
+#[tokio::test]
+async fn builtin_map() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | map(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "2, 4, 6"
+    );
+}
+
+#[tokio::test]
+async fn builtin_find() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | find(x -> x > 3) | to_string }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "4"
+    );
+}
+
+#[tokio::test]
+async fn builtin_reduce() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | reduce((a, b) -> a + b) | to_string }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "10"
+    );
+}
+
+#[tokio::test]
+async fn builtin_fold() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | fold(100, (acc, x) -> acc + x) | to_string }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "106"
+    );
+}
+
+#[tokio::test]
+async fn builtin_any_true() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | any(x -> x > 2) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_any_false() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | any(x -> x > 10) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_all_true() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![2, 4, 6]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | all(x -> x > 0) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_all_false() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![2, 4, 6]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | all(x -> x > 3) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "false"
+    );
+}
+
+// ── Iterator Overloaded Builtins (new) ──────────────────────────
+
+#[tokio::test]
+async fn builtin_flatten_iter() {
+    let i = Interner::new();
+    let types = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
+        )],
+    );
+    let values = vals(
+        &i,
+        &[(
+            "items",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3), Value::Int(4)]),
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | flatten | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "1, 2, 3, 4"
+    );
+}
+
+#[tokio::test]
+async fn builtin_flat_map_iter() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | flat_map(x -> [x, x * 10]) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "1, 10, 2, 20, 3, 30"
+    );
+}
+
+#[tokio::test]
+async fn builtin_join_iter() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("words", Ty::List(Box::new(Ty::String)))]);
+    let values = vals(
+        &i,
+        &[(
+            "words",
+            Value::List(vec![
+                Value::String("hello".into()),
+                Value::String("world".into()),
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @words | iter | join(" ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "hello world"
+    );
+}
+
+#[tokio::test]
+async fn builtin_contains_iter_found() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | contains(20) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn builtin_contains_iter_not_found() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | contains(99) | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn builtin_first_iter_some() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | first | unwrap | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "10"
+    );
+}
+
+#[tokio::test]
+async fn builtin_first_iter_none() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let values = vals(&i, &[("items", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ None = @items | iter | first }}empty{{_}}has{{/}}",
+            types,
+            values,
+        )
+        .await,
+        "empty"
+    );
+}
+
+#[tokio::test]
+async fn builtin_last_iter_some() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ @items | iter | last | unwrap | to_string }}",
+            ty,
+            val,
+        )
+        .await,
+        "30"
+    );
+}
+
+#[tokio::test]
+async fn builtin_last_iter_none() {
+    let i = Interner::new();
+    let types = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let values = vals(&i, &[("items", Value::List(vec![]))]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            "{{ None = @items | iter | last }}empty{{_}}has{{/}}",
+            types,
+            values,
+        )
+        .await,
+        "empty"
+    );
+}
+
+// ── Iterator Pipeline Combos ────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_filter_map_collect() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | filter(x -> x > 2) | map(x -> x * 10) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "30, 40, 50, 60"
+    );
+}
+
+#[tokio::test]
+async fn builtin_take_skip_combo() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | skip(2) | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "3, 4, 5"
+    );
+}
+
+#[tokio::test]
+async fn builtin_chain_filter_map() {
+    let i = Interner::new();
+    let types = ctx(
+        &i,
+        &[
+            ("a", Ty::List(Box::new(Ty::Int))),
+            ("b", Ty::List(Box::new(Ty::Int))),
+        ],
+    );
+    let values = vals(
+        &i,
+        &[
+            ("a", Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            ("b", Value::List(vec![Value::Int(4), Value::Int(5), Value::Int(6)])),
+        ],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @a | iter | chain(@b | iter) | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "3, 4, 5, 6"
+    );
+}
+
+#[tokio::test]
+async fn builtin_rev_iter_filter() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | rev_iter | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "5, 4, 3"
+    );
+}
+
+#[tokio::test]
+async fn builtin_flatten_iter_then_filter() {
+    let i = Interner::new();
+    let types = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
+        )],
+    );
+    let values = vals(
+        &i,
+        &[(
+            "items",
+            Value::List(vec![
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+                Value::List(vec![Value::Int(3), Value::Int(4)]),
+            ]),
+        )],
+    );
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | flatten | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            types,
+            values,
+        )
+        .await,
+        "3, 4"
+    );
+}
+
+// ── Pmap (parallel map) ─────────────────────────────────────────
+
+#[tokio::test]
+async fn builtin_pmap() {
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    // pmap should produce same results as map (order preserved)
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | iter | pmap(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "2, 4, 6"
+    );
+}

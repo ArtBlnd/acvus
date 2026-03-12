@@ -56,7 +56,13 @@ pub fn call_pure(id: BuiltinId, args: Vec<Value>) -> Result<Value, RuntimeError>
         | BuiltinId::Collect
         | BuiltinId::Take
         | BuiltinId::Skip
-        | BuiltinId::Chain => Err(RuntimeError::other(format!(
+        | BuiltinId::Chain
+        | BuiltinId::FlattenIter
+        | BuiltinId::FlatMapIter
+        | BuiltinId::JoinIter
+        | BuiltinId::ContainsIter
+        | BuiltinId::FirstIter
+        | BuiltinId::LastIter => Err(RuntimeError::other(format!(
             "not a pure builtin: {}",
             id.name()
         ))),

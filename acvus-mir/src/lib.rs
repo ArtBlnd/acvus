@@ -33,8 +33,8 @@ pub fn compile(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let checker = TypeChecker::new(interner, context_types);
-    let type_map = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map);
+    let (type_map, builtin_map) = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -55,9 +55,9 @@ pub fn compile_script_with_hint(
     expected_tail: Option<&Ty>,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let checker = TypeChecker::new(interner, context_types);
-    let (type_map, tail_ty) =
+    let (type_map, builtin_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -71,8 +71,8 @@ pub fn compile_analysis(
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let checker =
         TypeChecker::new(interner, context_types).with_analysis_mode();
-    let type_map = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map);
+    let (type_map, builtin_map) = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -86,8 +86,8 @@ pub fn compile_analysis_partial(
 ) -> (MirModule, HintTable, Vec<MirError>) {
     let checker =
         TypeChecker::new(interner, context_types).with_analysis_mode();
-    let (type_map, errors) = checker.check_template_partial(template);
-    let lowerer = Lowerer::new(interner, type_map);
+    let (type_map, builtin_map, errors) = checker.check_template_partial(template);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_template(template);
     (module, hints, errors)
 }
@@ -110,9 +110,9 @@ pub fn compile_script_analysis_with_tail(
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let checker =
         TypeChecker::new(interner, context_types).with_analysis_mode();
-    let (type_map, tail_ty) =
+    let (type_map, builtin_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -126,9 +126,9 @@ pub fn compile_script_analysis_with_tail_partial(
 ) -> (MirModule, HintTable, Ty, Vec<MirError>) {
     let checker =
         TypeChecker::new(interner, context_types).with_analysis_mode();
-    let (type_map, tail_ty, errors) =
+    let (type_map, builtin_map, tail_ty, errors) =
         checker.check_script_with_hint_partial(script, expected_tail);
-    let lowerer = Lowerer::new(interner, type_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map);
     let (module, hints) = lowerer.lower_script(script);
     (module, hints, tail_ty, errors)
 }
@@ -225,7 +225,7 @@ mod tests {
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
             &i,
-            r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}{{_}}{{/}}"#,
+            r#"{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &context,
         );
         assert!(result.is_ok());
@@ -414,7 +414,7 @@ mod tests {
         let (i, ctx) = extern_fn_context();
         let result = compile_src(
             &i,
-            r#"{{ x = @items | map(i -> @mapper(i)) }}{{ x | len | to_string }}{{_}}{{/}}"#,
+            r#"{{ x = @items | iter | map(i -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &ctx,
         );
         assert!(result.is_ok(), "pipe with extern fn call should work: {result:?}");

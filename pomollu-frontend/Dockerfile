@@ -2,7 +2,7 @@
 #   docker build -f pomollu-frontend/Dockerfile .
 
 # ── Stage 1: WASM build ──────────────────────────────────────────────────────
-FROM rust:1.93-slim AS wasm-builder
+FROM --platform=linux/amd64 rust:1.93-slim AS wasm-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config curl \
@@ -72,7 +72,7 @@ COPY pomollu-engine    pomollu-engine
 RUN wasm-pack build --release --target bundler pomollu-engine
 
 # ── Stage 2: Frontend build ──────────────────────────────────────────────────
-FROM node:22-slim AS frontend-builder
+FROM --platform=linux/amd64 node:22-slim AS frontend-builder
 
 WORKDIR /app
 

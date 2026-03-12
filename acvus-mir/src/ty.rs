@@ -149,6 +149,12 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
     }
 }
 
+/// Snapshot of `TySubst` state for rollback during overload resolution.
+pub struct TySubstSnapshot {
+    bindings: FxHashMap<TyVar, Ty>,
+    next_var: u32,
+}
+
 /// Substitution table for type unification.
 pub struct TySubst {
     bindings: FxHashMap<TyVar, Ty>,
@@ -167,6 +173,20 @@ impl TySubst {
             bindings: FxHashMap::default(),
             next_var: 0,
         }
+    }
+
+    /// Take a snapshot of the current state for later rollback.
+    pub fn snapshot(&self) -> TySubstSnapshot {
+        TySubstSnapshot {
+            bindings: self.bindings.clone(),
+            next_var: self.next_var,
+        }
+    }
+
+    /// Restore state from a snapshot, discarding any bindings made since.
+    pub fn rollback(&mut self, snap: TySubstSnapshot) {
+        self.bindings = snap.bindings;
+        self.next_var = snap.next_var;
     }
 
     /// Allocate a fresh type variable.

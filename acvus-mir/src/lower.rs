@@ -8,13 +8,13 @@ use acvus_ast::{
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::builtins::BuiltinId;
+use crate::builtins::registry;
 use crate::hints::{Hint, HintTable};
 use crate::ir::{
     ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
 use crate::ty::Ty;
-use crate::typeck::TypeMap;
+use crate::typeck::{BuiltinMap, TypeMap};
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -24,6 +24,8 @@ pub struct Lowerer<'a> {
     scopes: Vec<FxHashMap<Astr, ValueId>>,
     /// Type map from type checker.
     type_map: TypeMap,
+    /// Builtin map from type checker (call_span → resolved BuiltinId).
+    builtin_map: BuiltinMap,
     /// Closures produced during lowering.
     closures: FxHashMap<Label, ClosureBody>,
     /// Hint table.
@@ -106,12 +108,14 @@ impl<'a> Lowerer<'a> {
     pub fn new(
         interner: &'a Interner,
         type_map: TypeMap,
+        builtin_map: BuiltinMap,
     ) -> Self {
         Self {
             body: MirBody::new(),
             interner,
             scopes: vec![FxHashMap::default()],
             type_map,
+            builtin_map,
             closures: FxHashMap::default(),
             hints: HintTable::new(),
         }
@@ -790,7 +794,13 @@ impl<'a> Lowerer<'a> {
 
         self.set_origin(dst, ValOrigin::Call(*name));
 
-        if let Some(builtin_id) = BuiltinId::resolve(self.interner.resolve(*name)) {
+        // Resolve builtin: prefer builtin_map (authoritative from typechecker),
+        // fallback to single-candidate lookup for non-overloaded names.
+        let builtin_id = self.builtin_map.get(&call_span).copied().or_else(|| {
+            let cands = registry().candidates(self.interner.resolve(*name));
+            (cands.len() == 1).then(|| cands[0])
+        });
+        if let Some(builtin_id) = builtin_id {
             self.emit_inst(
                 call_span,
                 InstKind::BuiltinCall {
@@ -1491,10 +1501,10 @@ mod tests {
     ) -> MirModule {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let checker = TypeChecker::new(interner, context);
-        let type_map = checker
+        let (type_map, builtin_map) = checker
             .check_template(&template)
             .expect("type check failed");
-        let lowerer = Lowerer::new(interner, type_map);
+        let lowerer = Lowerer::new(interner, type_map, builtin_map);
         let (module, _hints) = lowerer.lower_template(&template);
         module
     }

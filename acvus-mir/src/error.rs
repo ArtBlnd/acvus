@@ -58,6 +58,12 @@ pub enum MirErrorKind {
     // Builtin constraint errors
     BuiltinConstraint(String),
 
+    // Overload resolution errors
+    NoMatchingOverload {
+        name: String,
+        arg_tys: Vec<Ty>,
+    },
+
     // Value errors
     NonPureContextLoad {
         name: String,
@@ -176,6 +182,16 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::BuiltinConstraint(msg) => {
                 write!(f, "{msg}")
+            }
+            MirErrorKind::NoMatchingOverload { name, arg_tys } => {
+                write!(f, "no matching overload for `{name}` with arguments (")?;
+                for (i, ty) in arg_tys.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ty.display(interner))?;
+                }
+                write!(f, ")")
             }
             MirErrorKind::ArityMismatch {
                 func,

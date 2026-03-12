@@ -34,6 +34,10 @@ pub enum IterOp {
     Skip(usize),
     /// Concatenate another chain's elements after the current ones.
     Chain(IterChain),
+    /// Flatten nested lists: each `Value::List(inner)` is inlined.
+    Flatten,
+    /// Map then flatten: call closure, then inline any `Value::List`.
+    FlatMap(FnValue),
 }
 
 impl SharedIter {
@@ -75,6 +79,14 @@ impl SharedIter {
     pub fn chain(self, other: SharedIter) -> Self {
         let other_chain = other.snapshot_chain();
         self.push_op(IterOp::Chain(other_chain))
+    }
+
+    pub fn flatten(self) -> Self {
+        self.push_op(IterOp::Flatten)
+    }
+
+    pub fn flat_map(self, f: FnValue) -> Self {
+        self.push_op(IterOp::FlatMap(f))
     }
 
     // -- snapshot / internal --------------------------------------------------

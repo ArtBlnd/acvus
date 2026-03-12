@@ -647,6 +647,71 @@ impl Interpreter {
                 Ok((this, Value::Iterator(a.chain(b))))
             }
 
+            // -- Iterator overloads --
+            BuiltinId::FlattenIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("flatten_iter: expected Iterator")
+                };
+                Ok((this, Value::Iterator(shared.flatten())))
+            }
+            BuiltinId::FlatMapIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("flat_map: expected Iterator")
+                };
+                let Value::Fn(f) = args.remove(0) else {
+                    panic!("flat_map: expected Fn")
+                };
+                Ok((this, Value::Iterator(shared.flat_map(f))))
+            }
+            BuiltinId::JoinIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("join_iter: expected Iterator")
+                };
+                let Value::String(sep) = args.remove(0) else {
+                    panic!("join_iter: expected String separator")
+                };
+                let items;
+                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                let parts: Vec<String> = items
+                    .into_iter()
+                    .map(|v| match v {
+                        Value::String(s) => s,
+                        _ => panic!("join_iter: element is not String"),
+                    })
+                    .collect();
+                Ok((this, Value::String(parts.join(&sep))))
+            }
+            BuiltinId::ContainsIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("contains_iter: expected Iterator")
+                };
+                let needle = args.remove(0);
+                let items;
+                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                let found = items.iter().any(|item| item == &needle);
+                Ok((this, Value::Bool(found)))
+            }
+            BuiltinId::FirstIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("first_iter: expected Iterator")
+                };
+                let items;
+                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                let opt: Option<Value> = items.into_iter().next();
+                let result = builtins::IntoValue::into_value(opt);
+                Ok((this, result))
+            }
+            BuiltinId::LastIter => {
+                let Value::Iterator(shared) = args.remove(0) else {
+                    panic!("last_iter: expected Iterator")
+                };
+                let items;
+                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                let opt: Option<Value> = items.into_iter().last();
+                let result = builtins::IntoValue::into_value(opt);
+                Ok((this, result))
+            }
+
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
                 let Value::Iterator(shared) = args.remove(0) else {
@@ -794,6 +859,34 @@ impl Interpreter {
                     let more;
                     (this, more) = Self::drive_chain(this, other, handle).await?;
                     items.extend(more);
+                }
+                IterOp::Flatten => {
+                    let mut result = Vec::new();
+                    for item in items {
+                        match item {
+                            Value::List(inner) => result.extend(inner),
+                            other => result.push(other),
+                        }
+                    }
+                    items = result;
+                }
+                IterOp::FlatMap(f) => {
+                    let mut result = Vec::new();
+                    for item in items {
+                        let mapped;
+                        (this, mapped) = Self::call_closure(
+                            this,
+                            f.clone(),
+                            vec![Arc::new(item)],
+                            handle,
+                        )
+                        .await?;
+                        match mapped {
+                            Value::List(inner) => result.extend(inner),
+                            other => result.push(other),
+                        }
+                    }
+                    items = result;
                 }
             }
         }
