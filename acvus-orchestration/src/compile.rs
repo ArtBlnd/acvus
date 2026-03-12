@@ -621,18 +621,20 @@ pub fn compute_external_context_env(
                 };
                 // When initial_value is present, compile it first to determine @self type,
                 // then compile the Expr body with @self available.
-                let mut expr_ctx = registry.merged().clone();
-                if let Some(ref init_src) = expr_spec.initial_value {
-                    let init_ty = compile_script_with_hint(
+                let self_ty = if let Some(ref init_src) = expr_spec.initial_value {
+                    let init_ctx = specs[idx].build_node_context(interner, registry.merged(), None);
+                    Some(compile_script_with_hint(
                         interner,
                         init_src,
-                        registry.merged(),
+                        &init_ctx,
                         hint,
                     )
                     .map(|(_, ty)| ty)
-                    .unwrap_or(Ty::Error);
-                    expr_ctx.insert(interner.intern("self"), init_ty);
-                }
+                    .unwrap_or(Ty::Error))
+                } else {
+                    None
+                };
+                let expr_ctx = specs[idx].build_node_context(interner, registry.merged(), self_ty);
                 stored_types[idx] = compile_script_with_hint(
                     interner,
                     &expr_spec.source,
@@ -817,25 +819,25 @@ pub fn compile_nodes_with_env(
 
     let mut nodes = Vec::new();
     for (i, spec) in specs.iter().enumerate() {
-        let mut node_ctx = context_types.clone();
-        if let Some(params) = tool_param_types.get(&spec.name) {
-            node_ctx.extend(params.iter().map(|(k, v)| (*k, v.clone())));
-        }
+        // Validate fn_param names don't conflict with context keys
         if spec.is_function {
-            for (param_name, param_ty) in &spec.fn_params {
+            for (param_name, _) in &spec.fn_params {
                 if context_types.contains_key(param_name) {
                     errors.push(OrchError::new(OrchErrorKind::FnParamConflict {
                         node: interner.resolve(spec.name).to_string(),
                         param: interner.resolve(*param_name).to_string(),
                     }));
-                    continue;
                 }
-                node_ctx.insert(*param_name, param_ty.clone());
             }
         }
-        // When initial_value is Some (Expr only), @self is available in the node body
-        if initial_value_scripts[i].is_some() {
-            node_ctx.insert(interner.intern("self"), stored_types[i].clone());
+        let self_ty = if initial_value_scripts[i].is_some() {
+            Some(stored_types[i].clone())
+        } else {
+            None
+        };
+        let mut node_ctx = spec.build_node_context(interner, &context_types, self_ty);
+        if let Some(params) = tool_param_types.get(&spec.name) {
+            node_ctx.extend(params.iter().map(|(k, v)| (*k, v.clone())));
         }
         let initial_value = initial_value_scripts[i].clone();
         let compiled_strategy = compiled_strategies[i].clone();

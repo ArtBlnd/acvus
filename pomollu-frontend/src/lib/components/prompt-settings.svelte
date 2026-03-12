@@ -12,7 +12,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import { analyzePrompt, mergeParams } from '$lib/param-resolver.js';
+	import { analyzePrompt, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import { collectPromptDeps } from '$lib/dependencies.js';
 	import { Download } from 'lucide-svelte';
 	import { downloadJson } from '$lib/io.js';
@@ -75,6 +75,8 @@
 		const result = analyzePrompt(prompt, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
+		const pruned = pruneOverrides(prompt.paramOverrides, result.params);
+		if (pruned) promptStore.update(promptId, (p) => ({ ...p, paramOverrides: pruned }));
 	}
 
 	function handleParamsUpdate(params: ContextParam[]) {

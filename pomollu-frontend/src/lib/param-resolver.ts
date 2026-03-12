@@ -471,6 +471,19 @@ export function mergeParams(
 	});
 }
 
+/** Remove overrides for params that no longer exist in analysis results. */
+export function pruneOverrides(
+	overrides: Record<string, ParamOverride>,
+	analysisParams: ContextParam[]
+): Record<string, ParamOverride> | null {
+	const liveNames = new Set(analysisParams.map(p => p.name));
+	const staleKeys = Object.keys(overrides).filter(k => !liveNames.has(k));
+	if (staleKeys.length === 0) return null;
+	const pruned = { ...overrides };
+	for (const k of staleKeys) delete pruned[k];
+	return pruned;
+}
+
 /**
  * Convert a UI Node to the WebNode format expected by the WASM engine.
  * Message block references are resolved to inline templates.

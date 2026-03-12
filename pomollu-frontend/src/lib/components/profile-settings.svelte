@@ -8,7 +8,7 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { profileStore, providerStore, uiState } from '$lib/stores.svelte.js';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import { analyzeProfile, mergeParams } from '$lib/param-resolver.js';
+	import { analyzeProfile, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import { collectProfileDeps } from '$lib/dependencies.js';
 	import { Download } from 'lucide-svelte';
 	import { downloadJson } from '$lib/io.js';
@@ -32,6 +32,8 @@
 		const result = analyzeProfile(profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
+		const pruned = pruneOverrides(profile.paramOverrides, result.params);
+		if (pruned) profileStore.update(profileId, (p) => ({ ...p, paramOverrides: pruned }));
 	}
 
 	function handleParamsUpdate(params: ContextParam[]) {

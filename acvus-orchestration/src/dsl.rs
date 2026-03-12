@@ -1,5 +1,6 @@
 use acvus_mir::ty::Ty;
-use acvus_utils::Astr;
+use acvus_utils::{Astr, Interner};
+use rustc_hash::FxHashMap;
 
 use crate::kind::NodeKind;
 
@@ -17,6 +18,33 @@ pub struct NodeSpec {
     pub is_function: bool,
     /// Function parameters (name, type) pairs.
     pub fn_params: Vec<(Astr, Ty)>,
+}
+
+impl NodeSpec {
+    /// Build the context type map visible inside this node's scripts.
+    ///
+    /// Starts from `base` (typically `registry.merged()` or `context_types`)
+    /// and injects fn_params (for function nodes) and optionally `@self`.
+    ///
+    /// All node-internal context assembly MUST go through this method
+    /// to prevent fn_params from being accidentally omitted.
+    pub fn build_node_context(
+        &self,
+        interner: &Interner,
+        base: &FxHashMap<Astr, Ty>,
+        self_ty: Option<Ty>,
+    ) -> FxHashMap<Astr, Ty> {
+        let mut ctx = base.clone();
+        if self.is_function {
+            for (name, ty) in &self.fn_params {
+                ctx.insert(*name, ty.clone());
+            }
+        }
+        if let Some(ty) = self_ty {
+            ctx.insert(interner.intern("self"), ty);
+        }
+        ctx
+    }
 }
 
 /// Execution strategy — determines execution timing and @self storage location.

@@ -417,63 +417,61 @@ pub fn typecheck_nodes(
         };
         let mut errors = NodeErrors::default();
 
-        // Context visible inside this node: external + @self (only when Expr with initial_value)
-        let mut node_ctx = env.registry.merged().clone();
-        let has_initial_value = matches!(
-            &spec.kind,
-            acvus_orchestration::NodeKind::Expr(e) if e.initial_value.is_some()
-        );
-        if has_initial_value {
-            node_ctx.insert(interner.intern("self"), locals.self_ty.clone());
-        }
+        // Context visible inside this node (fn_params + @self injected by build_node_context)
+        let self_ty = match &spec.kind {
+            acvus_orchestration::NodeKind::Expr(e) if e.initial_value.is_some() => {
+                Some(locals.self_ty.clone())
+            }
+            _ => None,
+        };
+        let node_ctx = spec.build_node_context(&interner, env.registry.merged(), self_ty);
 
-        // initial_value: expected tail = stored type (Expr only)
+        // initial_value: context = fn_params only (no @self yet), expected tail = stored type
         if let acvus_orchestration::NodeKind::Expr(expr_spec) = &spec.kind {
             if let Some(ref init_src) = expr_spec.initial_value {
                 let hint = match &locals.self_ty {
                     Ty::Error => None,
                     ty => Some(ty),
                 };
+                let init_ctx = spec.build_node_context(&interner, env.registry.merged(), None);
                 errors.initial_value = check_script(
                     &interner,
                     init_src,
-                    &env.registry.merged(),
+                    &init_ctx,
                     hint,
                 );
             }
         }
 
-        // strategy: history_bind uses @self (= stored type), no @raw
-        let mut strategy_ctx = env.registry.merged().clone();
-        strategy_ctx.insert(interner.intern("self"), locals.self_ty.clone());
+        // strategy: history_bind/if_modified use @self (= stored type)
+        let self_ctx = spec.build_node_context(&interner, env.registry.merged(), Some(locals.self_ty.clone()));
         match &spec.strategy {
             acvus_orchestration::Strategy::History { history_bind } => {
                 errors.history_bind = check_script(
                     &interner,
                     interner.resolve(*history_bind),
-                    &strategy_ctx,
+                    &self_ctx,
                     None,
                 );
             }
             acvus_orchestration::Strategy::IfModified { key } => {
+                let no_self_ctx = spec.build_node_context(&interner, env.registry.merged(), None);
                 errors.if_modified_key = check_script(
                     &interner,
                     interner.resolve(*key),
-                    &env.registry.merged(),
+                    &no_self_ctx,
                     None,
                 );
             }
             _ => {}
         }
 
-        // assert: context = external + @self (= stored type), expected tail = Bool
+        // assert: context = fn_params + @self, expected tail = Bool
         if let Some(assert_src) = spec.assert {
-            let mut assert_ctx = env.registry.merged().clone();
-            assert_ctx.insert(interner.intern("self"), locals.self_ty.clone());
             errors.assert = check_script(
                 &interner,
                 interner.resolve(assert_src),
-                &assert_ctx,
+                &self_ctx,
                 Some(&Ty::Bool),
             );
         }

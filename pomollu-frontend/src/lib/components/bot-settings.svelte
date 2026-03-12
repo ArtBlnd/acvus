@@ -14,7 +14,7 @@
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import GridLayoutEditor from './grid-layout-editor.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
-	import { analyzeBot, mergeParams } from '$lib/param-resolver.js';
+	import { analyzeBot, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import { analyzeWithTypes } from '$lib/engine.js';
 	import type { TypeDesc } from '$lib/type-parser.js';
 	import { collectBotDeps } from '$lib/dependencies.js';
@@ -170,6 +170,8 @@
 		const result = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.ownParams;
+		const pruned = pruneOverrides(bot.paramOverrides, result.ownParams);
+		if (pruned) botStore.update(bot.id, (b) => ({ ...b, paramOverrides: pruned }));
 	}
 
 	function handleParamsUpdate(params: ContextParam[]) {

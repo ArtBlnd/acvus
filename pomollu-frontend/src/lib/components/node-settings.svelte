@@ -15,7 +15,7 @@
 	import BasePage from './base-page.svelte';
 	import { collectOwnerDeps } from '$lib/dependencies.js';
 	import { formatErrors, type NodeErrors } from '$lib/engine.js';
-	import { isUnknownType, typeDescToString } from '$lib/type-parser.js';
+	import { isUnknownType, typeDescToString, parseTypeDesc } from '$lib/type-parser.js';
 
 	let {
 		nodeId,
@@ -38,11 +38,25 @@
 		return children ? findNodeItem(children, nodeId) : undefined;
 	});
 
-	// Merge external context types with this node's local types (@raw, @self)
+	// Merge external context types with this node's local types (@raw, @self) and fn_params
 	let locals = $derived(node ? nodeLocals[node.name] : undefined);
-	let mergedContextTypes = $derived(
-		locals ? { ...contextTypes, raw: locals.raw, self: locals.self } : contextTypes
-	);
+	let mergedContextTypes = $derived.by((): Record<string, import('$lib/type-parser.js').TypeDesc> => {
+		const base: Record<string, import('$lib/type-parser.js').TypeDesc> = locals
+			? { ...contextTypes, raw: locals.raw, self: locals.self }
+			: { ...contextTypes };
+		if (!node?.isFunction) return base;
+		// Inject fn_params so inline typecheck sees @a, @b, etc.
+		const discovered = nodeFnParams[node.name] ?? [];
+		for (const dp of discovered) {
+			const storedType = node.fnParams.find(fp => fp.name === dp.name)?.type;
+			if (storedType) {
+				base[dp.name] = parseTypeDesc(storedType);
+			} else if (!isUnknownType(dp.inferredType)) {
+				base[dp.name] = dp.inferredType;
+			}
+		}
+		return base;
+	});
 
 	// Per-field errors from hard typecheck (Phase 2)
 	const EMPTY_NODE_ERRORS: NodeErrors = { initialValue: [], historyBind: [], ifModifiedKey: [], assert: [], messages: {}, exprSource: [] };
@@ -169,6 +183,16 @@
 	let deps = $derived(collectOwnerDeps(owner));
 
 	let discoveredFnParams = $derived(node?.isFunction ? (nodeFnParams[node.name] ?? []) : []);
+
+	// Prune stale fnParams when discovered params change (e.g. @a removed from script)
+	$effect(() => {
+		if (!node) return;
+		const liveNames = new Set(discoveredFnParams.map(dp => dp.name));
+		const stale = node.fnParams.filter(fp => !liveNames.has(fp.name));
+		if (stale.length > 0) {
+			updateNode((n) => ({ ...n, fnParams: n.fnParams.filter(fp => liveNames.has(fp.name)) }));
+		}
+	});
 </script>
 
 <BasePage {deps} onConfigChange={() => {}}>
