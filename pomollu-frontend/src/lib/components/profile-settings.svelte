@@ -29,7 +29,7 @@
 
 	function runAnalysis() {
 		if (!profile) return;
-		const result = analyzeProfile(profile, (id) => providerStore.get(id)?.api ?? '');
+		const result = analyzeProfile(profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
 	}

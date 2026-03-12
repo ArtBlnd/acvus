@@ -14,7 +14,7 @@ mod storage;
 
 pub use acvus_mir_pass::analysis::reachable_context::ContextKeyPartition;
 pub use compile::{
-    CompiledBlock, CompiledMessage, CompiledNode, CompiledScript, CompiledSelf, CompiledStrategy,
+    CompiledBlock, CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy,
     ExternalContextEnv, NodeLocalTypes, compile_node, compile_nodes, compile_nodes_with_env,
     compile_script, compute_external_context_env,
 };
@@ -25,7 +25,7 @@ pub use display::{
     IterableDisplaySpec, RenderedDisplayEntry, StaticDisplaySpec, compile_iterable_display,
     compile_static_display, render_display, render_display_with_idx,
 };
-pub use dsl::{MessageSpec, NodeSpec, SelfSpec, Strategy, TokenBudget};
+pub use dsl::{MessageSpec, NodeSpec, Strategy, TokenBudget};
 pub use error::{OrchError, OrchErrorDisplay, OrchErrorKind};
 pub use kind::{
     CompiledExpr, CompiledLlm, CompiledLlmCache, CompiledNodeKind, CompiledPlain,

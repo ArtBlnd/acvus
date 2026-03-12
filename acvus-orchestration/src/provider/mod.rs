@@ -10,7 +10,8 @@ use rustc_hash::FxHashMap;
 use crate::kind::GenerationParams;
 use crate::message::{Message, ModelResponse, ToolSpec, Usage};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ApiKind {
     OpenAI,
     Anthropic,
@@ -18,14 +19,6 @@ pub enum ApiKind {
 }
 
 impl ApiKind {
-    pub fn parse(s: &str) -> Option<ApiKind> {
-        match s {
-            "openai" => Some(ApiKind::OpenAI),
-            "anthropic" => Some(ApiKind::Anthropic),
-            "google" => Some(ApiKind::Google),
-            _ => None,
-        }
-    }
 
     pub fn message_elem_ty(&self, interner: &Interner) -> Ty {
         Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([

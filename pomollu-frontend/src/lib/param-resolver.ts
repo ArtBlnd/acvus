@@ -1,7 +1,7 @@
 import type { ContextKeyInfo, WebNode, NodeErrors } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
-import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam, ParamOverride, Prompt, Profile, Bot } from './types.js';
+import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam, ParamOverride, Prompt, Profile, Bot, ApiKind } from './types.js';
 import { isRawBlock, CONTEXT_TYPE } from './types.js';
 import { collectBlocks, collectNodes } from './block-tree.js';
 import { analyzeWithTypes, analyzeWithKnown, typecheckNodes } from './engine.js';
@@ -42,7 +42,7 @@ export function collectScriptsFromTree(children: BlockNode[], opts?: { skipFunct
 }
 
 function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
-	if (node.selfSpec.initialValue.trim()) out.push({ source: node.selfSpec.initialValue, mode: 'script' });
+	if (node.kind === 'expr' && node.initialValue.trim()) out.push({ source: node.initialValue, mode: 'script' });
 	if (node.assert.trim() && node.assert !== 'true') out.push({ source: node.assert, mode: 'script' });
 	if (node.strategy.mode === 'history' && node.strategy.historyBind.trim()) {
 		out.push({ source: node.strategy.historyBind, mode: 'script' });
@@ -234,6 +234,8 @@ export type TwoPassResult = {
 	ownParams: ContextParam[];
 };
 
+type GetApi = (providerId: string) => ApiKind | undefined;
+
 export function twoPassAnalysis(opts: {
 	scripts: ScriptEntry[];
 	nodeNames: Set<string>;
@@ -241,7 +243,7 @@ export function twoPassAnalysis(opts: {
 	paramOverrides: Record<string, ParamOverride>;
 	baseTypes?: Record<string, TypeDesc>;
 	children: BlockNode[];
-	getApi: (providerId: string) => string;
+	getApi: GetApi;
 }): TwoPassResult {
 	const { paramOverrides } = opts;
 	const typesFromParams: Record<string, TypeDesc> = { ...(opts.baseTypes ?? {}) };
@@ -346,8 +348,6 @@ export function twoPassAnalysis(opts: {
 	const activeParams = params.filter((p) => p.active);
 	return { env, params, activeParams, ownParams: params };
 }
-
-type GetApi = (providerId: string) => string;
 
 export function analyzePrompt(prompt: Prompt, getApi: GetApi): TwoPassResult {
 	const nodeNames = collectNodeNames(prompt.children);
@@ -475,41 +475,12 @@ export function mergeParams(
  * Convert a UI Node to the WebNode format expected by the WASM engine.
  * Message block references are resolved to inline templates.
  */
-export function toWebNode(node: Node, api: string, discoveredFnParams?: DiscoveredFnParam[]): WebNode {
-	return {
+export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnParams?: DiscoveredFnParam[]): WebNode {
+	const shared = {
 		name: node.name,
-		kind: node.kind,
-		api,
-		model: node.model,
-		temperature: node.temperature,
-		topP: node.topP ?? null,
-		topK: node.topK ?? null,
-		grounding: node.grounding ?? false,
-		maxTokens: node.maxTokens,
-		selfSpec: node.selfSpec,
 		strategy: node.strategy,
 		retry: node.retry ?? 0,
 		assert: node.assert ?? '',
-		exprSource: node.exprSource,
-		messages: node.messages.map((m) => {
-			if (m.kind === 'block') {
-				const template = m.source.type === 'inline' ? m.source.template : '';
-				return { kind: 'block' as const, role: m.role, template };
-			}
-			return {
-				kind: 'iterator' as const,
-				iterator: m.iterator,
-				role: m.role,
-				slice: m.slice,
-				tokenBudget: m.tokenBudget,
-			};
-		}),
-		tools: node.tools.map((t) => ({
-			name: t.name,
-			description: t.description,
-			node: t.nodeId,
-			params: t.params,
-		})),
 		isFunction: node.isFunction ?? false,
 		fnParams: discoveredFnParams
 			? discoveredFnParams.map((p) => {
@@ -518,6 +489,52 @@ export function toWebNode(node: Node, api: string, discoveredFnParams?: Discover
 				})
 			: node.fnParams ?? [],
 	};
+
+	switch (node.kind) {
+		case 'llm':
+			return {
+				...shared,
+				kind: 'llm',
+				api,
+				model: node.model,
+				temperature: node.temperature,
+				topP: node.topP ?? null,
+				topK: node.topK ?? null,
+				grounding: node.grounding ?? false,
+				maxTokens: node.maxTokens,
+				messages: node.messages.map((m) => {
+					if (m.kind === 'block') {
+						const template = m.source.type === 'inline' ? m.source.template : '';
+						return { kind: 'block' as const, role: m.role, template };
+					}
+					return {
+						kind: 'iterator' as const,
+						iterator: m.iterator,
+						role: m.role,
+						slice: m.slice,
+						tokenBudget: m.tokenBudget,
+					};
+				}),
+				tools: node.tools.map((t) => ({
+					name: t.name,
+					description: t.description,
+					node: t.nodeId,
+					params: t.params,
+				})),
+			};
+		case 'expr':
+			return {
+				...shared,
+				kind: 'expr',
+				exprSource: node.exprSource,
+				initialValue: node.initialValue || undefined,
+			};
+		case 'plain':
+			return {
+				...shared,
+				kind: 'plain',
+			};
+	}
 }
 
 export type DiscoveredFnParam = { name: string; inferredType: TypeDesc };

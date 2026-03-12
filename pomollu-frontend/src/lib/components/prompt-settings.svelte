@@ -72,7 +72,7 @@
 
 	function runAnalysis() {
 		if (!prompt) return;
-		const result = analyzePrompt(prompt, (id) => providerStore.get(id)?.api ?? '');
+		const result = analyzePrompt(prompt, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
 	}

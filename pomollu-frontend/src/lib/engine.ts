@@ -4,6 +4,7 @@ import type {
 	TypeDesc as WasmTypeDesc,
 	AnalyzeResult as WasmAnalyzeResult,
 	TypecheckNodesResult as WasmTypecheckNodesResult,
+	NodeLocalTypes as WasmNodeLocalTypes,
 	EngineError,
 	NodeErrors as WasmNodeErrors,
 	StorageSnapshot,
@@ -180,17 +181,8 @@ export function analyzeWithTail(
 // TypecheckNodes — convert WASM TypeDesc → type-parser TypeDesc
 // ---------------------------------------------------------------------------
 
-export type WebNode = {
+type WebNodeShared = {
 	name: string;
-	kind: string;
-	api: string;
-	model: string;
-	temperature: number;
-	topP: number | null;
-	topK: number | null;
-	grounding: boolean;
-	maxTokens: { input: number; output: number };
-	selfSpec: { initialValue?: string };
 	strategy:
 		| { mode: 'always' }
 		| { mode: 'once-per-turn' }
@@ -198,15 +190,35 @@ export type WebNode = {
 		| { mode: 'history'; historyBind: string };
 	retry: number;
 	assert: string;
-	messages: (
-		| { kind: 'block'; role: string; template: string }
-		| { kind: 'iterator'; iterator: string; role?: string; slice?: number[]; tokenBudget?: { priority: number; min?: number; max?: number } }
-	)[];
-	tools: { name: string; description: string; node: string; params: { name: string; type: string }[] }[];
 	isFunction: boolean;
 	fnParams: { name: string; type: string }[];
-	exprSource?: string;
 };
+
+export type WebNode = WebNodeShared & (
+	| {
+		kind: 'llm';
+		api?: 'openai' | 'anthropic' | 'google';
+		model: string;
+		temperature: number;
+		topP: number | null;
+		topK: number | null;
+		grounding: boolean;
+		maxTokens: { input: number; output: number };
+		messages: (
+			| { kind: 'block'; role: string; template: string }
+			| { kind: 'iterator'; iterator: string; role?: string; slice?: number[]; tokenBudget?: { priority: number; min?: number; max?: number } }
+		)[];
+		tools: { name: string; description: string; node: string; params: { name: string; type: string }[] }[];
+	}
+	| {
+		kind: 'expr';
+		exprSource: string;
+		initialValue?: string;
+	}
+	| {
+		kind: 'plain';
+	}
+);
 
 export type TypecheckNodesResult = {
 	envErrors: EngineError[];
@@ -221,23 +233,23 @@ function convertNodeErrors(raw: WasmNodeErrors): NodeErrors {
 		historyBind: raw.historyBind,
 		ifModifiedKey: raw.ifModifiedKey,
 		assert: raw.assert,
-		messages: mapToRecord(raw.messages),
+		messages: mapToRecord(raw.messages as unknown as Map<string, EngineError[]>),
 		exprSource: raw.exprSource ?? [],
 	};
 }
 
 function convertTypecheckNodesResult(raw: WasmTypecheckNodesResult): TypecheckNodesResult {
-	const rawContextTypes = mapToRecord(raw.contextTypes);
+	const rawContextTypes = mapToRecord(raw.contextTypes as unknown as Map<string, WasmTypeDesc>);
 	const contextTypes: Record<string, TypeDesc> = {};
 	for (const [k, v] of Object.entries(rawContextTypes)) {
 		contextTypes[k] = convertTypeDesc(v);
 	}
-	const rawNodeLocals = mapToRecord(raw.nodeLocals);
+	const rawNodeLocals = mapToRecord(raw.nodeLocals as unknown as Map<string, WasmNodeLocalTypes>);
 	const nodeLocals: Record<string, { raw: TypeDesc; self: TypeDesc }> = {};
 	for (const [k, v] of Object.entries(rawNodeLocals)) {
 		nodeLocals[k] = { raw: convertTypeDesc(v.raw), self: convertTypeDesc(v.self) };
 	}
-	const rawNodeErrors = mapToRecord(raw.nodeErrors);
+	const rawNodeErrors = mapToRecord(raw.nodeErrors as unknown as Map<string, WasmNodeErrors>);
 	const nodeErrors: Record<string, NodeErrors> = {};
 	for (const [k, v] of Object.entries(rawNodeErrors)) {
 		nodeErrors[k] = convertNodeErrors(v);
@@ -298,7 +310,7 @@ export type NodeConfig = {
 
 	// LLM-specific
 	provider?: string;
-	api?: string;
+	api?: 'openai' | 'anthropic' | 'google';
 	model?: string;
 	temperature?: number;
 	top_p?: number | null;
@@ -327,7 +339,7 @@ export type MessageConfig = {
 };
 
 export type ProviderConfig = {
-	api: string;
+	api: 'openai' | 'anthropic' | 'google';
 	endpoint: string;
 	api_key: string;
 };

@@ -417,24 +417,30 @@ pub fn typecheck_nodes(
         };
         let mut errors = NodeErrors::default();
 
-        // Context visible inside this node: external + @self (only when initial_value is Some)
+        // Context visible inside this node: external + @self (only when Expr with initial_value)
         let mut node_ctx = env.registry.merged().clone();
-        if spec.self_spec.initial_value.is_some() {
+        let has_initial_value = matches!(
+            &spec.kind,
+            acvus_orchestration::NodeKind::Expr(e) if e.initial_value.is_some()
+        );
+        if has_initial_value {
             node_ctx.insert(interner.intern("self"), locals.self_ty.clone());
         }
 
-        // initial_value: expected tail = stored type (only when Some)
-        if let Some(ref init_src) = spec.self_spec.initial_value {
-            let hint = match &locals.self_ty {
-                Ty::Error => None,
-                ty => Some(ty),
-            };
-            errors.initial_value = check_script(
-                &interner,
-                interner.resolve(*init_src),
-                &env.registry.merged(),
-                hint,
-            );
+        // initial_value: expected tail = stored type (Expr only)
+        if let acvus_orchestration::NodeKind::Expr(expr_spec) = &spec.kind {
+            if let Some(ref init_src) = expr_spec.initial_value {
+                let hint = match &locals.self_ty {
+                    Ty::Error => None,
+                    ty => Some(ty),
+                };
+                errors.initial_value = check_script(
+                    &interner,
+                    init_src,
+                    &env.registry.merged(),
+                    hint,
+                );
+            }
         }
 
         // strategy: history_bind uses @self (= stored type), no @raw

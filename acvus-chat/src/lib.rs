@@ -195,11 +195,11 @@ where
             .await
             .map_err(|e| ChatError::Resolve(e.to_string()))?;
 
-        // Merge Always node results from turn_context into storage
+        // Merge all turn_context results into storage.
+        // Every strategy (Always, OncePerTurn, IfModified, History) stores its
+        // result in turn_context during the turn. At turn end we persist them all.
         for node in &self.nodes {
-            if matches!(node.strategy, CompiledStrategy::Always)
-                && let Some(v) = rs.turn_context.get(&node.name)
-            {
+            if let Some(v) = rs.turn_context.get(&node.name) {
                 rs.storage
                     .set(interner.resolve(node.name).to_string(), Value::clone(v));
             }
@@ -321,7 +321,7 @@ mod tests {
     use acvus_mir::context_registry::PartialContextTypeRegistry;
     use acvus_orchestration::{
         ApiKind, ExprSpec, GenerationParams, HashMapStorage, HttpRequest, LlmSpec, MaxTokens,
-        MessageSpec, NodeKind, NodeSpec, PlainSpec, SelfSpec, Strategy, ToolBinding, compile_nodes,
+        MessageSpec, NodeKind, NodeSpec, PlainSpec, Strategy, ToolBinding, compile_nodes,
     };
 
     struct MockFetch {
@@ -410,18 +410,6 @@ mod tests {
         .unwrap()
     }
 
-    fn plain_self_spec() -> SelfSpec {
-        SelfSpec {
-            initial_value: None,
-        }
-    }
-
-    fn llm_self_spec() -> SelfSpec {
-        SelfSpec {
-            initial_value: None,
-        }
-    }
-
     #[tokio::test]
     async fn new_valid_entrypoint() {
         let interner = Interner::new();
@@ -432,7 +420,7 @@ mod tests {
                 kind: NodeKind::Plain(PlainSpec {
                     source: "hello".into(),
                 }),
-                self_spec: plain_self_spec(),
+
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
@@ -464,7 +452,7 @@ mod tests {
                 kind: NodeKind::Plain(PlainSpec {
                     source: "hello".into(),
                 }),
-                self_spec: plain_self_spec(),
+
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
@@ -496,7 +484,7 @@ mod tests {
                 kind: NodeKind::Plain(PlainSpec {
                     source: "hello world".into(),
                 }),
-                self_spec: plain_self_spec(),
+
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
@@ -541,7 +529,7 @@ mod tests {
                     cache_key: None,
                     max_tokens: MaxTokens::default(),
                 }),
-                self_spec: llm_self_spec(),
+
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
@@ -591,7 +579,7 @@ mod tests {
                         source: "tool result text".into(),
                     }),
                     strategy: Strategy::default(),
-                    self_spec: plain_self_spec(),
+    
                     retry: 0,
                     assert: None,
                     is_function: false,
@@ -618,7 +606,7 @@ mod tests {
                         max_tokens: MaxTokens::default(),
                     }),
                     strategy: Strategy::default(),
-                    self_spec: llm_self_spec(),
+    
                     retry: 0,
                     assert: None,
                     is_function: false,
@@ -662,24 +650,23 @@ mod tests {
 
     /// #6: initial_value must be evaluated on first run (not Unit).
     /// OncePerTurn: first turn uses initial_value as @self, subsequent turns use persisted @self.
-    /// With self_bind removed, accumulation is done in the node body template using @self.
+    /// Accumulation is done in the Expr node body using @self.
     #[tokio::test]
     async fn initial_value_evaluated_on_first_run() {
         let interner = Interner::new();
-        // Template uses @self (previous) to accumulate.
+        // Expr uses @self (previous) to accumulate.
         // initial_value = "A".
-        // Turn 1: @self = "A" (initial), template = "{{@self}}B" → "AB"
-        // Turn 2: @self = "AB" (persisted), template = "{{@self}}B" → "ABB"
+        // Turn 1: @self = "A" (initial), expr = @self + "B" → "AB"
+        // Turn 2: @self = "AB" (persisted), expr = @self + "B" → "ABB"
         let nodes = compile_test_nodes(
             &interner,
             &[NodeSpec {
                 name: interner.intern("main"),
-                kind: NodeKind::Plain(PlainSpec {
-                    source: "{{@self}}B".into(),
+                kind: NodeKind::Expr(ExprSpec {
+                    source: r#"@self + "B""#.into(),
+                    output_ty: Ty::Infer,
+                    initial_value: Some(r#""A""#.into()),
                 }),
-                self_spec: SelfSpec {
-                    initial_value: Some(interner.intern(r#""A""#)),
-                },
                 strategy: Strategy::OncePerTurn,
                 retry: 0,
                 assert: None,
@@ -717,7 +704,7 @@ mod tests {
                 NodeSpec {
                     name: interner.intern("counter"),
                     kind: NodeKind::Plain(PlainSpec { source: "x".into() }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::Always,
                     retry: 0,
                     assert: None,
@@ -729,7 +716,7 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "{{@counter}}{{@counter}}".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -773,7 +760,7 @@ mod tests {
                 kind: NodeKind::Plain(PlainSpec {
                     source: "{{@input}}{{@input}}".into(),
                 }),
-                self_spec: plain_self_spec(),
+
                 strategy: Strategy::default(),
                 retry: 0,
                 assert: None,
@@ -836,7 +823,7 @@ mod tests {
                     cache_key: None,
                     max_tokens: MaxTokens::default(),
                 }),
-                self_spec: llm_self_spec(),
+
                 // history_bind accesses @self (= raw output = List) and extracts content
                 strategy: Strategy::History {
                     history_bind: interner.intern(r#"@self | map(x -> x.content) | join("")"#),
@@ -873,7 +860,7 @@ mod tests {
         assert_eq!(msg.get(&content_key), Some(&Value::String("hello".into())));
     }
 
-    /// @self in node body: accumulates across turns.
+    /// @self in Expr node body: accumulates across turns.
     /// Uses OncePerTurn so @self persists.
     #[tokio::test]
     async fn node_body_accesses_self() {
@@ -882,12 +869,11 @@ mod tests {
             &interner,
             &[NodeSpec {
                 name: interner.intern("main"),
-                kind: NodeKind::Plain(PlainSpec {
-                    source: "{{@self}}B".into(),
+                kind: NodeKind::Expr(ExprSpec {
+                    source: r#"@self + "B""#.into(),
+                    output_ty: Ty::Infer,
+                    initial_value: Some(r#""A""#.into()),
                 }),
-                self_spec: SelfSpec {
-                    initial_value: Some(interner.intern(r#""A""#)),
-                },
                 strategy: Strategy::OncePerTurn,
                 retry: 0,
                 assert: None,
@@ -931,8 +917,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -944,7 +931,7 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "ok".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -969,8 +956,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -983,7 +971,7 @@ mod tests {
                         // @double should be undefined — function nodes are not context
                         source: "{{@double}}".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1009,8 +997,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1022,8 +1011,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@double(5)".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1049,8 +1039,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x + @offset".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1062,8 +1053,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@add_offset(5)".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1088,8 +1080,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1101,7 +1094,7 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "{{ @double(5) | to_string }}".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1143,8 +1136,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "42".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1158,7 +1152,7 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "ok".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1185,8 +1179,9 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
+                        initial_value: None,
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,
@@ -1198,7 +1193,7 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "{{ @double(3) | to_string }}-{{ @double(7) | to_string }}".into(),
                     }),
-                    self_spec: plain_self_spec(),
+    
                     strategy: Strategy::default(),
                     retry: 0,
                     assert: None,

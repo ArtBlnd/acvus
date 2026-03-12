@@ -32,7 +32,7 @@ fn default_fuel_limit() -> u64 {
 
 #[derive(Debug, Deserialize)]
 pub struct ProviderConfig {
-    pub api: String,
+    pub api: acvus_orchestration::ApiKind,
     pub endpoint: String,
     pub api_key_env: Option<String>,
     pub api_key: Option<String>,

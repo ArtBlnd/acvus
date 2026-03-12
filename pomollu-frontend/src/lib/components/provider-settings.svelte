@@ -3,6 +3,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
+	import type { ApiKind } from '$lib/types.js';
 	import { providerStore, uiState } from '$lib/stores.svelte.js';
 	import type { EntityRef } from '$lib/entity-versions.svelte.js';
 	import BasePage from './base-page.svelte';
@@ -34,11 +36,16 @@
 				</div>
 				<div class="space-y-1">
 					<Label>API Type</Label>
-					<Input
-						value={provider.api}
-						oninput={(e) => providerStore.update(provider.id, (p) => ({ ...p, api: e.currentTarget.value }))}
-						placeholder="google, openai, anthropic..."
-					/>
+					<Select.Root type="single" value={provider.api} onValueChange={(v) => providerStore.update(provider.id, (p) => ({ ...p, api: v as ApiKind }))}>
+						<Select.Trigger class="w-full">
+							{provider.api === 'openai' ? 'OpenAI' : provider.api === 'anthropic' ? 'Anthropic' : 'Google'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="openai">OpenAI</Select.Item>
+							<Select.Item value="anthropic">Anthropic</Select.Item>
+							<Select.Item value="google">Google</Select.Item>
+						</Select.Content>
+					</Select.Root>
 				</div>
 				<div class="space-y-1">
 					<Label>Endpoint</Label>

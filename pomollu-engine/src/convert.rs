@@ -1,6 +1,6 @@
 use acvus_orchestration::{
     ApiKind, ExprSpec, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec,
-    PlainSpec, SelfSpec, Strategy, TokenBudget, ToolBinding,
+    PlainSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
@@ -11,39 +11,50 @@ use serde::Deserialize;
 #[serde(rename_all = "camelCase")]
 pub struct WebNode {
     pub name: String,
-    pub kind: String,
-    pub api: String,
-    pub model: String,
-    pub temperature: Decimal,
-    pub top_p: Option<Decimal>,
-    pub top_k: Option<u32>,
-    #[serde(default)]
-    pub grounding: bool,
-    pub max_tokens: WebMaxTokens,
-    pub self_spec: WebSelfSpec,
     pub strategy: WebStrategy,
     pub retry: u32,
     pub assert: String,
-    pub messages: Vec<WebMessage>,
-    pub tools: Vec<WebToolBinding>,
     #[serde(default)]
     pub is_function: bool,
     #[serde(default)]
     pub fn_params: Vec<WebFnParam>,
-    #[serde(default)]
-    pub expr_source: Option<String>,
+    #[serde(flatten)]
+    pub kind: WebNodeKind,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind")]
+pub enum WebNodeKind {
+    #[serde(rename = "llm", rename_all = "camelCase")]
+    Llm {
+        #[serde(default)]
+        api: Option<ApiKind>,
+        model: String,
+        temperature: Decimal,
+        top_p: Option<Decimal>,
+        top_k: Option<u32>,
+        #[serde(default)]
+        grounding: bool,
+        max_tokens: WebMaxTokens,
+        #[serde(default)]
+        messages: Vec<WebMessage>,
+        #[serde(default)]
+        tools: Vec<WebToolBinding>,
+    },
+    #[serde(rename = "expr", rename_all = "camelCase")]
+    Expr {
+        #[serde(default)]
+        expr_source: String,
+        initial_value: Option<String>,
+    },
+    #[serde(rename = "plain")]
+    Plain {},
 }
 
 #[derive(Deserialize)]
 pub struct WebMaxTokens {
     pub input: u32,
     pub output: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebSelfSpec {
-    pub initial_value: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,117 +118,116 @@ pub struct WebFnParam {
 
 impl WebNode {
     pub fn into_node(&self, interner: &Interner) -> Result<NodeSpec, String> {
-        let web = self;
-        let kind = match web.kind.as_str() {
-        "llm" => NodeKind::Llm(LlmSpec {
-            // Fallback to OpenAI when api is empty/unknown — ApiKind is only used at
-            // runtime for LLM calls, not during typechecking. This allows nodes with
-            // an unset provider to still participate in type analysis.
-            api: ApiKind::parse(&web.api).unwrap_or(ApiKind::OpenAI),
-            provider: String::new(),
-            model: web.model.clone(),
-            messages: web
-                .messages
+        let kind = match &self.kind {
+            WebNodeKind::Llm {
+                api,
+                model,
+                temperature,
+                top_p,
+                top_k,
+                grounding,
+                max_tokens,
+                messages,
+                tools,
+            } => NodeKind::Llm(LlmSpec {
+                // Fallback to OpenAI when unset — ApiKind is only used at runtime
+                // for LLM calls, not during typechecking. Allows nodes with no
+                // provider to still participate in type analysis.
+                api: api.clone().unwrap_or(ApiKind::OpenAI),
+                provider: String::new(),
+                model: model.clone(),
+                messages: messages
+                    .iter()
+                    .map(|m| match m {
+                        WebMessage::Block { role, template } => MessageSpec::Block {
+                            role: interner.intern(role),
+                            source: template.clone(),
+                        },
+                        WebMessage::Iterator {
+                            iterator,
+                            role,
+                            slice,
+                            token_budget,
+                        } => MessageSpec::Iterator {
+                            key: interner.intern(iterator),
+                            slice: slice.clone(),
+                            role: role.as_ref().map(|r| interner.intern(r)),
+                            token_budget: token_budget.as_ref().map(|tb| TokenBudget {
+                                priority: tb.priority,
+                                min: tb.min,
+                                max: tb.max,
+                            }),
+                        },
+                    })
+                    .collect(),
+                tools: tools
+                    .iter()
+                    .map(|t| ToolBinding {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        node: t.node.clone(),
+                        params: t
+                            .params
+                            .iter()
+                            .map(|p| (p.name.clone(), p.ty.clone()))
+                            .collect(),
+                    })
+                    .collect(),
+                generation: GenerationParams {
+                    temperature: Some(*temperature),
+                    top_p: *top_p,
+                    top_k: *top_k,
+                    grounding: *grounding,
+                },
+                cache_key: None,
+                max_tokens: MaxTokens {
+                    input: Some(max_tokens.input),
+                    output: Some(max_tokens.output),
+                },
+            }),
+            WebNodeKind::Expr {
+                expr_source,
+                initial_value,
+            } => NodeKind::Expr(ExprSpec {
+                source: expr_source.clone(),
+                output_ty: acvus_mir::ty::Ty::Infer,
+                initial_value: initial_value.clone(),
+            }),
+            WebNodeKind::Plain {} => NodeKind::Plain(PlainSpec {
+                source: String::new(),
+            }),
+        };
+
+        let strategy = match &self.strategy {
+            WebStrategy::Always => Strategy::Always,
+            WebStrategy::OncePerTurn => Strategy::OncePerTurn,
+            WebStrategy::IfModified { key } => Strategy::IfModified {
+                key: interner.intern(key),
+            },
+            WebStrategy::History { history_bind } => Strategy::History {
+                history_bind: interner.intern(history_bind),
+            },
+        };
+
+        Ok(NodeSpec {
+            name: interner.intern(&self.name),
+            kind,
+            strategy,
+            retry: self.retry,
+            assert: if self.assert.trim().is_empty() {
+                None
+            } else {
+                Some(interner.intern(&self.assert))
+            },
+            is_function: self.is_function,
+            fn_params: self
+                .fn_params
                 .iter()
-                .map(|m| match m {
-                    WebMessage::Block { role, template } => MessageSpec::Block {
-                        role: interner.intern(role),
-                        source: template.clone(),
-                    },
-                    WebMessage::Iterator {
-                        iterator,
-                        role,
-                        slice,
-                        token_budget,
-                    } => MessageSpec::Iterator {
-                        key: interner.intern(iterator),
-                        slice: slice.clone(),
-                        role: role.as_ref().map(|r| interner.intern(r)),
-                        token_budget: token_budget.as_ref().map(|tb| TokenBudget {
-                            priority: tb.priority,
-                            min: tb.min,
-                            max: tb.max,
-                        }),
-                    },
+                .map(|p| {
+                    let ty = crate::parse_type_string(&interner, &p.ty);
+                    (interner.intern(&p.name), ty)
                 })
                 .collect(),
-            tools: web
-                .tools
-                .iter()
-                .map(|t| ToolBinding {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    node: t.node.clone(),
-                    params: t
-                        .params
-                        .iter()
-                        .map(|p| (p.name.clone(), p.ty.clone()))
-                        .collect(),
-                })
-                .collect(),
-            generation: GenerationParams {
-                temperature: Some(web.temperature),
-                top_p: web.top_p,
-                top_k: web.top_k,
-                grounding: web.grounding,
-            },
-            cache_key: None,
-            max_tokens: MaxTokens {
-                input: Some(web.max_tokens.input),
-                output: Some(web.max_tokens.output),
-            },
-        }),
-        "expr" => NodeKind::Expr(ExprSpec {
-            source: web.expr_source.clone().unwrap_or_default(),
-            output_ty: acvus_mir::ty::Ty::Infer,
-        }),
-        _ => NodeKind::Plain(PlainSpec {
-            source: web
-                .messages
-                .iter()
-                .filter_map(|m| match m {
-                    WebMessage::Block { template, .. } => Some(template.as_str()),
-                    _ => None,
-                })
-                .next()
-                .unwrap_or("")
-                .to_string(),
-        }),
-    };
-
-    let strategy = match &web.strategy {
-        WebStrategy::Always => Strategy::Always,
-        WebStrategy::OncePerTurn => Strategy::OncePerTurn,
-        WebStrategy::IfModified { key } => Strategy::IfModified {
-            key: interner.intern(key),
-        },
-        WebStrategy::History { history_bind } => Strategy::History {
-            history_bind: interner.intern(history_bind),
-        },
-    };
-
-    Ok(NodeSpec {
-        name: interner.intern(&web.name),
-        kind,
-        self_spec: SelfSpec {
-            initial_value: web
-                .self_spec
-                .initial_value
-                .as_ref()
-                .map(|s| interner.intern(s)),
-        },
-        strategy,
-        retry: web.retry,
-        assert: if web.assert.trim().is_empty() {
-            None
-        } else {
-            Some(interner.intern(&web.assert))
-        },
-        is_function: web.is_function,
-        fn_params: web.fn_params.iter().map(|p| {
-            let ty = crate::parse_type_string(&interner, &p.ty);
-            (interner.intern(&p.name), ty)
-        }).collect(),
-    })
+        })
     }
 }

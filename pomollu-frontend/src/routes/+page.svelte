@@ -28,7 +28,7 @@
 
 	// --- Owner env: inline discovery + orchestration typecheck ---
 
-	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {} };
+	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {} };
 	const ENV_DEBOUNCE_MS = 1000;
 
 	let ownerEnv = $state<ContextEnvResult>(EMPTY_ENV);
@@ -36,7 +36,7 @@
 	let lastOwnerKey: string | null = null;
 
 	function computeFullEnv(owner: BlockOwner): TwoPassResult | null {
-		const getApi = (pid: string) => providerStore.get(pid)?.api ?? '';
+		const getApi = (pid: string) => providerStore.get(pid)?.api;
 
 		switch (owner.kind) {
 			case 'prompt': {

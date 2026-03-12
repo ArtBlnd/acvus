@@ -94,10 +94,12 @@ export type SidebarNode =
 
 // --- Provider ---
 
+export type ApiKind = 'openai' | 'anthropic' | 'google';
+
 export type Provider = {
 	id: string;
 	name: string;
-	api: string;
+	api: ApiKind;
 	endpoint: string;
 	apiKey: string;
 };
@@ -131,10 +133,6 @@ export type Strategy =
 	| { mode: 'if-modified'; key: string }
 	| { mode: 'history'; historyBind: string };
 
-export type SelfSpec = {
-	initialValue: string;
-};
-
 export type FnParam = {
 	name: string;
 	type: string;
@@ -151,7 +149,7 @@ export type Node = {
 	topK: number | null;
 	grounding: boolean;
 	maxTokens: MaxTokens;
-	selfSpec: SelfSpec;
+	initialValue: string;
 	strategy: Strategy;
 	retry: number;
 	assert: string;

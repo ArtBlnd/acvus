@@ -23,15 +23,6 @@ use crate::kind::{
 };
 use crate::storage::Storage;
 
-/// Compiled self specification for a node.
-///
-/// Stored value = raw output (identity). No bind transformation.
-/// When `initial_value` is `Some`, `@self` is available in the node body.
-#[derive(Debug, Clone)]
-pub struct CompiledSelf {
-    pub initial_value: Option<CompiledScript>,
-}
-
 /// Compiled execution strategy.
 #[derive(Debug, Clone)]
 pub enum CompiledStrategy {
@@ -47,7 +38,6 @@ pub struct CompiledNode {
     pub name: Astr,
     pub kind: CompiledNodeKind,
     pub all_context_keys: FxHashSet<Astr>,
-    pub self_spec: CompiledSelf,
     pub strategy: CompiledStrategy,
     pub retry: u32,
     pub assert: Option<CompiledScript>,
@@ -371,16 +361,17 @@ pub(crate) fn compile_messages(
 /// Compile a node spec into a `CompiledNode`.
 ///
 /// `stored_ty` is the node's stored type (derived from initial_value in compile_nodes).
+/// `initial_value` is the compiled initial_value script (Expr nodes only).
 /// Each message's `source` field is compiled directly — no file I/O.
 pub fn compile_node(
     interner: &Interner,
     spec: &NodeSpec,
     context_types: &FxHashMap<Astr, Ty>,
-    compiled_self: CompiledSelf,
+    initial_value: Option<CompiledScript>,
     compiled_strategy: CompiledStrategy,
     stored_ty: &Ty,
 ) -> Result<CompiledNode, Vec<OrchError>> {
-    let (kind, mut all_context_keys): (_, FxHashSet<_>) = match &spec.kind {
+    let (mut kind, mut all_context_keys): (_, FxHashSet<_>) = match &spec.kind {
         NodeKind::Plain(plain_spec) => {
             let (compiled, keys) = compile_plain(interner, plain_spec, context_types)?;
             (CompiledNodeKind::Plain(compiled), keys)
@@ -400,9 +391,13 @@ pub fn compile_node(
         }
     };
 
-    // self_spec context keys contribute to dependencies
-    if let Some(ref iv) = compiled_self.initial_value {
+    // initial_value context keys contribute to dependencies; set on Expr kind
+    if let Some(iv) = initial_value {
         all_context_keys.extend(iv.context_keys.iter().copied());
+        match &mut kind {
+            CompiledNodeKind::Expr(expr) => expr.initial_value = Some(iv),
+            _ => unreachable!("initial_value is only valid for Expr nodes"),
+        }
     }
 
     // assert context keys contribute
@@ -438,7 +433,6 @@ pub fn compile_node(
         name: spec.name,
         kind,
         all_context_keys,
-        self_spec: compiled_self,
         strategy: compiled_strategy,
         retry: spec.retry,
         assert: compiled_assert,
@@ -625,10 +619,24 @@ pub fn compute_external_context_env(
                     Ty::Infer => None,
                     ty => Some(ty),
                 };
+                // When initial_value is present, compile it first to determine @self type,
+                // then compile the Expr body with @self available.
+                let mut expr_ctx = registry.merged().clone();
+                if let Some(ref init_src) = expr_spec.initial_value {
+                    let init_ty = compile_script_with_hint(
+                        interner,
+                        init_src,
+                        registry.merged(),
+                        hint,
+                    )
+                    .map(|(_, ty)| ty)
+                    .unwrap_or(Ty::Error);
+                    expr_ctx.insert(interner.intern("self"), init_ty);
+                }
                 stored_types[idx] = compile_script_with_hint(
                     interner,
                     &expr_spec.source,
-                    registry.merged(),
+                    &expr_ctx,
                     hint,
                 )
                 .map(|(_, ty)| ty)
@@ -699,10 +707,15 @@ pub fn compile_nodes_with_env(
     let stored_types = env.stored_types;
     let mut errors = Vec::new();
 
-    // Compile initial_value scripts (only when Some) with stored type as expected tail hint
+    // Compile initial_value scripts — Expr nodes only.
+    // Non-Expr nodes with initial_value are rejected.
     let mut initial_value_scripts: Vec<Option<CompiledScript>> = Vec::new();
     for (i, spec) in specs.iter().enumerate() {
-        let Some(ref init_src) = spec.self_spec.initial_value else {
+        let init_src = match &spec.kind {
+            NodeKind::Expr(expr_spec) => expr_spec.initial_value.as_deref(),
+            _ => None,
+        };
+        let Some(init_src) = init_src else {
             initial_value_scripts.push(None);
             continue;
         };
@@ -712,7 +725,7 @@ pub fn compile_nodes_with_env(
         };
         let (script, init_ty) = match compile_script_with_hint(
             interner,
-            interner.resolve(*init_src),
+            init_src,
             &context_types,
             hint,
         ) {
@@ -820,19 +833,17 @@ pub fn compile_nodes_with_env(
                 node_ctx.insert(*param_name, param_ty.clone());
             }
         }
-        // When initial_value is Some, @self is available in the node body
+        // When initial_value is Some (Expr only), @self is available in the node body
         if initial_value_scripts[i].is_some() {
             node_ctx.insert(interner.intern("self"), stored_types[i].clone());
         }
-        let compiled_self = CompiledSelf {
-            initial_value: initial_value_scripts[i].clone(),
-        };
+        let initial_value = initial_value_scripts[i].clone();
         let compiled_strategy = compiled_strategies[i].clone();
         match compile_node(
             interner,
             spec,
             &node_ctx,
-            compiled_self,
+            initial_value,
             compiled_strategy,
             &stored_types[i],
         ) {

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -10,6 +11,14 @@ use tracing::{debug, info, warn};
 
 use crate::CompiledNodeKind;
 use crate::compile::{CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy};
+
+/// Expr 노드의 initial_value 접근 헬퍼.
+fn expr_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
+    match &node.kind {
+        CompiledNodeKind::Expr(e) => e.initial_value.as_ref(),
+        _ => None,
+    }
+}
 use crate::node::Node;
 use crate::storage::Storage;
 
@@ -23,6 +32,14 @@ use crate::storage::Storage;
 /// - `storage`: persistent cross-turn values (generic backend)
 /// - `turn_context`: values valid for this turn only
 /// - `bind_cache`: IfModified key→output cache
+///
+/// ## Context resolution priority (highest → lowest)
+///
+/// 1. **Local** — function params, @self, @bind (per-task)
+/// 2. **turn_context** — Always / OncePerTurn results (per-turn, merged to storage at turn end)
+/// 3. **Node execution** — spawn & run the node if its strategy says so
+/// 4. **Storage** — persistent cross-turn values (only for names with no pending node)
+/// 5. **External resolver** — fallback for names not produced by any node
 pub struct ResolveState<S> {
     pub storage: S,
     pub turn_context: FxHashMap<Astr, Arc<Value>>,
@@ -44,9 +61,6 @@ where
         }
     }
 
-    fn is_available(&self, name: Astr, interner: &Interner) -> bool {
-        self.turn_context.contains_key(&name) || self.storage.get(interner.resolve(name)).is_some()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +142,12 @@ struct LoopState<'a> {
     in_flight: FxHashSet<usize>,
     remaining_roots: FxHashSet<usize>,
     retry_state: FxHashMap<usize, (u32, u32, FxHashMap<Astr, Arc<Value>>)>,
+    /// Always + initial_value Expr 노드의 직렬화 큐.
+    ///
+    /// 이런 노드는 @self를 읽고 갱신하므로, 동시에 여러 인스턴스가 실행되면
+    /// 같은 @self를 읽어 lost update가 발생한다.
+    /// 이미 in_flight인 경우 여기에 park하고, 완료 시 하나씩 깨워 재실행한다.
+    serialized_queue: FxHashMap<usize, VecDeque<Parked>>,
 }
 
 impl<'a> LoopState<'a> {
@@ -140,6 +160,7 @@ impl<'a> LoopState<'a> {
             in_flight: FxHashSet::default(),
             remaining_roots: FxHashSet::default(),
             retry_state: FxHashMap::default(),
+            serialized_queue: FxHashMap::default(),
         }
     }
 
@@ -332,8 +353,7 @@ where
                     self.start_root_finalize(node_idx, value, local, lp, state)?;
                 } else {
                     self.apply_store(node_idx, &value, state);
-                    lp.wake_waiters(self.nodes[node_idx].name, value);
-                    self.try_eager_schedule(node_idx, lp, state);
+                    self.finish_dep_wake(node_idx, value, lp, state);
                 }
             }
             Some(TaskMeta::Script { purpose, local }) => {
@@ -390,6 +410,9 @@ where
     // NeedContext
     // -----------------------------------------------------------------------
 
+    /// Resolve a context request.
+    ///
+    /// Priority: Local → turn_context → Node (execution) → Storage → External resolver
     async fn handle_need_context<S>(
         &self,
         task_id: TaskId,
@@ -402,31 +425,62 @@ where
         S: Storage,
     {
         let name = request.name();
+        let name_str = self.interner.resolve(name);
 
-        // 1. Sync resolve (local → turn_context → storage)
-        if let Some(v) = self.try_sync_resolve(name, lp.local(task_id), state) {
-            request.resolve(v);
+        // 1. Local context (highest priority)
+        if let Some(arc) = lp.local(task_id).get(&name) {
+            debug!(context = %name_str, "resolved from local");
+            request.resolve(Arc::clone(arc));
             lp.enqueue_step(task_id, coroutine);
             return Ok(());
         }
 
-        // 2. Function node → ExternFn handle
+        // 2. turn_context (already resolved this turn)
+        if let Some(arc) = state.turn_context.get(&name).cloned() {
+            debug!(context = %name_str, "resolved from turn_context");
+            request.resolve(arc);
+            lp.enqueue_step(task_id, coroutine);
+            return Ok(());
+        }
+
+        // 3. Known node — check before storage so Node > Storage
         if let Some(&dep_idx) = self.name_to_idx.get(&name) {
+            // 3a. Function node → ExternFn handle
             if self.nodes[dep_idx].is_function {
                 request.resolve(Arc::new(Value::ExternFn(name)));
                 lp.enqueue_step(task_id, coroutine);
                 return Ok(());
             }
-        }
 
-        // 3. Node task → spawn dep
-        if lp.is_node_task(task_id) {
-            if let Some(&dep_idx) = self.name_to_idx.get(&name) {
-                if !lp.in_flight.contains(&dep_idx) && self.needs_resolve(dep_idx, state) {
-                    debug!(
-                        context = %self.interner.resolve(name),
-                        "spawning dependency node"
-                    );
+            // 3b. Node task → spawn dep if strategy says so
+            if lp.is_node_task(task_id) {
+                if self.needs_resolve(dep_idx, state) {
+                    // Serialized node already in flight → park in serialized_queue
+                    if self.needs_serialized(dep_idx) && lp.in_flight.contains(&dep_idx) {
+                        lp.serialized_queue.entry(dep_idx).or_default().push_back(Parked {
+                            task_id, coroutine,
+                            request: PendingRequest::Context(request),
+                        });
+                        return Ok(());
+                    }
+                    if !lp.in_flight.contains(&dep_idx) {
+                        debug!(context = %name_str, "spawning dependency node");
+                        self.start_prepare(dep_idx, FxHashMap::default(), false, lp, state);
+                    }
+                    lp.park_for_dep(name, task_id, coroutine, PendingRequest::Context(request));
+                    return Ok(());
+                }
+
+                // 3c. Node doesn't need resolve → serve from storage
+                if let Some(arc) = state.storage.get(name_str) {
+                    debug!(context = %name_str, "resolved from storage");
+                    request.resolve(arc);
+                    lp.enqueue_step(task_id, coroutine);
+                    return Ok(());
+                }
+
+                // Node exists but not in storage either → park for dep
+                if !lp.in_flight.contains(&dep_idx) {
                     self.start_prepare(dep_idx, FxHashMap::default(), false, lp, state);
                 }
                 lp.park_for_dep(name, task_id, coroutine, PendingRequest::Context(request));
@@ -434,8 +488,16 @@ where
             }
         }
 
-        // 4. External resolver (try_sync_resolve already ruled out cached values)
-        debug!(context = %self.interner.resolve(name), "calling external resolver");
+        // 4. Storage (for non-node names)
+        if let Some(arc) = state.storage.get(name_str) {
+            debug!(context = %name_str, "resolved from storage");
+            request.resolve(arc);
+            lp.enqueue_step(task_id, coroutine);
+            return Ok(());
+        }
+
+        // 5. External resolver (lowest priority)
+        debug!(context = %name_str, "calling external resolver");
         let value = self.resolve_external(name, state).await?;
         request.resolve(value);
         lp.enqueue_step(task_id, coroutine);
@@ -477,6 +539,15 @@ where
                 } else {
                     FxHashMap::default()
                 };
+
+                // Serialized node already in flight → park in serialized_queue
+                if self.needs_serialized(dep_idx) && lp.in_flight.contains(&dep_idx) {
+                    lp.serialized_queue.entry(dep_idx).or_default().push_back(Parked {
+                        task_id, coroutine,
+                        request: PendingRequest::ExternCall(request),
+                    });
+                    return Ok(());
+                }
 
                 debug!(
                     context = %self.interner.resolve(name),
@@ -545,8 +616,8 @@ where
                 {
                     debug!(node = %node_name_str, "if_modified cache hit, skipping execution");
                     state
-                        .storage
-                        .set(node_name_str.to_string(), Value::clone(cached));
+                        .turn_context
+                        .insert(node.name, Arc::new(Value::clone(cached)));
                     if lp.remaining_roots.contains(&node_idx) {
                         lp.remaining_roots.remove(&node_idx);
                     }
@@ -607,15 +678,11 @@ where
                 let node = &self.nodes[node_idx];
                 state.history_entries.insert(node.name, value);
 
-                state.storage.set(
-                    self.interner.resolve(node.name).to_string(),
-                    node_value.clone(),
-                );
+                // turn_context already set by apply_root_finalize — no redundant storage.set
                 info!(node = %self.interner.resolve(node.name), "resolve node complete");
 
                 lp.remaining_roots.remove(&node_idx);
-                lp.wake_waiters(node.name, node_value);
-                self.try_eager_schedule(node_idx, lp, state);
+                self.finish_dep_wake(node_idx, node_value, lp, state);
             }
         }
 
@@ -680,44 +747,67 @@ where
                 .push(((**bind_val).clone(), Arc::new(value.clone())));
         }
 
-        // Store + history
-        let name_str = node_name_str.to_string();
-        match &node.strategy {
-            CompiledStrategy::Always => {
-                state
-                    .turn_context
-                    .insert(node.name, Arc::new(value.clone()));
-            }
-            CompiledStrategy::OncePerTurn | CompiledStrategy::IfModified { .. } => {
-                state.storage.set(name_str, value.clone());
-            }
-            CompiledStrategy::History { history_bind } => {
-                state.storage.set(name_str, value.clone());
-                let mut hist_local = FxHashMap::default();
-                hist_local.insert(interner.intern("self"), Arc::new(value.clone()));
-                debug!(node = %node_name_str, "evaluating history_bind");
-                self.spawn_script_task(
-                    history_bind,
-                    hist_local,
-                    ScriptPurpose::HistoryBind {
-                        node_idx,
-                        value: value.clone(),
-                    },
-                    lp,
-                );
-                return; // HistoryBind will remove from remaining_roots
-            }
+        // Store in turn_context (merged to storage at turn end)
+        state
+            .turn_context
+            .insert(node.name, Arc::new(value.clone()));
+
+        // History: spawn history_bind script before completing
+        if let CompiledStrategy::History { history_bind } = &node.strategy {
+            let mut hist_local = FxHashMap::default();
+            hist_local.insert(interner.intern("self"), Arc::new(value.clone()));
+            debug!(node = %node_name_str, "evaluating history_bind");
+            self.spawn_script_task(
+                history_bind,
+                hist_local,
+                ScriptPurpose::HistoryBind {
+                    node_idx,
+                    value: value.clone(),
+                },
+                lp,
+            );
+            return; // HistoryBind will remove from remaining_roots
         }
 
         info!(node = %node_name_str, "resolve node complete");
         lp.remaining_roots.remove(&node_idx);
-        lp.wake_waiters(node.name, value.clone());
-        self.try_eager_schedule(node_idx, lp, state);
+        self.finish_dep_wake(node_idx, value.clone(), lp, state);
     }
 
     // -----------------------------------------------------------------------
     // Prepare phase: IfModified → InitialValue → Node spawn
     // -----------------------------------------------------------------------
+
+    /// Wake dep waiters after a node completes. For serialized nodes,
+    /// wakes one waiter at a time via re-execution to avoid lost updates.
+    fn finish_dep_wake<S>(
+        &self,
+        node_idx: usize,
+        value: Value,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<S>,
+    ) where
+        S: Storage,
+    {
+        let node_name = self.nodes[node_idx].name;
+        if self.needs_serialized(node_idx) {
+            if let Some(queue) = lp.serialized_queue.get_mut(&node_idx)
+                && let Some(parked) = queue.pop_front()
+            {
+                // 다음 waiter를 dep_waiters로 이동 → 재실행 결과를 받게 됨
+                lp.dep_waiters.entry(node_name).or_default().push(parked);
+                // 노드 재실행 (갱신된 @self from turn_context)
+                self.start_prepare(node_idx, FxHashMap::default(), false, lp, state);
+            } else {
+                // 직렬화 큐 비었음 → 일반 wake
+                lp.wake_waiters(node_name, value);
+                self.try_eager_schedule(node_idx, lp, state);
+            }
+        } else {
+            lp.wake_waiters(node_name, value);
+            self.try_eager_schedule(node_idx, lp, state);
+        }
+    }
 
     fn start_prepare<S>(
         &self,
@@ -746,8 +836,8 @@ where
             return;
         }
 
-        // InitialValue
-        if let Some(ref init_script) = node.self_spec.initial_value {
+        // InitialValue (Expr only)
+        if let Some(init_script) = expr_initial_value(node) {
             if let Some(prev) = self.load_self_value(idx, state) {
                 let mut new_local = local;
                 new_local.insert(interner.intern("self"), Arc::new(prev));
@@ -782,7 +872,7 @@ where
     {
         let node = &self.nodes[node_idx];
 
-        if node.self_spec.initial_value.is_some() {
+        if let Some(init_script) = expr_initial_value(node) {
             if let Some(prev) = self.load_self_value(node_idx, state) {
                 let mut new_local = local;
                 new_local.insert(self.interner.intern("self"), Arc::new(prev));
@@ -790,7 +880,7 @@ where
                 self.spawn_node_task(node_idx, new_local, is_root, lp);
             } else {
                 self.spawn_script_task(
-                    node.self_spec.initial_value.as_ref().unwrap(),
+                    init_script,
                     local,
                     ScriptPurpose::InitialValue { node_idx },
                     lp,
@@ -822,23 +912,16 @@ where
     // Store (common for root and dep finalize)
     // -----------------------------------------------------------------------
 
+    /// Store a dep node's result. All strategies go to turn_context;
+    /// merged to storage at turn end by ChatEngine.
     fn apply_store<S>(&self, idx: usize, value: &Value, state: &mut ResolveState<S>)
     where
         S: Storage,
     {
         let node = &self.nodes[idx];
-        match &node.strategy {
-            CompiledStrategy::Always => {
-                state
-                    .turn_context
-                    .insert(node.name, Arc::new(value.clone()));
-            }
-            _ => {
-                state
-                    .storage
-                    .set(self.interner.resolve(node.name).to_string(), value.clone());
-            }
-        }
+        state
+            .turn_context
+            .insert(node.name, Arc::new(value.clone()));
     }
 
     // -----------------------------------------------------------------------
@@ -876,36 +959,7 @@ where
     }
 
     // -----------------------------------------------------------------------
-    // Sync resolve
-    // -----------------------------------------------------------------------
-
-    fn try_sync_resolve<S>(
-        &self,
-        name: Astr,
-        local: &FxHashMap<Astr, Arc<Value>>,
-        state: &ResolveState<S>,
-    ) -> Option<Arc<Value>>
-    where
-        S: Storage,
-    {
-        let name_str = self.interner.resolve(name);
-        if let Some(arc) = local.get(&name) {
-            debug!(context = %name_str, "resolved from local");
-            return Some(Arc::clone(arc));
-        }
-        if let Some(arc) = state.turn_context.get(&name).cloned() {
-            debug!(context = %name_str, "resolved from turn_context");
-            return Some(arc);
-        }
-        if let Some(arc) = state.storage.get(name_str) {
-            debug!(context = %name_str, "resolved from storage");
-            return Some(arc);
-        }
-        None
-    }
-
-    // -----------------------------------------------------------------------
-    // External resolver (no redundant cache checks)
+    // External resolver
     // -----------------------------------------------------------------------
 
     async fn resolve_external<S>(
@@ -973,7 +1027,7 @@ where
             }
         }
 
-        if let Some(iv) = &node.self_spec.initial_value
+        if let Some(iv) = expr_initial_value(node)
             && storage.get(self.interner.resolve(node.name)).is_none()
         {
             eager.extend(iv.context_keys.iter().copied());
@@ -995,14 +1049,26 @@ where
             .collect()
     }
 
+    /// Always 전략 + initial_value를 가진 Expr 노드인지.
+    /// 이 조건이면 동시 실행 시 @self lost update가 발생하므로 직렬화 필요.
+    fn needs_serialized(&self, idx: usize) -> bool {
+        let node = &self.nodes[idx];
+        matches!(node.strategy, CompiledStrategy::Always)
+            && matches!(&node.kind, CompiledNodeKind::Expr(e) if e.initial_value.is_some())
+    }
+
     fn needs_resolve<S>(&self, idx: usize, state: &ResolveState<S>) -> bool
     where
         S: Storage,
     {
         let name = self.nodes[idx].name;
         match &self.nodes[idx].strategy {
+            // Always: re-execute on every reference within a turn.
             CompiledStrategy::Always => true,
-            _ => !state.is_available(name, self.interner),
+            // All other strategies: execute once per turn.
+            // Only turn_context counts — storage values from previous turns
+            // do NOT satisfy this. The node must re-run each turn.
+            _ => !state.turn_context.contains_key(&name),
         }
     }
 

@@ -3,23 +3,11 @@ use acvus_utils::Astr;
 
 use crate::kind::NodeKind;
 
-/// Self specification — stored value = raw output (identity).
-///
-/// When `initial_value` is `Some`, `@self` is available in the node body
-/// (previous stored value, or initial_value on first run).
-/// When `None`, `@self` is not available.
-#[derive(Debug, Clone)]
-pub struct SelfSpec {
-    /// Optional initial state. When Some, @self is available in the node body.
-    pub initial_value: Option<Astr>,
-}
-
 /// Node specification — pure compilation input, no Serde.
 #[derive(Debug, Clone)]
 pub struct NodeSpec {
     pub name: Astr,
     pub kind: NodeKind,
-    pub self_spec: SelfSpec,
     pub strategy: Strategy,
     /// Maximum retry count on RuntimeError. 0 = no retry.
     pub retry: u32,

@@ -82,7 +82,7 @@ pub fn build_dag(interner: &Interner, nodes: &[CompiledNode]) -> Result<Dag, Vec
 
 #[cfg(test)]
 mod tests {
-    use crate::compile::{CompiledSelf, CompiledStrategy};
+    use crate::compile::CompiledStrategy;
     use crate::{CompiledLlm, CompiledNodeKind};
     use acvus_utils::Interner;
 
@@ -105,9 +105,6 @@ mod tests {
                 .into_iter()
                 .map(|k| interner.intern(k))
                 .collect(),
-            self_spec: CompiledSelf {
-                initial_value: None,
-            },
             strategy: CompiledStrategy::Always,
             retry: 0,
             assert: None,

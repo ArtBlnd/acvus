@@ -167,7 +167,7 @@
 			return;
 		}
 
-		const result = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api ?? '');
+		const result = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.ownParams;
 	}

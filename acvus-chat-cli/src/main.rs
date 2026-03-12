@@ -10,7 +10,7 @@ use acvus_mir::ty::Ty;
 use acvus_mir::context_registry::PartialContextTypeRegistry;
 use acvus_orchestration::{
     ApiKind, ExprSpec, Fetch, HashMapStorage, HttpRequest, NodeKind, NodeSpec, ProviderConfig,
-    Resolved, SelfSpec, Strategy, compile_nodes, compile_script,
+    Resolved, Strategy, compile_nodes, compile_script,
 };
 use acvus_utils::{Astr, Interner};
 use node::NodeDef;
@@ -91,12 +91,6 @@ fn parse_context_args(args: &[String]) -> FxHashMap<String, String> {
     map
 }
 
-fn parse_api_kind(s: &str) -> ApiKind {
-    ApiKind::parse(s).unwrap_or_else(|| {
-        eprintln!("unknown api kind: {s}");
-        process::exit(1);
-    })
-}
 
 #[tokio::main]
 async fn main() {
@@ -190,10 +184,8 @@ async fn main() {
             kind: NodeKind::Expr(ExprSpec {
                 source,
                 output_ty: tail_ty,
-            }),
-            self_spec: SelfSpec {
                 initial_value: None,
-            },
+            }),
             strategy: Strategy::default(),
             retry: 0,
             assert: None,
@@ -206,7 +198,7 @@ async fn main() {
     let provider_apis: FxHashMap<String, ApiKind> = spec
         .providers
         .iter()
-        .map(|(name, config)| (name.clone(), parse_api_kind(&config.api)))
+        .map(|(name, config)| (name.clone(), config.api.clone()))
         .collect();
 
     let mut node_specs = Vec::new();
@@ -246,7 +238,7 @@ async fn main() {
     let mut providers: FxHashMap<String, ProviderConfig> = FxHashMap::default();
     let mut endpoint_apis: FxHashMap<String, ApiKind> = FxHashMap::default();
     for (name, config) in &spec.providers {
-        let api = parse_api_kind(&config.api);
+        let api = config.api.clone();
         let api_key = if render_only {
             String::new()
         } else if let Some(key) = &config.api_key {

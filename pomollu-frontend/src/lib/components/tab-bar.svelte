@@ -5,9 +5,10 @@
 	import { findBlock, findNodeItem } from '$lib/block-tree.js';
 	import { longpress } from '$lib/actions/longpress.js';
 	import { X, MessageCircle, Bot, FileCode, ScrollText, User, Box, Plug } from 'lucide-svelte';
-	import type { Component } from 'svelte';
 
-	function tabIcon(tab: Tab): Component {
+	type IconComponent = typeof MessageCircle;
+
+	function tabIcon(tab: Tab): IconComponent {
 		switch (tab.kind) {
 			case 'chat': return MessageCircle;
 			case 'bot-settings': return Bot;

@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use acvus_orchestration::{
-    ApiKind, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec,
-    PlainSpec, SelfSpec, Strategy, TokenBudget, ToolBinding,
+    ApiKind, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
+    NodeSpec, PlainSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -19,11 +19,6 @@ enum NodeKindDef {
         #[serde(default)]
         cache_config: FxHashMap<String, serde_json::Value>,
     },
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct SelfDef {
-    pub initial_value: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,8 +43,6 @@ pub struct NodeDef {
     #[serde(default)]
     generation: GenerationParamsDef,
     cache_key: Option<String>,
-    #[serde(rename = "self", default)]
-    self_spec: SelfDef,
     #[serde(default)]
     retry: u32,
     assert: Option<String>,
@@ -217,10 +210,6 @@ pub fn resolve_node(
         }
     };
 
-    let self_spec = SelfSpec {
-        initial_value: def.self_spec.initial_value.map(|v| interner.intern(&v)),
-    };
-
     let generation = GenerationParams {
         temperature: def.generation.temperature,
         top_p: def.generation.top_p,
@@ -303,7 +292,6 @@ pub fn resolve_node(
     Ok(NodeSpec {
         name: interner.intern(&def.name),
         kind,
-        self_spec,
         strategy,
         retry: def.retry,
         assert: def.assert.map(|a| interner.intern(&a)),

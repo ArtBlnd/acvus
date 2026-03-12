@@ -399,20 +399,22 @@
 							</div>
 						{/if}
 
-						<div class="field">
-							<Label>Initial Value</Label>
-							<AcvusEngineField
-								mode="script"
-								placeholder=''
-								value={node.selfSpec?.initialValue ?? ''}
-								oninput={(v) => updateNode((n) => ({ ...n, selfSpec: { ...n.selfSpec, initialValue: v } }))}
-								contextTypes={mergedContextTypes}
-								expectedTailType={locals?.self}
-								fieldError={formatErrors(fieldErrors.initialValue)}
-								discoverContext
-							/>
-							<p class="hint">Initial @self value. When set, @self is available in the node body (previous stored value or this initial value on first run). Leave empty to disable @self.</p>
-						</div>
+						{#if node.kind === 'expr'}
+							<div class="field">
+								<Label>Initial Value</Label>
+								<AcvusEngineField
+									mode="script"
+									placeholder=''
+									value={node.initialValue ?? ''}
+									oninput={(v) => updateNode((n) => ({ ...n, initialValue: v }))}
+									contextTypes={mergedContextTypes}
+									expectedTailType={locals?.self}
+									fieldError={formatErrors(fieldErrors.initialValue)}
+									discoverContext
+								/>
+								<p class="hint">Initial @self value. When set, @self is available in the node body (previous stored value or this initial value on first run). Leave empty to disable @self.</p>
+							</div>
+						{/if}
 
 						<!-- Retry / Assert -->
 						<div class="grid grid-cols-2 gap-2">

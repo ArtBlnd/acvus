@@ -43,7 +43,7 @@ function convertNode(
 			name: node.name,
 			kind: 'expr',
 			template: node.exprSource,
-			initial_value: node.selfSpec.initialValue?.trim() || undefined,
+			initial_value: node.initialValue?.trim() || undefined,
 			strategy: convertStrategy(node.strategy),
 			retry: node.retry,
 			assert_script: node.assert?.trim() || undefined,
@@ -75,7 +75,6 @@ function convertNode(
 	return {
 		name: node.name,
 		kind: node.kind,
-		initial_value: node.selfSpec.initialValue?.trim() || undefined,
 		strategy: convertStrategy(node.strategy),
 		retry: node.retry,
 		assert_script: node.assert?.trim() || undefined,
@@ -268,7 +267,7 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 
 	// analyzeBot typechecks all 3 levels and returns ALL params merged
 	// (prompt + profile + bot). This is the single source of truth.
-	const analysisResult = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api ?? '');
+	const analysisResult = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
 	// Use ALL params for the session config, not just active ones.
 	// active flag is for UI display (hiding pruned params in editor) — not for compilation.
 	// Dead-branch params are harmless: WASM simply won't evaluate them at runtime.

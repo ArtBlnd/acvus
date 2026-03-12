@@ -89,7 +89,7 @@ export function createNode(name: string): Node {
 		topK: null,
 		grounding: false,
 		maxTokens: { input: 16000, output: 4000 },
-		selfSpec: { initialValue: '' },
+		initialValue: '',
 		strategy: { mode: 'once-per-turn' },
 		retry: 0,
 		assert: 'true',
@@ -435,7 +435,7 @@ class ProviderStore {
 		const provider: Provider = {
 			id: createId(),
 			name,
-			api: '',
+			api: 'openai',
 			endpoint: '',
 			apiKey: ''
 		};
@@ -792,7 +792,19 @@ function migrateBlock(block: Record<string, unknown>): Block {
 }
 
 function migrateNode(node: Record<string, unknown>): Node {
-	return { ...node, exprSource: (node as any).exprSource ?? '' } as unknown as Node;
+	const n: Record<string, unknown> = { ...node, exprSource: (node as any).exprSource ?? '' };
+	// Migrate selfSpec.initialValue → initialValue (Expr-only)
+	if ('selfSpec' in n && typeof n.selfSpec === 'object' && n.selfSpec !== null) {
+		const spec = n.selfSpec as Record<string, unknown>;
+		if (!('initialValue' in n)) {
+			n.initialValue = (spec.initialValue as string) ?? '';
+		}
+		delete n.selfSpec;
+	}
+	if (!('initialValue' in n)) {
+		n.initialValue = '';
+	}
+	return n as unknown as Node;
 }
 
 function migrateChildren(children: BlockNode[]): BlockNode[] {

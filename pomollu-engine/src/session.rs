@@ -5,7 +5,7 @@ use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     ApiKind, DisplayEntrySpec, ExprSpec, GenerationParams, HttpRequest, IterableDisplaySpec,
     LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec, PlainSpec, ProviderConfig, Resolved,
-    SelfSpec, StaticDisplaySpec, Storage, Strategy, TokenBudget, ToolBinding,
+    StaticDisplaySpec, Storage, Strategy, TokenBudget, ToolBinding,
     compile_iterable_display, compile_static_display, render_display, render_display_with_idx,
 };
 use acvus_utils::{Astr, Interner};
@@ -245,7 +245,7 @@ struct SessionConfig {
 
 #[derive(Deserialize)]
 struct ProviderConfigJson {
-    api: String,
+    api: ApiKind,
     endpoint: String,
     api_key: String,
 }
@@ -285,7 +285,7 @@ enum NodeKindConfig {
     #[serde(rename = "llm")]
     Llm {
         provider: String,
-        api: String,
+        api: ApiKind,
         model: String,
         temperature: Option<Decimal>,
         top_p: Option<Decimal>,
@@ -373,9 +373,6 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
             messages,
             tools,
         } => {
-            let api = ApiKind::parse(api)
-                .ok_or_else(|| format!("node '{}': unknown api '{api}'", cfg.name))?;
-
             let messages: Vec<MessageSpec> = messages
                 .iter()
                 .filter_map(|m| {
@@ -405,7 +402,7 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
                 .collect();
 
             NodeKind::Llm(LlmSpec {
-                api,
+                api: api.clone(),
                 provider: provider.clone(),
                 model: model.clone(),
                 messages,
@@ -445,6 +442,7 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
             NodeKind::Expr(ExprSpec {
                 source: template.clone(),
                 output_ty,
+                initial_value: cfg.initial_value.clone(),
             })
         }
         NodeKindConfig::Plain { template } => NodeKind::Plain(PlainSpec {
@@ -463,12 +461,17 @@ fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, Strin
         },
     };
 
+    // Non-Expr nodes must not have initial_value
+    if !matches!(kind, NodeKind::Expr(_)) && cfg.initial_value.is_some() {
+        return Err(format!(
+            "node '{}': initial_value is only supported for Expr nodes",
+            cfg.name
+        ));
+    }
+
     Ok(NodeSpec {
         name: interner.intern(&cfg.name),
         kind,
-        self_spec: SelfSpec {
-            initial_value: cfg.initial_value.as_ref().map(|s| interner.intern(s)),
-        },
         strategy,
         retry: cfg.retry,
         assert: cfg.assert_script.as_ref().map(|s| interner.intern(s)),
@@ -556,16 +559,15 @@ impl ChatSession {
         let providers: FxHashMap<String, ProviderConfig> = config
             .providers
             .into_iter()
-            .filter_map(|(name, p)| {
-                let api = ApiKind::parse(&p.api)?;
-                Some((
+            .map(|(name, p)| {
+                (
                     name,
                     ProviderConfig {
-                        api,
+                        api: p.api,
                         endpoint: p.endpoint,
                         api_key: p.api_key,
                     },
-                ))
+                )
             })
             .collect();
 
