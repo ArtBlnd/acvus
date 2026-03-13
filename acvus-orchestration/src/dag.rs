@@ -32,9 +32,7 @@ pub fn build_dag(interner: &Interner, nodes: &[CompiledNode]) -> Result<Dag, Vec
 
     for (i, node) in nodes.iter().enumerate() {
         for key in &node.all_context_keys {
-            if let Some(&j) = name_to_idx.get(key)
-                && j != i
-            {
+            if let Some(&j) = name_to_idx.get(key) {
                 deps[i].insert(j);
                 rdeps[j].insert(i);
             }
@@ -82,8 +80,8 @@ pub fn build_dag(interner: &Interner, nodes: &[CompiledNode]) -> Result<Dag, Vec
 
 #[cfg(test)]
 mod tests {
-    use crate::compile::CompiledStrategy;
-    use crate::{CompiledLlm, CompiledNodeKind};
+    use crate::compile::{CompiledExecution, CompiledStrategy};
+    use crate::{ApiKind, CompiledLlm, CompiledPersistency, CompiledNodeKind};
     use acvus_utils::Interner;
 
     use super::*;
@@ -92,7 +90,7 @@ mod tests {
         CompiledNode {
             name: interner.intern(name),
             kind: CompiledNodeKind::Llm(CompiledLlm {
-                api: crate::ApiKind::OpenAI,
+                api: ApiKind::OpenAI,
                 provider: "test".into(),
                 model: "m".into(),
                 messages: vec![],
@@ -105,9 +103,13 @@ mod tests {
                 .into_iter()
                 .map(|k| interner.intern(k))
                 .collect(),
-            strategy: CompiledStrategy::Always,
-            retry: 0,
-            assert: None,
+            strategy: CompiledStrategy {
+                execution: CompiledExecution::Always,
+                persistency: CompiledPersistency::Ephemeral,
+                initial_value: None,
+                retry: 0,
+                assert: None,
+            },
             is_function: false,
             fn_params: vec![],
         }
@@ -184,5 +186,15 @@ mod tests {
         let dag = build_dag(&interner, &nodes).unwrap();
         assert_eq!(dag.topo_order.len(), 2);
         assert!(dag.deps[1].is_empty());
+    }
+
+    #[test]
+    fn self_reference_detected() {
+        let interner = Interner::new();
+        let nodes = vec![
+            make_node(&interner, "A", vec!["A"]),
+        ];
+        let err = build_dag(&interner, &nodes).unwrap_err();
+        assert!(matches!(err[0].kind, OrchErrorKind::CycleDetected { .. }));
     }
 }

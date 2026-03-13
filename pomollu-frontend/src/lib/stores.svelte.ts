@@ -1,8 +1,8 @@
-import type { Block, ContextBlock, RawBlock, RawBlockMode, BlockNode, Node, Prompt, Profile, Provider, Bot, Session, NoneBlock, ContextParam, ParamOverride } from './types.js';
+import type { Block, ContextBlock, RawBlock, RawBlockMode, BlockNode, Node, Prompt, Profile, Provider, Bot, Session, NoneBlock, ContextParam, ParamOverride, RenderedRegion, RenderedCard } from './types.js';
 import { createDefaultLayout, HISTORY_BINDING_NAME } from './types.js';
+import { ChatSession, type TurnNode } from '$lib/engine.js';
 import { entityVersions } from '$lib/entity-versions.svelte.js';
 import type { EntityRef, EntityKind } from '$lib/entity-versions.svelte.js';
-import { disposeEphemeral } from '$lib/ephemeral.svelte.js';
 import { addNode, removeTreeNode, updateBlock as treeUpdateBlock, updateNodeItem as treeUpdateNodeItem, findTreeNode, findBlock, findNodeItem, collectAllIds, collectBlocks } from './block-tree.js';
 
 export function createId(): string {
@@ -89,10 +89,13 @@ export function createNode(name: string): Node {
 		topK: null,
 		grounding: false,
 		maxTokens: { input: 16000, output: 4000 },
-		initialValue: '',
-		strategy: { mode: 'once-per-turn' },
-		retry: 0,
-		assert: 'true',
+		strategy: {
+			execution: { mode: 'once-per-turn' },
+			persistency: { kind: 'ephemeral' },
+			initialValue: '',
+			retry: 0,
+			assert: 'true',
+		},
 		exprSource: '',
 		messages: [],
 		tools: [],
@@ -621,11 +624,64 @@ class BotStore {
 	}
 }
 
+// --- Chat state (per-session ephemeral state) ---
+
+export class ChatState {
+	// Reactive
+	treeNodes = $state<TurnNode[]>([]);
+	treeCursor = $state<string>('');
+	isLoading = $state(false);
+	runtimeError = $state('');
+	displayCards = $state<RenderedCard[]>([]);
+	totalListLen = $state(0);
+	loadedFrom = $state(0);
+	turnCount = $state(0);
+	regionData = $state<Map<string, RenderedRegion>>(new Map());
+	pendingResolve: { key: string; resolve: (value: string) => void } | null = $state(null);
+	pendingValue = $state('');
+	gotoHandler: ((id: string) => void) | null = null;
+
+	// Non-reactive
+	chatSession: ChatSession | null = null;
+	chatSessionKey: string | null = null;
+	cancelled = false;
+	activeTurnId = 0;
+	turnDeps: EntityRef[] = [];
+}
+
 // --- Session store ---
 
 class SessionStore {
 	sessions = $state<Session[]>([]);
 	activeSessionId = $state<string | null>(null);
+	private chatStates = new Map<string, ChatState>();
+
+	getChatState(sessionId: string): ChatState {
+		let st = this.chatStates.get(sessionId);
+		if (!st) {
+			st = new ChatState();
+			this.chatStates.set(sessionId, st);
+		}
+		return st;
+	}
+
+	disposeChatState(sessionId: string): void {
+		const st = this.chatStates.get(sessionId);
+		if (!st) return;
+		if (st.pendingResolve) {
+			st.pendingResolve.resolve('');
+			st.pendingResolve = null;
+		}
+		if (st.chatSession) {
+			st.chatSession.free();
+			st.chatSession = null;
+			st.chatSessionKey = null;
+		}
+		if (st.isLoading && st.turnDeps.length > 0) {
+			uiState.unlock(st.turnDeps);
+		}
+		this.chatStates.delete(sessionId);
+	}
 
 	get active(): Session | undefined {
 		return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -640,7 +696,6 @@ class SessionStore {
 			id: createId(),
 			name,
 			botId,
-			storage: null
 		};
 		this.sessions = [...this.sessions, session];
 		this.activeSessionId = session.id;
@@ -648,7 +703,7 @@ class SessionStore {
 	}
 
 	remove(id: string) {
-		disposeEphemeral(`chat:${id}`);
+		this.disposeChatState(id);
 		this.sessions = this.sessions.filter((s) => s.id !== id);
 		if (this.activeSessionId === id) {
 			this.activeSessionId = null;
@@ -657,7 +712,7 @@ class SessionStore {
 
 	removeForBot(botId: string) {
 		for (const s of this.sessions) {
-			if (s.botId === botId) disposeEphemeral(`chat:${s.id}`);
+			if (s.botId === botId) this.disposeChatState(s.id);
 		}
 		this.sessions = this.sessions.filter((s) => s.botId !== botId);
 		if (this.activeSessionId && !this.sessions.some((s) => s.id === this.activeSessionId)) {
@@ -793,7 +848,7 @@ function migrateBlock(block: Record<string, unknown>): Block {
 
 function migrateNode(node: Record<string, unknown>): Node {
 	const n: Record<string, unknown> = { ...node, exprSource: (node as any).exprSource ?? '' };
-	// Migrate selfSpec.initialValue → initialValue (Expr-only)
+	// Migrate selfSpec.initialValue → strategy.initialValue (legacy)
 	if ('selfSpec' in n && typeof n.selfSpec === 'object' && n.selfSpec !== null) {
 		const spec = n.selfSpec as Record<string, unknown>;
 		if (!('initialValue' in n)) {
@@ -801,8 +856,20 @@ function migrateNode(node: Record<string, unknown>): Node {
 		}
 		delete n.selfSpec;
 	}
-	if (!('initialValue' in n)) {
-		n.initialValue = '';
+	// Migrate flat fields → nested strategy object
+	if (!('strategy' in n) || typeof n.strategy !== 'object' || n.strategy === null) {
+		n.strategy = {
+			execution: n.execution ?? { mode: 'once-per-turn' },
+			persistency: n.persistency ?? { kind: 'ephemeral' },
+			initialValue: n.initialValue ?? '',
+			retry: n.retry ?? 0,
+			assert: n.assert ?? 'true',
+		};
+		delete n.execution;
+		delete n.persistency;
+		delete n.initialValue;
+		delete n.retry;
+		delete n.assert;
 	}
 	return n as unknown as Node;
 }

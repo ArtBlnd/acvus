@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { BlockNode } from '$lib/types.js';
 	import { blockLabel } from '$lib/types.js';
-	import { botStore, uiState, generateName, createBlockNode, createFolderNode, createNodeBlockNode, getOwnerChildren, updateOwnerChildren, addOwnerChild } from '$lib/stores.svelte.js';
+	import { botStore, sessionStore, uiState, generateName, createBlockNode, createFolderNode, createNodeBlockNode, getOwnerChildren, updateOwnerChildren, addOwnerChild } from '$lib/stores.svelte.js';
 	import { collectAllNames } from '$lib/block-tree.js';
 	import type { BlockOwner } from '$lib/stores.svelte.js';
 	import BlockListCompact from './block-list-compact.svelte';
-	import BranchTree from './branch-tree.svelte';
+	import HistoryPanel from './history-panel.svelte';
 
 	type OwnerContext = { kind: 'owner'; owner: BlockOwner; children: BlockNode[]; label: string };
 
@@ -27,6 +27,12 @@
 		return null;
 	}
 
+	let chatState = $derived(
+		sessionStore.activeSessionId
+			? sessionStore.getChatState(sessionStore.activeSessionId)
+			: null
+	);
+
 	let context = $derived.by(() => {
 		const tab = uiState.activeTab;
 		if (tab?.kind === 'chat') return { kind: 'session' as const };
@@ -41,8 +47,13 @@
 </script>
 
 <div class="flex h-full flex-col">
-	{#if context?.kind === 'session'}
-		<BranchTree />
+	{#if context?.kind === 'session' && chatState}
+		<HistoryPanel
+			nodes={chatState.treeNodes}
+			cursor={chatState.treeCursor}
+			onGoto={(id) => chatState.gotoHandler?.(id)}
+			disabled={chatState.isLoading}
+		/>
 	{:else if context?.kind === 'owner'}
 		<div class="shrink-0 border-b px-3 py-2.5">
 			<div class="text-xs font-medium text-muted-foreground">{context.label}</div>

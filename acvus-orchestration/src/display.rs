@@ -9,7 +9,7 @@ use crate::compile::{
     CompiledScript, compile_script, compile_script_with_hint, compile_template, expect_list,
 };
 use crate::error::OrchError;
-use crate::storage::Storage;
+use crate::storage::EntryRef;
 
 // ---------------------------------------------------------------------------
 // Spec (source strings — compilation input)
@@ -162,15 +162,12 @@ pub fn compile_iterable_display(
 // Rendering — storage read-only, no resolve chain
 // ---------------------------------------------------------------------------
 
-async fn drive_from_storage<S>(
+async fn drive_from_entry(
     interner: &Interner,
     script: &CompiledScript,
-    storage: &S,
+    entry: &(impl EntryRef<'_> + Sync),
     local: &FxHashMap<String, Arc<Value>>,
-) -> Value
-where
-    S: Storage,
-{
+) -> Value {
     let interp = Interpreter::new(interner, script.module.clone());
     let mut coroutine = interp.execute();
     loop {
@@ -180,7 +177,8 @@ where
             }
             acvus_interpreter::Stepped::NeedContext(request) => {
                 let name = interner.resolve(request.name()).to_string();
-                let Some(value) = local.get(&name).cloned().or_else(|| storage.get(&name)) else {
+                let Some(value) = local.get(&name).cloned().or_else(|| entry.get(&name))
+                else {
                     return Value::Unit;
                 };
                 request.resolve(value);
@@ -194,15 +192,12 @@ where
     }
 }
 
-async fn drive_template_from_storage<S>(
+async fn drive_template_from_entry(
     interner: &Interner,
     script: &CompiledScript,
-    storage: &S,
+    entry: &(impl EntryRef<'_> + Sync),
     local: &FxHashMap<String, Arc<Value>>,
-) -> String
-where
-    S: Storage,
-{
+) -> String {
     let interp = Interpreter::new(interner, script.module.clone());
     let mut coroutine = interp.execute();
     let mut output = String::new();
@@ -214,7 +209,8 @@ where
             },
             acvus_interpreter::Stepped::NeedContext(request) => {
                 let name = interner.resolve(request.name()).to_string();
-                let Some(value) = local.get(&name).cloned().or_else(|| storage.get(&name)) else {
+                let Some(value) = local.get(&name).cloned().or_else(|| entry.get(&name))
+                else {
                     break;
                 };
                 request.resolve(value);
@@ -229,27 +225,24 @@ where
     output
 }
 
-async fn eval_entries<S>(
+async fn eval_entries(
     interner: &Interner,
     entries: &[CompiledDisplayEntry],
-    storage: &S,
+    entry: &(impl EntryRef<'_> + Sync),
     local: &FxHashMap<String, Arc<Value>>,
-) -> Vec<RenderedDisplayEntry>
-where
-    S: Storage,
-{
+) -> Vec<RenderedDisplayEntry> {
     let mut result = Vec::new();
-    for entry in entries {
-        if let Some(ref cond) = entry.condition {
-            let val = drive_from_storage(interner, cond, storage, local).await;
+    for e in entries {
+        if let Some(ref cond) = e.condition {
+            let val = drive_from_entry(interner, cond, entry, local).await;
             let Value::Bool(true) = val else {
                 continue;
             };
         }
         let content =
-            drive_template_from_storage(interner, &entry.template, storage, local).await;
+            drive_template_from_entry(interner, &e.template, entry, local).await;
         result.push(RenderedDisplayEntry {
-            name: entry.name.clone(),
+            name: e.name.clone(),
             content,
         });
     }
@@ -257,17 +250,14 @@ where
 }
 
 /// Render a static display region.
-pub async fn render_display<S>(
+pub async fn render_display(
     interner: &Interner,
     display: &CompiledStaticDisplay,
-    storage: &S,
-) -> Vec<RenderedDisplayEntry>
-where
-    S: Storage,
-{
+    entry: &(impl EntryRef<'_> + Sync),
+) -> Vec<RenderedDisplayEntry> {
     let local = FxHashMap::default();
     let content =
-        drive_template_from_storage(interner, &display.template, storage, &local).await;
+        drive_template_from_entry(interner, &display.template, entry, &local).await;
     vec![RenderedDisplayEntry {
         name: String::new(),
         content,
@@ -279,26 +269,25 @@ where
 /// Evaluates the iterator to get the list, indexes into it,
 /// then evaluates each entry's condition/template with `@item` and `@index` injected.
 /// Returns rendered HTML strings (entries whose condition is false are skipped).
-pub async fn render_display_with_idx<S>(
+pub async fn render_display_with_idx(
     interner: &Interner,
     display: &CompiledIterableDisplay,
-    storage: &S,
+    entry: &(impl EntryRef<'_> + Sync),
     index: usize,
-) -> Vec<RenderedDisplayEntry>
-where
-    S: Storage,
-{
+) -> Vec<RenderedDisplayEntry> {
     let empty_local = FxHashMap::default();
-    let list = drive_from_storage(
+    let list = drive_from_entry(
         interner,
         &display.iterator,
-        storage,
+        entry,
         &empty_local,
     )
     .await;
 
-    let Value::List(items) = list else {
-        return Vec::new();
+    let items = match list {
+        Value::List(items) => items,
+        Value::Deque(deque) => deque.into_vec(),
+        _ => return Vec::new(),
     };
     let Some(item) = items.into_iter().nth(index) else {
         return Vec::new();
@@ -308,21 +297,24 @@ where
     local.insert("item".into(), Arc::new(item));
     local.insert("index".into(), Arc::new(Value::Int(index as i64)));
 
-    eval_entries(interner, &display.entries, storage, &local).await
+    eval_entries(interner, &display.entries, entry, &local).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::HashMapStorage;
+    use crate::storage::{EntryMut, Journal, TreeJournal};
     use acvus_utils::Interner;
 
-    fn storage_with(entries: Vec<(&str, Value)>) -> HashMapStorage {
-        let mut s = HashMapStorage::new();
+    async fn journal_with(entries: Vec<(&str, Value)>) -> (TreeJournal, uuid::Uuid) {
+        let (mut j, root) = TreeJournal::new();
+        let mut e = j.entry_mut(root).await.next().await;
+        let uuid = e.uuid();
         for (k, v) in entries {
-            s.set(k.into(), v);
+            e.apply(k, crate::StorageDiff::Snapshot(v));
         }
-        s
+        drop(e);
+        (j, uuid)
     }
 
     #[test]
@@ -376,8 +368,8 @@ mod tests {
             template: "hello {{ @greeting }}".into(),
         };
         let compiled = compile_static_display(&interner, &spec, &ctx).unwrap();
-        let storage = storage_with(vec![("greeting", Value::String("world".into()))]);
-        let result = render_display(&interner, &compiled, &storage).await;
+        let (journal, uuid) = journal_with(vec![("greeting", Value::String("world".into()))]).await;
+        let result = render_display(&interner, &compiled, &journal.entry(uuid).await).await;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "hello world");
         assert_eq!(result[0].name, "");
@@ -397,21 +389,22 @@ mod tests {
             }],
         };
         let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
-        let storage = storage_with(vec![(
+        let (journal, uuid) = journal_with(vec![(
             "messages",
             Value::List(vec![
                 Value::String("a".into()),
                 Value::String("b".into()),
                 Value::String("c".into()),
             ]),
-        )]);
+        )])
+        .await;
         let r0 =
-            render_display_with_idx(&interner, &compiled, &storage, 0).await;
+            render_display_with_idx(&interner, &compiled, &journal.entry(uuid).await, 0).await;
         assert_eq!(r0.len(), 1);
         assert_eq!(r0[0].name, "msg");
         assert_eq!(r0[0].content, "msg: a");
         let r2 =
-            render_display_with_idx(&interner, &compiled, &storage, 2).await;
+            render_display_with_idx(&interner, &compiled, &journal.entry(uuid).await, 2).await;
         assert_eq!(r2.len(), 1);
         assert_eq!(r2[0].content, "msg: c");
     }
@@ -437,18 +430,19 @@ mod tests {
             ],
         };
         let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
-        let storage = storage_with(vec![(
+        let (journal, uuid) = journal_with(vec![(
             "nums",
             Value::List(vec![Value::Int(3), Value::Int(10)]),
-        )]);
+        )])
+        .await;
 
         let r0 =
-            render_display_with_idx(&interner, &compiled, &storage, 0).await;
+            render_display_with_idx(&interner, &compiled, &journal.entry(uuid).await, 0).await;
         assert_eq!(r0.len(), 1, "3 <= 5, first entry skipped");
         assert_eq!(r0[0].content, "all: 3");
 
         let r1 =
-            render_display_with_idx(&interner, &compiled, &storage, 1).await;
+            render_display_with_idx(&interner, &compiled, &journal.entry(uuid).await, 1).await;
         assert_eq!(r1.len(), 2, "10 > 5, both entries pass");
         assert_eq!(r1[0].content, "big: 10");
         assert_eq!(r1[1].content, "all: 10");
@@ -468,12 +462,13 @@ mod tests {
             }],
         };
         let compiled = compile_iterable_display(&interner, &spec, &ctx).unwrap();
-        let storage = storage_with(vec![(
+        let (journal, uuid) = journal_with(vec![(
             "items",
             Value::List(vec![Value::String("only".into())]),
-        )]);
+        )])
+        .await;
         let result =
-            render_display_with_idx(&interner, &compiled, &storage, 99).await;
+            render_display_with_idx(&interner, &compiled, &journal.entry(uuid).await, 99).await;
         assert!(result.is_empty(), "out of bounds returns empty");
     }
 }

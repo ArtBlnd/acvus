@@ -4,21 +4,25 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     1 │   r1 = closure L0 []
-     2 │   r2 = call map(r0, r1)
-     3 │   r3 = closure L1 []
-     4 │   r4 = call filter(r2, r3)
-     5 │   r5 = call len(r4)
-     6 │   r6 = call to_string(r5)
-     7 │   yield r6
+     1 │   r1 = call iter(r0)
+     2 │   r2 = closure L0 []
+     3 │   r3 = call map(r1, r2)
+     4 │   r4 = closure L1 []
+     5 │   r5 = call filter(r3, r4)
+     6 │   r6 = call collect(r5)
+     7 │   r7 = call len(r6)
+     8 │   r8 = call to_string(r7)
+     9 │   yield r8
 
     ; r0 (@items) : List<Int>
-    ; r1 (v1) : Fn(Int) -> Int
-    ; r2 (map(...)) : List<Int>
-    ; r3 (v3) : Fn(Int) -> Bool
-    ; r4 (filter(...)) : List<Int>
-    ; r5 (len(...)) : Int
-    ; r6 (to_string(...)) : String
+    ; r1 (iter(...)) : Iterator<Int>
+    ; r2 (v2) : Fn(Int) -> Int
+    ; r3 (map(...)) : Iterator<Int>
+    ; r4 (v4) : Fn(Int) -> Bool
+    ; r5 (filter(...)) : Iterator<Int>
+    ; r6 (collect(...)) : List<Int>
+    ; r7 (len(...)) : Int
+    ; r8 (to_string(...)) : String
 
 === closure L0 (i) ===
      1 │   r2 = r0 + 1 (r1)

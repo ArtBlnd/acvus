@@ -1,6 +1,6 @@
 import type { Bot, Prompt, Profile, Node, MessageDef, Block, RawBlock, ContextBlock, ContextBinding } from './types.js';
-import { isRawBlock, isContextBlock, CONTEXT_TYPE } from './types.js';
-import type { SessionConfig, NodeConfig, MessageConfig, ProviderConfig, StrategyConfig } from './engine.js';
+import { isRawBlock, isContextBlock, CONTEXT_TYPE, HISTORY_BINDING_NAME } from './types.js';
+import type { SessionConfig, NodeConfig, MessageConfig, ProviderConfig, ExecutionConfig, PersistencyConfig, StrategyConfig } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import { collectNodes, collectBlocks } from './block-tree.js';
@@ -32,6 +32,16 @@ function convertMessage(msg: MessageDef, blockLookup: Map<string, RawBlock>): Me
 	}
 }
 
+function convertStrategy(node: Node): StrategyConfig {
+	return {
+		execution: convertExecution(node.strategy.execution),
+		persistency: convertPersistency(node.strategy.persistency),
+		initial_value: node.strategy.initialValue?.trim() || undefined,
+		retry: node.strategy.retry,
+		assert_script: node.strategy.assert?.trim() || undefined,
+	};
+}
+
 function convertNode(
 	node: Node,
 	blockLookup: Map<string, RawBlock>,
@@ -43,10 +53,7 @@ function convertNode(
 			name: node.name,
 			kind: 'expr',
 			template: node.exprSource,
-			initial_value: node.initialValue?.trim() || undefined,
-			strategy: convertStrategy(node.strategy),
-			retry: node.retry,
-			assert_script: node.assert?.trim() || undefined,
+			strategy: convertStrategy(node),
 			is_function: node.isFunction || undefined,
 			fn_params: node.isFunction ? node.fnParams.map(p => ({ name: p.name, type: p.type })) : undefined
 		};
@@ -75,9 +82,7 @@ function convertNode(
 	return {
 		name: node.name,
 		kind: node.kind,
-		strategy: convertStrategy(node.strategy),
-		retry: node.retry,
-		assert_script: node.assert?.trim() || undefined,
+		strategy: convertStrategy(node),
 		provider: provider?.name ?? '',
 		api: provider?.api,
 		model: node.model,
@@ -93,27 +98,40 @@ function convertNode(
 	};
 }
 
-function convertStrategy(strategy: Node['strategy']): StrategyConfig {
-	switch (strategy.mode) {
+function convertExecution(execution: import('./types.js').Execution | undefined): ExecutionConfig {
+	switch (execution?.mode) {
 		case 'always':
 			return { mode: 'always' };
 		case 'once-per-turn':
 			return { mode: 'once-per-turn' };
 		case 'if-modified':
-			return { mode: 'if-modified', key: strategy.key };
-		case 'history':
-			return { mode: 'history', history_bind: strategy.historyBind };
+			return { mode: 'if-modified', key: execution.key };
+		default:
+			return { mode: 'always' };
 	}
 }
 
-/** Convert a Prompt contextBinding to an Expr NodeConfig. */
+function convertPersistency(persistency: import('./types.js').Persistency | undefined): PersistencyConfig {
+	switch (persistency?.kind) {
+		case 'snapshot': return { kind: 'snapshot' };
+		case 'deque': return { kind: 'deque', bind: persistency.bind };
+		case 'diff': return { kind: 'diff', bind: persistency.bind };
+		default: return { kind: 'ephemeral' };
+	}
+}
+
+/** Convert a Prompt contextBinding to an Expr NodeConfig.
+ * All bindings use snapshot persistency — display engine reads values from journal. */
 function bindingToExprNode(binding: ContextBinding): NodeConfig {
 	return {
 		name: binding.name,
 		kind: 'expr',
 		template: binding.script,
-		strategy: { mode: 'once-per-turn' },
-		retry: 0
+		strategy: {
+			execution: { mode: 'once-per-turn' },
+			persistency: { kind: 'snapshot' },
+			retry: 0,
+		},
 	};
 }
 
@@ -153,8 +171,11 @@ function buildContextNodes(allBlocks: Block[], bot: Bot): NodeConfig[] {
 				name: partNodeName,
 				kind: 'plain',
 				template: part.value,
-				strategy: { mode: 'once-per-turn' },
-				retry: 0
+				strategy: {
+					execution: { mode: 'once-per-turn' },
+					persistency: { kind: 'ephemeral' },
+					retry: 0,
+				},
 			});
 
 			const entry = `{name: ${escapeAcvusString(b.name)}, description: ${escapeAcvusString(b.info.description)}, tags: ${tagsToAcvus(b.info.tags)}, content: @${partNodeName}, content_type: ${escapeAcvusString(part.content_type)},}`;
@@ -186,8 +207,11 @@ function buildContextNodes(allBlocks: Block[], bot: Bot): NodeConfig[] {
 		name: 'context',
 		kind: 'expr',
 		template: `{${fields.join(', ')},}`,
-		strategy: { mode: 'once-per-turn' },
-		retry: 0,
+		strategy: {
+			execution: { mode: 'once-per-turn' },
+			persistency: { kind: 'ephemeral' },
+			retry: 0,
+		},
 		output_ty: CONTEXT_TYPE
 	});
 
@@ -286,8 +310,11 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 				name: param.name,
 				kind: 'expr',
 				template: script,
-				strategy: { mode: 'once-per-turn' },
-				retry: 0,
+				strategy: {
+					execution: { mode: 'once-per-turn' },
+					persistency: { kind: 'snapshot' },
+					retry: 0,
+				},
 				output_ty: ty
 			});
 			sideEffects.push(param.name);
@@ -302,13 +329,8 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 		}
 	}
 
-	// Entrypoint: the single history-strategy node. If none, last user-defined node.
-	const historyNodes = allNodes.filter((n) => n.strategy.mode === 'history');
-	if (historyNodes.length > 1) {
-		errors.push(`multiple history nodes: ${historyNodes.map((n) => n.name).join(', ')} (only one allowed)`);
-	}
-	const entrypoint = historyNodes[0]?.name
-		?? allNodes[allNodes.length - 1]?.name
+	// Entrypoint: last user-defined node.
+	const entrypoint = allNodes[allNodes.length - 1]?.name
 		?? nodeConfigs[nodeConfigs.length - 1]?.name;
 	if (!entrypoint) {
 		errors.push('no entrypoint: add at least one node');

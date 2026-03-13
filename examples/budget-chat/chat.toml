@@ -8,9 +8,12 @@ input = 16000
 
 [self]
 
-[strategy]
-mode = "history"
-inline_history_bind = "@self"
+[execution]
+mode = "once-per-turn"
+
+[persistency]
+kind = "deque"
+inline_bind = "@self | extend(@raw)"
 
 [[messages]]
 role = "system"
@@ -19,7 +22,7 @@ template = "system.acvus"
 # Chat history with token budget.
 # priority = 0 (fills first), max = 12000 caps this iterator.
 [[messages]]
-iterator = "@turn.history | map(h -> h.chat)"
+iterator = "@self"
 token_budget = { priority = 0, max = 12000 }
 
 [[messages]]

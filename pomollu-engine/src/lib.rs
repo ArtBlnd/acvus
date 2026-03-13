@@ -1,5 +1,9 @@
+mod config;
 mod convert;
 pub mod error;
+mod fetch;
+mod history;
+mod idb;
 pub mod schema;
 mod session;
 
@@ -416,46 +420,30 @@ pub fn typecheck_nodes(
             continue;
         };
         let mut errors = NodeErrors::default();
+        let locals_ref = Some(locals);
 
-        // Context visible inside this node (fn_params + @self injected by build_node_context)
-        let self_ty = match &spec.kind {
-            acvus_orchestration::NodeKind::Expr(e) if e.initial_value.is_some() => {
-                Some(locals.self_ty.clone())
-            }
-            _ => None,
-        };
-        let node_ctx = spec.build_node_context(&interner, env.registry.merged(), self_ty);
+        // Body context: fn_params + @self (if initial_value exists)
+        let node_ctx = spec.build_node_context(&interner, env.registry.merged(), acvus_orchestration::ContextScope::Body, locals_ref);
 
-        // initial_value: context = fn_params only (no @self yet), expected tail = stored type
-        if let acvus_orchestration::NodeKind::Expr(expr_spec) = &spec.kind {
-            if let Some(ref init_src) = expr_spec.initial_value {
-                let hint = match &locals.self_ty {
-                    Ty::Error => None,
-                    ty => Some(ty),
-                };
-                let init_ctx = spec.build_node_context(&interner, env.registry.merged(), None);
-                errors.initial_value = check_script(
-                    &interner,
-                    init_src,
-                    &init_ctx,
-                    hint,
-                );
-            }
+        // initial_value: no @self, no @raw
+        if let Some(init_src) = spec.strategy.initial_value {
+            let hint = match &locals.self_ty {
+                Ty::Error => None,
+                ty => Some(ty),
+            };
+            let init_ctx = spec.build_node_context(&interner, env.registry.merged(), acvus_orchestration::ContextScope::InitialValue, locals_ref);
+            errors.initial_value = check_script(
+                &interner,
+                interner.resolve(init_src),
+                &init_ctx,
+                hint,
+            );
         }
 
-        // strategy: history_bind/if_modified use @self (= stored type)
-        let self_ctx = spec.build_node_context(&interner, env.registry.merged(), Some(locals.self_ty.clone()));
-        match &spec.strategy {
-            acvus_orchestration::Strategy::History { history_bind } => {
-                errors.history_bind = check_script(
-                    &interner,
-                    interner.resolve(*history_bind),
-                    &self_ctx,
-                    None,
-                );
-            }
-            acvus_orchestration::Strategy::IfModified { key } => {
-                let no_self_ctx = spec.build_node_context(&interner, env.registry.merged(), None);
+        // if_modified key: no @self context
+        match &spec.strategy.execution {
+            acvus_orchestration::Execution::IfModified { key } => {
+                let no_self_ctx = spec.build_node_context(&interner, env.registry.merged(), acvus_orchestration::ContextScope::InitialValue, locals_ref);
                 errors.if_modified_key = check_script(
                     &interner,
                     interner.resolve(*key),
@@ -466,12 +454,32 @@ pub fn typecheck_nodes(
             _ => {}
         }
 
-        // assert: context = fn_params + @self, expected tail = Bool
-        if let Some(assert_src) = spec.assert {
+        // persistency: bind script (Deque/Diff) uses @self + @raw + all context
+        match &spec.strategy.persistency {
+            acvus_orchestration::Persistency::Deque { bind } | acvus_orchestration::Persistency::Diff { bind } => {
+                let bind_ctx = spec.build_node_context(&interner, env.registry.merged(), acvus_orchestration::ContextScope::Bind, locals_ref);
+                let hint = if locals.self_ty != Ty::Error {
+                    Some(&locals.self_ty)
+                } else {
+                    None
+                };
+                errors.bind = check_script(
+                    &interner,
+                    interner.resolve(*bind),
+                    &bind_ctx,
+                    hint,
+                );
+            }
+            _ => {}
+        }
+
+        // assert: Bind scope (@self + @raw), expected tail = Bool
+        if let Some(assert_src) = spec.strategy.assert {
+            let assert_ctx = spec.build_node_context(&interner, env.registry.merged(), acvus_orchestration::ContextScope::Bind, locals_ref);
             errors.assert = check_script(
                 &interner,
                 interner.resolve(assert_src),
-                &self_ctx,
+                &assert_ctx,
                 Some(&Ty::Bool),
             );
         }

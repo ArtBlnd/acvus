@@ -16,7 +16,7 @@
 		expectedTailType,
 		// 2-pass typecheck: analyze (lenient) first to discover unresolved context keys,
 		// then hard typecheck with merged context. Only for node-internal fields
-		// (strategy key/history bind, initial value, assert, messages, iterators).
+		// (strategy if-modified key, bind, initial value, assert, messages, iterators).
 		// Do NOT enable for context bindings, display entries, or regions.
 		discoverContext = false,
 		// Per-field error from hard typecheck (nodeErrors). Takes priority over inline typecheck.

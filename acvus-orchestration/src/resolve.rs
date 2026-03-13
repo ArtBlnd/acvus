@@ -4,23 +4,20 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Interpreter, RuntimeError, Stepped, Value};
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
-use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner};
+use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner, TrackedDeque};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, info, warn};
 
 use crate::CompiledNodeKind;
-use crate::compile::{CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy};
+use crate::compile::{CompiledExecution, CompiledMessage, CompiledNode, CompiledPersistency, CompiledScript};
 
-/// Expr 노드의 initial_value 접근 헬퍼.
-fn expr_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
-    match &node.kind {
-        CompiledNodeKind::Expr(e) => e.initial_value.as_ref(),
-        _ => None,
-    }
+/// Access a node's initial_value script.
+fn node_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
+    node.strategy.initial_value.as_ref()
 }
 use crate::node::Node;
-use crate::storage::Storage;
+use crate::storage::{EntryMut, EntryRef, StorageDiff};
 
 // ---------------------------------------------------------------------------
 // ResolveState — bundled mutable context
@@ -29,7 +26,7 @@ use crate::storage::Storage;
 /// Mutable state that flows through the resolver.
 ///
 /// Groups the three stores that always travel together:
-/// - `storage`: persistent cross-turn values (generic backend)
+/// - `entry`: mutable entry into the storage tree
 /// - `turn_context`: values valid for this turn only
 /// - `bind_cache`: IfModified key→output cache
 ///
@@ -40,27 +37,10 @@ use crate::storage::Storage;
 /// 3. **Node execution** — spawn & run the node if its strategy says so
 /// 4. **Storage** — persistent cross-turn values (only for names with no pending node)
 /// 5. **External resolver** — fallback for names not produced by any node
-pub struct ResolveState<S> {
-    pub storage: S,
+pub struct ResolveState<E> {
+    pub entry: E,
     pub turn_context: FxHashMap<Astr, Arc<Value>>,
     pub bind_cache: FxHashMap<Astr, Vec<(Value, Arc<Value>)>>,
-    /// Buffered history entries for the current turn. Flushed once at turn end.
-    pub history_entries: FxHashMap<Astr, Value>,
-}
-
-impl<S> ResolveState<S>
-where
-    S: Storage,
-{
-    pub fn new(storage: S) -> Self {
-        Self {
-            storage,
-            turn_context: FxHashMap::default(),
-            bind_cache: FxHashMap::default(),
-            history_entries: FxHashMap::default(),
-        }
-    }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +87,11 @@ enum ScriptPurpose {
     IfModifiedKey { node_idx: usize },
     InitialValue { node_idx: usize },
     Assert { node_idx: usize, value: Value },
-    HistoryBind { node_idx: usize, value: Value },
+    BindScript {
+        node_idx: usize,
+        value: Value,
+        origin: Option<TrackedDeque<Value>>,
+    },
 }
 
 enum PendingRequest {
@@ -229,7 +213,7 @@ impl<'a> LoopState<'a> {
 ///
 /// Uses a flat FuturesUnordered event loop to drive coroutines and resolve
 /// dependencies without recursive Box::pin calls.
-/// Script phases (IfModified, InitialValue, Assert, HistoryBind) are driven
+/// Script phases (IfModified, InitialValue, Assert, BindScript) are driven
 /// as first-class coroutine tasks, identical to node coroutines.
 pub struct Resolver<'a, R, EH> {
     pub nodes: &'a [CompiledNode],
@@ -250,25 +234,25 @@ where
     // Public entry points
     // -----------------------------------------------------------------------
 
-    pub async fn resolve_node<S>(
+    pub async fn resolve_node<'j, E>(
         &self,
         idx: usize,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
         local: FxHashMap<Astr, Arc<Value>>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         self.resolve_nodes(vec![(idx, local)], state).await
     }
 
-    pub async fn resolve_nodes<S>(
+    pub async fn resolve_nodes<'j, E>(
         &self,
         roots: Vec<(usize, FxHashMap<Astr, Arc<Value>>)>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         if roots.is_empty() {
             return Ok(());
@@ -277,7 +261,7 @@ where
         let mut lp = LoopState::new();
 
         for (idx, local) in roots {
-            let max_retries = self.nodes[idx].retry;
+            let max_retries = self.nodes[idx].strategy.retry;
             lp.retry_state.insert(idx, (max_retries, 0, local.clone()));
             lp.remaining_roots.insert(idx);
             self.start_prepare(idx, local, true, &mut lp, state);
@@ -321,24 +305,71 @@ where
             }
         }
 
-        Err(ResolveError::UnresolvedContext(
-            "event loop exhausted without all root nodes completing".to_string(),
-        ))
+        let stuck_roots: Vec<String> = lp.remaining_roots.iter().map(|&idx| {
+            self.interner.resolve(self.nodes[idx].name).to_string()
+        }).collect();
+        let dep_waiters: Vec<String> = lp.dep_waiters.keys().map(|&name| {
+            self.interner.resolve(name).to_string()
+        }).collect();
+        let serialized_queue: Vec<String> = lp.serialized_queue.keys().map(|&idx| {
+            self.interner.resolve(self.nodes[idx].name).to_string()
+        }).collect();
+        let turn_context_keys: Vec<String> = state.turn_context.keys().map(|&name| {
+            self.interner.resolve(name).to_string()
+        }).collect();
+        let in_flight: Vec<String> = lp.in_flight.iter().map(|&idx| {
+            self.interner.resolve(self.nodes[idx].name).to_string()
+        }).collect();
+        let mut parked: Vec<ParkedDiag> = Vec::new();
+        // dep_waiters
+        for (name, waiters) in &lp.dep_waiters {
+            let waiting_for = self.interner.resolve(*name).to_string();
+            for w in waiters {
+                let task = match lp.meta.get(&w.task_id) {
+                    Some(TaskMeta::Node { node_idx, .. }) =>
+                        self.interner.resolve(self.nodes[*node_idx].name).to_string(),
+                    Some(TaskMeta::Script { purpose, .. }) => {
+                        let idx = script_purpose_node_idx(purpose);
+                        format!("script:{}", self.interner.resolve(self.nodes[idx].name))
+                    }
+                    None => format!("task#{}", w.task_id),
+                };
+                parked.push(ParkedDiag { task, waiting_for: waiting_for.clone() });
+            }
+        }
+        // serialized_queue
+        for (&idx, queue) in &lp.serialized_queue {
+            let waiting_for = self.interner.resolve(self.nodes[idx].name).to_string();
+            for w in queue {
+                let task = match lp.meta.get(&w.task_id) {
+                    Some(TaskMeta::Node { node_idx, .. }) =>
+                        self.interner.resolve(self.nodes[*node_idx].name).to_string(),
+                    Some(TaskMeta::Script { purpose, .. }) => {
+                        let idx = script_purpose_node_idx(purpose);
+                        format!("script:{}", self.interner.resolve(self.nodes[idx].name))
+                    }
+                    None => format!("task#{}", w.task_id),
+                };
+                parked.push(ParkedDiag { task, waiting_for: format!("serial:{}", waiting_for) });
+            }
+        }
+
+        Err(ResolveError::Deadlock { stuck_roots, dep_waiters, serialized_queue, parked, turn_context_keys, in_flight })
     }
 
     // -----------------------------------------------------------------------
     // Emit (unified Emit + Done)
     // -----------------------------------------------------------------------
 
-    fn handle_emit<S>(
+    fn handle_emit<'j, E>(
         &self,
         task_id: TaskId,
         value: Value,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         match lp.meta.remove(&task_id) {
             Some(TaskMeta::Node {
@@ -346,7 +377,7 @@ where
                 local,
                 is_root,
             }) => {
-                if matches!(self.nodes[node_idx].strategy, CompiledStrategy::Always) {
+                if matches!(self.nodes[node_idx].strategy.execution, CompiledExecution::Always) {
                     lp.in_flight.remove(&node_idx);
                 }
                 if is_root {
@@ -368,15 +399,15 @@ where
     // Error
     // -----------------------------------------------------------------------
 
-    fn handle_error<S>(
+    fn handle_error<'j, E>(
         &self,
         task_id: TaskId,
         error: RuntimeError,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let task_meta = lp.meta.remove(&task_id);
         let node_idx = match &task_meta {
@@ -413,16 +444,16 @@ where
     /// Resolve a context request.
     ///
     /// Priority: Local → turn_context → Node (execution) → Storage → External resolver
-    async fn handle_need_context<S>(
+    async fn handle_need_context<'j, E>(
         &self,
         task_id: TaskId,
         coroutine: Coroutine<Value, RuntimeError>,
         request: ContextRequest<Value>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let name = request.name();
         let name_str = self.interner.resolve(name);
@@ -472,7 +503,7 @@ where
                 }
 
                 // 3c. Node doesn't need resolve → serve from storage
-                if let Some(arc) = state.storage.get(name_str) {
+                if let Some(arc) = state.entry.get(name_str) {
                     debug!(context = %name_str, "resolved from storage");
                     request.resolve(arc);
                     lp.enqueue_step(task_id, coroutine);
@@ -489,9 +520,17 @@ where
         }
 
         // 4. Storage (for non-node names)
-        if let Some(arc) = state.storage.get(name_str) {
+        if let Some(arc) = state.entry.get(name_str) {
             debug!(context = %name_str, "resolved from storage");
             request.resolve(arc);
+            lp.enqueue_step(task_id, coroutine);
+            return Ok(());
+        }
+
+        // 4b. @turn_index — derived from tree depth
+        if name == self.interner.intern("turn_index") {
+            let depth = state.entry.depth();
+            request.resolve(Arc::new(Value::Int(depth as i64)));
             lp.enqueue_step(task_id, coroutine);
             return Ok(());
         }
@@ -508,16 +547,16 @@ where
     // NeedExternCall
     // -----------------------------------------------------------------------
 
-    async fn handle_need_extern_call<S>(
+    async fn handle_need_extern_call<'j, E>(
         &self,
         task_id: TaskId,
         coroutine: Coroutine<Value, RuntimeError>,
         request: ExternCallRequest<Value>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let name = request.name();
 
@@ -594,16 +633,16 @@ where
     // Script phase transitions
     // -----------------------------------------------------------------------
 
-    fn handle_script_emit<S>(
+    fn handle_script_emit<'j, E>(
         &self,
         purpose: ScriptPurpose,
         value: Value,
         local: FxHashMap<Astr, Arc<Value>>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         match purpose {
             ScriptPurpose::IfModifiedKey { node_idx } => {
@@ -671,18 +710,55 @@ where
                 self.apply_root_finalize(node_idx, &node_value, &local, lp, state);
             }
 
-            ScriptPurpose::HistoryBind {
+            ScriptPurpose::BindScript {
                 node_idx,
-                value: node_value,
+                value: _raw_value,
+                origin,
             } => {
                 let node = &self.nodes[node_idx];
-                state.history_entries.insert(node.name, value);
+                let node_name_str = self.interner.resolve(node.name);
 
-                // turn_context already set by apply_root_finalize — no redundant storage.set
-                info!(node = %self.interner.resolve(node.name), "resolve node complete");
+                // Apply the bind result to storage based on mode.
+                // The bind result (`value`) is the accumulated @self — this is
+                // what @node_name should resolve to for other nodes.
+                let stored_value = match &node.strategy.persistency {
+                    CompiledPersistency::Deque { .. } => {
+                        let Value::Deque(deque) = value else {
+                            panic!(
+                                "bind script for deque node '{}' returned non-Deque value",
+                                node_name_str,
+                            );
+                        };
+                        let origin = origin.expect("deque mode must have origin");
+                        let (squashed, diff) = deque.into_diff(&origin);
+                        let stored = Value::Deque(squashed.clone());
+                        state.entry.apply(
+                            node_name_str,
+                            StorageDiff::Deque { squashed, diff },
+                        );
+                        stored
+                    }
+                    CompiledPersistency::Diff { .. } => {
+                        let stored = value.clone();
+                        state.entry.apply(
+                            node_name_str,
+                            StorageDiff::Snapshot(value),
+                        );
+                        stored
+                    }
+                    _ => unreachable!("BindScript only spawned for Deque/Diff modes"),
+                };
+
+                // Update turn_context with the bind result (not raw).
+                // @node_name must reflect the accumulated value (@self view).
+                state
+                    .turn_context
+                    .insert(node.name, Arc::new(stored_value.clone()));
+
+                info!(node = %node_name_str, "resolve node complete");
 
                 lp.remaining_roots.remove(&node_idx);
-                self.finish_dep_wake(node_idx, node_value, lp, state);
+                self.finish_dep_wake(node_idx, stored_value, lp, state);
             }
         }
 
@@ -690,29 +766,82 @@ where
     }
 
     // -----------------------------------------------------------------------
-    // Root finalize: assert → cache → store → history
+    // Bind-scope locals: @self + @raw injection (single source of truth)
     // -----------------------------------------------------------------------
 
-    fn start_root_finalize<S>(
+    /// Prepare locals for Bind scope (@self + @raw).
+    /// Returns `(locals, origin)` where `origin` is the Deque checkpoint
+    /// needed by bind to compute diffs. Assert callers can ignore `origin`.
+    fn prepare_bind_locals<'j, E>(
+        &self,
+        node_idx: usize,
+        raw_value: &Value,
+        state: &ResolveState<E>,
+    ) -> (FxHashMap<Astr, Arc<Value>>, Option<TrackedDeque<Value>>)
+    where
+        E: EntryMut<'j>,
+    {
+        let node = &self.nodes[node_idx];
+        let interner = self.interner;
+        let mut locals = FxHashMap::default();
+        let mut origin: Option<TrackedDeque<Value>> = None;
+
+        // @self = previous stored value (or initial_value on first run)
+        if let Some(prev) = self.load_self_value(node_idx, state) {
+            let self_val = match &node.strategy.persistency {
+                CompiledPersistency::Deque { .. } => {
+                    let deque = match prev {
+                        Value::Deque(d) => d,
+                        Value::List(items) => TrackedDeque::from_vec(items),
+                        _ => panic!("deque mode @self: expected Deque or List"),
+                    };
+                    origin = Some(deque.clone());
+                    let mut working = deque;
+                    working.checkpoint();
+                    Value::Deque(working)
+                }
+                _ => prev,
+            };
+            locals.insert(interner.intern("self"), Arc::new(self_val));
+        } else if matches!(&node.strategy.persistency, CompiledPersistency::Deque { .. }) {
+            // First run with no stored value — inject empty deque with checkpoint
+            let deque = TrackedDeque::new();
+            origin = Some(deque.clone());
+            let mut working = deque;
+            working.checkpoint();
+            locals.insert(interner.intern("self"), Arc::new(Value::Deque(working)));
+        }
+
+        // @raw = this turn's raw output. Strictly bind-internal — never
+        // exposed via turn_context or dep wake.
+        locals.insert(interner.intern("raw"), Arc::new(raw_value.clone()));
+
+        (locals, origin)
+    }
+
+    // -----------------------------------------------------------------------
+    // Root finalize: assert → cache → store → bind
+    // -----------------------------------------------------------------------
+
+    fn start_root_finalize<'j, E>(
         &self,
         node_idx: usize,
         value: Value,
         local: FxHashMap<Astr, Arc<Value>>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[node_idx];
 
-        if let Some(ref assert_script) = node.assert {
-            let mut bind_local = local;
-            bind_local.insert(self.interner.intern("self"), Arc::new(value.clone()));
+        if let Some(ref assert_script) = node.strategy.assert {
+            let (assert_local, _origin) = self.prepare_bind_locals(node_idx, &value, state);
             debug!(node = %self.interner.resolve(node.name), "evaluating assert");
             self.spawn_script_task(
                 assert_script,
-                bind_local,
+                assert_local,
                 ScriptPurpose::Assert { node_idx, value },
                 lp,
             );
@@ -722,22 +851,22 @@ where
         Ok(())
     }
 
-    fn apply_root_finalize<S>(
+    fn apply_root_finalize<'j, E>(
         &self,
         node_idx: usize,
         value: &Value,
         local: &FxHashMap<Astr, Arc<Value>>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[node_idx];
         let interner = self.interner;
         let node_name_str = interner.resolve(node.name);
 
         // IfModified: cache update
-        if matches!(node.strategy, CompiledStrategy::IfModified { .. })
+        if matches!(node.strategy.execution, CompiledExecution::IfModified { .. })
             && let Some(bind_val) = local.get(&interner.intern("bind"))
         {
             state
@@ -747,26 +876,41 @@ where
                 .push(((**bind_val).clone(), Arc::new(value.clone())));
         }
 
-        // Store in turn_context (merged to storage at turn end)
-        state
-            .turn_context
-            .insert(node.name, Arc::new(value.clone()));
-
-        // History: spawn history_bind script before completing
-        if let CompiledStrategy::History { history_bind } = &node.strategy {
-            let mut hist_local = FxHashMap::default();
-            hist_local.insert(interner.intern("self"), Arc::new(value.clone()));
-            debug!(node = %node_name_str, "evaluating history_bind");
-            self.spawn_script_task(
-                history_bind,
-                hist_local,
-                ScriptPurpose::HistoryBind {
-                    node_idx,
-                    value: value.clone(),
-                },
-                lp,
-            );
-            return; // HistoryBind will remove from remaining_roots
+        // Mode: Deque/Diff → spawn bind script before completing.
+        //
+        // For Deque/Diff modes, turn_context is NOT set here with the raw value.
+        // It will be set to the bind result (accumulated @self) when the bind
+        // script completes. This ensures @node_name === @self (not @raw).
+        //
+        // @raw is strictly internal to the bind script — it is injected as a
+        // local variable and MUST NOT leak to turn_context or dep wakers.
+        // External consumers of @node_name always see the accumulated value.
+        match &node.strategy.persistency {
+            CompiledPersistency::Deque { bind } | CompiledPersistency::Diff { bind } => {
+                let (bind_local, origin) = self.prepare_bind_locals(node_idx, &value, state);
+                debug!(node = %node_name_str, "evaluating bind script");
+                self.spawn_script_task(
+                    bind,
+                    bind_local,
+                    ScriptPurpose::BindScript {
+                        node_idx,
+                        value: value.clone(),
+                        origin,
+                    },
+                    lp,
+                );
+                return; // BindScript will remove from remaining_roots
+            }
+            CompiledPersistency::Snapshot => {
+                state.entry.apply(
+                    node_name_str,
+                    StorageDiff::Snapshot(value.clone()),
+                );
+                state.turn_context.insert(node.name, Arc::new(value.clone()));
+            }
+            CompiledPersistency::Ephemeral => {
+                state.turn_context.insert(node.name, Arc::new(value.clone()));
+            }
         }
 
         info!(node = %node_name_str, "resolve node complete");
@@ -780,14 +924,14 @@ where
 
     /// Wake dep waiters after a node completes. For serialized nodes,
     /// wakes one waiter at a time via re-execution to avoid lost updates.
-    fn finish_dep_wake<S>(
+    fn finish_dep_wake<'j, E>(
         &self,
         node_idx: usize,
         value: Value,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node_name = self.nodes[node_idx].name;
         if self.needs_serialized(node_idx) {
@@ -809,15 +953,15 @@ where
         }
     }
 
-    fn start_prepare<S>(
+    fn start_prepare<'j, E>(
         &self,
         idx: usize,
         local: FxHashMap<Astr, Arc<Value>>,
         is_root: bool,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[idx];
         let interner = self.interner;
@@ -825,7 +969,7 @@ where
         info!(node = %node_name_str, "prepare node");
 
         // IfModified: spawn key script
-        if let CompiledStrategy::IfModified { ref key } = node.strategy {
+        if let CompiledExecution::IfModified { ref key } = node.strategy.execution {
             self.spawn_script_task(
                 key,
                 local,
@@ -836,8 +980,8 @@ where
             return;
         }
 
-        // InitialValue (Expr only)
-        if let Some(init_script) = expr_initial_value(node) {
+        // InitialValue
+        if let Some(init_script) = node_initial_value(node) {
             if let Some(prev) = self.load_self_value(idx, state) {
                 let mut new_local = local;
                 new_local.insert(interner.intern("self"), Arc::new(prev));
@@ -861,18 +1005,18 @@ where
     }
 
     /// After IfModified key resolved (cache miss): check initial_value, then spawn node.
-    fn start_after_if_modified<S>(
+    fn start_after_if_modified<'j, E>(
         &self,
         node_idx: usize,
         local: FxHashMap<Astr, Arc<Value>>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[node_idx];
 
-        if let Some(init_script) = expr_initial_value(node) {
+        if let Some(init_script) = node_initial_value(node) {
             if let Some(prev) = self.load_self_value(node_idx, state) {
                 let mut new_local = local;
                 new_local.insert(self.interner.intern("self"), Arc::new(prev));
@@ -893,13 +1037,13 @@ where
     }
 
     /// Try to load the existing @self value from storage or turn_context.
-    fn load_self_value<S>(&self, idx: usize, state: &ResolveState<S>) -> Option<Value>
+    fn load_self_value<'j, E>(&self, idx: usize, state: &ResolveState<E>) -> Option<Value>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[idx];
         let name_str = self.interner.resolve(node.name);
-        if let Some(arc) = state.storage.get(name_str) {
+        if let Some(arc) = state.entry.get(name_str) {
             return Some(Value::clone(&arc));
         }
         if let Some(arc) = state.turn_context.get(&node.name) {
@@ -914,9 +1058,9 @@ where
 
     /// Store a dep node's result. All strategies go to turn_context;
     /// merged to storage at turn end by ChatEngine.
-    fn apply_store<S>(&self, idx: usize, value: &Value, state: &mut ResolveState<S>)
+    fn apply_store<'j, E>(&self, idx: usize, value: &Value, state: &mut ResolveState<E>)
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let node = &self.nodes[idx];
         state
@@ -928,16 +1072,16 @@ where
     // Retry
     // -----------------------------------------------------------------------
 
-    fn try_retry<S>(
+    fn try_retry<'j, E>(
         &self,
         idx: usize,
         node_name: &str,
         error: &RuntimeError,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> bool
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let Some((max_retries, attempt, local)) = lp.retry_state.get_mut(&idx) else {
             return false;
@@ -962,13 +1106,13 @@ where
     // External resolver
     // -----------------------------------------------------------------------
 
-    async fn resolve_external<S>(
+    async fn resolve_external<'j, E>(
         &self,
         name: Astr,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) -> Result<Arc<Value>, ResolveError>
     where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         let name_str = self.interner.resolve(name);
         info!(name = %name_str, "calling external resolver");
@@ -986,7 +1130,7 @@ where
             Resolved::Persist(value) => {
                 debug!(name = %name_str, kind = "persist", "external resolver returned");
                 let arc = Arc::new(value);
-                state.storage.set(name_str.to_string(), Value::clone(&arc));
+                state.entry.apply(name_str, StorageDiff::Snapshot(Value::clone(&arc)));
                 Ok(arc)
             }
         }
@@ -996,12 +1140,9 @@ where
     // Eager dependency scheduling
     // -----------------------------------------------------------------------
 
-    fn eager_node_deps<S>(&self, idx: usize, storage: &S) -> Vec<usize>
-    where
-        S: Storage,
-    {
+    fn eager_node_deps(&self, idx: usize, entry: &dyn EntryRef<'_>) -> Vec<usize> {
         let node = &self.nodes[idx];
-        let known = node.known_from_storage(self.interner, storage);
+        let known = node.known_from_entry(self.interner, entry);
         let mut eager = FxHashSet::default();
 
         for msg in node.kind.messages() {
@@ -1027,17 +1168,20 @@ where
             }
         }
 
-        if let Some(iv) = expr_initial_value(node)
-            && storage.get(self.interner.resolve(node.name)).is_none()
+        if let Some(iv) = node_initial_value(node)
+            && entry.get(self.interner.resolve(node.name)).is_none()
         {
             eager.extend(iv.context_keys.iter().copied());
         }
-        match &node.strategy {
-            CompiledStrategy::History { history_bind } => {
-                eager.extend(history_bind.context_keys.iter().copied());
-            }
-            CompiledStrategy::IfModified { key } => {
+        match &node.strategy.execution {
+            CompiledExecution::IfModified { key } => {
                 eager.extend(key.context_keys.iter().copied());
+            }
+            _ => {}
+        }
+        match &node.strategy.persistency {
+            CompiledPersistency::Deque { bind } | CompiledPersistency::Diff { bind } => {
+                eager.extend(bind.context_keys.iter().copied());
             }
             _ => {}
         }
@@ -1049,22 +1193,19 @@ where
             .collect()
     }
 
-    /// Always 전략 + initial_value를 가진 Expr 노드인지.
+    /// Always 전략 + initial_value를 가진 노드인지.
     /// 이 조건이면 동시 실행 시 @self lost update가 발생하므로 직렬화 필요.
     fn needs_serialized(&self, idx: usize) -> bool {
         let node = &self.nodes[idx];
-        matches!(node.strategy, CompiledStrategy::Always)
-            && matches!(&node.kind, CompiledNodeKind::Expr(e) if e.initial_value.is_some())
+        matches!(node.strategy.execution, CompiledExecution::Always)
+            && node.strategy.initial_value.is_some()
     }
 
-    fn needs_resolve<S>(&self, idx: usize, state: &ResolveState<S>) -> bool
-    where
-        S: Storage,
-    {
+    fn needs_resolve<E>(&self, idx: usize, state: &ResolveState<E>) -> bool {
         let name = self.nodes[idx].name;
-        match &self.nodes[idx].strategy {
+        match &self.nodes[idx].strategy.execution {
             // Always: re-execute on every reference within a turn.
-            CompiledStrategy::Always => true,
+            CompiledExecution::Always => true,
             // All other strategies: execute once per turn.
             // Only turn_context counts — storage values from previous turns
             // do NOT satisfy this. The node must re-run each turn.
@@ -1072,13 +1213,13 @@ where
         }
     }
 
-    fn try_eager_schedule<S>(
+    fn try_eager_schedule<'j, E>(
         &self,
         completed_idx: usize,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<S>,
+        state: &mut ResolveState<E>,
     ) where
-        S: Storage,
+        E: EntryMut<'j>,
     {
         if completed_idx >= self.rdeps.len() {
             return;
@@ -1087,7 +1228,10 @@ where
             if lp.in_flight.contains(&candidate) || !self.needs_resolve(candidate, state) {
                 continue;
             }
-            let eager_deps = self.eager_node_deps(candidate, &state.storage);
+            let eager_deps = {
+                let entry_ref = state.entry.as_ref();
+                self.eager_node_deps(candidate, &entry_ref)
+            };
             if eager_deps
                 .iter()
                 .all(|&dep| !self.needs_resolve(dep, state))
@@ -1150,7 +1294,7 @@ fn script_purpose_node_idx(purpose: &ScriptPurpose) -> usize {
         ScriptPurpose::IfModifiedKey { node_idx }
         | ScriptPurpose::InitialValue { node_idx }
         | ScriptPurpose::Assert { node_idx, .. }
-        | ScriptPurpose::HistoryBind { node_idx, .. } => *node_idx,
+        | ScriptPurpose::BindScript { node_idx, .. } => *node_idx,
     }
 }
 
@@ -1159,8 +1303,26 @@ fn script_purpose_node_idx(purpose: &ScriptPurpose) -> usize {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
+pub struct ParkedDiag {
+    /// The task that is parked (node or script-for-node name).
+    pub task: String,
+    /// The `@name` it is waiting for.
+    pub waiting_for: String,
+}
+
+#[derive(Debug)]
 pub enum ResolveError {
+    /// A context key could not be resolved at all.
     UnresolvedContext(String),
+    /// The event loop drained but some root nodes never completed (deadlock).
+    Deadlock {
+        stuck_roots: Vec<String>,
+        dep_waiters: Vec<String>,
+        serialized_queue: Vec<String>,
+        turn_context_keys: Vec<String>,
+        in_flight: Vec<String>,
+        parked: Vec<ParkedDiag>,
+    },
     Runtime { node: String, error: RuntimeError },
 }
 
@@ -1168,6 +1330,23 @@ impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResolveError::UnresolvedContext(name) => write!(f, "unresolved context: @{name}"),
+            ResolveError::Deadlock { stuck_roots, dep_waiters, serialized_queue, turn_context_keys, in_flight, parked } => {
+                write!(f, "deadlock: roots [{}]", stuck_roots.join(", "))?;
+                if !dep_waiters.is_empty() {
+                    write!(f, ", dep_waiters [{}]", dep_waiters.join(", "))?;
+                }
+                if !serialized_queue.is_empty() {
+                    write!(f, ", serial_q [{}]", serialized_queue.join(", "))?;
+                }
+                if !in_flight.is_empty() {
+                    write!(f, ", in_flight [{}]", in_flight.join(", "))?;
+                }
+                write!(f, ", turn_ctx [{}]", turn_context_keys.join(", "))?;
+                for p in parked {
+                    write!(f, "; {} -> @{}", p.task, p.waiting_for)?;
+                }
+                Ok(())
+            }
             ResolveError::Runtime { node, error } => {
                 if node.is_empty() {
                     write!(f, "runtime error: {error}")

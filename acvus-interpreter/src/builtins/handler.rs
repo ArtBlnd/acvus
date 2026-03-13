@@ -63,6 +63,9 @@ where
     fn from_value(v: Value) -> Self {
         match v {
             Value::List(items) => items.into_iter().map(T::from_value).collect(),
+            Value::Deque(deque) => {
+                deque.into_vec().into_iter().map(|v| T::from_value(v)).collect()
+            }
             _ => unreachable!("FromValue<Vec<T>>: expected List, got {v:?}"),
         }
     }

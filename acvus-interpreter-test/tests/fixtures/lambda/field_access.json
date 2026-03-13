@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @users | iter | map(u -> u.name) | collect }}{{ x | join(\", \") }}",
+  "template": "{{ x = @users | map(u -> u.name) | collect }}{{ x | join(\", \") }}",
   "context": {
     "users": [
       { "name": "alice", "age": 30 },

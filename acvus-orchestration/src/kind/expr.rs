@@ -12,17 +12,12 @@ use crate::error::OrchError;
 pub struct ExprSpec {
     pub source: String,
     pub output_ty: Ty,
-    /// Optional initial state. When Some, `@self` is available in the node body.
-    /// Only Expr nodes support `initial_value` (stateful accumulation via `@self`).
-    pub initial_value: Option<String>,
 }
 
 /// Compiled expr node.
 #[derive(Debug, Clone)]
 pub struct CompiledExpr {
     pub script: CompiledScript,
-    /// Compiled initial_value script. When Some, `@self` is available in the node body.
-    pub initial_value: Option<CompiledScript>,
 }
 
 /// Compile an expr node spec.
@@ -39,5 +34,5 @@ pub fn compile_expr(
         compile_script_with_hint(interner, &spec.source, context_types, hint)
             .map_err(|e| vec![e])?;
     let keys = script.context_keys.clone();
-    Ok((CompiledExpr { script, initial_value: None }, keys))
+    Ok((CompiledExpr { script }, keys))
 }

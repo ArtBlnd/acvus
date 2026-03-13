@@ -128,7 +128,7 @@ pub struct NodeErrors {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub initial_value: Vec<error::EngineError>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub history_bind: Vec<error::EngineError>,
+    pub bind: Vec<error::EngineError>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub if_modified_key: Vec<error::EngineError>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -142,7 +142,7 @@ pub struct NodeErrors {
 impl NodeErrors {
     pub fn is_empty(&self) -> bool {
         self.initial_value.is_empty()
-            && self.history_bind.is_empty()
+            && self.bind.is_empty()
             && self.if_modified_key.is_empty()
             && self.assert.is_empty()
             && self.messages.is_empty()
@@ -160,11 +160,30 @@ pub struct EvaluateResult {
 }
 
 // ---------------------------------------------------------------------------
-// StorageSnapshot — Tsify wrapper for storage export/import
+// Tree / turn types
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, Tsify)]
-pub struct StorageSnapshot(pub FxHashMap<String, JsConcreteValue>);
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnNode {
+    pub uuid: String,
+    pub parent: Option<String>,
+    pub depth: usize,
+}
+
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnResult {
+    pub value: JsConcreteValue,
+    pub turn: TurnNode,
+}
+
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeView {
+    pub nodes: Vec<TurnNode>,
+    pub cursor: String,
+}
 
 // ---------------------------------------------------------------------------
 // JsRenderedDisplayEntry — Tsify wrapper for RenderedDisplayEntry
@@ -280,6 +299,8 @@ pub enum TypeDesc {
     Object { fields: Vec<TypeDescField> },
     #[serde(rename = "list")]
     List { elem: Box<TypeDesc> },
+    #[serde(rename = "deque")]
+    Deque { elem: Box<TypeDesc>, origin: TypeDescOrigin },
     #[serde(rename = "enum")]
     Enum {
         name: String,
@@ -287,6 +308,13 @@ pub enum TypeDesc {
     },
     #[serde(rename = "unsupported")]
     Unsupported { raw: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, Tsify)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TypeDescOrigin {
+    Concrete { id: u32 },
+    Var { id: u32 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Tsify)]
@@ -321,9 +349,6 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
         Ty::Option(inner) => TypeDesc::Option {
             inner: Box::new(ty_to_desc(interner, inner)),
         },
-        Ty::List(inner) => TypeDesc::List {
-            elem: Box::new(ty_to_desc(interner, inner)),
-        },
         Ty::Object(fields) => {
             let mut desc_fields: Vec<TypeDescField> = fields
                 .iter()
@@ -350,6 +375,16 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
                 variants: desc_variants,
             }
         }
+        Ty::List(inner) => TypeDesc::List {
+            elem: Box::new(ty_to_desc(interner, inner)),
+        },
+        Ty::Deque(inner, origin) => TypeDesc::Deque {
+            elem: Box::new(ty_to_desc(interner, inner)),
+            origin: match origin {
+                acvus_mir::ty::Origin::Concrete(id) => TypeDescOrigin::Concrete { id: *id },
+                acvus_mir::ty::Origin::Var(id) => TypeDescOrigin::Var { id: *id },
+            },
+        },
         Ty::Var(_) | Ty::Infer | Ty::Error => TypeDesc::Unsupported { raw: "?".into() },
         Ty::Fn { .. } => TypeDesc::Unsupported { raw: "Fn".into() },
         Ty::Opaque(_) => TypeDesc::Unsupported { raw: "Opaque".into() },
@@ -369,6 +404,13 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
         },
         TypeDesc::Option { inner } => Ty::Option(Box::new(desc_to_ty(interner, inner))),
         TypeDesc::List { elem } => Ty::List(Box::new(desc_to_ty(interner, elem))),
+        TypeDesc::Deque { elem, origin } => {
+            let o = match origin {
+                TypeDescOrigin::Concrete { id } => acvus_mir::ty::Origin::Concrete(*id),
+                TypeDescOrigin::Var { id } => acvus_mir::ty::Origin::Var(*id),
+            };
+            Ty::Deque(Box::new(desc_to_ty(interner, elem)), o)
+        }
         TypeDesc::Object { fields } => {
             let ty_fields: FxHashMap<Astr, Ty> = fields
                 .iter()

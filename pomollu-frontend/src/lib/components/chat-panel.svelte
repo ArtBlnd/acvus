@@ -9,12 +9,11 @@
 	import { tick } from 'svelte';
 	import DisplayCard from './display-card.svelte';
 	import { sessionStore, promptStore, profileStore, uiState } from '$lib/stores.svelte.js';
-	import { ChatSession, type StorageSnapshot } from '$lib/engine.js';
+	import { ChatSession, type TurnNode } from '$lib/engine.js';
 	import { buildSessionConfig, type BuildResult } from '$lib/session-builder.js';
 	import { confirmAction } from '$lib/confirm-dialog.svelte.js';
 	import { collectBotDeps } from '$lib/dependencies.js';
 	import type { EntityRef } from '$lib/entity-versions.svelte.js';
-	import { ephemeral } from '$lib/ephemeral.svelte.js';
 	import BasePage from './base-page.svelte';
 
 	let {
@@ -27,43 +26,9 @@
 
 	// --- Ephemeral state: survives component remounts ---
 
-	class ChatPanelState {
-		isLoading = $state(false);
-		inputValue = $state('');
-		runtimeError = $state('');
-		displayCards = $state<RenderedCard[]>([]);
-		totalListLen = $state(0);
-		loadedFrom = $state(0);
-		turnCount = $state(0);
-		regionData = $state<Map<string, RenderedRegion>>(new Map());
-		pendingResolve: { key: string; resolve: (value: string) => void } | null = $state(null);
-		pendingValue = $state('');
-
-		// Non-reactive (no $state needed — internal bookkeeping only)
-		chatSession: ChatSession | null = null;
-		chatSessionKey: string | null = null;
-		cancelled = false;
-		activeTurnId = 0;
-		turnDeps: EntityRef[] = [];
-		storageSnapshot: unknown = null;
-		prevSessionKey = '';
-	}
-
-	const st = ephemeral(`chat:${session.id}`, () => new ChatPanelState(), (st) => {
-		// Called on session deletion (disposeEphemeral) — free WASM resources.
-		if (st.pendingResolve) {
-			st.pendingResolve.resolve('');
-			st.pendingResolve = null;
-		}
-		if (st.chatSession) {
-			st.chatSession.free();
-			st.chatSession = null;
-			st.chatSessionKey = null;
-		}
-		if (st.isLoading && st.turnDeps.length > 0) {
-			uiState.unlock(st.turnDeps);
-		}
-	});
+	const st = sessionStore.getChatState(session.id);
+	let inputValue = $state('');
+	let prevSessionKey = '';
 
 	// --- Derived from props (always recomputed, not ephemeral) ---
 
@@ -81,7 +46,7 @@
 		prompt?.contextBindings.some((b) => b.name === HISTORY_BINDING_NAME && b.script.trim() !== '') ?? false
 	);
 	let isConfigured = $derived(hasHistoryBinding && !!inputParam);
-	let canSubmit = $derived(st.inputValue.trim().length > 0 && isConfigured);
+	let canSubmit = $derived(inputValue.trim().length > 0 && isConfigured);
 
 	// --- Error handling: config built via debounced handleConfigChange, runtime errors are ephemeral ---
 	let configResult = $state<BuildResult | null>(buildSessionConfig(bot));
@@ -106,8 +71,8 @@
 	// --- Session lifecycle: auto-init when conditions are met ---
 	$effect(() => {
 		const key = `${bot.id}:${session.id}`;
-		if (key !== st.prevSessionKey) {
-			st.prevSessionKey = key;
+		if (key !== prevSessionKey) {
+			prevSessionKey = key;
 
 			// Abort pending resolver so the old turn() can reject and clean up
 			if (st.pendingResolve) {
@@ -123,6 +88,8 @@
 			st.regionData = new Map();
 			st.runtimeError = '';
 			st.turnCount = 0;
+			st.treeNodes = [];
+			st.treeCursor = '';
 
 			// Invalidate old session
 			if (st.chatSession) {
@@ -156,18 +123,6 @@
 		});
 	});
 
-	/** Incrementally update session storage from WASM callback. */
-	function onStorageChange(key: string, value: unknown) {
-		sessionStore.update(session.id, (s) => {
-			const storage = ((s.storage ?? {}) as Record<string, unknown>);
-			if (value === undefined) {
-				const { [key]: _, ...rest } = storage;
-				return { ...s, storage: rest };
-			}
-			return { ...s, storage: { ...storage, [key]: value } };
-		});
-	}
-
 	async function ensureChatSession(): Promise<ChatSession> {
 		const key = `${bot.id}:${session.id}`;
 		if (st.chatSession && st.chatSessionKey === key) return st.chatSession;
@@ -179,7 +134,7 @@
 
 		if (!configResult?.ok) throw new Error(configError || 'invalid config');
 
-		const cs = await ChatSession.create(configResult.config, session.storage as StorageSnapshot | null, onStorageChange);
+		const cs = await ChatSession.create(configResult.config, session.id);
 
 		// Guard: another init may have completed while we were awaiting
 		if (st.chatSessionKey !== null) {
@@ -189,10 +144,15 @@
 
 		st.chatSession = cs;
 		st.chatSessionKey = key;
+		st.gotoHandler = (id: string) => handleHistoryGoto(id);
 
-		// Sync initial storage (import doesn't fire callbacks).
-		sessionStore.update(session.id, (s) => ({ ...s, storage: cs.exportStorage() }));
-		st.turnCount = cs.turnCount();
+		st.turnCount = await cs.turnCount();
+
+		const treeView = cs.tree();
+		if (treeView) {
+			st.treeNodes = treeView.nodes;
+			st.treeCursor = treeView.cursor;
+		}
 
 		if (useDisplayEngine) {
 			await initialDisplayLoad(cs);
@@ -208,6 +168,8 @@
 		st.loadedFrom = Math.max(0, len - 10);
 		if (len > 0) {
 			st.displayCards = await renderDisplayRange(cs, st.loadedFrom, len);
+		} else {
+			st.displayCards = [];
 		}
 	}
 
@@ -364,11 +326,7 @@
 		// Immediately release lock and reset UI — don't wait for WASM to finish.
 		uiState.unlock(st.turnDeps);
 		st.isLoading = false;
-		// Restore storage to pre-turn state and destroy session.
-		if (st.storageSnapshot !== null) {
-			sessionStore.update(session.id, (s) => ({ ...s, storage: st.storageSnapshot }));
-			st.storageSnapshot = null;
-		}
+		// Destroy session.
 		st.chatSession = null;
 		st.chatSessionKey = null;
 		// Unblock any pending resolver so the WASM turn can finish in background.
@@ -385,7 +343,7 @@
 			return;
 		}
 		if (!canSubmit) return;
-		const currentInput = st.inputValue;
+		const currentInput = inputValue;
 		const currentInputParam = inputParam;
 
 		st.isLoading = true;
@@ -393,11 +351,6 @@
 		st.runtimeError = '';
 		let turnSession: ChatSession | null = null;
 		const myTurnId = ++st.activeTurnId;
-
-		// Snapshot storage so we can restore on cancel.
-		st.storageSnapshot = $state.snapshot(
-			sessionStore.sessions.find((s) => s.id === session.id)?.storage ?? null
-		);
 
 		try {
 			const cs = await ensureChatSession();
@@ -414,7 +367,7 @@
 
 			st.turnDeps = deps;
 			uiState.lock(st.turnDeps);
-			const result = await cs.turn(resolver);
+			const { value, turn: turnNode } = await cs.turn(resolver);
 
 			// Session was switched during turn — bail out.
 			if (st.chatSessionKey !== snapshotKey) return;
@@ -422,9 +375,11 @@
 			// Turn was cancelled while WASM was running — discard result.
 			if (myTurnId !== st.activeTurnId) return;
 
-			// Storage is already synced via onStorageChange callback.
-			st.turnCount = cs.turnCount();
-			st.inputValue = '';
+			st.treeNodes = [...st.treeNodes, turnNode];
+			st.treeCursor = turnNode.uuid;
+
+			st.turnCount = await cs.turnCount();
+			inputValue = '';
 
 			if (useDisplayEngine) {
 				const newLen = await cs.displayListLen(bot.display.iterator);
@@ -434,7 +389,7 @@
 					st.totalListLen = newLen;
 				}
 			} else {
-				const content = formatResult(result);
+				const content = formatResult(value);
 				st.displayCards = [...st.displayCards, { name: 'User', content: currentInput }, { name: 'Assistant', content }];
 			}
 
@@ -458,7 +413,6 @@
 				uiState.unlock(st.turnDeps);
 				st.isLoading = false;
 				st.cancelled = false;
-				st.storageSnapshot = null;
 				st.pendingResolve = null;
 				st.pendingValue = '';
 			}
@@ -471,6 +425,35 @@
 		st.pendingResolve.resolve(st.pendingValue.trim());
 		st.pendingResolve = null;
 		st.pendingValue = '';
+	}
+
+	async function handleHistoryUndo() {
+		if (!st.chatSession || st.isLoading) return;
+		await st.chatSession.undo();
+		await refreshAfterNavigation(st.chatSession);
+	}
+
+	async function handleHistoryGoto(id: string) {
+		if (!st.chatSession || st.isLoading) return;
+		await st.chatSession.goto(id);
+		await refreshAfterNavigation(st.chatSession);
+	}
+
+	/** Refresh display + tree after cursor navigation (undo/goto). */
+	async function refreshAfterNavigation(cs: ChatSession) {
+		// Update tree cursor from WASM
+		const treeView = cs.tree();
+		if (treeView) {
+			st.treeNodes = treeView.nodes;
+			st.treeCursor = treeView.cursor;
+		}
+		st.turnCount = await cs.turnCount();
+		if (useDisplayEngine) {
+			await initialDisplayLoad(cs);
+		} else {
+			st.displayCards = [];
+		}
+		await renderRegions(cs);
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -546,7 +529,9 @@
 {#if bot.embeddedStyle}
 	{@html `<style>${bot.embeddedStyle}</style>`}
 {/if}
-<div class="flex h-full flex-col">
+<div class="flex h-full">
+	<!-- Main chat area -->
+	<div class="flex flex-1 flex-col min-w-0">
 	<div class="flex-1 overflow-hidden flex items-center justify-center">
 		{#if hasRegions}
 			<div
@@ -603,8 +588,8 @@
 					/>
 				{:else}
 					<Textarea
-						value={st.inputValue}
-						oninput={(e) => { st.inputValue = e.currentTarget.value; }}
+						value={inputValue}
+						oninput={(e) => { inputValue = e.currentTarget.value; }}
 						onkeydown={handleKeydown}
 						placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
 						rows={2}
@@ -613,7 +598,7 @@
 					/>
 				{/if}
 			</div>
-			<div class="flex flex-col justify-end pb-1 pr-1">
+			<div class="flex flex-col justify-end gap-1 pb-1 pr-1">
 				{#if st.pendingResolve}
 					<Button size="icon" class="h-10 w-10 shrink-0 rounded-lg transition-transform hover:scale-105 active:scale-95" disabled={!st.pendingValue.trim()} onclick={submitPending}>
 						<Send class="h-4 w-4" />
@@ -630,6 +615,8 @@
 			</div>
 		</div>
 	</div>
+	</div>
+
 </div>
 {/if}
 </BasePage>

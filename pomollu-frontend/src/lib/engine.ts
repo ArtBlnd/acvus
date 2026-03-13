@@ -7,7 +7,6 @@ import type {
 	NodeLocalTypes as WasmNodeLocalTypes,
 	EngineError,
 	NodeErrors as WasmNodeErrors,
-	StorageSnapshot,
 } from '$lib/wasm/pomollu_engine.js';
 import {
 	analyze as wasmAnalyze,
@@ -21,11 +20,41 @@ import {
 // Re-exports — WASM types that consumers use directly
 // ---------------------------------------------------------------------------
 
-export type { EngineError, StorageSnapshot };
+export type { EngineError };
+
+// ---------------------------------------------------------------------------
+// Tree / Turn API types
+// ---------------------------------------------------------------------------
+
+export type TurnNode = {
+	uuid: string;
+	parent: string | null;
+	depth: number;
+};
+
+export type TreeView = {
+	nodes: TurnNode[];
+	cursor: string;
+};
+
+export type TurnResultWithNode = {
+	value: unknown;
+	turn: TurnNode;
+};
+
+// ---------------------------------------------------------------------------
+// History API types (mirrors Rust StorageView via Tsify)
+// ---------------------------------------------------------------------------
+
+export type StorageViewResult = {
+	cursor: string;
+	depth: number;
+	entries: Map<string, unknown> | Record<string, unknown>;
+};
 
 export type NodeErrors = {
 	initialValue: EngineError[];
-	historyBind: EngineError[];
+	bind: EngineError[];
 	ifModifiedKey: EngineError[];
 	assert: EngineError[];
 	messages: Record<string, EngineError[]>;
@@ -38,7 +67,7 @@ export type NodeErrors = {
 // Tsify serializes FxHashMap as JS Map, not plain object.
 // We need to convert to Record for TS consumers.
 
-function mapToRecord<V>(mapOrObj: Map<string, V> | Record<string, V>): Record<string, V> {
+export function mapToRecord<V>(mapOrObj: Map<string, V> | Record<string, V>): Record<string, V> {
 	if (mapOrObj instanceof Map) {
 		const rec: Record<string, V> = {};
 		for (const [k, v] of mapOrObj) rec[k] = v;
@@ -65,6 +94,8 @@ function convertTypeDesc(wasm: WasmTypeDesc): TypeDesc {
 			return { kind: 'option', inner: convertTypeDesc(wasm.inner) };
 		case 'list':
 			return { kind: 'list', elem: convertTypeDesc(wasm.elem) };
+		case 'deque':
+			return { kind: 'deque', elem: convertTypeDesc(wasm.elem), origin: wasm.origin };
 		case 'object':
 			return {
 				kind: 'object',
@@ -183,13 +214,20 @@ export function analyzeWithTail(
 
 type WebNodeShared = {
 	name: string;
-	strategy:
-		| { mode: 'always' }
-		| { mode: 'once-per-turn' }
-		| { mode: 'if-modified'; key: string }
-		| { mode: 'history'; historyBind: string };
-	retry: number;
-	assert: string;
+	strategy: {
+		execution:
+			| { mode: 'always' }
+			| { mode: 'once-per-turn' }
+			| { mode: 'if-modified'; key: string };
+		persistency:
+			| { kind: 'ephemeral' }
+			| { kind: 'snapshot' }
+			| { kind: 'deque'; bind: string }
+			| { kind: 'diff'; bind: string };
+		initialValue?: string;
+		retry: number;
+		assert: string;
+	};
 	isFunction: boolean;
 	fnParams: { name: string; type: string }[];
 };
@@ -213,7 +251,6 @@ export type WebNode = WebNodeShared & (
 	| {
 		kind: 'expr';
 		exprSource: string;
-		initialValue?: string;
 	}
 	| {
 		kind: 'plain';
@@ -230,7 +267,7 @@ export type TypecheckNodesResult = {
 function convertNodeErrors(raw: WasmNodeErrors): NodeErrors {
 	return {
 		initialValue: raw.initialValue,
-		historyBind: raw.historyBind,
+		bind: raw.bind,
 		ifModifiedKey: raw.ifModifiedKey,
 		assert: raw.assert,
 		messages: mapToRecord(raw.messages as unknown as Map<string, EngineError[]>),
@@ -294,19 +331,29 @@ export type SessionConfig = {
 	side_effects?: string[];
 };
 
-export type StrategyConfig =
+export type ExecutionConfig =
 	| { mode: 'always' }
 	| { mode: 'once-per-turn' }
-	| { mode: 'if-modified'; key: string }
-	| { mode: 'history'; history_bind: string };
+	| { mode: 'if-modified'; key: string };
+
+export type PersistencyConfig =
+	| { kind: 'ephemeral' }
+	| { kind: 'snapshot' }
+	| { kind: 'deque'; bind: string }
+	| { kind: 'diff'; bind: string };
+
+export type StrategyConfig = {
+	execution: ExecutionConfig;
+	persistency: PersistencyConfig;
+	initial_value?: string;
+	retry: number;
+	assert_script?: string;
+};
 
 export type NodeConfig = {
 	name: string;
 	kind: string;
-	initial_value?: string;
 	strategy: StrategyConfig;
-	retry: number;
-	assert_script?: string;
 
 	// LLM-specific
 	provider?: string;
@@ -348,7 +395,9 @@ export type ResolverFn = (key: string) => string | Promise<string>;
 
 export class ChatSession {
 	private inner: WasmChatSession;
-	private _busy = false;
+	private _exclusive = false;
+	private _inflightReads = 0;
+	private _drainResolve: (() => void) | null = null;
 	private _pendingFree = false;
 	private _freed = false;
 	private _crashed = false;
@@ -357,9 +406,9 @@ export class ChatSession {
 		this.inner = inner;
 	}
 
-	/** True while turn() is running (&mut self held by WASM). */
+	/** True while an exclusive operation (turn/undo/goto) holds the lock. */
 	get busy(): boolean {
-		return this._busy;
+		return this._exclusive;
 	}
 
 	/** True after inner WASM object has been freed. */
@@ -372,28 +421,75 @@ export class ChatSession {
 		return this._crashed;
 	}
 
+	// -----------------------------------------------------------------------
+	// Lock primitives
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Acquire exclusive lock. Sets the flag immediately to reject new reads,
+	 * then waits for any in-flight read operations to drain.
+	 */
+	private async acquireExclusive(): Promise<void> {
+		if (this._exclusive) throw new Error('Session is busy');
+		this._exclusive = true;
+		if (this._inflightReads > 0) {
+			await new Promise<void>((resolve) => {
+				this._drainResolve = resolve;
+			});
+		}
+	}
+
+	private releaseExclusive(): void {
+		this._exclusive = false;
+	}
+
+	/**
+	 * Run fn under a shared read guard. If exclusive lock is held or session
+	 * is freed/crashed, returns fallback immediately without touching WASM.
+	 */
+	private async withReadGuard<T>(fallback: T, fn: () => Promise<T>): Promise<T> {
+		if (this._freed || this._exclusive) return fallback;
+		this._inflightReads++;
+		try {
+			return await fn();
+		} finally {
+			this._inflightReads--;
+			if (this._inflightReads === 0 && this._drainResolve) {
+				const resolve = this._drainResolve;
+				this._drainResolve = null;
+				resolve();
+			}
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Construction
+	// -----------------------------------------------------------------------
+
 	static async create(
 		config: SessionConfig,
-		storage: StorageSnapshot | null = null,
-		onStorageChange: (key: string, value: unknown) => void,
+		sessionId: string,
 	): Promise<ChatSession> {
 		const inner = await WasmChatSession.create(
 			JSON.stringify(config),
-			storage,
-			onStorageChange,
+			sessionId,
 		);
 		return new ChatSession(inner);
 	}
 
-	async turn(resolver: ResolverFn): Promise<unknown> {
+	// -----------------------------------------------------------------------
+	// Exclusive operations (turn, undo, goto)
+	// -----------------------------------------------------------------------
+
+	async turn(resolver: ResolverFn): Promise<TurnResultWithNode> {
 		if (this._freed) throw new Error('ChatSession already freed');
 		if (this._crashed) throw new Error('ChatSession crashed — recreate session');
-		this._busy = true;
+		await this.acquireExclusive();
 		try {
 			// WASM panic=abort causes a WebAssembly.RuntimeError that escapes
 			// the wasm-bindgen-futures executor, leaving the inner Promise
 			// permanently pending. Catch it via window 'error' and force-reject.
-			return await new Promise((resolve, reject) => {
+			return await new Promise<TurnResultWithNode>((resolve, reject) => {
 				let settled = false;
 				const onError = (e: ErrorEvent) => {
 					if (!settled && e.error instanceof WebAssembly.RuntimeError) {
@@ -404,14 +500,14 @@ export class ChatSession {
 				};
 				window.addEventListener('error', onError);
 				this.inner.turn(resolver).then(
-					(v) => { settled = true; resolve(v); },
+					(v) => { settled = true; resolve(v as unknown as TurnResultWithNode); },
 					(e) => { settled = true; reject(e); },
 				).finally(() => {
 					window.removeEventListener('error', onError);
 				});
 			});
 		} finally {
-			this._busy = false;
+			this.releaseExclusive();
 		}
 	}
 
@@ -426,19 +522,38 @@ export class ChatSession {
 		}
 	}
 
-	exportStorage(): StorageSnapshot {
-		if (this._freed) return {} as StorageSnapshot;
-		return this.inner.export_storage();
+	/** Undo: move cursor to parent entry. */
+	async undo(): Promise<void> {
+		if (this._freed) return;
+		await this.acquireExclusive();
+		try {
+			await this.inner.undo();
+		} finally {
+			this.releaseExclusive();
+		}
 	}
 
-	turnCount(): number {
-		if (this._freed) return 0;
-		return this.inner.turn_count();
+	/** Navigate to a specific entry by UUID. */
+	async goto(id: string): Promise<void> {
+		if (this._freed) return;
+		await this.acquireExclusive();
+		try {
+			await this.inner.goto(id);
+		} finally {
+			this.releaseExclusive();
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Read operations (shared, rejected while exclusive lock is held)
+	// -----------------------------------------------------------------------
+
+	async turnCount(): Promise<number> {
+		return this.withReadGuard(0, () => this.inner.turn_count());
 	}
 
 	async displayListLen(iteratorScript: string): Promise<number> {
-		if (this._freed || this._busy) return 0;
-		return this.inner.display_list_len(iteratorScript);
+		return this.withReadGuard(0, () => this.inner.display_list_len(iteratorScript));
 	}
 
 	async renderDisplay(
@@ -446,22 +561,54 @@ export class ChatSession {
 		entriesJson: string,
 		index: number
 	): Promise<RenderedCard[]> {
-		if (this._freed || this._busy) return [];
-		return this.inner.render_display(iteratorScript, entriesJson, index) as unknown as RenderedCard[];
+		return this.withReadGuard([], () =>
+			this.inner.render_display(iteratorScript, entriesJson, index) as unknown as Promise<RenderedCard[]>
+		);
 	}
 
 	async renderStatic(template: string): Promise<RenderedCard[]> {
-		if (this._freed || this._busy) return [];
-		return this.inner.render_static(template) as unknown as RenderedCard[];
+		return this.withReadGuard([], () =>
+			this.inner.render_static(template) as unknown as Promise<RenderedCard[]>
+		);
 	}
 
+	// -----------------------------------------------------------------------
+	// Tree API (sync — no guard needed, just check flags)
+	// -----------------------------------------------------------------------
+
+	/** Get the full tree of turn nodes and current cursor. */
+	tree(): TreeView | null {
+		if (this._freed || this._exclusive) return null;
+		return this.inner.tree() as unknown as TreeView;
+	}
+
+	// -----------------------------------------------------------------------
+	// History API (sync reads)
+	// -----------------------------------------------------------------------
+
+	/** Get storage state at a specific entry by UUID. */
+	stateAt(id: string): StorageViewResult | null {
+		if (this._freed || this._exclusive) return null;
+		return this.inner.state_at(id) as unknown as StorageViewResult;
+	}
+
+	/** Get visible state at the current cursor. */
+	visibleState(): StorageViewResult | null {
+		if (this._freed || this._exclusive) return null;
+		return this.inner.visible_state() as unknown as StorageViewResult;
+	}
+
+	// -----------------------------------------------------------------------
+	// Lifecycle
+	// -----------------------------------------------------------------------
+
 	/**
-	 * Request free. If turn() is in progress, defers until finishTurn().
+	 * Request free. If an exclusive op is in progress, defers until finishTurn().
 	 * If not busy, frees immediately.
 	 */
 	free(): void {
 		if (this._freed) return;
-		if (this._busy) {
+		if (this._exclusive) {
 			this._pendingFree = true;
 		} else {
 			this._freed = true;

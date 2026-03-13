@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Node, MessageDef, Strategy, FnParam } from '$lib/types.js';
+	import type { Node, MessageDef, Execution, Persistency, FnParam } from '$lib/types.js';
 	import { blockLabel } from '$lib/types.js';
 	import type { BlockOwner } from '$lib/stores.svelte.js';
 	import type { DiscoveredFnParam } from '$lib/param-resolver.js';
@@ -59,7 +59,7 @@
 	});
 
 	// Per-field errors from hard typecheck (Phase 2)
-	const EMPTY_NODE_ERRORS: NodeErrors = { initialValue: [], historyBind: [], ifModifiedKey: [], assert: [], messages: {}, exprSource: [] };
+	const EMPTY_NODE_ERRORS: NodeErrors = { initialValue: [], bind: [], ifModifiedKey: [], assert: [], messages: {}, exprSource: [] };
 	let fieldErrors = $derived(node ? (nodeErrors[node.name] ?? EMPTY_NODE_ERRORS) : EMPTY_NODE_ERRORS);
 	let providers = $derived(providerStore.providers);
 	let hasOrphanProvider = $derived(
@@ -74,19 +74,44 @@
 		uiState.removeOwnerTreeNode(owner, nodeId);
 	}
 
-	// --- Strategy ---
+	// --- Strategy (Execution + Persistency + InitialValue + Retry + Assert) ---
 
-	const strategy = $derived(node?.strategy ?? { mode: 'once-per-turn' as const });
+	const execution = $derived(node?.strategy.execution ?? { mode: 'once-per-turn' as const });
 
-	function setStrategyMode(mode: string) {
-		const strategies: Record<string, Strategy> = {
+	function setExecutionMode(mode: string) {
+		const executions: Record<string, Execution> = {
 			'always': { mode: 'always' },
 			'once-per-turn': { mode: 'once-per-turn' },
 			'if-modified': { mode: 'if-modified', key: '' },
-			'history': { mode: 'history', historyBind: '@raw' },
 		};
-		updateNode((n) => ({ ...n, strategy: strategies[mode] }));
+		updateNode((n) => ({ ...n, strategy: { ...n.strategy, execution: executions[mode] } }));
 	}
+
+	const persistency = $derived(node?.strategy.persistency ?? { kind: 'ephemeral' as const });
+
+	function setPersistencyKind(kind: string) {
+		const persistencies: Record<string, Persistency> = {
+			'ephemeral': { kind: 'ephemeral' },
+			'snapshot': { kind: 'snapshot' },
+			'deque': { kind: 'deque', bind: '' },
+			'diff': { kind: 'diff', bind: '' },
+		};
+		updateNode((n) => ({ ...n, strategy: { ...n.strategy, persistency: persistencies[kind] } }));
+	}
+
+	const persistencyLabels: Record<string, string> = {
+		'ephemeral': 'Ephemeral',
+		'snapshot': 'Snapshot',
+		'deque': 'Deque',
+		'diff': 'Diff',
+	};
+
+	const persistencyDescriptions: Record<string, string> = {
+		'ephemeral': 'Output is not persisted to storage.',
+		'snapshot': 'Overwrite stored value entirely each time.',
+		'deque': 'Tracked deque. Requires a bind script.',
+		'diff': 'Object field-level patch. Requires a bind script.',
+	};
 
 	// --- Messages ---
 
@@ -166,18 +191,16 @@
 		return msg.kind === 'block' ? msg.role : msg.role;
 	}
 
-	const strategyLabels: Record<string, string> = {
+	const executionLabels: Record<string, string> = {
 		'always': 'Always',
 		'once-per-turn': 'Once Per Turn',
 		'if-modified': 'If Modified',
-		'history': 'History',
 	};
 
-	const strategyDescriptions: Record<string, string> = {
+	const executionDescriptions: Record<string, string> = {
 		'always': 'Execute every invocation. @self is volatile (per-turn).',
 		'once-per-turn': 'Execute once per turn. @self is persistent.',
 		'if-modified': 'Execute only when key changes. @self is persistent.',
-		'history': 'Execute once per turn + append to history.',
 	};
 
 	let deps = $derived(collectOwnerDeps(owner));
@@ -380,65 +403,80 @@
 						<span>Strategy</span>
 					</button>
 					{#if !collapsed['strategy']}<div class="section-body">
+						<!-- Execution subsection -->
 						<div class="field">
-							<Label>Mode</Label>
-							<Select.Root type="single" value={strategy.mode} onValueChange={(v) => setStrategyMode(v)}>
-								<Select.Trigger class="w-full">{strategyLabels[strategy.mode]}</Select.Trigger>
+							<Label>Execution</Label>
+							<Select.Root type="single" value={execution.mode} onValueChange={(v) => setExecutionMode(v)}>
+								<Select.Trigger class="w-full">{executionLabels[execution.mode]}</Select.Trigger>
 								<Select.Content>
 									<Select.Item value="always">Always</Select.Item>
 									<Select.Item value="once-per-turn">Once Per Turn</Select.Item>
 									<Select.Item value="if-modified">If Modified</Select.Item>
-									<Select.Item value="history">History</Select.Item>
 								</Select.Content>
 							</Select.Root>
-							<p class="hint">{strategyDescriptions[strategy.mode]}</p>
+							<p class="hint">{executionDescriptions[execution.mode]}</p>
 						</div>
-						{#if strategy.mode === 'if-modified'}
+						{#if execution.mode === 'if-modified'}
 							<div class="field">
 								<Label>Key</Label>
 								<AcvusEngineField
 									mode="script"
 									placeholder="e.g. @input | to_string"
-									value={strategy.key}
-									oninput={(v) => updateNode((n) => ({ ...n, strategy: { mode: 'if-modified', key: v } }))}
+									value={execution.key}
+									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, execution: { mode: 'if-modified', key: v } } }))}
 									contextTypes={mergedContextTypes}
 									fieldError={formatErrors(fieldErrors.ifModifiedKey)}
 									discoverContext
 								/>
 								<p class="hint">Script expression. Re-executes when this value changes.</p>
 							</div>
-						{:else if strategy.mode === 'history'}
+						{/if}
+
+						<!-- Persistency subsection -->
+						<div class="field">
+							<Label>Persistency</Label>
+							<Select.Root type="single" value={persistency.kind} onValueChange={(v) => setPersistencyKind(v)}>
+								<Select.Trigger class="w-full">{persistencyLabels[persistency.kind]}</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="ephemeral">Ephemeral</Select.Item>
+									<Select.Item value="snapshot">Snapshot</Select.Item>
+									<Select.Item value="deque">Deque</Select.Item>
+									<Select.Item value="diff">Diff</Select.Item>
+								</Select.Content>
+							</Select.Root>
+							<p class="hint">{persistencyDescriptions[persistency.kind]}</p>
+						</div>
+						{#if persistency.kind === 'deque' || persistency.kind === 'diff'}
 							<div class="field">
-								<Label>History Bind</Label>
+								<Label>Bind</Label>
 								<AcvusEngineField
 									mode="script"
 									placeholder="e.g. @raw"
-									value={strategy.historyBind}
-									oninput={(v) => updateNode((n) => ({ ...n, strategy: { mode: 'history', historyBind: v } }))}
+									value={persistency.bind}
+									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, persistency: { ...n.strategy.persistency, bind: v } as Persistency } }))}
 									contextTypes={mergedContextTypes}
-									fieldError={formatErrors(fieldErrors.historyBind)}
+									fieldError={formatErrors(fieldErrors.bind)}
 									discoverContext
 								/>
-								<p class="hint">Script that produces each history entry. Appended to @turn.history.&#123;name&#125;.</p>
+								<p class="hint">Script with access to @raw (node output) and @self (current stored value).</p>
 							</div>
 						{/if}
 
-						{#if node.kind === 'expr'}
-							<div class="field">
-								<Label>Initial Value</Label>
-								<AcvusEngineField
-									mode="script"
-									placeholder=''
-									value={node.initialValue ?? ''}
-									oninput={(v) => updateNode((n) => ({ ...n, initialValue: v }))}
-									contextTypes={mergedContextTypes}
-									expectedTailType={locals?.self}
-									fieldError={formatErrors(fieldErrors.initialValue)}
-									discoverContext
-								/>
-								<p class="hint">Initial @self value. When set, @self is available in the node body (previous stored value or this initial value on first run). Leave empty to disable @self.</p>
-							</div>
-						{/if}
+						<!-- Initial Value -->
+						<div class="field">
+							<Label>Initial Value</Label>
+							<AcvusEngineField
+								mode="script"
+								placeholder=''
+								value={node.strategy.initialValue ?? ''}
+								oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, initialValue: v } }))}
+								contextTypes={mergedContextTypes}
+								expectedTailType={locals?.self}
+								fieldError={formatErrors(fieldErrors.initialValue)}
+								discoverContext
+							/>
+							<p class="hint">Initial @self value. When set, @self is available in the node body (previous stored value or this initial value on first run). Leave empty to disable @self.</p>
+						</div>
 
 						<!-- Retry / Assert -->
 						<div class="grid grid-cols-2 gap-2">
@@ -447,8 +485,8 @@
 								<Input
 									type="number"
 									min="0"
-									value={String(node.retry ?? 0)}
-									oninput={(e) => updateNode((n) => ({ ...n, retry: Number(e.currentTarget.value) || 0 }))}
+									value={String(node.strategy.retry ?? 0)}
+									oninput={(e) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, retry: Number(e.currentTarget.value) || 0 } }))}
 								/>
 							</div>
 							<div class="field">
@@ -456,8 +494,8 @@
 								<AcvusEngineField
 									mode="script"
 									placeholder="e.g. @self | length > 0"
-									value={node.assert ?? ''}
-									oninput={(v) => updateNode((n) => ({ ...n, assert: v }))}
+									value={node.strategy.assert ?? ''}
+									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, assert: v } }))}
 									contextTypes={mergedContextTypes}
 									expectedTailType={{ kind: 'primitive', name: 'Bool' }}
 									fieldError={formatErrors(fieldErrors.assert)}
@@ -609,7 +647,7 @@
 												<div class="space-y-1.5">
 													<AcvusEngineField
 														mode="script"
-														placeholder="Iterator expression, e.g. @turn.history | map(h -> h.chat)"
+														placeholder="Iterator expression"
 														value={msg.iterator}
 														oninput={(v) => updateMessage(i, { iterator: v })}
 														contextTypes={mergedContextTypes}
@@ -744,7 +782,7 @@
 		cursor: pointer;
 		user-select: none;
 	}
-	/* When section-header is a button (Basic, Strategy) */
+	/* When section-header is a button (Basic, Execution) */
 	button.section-header {
 		width: 100%;
 		border: none;

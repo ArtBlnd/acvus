@@ -5,16 +5,19 @@ model = "gemini-2.5-flash"
 
 [self]
 
-[strategy]
-mode = "history"
-inline_history_bind = "@self"
+[execution]
+mode = "once-per-turn"
+
+[persistency]
+kind = "deque"
+inline_bind = "@self | extend(@raw)"
 
 [[messages]]
 role = "system"
 inline_template = "You are a helpful assistant. Answer concisely."
 
 [[messages]]
-iterator = "@turn.history | map(h -> h.chat)"
+iterator = "@self"
 
 [[messages]]
 role = "user"

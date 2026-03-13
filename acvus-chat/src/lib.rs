@@ -3,42 +3,43 @@ mod error;
 pub use error::ChatError;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use acvus_interpreter::{RuntimeError, Value};
 use acvus_orchestration::{
-    CompiledNode, CompiledNodeKind, CompiledStrategy, Fetch, Node, ProviderConfig, ResolveState,
-    Resolved, Resolver, State, Storage, build_dag, build_node_table,
+    CompiledNode, EntryMut, EntryRef, Fetch, Journal, Node, ProviderConfig, ResolveState, Resolved,
+    Resolver, StorageDiff, build_dag, build_node_table,
 };
 use acvus_utils::{Astr, Interner};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-pub struct ChatEngine<S> {
+pub struct ChatEngine<J> {
     nodes: Vec<CompiledNode>,
     node_table: Vec<Arc<dyn Node>>,
     name_to_idx: FxHashMap<Astr, usize>,
     rdeps: Vec<FxHashSet<usize>>,
-    pub state: State<S>,
+    pub journal: J,
+    pub cursor: Uuid,
     bind_cache: FxHashMap<Astr, Vec<(Value, Arc<Value>)>>,
     entrypoint_idx: usize,
-    history_nodes: Vec<Astr>,
     side_effect_idxs: Vec<usize>,
     interner: Interner,
 }
 
-impl<S> ChatEngine<S>
+impl<J> ChatEngine<J>
 where
-    S: Storage,
+    J: Journal,
 {
     pub async fn new<F>(
         nodes: Vec<CompiledNode>,
         providers: FxHashMap<String, ProviderConfig>,
         fetch: F,
-        mut storage: S,
+        journal: J,
+        root: Uuid,
         entrypoint: &str,
         side_effects: &[String],
         interner: &Interner,
@@ -54,15 +55,6 @@ where
             .get(&entrypoint_key)
             .ok_or_else(|| ChatError::EntrypointNotFound(entrypoint.to_string()))?;
 
-        // Collect history nodes
-        let history_nodes: Vec<Astr> = nodes
-            .iter()
-            .filter_map(|n| match &n.strategy {
-                CompiledStrategy::History { .. } => Some(n.name),
-                _ => None,
-            })
-            .collect();
-
         // Validate: no dependency cycles + extract rdeps
         let dag = build_dag(interner, &nodes).map_err(|errs| {
             let msg = errs
@@ -73,38 +65,6 @@ where
             ChatError::CycleDetected(msg)
         })?;
         let rdeps = dag.rdeps;
-
-        // Validate: history nodes must be reachable from entrypoint via BFS
-        let mut reachable = FxHashSet::default();
-        let mut queue = VecDeque::new();
-        queue.push_back(entrypoint_idx);
-        reachable.insert(entrypoint_idx);
-        while let Some(idx) = queue.pop_front() {
-            for key in &nodes[idx].all_context_keys {
-                if let Some(&dep_idx) = name_to_idx.get(key)
-                    && reachable.insert(dep_idx)
-                {
-                    queue.push_back(dep_idx);
-                }
-            }
-            if let CompiledNodeKind::Llm(llm) = &nodes[idx].kind {
-                for tool in &llm.tools {
-                    let tool_node = interner.intern(&tool.node);
-                    if let Some(&dep_idx) = name_to_idx.get(&tool_node)
-                        && reachable.insert(dep_idx)
-                    {
-                        queue.push_back(dep_idx);
-                    }
-                }
-            }
-        }
-        for &name in &history_nodes {
-            if !reachable.contains(&name_to_idx[&name]) {
-                return Err(ChatError::HistoryNodeUnreachable(
-                    interner.resolve(name).to_string(),
-                ));
-            }
-        }
 
         // Resolve side_effect node indices
         let side_effect_idxs: Vec<usize> = side_effects
@@ -124,192 +84,85 @@ where
             node_table,
             name_to_idx,
             rdeps,
-            state: State::new(storage, 0),
+            journal,
+            cursor: root,
             bind_cache: FxHashMap::default(),
             entrypoint_idx,
-            history_nodes,
             side_effect_idxs,
             interner: interner.clone(),
         })
     }
 
-    pub async fn turn<R, EH>(&mut self, resolver: &R, extern_handler: &EH) -> Result<Value, ChatError>
+    pub async fn turn<R, EH>(&mut self, resolver: &R, extern_handler: &EH) -> Result<(Value, Uuid), ChatError>
     where
-        S: Default,
         R: AsyncFn(Astr) -> Resolved + Sync,
         EH: AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync,
     {
         let interner = &self.interner;
         let entrypoint_name = &self.nodes[self.entrypoint_idx].name;
         tracing::info!(entrypoint = %interner.resolve(*entrypoint_name), "turn start");
-        let index_key = interner.intern("index");
-        let history_key = interner.intern("history");
-        let turn_key = interner.intern("turn");
 
-        // Ensure @turn exists; compute next index
-        let turn_index = if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
-            let Value::Object(ref turn) = *arc else {
-                panic!("@turn must be an Object");
+        // Block scope: entry borrows journal mutably, released at block end.
+        let (new_cursor, bind_cache) = {
+            let entry = self.journal.entry_mut(self.cursor).await.next().await;
+            let new_cursor = entry.uuid();
+
+            let mut rs = ResolveState {
+                entry,
+                turn_context: FxHashMap::default(),
+                bind_cache: std::mem::take(&mut self.bind_cache),
             };
-            let Value::Int(i) = turn.get(&index_key).expect("@turn.index missing") else {
-                panic!("@turn.index must be Int");
-            };
-            *i + 1
-        } else {
-            self.state.storage.set(
-                interner.resolve(turn_key).to_string(),
-                Value::Object(FxHashMap::from_iter([
-                    (index_key, Value::Int(0)),
-                    (history_key, Value::List(Vec::new())),
-                ])),
-            );
-            0
-        };
 
-        // Always-strategy nodes re-resolve every turn
-        for node in &self.nodes {
-            if matches!(node.strategy, CompiledStrategy::Always) {
-                self.state.storage.remove(interner.resolve(node.name));
-            }
-        }
+            {
+                let ctx = Resolver {
+                    nodes: &self.nodes,
+                    node_table: &self.node_table,
+                    name_to_idx: &self.name_to_idx,
+                    extern_handler,
+                    resolver,
+                    interner,
+                    rdeps: &self.rdeps,
+                };
 
-        // Build ResolveState for this turn
-        let mut rs = ResolveState {
-            storage: std::mem::take(&mut self.state.storage),
-            turn_context: FxHashMap::default(),
-            bind_cache: std::mem::take(&mut self.bind_cache),
-            history_entries: FxHashMap::default(),
-        };
+                ctx.resolve_node(self.entrypoint_idx, &mut rs, FxHashMap::default())
+                    .await
+                    .map_err(|e| ChatError::Resolve(format!("[entrypoint] {e}")))?;
 
-        let ctx = Resolver {
-            nodes: &self.nodes,
-            node_table: &self.node_table,
-            name_to_idx: &self.name_to_idx,
-            extern_handler,
-            resolver,
-            interner,
-            rdeps: &self.rdeps,
-        };
-
-        ctx.resolve_node(self.entrypoint_idx, &mut rs, FxHashMap::default())
-            .await
-            .map_err(|e| ChatError::Resolve(e.to_string()))?;
-
-        // Merge all turn_context results into storage.
-        // Every strategy (Always, OncePerTurn, IfModified, History) stores its
-        // result in turn_context during the turn. At turn end we persist them all.
-        for node in &self.nodes {
-            if let Some(v) = rs.turn_context.get(&node.name) {
-                rs.storage
-                    .set(interner.resolve(node.name).to_string(), Value::clone(v));
-            }
-        }
-
-        // Flush history + update turn index
-        {
-            let mut turn_val = rs
-                .storage
-                .get(interner.resolve(turn_key))
-                .map(|arc| Value::clone(&arc))
-                .unwrap_or_else(|| Value::Object(FxHashMap::default()));
-
-            if let Value::Object(ref mut turn) = turn_val {
-                turn.insert(index_key, Value::Int(turn_index));
-                if !rs.history_entries.is_empty() {
-                    let history = turn
-                        .entry(history_key)
-                        .or_insert_with(|| Value::List(Vec::new()));
-                    if let Value::List(list) = history {
-                        list.push(Value::Object(std::mem::take(&mut rs.history_entries)));
-                    }
+                // Side effects
+                if !self.side_effect_idxs.is_empty() {
+                    let side_effects: Vec<_> = self
+                        .side_effect_idxs
+                        .iter()
+                        .map(|&idx| (idx, FxHashMap::default()))
+                        .collect();
+                    ctx.resolve_nodes(side_effects, &mut rs)
+                        .await
+                        .map_err(|e| ChatError::Resolve(format!("[side_effects] {e}")))?;
                 }
             }
-            rs.storage
-                .set(interner.resolve(turn_key).to_string(), turn_val);
-        }
 
-        self.state.turn = turn_index as usize;
+            let bind_cache = std::mem::take(&mut rs.bind_cache);
+            // rs (including entry) dropped here at block end
+            (new_cursor, bind_cache)
+        };
 
-        // Resolve side-effect nodes concurrently after history flush + turn increment
-        if !self.side_effect_idxs.is_empty() {
-            let side_effects: Vec<_> = self
-                .side_effect_idxs
-                .iter()
-                .map(|&idx| (idx, FxHashMap::default()))
-                .collect();
-            ctx.resolve_nodes(side_effects, &mut rs)
-                .await
-                .map_err(|e| ChatError::Resolve(e.to_string()))?;
-        }
+        self.bind_cache = bind_cache;
+        self.cursor = new_cursor;
 
-        // Restore persistent state
-        self.state.storage = rs.storage;
-        self.bind_cache = rs.bind_cache;
+        tracing::info!(depth = self.journal.entry(self.cursor).await.depth(), "turn complete");
 
-        tracing::info!(turn = self.state.turn, "turn complete");
-
+        // Read result from journal (entry is dropped, journal is free)
         let name = self.nodes[self.entrypoint_idx].name;
-        let result = self
-            .state
-            .storage
+        let result = self.journal.entry(self.cursor).await
             .get(interner.resolve(name))
             .ok_or_else(|| ChatError::UnresolvedContext(interner.resolve(name).to_string()))?;
-        Ok(Value::clone(&result))
+        Ok((Value::clone(&result), new_cursor))
     }
 
-    pub fn history_len(&self) -> usize {
-        self.state.turn
+    pub async fn history_len(&self) -> usize {
+        self.journal.entry(self.cursor).await.depth()
     }
 
-    pub fn history_pop(&mut self) {
-        if self.state.turn == 0 {
-            return;
-        }
-        self.state.turn -= 1;
-        let interner = &self.interner;
-        let turn_key = interner.intern("turn");
-        let history_key = interner.intern("history");
-        if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
-            let mut turn_val = Value::clone(&arc);
-            if let Value::Object(ref mut turn) = turn_val
-                && let Some(Value::List(history)) = turn.get_mut(&history_key)
-            {
-                history.pop();
-            }
-            self.state
-                .storage
-                .set(interner.resolve(turn_key).to_string(), turn_val);
-        }
-    }
-
-    pub async fn re_execute<R, EH>(&mut self, index: usize, resolver: &R, extern_handler: &EH) -> Result<Value, ChatError>
-    where
-        S: Default,
-        R: AsyncFn(Astr) -> Resolved + Sync,
-        EH: AsyncFn(Astr, Vec<Value>) -> Result<Value, RuntimeError> + Sync,
-    {
-        assert!(
-            index <= self.state.turn,
-            "re_execute index out of bounds: {index} > {}",
-            self.state.turn,
-        );
-        let interner = &self.interner;
-        let turn_key = interner.intern("turn");
-        let history_key = interner.intern("history");
-        if let Some(arc) = self.state.storage.get(interner.resolve(turn_key)) {
-            let mut turn_val = Value::clone(&arc);
-            if let Value::Object(ref mut turn) = turn_val
-                && let Some(Value::List(history)) = turn.get_mut(&history_key)
-            {
-                history.truncate(index);
-            }
-            self.state
-                .storage
-                .set(interner.resolve(turn_key).to_string(), turn_val);
-        }
-        self.state.turn = index;
-        self.turn(resolver, extern_handler).await
-    }
 }
 
 #[cfg(test)]
@@ -320,8 +173,9 @@ mod tests {
     use acvus_mir::ty::Ty;
     use acvus_mir::context_registry::PartialContextTypeRegistry;
     use acvus_orchestration::{
-        ApiKind, ExprSpec, GenerationParams, HashMapStorage, HttpRequest, LlmSpec, MaxTokens,
-        MessageSpec, NodeKind, NodeSpec, PlainSpec, Strategy, ToolBinding, compile_nodes,
+        ApiKind, ExprSpec, GenerationParams, HttpRequest, LlmSpec, MaxTokens,
+        Execution, MessageSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy, ToolBinding,
+        TreeJournal, compile_nodes,
     };
 
     struct MockFetch {
@@ -421,19 +275,25 @@ mod tests {
                     source: "hello".into(),
                 }),
 
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::default(),
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let result = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -453,19 +313,25 @@ mod tests {
                     source: "hello".into(),
                 }),
 
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::default(),
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let result = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "nonexistent",
             &[],
             &interner,
@@ -485,19 +351,25 @@ mod tests {
                     source: "hello world".into(),
                 }),
 
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::default(),
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -505,7 +377,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(result, Value::String("hello world".into()));
     }
 
@@ -530,20 +402,26 @@ mod tests {
                     max_tokens: MaxTokens::default(),
                 }),
 
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::default(),
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             mock,
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -551,7 +429,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         // stored value = raw output (List of messages)
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
@@ -578,10 +456,13 @@ mod tests {
                     kind: NodeKind::Plain(PlainSpec {
                         source: "tool result text".into(),
                     }),
-                    strategy: Strategy::default(),
-    
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -605,16 +486,20 @@ mod tests {
                         cache_key: None,
                         max_tokens: MaxTokens::default(),
                     }),
-                    strategy: Strategy::default(),
-    
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
             ],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mock = MockFetch::new(vec![
             openai_tool_call_response(vec![("call_1", "my_tool", serde_json::json!({}))]),
             openai_text_response("final answer"),
@@ -623,7 +508,8 @@ mod tests {
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             mock,
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -631,7 +517,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         // stored value = raw output (List of messages)
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
@@ -665,21 +551,26 @@ mod tests {
                 kind: NodeKind::Expr(ExprSpec {
                     source: r#"@self + "B""#.into(),
                     output_ty: Ty::Infer,
-                    initial_value: Some(r#""A""#.into()),
                 }),
-                strategy: Strategy::OncePerTurn,
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::OncePerTurn,
+                    persistency: Persistency::default(),
+                    initial_value: Some(interner.intern(r#""A""#)),
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -687,10 +578,10 @@ mod tests {
         .await
         .unwrap();
 
-        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(r1, Value::String("AB".into()));
 
-        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(r2, Value::String("ABB".into()));
     }
 
@@ -705,9 +596,13 @@ mod tests {
                     name: interner.intern("counter"),
                     kind: NodeKind::Plain(PlainSpec { source: "x".into() }),
     
-                    strategy: Strategy::Always,
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::Always,
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -717,20 +612,26 @@ mod tests {
                         source: "{{@counter}}{{@counter}}".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
             ],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -738,7 +639,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(result, Value::String("xx".into()));
     }
 
@@ -761,9 +662,13 @@ mod tests {
                     source: "{{@input}}{{@input}}".into(),
                 }),
 
-                strategy: Strategy::default(),
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::default(),
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
@@ -771,11 +676,13 @@ mod tests {
         )
         .unwrap();
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -793,7 +700,7 @@ mod tests {
             }
         };
 
-        let result = engine.turn(&resolver, &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&resolver, &noop_extern_handler()).await.unwrap().0;
         assert_eq!(result, Value::String("hihi".into()));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
@@ -802,9 +709,9 @@ mod tests {
         );
     }
 
-    /// #6b (history_bind @self): history_bind must have access to @self without panic.
+    /// #6b: LLM nodes with OncePerTurn persist correctly.
     #[tokio::test]
-    async fn history_bind_accesses_self() {
+    async fn llm_once_per_turn_persists() {
         let interner = Interner::new();
         let nodes = compile_test_nodes(
             &interner,
@@ -824,23 +731,26 @@ mod tests {
                     max_tokens: MaxTokens::default(),
                 }),
 
-                // history_bind accesses @self (= raw output = List) and extracts content
-                strategy: Strategy::History {
-                    history_bind: interner.intern(r#"@self | iter | map(x -> x.content) | collect | join("")"#),
+                strategy: Strategy {
+                    execution: Execution::OncePerTurn,
+                    persistency: Persistency::default(),
+                    initial_value: None,
+                    retry: 0,
+                    assert: None,
                 },
-                retry: 0,
-                assert: None,
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![openai_text_response("hello")]),
 
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -848,8 +758,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Should not panic — @self = raw output = List<{role, content, content_type}>
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        // Verify LLM output is stored and retrievable
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         let Value::List(msgs) = &result else {
             panic!("expected List, got {result:?}");
         };
@@ -872,21 +782,26 @@ mod tests {
                 kind: NodeKind::Expr(ExprSpec {
                     source: r#"@self + "B""#.into(),
                     output_ty: Ty::Infer,
-                    initial_value: Some(r#""A""#.into()),
                 }),
-                strategy: Strategy::OncePerTurn,
-                retry: 0,
-                assert: None,
+                strategy: Strategy {
+                    execution: Execution::OncePerTurn,
+                    persistency: Persistency::default(),
+                    initial_value: Some(interner.intern(r#""A""#)),
+                    retry: 0,
+                    assert: None,
+                },
                 is_function: false,
                 fn_params: vec![],
             }],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -895,11 +810,11 @@ mod tests {
         .unwrap();
 
         // Turn 1: @self = "A" (initial), output = "AB"
-        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let r1 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(r1, Value::String("AB".into()));
 
         // Turn 2: @self = "AB" (persisted), output = "ABB"
-        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let r2 = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(r2, Value::String("ABB".into()));
     }
 
@@ -917,12 +832,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -932,9 +850,13 @@ mod tests {
                         source: "ok".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -956,12 +878,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -972,9 +897,13 @@ mod tests {
                         source: "{{@double}}".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -997,12 +926,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -1011,12 +943,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@double(5)".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -1039,12 +974,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x + @offset".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -1053,12 +991,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@add_offset(5)".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -1080,12 +1021,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -1095,20 +1039,26 @@ mod tests {
                         source: "{{ @double(5) | to_string }}".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
             ],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -1116,7 +1066,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(result, Value::String("10".into()));
     }
 
@@ -1136,12 +1086,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "42".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![],
                 },
@@ -1153,9 +1106,13 @@ mod tests {
                         source: "ok".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
@@ -1179,12 +1136,15 @@ mod tests {
                     kind: NodeKind::Expr(ExprSpec {
                         source: "@x * 2".into(),
                         output_ty: Ty::Int,
-                        initial_value: None,
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: true,
                     fn_params: vec![(interner.intern("x"), Ty::Int)],
                 },
@@ -1194,20 +1154,26 @@ mod tests {
                         source: "{{ @double(3) | to_string }}-{{ @double(7) | to_string }}".into(),
                     }),
     
-                    strategy: Strategy::default(),
-                    retry: 0,
-                    assert: None,
+                    strategy: Strategy {
+                        execution: Execution::default(),
+                        persistency: Persistency::default(),
+                        initial_value: None,
+                        retry: 0,
+                        assert: None,
+                    },
                     is_function: false,
                     fn_params: vec![],
                 },
             ],
         );
         let (pname, pconfig) = default_provider();
+        let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
             FxHashMap::from_iter([(pname, pconfig)]),
             MockFetch::new(vec![]),
-            HashMapStorage::new(),
+            journal,
+            root,
             "main",
             &[],
             &interner,
@@ -1215,7 +1181,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap();
+        let result = engine.turn(&noop_resolver(), &noop_extern_handler()).await.unwrap().0;
         assert_eq!(result, Value::String("6-14".into()));
     }
 }

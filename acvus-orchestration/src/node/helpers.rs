@@ -101,8 +101,13 @@ pub async fn expand_iterator_in_coroutine(
 ) -> Result<Vec<Message>, RuntimeError> {
     let evaluated = eval_script_in_coroutine(interner, &expr.module, local, handle).await?;
 
+    let deque_vec;
     let all_items = match &evaluated {
         Value::List(items) => items.as_slice(),
+        Value::Deque(deque) => {
+            deque_vec = deque.as_slice();
+            deque_vec
+        }
         _ => return Ok(Vec::new()),
     };
 
@@ -120,26 +125,20 @@ pub async fn expand_iterator_in_coroutine(
     let role_str = role_override.map(|r| interner.resolve(r).to_string());
     let mut messages = Vec::new();
     for item in items {
-        let parts = match item {
-            Value::List(parts) => parts.as_slice(),
-            _ => panic!("expand_iterator: expected List item, got {item:?}"),
+        let (part_role, part_text, part_content_type) = api.item_fields(interner, item);
+        let role = role_str.as_deref().unwrap_or(part_role);
+        let content = if part_content_type == "text" {
+            Content::Text(part_text.to_string())
+        } else {
+            Content::Blob {
+                mime_type: part_content_type.to_string(),
+                data: part_text.to_string(),
+            }
         };
-        for part in parts {
-            let (part_role, part_text, part_content_type) = api.item_fields(interner, part);
-            let role = role_str.as_deref().unwrap_or(part_role);
-            let content = if part_content_type == "text" {
-                Content::Text(part_text.to_string())
-            } else {
-                Content::Blob {
-                    mime_type: part_content_type.to_string(),
-                    data: part_text.to_string(),
-                }
-            };
-            messages.push(Message::Content {
-                role: role.to_string(),
-                content,
-            });
-        }
+        messages.push(Message::Content {
+            role: role.to_string(),
+            content,
+        });
     }
     Ok(messages)
 }

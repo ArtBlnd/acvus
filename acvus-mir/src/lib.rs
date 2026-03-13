@@ -225,7 +225,7 @@ mod tests {
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let result = compile_src(
             &i,
-            r#"{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &context,
         );
         assert!(result.is_ok());
@@ -414,7 +414,7 @@ mod tests {
         let (i, ctx) = extern_fn_context();
         let result = compile_src(
             &i,
-            r#"{{ x = @items | iter | map(i -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+            r#"{{ x = @items | map(i -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
             &ctx,
         );
         assert!(result.is_ok(), "pipe with extern fn call should work: {result:?}");

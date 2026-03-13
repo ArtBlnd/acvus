@@ -9,8 +9,8 @@ use acvus_interpreter::Value;
 use acvus_mir::ty::Ty;
 use acvus_mir::context_registry::PartialContextTypeRegistry;
 use acvus_orchestration::{
-    ApiKind, ExprSpec, Fetch, HashMapStorage, HttpRequest, NodeKind, NodeSpec, ProviderConfig,
-    Resolved, Strategy, compile_nodes, compile_script,
+    ApiKind, EntryRef, Execution, ExprSpec, Fetch, HttpRequest, Journal, NodeKind, NodeSpec,
+    Persistency, ProviderConfig, Resolved, Strategy, TreeJournal, compile_nodes, compile_script,
 };
 use acvus_utils::{Astr, Interner};
 use node::NodeDef;
@@ -141,14 +141,17 @@ async fn main() {
 
     // Build registry: extern fns separate, user-declared in user tier
     let extern_fns = acvus_ext::regex_context_types(&interner);
-    let mut registry = PartialContextTypeRegistry::new(extern_fns, FxHashMap::default(), user_types)
+    let registry = PartialContextTypeRegistry::new(extern_fns, FxHashMap::default(), user_types)
         .unwrap_or_else(|e| {
             eprintln!("context type conflict: {e}");
             process::exit(1);
         });
 
     // Compile expr definitions → NodeSpec with NodeKind::Expr
+    // Use a local context map for progressive compilation (each expr can reference
+    // previous ones). Don't insert into registry — compute_external_context_env handles that.
     let mut expr_node_specs: Vec<NodeSpec> = Vec::new();
+    let mut expr_context = registry.merged().clone();
     for expr_def in &spec.expr {
         let source = if let Some(path) = &expr_def.source {
             std::fs::read_to_string(project_dir.join(path)).unwrap_or_else(|e| {
@@ -164,7 +167,7 @@ async fn main() {
             );
             process::exit(1);
         };
-        let (_script, tail_ty) = compile_script(&interner, &source, registry.merged())
+        let (_script, tail_ty) = compile_script(&interner, &source, &expr_context)
             .unwrap_or_else(|e| {
                 eprintln!(
                     "expr '{}' compile error: {}",
@@ -174,21 +177,20 @@ async fn main() {
                 process::exit(1);
             });
         let expr_name = interner.intern(&expr_def.name);
-        registry.insert_system(expr_name, tail_ty.clone())
-            .unwrap_or_else(|e| {
-                eprintln!("expr '{}' type conflict: {e}", expr_def.name);
-                process::exit(1);
-            });
+        expr_context.insert(expr_name, tail_ty.clone());
         expr_node_specs.push(NodeSpec {
             name: expr_name,
             kind: NodeKind::Expr(ExprSpec {
                 source,
                 output_ty: tail_ty,
-                initial_value: None,
             }),
-            strategy: Strategy::default(),
-            retry: 0,
-            assert: None,
+            strategy: Strategy {
+                execution: Execution::default(),
+                persistency: Persistency::default(),
+                initial_value: None,
+                retry: 0,
+                assert: None,
+            },
             is_function: false,
             fn_params: vec![],
         });
@@ -233,7 +235,7 @@ async fn main() {
     };
 
     // Storage starts empty — context is type-only
-    let storage = HashMapStorage::new();
+    let (journal, root) = TreeJournal::new();
 
     let mut providers: FxHashMap<String, ProviderConfig> = FxHashMap::default();
     let mut endpoint_apis: FxHashMap<String, ApiKind> = FxHashMap::default();
@@ -311,7 +313,8 @@ async fn main() {
             compiled_nodes,
             providers,
             fetch,
-            storage,
+            journal,
+            root,
             &spec.entrypoint,
             &[],
             &interner,
@@ -321,7 +324,7 @@ async fn main() {
             eprintln!("engine init error: {e}");
             process::exit(1);
         });
-        let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
+        let (response, _) = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
             eprintln!("turn error: {e}");
             process::exit(1);
         });
@@ -334,7 +337,8 @@ async fn main() {
             compiled_nodes,
             providers,
             fetch,
-            storage,
+            journal,
+            root,
             &spec.entrypoint,
             &[],
             &interner,
@@ -347,15 +351,15 @@ async fn main() {
 
         if context_args.is_empty() {
             loop {
-                let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
+                let (response, _) = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
                     eprintln!("turn error: {e}");
                     process::exit(1);
                 });
                 println!("{}", format_output(&interner, &response));
-                println!("{:#?}", engine.state.storage.entries);
+                println!("cursor depth: {}", engine.journal.entry(engine.cursor).await.depth());
             }
         } else {
-            let response = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
+            let (response, _) = engine.turn(&resolver, &extern_handler).await.unwrap_or_else(|e| {
                 eprintln!("turn error: {e}");
                 process::exit(1);
             });

@@ -350,6 +350,7 @@ mod tests {
 
     use rustc_hash::FxHashMap;
 
+    use crate::ApiKind;
     use crate::kind::GenerationParams;
     use crate::message::{Message, ToolSpec};
 
@@ -486,7 +487,7 @@ mod tests {
     #[test]
     fn count_tokens_request_format() {
         let config = ProviderConfig {
-            api: crate::provider::ApiKind::Anthropic,
+            api: ApiKind::Anthropic,
             endpoint: "https://api.anthropic.com".into(),
             api_key: "test-key".into(),
         };

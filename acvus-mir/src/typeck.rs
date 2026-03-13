@@ -388,7 +388,7 @@ impl<'a> TypeChecker<'a> {
         let resolved = self.subst.resolve(&source_ty);
 
         let elem_ty = match &resolved {
-            Ty::List(inner) => inner.as_ref().clone(),
+            Ty::List(inner) | Ty::Deque(inner, _) => inner.as_ref().clone(),
             Ty::Range => Ty::Int,
             Ty::Error => Ty::Error,
             _ => {
@@ -432,7 +432,7 @@ impl<'a> TypeChecker<'a> {
             _ => {
                 // Other patterns match iterated elements.
                 match source_ty {
-                    Ty::List(inner) => inner.as_ref().clone(),
+                    Ty::List(inner) | Ty::Deque(inner, _) => inner.as_ref().clone(),
                     Ty::Range => Ty::Int,
                     _ => source_ty.clone(),
                 }
@@ -452,7 +452,8 @@ impl<'a> TypeChecker<'a> {
                     Literal::List(elems) => {
                         if elems.is_empty() {
                             let elem = self.subst.fresh_var();
-                            Ty::List(Box::new(elem))
+                            let origin = self.subst.fresh_concrete_origin();
+                            Ty::Deque(Box::new(elem), origin)
                         } else {
                             let first_ty = self.literal_ty(&elems[0]);
                             for elem in &elems[1..] {
@@ -467,7 +468,8 @@ impl<'a> TypeChecker<'a> {
                                     );
                                 }
                             }
-                            Ty::List(Box::new(self.subst.resolve(&first_ty)))
+                            let origin = self.subst.fresh_concrete_origin();
+                            Ty::Deque(Box::new(self.subst.resolve(&first_ty)), origin)
                         }
                     }
                 };
@@ -781,7 +783,8 @@ impl<'a> TypeChecker<'a> {
                     // Empty list `[]` — element type unknown, use fresh var.
                     // If no hint resolves it, we report the error after resolve.
                     let elem = self.subst.fresh_var();
-                    let ty = Ty::List(Box::new(elem));
+                    let origin = self.subst.fresh_concrete_origin();
+                    let ty = Ty::Deque(Box::new(elem), origin);
                     return self.record_ret(*span, ty);
                 }
 
@@ -803,7 +806,8 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                let ty = Ty::List(Box::new(self.subst.resolve(&elem_ty)));
+                let origin = self.subst.fresh_concrete_origin();
+                let ty = Ty::Deque(Box::new(self.subst.resolve(&elem_ty)), origin);
                 self.record_ret(*span, ty)
             }
 
@@ -1176,10 +1180,11 @@ impl<'a> TypeChecker<'a> {
                 // List. Same rationale as Tuple above.
                 let shallow = self.subst.shallow_resolve(source_ty);
                 let elem_ty = match shallow {
-                    Ty::List(ref inner) => (**inner).clone(),
+                    Ty::List(ref inner) | Ty::Deque(ref inner, _) => (**inner).clone(),
                     _ => {
                         let var = self.subst.fresh_var();
-                        let list_ty = Ty::List(Box::new(var.clone()));
+                        let origin = self.subst.fresh_concrete_origin();
+                        let list_ty = Ty::Deque(Box::new(var.clone()), origin);
                         if self.subst.unify(source_ty, &list_ty).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
@@ -1401,17 +1406,20 @@ impl<'a> TypeChecker<'a> {
         Some((option_name, type_params, payload))
     }
 
-    fn literal_ty(&self, lit: &Literal) -> Ty {
+    fn literal_ty(&mut self, lit: &Literal) -> Ty {
         match lit {
             Literal::Int(_) => Ty::Int,
             Literal::Float(_) => Ty::Float,
             Literal::String(_) => Ty::String,
             Literal::Bool(_) => Ty::Bool,
             Literal::Byte(_) => Ty::Byte,
-            Literal::List(elems) => match elems.first() {
-                Some(first) => Ty::List(Box::new(self.literal_ty(first))),
-                None => Ty::List(Box::new(Ty::Error)),
-            },
+            Literal::List(elems) => {
+                let origin = self.subst.fresh_concrete_origin();
+                match elems.first() {
+                    Some(first) => Ty::Deque(Box::new(self.literal_ty(first)), origin),
+                    None => Ty::Deque(Box::new(Ty::Error), origin),
+                }
+            }
         }
     }
 
@@ -1435,7 +1443,7 @@ impl<'a> TypeChecker<'a> {
 fn contains_var(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::Option(inner) => contains_var(inner),
+        Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => contains_var(inner),
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
         Ty::Fn { params, ret, .. } => params.iter().any(contains_var) || contains_var(ret),
@@ -1624,7 +1632,7 @@ mod tests {
     fn lambda_type_check() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src = "{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
+        let src = "{{ x = @items | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
         let result = check_with_interner(src, &context, &i);
         assert!(result.is_ok());
     }

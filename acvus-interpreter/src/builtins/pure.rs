@@ -30,27 +30,6 @@ pub(crate) fn builtin_len(items: Vec<Value>) -> i64 {
     items.len() as i64
 }
 
-pub(crate) fn builtin_reverse(items: Vec<Value>) -> Value {
-    let mut items = items;
-    items.reverse();
-    Value::List(items)
-}
-
-pub(crate) fn builtin_flatten(items: Vec<Value>) -> Value {
-    let mut out = Vec::new();
-    for item in items {
-        match item {
-            Value::List(inner) => out.extend(inner),
-            other => out.push(other),
-        }
-    }
-    Value::List(out)
-}
-
-pub(crate) fn builtin_join(items: Vec<String>, sep: String) -> String {
-    items.join(&sep)
-}
-
 pub(crate) fn builtin_contains(items: Vec<Value>, target: Value) -> bool {
     items.iter().any(|v| values_equal(v, &target))
 }

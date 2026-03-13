@@ -1,10 +1,25 @@
 use acvus_orchestration::{
-    ApiKind, ExprSpec, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind, NodeSpec,
-    PlainSpec, Strategy, TokenBudget, ToolBinding,
+    ApiKind, ExprSpec, Execution, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind,
+    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
 use serde::Deserialize;
+
+/// JSON-deserializable strategy definition from the web UI.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebStrategy {
+    pub execution: WebExecution,
+    #[serde(default)]
+    pub persistency: WebPersistency,
+    #[serde(default)]
+    pub initial_value: Option<String>,
+    #[serde(default)]
+    pub retry: u32,
+    #[serde(default)]
+    pub assert: String,
+}
 
 /// JSON-deserializable node definition from the web UI.
 #[derive(Deserialize)]
@@ -12,8 +27,6 @@ use serde::Deserialize;
 pub struct WebNode {
     pub name: String,
     pub strategy: WebStrategy,
-    pub retry: u32,
-    pub assert: String,
     #[serde(default)]
     pub is_function: bool,
     #[serde(default)]
@@ -45,7 +58,6 @@ pub enum WebNodeKind {
     Expr {
         #[serde(default)]
         expr_source: String,
-        initial_value: Option<String>,
     },
     #[serde(rename = "plain")]
     Plain {},
@@ -59,17 +71,13 @@ pub struct WebMaxTokens {
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase")]
-pub enum WebStrategy {
+pub enum WebExecution {
     Always,
     #[serde(rename = "once-per-turn")]
     OncePerTurn,
     #[serde(rename = "if-modified", rename_all = "camelCase")]
     IfModified {
         key: String,
-    },
-    #[serde(rename = "history", rename_all = "camelCase")]
-    History {
-        history_bind: String,
     },
 }
 
@@ -116,8 +124,20 @@ pub struct WebFnParam {
     pub ty: String,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WebPersistency {
+    #[default]
+    Ephemeral,
+    Snapshot,
+    Deque { bind: String },
+    Diff { bind: String },
+}
+
 impl WebNode {
     pub fn into_node(&self, interner: &Interner) -> Result<NodeSpec, String> {
+        let initial_value = self.strategy.initial_value.as_ref().map(|s| interner.intern(s));
+
         let kind = match &self.kind {
             WebNodeKind::Llm {
                 api,
@@ -187,37 +207,43 @@ impl WebNode {
             }),
             WebNodeKind::Expr {
                 expr_source,
-                initial_value,
             } => NodeKind::Expr(ExprSpec {
                 source: expr_source.clone(),
                 output_ty: acvus_mir::ty::Ty::Infer,
-                initial_value: initial_value.clone(),
             }),
             WebNodeKind::Plain {} => NodeKind::Plain(PlainSpec {
                 source: String::new(),
             }),
         };
 
-        let strategy = match &self.strategy {
-            WebStrategy::Always => Strategy::Always,
-            WebStrategy::OncePerTurn => Strategy::OncePerTurn,
-            WebStrategy::IfModified { key } => Strategy::IfModified {
+        let execution = match &self.strategy.execution {
+            WebExecution::Always => Execution::Always,
+            WebExecution::OncePerTurn => Execution::OncePerTurn,
+            WebExecution::IfModified { key } => Execution::IfModified {
                 key: interner.intern(key),
             },
-            WebStrategy::History { history_bind } => Strategy::History {
-                history_bind: interner.intern(history_bind),
-            },
+        };
+
+        let persistency = match &self.strategy.persistency {
+            WebPersistency::Ephemeral => Persistency::Ephemeral,
+            WebPersistency::Snapshot => Persistency::Snapshot,
+            WebPersistency::Deque { bind } => Persistency::Deque { bind: interner.intern(bind) },
+            WebPersistency::Diff { bind } => Persistency::Diff { bind: interner.intern(bind) },
         };
 
         Ok(NodeSpec {
             name: interner.intern(&self.name),
             kind,
-            strategy,
-            retry: self.retry,
-            assert: if self.assert.trim().is_empty() {
-                None
-            } else {
-                Some(interner.intern(&self.assert))
+            strategy: Strategy {
+                execution,
+                persistency,
+                initial_value,
+                retry: self.strategy.retry,
+                assert: if self.strategy.assert.trim().is_empty() {
+                    None
+                } else {
+                    Some(interner.intern(&self.strategy.assert))
+                },
             },
             is_function: self.is_function,
             fn_params: self

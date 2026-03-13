@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @items | iter | map(i -> i + 1) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(\", \") }}",
+  "template": "{{ x = @items | map(i -> i + 1) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(\", \") }}",
   "context": { "items": [1, 2, 3] },
   "expected": "2, 3, 4"
 }

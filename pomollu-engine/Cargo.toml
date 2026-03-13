@@ -19,10 +19,15 @@ rustc-hash = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Request", "RequestInit", "Response", "Headers", "Window", "console"] }
+web-sys = { version = "0.3", features = [
+    "Request", "RequestInit", "Response", "Headers", "Window", "console",
+    "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbTransaction",
+    "IdbTransactionMode", "IdbObjectStore", "IdbRequest", "DomStringList",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 rust_decimal = { version = "1", features = ["serde-with-arbitrary-precision"] }
+uuid = { workspace = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 console_error_panic_hook = "0.1"
 tsify = { git = "https://github.com/madonoharu/tsify", rev = "d89d5c1d16a83c0370109232c9197fc2fa072564", default-features = false, features = ["js"] }

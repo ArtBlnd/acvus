@@ -6,6 +6,26 @@ use rustc_hash::FxHashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(pub u32);
 
+/// Origin identity for Deque types — prevents mixing deques from different sources.
+///
+/// - `Concrete(u32)`: a fixed origin created by `[]` literals — unique provenance.
+/// - `Var(u32)`: an origin variable created by builtin signatures (e.g. `extend`) —
+///   binds to the actual origin of the input Deque during unification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Origin {
+    Concrete(u32),
+    Var(u32),
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Origin::Concrete(id) => write!(f, "Origin({id})"),
+            Origin::Var(id) => write!(f, "OriginVar({id})"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
     Int,
@@ -14,6 +34,7 @@ pub enum Ty {
     Bool,
     Unit,
     Range,
+    /// Immutable list of elements. Coerces from Deque (losing origin), coerces to Iterator.
     List(Box<Ty>),
     Object(FxHashMap<Astr, Ty>),
     Tuple(Vec<Ty>),
@@ -36,6 +57,9 @@ pub enum Ty {
     },
     /// Lazy iterator over elements of type T.
     Iterator(Box<Ty>),
+    /// Deque type: tracked deque with origin identity.
+    /// `Origin` prevents mixing deques from different sources.
+    Deque(Box<Ty>, Origin),
     /// Unification variable. Must not appear in final resolved types.
     Var(TyVar),
     /// Inferred type: signals the type checker to create a fresh Var internally.
@@ -57,6 +81,7 @@ impl Ty {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
             | Ty::Range | Ty::Byte => true,
             Ty::List(inner) => inner.is_pure(),
+            Ty::Deque(inner, _) => inner.is_pure(),
             Ty::Option(inner) => inner.is_pure(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pure()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pure()),
@@ -68,7 +93,7 @@ impl Ty {
         }
     }
 
-    /// Convenience: `List<Byte>` (replaces the old `Ty::Bytes`).
+    /// Convenience: `List<Byte>` (byte array type).
     pub fn bytes() -> Ty {
         Ty::List(Box::new(Ty::Byte))
     }
@@ -93,7 +118,6 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::Unit => write!(f, "Unit"),
             Ty::Range => write!(f, "Range"),
             Ty::Byte => write!(f, "Byte"),
-            Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
             Ty::Object(fields) => {
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
@@ -132,7 +156,9 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ") -> {}", ret.display(self.interner))
             }
+            Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
             Ty::Iterator(inner) => write!(f, "Iterator<{}>", inner.display(self.interner)),
+            Ty::Deque(inner, origin) => write!(f, "Deque<{}, {}>", inner.display(self.interner), origin),
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::Opaque(name) => write!(f, "{name}"),
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
@@ -152,13 +178,17 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
 /// Snapshot of `TySubst` state for rollback during overload resolution.
 pub struct TySubstSnapshot {
     bindings: FxHashMap<TyVar, Ty>,
+    origin_bindings: FxHashMap<u32, Origin>,
     next_var: u32,
+    next_origin: u32,
 }
 
 /// Substitution table for type unification.
 pub struct TySubst {
     bindings: FxHashMap<TyVar, Ty>,
+    origin_bindings: FxHashMap<u32, Origin>,
     next_var: u32,
+    next_origin: u32,
 }
 
 impl Default for TySubst {
@@ -171,7 +201,9 @@ impl TySubst {
     pub fn new() -> Self {
         Self {
             bindings: FxHashMap::default(),
+            origin_bindings: FxHashMap::default(),
             next_var: 0,
+            next_origin: 0,
         }
     }
 
@@ -179,14 +211,34 @@ impl TySubst {
     pub fn snapshot(&self) -> TySubstSnapshot {
         TySubstSnapshot {
             bindings: self.bindings.clone(),
+            origin_bindings: self.origin_bindings.clone(),
             next_var: self.next_var,
+            next_origin: self.next_origin,
         }
     }
 
     /// Restore state from a snapshot, discarding any bindings made since.
     pub fn rollback(&mut self, snap: TySubstSnapshot) {
         self.bindings = snap.bindings;
+        self.origin_bindings = snap.origin_bindings;
         self.next_var = snap.next_var;
+        self.next_origin = snap.next_origin;
+    }
+
+    /// Allocate a fresh origin VARIABLE for builtin signatures.
+    /// Origin variables bind to concrete origins during unification.
+    pub fn fresh_origin(&mut self) -> Origin {
+        let o = Origin::Var(self.next_origin);
+        self.next_origin += 1;
+        o
+    }
+
+    /// Allocate a fresh CONCRETE origin for `[]` literals.
+    /// Concrete origins are unique and can only unify with origin variables.
+    pub fn fresh_concrete_origin(&mut self) -> Origin {
+        let o = Origin::Concrete(self.next_origin);
+        self.next_origin += 1;
+        o
     }
 
     /// Allocate a fresh type variable.
@@ -194,6 +246,39 @@ impl TySubst {
         let v = TyVar(self.next_var);
         self.next_var += 1;
         Ty::Var(v)
+    }
+
+    /// Resolve an origin by following binding chains for Origin::Var.
+    pub fn resolve_origin(&self, o: Origin) -> Origin {
+        match o {
+            Origin::Concrete(_) => o,
+            Origin::Var(id) => {
+                if let Some(&bound) = self.origin_bindings.get(&id) {
+                    self.resolve_origin(bound)
+                } else {
+                    o
+                }
+            }
+        }
+    }
+
+    /// Unify two origins. Returns Ok(()) on success, Err with the two resolved
+    /// origins on failure.
+    fn unify_origins(&mut self, a: Origin, b: Origin) -> Result<(), (Origin, Origin)> {
+        let a = self.resolve_origin(a);
+        let b = self.resolve_origin(b);
+        match (a, b) {
+            (Origin::Concrete(x), Origin::Concrete(y)) => {
+                if x == y { Ok(()) } else { Err((a, b)) }
+            }
+            (Origin::Var(v), other) | (other, Origin::Var(v)) => {
+                if let Origin::Var(v2) = other {
+                    if v == v2 { return Ok(()); }
+                }
+                self.origin_bindings.insert(v, other);
+                Ok(())
+            }
+        }
     }
 
     /// Resolve a type by following substitution chains.
@@ -208,6 +293,7 @@ impl TySubst {
             }
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
             Ty::Iterator(inner) => Ty::Iterator(Box::new(self.resolve(inner))),
+            Ty::Deque(inner, origin) => Ty::Deque(Box::new(self.resolve(inner)), self.resolve_origin(*origin)),
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Object(fields) => {
                 let resolved: FxHashMap<_, _> =
@@ -364,8 +450,25 @@ impl TySubst {
                 Ok(())
             }
 
-            (Ty::List(la), Ty::List(lb)) => self.unify(la, lb),
             (Ty::Iterator(a), Ty::Iterator(b)) => self.unify(a, b),
+
+            (Ty::List(a), Ty::List(b)) => self.unify(a, b),
+
+            // Deque vs Deque: inner types unify, origins unify
+            (Ty::Deque(ia, oa), Ty::Deque(ib, ob)) => {
+                self.unify_origins(*oa, *ob).map_err(|_| (a.clone(), b.clone()))?;
+                self.unify(ia, ib)
+            }
+
+            // Deque → List coercion (one-directional: Deque can become List, losing origin)
+            (Ty::Deque(inner_d, _), Ty::List(inner_l)) => self.unify(inner_d, inner_l),
+
+            // List → Iterator coercion (one-directional: List can be iterated)
+            (Ty::List(inner_l), Ty::Iterator(inner_i)) => self.unify(inner_l, inner_i),
+
+            // Deque → Iterator coercion (one-directional: Deque can be iterated)
+            (Ty::Deque(inner_d, _), Ty::Iterator(inner_i)) => self.unify(inner_d, inner_i),
+
             (Ty::Option(a), Ty::Option(b)) => self.unify(a, b),
 
             (Ty::Object(fa), Ty::Object(fb)) => {
@@ -454,6 +557,7 @@ impl TySubst {
             }
             Ty::List(inner) => self.occurs_in(var, inner),
             Ty::Iterator(inner) => self.occurs_in(var, inner),
+            Ty::Deque(inner, _) => self.occurs_in(var, inner),
             Ty::Option(inner) => self.occurs_in(var, inner),
             Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(var, e)),
             Ty::Object(fields) => fields.values().any(|v| self.occurs_in(var, v)),
@@ -500,14 +604,15 @@ mod tests {
     }
 
     #[test]
-    fn unify_list_of_var() {
+    fn unify_deque_of_var() {
         let mut s = TySubst::new();
+        let o = s.fresh_origin();
         let t = s.fresh_var();
-        let list_t = Ty::List(Box::new(t.clone()));
-        let list_int = Ty::List(Box::new(Ty::Int));
-        assert!(s.unify(&list_t, &list_int).is_ok());
+        let deque_t = Ty::Deque(Box::new(t.clone()), o);
+        let deque_int = Ty::Deque(Box::new(Ty::Int), o);
+        assert!(s.unify(&deque_t, &deque_int).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
-        assert_eq!(s.resolve(&list_t), Ty::List(Box::new(Ty::Int)));
+        assert_eq!(s.resolve(&deque_t), Ty::Deque(Box::new(Ty::Int), o));
     }
 
     #[test]
@@ -578,10 +683,11 @@ mod tests {
     #[test]
     fn occurs_check() {
         let mut s = TySubst::new();
+        let o = s.fresh_origin();
         let t = s.fresh_var();
-        let list_t = Ty::List(Box::new(t.clone()));
-        // T = List<T> should fail
-        assert!(s.unify(&t, &list_t).is_err());
+        let deque_t = Ty::Deque(Box::new(t.clone()), o);
+        // T = Deque<T, O> should fail
+        assert!(s.unify(&t, &deque_t).is_err());
     }
 
     #[test]
@@ -655,5 +761,184 @@ mod tests {
         let obj2 = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::String)]));
         assert!(s.unify(&v, &obj1).is_ok());
         assert!(s.unify(&v, &obj2).is_err());
+    }
+
+    // -- Deque type tests --
+
+    #[test]
+    fn unify_deque_same_origin() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let t = s.fresh_var();
+        let d1 = Ty::Deque(Box::new(t.clone()), o);
+        let d2 = Ty::Deque(Box::new(Ty::Int), o);
+        assert!(s.unify(&d1, &d2).is_ok());
+        assert_eq!(s.resolve(&t), Ty::Int);
+        assert_eq!(s.resolve(&d1), Ty::Deque(Box::new(Ty::Int), o));
+    }
+
+    #[test]
+    fn unify_deque_different_concrete_origin_fails() {
+        let mut s = TySubst::new();
+        let o1 = s.fresh_concrete_origin();
+        let o2 = s.fresh_concrete_origin();
+        assert_ne!(o1, o2);
+        let d1 = Ty::Deque(Box::new(Ty::Int), o1);
+        let d2 = Ty::Deque(Box::new(Ty::Int), o2);
+        assert!(s.unify(&d1, &d2).is_err(), "different concrete origins must not unify");
+    }
+
+    #[test]
+    fn unify_deque_origin_var_binds_to_concrete() {
+        // Origin::Var should bind to Origin::Concrete during unification
+        let mut s = TySubst::new();
+        let concrete = s.fresh_concrete_origin();
+        let var = s.fresh_origin(); // Origin::Var
+        let d1 = Ty::Deque(Box::new(Ty::Int), concrete);
+        let d2 = Ty::Deque(Box::new(Ty::Int), var);
+        assert!(s.unify(&d1, &d2).is_ok(), "origin Var should bind to Concrete");
+        assert_eq!(s.resolve_origin(var), concrete);
+    }
+
+    #[test]
+    fn unify_deque_origin_var_preserves_identity() {
+        // Two Deques through same Origin::Var should resolve to same concrete origin
+        let mut s = TySubst::new();
+        let concrete = s.fresh_concrete_origin();
+        let var = s.fresh_origin();
+        let d_concrete = Ty::Deque(Box::new(Ty::Int), concrete);
+        let d_var = Ty::Deque(Box::new(Ty::Int), var);
+        assert!(s.unify(&d_concrete, &d_var).is_ok());
+        // Now a second concrete origin should NOT match the same var
+        let concrete2 = s.fresh_concrete_origin();
+        let d_concrete2 = Ty::Deque(Box::new(Ty::Int), concrete2);
+        let d_var2 = Ty::Deque(Box::new(Ty::Int), var);
+        assert!(s.unify(&d_concrete2, &d_var2).is_err(), "var already bound to different concrete");
+    }
+
+    #[test]
+    fn unify_deque_inner_type_mismatch_fails() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let d1 = Ty::Deque(Box::new(Ty::Int), o);
+        let d2 = Ty::Deque(Box::new(Ty::String), o);
+        assert!(s.unify(&d1, &d2).is_err(), "inner type mismatch with same origin must fail");
+    }
+
+    #[test]
+    fn coerce_deque_to_iterator() {
+        // Deque<Int, O> can be used where Iterator<Int> is expected
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let deque = Ty::Deque(Box::new(Ty::Int), o);
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        assert!(s.unify(&deque, &iter).is_ok(), "Deque → Iterator coercion should succeed");
+    }
+
+    #[test]
+    fn coerce_deque_to_iterator_with_var() {
+        // Deque<T, O> unifies with Iterator<Int> → T becomes Int
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let t = s.fresh_var();
+        let deque = Ty::Deque(Box::new(t.clone()), o);
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        assert!(s.unify(&deque, &iter).is_ok());
+        assert_eq!(s.resolve(&t), Ty::Int);
+    }
+
+    #[test]
+    fn coerce_iterator_to_deque_fails() {
+        // Iterator<Int> cannot become Deque<Int, O> — one-directional only
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        let deque = Ty::Deque(Box::new(Ty::Int), o);
+        assert!(s.unify(&iter, &deque).is_err(), "Iterator → Deque coercion must be forbidden");
+    }
+
+    #[test]
+    fn fresh_origin_produces_unique_ids() {
+        let mut s = TySubst::new();
+        let o1 = s.fresh_origin();
+        let o2 = s.fresh_origin();
+        let o3 = s.fresh_origin();
+        assert_ne!(o1, o2);
+        assert_ne!(o2, o3);
+        assert_ne!(o1, o3);
+    }
+
+    #[test]
+    fn resolve_deque_propagates_inner() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let t = s.fresh_var();
+        assert!(s.unify(&t, &Ty::String).is_ok());
+        let deque = Ty::Deque(Box::new(t.clone()), o);
+        assert_eq!(s.resolve(&deque), Ty::Deque(Box::new(Ty::String), o));
+    }
+
+    #[test]
+    fn occurs_in_deque() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let t = s.fresh_var();
+        let deque_t = Ty::Deque(Box::new(t.clone()), o);
+        // T = Deque<T, O> should fail (occurs check)
+        assert!(s.unify(&t, &deque_t).is_err());
+    }
+
+    #[test]
+    fn snapshot_rollback_preserves_origin_counter() {
+        let mut s = TySubst::new();
+        let _o1 = s.fresh_origin();
+        let snap = s.snapshot();
+        let o2 = s.fresh_origin();
+        assert_eq!(o2, Origin::Var(1)); // second origin
+        s.rollback(snap);
+        let o_after = s.fresh_origin();
+        assert_eq!(o_after, Origin::Var(1), "rollback should restore origin counter");
+    }
+
+    #[test]
+    fn deque_to_iterator_coercion_with_inner_var_unification() {
+        // Deque<Var, O> vs Iterator<Var> where both Vars unify to same type
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let t1 = s.fresh_var();
+        let t2 = s.fresh_var();
+        let deque = Ty::Deque(Box::new(t1.clone()), o);
+        let iter = Ty::Iterator(Box::new(t2.clone()));
+        assert!(s.unify(&deque, &iter).is_ok());
+        // Now bind t2 to Int
+        assert!(s.unify(&t2, &Ty::Int).is_ok());
+        // t1 should also resolve to Int via transitive unification
+        assert_eq!(s.resolve(&t1), Ty::Int);
+    }
+
+    #[test]
+    fn unify_deque_coerces_to_list() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let d = Ty::Deque(Box::new(Ty::Int), o);
+        let l = Ty::List(Box::new(Ty::Int));
+        assert!(s.unify(&d, &l).is_ok(), "Deque should coerce to List");
+    }
+
+    #[test]
+    fn unify_list_does_not_coerce_to_deque() {
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let l = Ty::List(Box::new(Ty::Int));
+        let d = Ty::Deque(Box::new(Ty::Int), o);
+        assert!(s.unify(&l, &d).is_err(), "List must not coerce to Deque");
+    }
+
+    #[test]
+    fn unify_list_coerces_to_iterator() {
+        let mut s = TySubst::new();
+        let l = Ty::List(Box::new(Ty::Int));
+        let i = Ty::Iterator(Box::new(Ty::Int));
+        assert!(s.unify(&l, &i).is_ok(), "List should coerce to Iterator");
     }
 }

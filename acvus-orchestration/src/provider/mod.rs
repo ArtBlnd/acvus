@@ -21,11 +21,11 @@ pub enum ApiKind {
 impl ApiKind {
 
     pub fn message_elem_ty(&self, interner: &Interner) -> Ty {
-        Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
+        Ty::Object(FxHashMap::from_iter([
             (interner.intern("role"), Ty::String),
             (interner.intern("content"), Ty::String),
             (interner.intern("content_type"), Ty::String),
-        ]))))
+        ]))
     }
 
     pub fn item_fields<'a>(

@@ -473,6 +473,7 @@ fn parse_usage(json: &serde_json::Value) -> Usage {
 #[cfg(test)]
 mod tests {
 
+    use crate::ApiKind;
     use crate::kind::GenerationParams;
     use crate::message::{Message, ToolSpec};
 
@@ -623,7 +624,7 @@ mod tests {
     #[test]
     fn count_tokens_request_format() {
         let config = ProviderConfig {
-            api: crate::provider::ApiKind::Google,
+            api: ApiKind::Google,
             endpoint: "https://generativelanguage.googleapis.com".into(),
             api_key: "test-key".into(),
         };

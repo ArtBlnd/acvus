@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @products | iter | filter(p -> p.price >= 100) | map(p -> p.name) | collect }}{{ x | join(\", \") }}",
+  "template": "{{ x = @products | filter(p -> p.price >= 100) | map(p -> p.name) | collect }}{{ x | join(\", \") }}",
   "context": {
     "products": [
       { "name": "apple", "price": 100 },

@@ -3,7 +3,7 @@ use std::fmt;
 use acvus_ast::Span;
 use acvus_utils::Interner;
 
-use crate::ty::Ty;
+use crate::ty::{self, Ty};
 
 #[derive(Debug, Clone)]
 pub struct MirError {
@@ -57,6 +57,13 @@ pub enum MirErrorKind {
 
     // Builtin constraint errors
     BuiltinConstraint(String),
+
+    // Deque origin errors
+    OriginMismatch {
+        expected: ty::Origin,
+        got: ty::Origin,
+    },
+    DequeListCoercionForbidden,
 
     // Overload resolution errors
     NoMatchingOverload {
@@ -182,6 +189,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::BuiltinConstraint(msg) => {
                 write!(f, "{msg}")
+            }
+            MirErrorKind::OriginMismatch { expected, got } => {
+                write!(f, "deque origin mismatch: expected {expected}, got {got}")
+            }
+            MirErrorKind::DequeListCoercionForbidden => {
+                write!(f, "cannot convert List to Deque: only Deque → List coercion is allowed")
             }
             MirErrorKind::NoMatchingOverload { name, arg_tys } => {
                 write!(f, "no matching overload for `{name}` with arguments (")?;

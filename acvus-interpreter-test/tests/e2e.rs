@@ -858,7 +858,7 @@ async fn lambda_filter() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 0, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             ty,
             val
         )
@@ -874,7 +874,7 @@ async fn lambda_map() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | iter | map(i -> i + 1) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> i + 1) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             ty,
             val
         )
@@ -890,7 +890,7 @@ async fn lambda_pmap() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | iter | pmap(i -> (i | to_string)) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | pmap(i -> (i | to_string)) | collect }}{{ x | join(", ") }}"#,
             ty,
             val
         )
@@ -905,7 +905,7 @@ async fn pipe_filter_map() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 0, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | filter(x -> x != 0) | map(x -> (x | to_string)) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) | collect }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -920,7 +920,7 @@ async fn triple_pipe_chain() {
     let (ty, val) = items_context(&i, vec![0, 1, 2, 3]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | filter(i -> i != 0) | map(i -> i + 1) | map(i -> (i | to_string)) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> (i | to_string)) | collect }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -935,7 +935,7 @@ async fn closure_capture_local() {
     let (ty, val) = items_context(&i, vec![1, 3, 5, 7, 10]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ threshold = 5 }}{{ x = @items | iter | filter(i -> i > threshold) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}{{_}}{{/}}"#,
+            r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}{{_}}{{/}}"#,
             ty,
             val,
         )
@@ -966,7 +966,7 @@ async fn closure_capture_context() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | filter(i -> i > @threshold) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i > @threshold) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             types,
             values
         )
@@ -982,7 +982,7 @@ async fn lambda_field_access() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @users | iter | map(u -> u.name) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @users | map(u -> u.name) | collect }}{{ x | join(", ") }}"#,
             ty,
             val
         )
@@ -998,7 +998,7 @@ async fn lambda_negate_param() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @items | iter | map(i -> -i) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> -i) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             ty,
             val
         )
@@ -1025,7 +1025,7 @@ async fn lambda_not_param() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @flags | iter | map(i -> !i) | collect }}{{ x | iter | map(b -> (b | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @flags | map(i -> !i) | collect }}{{ x | map(b -> (b | to_string)) | collect | join(", ") }}"#,
             types,
             values
         )
@@ -1051,7 +1051,7 @@ async fn lambda_string_concat() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @names | iter | map(n -> n + "!") | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @names | map(n -> n + "!") | collect }}{{ x | join(", ") }}"#,
             types,
             values
         )
@@ -1074,7 +1074,7 @@ async fn lambda_float_arithmetic() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @vals | iter | map(v -> v * 2.0) | collect }}{{ x | iter | map(v -> (v | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @vals | map(v -> v * 2.0) | collect }}{{ x | map(v -> (v | to_string)) | collect | join(", ") }}"#,
             types,
             values
         )
@@ -1090,7 +1090,7 @@ async fn filter_then_map_field() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ x = @users | iter | filter(u -> u.age > 18) | map(u -> u.name) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) | collect }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -1123,7 +1123,7 @@ async fn multiple_closures_same_capture() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | map(i -> i + @offset) | filter(i -> i > 0) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -1227,7 +1227,7 @@ async fn logical_in_filter() {
     let (ty, val) = items_context(&i, vec![1, 5, 10, 15, 20, 25]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @items | iter | filter(i -> i > 5 && i < 20) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @items | filter(i -> i > 5 && i < 20) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}"#,
             ty,
             val
         )
@@ -1304,7 +1304,7 @@ async fn filter_map_with_object_pattern() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @products | iter | filter(p -> p.price >= 100) | map(p -> p.name) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @products | filter(p -> p.price >= 100) | map(p -> p.name) | collect }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -1359,7 +1359,7 @@ async fn multi_context_interaction() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ filtered = @items | iter | filter(i -> i >= @min && i <= @max) | collect }}{{ $count = 0 }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}"#,
+            r#"{{ filtered = @items | filter(i -> i >= @min && i <= @max) | collect }}{{ $count = 0 }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}"#,
             types,
             values,
         )
@@ -1404,7 +1404,7 @@ async fn chained_pipe_with_logical_filter() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ x = @nums | iter | filter(n -> n > 0 && n < 10) | map(n -> n * n) | collect }}{{ x | iter | map(n -> (n | to_string)) | collect | join(", ") }}"#,
+            r#"{{ x = @nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) | collect }}{{ x | map(n -> (n | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -1448,7 +1448,7 @@ async fn map_then_iterate_with_match() {
     let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
     assert_eq!(
         run_ctx(&i,
-            r#"{{ doubled = @items | iter | map(i -> i * 2) | collect }}{{ x in doubled }}{{ true = x > 6 }}{{ x | to_string }} {{_}}{{/}}{{/}}"#,
+            r#"{{ doubled = @items | map(i -> i * 2) | collect }}{{ x in doubled }}{{ true = x > 6 }}{{ x | to_string }} {{_}}{{/}}{{/}}"#,
             ty,
             val,
         )
@@ -1513,7 +1513,7 @@ async fn complex_object_filter_format() {
     );
     assert_eq!(
         run_ctx(&i,
-            r#"{{ eligible = @users | iter | filter(u -> u.active && u.age >= 18) | map(u -> u.name) | collect }}{{ name in eligible }}{{ name }} {{/}}"#,
+            r#"{{ eligible = @users | filter(u -> u.active && u.age >= 18) | map(u -> u.name) | collect }}{{ name in eligible }}{{ name }} {{/}}"#,
             ty,
             val,
         )
@@ -1528,7 +1528,7 @@ async fn complex_object_filter_format() {
 async fn list_literal_expression() {
     assert_eq!(
         run_simple(
-            r#"{{ x = [1, 2, 3] }}{{ x | iter | map(i -> (i | to_string)) | collect | join(", ") }}{{_}}{{/}}"#
+            r#"{{ x = [1, 2, 3] }}{{ x | map(i -> (i | to_string)) | collect | join(", ") }}{{_}}{{/}}"#
         )
         .await,
         "1, 2, 3"
@@ -1724,7 +1724,7 @@ async fn obf_lambda_filter_map() {
     assert_eq!(
         run_obfuscated(
             &i,
-            r#"{{ x = @items | iter | filter(x -> x != 0) | map(x -> (x | to_string)) | collect }}{{ x | join(", ") }}"#,
+            r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) | collect }}{{ x | join(", ") }}"#,
             ty,
             val,
         )
@@ -1847,7 +1847,7 @@ async fn obf_filter_accumulate_complex() {
     assert_eq!(
         run_obfuscated(
             &i,
-            r#"{{ $sum = 0 }}{{ x in (@items | iter | filter(x -> x > 5) | collect) }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
+            r#"{{ $sum = 0 }}{{ x in (@items | filter(x -> x > 5) | collect) }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
             ty,
             val,
         )
@@ -2036,7 +2036,7 @@ async fn to_utf8_returns_option_and_unwrap() {
 async fn to_utf8_none_on_invalid() {
     let i = Interner::new();
     // 0xFF is not valid utf8 -> to_utf8 returns None
-    let types = ctx(&i, &[("data", Ty::List(Box::new(Ty::Byte)))]);
+    let types = ctx(&i, &[("data", Ty::bytes())]);
     let values = vals(
         &i,
         &[(
@@ -2067,7 +2067,7 @@ async fn error_find_empty_list() {
 
     let err = run_expect_error(
         &i,
-        r#"{{ x = @items | iter | find(x -> x == 99) }}{{ x | to_string }}{{_}}{{/}}"#,
+        r#"{{ x = @items | find(x -> x == 99) }}{{ x | to_string }}{{_}}{{/}}"#,
         types,
         values,
     )
@@ -2088,7 +2088,7 @@ async fn error_reduce_empty_list() {
 
     let err = run_expect_error(
         &i,
-        r#"{{ x = @items | iter | reduce((a, b) -> a + b) }}{{ x | to_string }}{{_}}{{/}}"#,
+        r#"{{ x = @items | reduce((a, b) -> a + b) }}{{ x | to_string }}{{_}}{{/}}"#,
         types,
         values,
     )
@@ -2490,7 +2490,7 @@ async fn template_enum_single_variant_context_type() {
 
 #[tokio::test]
 async fn script_hint_flatten_with_context() {
-    // Simulates: @turn.history | map(v -> v.entrypoint) | flatten | flatten
+    // Simulates: @turn.history | map(v -> v.entrypoint) | collect | flatten | flatten
     let i = Interner::new();
     let entry_ty = Ty::Object(FxHashMap::from_iter([
         (i.intern("entrypoint"), Ty::List(Box::new(
@@ -2507,7 +2507,7 @@ async fn script_hint_flatten_with_context() {
     let context_types = FxHashMap::from_iter([
         (i.intern("turn"), turn_ty),
     ]);
-    let script = "@turn.history | iter | map(v -> v.entrypoint) | collect | flatten | flatten";
+    let script = "@turn.history | map(v -> v.entrypoint) | collect | flatten | flatten";
 
     // Compile with no hint — should work (this is the CLI path)
     let ast = acvus_ast::parse_script(&i, script).expect("parse failed");
@@ -2562,7 +2562,7 @@ async fn block_in_lambda() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | map(x -> { y = x * 10; y }) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | map(x -> { y = x * 10; y }) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -2729,13 +2729,13 @@ async fn builtin_len_empty_list() {
 }
 
 #[tokio::test]
-async fn builtin_reverse_list() {
+async fn builtin_rev_iter_list() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | reverse | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | rev_iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -2767,7 +2767,7 @@ async fn builtin_flatten_list() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | flatten | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | flatten | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -3057,7 +3057,7 @@ async fn builtin_to_bytes_and_back() {
 #[tokio::test]
 async fn builtin_to_utf8_lossy() {
     let i = Interner::new();
-    let types = ctx(&i, &[("data", Ty::List(Box::new(Ty::Byte)))]);
+    let types = ctx(&i, &[("data", Ty::bytes())]);
     let values = vals(
         &i,
         &[(
@@ -3104,13 +3104,13 @@ async fn builtin_unwrap_or_none() {
 // ── Iterator Constructors & Basic Ops ───────────────────────────
 
 #[tokio::test]
-async fn builtin_iter_collect_roundtrip() {
+async fn builtin_map_collect() {
     let i = Interner::new();
     let (ty, val) = items_context(&i, vec![1, 2, 3]);
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | collect | iter | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3142,7 +3142,7 @@ async fn builtin_take() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3158,7 +3158,7 @@ async fn builtin_skip() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | skip(2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | skip(2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3187,7 +3187,7 @@ async fn builtin_chain() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @a | iter | chain(@b | iter) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @a | chain(@b) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -3205,7 +3205,7 @@ async fn builtin_filter() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | filter(x -> x > 3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | filter(x -> x > 3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3221,7 +3221,7 @@ async fn builtin_map() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | map(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | map(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3237,7 +3237,7 @@ async fn builtin_find() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | find(x -> x > 3) | to_string }}"#,
+            r#"{{ @items | find(x -> x > 3) | to_string }}"#,
             ty,
             val,
         )
@@ -3253,7 +3253,7 @@ async fn builtin_reduce() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | reduce((a, b) -> a + b) | to_string }}"#,
+            r#"{{ @items | reduce((a, b) -> a + b) | to_string }}"#,
             ty,
             val,
         )
@@ -3269,7 +3269,7 @@ async fn builtin_fold() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | fold(100, (acc, x) -> acc + x) | to_string }}"#,
+            r#"{{ @items | fold(100, (acc, x) -> acc + x) | to_string }}"#,
             ty,
             val,
         )
@@ -3285,7 +3285,7 @@ async fn builtin_any_true() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | any(x -> x > 2) | to_string }}",
+            "{{ @items | any(x -> x > 2) | to_string }}",
             ty,
             val,
         )
@@ -3301,7 +3301,7 @@ async fn builtin_any_false() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | any(x -> x > 10) | to_string }}",
+            "{{ @items | any(x -> x > 10) | to_string }}",
             ty,
             val,
         )
@@ -3317,7 +3317,7 @@ async fn builtin_all_true() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | all(x -> x > 0) | to_string }}",
+            "{{ @items | all(x -> x > 0) | to_string }}",
             ty,
             val,
         )
@@ -3333,7 +3333,7 @@ async fn builtin_all_false() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | all(x -> x > 3) | to_string }}",
+            "{{ @items | all(x -> x > 3) | to_string }}",
             ty,
             val,
         )
@@ -3367,7 +3367,7 @@ async fn builtin_flatten_iter() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | flatten | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | flatten | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -3383,7 +3383,7 @@ async fn builtin_flat_map_iter() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | flat_map(x -> [x, x * 10]) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | flat_map(x -> [x, x * 10]) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3409,7 +3409,7 @@ async fn builtin_join_iter() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @words | iter | join(" ") }}"#,
+            r#"{{ @words | join(" ") }}"#,
             types,
             values,
         )
@@ -3425,7 +3425,7 @@ async fn builtin_contains_iter_found() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | contains(20) | to_string }}",
+            "{{ @items | contains(20) | to_string }}",
             ty,
             val,
         )
@@ -3441,7 +3441,7 @@ async fn builtin_contains_iter_not_found() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | contains(99) | to_string }}",
+            "{{ @items | contains(99) | to_string }}",
             ty,
             val,
         )
@@ -3457,7 +3457,7 @@ async fn builtin_first_iter_some() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | first | unwrap | to_string }}",
+            "{{ @items | first | unwrap | to_string }}",
             ty,
             val,
         )
@@ -3474,7 +3474,7 @@ async fn builtin_first_iter_none() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ None = @items | iter | first }}empty{{_}}has{{/}}",
+            "{{ None = @items | first }}empty{{_}}has{{/}}",
             types,
             values,
         )
@@ -3490,7 +3490,7 @@ async fn builtin_last_iter_some() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ @items | iter | last | unwrap | to_string }}",
+            "{{ @items | last | unwrap | to_string }}",
             ty,
             val,
         )
@@ -3507,7 +3507,7 @@ async fn builtin_last_iter_none() {
     assert_eq!(
         run_ctx(
             &i,
-            "{{ None = @items | iter | last }}empty{{_}}has{{/}}",
+            "{{ None = @items | last }}empty{{_}}has{{/}}",
             types,
             values,
         )
@@ -3525,7 +3525,7 @@ async fn builtin_filter_map_collect() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | filter(x -> x > 2) | map(x -> x * 10) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | filter(x -> x > 2) | map(x -> x * 10) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3541,7 +3541,7 @@ async fn builtin_take_skip_combo() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | skip(2) | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | skip(2) | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )
@@ -3570,7 +3570,7 @@ async fn builtin_chain_filter_map() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @a | iter | chain(@b | iter) | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @a | chain(@b) | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -3618,7 +3618,7 @@ async fn builtin_flatten_iter_then_filter() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | flatten | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | flatten | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             types,
             values,
         )
@@ -3637,7 +3637,7 @@ async fn builtin_pmap() {
     assert_eq!(
         run_ctx(
             &i,
-            r#"{{ @items | iter | pmap(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            r#"{{ @items | pmap(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
             ty,
             val,
         )

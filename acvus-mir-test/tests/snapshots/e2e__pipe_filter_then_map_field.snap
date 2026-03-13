@@ -7,20 +7,22 @@ expression: ir
 
 === main ===
      0 │   r0 = context_load @users
-     1 │   r1 = closure L0 []
-     2 │   r2 = call filter(r0, r1)
-     3 │   r3 = closure L1 []
-     4 │   r4 = call map(r2, r3)
-     6 │   r6 = call join(r4, T0)
-     7 │   yield r6
+     1 │   r1 = call iter(r0)
+     2 │   r2 = closure L0 []
+     3 │   r3 = call filter(r1, r2)
+     4 │   r4 = closure L1 []
+     5 │   r5 = call map(r3, r4)
+     7 │   r7 = call join(r5, T0)
+     8 │   yield r7
 
     ; r0 (@users) : List<{age: Int, name: String}>
-    ; r1 (v1) : Fn({age: Int, name: String}) -> Bool
-    ; r2 (filter(...)) : List<{age: Int, name: String}>
-    ; r3 (v3) : Fn({age: Int, name: String}) -> String
-    ; r4 (map(...)) : List<String>
-    ; r5 (v5) : String
-    ; r6 (join(...)) : String
+    ; r1 (iter(...)) : Iterator<{age: Int, name: String}>
+    ; r2 (v2) : Fn({age: Int, name: String}) -> Bool
+    ; r3 (filter(...)) : Iterator<{age: Int, name: String}>
+    ; r4 (v4) : Fn({age: Int, name: String}) -> String
+    ; r5 (map(...)) : Iterator<String>
+    ; r6 (v6) : String
+    ; r7 (join(...)) : String
 
 === closure L0 (u) ===
      0 │   r1 = r0.age

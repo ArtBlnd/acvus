@@ -209,7 +209,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn list_elem_type(&self, list_val: ValueId) -> Ty {
-        if let Some(Ty::List(elem)) = self.body.val_types.get(&list_val) {
+        if let Some(Ty::List(elem) | Ty::Deque(elem, _)) = self.body.val_types.get(&list_val) {
             elem.as_ref().clone()
         } else {
             Ty::Error
@@ -234,7 +234,7 @@ impl<'a> Lowerer<'a> {
 
     fn iterable_elem_type(&self, src_val: ValueId) -> Ty {
         match self.body.val_types.get(&src_val) {
-            Some(Ty::List(elem)) => elem.as_ref().clone(),
+            Some(Ty::List(elem) | Ty::Deque(elem, _)) => elem.as_ref().clone(),
             Some(Ty::Range) => Ty::Int,
             _ => Ty::Error,
         }

@@ -9,6 +9,7 @@ use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::{Inst, InstKind, Label, MirBody, MirModule, ValueId};
 use acvus_utils::Astr;
 use acvus_utils::Interner;
+use acvus_utils::TrackedDeque;
 use rustc_hash::FxHashMap;
 
 use crate::builtins;
@@ -134,6 +135,10 @@ impl Frame {
     fn iter_init(&mut self, dst: ValueId, src: ValueId) {
         let state = match self.take_owned(src) {
             Value::List(items) => IterState::List { items, pos: 0 },
+            Value::Deque(deque) => IterState::List {
+                items: deque.into_vec(),
+                pos: 0,
+            },
             Value::Range {
                 start,
                 end,
@@ -281,7 +286,7 @@ impl Interpreter {
                 }
                 InstKind::MakeList { dst, elements } => {
                     let items = frame.collect_args(elements);
-                    frame.set_new(*dst, Value::List(items));
+                    frame.set_new(*dst, Value::Deque(TrackedDeque::from_vec(items)));
                 }
                 InstKind::MakeObject { dst, fields } => {
                     let obj: FxHashMap<Astr, Value> = fields
@@ -572,9 +577,6 @@ impl Interpreter {
             | BuiltinId::CharToInt
             | BuiltinId::IntToChar
             | BuiltinId::Len
-            | BuiltinId::Reverse
-            | BuiltinId::Flatten
-            | BuiltinId::Join
             | BuiltinId::Contains
             | BuiltinId::ContainsStr
             | BuiltinId::Substring
@@ -594,81 +596,81 @@ impl Interpreter {
             | BuiltinId::RepeatStr
             | BuiltinId::Unwrap
             | BuiltinId::First
+            | BuiltinId::FirstIter
             | BuiltinId::Last
+            | BuiltinId::LastIter
+            | BuiltinId::ContainsIter
             | BuiltinId::UnwrapOr => {
                 let result = builtins::call_pure(id, args)?;
                 Ok((this, result))
             }
 
             // -- Iterator constructors --
+            BuiltinId::Reverse => {
+                let mut items = match args.remove(0) {
+                    Value::List(items) => items,
+                    Value::Deque(d) => d.into_vec(),
+                    other => panic!("reverse: expected List or Deque, got {other:?}"),
+                };
+                items.reverse();
+                Ok((this, Value::List(items)))
+            }
             BuiltinId::Iter => {
-                let Value::List(items) = args.remove(0) else {
-                    panic!("iter: expected List")
+                let items = match args.remove(0) {
+                    Value::List(items) => items,
+                    Value::Deque(d) => d.into_vec(),
+                    other => panic!("iter: expected List or Deque, got {other:?}"),
                 };
                 Ok((this, Value::Iterator(SharedIter::from_list(items))))
             }
             BuiltinId::RevIter => {
-                let Value::List(items) = args.remove(0) else {
-                    panic!("rev_iter: expected List")
+                let items = match args.remove(0) {
+                    Value::List(items) => items,
+                    Value::Deque(d) => d.into_vec(),
+                    other => panic!("rev_iter: expected List or Deque, got {other:?}"),
                 };
                 Ok((this, Value::Iterator(SharedIter::from_list_rev(items))))
             }
             BuiltinId::Collect => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("collect: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 Self::exec_collect(this, shared, handle).await
             }
             BuiltinId::Take => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("take: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let Value::Int(n) = args.remove(0) else {
                     panic!("take: expected Int")
                 };
                 Ok((this, Value::Iterator(shared.take(n as usize))))
             }
             BuiltinId::Skip => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("skip: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let Value::Int(n) = args.remove(0) else {
                     panic!("skip: expected Int")
                 };
                 Ok((this, Value::Iterator(shared.skip(n as usize))))
             }
             BuiltinId::Chain => {
-                let Value::Iterator(a) = args.remove(0) else {
-                    panic!("chain: expected Iterator")
-                };
-                let Value::Iterator(b) = args.remove(0) else {
-                    panic!("chain: expected Iterator")
-                };
+                let a = args.remove(0).into_shared_iter();
+                let b = args.remove(0).into_shared_iter();
                 Ok((this, Value::Iterator(a.chain(b))))
             }
 
-            // -- Iterator overloads --
-            BuiltinId::FlattenIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("flatten_iter: expected Iterator")
-                };
+            // -- Iterator operations --
+            BuiltinId::Flatten | BuiltinId::FlattenIter => {
+                let shared = args.remove(0).into_shared_iter();
                 Ok((this, Value::Iterator(shared.flatten())))
             }
-            BuiltinId::FlatMapIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("flat_map: expected Iterator")
-                };
+            BuiltinId::FlatMap | BuiltinId::FlatMapIter => {
+                let shared = args.remove(0).into_shared_iter();
                 let Value::Fn(f) = args.remove(0) else {
                     panic!("flat_map: expected Fn")
                 };
                 Ok((this, Value::Iterator(shared.flat_map(f))))
             }
-            BuiltinId::JoinIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("join_iter: expected Iterator")
-                };
+            BuiltinId::Join | BuiltinId::JoinIter => {
+                let shared = args.remove(0).into_shared_iter();
                 let Value::String(sep) = args.remove(0) else {
-                    panic!("join_iter: expected String separator")
+                    panic!("join: expected String separator")
                 };
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -676,56 +678,21 @@ impl Interpreter {
                     .into_iter()
                     .map(|v| match v {
                         Value::String(s) => s,
-                        _ => panic!("join_iter: element is not String"),
+                        _ => panic!("join: element is not String"),
                     })
                     .collect();
                 Ok((this, Value::String(parts.join(&sep))))
             }
-            BuiltinId::ContainsIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("contains_iter: expected Iterator")
-                };
-                let needle = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let found = items.iter().any(|item| item == &needle);
-                Ok((this, Value::Bool(found)))
-            }
-            BuiltinId::FirstIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("first_iter: expected Iterator")
-                };
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let opt: Option<Value> = items.into_iter().next();
-                let result = builtins::IntoValue::into_value(opt);
-                Ok((this, result))
-            }
-            BuiltinId::LastIter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("last_iter: expected Iterator")
-                };
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let opt: Option<Value> = items.into_iter().last();
-                let result = builtins::IntoValue::into_value(opt);
-                Ok((this, result))
-            }
-
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("map: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let Value::Fn(f) = args.remove(0) else {
                     panic!("map: expected Fn")
                 };
                 Ok((this, Value::Iterator(shared.map(f))))
             }
             BuiltinId::Filter => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("filter: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let Value::Fn(f) = args.remove(0) else {
                     panic!("filter: expected Fn")
                 };
@@ -734,9 +701,7 @@ impl Interpreter {
 
             // -- Consuming HOFs (collect then apply) --
             BuiltinId::Find => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("find: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -746,9 +711,7 @@ impl Interpreter {
                 Self::exec_hof_find_inner(this, items, f, handle).await
             }
             BuiltinId::Reduce => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("reduce: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -758,9 +721,7 @@ impl Interpreter {
                 Self::exec_hof_reduce_inner(this, items, f, handle).await
             }
             BuiltinId::Fold => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("fold: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let init = args.remove(0);
                 let fn_val = args.remove(0);
                 let items;
@@ -771,9 +732,7 @@ impl Interpreter {
                 Self::exec_hof_fold_inner(this, items, init, f, handle).await
             }
             BuiltinId::Any => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("any: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -783,9 +742,7 @@ impl Interpreter {
                 Self::exec_hof_any_inner(this, items, f, handle).await
             }
             BuiltinId::All => {
-                let Value::Iterator(shared) = args.remove(0) else {
-                    panic!("all: expected Iterator")
-                };
+                let shared = args.remove(0).into_shared_iter();
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -793,6 +750,39 @@ impl Interpreter {
                     panic!("all: expected Fn")
                 };
                 Self::exec_hof_all_inner(this, items, f, handle).await
+            }
+
+            // -- Deque ops --
+            BuiltinId::Append => {
+                let list = args.remove(0);
+                let item = args.remove(0);
+                let Value::Deque(mut deque) = list else {
+                    panic!("append: expected Deque, got {list:?}")
+                };
+                deque.push(item);
+                Ok((this, Value::Deque(deque)))
+            }
+            BuiltinId::Extend => {
+                let list = args.remove(0);
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Deque(mut deque) = list else {
+                    panic!("extend: expected Deque as first arg")
+                };
+                let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                deque.extend(items);
+                Ok((this, Value::Deque(deque)))
+            }
+            BuiltinId::Consume => {
+                let list = args.remove(0);
+                let n_val = args.remove(0);
+                let Value::Deque(mut deque) = list else {
+                    panic!("consume: expected Deque as first arg")
+                };
+                let Value::Int(n) = n_val else {
+                    panic!("consume: expected Int as second arg")
+                };
+                deque.consume(n as usize);
+                Ok((this, Value::Deque(deque)))
             }
         }
     }
@@ -865,6 +855,7 @@ impl Interpreter {
                     for item in items {
                         match item {
                             Value::List(inner) => result.extend(inner),
+                            Value::Deque(d) => result.extend(d.into_vec()),
                             other => result.push(other),
                         }
                     }
@@ -883,6 +874,7 @@ impl Interpreter {
                         .await?;
                         match mapped {
                             Value::List(inner) => result.extend(inner),
+                            Value::Deque(d) => result.extend(d.into_vec()),
                             other => result.push(other),
                         }
                     }
@@ -1055,6 +1047,7 @@ impl Interpreter {
 fn expect_list<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
     match v {
         Value::List(items) => items,
+        Value::Deque(d) => d.as_slice(),
         _ => panic!("{ctx}: expected List, got {v:?}"),
     }
 }
@@ -1091,7 +1084,9 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::String(s) => Value::String(s.clone()),
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Byte(b) => Value::Byte(*b),
-        Literal::List(elems) => Value::List(elems.iter().map(literal_to_value).collect()),
+        Literal::List(elems) => {
+            Value::Deque(TrackedDeque::from_vec(elems.iter().map(literal_to_value).collect()))
+        }
     }
 }
 

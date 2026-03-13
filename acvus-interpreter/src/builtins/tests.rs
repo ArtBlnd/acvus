@@ -79,9 +79,6 @@ const PURE_NAMES: &[&str] = &[
     "char_to_int",
     "int_to_char",
     "len",
-    "reverse",
-    "flatten",
-    "join",
     "contains",
     "contains_str",
     "substring",
@@ -108,19 +105,92 @@ const PURE_NAMES: &[&str] = &[
 /// Names of higher-order function / iterator builtins dispatched by `exec_builtin`.
 const HOF_NAMES: &[&str] = &[
     "filter", "map", "pmap", "find", "reduce", "fold", "any", "all",
-    "iter", "rev_iter", "collect", "take", "skip", "chain",
-    "flat_map",
+    "reverse", "iter", "rev_iter", "collect", "take", "skip", "chain",
+    "flat_map", "flatten", "join",
+    "append", "extend", "consume",
 ];
 
 #[test]
 fn all_mir_builtins_handled() {
     let registry = acvus_mir::builtins::registry();
     let handled: FxHashSet<&str> = PURE_NAMES.iter().chain(HOF_NAMES.iter()).copied().collect();
+
+    // No name should appear in both lists.
+    let pure_set: FxHashSet<&str> = PURE_NAMES.iter().copied().collect();
+    let hof_set: FxHashSet<&str> = HOF_NAMES.iter().copied().collect();
+    let overlap: Vec<_> = pure_set.intersection(&hof_set).collect();
+    assert!(overlap.is_empty(), "names appear in both PURE and HOF: {overlap:?}");
+
     // Every name the interpreter handles should exist in the registry.
     for name in &handled {
         assert!(
             !registry.candidates(name).is_empty(),
             "interpreter handles `{name}` but it is not registered in MIR",
+        );
+    }
+
+    // Every registered builtin must appear in exactly one of the two lists.
+    let all_ids: &[BuiltinId] = &[
+        BuiltinId::Filter,
+        BuiltinId::Map,
+        BuiltinId::Pmap,
+        BuiltinId::ToString,
+        BuiltinId::ToFloat,
+        BuiltinId::ToInt,
+        BuiltinId::Find,
+        BuiltinId::Reduce,
+        BuiltinId::Fold,
+        BuiltinId::Any,
+        BuiltinId::All,
+        BuiltinId::Len,
+        BuiltinId::Reverse,
+        BuiltinId::Flatten,
+        BuiltinId::Join,
+        BuiltinId::CharToInt,
+        BuiltinId::IntToChar,
+        BuiltinId::Contains,
+        BuiltinId::ContainsStr,
+        BuiltinId::Substring,
+        BuiltinId::LenStr,
+        BuiltinId::ToBytes,
+        BuiltinId::ToUtf8,
+        BuiltinId::ToUtf8Lossy,
+        BuiltinId::Trim,
+        BuiltinId::TrimStart,
+        BuiltinId::TrimEnd,
+        BuiltinId::Upper,
+        BuiltinId::Lower,
+        BuiltinId::ReplaceStr,
+        BuiltinId::SplitStr,
+        BuiltinId::StartsWithStr,
+        BuiltinId::EndsWithStr,
+        BuiltinId::RepeatStr,
+        BuiltinId::Unwrap,
+        BuiltinId::First,
+        BuiltinId::Last,
+        BuiltinId::UnwrapOr,
+        BuiltinId::Iter,
+        BuiltinId::RevIter,
+        BuiltinId::Collect,
+        BuiltinId::Take,
+        BuiltinId::Skip,
+        BuiltinId::Chain,
+        BuiltinId::Append,
+        BuiltinId::Extend,
+        BuiltinId::Consume,
+        BuiltinId::FlattenIter,
+        BuiltinId::FlatMap,
+        BuiltinId::FlatMapIter,
+        BuiltinId::JoinIter,
+        BuiltinId::ContainsIter,
+        BuiltinId::FirstIter,
+        BuiltinId::LastIter,
+    ];
+    for &id in all_ids {
+        let name = id.name();
+        assert!(
+            handled.contains(name),
+            "MIR builtin `{name}` ({id:?}) is not covered by PURE_NAMES or HOF_NAMES",
         );
     }
 }

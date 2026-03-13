@@ -252,7 +252,7 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(x -> x != 0) | map(x -> x + 1) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | filter(x -> x != 0) | map(x -> x + 1) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -275,7 +275,7 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(x -> x != 0) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | filter(x -> x != 0) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -704,7 +704,7 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | pmap(i -> i + 1) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | pmap(i -> i + 1) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -802,7 +802,7 @@ fn closure_capture_context() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(i -> i > @threshold) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | filter(i -> i > @threshold) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -845,7 +845,7 @@ fn lambda_map_arithmetic() {
     // Lambda param type resolved via unification: map(List<Int>, x -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | map(i -> i + 1) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | map(i -> i + 1) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -858,7 +858,7 @@ fn lambda_filter_comparison() {
     // Lambda param type resolved via unification: filter(List<Int>, x -> x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | filter(i -> i > 0) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -873,7 +873,7 @@ fn closure_capture_local() {
     // Closure captures local variable (not context).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ x = @items | filter(i -> i > threshold) }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ threshold = 5 }}{{ x = @items | iter | filter(i -> i > threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -1013,7 +1013,7 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(i -> i != 0) | map(i -> i + 1) | map(i -> i * 2) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | filter(i -> i != 0) | map(i -> i + 1) | map(i -> i * 2) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -1079,7 +1079,7 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | map(i -> -i) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | map(i -> -i) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -1095,7 +1095,7 @@ fn lambda_not_param() {
     let context = ctx(&i, &[("flags", Ty::List(Box::new(Ty::Bool)))]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @flags | map(i -> !i) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @flags | iter | map(i -> !i) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1128,7 +1128,7 @@ fn multiple_closures_same_capture() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | map(i -> i + @offset) | filter(i -> i > 0) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | map(i -> i + @offset) | filter(i -> i > 0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1143,7 +1143,7 @@ fn string_equality_in_filter() {
     let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @names | filter(n -> n != "admin") }}{{ x | join(",") }}"#,
+        r#"{{ x = @names | iter | filter(n -> n != "admin") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1165,7 +1165,7 @@ fn lambda_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | map(u -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ x = @users | iter | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1195,7 +1195,7 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | map(i -> i + 1) | filter(i -> i != 0) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @items | iter | map(i -> i + 1) | filter(i -> i != 0) | collect }}{{ x | len | to_string }}"#,
         &items_context(&i),
     )
     .unwrap();
@@ -1212,7 +1212,7 @@ fn lambda_capture_local_var_ref() {
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ $offset = 10 }}{{ x = @items | filter(i -> i > $offset) }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ $offset = 10 }}{{ x = @items | iter | filter(i -> i > $offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1234,7 +1234,7 @@ fn lambda_multiple_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | map(u -> (u.name, u.age)) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @users | iter | map(u -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1258,7 +1258,7 @@ fn lambda_chained_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | map(u -> u.address.city) }}{{ x | join(",") }}"#,
+        r#"{{ x = @users | iter | map(u -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1274,7 +1274,7 @@ fn lambda_string_concat() {
     let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @names | map(n -> n + "!") }}{{ x | join(",") }}"#,
+        r#"{{ x = @names | iter | map(n -> n + "!") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1295,7 +1295,7 @@ fn pipe_filter_then_map_field() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ x = @users | iter | filter(u -> u.age > 18) | map(u -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1341,7 +1341,7 @@ fn lambda_float_arithmetic() {
     let context = ctx(&i, &[("vals", Ty::List(Box::new(Ty::Float)))]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @vals | map(v -> v * 2.0) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @vals | iter | map(v -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1380,7 +1380,7 @@ fn filter_object_field_equality() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | filter(u -> u.active) }}{{ x | len | to_string }}"#,
+        r#"{{ x = @users | iter | filter(u -> u.active) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();

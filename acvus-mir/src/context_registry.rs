@@ -137,7 +137,7 @@ impl PartialContextTypeRegistry {
     /// Insert a single key into the system tier.
     ///
     /// Returns an error if the key already exists in extern or user tier.
-    /// If the key already exists in system, it is overwritten (same tier = OK).
+    /// Panics if the key already exists in the system tier (programming bug).
     pub fn insert_system(
         &mut self,
         key: Astr,
@@ -157,10 +157,15 @@ impl PartialContextTypeRegistry {
                 tier_b: "user",
             });
         }
+        assert!(
+            !self.system.contains_key(&key),
+            "insert_system: duplicate key in system tier",
+        );
         self.system.insert(key, ty.clone());
         self.merged.insert(key, ty);
         Ok(())
     }
+
 
     /// Extend the system tier with multiple entries.
     ///

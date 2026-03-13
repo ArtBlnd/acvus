@@ -2,7 +2,7 @@ import type { ContextKeyInfo, WebNode, NodeErrors } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam, ParamOverride, Prompt, Profile, Bot, ApiKind } from './types.js';
-import { isRawBlock, CONTEXT_TYPE } from './types.js';
+import { isRawBlock, CONTEXT_TYPE, type RawBlock } from './types.js';
 import { collectBlocks, collectNodes } from './block-tree.js';
 import { analyzeWithTypes, analyzeWithKnown, typecheckNodes } from './engine.js';
 
@@ -10,14 +10,14 @@ import { analyzeWithTypes, analyzeWithKnown, typecheckNodes } from './engine.js'
  * Builtin context refs injected automatically by the WASM engine.
  * These are NOT user-defined params — excluded from param discovery.
  *
- * - turn: current turn info (engine internal struct)
+ * - turn_index: current turn index (engine internal)
  * - raw/self/content: node-internal variables (types provided by typecheckNodes)
  * - context: @context object (injected via CONTEXT_TYPE)
  * - item/index: iterator loop variables (injected by typecheckNodes / render_display)
  *
  * DO NOT move this to another file — internal to param-resolver.
  */
-const BUILTIN_CONTEXT_REFS = new Set(['turn', 'raw', 'self', 'content', 'context', 'item', 'index']);
+const BUILTIN_CONTEXT_REFS = new Set(['turn_index', 'raw', 'self', 'content', 'context', 'item', 'index']);
 
 export type ScriptEntry = { source: string; mode: 'script' | 'template' };
 
@@ -42,13 +42,10 @@ export function collectScriptsFromTree(children: BlockNode[], opts?: { skipFunct
 }
 
 function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
-	if (node.kind === 'expr' && node.initialValue.trim()) out.push({ source: node.initialValue, mode: 'script' });
-	if (node.assert.trim() && node.assert !== 'true') out.push({ source: node.assert, mode: 'script' });
-	if (node.strategy.mode === 'history' && node.strategy.historyBind.trim()) {
-		out.push({ source: node.strategy.historyBind, mode: 'script' });
-	}
-	if (node.strategy.mode === 'if-modified' && node.strategy.key.trim()) {
-		out.push({ source: node.strategy.key, mode: 'script' });
+	if (node.strategy.initialValue?.trim()) out.push({ source: node.strategy.initialValue, mode: 'script' });
+	if (node.strategy.assert?.trim() && node.strategy.assert !== 'true') out.push({ source: node.strategy.assert, mode: 'script' });
+	if (node.strategy.execution?.mode === 'if-modified' && node.strategy.execution.key?.trim()) {
+		out.push({ source: node.strategy.execution.key, mode: 'script' });
 	}
 	for (const msg of node.messages) {
 		if (msg.kind === 'block' && msg.source.type === 'inline') {
@@ -62,6 +59,9 @@ function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
 	}
 	if (node.kind === 'expr' && node.exprSource.trim()) {
 		out.push({ source: node.exprSource, mode: 'script' });
+	}
+	if ((node.strategy.persistency?.kind === 'deque' || node.strategy.persistency?.kind === 'diff') && node.strategy.persistency.bind?.trim()) {
+		out.push({ source: node.strategy.persistency.bind, mode: 'script' });
 	}
 }
 
@@ -285,9 +285,16 @@ export function twoPassAnalysis(opts: {
 	}
 
 	// ── Phase 2: Typecheck + Pruning ──
+	// Build block lookup so toWebNode can resolve block references.
+	// Without this, block-referenced messages are sent as empty strings
+	// and @self / other node-local context is invisible to the typechecker.
+	const blockLookup = new Map<string, RawBlock>();
+	for (const b of collectBlocks(opts.children)) {
+		if (isRawBlock(b)) blockLookup.set(b.id, b);
+	}
 	const webNodes = collectNodes(opts.children)
 		.filter((n) => n.name)
-		.map((n) => toWebNode(n, opts.getApi(n.providerId), nodeFnParams[n.name]));
+		.map((n) => toWebNode(n, opts.getApi(n.providerId), nodeFnParams[n.name], blockLookup));
 	const typecheckResult = typecheckNodes(webNodes, fullTypes);
 	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {} };
 	const env: ContextEnvResult = typecheckResult.envErrors.length > 0
@@ -488,12 +495,39 @@ export function pruneOverrides(
  * Convert a UI Node to the WebNode format expected by the WASM engine.
  * Message block references are resolved to inline templates.
  */
-export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnParams?: DiscoveredFnParam[]): WebNode {
+function sanitizeExecution(execution: import('./types.js').Execution | undefined): import('./types.js').Execution {
+	switch (execution?.mode) {
+		case 'always':
+		case 'once-per-turn':
+		case 'if-modified':
+			return execution;
+		default:
+			return { mode: 'always' };
+	}
+}
+
+function sanitizePersistency(persistency: import('./types.js').Persistency | undefined): import('./types.js').Persistency {
+	switch (persistency?.kind) {
+		case 'ephemeral':
+		case 'snapshot':
+		case 'deque':
+		case 'diff':
+			return persistency;
+		default:
+			return { kind: 'ephemeral' };
+	}
+}
+
+export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnParams?: DiscoveredFnParam[], blockLookup?: Map<string, RawBlock>): WebNode {
 	const shared = {
 		name: node.name,
-		strategy: node.strategy,
-		retry: node.retry ?? 0,
-		assert: node.assert ?? '',
+		strategy: {
+			execution: sanitizeExecution(node.strategy.execution),
+			persistency: sanitizePersistency(node.strategy.persistency),
+			initialValue: node.strategy.initialValue || undefined,
+			retry: node.strategy.retry ?? 0,
+			assert: node.strategy.assert ?? '',
+		},
 		isFunction: node.isFunction ?? false,
 		fnParams: discoveredFnParams
 			? discoveredFnParams.map((p) => {
@@ -508,7 +542,7 @@ export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnPara
 			return {
 				...shared,
 				kind: 'llm',
-				api,
+				api: api || null,
 				model: node.model,
 				temperature: node.temperature,
 				topP: node.topP ?? null,
@@ -517,7 +551,12 @@ export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnPara
 				maxTokens: node.maxTokens,
 				messages: node.messages.map((m) => {
 					if (m.kind === 'block') {
-						const template = m.source.type === 'inline' ? m.source.template : '';
+						let template = '';
+						if (m.source.type === 'inline') {
+							template = m.source.template;
+						} else if (blockLookup) {
+							template = blockLookup.get(m.source.blockId)?.text ?? '';
+						}
 						return { kind: 'block' as const, role: m.role, template };
 					}
 					return {
@@ -540,7 +579,6 @@ export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnPara
 				...shared,
 				kind: 'expr',
 				exprSource: node.exprSource,
-				initialValue: node.initialValue || undefined,
 			};
 		case 'plain':
 			return {

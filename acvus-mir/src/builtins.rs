@@ -53,8 +53,13 @@ pub enum BuiltinId {
     Take,
     Skip,
     Chain,
+    // -- Deque ops (origin-preserving) --
+    Append,
+    Extend,
+    Consume,
     // -- Iterator overloads --
     FlattenIter,
+    FlatMap,
     FlatMapIter,
     JoinIter,
     ContainsIter,
@@ -414,6 +419,45 @@ fn sig_unwrap_or(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::Option(Box::new(t.clone())), t.clone()], t)
 }
 
+// ---------------------------------------------------------------------------
+// Signature helpers — Deque ops (origin-preserving)
+// ---------------------------------------------------------------------------
+
+fn sig_append(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (vec![Ty::Deque(Box::new(t.clone()), o), t.clone()], Ty::Deque(Box::new(t), o))
+}
+
+fn sig_extend(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Iterator(Box::new(t.clone()))], Ty::Deque(Box::new(t), o))
+}
+
+fn sig_consume(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Int], Ty::Deque(Box::new(t), o))
+}
+
+// (Iterator<T>, Fn(T) → Iterator<U>) → Iterator<U>
+fn sig_flat_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let u = s.fresh_var();
+    (
+        vec![
+            Ty::Iterator(Box::new(t.clone())),
+            Ty::Fn {
+                params: vec![t],
+                ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
+                is_extern: false,
+            },
+        ],
+        Ty::Iterator(Box::new(u)),
+    )
+}
+
 fn sig_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (vec![Ty::List(Box::new(t.clone()))], Ty::Iterator(Box::new(t)))
@@ -477,8 +521,14 @@ fn build_registry() -> BuiltinRegistry {
     r.add("flatten",     BuiltinId::Flatten,      sig_flatten,       None);
     r.add("flatten",     BuiltinId::FlattenIter,  sig_flatten_iter,  None);
 
-    // -- flat_map (Iterator only) --
+    // -- flat_map (overloaded: Iterator→Iterator + Iterator→List) --
+    r.add("flat_map",    BuiltinId::FlatMap,      sig_flat_map,      None);
     r.add("flat_map",    BuiltinId::FlatMapIter,  sig_flat_map_iter, None);
+
+    // -- Deque ops (origin-preserving) --
+    r.add("append",      BuiltinId::Append,       sig_append,        None);
+    r.add("extend",      BuiltinId::Extend,       sig_extend,        None);
+    r.add("consume",     BuiltinId::Consume,      sig_consume,       None);
 
     // -- join (overloaded: List + Iterator) --
     r.add("join",        BuiltinId::Join,         sig_join,          None);

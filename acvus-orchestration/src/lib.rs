@@ -1,3 +1,5 @@
+mod blob;
+mod blob_journal;
 mod compile;
 mod convert;
 mod dag;
@@ -9,14 +11,15 @@ mod message;
 pub mod node;
 mod provider;
 pub mod resolve;
-mod state;
 mod storage;
 
+pub use blob::{BlobHash, BlobStore, MemBlobStore};
+pub use blob_journal::BlobStoreJournal;
 pub use acvus_mir_pass::analysis::reachable_context::ContextKeyPartition;
 pub use compile::{
-    CompiledBlock, CompiledMessage, CompiledNode, CompiledScript, CompiledStrategy,
-    ExternalContextEnv, NodeLocalTypes, compile_node, compile_nodes, compile_nodes_with_env,
-    compile_script, compute_external_context_env,
+    CompiledBlock, CompiledExecution, CompiledMessage, CompiledNode, CompiledPersistency,
+    CompiledScript, CompiledStrategy, ExternalContextEnv, compile_node,
+    compile_nodes, compile_nodes_with_env, compile_script, compute_external_context_env,
 };
 pub use convert::{json_to_value, value_to_literal};
 pub use dag::{Dag, build_dag};
@@ -25,7 +28,7 @@ pub use display::{
     IterableDisplaySpec, RenderedDisplayEntry, StaticDisplaySpec, compile_iterable_display,
     compile_static_display, render_display, render_display_with_idx,
 };
-pub use dsl::{MessageSpec, NodeSpec, Strategy, TokenBudget};
+pub use dsl::{ContextScope, Execution, MessageSpec, NodeLocalTypes, NodeSpec, Persistency, Strategy, TokenBudget};
 pub use error::{OrchError, OrchErrorDisplay, OrchErrorKind};
 pub use kind::{
     CompiledExpr, CompiledLlm, CompiledLlmCache, CompiledNodeKind, CompiledPlain,
@@ -40,6 +43,8 @@ pub use provider::{
     ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, build_cache_request, build_request,
     create_llm_model, parse_cache_response, parse_response,
 };
-pub use resolve::{ResolveError, ResolveState, Resolved, Resolver};
-pub use state::State;
-pub use storage::{HashMapStorage, Storage};
+pub use resolve::{ParkedDiag, ResolveError, ResolveState, Resolved, Resolver};
+pub use storage::{
+    EntryMut, EntryRef, HistoryEntry, Journal, ObjectDiff, Prune, StorageDiff, TreeEntryMut,
+    TreeEntryRef, TreeExport, TreeJournal, TreeNodeExport,
+};

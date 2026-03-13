@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use acvus_mir::ir::Label;
-use acvus_utils::Astr;
+use acvus_utils::{Astr, TrackedDeque};
 use rustc_hash::FxHashMap;
 
 use crate::iter::SharedIter;
@@ -148,6 +148,10 @@ pub enum Value {
         inclusive: bool,
     },
     List(Vec<Value>),
+    /// Tracked deque — origin-safe mutable list with diff tracking.
+    /// Produced by `[]` literals and deque builtins (append, extend, consume).
+    /// Use `into_diff()` after checkpoint to extract `OwnedDequeDiff`.
+    Deque(TrackedDeque<Value>),
     Object(FxHashMap<Astr, Value>),
     Tuple(Vec<Value>),
     Byte(u8),
@@ -214,6 +218,22 @@ impl PartialEq for FnValue {
 }
 
 impl Value {
+    /// Coerce into a `SharedIter`.
+    ///
+    /// Mirrors the type-level `Deque → Iterator` coercion:
+    /// - `Value::Iterator` is returned as-is.
+    /// - `Value::List` (runtime repr of Deque) is converted via `SharedIter::from_list`.
+    ///
+    /// Panics on any other variant.
+    pub fn into_shared_iter(self) -> SharedIter {
+        match self {
+            Value::Iterator(s) => s,
+            Value::List(items) => SharedIter::from_list(items),
+            Value::Deque(deque) => SharedIter::from_list(deque.into_vec()),
+            other => panic!("into_shared_iter: expected Iterator, List, or Deque, got {other:?}"),
+        }
+    }
+
     /// Convert a PureValue into a Value. Infallible.
     pub fn from_pure(pure: PureValue) -> Self {
         match pure {
@@ -287,6 +307,9 @@ impl Value {
                 tag,
                 payload: payload.map(|p| Box::new((*p).into_pure())),
             },
+            Value::Deque(deque) => {
+                PureValue::List(deque.into_vec().into_iter().map(Value::into_pure).collect())
+            }
             Value::Fn(_) => panic!("cannot convert Fn to PureValue"),
             Value::ExternFn(_) => panic!("cannot convert ExternFn to PureValue"),
             Value::Opaque(o) => panic!("cannot convert Opaque<{}> to PureValue", o.type_name),

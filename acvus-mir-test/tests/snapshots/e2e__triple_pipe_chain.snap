@@ -4,25 +4,29 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     1 │   r1 = closure L0 []
-     2 │   r2 = call filter(r0, r1)
-     3 │   r3 = closure L1 []
-     4 │   r4 = call map(r2, r3)
-     5 │   r5 = closure L2 []
-     6 │   r6 = call map(r4, r5)
-     7 │   r7 = call len(r6)
-     8 │   r8 = call to_string(r7)
-     9 │   yield r8
+     1 │   r1 = call iter(r0)
+     2 │   r2 = closure L0 []
+     3 │   r3 = call filter(r1, r2)
+     4 │   r4 = closure L1 []
+     5 │   r5 = call map(r3, r4)
+     6 │   r6 = closure L2 []
+     7 │   r7 = call map(r5, r6)
+     8 │   r8 = call collect(r7)
+     9 │   r9 = call len(r8)
+    10 │   r10 = call to_string(r9)
+    11 │   yield r10
 
     ; r0 (@items) : List<Int>
-    ; r1 (v1) : Fn(Int) -> Bool
-    ; r2 (filter(...)) : List<Int>
-    ; r3 (v3) : Fn(Int) -> Int
-    ; r4 (map(...)) : List<Int>
-    ; r5 (v5) : Fn(Int) -> Int
-    ; r6 (map(...)) : List<Int>
-    ; r7 (len(...)) : Int
-    ; r8 (to_string(...)) : String
+    ; r1 (iter(...)) : Iterator<Int>
+    ; r2 (v2) : Fn(Int) -> Bool
+    ; r3 (filter(...)) : Iterator<Int>
+    ; r4 (v4) : Fn(Int) -> Int
+    ; r5 (map(...)) : Iterator<Int>
+    ; r6 (v6) : Fn(Int) -> Int
+    ; r7 (map(...)) : Iterator<Int>
+    ; r8 (collect(...)) : List<Int>
+    ; r9 (len(...)) : Int
+    ; r10 (to_string(...)) : String
 
 === closure L0 (i) ===
      1 │   r2 = r0 != 0 (r1)

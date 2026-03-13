@@ -127,15 +127,28 @@ export type MessageDef =
 	| { kind: 'block'; role: string; source: MessageSource }
 	| { kind: 'iterator'; iterator: string; role?: string; template?: string; slice?: number[]; tokenBudget?: TokenBudget };
 
-export type Strategy =
+export type Execution =
 	| { mode: 'always' }
 	| { mode: 'once-per-turn' }
-	| { mode: 'if-modified'; key: string }
-	| { mode: 'history'; historyBind: string };
+	| { mode: 'if-modified'; key: string };
+
+export type Persistency =
+	| { kind: 'ephemeral' }
+	| { kind: 'snapshot' }
+	| { kind: 'deque'; bind: string }
+	| { kind: 'diff'; bind: string };
 
 export type FnParam = {
 	name: string;
 	type: string;
+};
+
+export type Strategy = {
+	execution: Execution;
+	persistency: Persistency;
+	initialValue: string;
+	retry: number;
+	assert: string;
 };
 
 export type Node = {
@@ -149,10 +162,7 @@ export type Node = {
 	topK: number | null;
 	grounding: boolean;
 	maxTokens: MaxTokens;
-	initialValue: string;
 	strategy: Strategy;
-	retry: number;
-	assert: string;
 	exprSource: string;
 	messages: MessageDef[];
 	tools: NodeToolBinding[];
@@ -404,5 +414,4 @@ export type Session = {
 	id: string;
 	name: string;
 	botId: string;
-	storage: unknown;
 };

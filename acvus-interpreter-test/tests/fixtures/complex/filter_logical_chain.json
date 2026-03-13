@@ -1,5 +1,5 @@
 {
-  "template": "{{ eligible = @users | iter | filter(u -> u.active) | filter(u -> u.age >= 18) | map(u -> u.name) | collect }}{{ name in eligible }}{{ name }} {{/}}",
+  "template": "{{ eligible = @users | filter(u -> u.active) | filter(u -> u.age >= 18) | map(u -> u.name) | collect }}{{ name in eligible }}{{ name }} {{/}}",
   "context": {
     "users": [
       { "name": "alice", "age": 30, "active": true },

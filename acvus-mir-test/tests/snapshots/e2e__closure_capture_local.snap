@@ -4,18 +4,22 @@ expression: ir
 ---
 === main ===
      1 │   r1 = context_load @items
-     2 │   r2 = closure L0 [5 (r0)]
-     3 │   r3 = call filter(r1, r2)
-     4 │   r4 = call len(r3)
-     5 │   r5 = call to_string(r4)
-     6 │   yield r5
+     2 │   r2 = call iter(r1)
+     3 │   r3 = closure L0 [5 (r0)]
+     4 │   r4 = call filter(r2, r3)
+     5 │   r5 = call collect(r4)
+     6 │   r6 = call len(r5)
+     7 │   r7 = call to_string(r6)
+     8 │   yield r7
 
     ; r0 (v0) : Int
     ; r1 (@items) : List<Int>
-    ; r2 (v2) : Fn(Int) -> Bool
-    ; r3 (filter(...)) : List<Int>
-    ; r4 (len(...)) : Int
-    ; r5 (to_string(...)) : String
+    ; r2 (iter(...)) : Iterator<Int>
+    ; r3 (v3) : Fn(Int) -> Bool
+    ; r4 (filter(...)) : Iterator<Int>
+    ; r5 (collect(...)) : List<Int>
+    ; r6 (len(...)) : Int
+    ; r7 (to_string(...)) : String
 
 === closure L0 (i) [captures: threshold] ===
      0 │   r2 = r1 > r0

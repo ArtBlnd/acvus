@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @nums | iter | filter(n -> n > 0 && n < 10) | map(n -> n * n) | collect }}{{ x | iter | map(i -> (i | to_string)) | collect | join(\", \") }}",
+  "template": "{{ x = @nums | filter(n -> n > 0 && n < 10) | map(n -> n * n) | collect }}{{ x | map(i -> (i | to_string)) | collect | join(\", \") }}",
   "context": { "nums": [-5, 0, 3, 7, 12, 20] },
   "expected": "9, 49"
 }

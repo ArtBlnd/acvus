@@ -1,5 +1,5 @@
 {
-  "template": "{{ $count = 0 }}{{ filtered = @items | iter | filter(i -> i >= @min && i <= @max) | collect }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}",
+  "template": "{{ $count = 0 }}{{ filtered = @items | filter(i -> i >= @min && i <= @max) | collect }}{{ x in filtered }}{{ $count = $count + 1 }}{{/}}{{ $count | to_string }}{{_}}{{/}}",
   "context": { "items": [3, 7, 1, 9, 4], "min": 2, "max": 8 },
   "expected": "3"
 }

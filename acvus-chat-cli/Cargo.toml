@@ -14,6 +14,7 @@ rustc-hash = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 rust_decimal = { version = "1", features = ["serde-with-arbitrary-precision"] }
+uuid = { workspace = true }
 toml = "0.8"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }

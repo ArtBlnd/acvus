@@ -2,11 +2,16 @@
 // TypeDesc — structured type representation
 // ---------------------------------------------------------------------------
 
+export type TypeDescOrigin =
+	| { kind: 'concrete'; id: number }
+	| { kind: 'var'; id: number };
+
 export type TypeDesc =
 	| { kind: 'primitive'; name: 'String' | 'Int' | 'Float' | 'Bool' }
 	| { kind: 'option'; inner: TypeDesc }
 	| { kind: 'object'; fields: { name: string; type: TypeDesc }[] }
 	| { kind: 'list'; elem: TypeDesc }
+	| { kind: 'deque'; elem: TypeDesc; origin: TypeDescOrigin }
 	| { kind: 'enum'; name: string; variants: { tag: string; hasPayload: boolean; payloadType?: TypeDesc }[] }
 	| { kind: 'unsupported'; raw: string };
 
@@ -158,6 +163,8 @@ export function typeDescToString(desc: TypeDesc): string {
 			return `Option<${typeDescToString(desc.inner)}>`;
 		case 'list':
 			return `List<${typeDescToString(desc.elem)}>`;
+		case 'deque':
+			return `Deque<${typeDescToString(desc.elem)}>`;
 		case 'object': {
 			const fields = desc.fields.map((f) => `${f.name}: ${typeDescToString(f.type)}`);
 			return `{${fields.join(', ')}}`;
@@ -220,6 +227,7 @@ export function createDefaultValue(desc: TypeDesc): StructuredValue {
 			}
 			return { kind: 'raw', script: '' };
 		case 'list':
+		case 'deque':
 		case 'unsupported':
 			return { kind: 'raw', script: '' };
 	}

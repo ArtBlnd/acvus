@@ -8,9 +8,12 @@ input = 16000
 
 [self]
 
-[strategy]
-mode = "history"
-inline_history_bind = "@self"
+[execution]
+mode = "once-per-turn"
+
+[persistency]
+kind = "deque"
+inline_bind = "@self | extend(@raw)"
 
 [[messages]]
 role = "system"
@@ -26,7 +29,7 @@ token_budget = { priority = 0, min = 2000, max = 6000 }
 
 # Chat history — priority 1 (fills after documents), no max (consumes remaining pool).
 [[messages]]
-iterator = "@turn.history | map(h -> h.chat)"
+iterator = "@self"
 token_budget = { priority = 1 }
 
 [[messages]]

@@ -26,7 +26,7 @@
 
 	// Fall back to raw editor if too deep or unsupported
 	let useRaw = $derived(
-		depth >= MAX_DEPTH || typeDesc.kind === 'list' || typeDesc.kind === 'unsupported'
+		depth >= MAX_DEPTH || typeDesc.kind === 'list' || typeDesc.kind === 'deque' || typeDesc.kind === 'unsupported'
 	);
 </script>
 

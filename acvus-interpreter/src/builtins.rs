@@ -19,9 +19,6 @@ pub fn call_pure(id: BuiltinId, args: Vec<Value>) -> Result<Value, RuntimeError>
         BuiltinId::CharToInt => PureBuiltin::call(builtin_char_to_int, args),
         BuiltinId::IntToChar => PureBuiltin::call(builtin_int_to_char, args),
         BuiltinId::Len => PureBuiltin::call(builtin_len, args),
-        BuiltinId::Reverse => PureBuiltin::call(builtin_reverse, args),
-        BuiltinId::Flatten => PureBuiltin::call(builtin_flatten, args),
-        BuiltinId::Join => PureBuiltin::call(builtin_join, args),
         BuiltinId::Contains => PureBuiltin::call(builtin_contains, args),
         BuiltinId::ContainsStr => PureBuiltin::call(builtin_contains_str, args),
         BuiltinId::Substring => PureBuiltin::call(builtin_substring, args),
@@ -51,18 +48,25 @@ pub fn call_pure(id: BuiltinId, args: Vec<Value>) -> Result<Value, RuntimeError>
         | BuiltinId::Fold
         | BuiltinId::Any
         | BuiltinId::All
+        | BuiltinId::Reverse
         | BuiltinId::Iter
         | BuiltinId::RevIter
         | BuiltinId::Collect
         | BuiltinId::Take
         | BuiltinId::Skip
         | BuiltinId::Chain
+        | BuiltinId::Flatten
         | BuiltinId::FlattenIter
+        | BuiltinId::FlatMap
         | BuiltinId::FlatMapIter
+        | BuiltinId::Join
         | BuiltinId::JoinIter
         | BuiltinId::ContainsIter
         | BuiltinId::FirstIter
-        | BuiltinId::LastIter => Err(RuntimeError::other(format!(
+        | BuiltinId::LastIter
+        | BuiltinId::Append
+        | BuiltinId::Extend
+        | BuiltinId::Consume => Err(RuntimeError::other(format!(
             "not a pure builtin: {}",
             id.name()
         ))),

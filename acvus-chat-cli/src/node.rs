@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use acvus_orchestration::{
-    ApiKind, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, PlainSpec, Strategy, TokenBudget, ToolBinding,
+    ApiKind, Execution, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
+    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding,
 };
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -19,6 +19,19 @@ enum NodeKindDef {
         #[serde(default)]
         cache_config: FxHashMap<String, serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct StrategyDef {
+    #[serde(default)]
+    execution: ExecutionDef,
+    #[serde(default)]
+    persistency: PersistencySection,
+    initial_value: Option<String>,
+    inline_initial_value: Option<String>,
+    #[serde(default)]
+    retry: u32,
+    assert: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,33 +56,45 @@ pub struct NodeDef {
     #[serde(default)]
     generation: GenerationParamsDef,
     cache_key: Option<String>,
-    #[serde(default)]
-    retry: u32,
-    assert: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-enum StrategyModeDef {
+enum ExecutionModeDef {
     #[default]
     Always,
     OncePerTurn,
-    History,
     IfModified,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-struct StrategyDef {
+struct ExecutionDef {
     #[serde(default)]
-    mode: StrategyModeDef,
-    /// File path to history_bind script.
-    history_bind: Option<String>,
-    /// Inline history_bind script (used when no file).
-    inline_history_bind: Option<String>,
+    mode: ExecutionModeDef,
     /// File path to key script.
     key: Option<String>,
     /// Inline key script.
     inline_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+enum PersistencyKindDef {
+    #[default]
+    Ephemeral,
+    Snapshot,
+    Deque,
+    Diff,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct PersistencySection {
+    #[serde(default)]
+    kind: PersistencyKindDef,
+    /// File path to bind script.
+    bind: Option<String>,
+    /// Inline bind script (used when no file).
+    inline_bind: Option<String>,
 }
 
 /// Serde message entry — tried as Iterator first (untagged).
@@ -183,28 +208,17 @@ pub fn resolve_node(
         }
     }
 
-    let strategy = match def.strategy.mode {
-        StrategyModeDef::Always => Strategy::Always,
-        StrategyModeDef::OncePerTurn => Strategy::OncePerTurn,
-        StrategyModeDef::History => {
-            let history_bind = resolve_template(
-                base_dir,
-                def.strategy.history_bind.as_deref(),
-                def.strategy.inline_history_bind.as_deref(),
-            )
-            .map_err(|e| format!("node '{}': history strategy: {e}", def.name))?;
-            Strategy::History {
-                history_bind: interner.intern(&history_bind),
-            }
-        }
-        StrategyModeDef::IfModified => {
+    let execution = match def.strategy.execution.mode {
+        ExecutionModeDef::Always => Execution::Always,
+        ExecutionModeDef::OncePerTurn => Execution::OncePerTurn,
+        ExecutionModeDef::IfModified => {
             let key = resolve_template(
                 base_dir,
-                def.strategy.key.as_deref(),
-                def.strategy.inline_key.as_deref(),
+                def.strategy.execution.key.as_deref(),
+                def.strategy.execution.inline_key.as_deref(),
             )
-            .map_err(|e| format!("node '{}': if-modified strategy: {e}", def.name))?;
-            Strategy::IfModified {
+            .map_err(|e| format!("node '{}': if-modified execution: {e}", def.name))?;
+            Execution::IfModified {
                 key: interner.intern(&key),
             }
         }
@@ -289,12 +303,48 @@ pub fn resolve_node(
         }
     };
 
+    let persistency = match def.strategy.persistency.kind {
+        PersistencyKindDef::Ephemeral => Persistency::Ephemeral,
+        PersistencyKindDef::Snapshot => Persistency::Snapshot,
+        PersistencyKindDef::Deque => {
+            let bind = resolve_template(
+                base_dir,
+                def.strategy.persistency.bind.as_deref(),
+                def.strategy.persistency.inline_bind.as_deref(),
+            )
+            .map_err(|e| format!("node '{}': deque persistency bind: {e}", def.name))?;
+            Persistency::Deque { bind: interner.intern(&bind) }
+        }
+        PersistencyKindDef::Diff => {
+            let bind = resolve_template(
+                base_dir,
+                def.strategy.persistency.bind.as_deref(),
+                def.strategy.persistency.inline_bind.as_deref(),
+            )
+            .map_err(|e| format!("node '{}': diff persistency bind: {e}", def.name))?;
+            Persistency::Diff { bind: interner.intern(&bind) }
+        }
+    };
+
+    let initial_value = match (&def.strategy.initial_value, &def.strategy.inline_initial_value) {
+        (None, None) => None,
+        _ => Some(interner.intern(&resolve_template(
+            base_dir,
+            def.strategy.initial_value.as_deref(),
+            def.strategy.inline_initial_value.as_deref(),
+        ).map_err(|e| format!("node '{}': initial_value: {e}", def.name))?)),
+    };
+
     Ok(NodeSpec {
         name: interner.intern(&def.name),
         kind,
-        strategy,
-        retry: def.retry,
-        assert: def.assert.map(|a| interner.intern(&a)),
+        strategy: Strategy {
+            execution,
+            persistency,
+            initial_value,
+            retry: def.strategy.retry,
+            assert: def.strategy.assert.map(|a| interner.intern(&a)),
+        },
         is_function: false,
         fn_params: vec![],
     })
