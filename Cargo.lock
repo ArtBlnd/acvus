@@ -127,6 +127,7 @@ dependencies = [
  "acvus-utils",
  "rand 0.9.2",
  "rustc-hash",
+ "smallvec",
 ]
 
 [[package]]

@@ -1,12 +1,15 @@
 use std::collections::VecDeque;
 
-use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
+use acvus_ast::Literal;
 use acvus_mir::ir::{InstKind, Label, MirModule, ValueId};
-use acvus_mir::ty::Ty;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::cfg::Cfg;
+use crate::analysis::dataflow::{BooleanDomain, DataflowState, forward_analysis};
+use crate::analysis::domain::AbstractValue;
 use crate::analysis::val_def::ValDefMap;
+use crate::analysis::value_transfer::ValueDomainTransfer;
 
 /// Context keys partitioned by reachability confidence.
 #[derive(Debug, Clone, Default)]
@@ -97,105 +100,6 @@ pub fn partition_context_keys(
     partition
 }
 
-/// Block in the linear instruction stream.
-struct Block {
-    label: Option<Label>,
-    /// Instruction indices (non-terminator)
-    insts: Vec<usize>,
-    terminator: Term,
-    /// If set, this block is the merge point of a match expression.
-    /// The label points to the first arm's test block, whose reachability
-    /// the merge point should inherit.
-    merge_of: Option<Label>,
-}
-
-enum Term {
-    Jump(Label),
-    JumpIf {
-        cond: ValueId,
-        then_label: Label,
-        else_label: Label,
-    },
-    Return,
-    /// No explicit terminator — falls through to next block.
-    Fallthrough,
-}
-
-fn build_blocks(insts: &[acvus_mir::ir::Inst]) -> Vec<Block> {
-    let mut blocks = Vec::new();
-    let mut label: Option<Label> = None;
-    let mut inst_indices = Vec::new();
-    let mut current_merge_of: Option<Label> = None;
-
-    for (i, inst) in insts.iter().enumerate() {
-        match &inst.kind {
-            InstKind::BlockLabel {
-                label: l,
-                merge_of,
-                ..
-            } => {
-                if !inst_indices.is_empty() || label.is_some() {
-                    blocks.push(Block {
-                        label: label.take(),
-                        insts: std::mem::take(&mut inst_indices),
-                        terminator: Term::Fallthrough,
-                        merge_of: current_merge_of.take(),
-                    });
-                }
-                label = Some(*l);
-                current_merge_of = *merge_of;
-            }
-            InstKind::Jump { label: target, .. } => {
-                blocks.push(Block {
-                    label: label.take(),
-                    insts: std::mem::take(&mut inst_indices),
-                    terminator: Term::Jump(*target),
-                    merge_of: current_merge_of.take(),
-                });
-            }
-            InstKind::JumpIf {
-                cond,
-                then_label,
-                else_label,
-                ..
-            } => {
-                blocks.push(Block {
-                    label: label.take(),
-                    insts: std::mem::take(&mut inst_indices),
-                    terminator: Term::JumpIf {
-                        cond: *cond,
-                        then_label: *then_label,
-                        else_label: *else_label,
-                    },
-                    merge_of: current_merge_of.take(),
-                });
-            }
-            InstKind::Return(_) => {
-                blocks.push(Block {
-                    label: label.take(),
-                    insts: std::mem::take(&mut inst_indices),
-                    terminator: Term::Return,
-                    merge_of: current_merge_of.take(),
-                });
-            }
-            _ => {
-                inst_indices.push(i);
-            }
-        }
-    }
-
-    if !inst_indices.is_empty() || label.is_some() {
-        blocks.push(Block {
-            label,
-            insts: inst_indices,
-            terminator: Term::Fallthrough,
-            merge_of: current_merge_of,
-        });
-    }
-
-    blocks
-}
-
 /// Reachability level for a block.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Reach {
@@ -208,116 +112,33 @@ enum Reach {
 
 fn partition_from_body(
     insts: &[acvus_mir::ir::Inst],
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, acvus_mir::ty::Ty>,
     known: &FxHashMap<Astr, KnownValue>,
-    val_def: &ValDefMap,
+    _val_def: &ValDefMap,
     partition: &mut ContextKeyPartition,
 ) {
-    let blocks = build_blocks(insts);
-    if blocks.is_empty() {
+    let cfg = Cfg::build(insts);
+    if cfg.blocks.is_empty() {
         return;
     }
 
-    // label → block index
-    let label_to_block: FxHashMap<Label, usize> = blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(i, b)| b.label.map(|l| (l, i)))
-        .collect();
+    // Run dataflow analysis
+    let transfer = ValueDomainTransfer {
+        val_types,
+        known_context: known,
+    };
+    let dataflow = forward_analysis(&cfg, insts, &transfer, DataflowState::new());
 
-    // Forward reachability from entry block (index 0)
-    let mut reach = vec![Reach::Unreachable; blocks.len()];
-    let mut queue = VecDeque::new();
-    reach[0] = Reach::Definite;
-    queue.push_back(0);
-
-    while let Some(idx) = queue.pop_front() {
-        let block = &blocks[idx];
-        let mut block_reach = reach[idx];
-
-        // Merge point upgrade: the match structure guarantees this block
-        // is reached whenever the first arm's test block is reached.
-        if let Some(source_label) = block.merge_of {
-            if let Some(&source_idx) = label_to_block.get(&source_label) {
-                if reach[source_idx] > block_reach {
-                    block_reach = reach[source_idx];
-                    reach[idx] = block_reach;
-                }
-            }
-        }
-
-        match &block.terminator {
-            Term::Jump(target) => {
-                enqueue_reach(
-                    *target,
-                    block_reach,
-                    &label_to_block,
-                    &mut reach,
-                    &mut queue,
-                );
-            }
-            Term::JumpIf {
-                cond,
-                then_label,
-                else_label,
-            } => match try_eval_condition(*cond, insts, val_types, val_def, known) {
-                Some(true) => {
-                    enqueue_reach(
-                        *then_label,
-                        block_reach,
-                        &label_to_block,
-                        &mut reach,
-                        &mut queue,
-                    );
-                }
-                Some(false) => {
-                    enqueue_reach(
-                        *else_label,
-                        block_reach,
-                        &label_to_block,
-                        &mut reach,
-                        &mut queue,
-                    );
-                }
-                None => {
-                    enqueue_reach(
-                        *then_label,
-                        Reach::Conditional,
-                        &label_to_block,
-                        &mut reach,
-                        &mut queue,
-                    );
-                    enqueue_reach(
-                        *else_label,
-                        Reach::Conditional,
-                        &label_to_block,
-                        &mut reach,
-                        &mut queue,
-                    );
-                }
-            },
-            Term::Fallthrough => {
-                let next = idx + 1;
-                if next < blocks.len() && block_reach > reach[next] {
-                    reach[next] = block_reach;
-                    queue.push_back(next);
-                }
-            }
-            Term::Return => {}
-        }
-    }
+    // Compute reach levels using dataflow results
+    let reach = compute_reach(&cfg, &dataflow);
 
     // Collect ContextLoads by reach level
-    for (i, block) in blocks.iter().enumerate() {
+    for (i, block) in cfg.blocks.iter().enumerate() {
         let block_reach = reach[i];
-        for &inst_idx in &block.insts {
+        for &inst_idx in &block.inst_indices {
             if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind {
                 match block_reach {
                     Reach::Unreachable => {
-                        // Dead branch: not needed at runtime, but the typechecker
-                        // still compiles all branches and needs these types injected.
-                        // Include even known keys — their types must still reach
-                        // the hard typecheck phase.
                         partition.pruned.insert(*name);
                     }
                     _ => {
@@ -337,176 +158,112 @@ fn partition_from_body(
     }
 }
 
+fn compute_reach(
+    cfg: &Cfg,
+    dataflow: &crate::analysis::dataflow::DataflowResult<AbstractValue>,
+) -> Vec<Reach> {
+    let n = cfg.blocks.len();
+    let mut reach = vec![Reach::Unreachable; n];
+    let mut queue = VecDeque::new();
+
+    reach[0] = Reach::Definite;
+    queue.push_back(0);
+
+    while let Some(idx) = queue.pop_front() {
+        let block = &cfg.blocks[idx];
+        let mut block_reach = reach[idx];
+
+        // Merge point upgrade: the match structure guarantees this block
+        // is reached whenever the first arm's test block is reached.
+        if let Some(source_label) = block.merge_of {
+            if let Some(&source_idx) = cfg.label_to_block.get(&source_label) {
+                if reach[source_idx.0] > block_reach {
+                    block_reach = reach[source_idx.0];
+                    reach[idx] = block_reach;
+                }
+            }
+        }
+
+        match &block.terminator {
+            crate::analysis::cfg::Terminator::Jump { target, .. } => {
+                enqueue_reach(
+                    *target,
+                    block_reach,
+                    cfg,
+                    &mut reach,
+                    &mut queue,
+                );
+            }
+            crate::analysis::cfg::Terminator::JumpIf {
+                cond,
+                then_label,
+                else_label,
+                ..
+            } => {
+                let cond_val = dataflow.block_exit[idx].get(*cond);
+                match cond_val.as_definite_bool() {
+                    Some(true) => {
+                        enqueue_reach(
+                            *then_label,
+                            block_reach,
+                            cfg,
+                            &mut reach,
+                            &mut queue,
+                        );
+                    }
+                    Some(false) => {
+                        enqueue_reach(
+                            *else_label,
+                            block_reach,
+                            cfg,
+                            &mut reach,
+                            &mut queue,
+                        );
+                    }
+                    None => {
+                        enqueue_reach(
+                            *then_label,
+                            Reach::Conditional,
+                            cfg,
+                            &mut reach,
+                            &mut queue,
+                        );
+                        enqueue_reach(
+                            *else_label,
+                            Reach::Conditional,
+                            cfg,
+                            &mut reach,
+                            &mut queue,
+                        );
+                    }
+                }
+            }
+            crate::analysis::cfg::Terminator::Fallthrough => {
+                let next = idx + 1;
+                if next < n && block_reach > reach[next] {
+                    reach[next] = block_reach;
+                    queue.push_back(next);
+                }
+            }
+            crate::analysis::cfg::Terminator::Return => {}
+        }
+    }
+
+    reach
+}
+
 fn enqueue_reach(
     label: Label,
     new_reach: Reach,
-    label_to_block: &FxHashMap<Label, usize>,
+    cfg: &Cfg,
     reach: &mut [Reach],
     queue: &mut VecDeque<usize>,
 ) {
-    if let Some(&idx) = label_to_block.get(&label)
-        && new_reach > reach[idx]
+    if let Some(&idx) = cfg.label_to_block.get(&label)
+        && new_reach > reach[idx.0]
     {
-        reach[idx] = new_reach;
-        queue.push_back(idx);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Condition evaluation
-// ---------------------------------------------------------------------------
-
-fn try_eval_condition(
-    cond: ValueId,
-    insts: &[acvus_mir::ir::Inst],
-    val_types: &FxHashMap<ValueId, Ty>,
-    val_def: &ValDefMap,
-    known: &FxHashMap<Astr, KnownValue>,
-) -> Option<bool> {
-    let &def_idx = val_def.0.get(&cond)?;
-
-    match &insts[def_idx].kind {
-        // Constant bool → trivially evaluable.
-        InstKind::Const {
-            value: Literal::Bool(b),
-            ..
-        } => Some(*b),
-
-        InstKind::TestLiteral { src, value, .. } => {
-            let ctx_name = trace_to_context_load(*src, insts, val_def)?;
-            let known_val = known.get(&ctx_name)?;
-            match known_val {
-                KnownValue::Literal(lit) => Some(lit == value),
-                _ => None,
-            }
-        }
-        InstKind::TestRange {
-            src,
-            start,
-            end,
-            kind,
-            ..
-        } => {
-            let ctx_name = trace_to_context_load(*src, insts, val_def)?;
-            let known_val = known.get(&ctx_name)?;
-            match known_val {
-                KnownValue::Literal(Literal::Int(v)) => Some(in_range(*v, *start, *end, *kind)),
-                _ => None,
-            }
-        }
-
-        // TestVariant: check if the source type is an enum that lacks this variant.
-        InstKind::TestVariant { src, tag, .. } => {
-            if let Some(ty) = val_types.get(src) {
-                match ty {
-                    Ty::Enum { variants, .. } => {
-                        if !variants.contains_key(tag) {
-                            // Variant doesn't exist in the type → always false.
-                            return Some(false);
-                        }
-                        if variants.len() == 1 {
-                            // Single-variant enum: the only variant is always matched.
-                            return Some(true);
-                        }
-                    }
-                    Ty::Option(_) => {
-                        // Option is handled via builtin variants (Some/None),
-                        // no pruning from type alone.
-                    }
-                    _ => {}
-                }
-            }
-            // Value-based pruning — if we know the actual variant tag
-            let ctx_name = trace_to_context_load(*src, insts, val_def)?;
-            let known_val = known.get(&ctx_name)?;
-            match known_val {
-                KnownValue::Variant { tag: known_tag, .. } => Some(*known_tag == *tag),
-                _ => None,
-            }
-        }
-
-        InstKind::BinOp {
-            op: BinOp::And,
-            left,
-            right,
-            ..
-        } => {
-            let l = try_eval_condition(*left, insts, val_types, val_def, known);
-            if l == Some(false) {
-                return Some(false);
-            }
-            let r = try_eval_condition(*right, insts, val_types, val_def, known);
-            match (l, r) {
-                (Some(true), Some(true)) => Some(true),
-                (Some(false), _) | (_, Some(false)) => Some(false),
-                _ => None,
-            }
-        }
-        InstKind::BinOp {
-            op: BinOp::Or,
-            left,
-            right,
-            ..
-        } => {
-            let l = try_eval_condition(*left, insts, val_types, val_def, known);
-            if l == Some(true) {
-                return Some(true);
-            }
-            let r = try_eval_condition(*right, insts, val_types, val_def, known);
-            match (l, r) {
-                (Some(true), _) | (_, Some(true)) => Some(true),
-                (Some(false), Some(false)) => Some(false),
-                _ => None,
-            }
-        }
-
-        // Not: negate inner condition.
-        InstKind::UnaryOp {
-            op: UnaryOp::Not,
-            operand,
-            ..
-        } => {
-            let inner = try_eval_condition(*operand, insts, val_types, val_def, known)?;
-            Some(!inner)
-        }
-
-        _ => None,
-    }
-}
-
-fn trace_to_context_load(
-    val: ValueId,
-    insts: &[acvus_mir::ir::Inst],
-    val_def: &ValDefMap,
-) -> Option<Astr> {
-    let &idx = val_def.0.get(&val)?;
-    match &insts[idx].kind {
-        InstKind::ContextLoad { name, .. } => Some(*name),
-        // Follow TupleIndex through to the source.
-        // The source may be a ContextLoad (tuple loaded directly from context)
-        // or a MakeTuple (tuple constructed inline).
-        InstKind::TupleIndex { tuple, index, .. } => {
-            let &tuple_idx = val_def.0.get(tuple)?;
-            match &insts[tuple_idx].kind {
-                // Tuple loaded from context — the context var itself is the tuple.
-                InstKind::ContextLoad { name, .. } => Some(*name),
-                // Inline tuple — trace through to the element source.
-                InstKind::MakeTuple { elements, .. } => {
-                    let elem = elements.get(*index)?;
-                    trace_to_context_load(*elem, insts, val_def)
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn in_range(v: i64, start: i64, end: i64, kind: RangeKind) -> bool {
-    match kind {
-        RangeKind::Exclusive => v >= start && v < end,
-        RangeKind::InclusiveEnd => v >= start && v <= end,
-        RangeKind::ExclusiveStart => v > start && v <= end,
+        reach[idx.0] = new_reach;
+        queue.push_back(idx.0);
     }
 }
 
@@ -517,8 +274,9 @@ fn in_range(v: i64, start: i64, end: i64, kind: RangeKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::Span;
+    use acvus_ast::{Literal, RangeKind, Span};
     use acvus_mir::ir::{DebugInfo, Inst, MirBody};
+    use acvus_mir::ty::Ty;
     use acvus_utils::Interner;
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
@@ -1119,9 +877,9 @@ mod tests {
         assert!(!p.lazy.contains(&i.intern("else_data")));
     }
 
-    /// Multi-arm enum variant match: A → B → fallback(C).
-    /// Source has variants {A, B, C}. No known values.
-    /// All branches should be lazy (conditional) since we can't evaluate.
+    /// Multi-arm enum variant match with type pruning.
+    /// Source has {A, B} but match tests A → C → fallback.
+    /// TestVariant(C) is always false → C arm is dead, fallback is reached.
     #[test]
     fn enum_multi_arm_unknown_all_conditional() {
         let i = Interner::new();
@@ -1448,15 +1206,6 @@ mod tests {
     }
 
     /// Match merge point upgrades reachability to Definite.
-    ///
-    /// Structure:
-    ///   entry: ContextLoad "scrutinee" → TestVariant → JumpIf(arm_body, next_test)
-    ///   arm_body: ContextLoad "arm_data" → Jump(end_label)
-    ///   next_test: ContextLoad "other_arm" → Jump(end_label)
-    ///   end_label (merge_of = first_test_label): ContextLoad "post_match"
-    ///
-    /// Because end_label is the merge point of the match, "post_match" should
-    /// be Definite (eager), not Conditional (lazy).
     #[test]
     fn merge_point_upgrades_to_definite() {
         let i = Interner::new();
