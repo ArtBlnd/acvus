@@ -566,11 +566,23 @@ where
                 let args = request.args().to_vec();
                 let node = &self.nodes[dep_idx];
                 let dep_local: FxHashMap<Astr, Arc<Value>> = if node.is_function {
-                    node.fn_params
-                        .iter()
-                        .zip(args.into_iter())
-                        .map(|((name, _), val)| (*name, Arc::new(val)))
-                        .collect()
+                    // Tool call args come as a single Object — unpack fields by name.
+                    if let Some(Value::Object(obj)) = args.first() {
+                        node.fn_params
+                            .iter()
+                            .filter_map(|p| {
+                                let val = obj.get(&p.name)?.clone();
+                                Some((p.name, Arc::new(val)))
+                            })
+                            .collect()
+                    } else {
+                        // Positional fallback (e.g. script-level @fn(a, b) calls)
+                        node.fn_params
+                            .iter()
+                            .zip(args.into_iter())
+                            .map(|(p, val)| (p.name, Arc::new(val)))
+                            .collect()
+                    }
                 } else if let Some(Value::Object(obj)) = args.first() {
                     obj.iter()
                         .map(|(k, v)| (*k, Arc::new(v.clone())))

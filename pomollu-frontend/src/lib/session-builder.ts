@@ -5,7 +5,7 @@ import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import { collectNodes, collectBlocks } from './block-tree.js';
 import { promptStore, profileStore, providerStore } from './stores.svelte.js';
-import { analyzeBot } from './param-resolver.js';
+import { analyzeBot, typeDescToFnParamString, type DiscoveredFnParam } from './param-resolver.js';
 
 function convertMessage(msg: MessageDef, blockLookup: Map<string, RawBlock>): MessageConfig {
 	switch (msg.kind) {
@@ -42,12 +42,30 @@ function convertStrategy(node: Node): StrategyConfig {
 	};
 }
 
+/** Resolve fn_params: merge stored (user overrides) with discovered (inferred types).
+ *  Discovered params are the source of truth for which params exist;
+ *  stored params provide user type overrides and descriptions. */
+function resolveFnParams(node: Node, discovered: DiscoveredFnParam[]): { name: string; type: string; description?: string }[] {
+	return discovered.map((dp) => {
+		const stored = node.fnParams.find((fp) => fp.name === dp.name);
+		return {
+			name: dp.name,
+			type: stored?.type || (isUnknownType(dp.inferredType) ? '' : typeDescToFnParamString(dp.inferredType)),
+			description: stored?.description,
+		};
+	});
+}
+
 function convertNode(
 	node: Node,
 	blockLookup: Map<string, RawBlock>,
 	allNodes: Node[],
-	errors: string[]
+	errors: string[],
+	allDiscovered: Record<string, DiscoveredFnParam[]>,
 ): NodeConfig {
+	// Resolve fn_params from discovered + stored for this node (and used for tool param derivation)
+	const resolvedFn = node.isFunction ? resolveFnParams(node, allDiscovered[node.name] ?? []) : undefined;
+
 	if (node.kind === 'expr') {
 		return {
 			name: node.name,
@@ -55,7 +73,7 @@ function convertNode(
 			template: node.exprSource,
 			strategy: convertStrategy(node),
 			is_function: node.isFunction || undefined,
-			fn_params: node.isFunction ? node.fnParams.map(p => ({ name: p.name, type: p.type })) : undefined
+			fn_params: resolvedFn,
 		};
 	}
 
@@ -65,17 +83,21 @@ function convertNode(
 		errors.push(`node '${node.name}': provider not found`);
 	}
 
-	// Resolve tool bindings — each tool references another node by id
+	// Resolve tool bindings — each tool references another node by id.
+	// Params are derived from the target function node's discovered fn_params.
 	const tools = node.tools.map((t) => {
 		const targetNode = allNodes.find((n) => n.id === t.nodeId);
 		if (!targetNode) {
-			errors.push(`node '${node.name}': tool '${t.name}' references unknown node`);
+			errors.push(`node '${node.name}': tool references unknown node`);
 		}
+		const targetParams = targetNode
+			? resolveFnParams(targetNode, allDiscovered[targetNode.name] ?? [])
+			: [];
 		return {
-			name: t.name,
+			name: targetNode?.name ?? '',
 			description: t.description,
 			node: targetNode?.name ?? '',
-			params: Object.fromEntries(t.params.map((p) => [p.name, p.type]))
+			params: targetParams,
 		};
 	}).filter((t) => t.node !== '');
 
@@ -90,11 +112,12 @@ function convertNode(
 		top_p: node.topP,
 		top_k: node.topK,
 		grounding: node.grounding,
+		thinking: node.thinking,
 		max_tokens: { input: node.maxTokens.input, output: node.maxTokens.output },
 		messages: node.messages.map((m) => convertMessage(m, blockLookup)),
 		tools,
 		is_function: node.isFunction || undefined,
-		fn_params: node.isFunction ? node.fnParams.map(p => ({ name: p.name, type: p.type })) : undefined
+		fn_params: resolvedFn,
 	};
 }
 
@@ -256,8 +279,14 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 		seenNodeNames.add(n.name);
 	}
 
+	// analyzeBot typechecks all 3 levels and returns ALL params merged
+	// (prompt + profile + bot). This is the single source of truth.
+	const analysisResult = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
+	const allDiscovered = analysisResult.env.nodeFnParams;
+
+
 	// Convert user-defined nodes → NodeConfigs
-	const nodeConfigs: NodeConfig[] = allNodes.map((n) => convertNode(n, blockLookup, allNodes, errors));
+	const nodeConfigs: NodeConfig[] = allNodes.map((n) => convertNode(n, blockLookup, allNodes, errors, allDiscovered));
 
 	// Prompt contextBindings → Expr nodes (also tracked as side effects)
 	const sideEffects: string[] = [];
@@ -290,9 +319,6 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 		}
 	}
 
-	// analyzeBot typechecks all 3 levels and returns ALL params merged
-	// (prompt + profile + bot). This is the single source of truth.
-	const analysisResult = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
 	// Use ALL params for the session config, not just active ones.
 	// active flag is for UI display (hiding pruned params in editor) — not for compilation.
 	// Dead-branch params are harmless: WASM simply won't evaluate them at runtime.
@@ -322,18 +348,17 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 			if (ty) {
 				context[param.name] = { type: ty };
 			} else {
-				context[param.name] = { type: { kind: 'primitive', name: 'String' } };
+				context[param.name] = { type: { kind: 'primitive', name: 'string' } };
 			}
 		} else if (param.resolution.kind === 'unresolved') {
 			errors.push(`param '${param.name}': unresolved (set to static or dynamic)`);
 		}
 	}
 
-	// Entrypoint: last user-defined node.
-	const entrypoint = allNodes[allNodes.length - 1]?.name
-		?? nodeConfigs[nodeConfigs.length - 1]?.name;
+	// Entrypoint: must be a node named "entrypoint".
+	const entrypoint = allNodes.find(n => n.name === 'entrypoint')?.name;
 	if (!entrypoint) {
-		errors.push('no entrypoint: add at least one node');
+		errors.push("no node named 'entrypoint': create one to serve as the main execution entry");
 	}
 
 	// Validate inputParam is a dynamic context param

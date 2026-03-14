@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use crate::compile::CompiledScript;
 use crate::dsl::TokenBudget;
 use crate::kind::CompiledToolBinding;
-use crate::message::{Content, Message, ToolSpec};
+use crate::message::{Content, Message, ToolSpec, ToolSpecParam};
 use crate::provider::{ApiKind, Fetch};
 
 pub async fn render_block_in_coroutine(
@@ -189,7 +189,10 @@ pub fn make_tool_specs(tools: &[CompiledToolBinding]) -> Vec<ToolSpec> {
             params: t
                 .params
                 .iter()
-                .map(|(k, v)| (k.clone(), ty_to_json_schema(v).to_string()))
+                .map(|(k, v)| (k.clone(), ToolSpecParam {
+                    ty: ty_to_json_schema(&v.ty).to_string(),
+                    description: v.description.clone(),
+                }))
                 .collect(),
         })
         .collect()

@@ -43,6 +43,17 @@ impl LlmSpec {
     }
 }
 
+/// Thinking / reasoning configuration for models that support it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "lowercase")]
+pub enum ThinkingConfig {
+    Off,
+    Low,
+    Medium,
+    High,
+    Custom(u32),
+}
+
 /// Generation parameters for model calls.
 #[derive(Debug, Clone, Default)]
 pub struct GenerationParams {
@@ -50,6 +61,14 @@ pub struct GenerationParams {
     pub top_p: Option<Decimal>,
     pub top_k: Option<u32>,
     pub grounding: bool,
+    pub thinking: Option<ThinkingConfig>,
+}
+
+/// Tool parameter info (pre-compilation).
+#[derive(Debug, Clone)]
+pub struct ToolParamInfo {
+    pub ty: String,
+    pub description: Option<String>,
 }
 
 /// Tool binding — binds a tool name to a target node with typed parameters.
@@ -58,7 +77,14 @@ pub struct ToolBinding {
     pub name: String,
     pub description: String,
     pub node: String,
-    pub params: FxHashMap<String, String>,
+    pub params: FxHashMap<String, ToolParamInfo>,
+}
+
+/// Compiled tool parameter info with resolved type.
+#[derive(Debug, Clone)]
+pub struct CompiledToolParamInfo {
+    pub ty: Ty,
+    pub description: Option<String>,
 }
 
 /// A compiled tool binding with resolved types.
@@ -67,7 +93,7 @@ pub struct CompiledToolBinding {
     pub name: String,
     pub description: String,
     pub node: String,
-    pub params: FxHashMap<String, Ty>,
+    pub params: FxHashMap<String, CompiledToolParamInfo>,
 }
 
 /// Compiled LLM node.
@@ -138,16 +164,19 @@ fn compile_tool_bindings(
 
     for tool in tools {
         let mut params = FxHashMap::default();
-        for (param_name, type_name) in &tool.params {
-            let Some(ty) = parse_type_name(type_name) else {
+        for (param_name, info) in &tool.params {
+            let Some(ty) = parse_type_name(&info.ty) else {
                 errors.push(OrchError::new(OrchErrorKind::ToolParamType {
                     tool: tool.name.clone(),
                     param: param_name.clone(),
-                    type_name: type_name.clone(),
+                    type_name: info.ty.clone(),
                 }));
                 continue;
             };
-            params.insert(param_name.clone(), ty);
+            params.insert(param_name.clone(), CompiledToolParamInfo {
+                ty,
+                description: info.description.clone(),
+            });
         }
         compiled.push(CompiledToolBinding {
             name: tool.name.clone(),

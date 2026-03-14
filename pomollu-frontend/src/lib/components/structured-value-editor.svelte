@@ -39,7 +39,7 @@
 		{contextTypes}
 	/>
 {:else if typeDesc.kind === 'primitive'}
-	{#if typeDesc.name === 'Bool'}
+	{#if typeDesc.name === 'bool'}
 		<div class="flex items-center gap-2">
 			<Switch
 				checked={value.kind === 'primitive' && value.value === 'true'}
@@ -47,7 +47,7 @@
 			/>
 			<span class="text-xs text-muted-foreground">{value.kind === 'primitive' ? value.value : 'false'}</span>
 		</div>
-	{:else if typeDesc.name === 'Int'}
+	{:else if typeDesc.name === 'int'}
 		<Input
 			type="number"
 			step="1"
@@ -55,7 +55,7 @@
 			value={value.kind === 'primitive' ? value.value : '0'}
 			oninput={(e) => onchange({ kind: 'primitive', value: e.currentTarget.value })}
 		/>
-	{:else if typeDesc.name === 'Float'}
+	{:else if typeDesc.name === 'float'}
 		<Input
 			type="number"
 			step="any"

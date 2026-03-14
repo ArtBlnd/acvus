@@ -89,7 +89,7 @@ where
             );
             let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
             let cache_name = crate::provider::parse_cache_response(&provider_config.api, &json)
-                .map_err(RuntimeError::fetch)?;
+                .map_err(|e| RuntimeError::fetch(e.to_string()))?;
             debug!(cache_name = %cache_name, "llm_cache created");
 
             handle.yield_val(Value::String(cache_name)).await;

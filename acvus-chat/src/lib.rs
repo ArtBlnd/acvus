@@ -179,7 +179,7 @@ mod tests {
     use acvus_mir::context_registry::PartialContextTypeRegistry;
     use acvus_orchestration::{
         ApiKind, ExprSpec, GenerationParams, HttpRequest, LlmSpec, MaxTokens,
-        Execution, MessageSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy, ToolBinding,
+        Execution, FnParam, MessageSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy, ToolBinding,
         TreeJournal, compile_nodes,
     };
 
@@ -847,7 +847,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -893,7 +893,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -941,7 +941,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -989,7 +989,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -1036,7 +1036,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),
@@ -1151,7 +1151,7 @@ mod tests {
                         assert: None,
                     },
                     is_function: true,
-                    fn_params: vec![(interner.intern("x"), Ty::Int)],
+                    fn_params: vec![FnParam { name: interner.intern("x"), ty: Ty::Int, description: None }],
                 },
                 NodeSpec {
                     name: interner.intern("main"),

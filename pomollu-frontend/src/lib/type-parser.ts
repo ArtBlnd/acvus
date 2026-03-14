@@ -7,7 +7,7 @@ export type TypeDescOrigin =
 	| { kind: 'var'; id: number };
 
 export type TypeDesc =
-	| { kind: 'primitive'; name: 'String' | 'Int' | 'Float' | 'Bool' }
+	| { kind: 'primitive'; name: 'string' | 'int' | 'float' | 'bool' }
 	| { kind: 'option'; inner: TypeDesc }
 	| { kind: 'object'; fields: { name: string; type: TypeDesc }[] }
 	| { kind: 'list'; elem: TypeDesc }
@@ -65,7 +65,7 @@ function splitTopLevel(s: string, sep: string): string[] {
 // parseTypeDesc
 // ---------------------------------------------------------------------------
 
-const PRIMITIVES = new Set(['String', 'Int', 'Float', 'Bool']);
+const PRIMITIVES = new Set(['string', 'int', 'float', 'bool']);
 
 export function parseTypeDesc(
 	typeStr: string,
@@ -74,7 +74,7 @@ export function parseTypeDesc(
 	if (!s || s === '?') return { kind: 'unsupported', raw: s };
 
 	if (PRIMITIVES.has(s)) {
-		return { kind: 'primitive', name: s as 'String' | 'Int' | 'Float' | 'Bool' };
+		return { kind: 'primitive', name: s as 'string' | 'int' | 'float' | 'bool' };
 	}
 
 	if (s.startsWith('Option<')) {
@@ -202,10 +202,10 @@ export function createDefaultValue(desc: TypeDesc): StructuredValue {
 	switch (desc.kind) {
 		case 'primitive':
 			switch (desc.name) {
-				case 'String': return { kind: 'primitive', value: '' };
-				case 'Int': return { kind: 'primitive', value: '0' };
-				case 'Float': return { kind: 'primitive', value: '0.0' };
-				case 'Bool': return { kind: 'primitive', value: 'false' };
+				case 'string': return { kind: 'primitive', value: '' };
+				case 'int': return { kind: 'primitive', value: '0' };
+				case 'float': return { kind: 'primitive', value: '0.0' };
+				case 'bool': return { kind: 'primitive', value: 'false' };
 			}
 			break; // unreachable but satisfies TS
 		case 'option':
@@ -263,11 +263,11 @@ export function generateScript(value: StructuredValue, desc: TypeDesc): string {
 		case 'primitive': {
 			if (desc.kind !== 'primitive') return value.value;
 			switch (desc.name) {
-				case 'String': return `"${escapeAcvusString(value.value)}"`;
-				case 'Int':
-				case 'Float':
+				case 'string': return `"${escapeAcvusString(value.value)}"`;
+				case 'int':
+				case 'float':
 					return value.value || '0';
-				case 'Bool':
+				case 'bool':
 					return value.value === 'true' ? 'true' : 'false';
 			}
 			return value.value;
@@ -331,18 +331,18 @@ export function parseScript(script: string, desc: TypeDesc): StructuredValue | n
 
 function parsePrimitive(s: string, name: string): StructuredValue | null {
 	switch (name) {
-		case 'String':
+		case 'string':
 			if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
 				return { kind: 'primitive', value: unescapeAcvusString(s.slice(1, -1)) };
 			}
 			return null;
-		case 'Int':
+		case 'int':
 			if (/^-?\d+$/.test(s)) return { kind: 'primitive', value: s };
 			return null;
-		case 'Float':
+		case 'float':
 			if (/^-?\d+(\.\d+)?$/.test(s)) return { kind: 'primitive', value: s };
 			return null;
-		case 'Bool':
+		case 'bool':
 			if (s === 'true' || s === 'false') return { kind: 'primitive', value: s };
 			return null;
 	}

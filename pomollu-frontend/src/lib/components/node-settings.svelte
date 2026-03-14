@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Node, MessageDef, Execution, Persistency, FnParam } from '$lib/types.js';
+	import type { Node, MessageDef, Execution, Persistency, FnParam, NodeToolBinding } from '$lib/types.js';
 	import { blockLabel } from '$lib/types.js';
 	import type { BlockOwner } from '$lib/stores.svelte.js';
 	import type { DiscoveredFnParam } from '$lib/param-resolver.js';
@@ -7,7 +7,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
-	import { getOwnerChildren, updateOwnerNodeItem, uiState, providerStore, createRawBlock, generateName } from '$lib/stores.svelte.js';
+	import { getOwnerChildren, updateOwnerNodeItem, uiState, providerStore, createRawBlock, generateName, collectScopeFunctionNodes } from '$lib/stores.svelte.js';
 	import { findNodeItem, collectBlocks, collectAllNames } from '$lib/block-tree.js';
 	import { Plus, Trash2 } from 'lucide-svelte';
 	import { Switch } from '$lib/components/ui/switch';
@@ -16,6 +16,7 @@
 	import { collectOwnerDeps } from '$lib/dependencies.js';
 	import { formatErrors, type NodeErrors } from '$lib/engine.js';
 	import { isUnknownType, typeDescToString, parseTypeDesc } from '$lib/type-parser.js';
+	import { typeDescToFnParamString } from '$lib/param-resolver.js';
 
 	let {
 		nodeId,
@@ -215,13 +216,52 @@
 
 	let discoveredFnParams = $derived(node?.isFunction ? (nodeFnParams[node.name] ?? []) : []);
 
-	// Prune stale fnParams when discovered params change (e.g. @a removed from script)
+	// --- Tool bindings (LLM only) ---
+
+	let availableFnNodes = $derived(node ? collectScopeFunctionNodes(owner, node.id) : []);
+
+	function addToolBinding() {
+		updateNode((n) => ({
+			...n,
+			tools: [...n.tools, { nodeId: '', description: '' }]
+		}));
+	}
+
+	function updateToolBinding(index: number, patch: Partial<NodeToolBinding>) {
+		updateNode((n) => ({
+			...n,
+			tools: n.tools.map((t, i) => i === index ? { ...t, ...patch } : t)
+		}));
+	}
+
+	function removeToolBinding(index: number) {
+		updateNode((n) => ({
+			...n,
+			tools: n.tools.filter((_, i) => i !== index)
+		}));
+	}
+
+	function getToolTargetNode(nodeId: string): Node | undefined {
+		return availableFnNodes.find((n) => n.id === nodeId);
+	}
+
+	// Sync fnParams with discovered params: add new, remove stale, preserve user overrides.
 	$effect(() => {
 		if (!node) return;
 		const liveNames = new Set(discoveredFnParams.map(dp => dp.name));
+		const currentNames = new Set((node.fnParams ?? []).map(fp => fp.name));
 		const stale = (node.fnParams ?? []).filter(fp => !liveNames.has(fp.name));
-		if (stale.length > 0) {
-			updateNode((n) => ({ ...n, fnParams: (n.fnParams ?? []).filter(fp => liveNames.has(fp.name)) }));
+		const added = discoveredFnParams.filter(dp => !currentNames.has(dp.name));
+		if (stale.length > 0 || added.length > 0) {
+			updateNode((n) => {
+				const kept = (n.fnParams ?? []).filter(fp => liveNames.has(fp.name));
+				const newEntries = added.map(dp => ({
+					name: dp.name,
+					type: typeDescToFnParamString(dp.inferredType),
+					description: undefined as string | undefined,
+				}));
+				return { ...n, fnParams: [...kept, ...newEntries] };
+			});
 		}
 	});
 </script>
@@ -277,7 +317,8 @@
 								{:else}
 									<div class="fn-params-list">
 										{#each discoveredFnParams as dp (dp.name)}
-											{@const storedType = node.fnParams.find(fp => fp.name === dp.name)?.type}
+											{@const stored = node.fnParams.find(fp => fp.name === dp.name)}
+											{@const storedType = stored?.type}
 											{@const hasInferred = !isUnknownType(dp.inferredType)}
 											{@const displayType = storedType || (hasInferred ? typeDescToString(dp.inferredType) : '')}
 											<div class="fn-param-row">
@@ -292,14 +333,30 @@
 														oninput={(e) => {
 															const val = e.currentTarget.value.trim();
 															const params = discoveredFnParams.map(p => {
-																if (p.name === dp.name) return { name: p.name, type: val };
+																if (p.name === dp.name) return { name: p.name, type: val, description: stored?.description };
 																const existing = node.fnParams.find(fp => fp.name === p.name);
-																return { name: p.name, type: existing?.type || '' };
+																return { name: p.name, type: existing?.type || '', description: existing?.description };
 															});
 															updateNode((n) => ({ ...n, fnParams: params }));
 														}}
 													/>
 												{/if}
+											</div>
+											<div class="fn-param-desc-row">
+												<Input
+													class="fn-param-desc-input"
+													placeholder="description..."
+													value={stored?.description ?? ''}
+													oninput={(e) => {
+														const val = e.currentTarget.value;
+														const params = discoveredFnParams.map(p => {
+															const existing = node.fnParams.find(fp => fp.name === p.name);
+															if (p.name === dp.name) return { name: p.name, type: existing?.type || displayType, description: val || undefined };
+															return { name: p.name, type: existing?.type || '', description: existing?.description };
+														});
+														updateNode((n) => ({ ...n, fnParams: params }));
+													}}
+												/>
 											</div>
 										{/each}
 									</div>
@@ -381,6 +438,44 @@
 									onCheckedChange={(v) => updateNode((n) => ({ ...n, grounding: v }))}
 								/>
 								<Label class="text-sm">Grounding</Label>
+							</div>
+							<div class="field">
+								<Label>Thinking</Label>
+								<div class="flex gap-2">
+									<Select.Root
+										type="single"
+										value={node.thinking?.kind ?? 'none'}
+										onValueChange={(v) => {
+											if (v === 'none') {
+												updateNode((n) => ({ ...n, thinking: null }));
+											} else if (v === 'custom') {
+												updateNode((n) => ({ ...n, thinking: { kind: 'custom', value: (n.thinking as any)?.value ?? 4096 } }));
+											} else {
+												updateNode((n) => ({ ...n, thinking: { kind: v as 'off' | 'low' | 'medium' | 'high' } }));
+											}
+										}}
+									>
+										<Select.Trigger class="flex-1">{{ none: 'None', off: 'Off', low: 'Low', medium: 'Medium', high: 'High', custom: 'Custom' }[node.thinking?.kind ?? 'none']}</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="none">None</Select.Item>
+											<Select.Item value="off">Off</Select.Item>
+											<Select.Item value="low">Low</Select.Item>
+											<Select.Item value="medium">Medium</Select.Item>
+											<Select.Item value="high">High</Select.Item>
+											<Select.Item value="custom">Custom</Select.Item>
+										</Select.Content>
+									</Select.Root>
+									{#if node.thinking?.kind === 'custom'}
+										<Input
+											type="number"
+											class="w-28"
+											min="1"
+											value={String(node.thinking.value)}
+											oninput={(e) => updateNode((n) => ({ ...n, thinking: { kind: 'custom', value: Number(e.currentTarget.value) || 1 } }))}
+											placeholder="Budget"
+										/>
+									{/if}
+								</div>
 							</div>
 							<div class="grid grid-cols-2 gap-2">
 								<div class="field">
@@ -505,7 +600,7 @@
 									value={node.strategy.assert ?? ''}
 									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, assert: v } }))}
 									contextTypes={mergedContextTypes}
-									expectedTailType={{ kind: 'primitive', name: 'Bool' }}
+									expectedTailType={{ kind: 'primitive', name: 'bool' }}
 									fieldError={formatErrors(fieldErrors.assert)}
 									discoverContext
 								/>
@@ -743,6 +838,95 @@
 					</section>
 				{/if}
 
+				<!-- ========== TOOLS (LLM only) ========== -->
+				{#if node.kind === 'llm'}
+					<section class="section">
+						<div class="section-header">
+							<button class="section-toggle" onclick={() => toggleSection('tools')}>
+								<svg class="section-chevron" class:collapsed={collapsed['tools']} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+								<span>Tools</span>
+							</button>
+							<Button variant="outline" size="sm" class="h-6 text-xs" onclick={addToolBinding} disabled={availableFnNodes.length === 0}>
+								<Plus class="mr-1 h-3 w-3" />
+								Bind
+							</Button>
+						</div>
+						{#if !collapsed['tools']}<div class="section-body">
+							{#if node.tools.length === 0}
+								<div class="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
+									{#if availableFnNodes.length === 0}
+										No function nodes available. Mark a node as Function to bind it as a tool.
+									{:else}
+										No tool bindings. Click Bind to add one.
+									{/if}
+								</div>
+							{/if}
+
+							<div class="space-y-2">
+								{#each node.tools as tool, i (i)}
+									{@const target = getToolTargetNode(tool.nodeId)}
+									{@const isOrphan = tool.nodeId !== '' && !target}
+									<div class="tool-card" class:tool-orphan={isOrphan}>
+										<div class="flex items-center gap-2 px-2 py-1.5">
+											<Select.Root
+												type="single"
+												value={tool.nodeId}
+												onValueChange={(v) => updateToolBinding(i, { nodeId: v })}
+											>
+												<Select.Trigger class="flex-1 text-sm {isOrphan ? 'border-destructive' : ''}">
+													{#if target}
+														{target.name}
+													{:else if isOrphan}
+														<span class="text-destructive">Deleted node</span>
+													{:else}
+														<span class="text-muted-foreground">Select function...</span>
+													{/if}
+												</Select.Trigger>
+												<Select.Content>
+													{#each availableFnNodes as fn (fn.id)}
+														<Select.Item value={fn.id}>{fn.name}</Select.Item>
+													{/each}
+													{#if availableFnNodes.length === 0}
+														<div class="px-2 py-1.5 text-xs text-muted-foreground">No function nodes</div>
+													{/if}
+												</Select.Content>
+											</Select.Root>
+											<button
+												class="rounded p-0.5 text-muted-foreground hover:text-destructive"
+												onclick={() => removeToolBinding(i)}
+												title="Remove"
+											>
+												<Trash2 class="h-3.5 w-3.5" />
+											</button>
+										</div>
+										<div class="px-2 pb-2 space-y-1.5">
+											<Input
+												class="text-xs"
+												placeholder="Description (optional)..."
+												value={tool.description}
+												oninput={(e) => updateToolBinding(i, { description: e.currentTarget.value })}
+											/>
+											{#if target && target.fnParams.length > 0}
+												<div class="tool-params">
+													{#each target.fnParams as param (param.name)}
+														<div class="tool-param-row">
+															<code class="tool-param-name">@{param.name}</code>
+															<span class="tool-param-type">{param.type}</span>
+														</div>
+													{/each}
+												</div>
+											{/if}
+											{#if isOrphan}
+												<p class="text-xs text-destructive">Target function node has been deleted.</p>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>{/if}
+					</section>
+				{/if}
+
 				<!-- ========== EXPR SCRIPT (Expr only) ========== -->
 				{#if node.kind === 'expr'}
 					<section class="section" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
@@ -775,6 +959,8 @@
 	.sections {
 		display: flex;
 		flex-direction: column;
+		padding-top: 0.5rem;
+		padding-bottom: 4rem;
 	}
 	.section {
 		border-bottom: 1px solid var(--color-border);
@@ -993,6 +1179,54 @@
 		font-size: 0.6875rem;
 		color: var(--color-muted-foreground);
 		font-family: var(--font-mono, ui-monospace, monospace);
+	}
+	/* Tool cards */
+	.tool-card {
+		border-radius: 0.5rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-card);
+	}
+	.tool-orphan {
+		border-color: var(--color-destructive);
+	}
+	.tool-params {
+		display: flex;
+		flex-direction: column;
+		border-radius: 0.25rem;
+		border: 1px solid var(--color-border);
+		overflow: hidden;
+		background: var(--color-muted);
+	}
+	.tool-param-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.25rem 0.5rem;
+		gap: 0.5rem;
+	}
+	.tool-param-row + .tool-param-row {
+		border-top: 1px solid var(--color-border);
+	}
+	.tool-param-name {
+		font-size: 0.6875rem;
+		font-weight: 600;
+		color: var(--color-foreground);
+		white-space: nowrap;
+	}
+	.tool-param-type {
+		font-size: 0.625rem;
+		color: var(--color-muted-foreground);
+		font-family: var(--font-mono, ui-monospace, monospace);
+	}
+
+	.fn-param-desc-row {
+		padding: 0 0.625rem 0.375rem;
+	}
+	:global(.fn-param-desc-input) {
+		width: 100% !important;
+		height: 1.5rem !important;
+		font-size: 0.625rem !important;
+		color: var(--color-muted-foreground) !important;
 	}
 	:global(.fn-param-input) {
 		width: 6rem !important;

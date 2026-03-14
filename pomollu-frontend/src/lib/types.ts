@@ -33,16 +33,9 @@ export type RawBlock = {
 	mode: RawBlockMode;
 };
 
-export type ToolParam = {
-	name: string;
-	type: string;
-};
-
 export type NodeToolBinding = {
 	nodeId: string;
-	name: string;
 	description: string;
-	params: ToolParam[];
 };
 
 export type NoneBlock = {
@@ -141,6 +134,7 @@ export type Persistency =
 export type FnParam = {
 	name: string;
 	type: string;
+	description?: string;
 };
 
 export type Strategy = {
@@ -150,6 +144,13 @@ export type Strategy = {
 	retry: number;
 	assert: string;
 };
+
+export type ThinkingConfig =
+	| { kind: 'off' }
+	| { kind: 'low' }
+	| { kind: 'medium' }
+	| { kind: 'high' }
+	| { kind: 'custom'; value: number };
 
 export type Node = {
 	id: string;
@@ -161,6 +162,7 @@ export type Node = {
 	topP: number | null;
 	topK: number | null;
 	grounding: boolean;
+	thinking: ThinkingConfig | null;
 	maxTokens: MaxTokens;
 	strategy: Strategy;
 	exprSource: string;
@@ -208,9 +210,9 @@ export const HISTORY_ENTRY_TYPE: TypeDesc = {
 	elem: {
 		kind: 'object',
 		fields: [
-			{ name: 'content', type: { kind: 'primitive', name: 'String' } },
-			{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
-			{ name: 'role', type: { kind: 'primitive', name: 'String' } },
+			{ name: 'content', type: { kind: 'primitive', name: 'string' } },
+			{ name: 'content_type', type: { kind: 'primitive', name: 'string' } },
+			{ name: 'role', type: { kind: 'primitive', name: 'string' } },
 		],
 	},
 };
@@ -219,8 +221,8 @@ export const HISTORY_ENTRY_TYPE: TypeDesc = {
 const TAG_ENTRY_TYPE: TypeDesc = {
 	kind: 'object',
 	fields: [
-		{ name: 'key', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'value', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'key', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'value', type: { kind: 'primitive', name: 'string' } },
 	],
 };
 
@@ -228,11 +230,11 @@ const TAG_ENTRY_TYPE: TypeDesc = {
 const CONTEXT_ENTRY_TYPE: TypeDesc = {
 	kind: 'object',
 	fields: [
-		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'name', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'description', type: { kind: 'primitive', name: 'string' } },
 		{ name: 'tags', type: { kind: 'list', elem: TAG_ENTRY_TYPE } },
-		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'content_type', type: { kind: 'primitive', name: 'string' } },
 	],
 };
 
@@ -240,12 +242,12 @@ const CONTEXT_ENTRY_TYPE: TypeDesc = {
 const CONTEXT_CUSTOM_ENTRY_TYPE: TypeDesc = {
 	kind: 'object',
 	fields: [
-		{ name: 'name', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'description', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'name', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'description', type: { kind: 'primitive', name: 'string' } },
 		{ name: 'tags', type: { kind: 'list', elem: TAG_ENTRY_TYPE } },
-		{ name: 'content', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'content_type', type: { kind: 'primitive', name: 'String' } },
-		{ name: 'type', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'content', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'content_type', type: { kind: 'primitive', name: 'string' } },
+		{ name: 'type', type: { kind: 'primitive', name: 'string' } },
 	],
 };
 
@@ -259,7 +261,7 @@ export const CONTEXT_TYPE: TypeDesc = {
 		{ name: 'lorebook', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
 		{ name: 'memory', type: { kind: 'list', elem: CONTEXT_ENTRY_TYPE } },
 		{ name: 'custom', type: { kind: 'list', elem: CONTEXT_CUSTOM_ENTRY_TYPE } },
-		{ name: 'bot_name', type: { kind: 'primitive', name: 'String' } },
+		{ name: 'bot_name', type: { kind: 'primitive', name: 'string' } },
 	],
 };
 

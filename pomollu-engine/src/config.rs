@@ -1,7 +1,8 @@
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     ApiKind, ExprSpec, Execution, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding,
+    FnParam, NodeSpec, Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding,
+    ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
@@ -65,6 +66,7 @@ pub(crate) struct FnParamConfig {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +82,7 @@ pub(crate) enum NodeKindConfig {
         top_k: Option<u32>,
         #[serde(default)]
         grounding: bool,
+        thinking: Option<ThinkingConfig>,
         max_tokens: Option<MaxTokensJson>,
         messages: Vec<MessageConfig>,
         #[serde(default)]
@@ -100,7 +103,16 @@ pub(crate) struct ToolConfig {
     pub name: String,
     pub description: String,
     pub node: String,
-    pub params: FxHashMap<String, String>,
+    pub params: Vec<ToolParamConfigEntry>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct ToolParamConfigEntry {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +181,7 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
             top_p,
             top_k,
             grounding,
+            thinking,
             max_tokens,
             messages,
             tools,
@@ -212,7 +225,10 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
                         name: t.name.clone(),
                         description: t.description.clone(),
                         node: t.node.clone(),
-                        params: t.params.clone(),
+                        params: t.params.iter().map(|p| (p.name.clone(), ToolParamInfo {
+                            ty: p.ty.clone(),
+                            description: p.description.clone(),
+                        })).collect(),
                     })
                     .collect(),
                 generation: GenerationParams {
@@ -220,6 +236,7 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
                     top_p: *top_p,
                     top_k: *top_k,
                     grounding: *grounding,
+                    thinking: thinking.clone(),
                 },
                 cache_key: None,
                 max_tokens: max_tokens
@@ -280,7 +297,11 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
             .iter()
             .map(|p| {
                 let ty = crate::parse_type_string(&interner, &p.ty);
-                (interner.intern(&p.name), ty)
+                FnParam {
+                    name: interner.intern(&p.name),
+                    ty,
+                    description: p.description.as_ref().map(|d| interner.intern(d)),
+                }
             })
             .collect(),
     })

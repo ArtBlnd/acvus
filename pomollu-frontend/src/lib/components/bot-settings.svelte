@@ -207,7 +207,7 @@
 		const result = analyzeWithTypes(iterator, 'script', baseTypes);
 		if (!result.ok) return baseTypes;
 		if (result.tailType.kind !== 'list') return baseTypes;
-		return { ...baseTypes, item: result.tailType.elem, index: { kind: 'primitive', name: 'Int' } };
+		return { ...baseTypes, item: result.tailType.elem, index: { kind: 'primitive', name: 'int' } };
 	}
 </script>
 

@@ -15,12 +15,21 @@ pub enum Message {
     ToolResult { call_id: String, content: String },
 }
 
+/// Provider-specific extras attached to a tool call.
+#[derive(Debug, Clone)]
+pub enum ToolCallExtras {
+    Gemini {
+        thought_signature: Option<String>,
+    },
+}
+
 /// A tool call requested by the model.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
+    pub extras: Option<ToolCallExtras>,
 }
 
 /// A single content part from a model response.
@@ -37,12 +46,19 @@ pub enum ModelResponse {
     ToolCalls(Vec<ToolCall>),
 }
 
+/// Tool parameter specification passed to the model.
+#[derive(Debug, Clone)]
+pub struct ToolSpecParam {
+    pub ty: String,
+    pub description: Option<String>,
+}
+
 /// Tool specification passed to the model.
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
-    pub params: FxHashMap<String, String>,
+    pub params: FxHashMap<String, ToolSpecParam>,
 }
 
 /// Token usage from a model response.

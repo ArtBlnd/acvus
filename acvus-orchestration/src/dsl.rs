@@ -18,6 +18,14 @@ pub struct Strategy {
     pub assert: Option<Astr>,
 }
 
+/// A function parameter with name, type, and optional description.
+#[derive(Debug, Clone)]
+pub struct FnParam {
+    pub name: Astr,
+    pub ty: Ty,
+    pub description: Option<Astr>,
+}
+
 /// Node specification — pure compilation input, no Serde.
 #[derive(Debug, Clone)]
 pub struct NodeSpec {
@@ -26,8 +34,8 @@ pub struct NodeSpec {
     pub strategy: Strategy,
     /// Whether this node is a function node.
     pub is_function: bool,
-    /// Function parameters (name, type) pairs.
-    pub fn_params: Vec<(Astr, Ty)>,
+    /// Function parameters.
+    pub fn_params: Vec<FnParam>,
 }
 
 /// Which script scope is being compiled/typechecked.
@@ -59,8 +67,8 @@ impl NodeSpec {
     ) -> Result<ContextTypeRegistry, RegistryConflictError> {
         let mut extra: Vec<(Astr, Ty)> = Vec::new();
         if self.is_function {
-            for (name, ty) in &self.fn_params {
-                extra.push((*name, ty.clone()));
+            for p in &self.fn_params {
+                extra.push((p.name, p.ty.clone()));
             }
         }
         if let Some(locals) = locals {

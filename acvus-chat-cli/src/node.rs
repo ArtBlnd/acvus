@@ -2,7 +2,7 @@ use std::path::Path;
 
 use acvus_orchestration::{
     ApiKind, Execution, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding,
+    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -135,6 +135,7 @@ struct GenerationParamsDef {
     top_k: Option<u32>,
     #[serde(default)]
     grounding: bool,
+    thinking: Option<acvus_orchestration::ThinkingConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,6 +230,7 @@ pub fn resolve_node(
         top_p: def.generation.top_p,
         top_k: def.generation.top_k,
         grounding: def.generation.grounding,
+        thinking: def.generation.thinking.clone(),
     };
 
     let max_tokens = MaxTokens {
@@ -243,7 +245,10 @@ pub fn resolve_node(
             name: t.name,
             description: t.description,
             node: t.node,
-            params: t.params,
+            params: t.params.into_iter().map(|(k, v)| (k, ToolParamInfo {
+                ty: v,
+                description: None,
+            })).collect(),
         })
         .collect();
 

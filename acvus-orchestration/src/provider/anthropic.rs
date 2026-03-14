@@ -1,7 +1,8 @@
-use crate::kind::GenerationParams;
+use crate::kind::{GenerationParams, ThinkingConfig};
 use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, ToolSpec, Usage};
 
-use super::{HttpRequest, ProviderConfig};
+use super::schema::anthropic as schema;
+use super::{split_system_messages, HttpRequest, ProviderConfig, ProviderError};
 
 pub struct AnthropicModel {
     config: ProviderConfig,
@@ -20,7 +21,7 @@ impl AnthropicModel {
         generation: &GenerationParams,
         max_output_tokens: Option<u32>,
         cached_content: Option<&str>,
-    ) -> HttpRequest {
+    ) -> Result<HttpRequest, ProviderError> {
         let _ = cached_content;
         build_request(
             &self.config,
@@ -35,7 +36,7 @@ impl AnthropicModel {
     pub fn parse_response(
         &self,
         json: &serde_json::Value,
-    ) -> Result<(ModelResponse, Usage), String> {
+    ) -> Result<(ModelResponse, Usage), ProviderError> {
         parse_response(json)
     }
 
@@ -47,8 +48,60 @@ impl AnthropicModel {
         ))
     }
 
-    pub fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, String> {
+    pub fn parse_count_tokens_response(&self, json: &serde_json::Value) -> Result<u32, ProviderError> {
         parse_count_tokens_response(json)
+    }
+}
+
+fn convert_message(m: &Message) -> schema::RequestMessage {
+    match m {
+        Message::Content { role, content } => match content {
+            Content::Text(text) => schema::RequestMessage {
+                role: role.clone(),
+                content: schema::RequestContent::Text(text.clone()),
+            },
+            Content::Blob { mime_type, data } => schema::RequestMessage {
+                role: role.clone(),
+                content: schema::RequestContent::Blocks(vec![schema::ContentBlock::Image {
+                    source: schema::ImageSource {
+                        source_type: "base64".into(),
+                        media_type: mime_type.clone(),
+                        data: data.clone(),
+                    },
+                }]),
+            },
+        },
+        Message::ToolCalls(calls) => schema::RequestMessage {
+            role: "assistant".into(),
+            content: schema::RequestContent::Blocks(
+                calls
+                    .iter()
+                    .map(|tc| schema::ContentBlock::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: tc.arguments.clone(),
+                    })
+                    .collect(),
+            ),
+        },
+        Message::ToolResult { call_id, content } => schema::RequestMessage {
+            role: "user".into(),
+            content: schema::RequestContent::Blocks(vec![schema::ContentBlock::ToolResult {
+                tool_use_id: call_id.clone(),
+                content: content.clone(),
+            }]),
+        },
+    }
+}
+
+fn convert_thinking(thinking: &ThinkingConfig) -> Result<schema::ThinkingParam, ProviderError> {
+    match thinking {
+        ThinkingConfig::Off => Ok(schema::ThinkingParam::Disabled {}),
+        ThinkingConfig::Custom(n) => Ok(schema::ThinkingParam::Enabled { budget_tokens: *n }),
+        other => Err(ProviderError::UnsupportedThinkingConfig {
+            provider: "anthropic",
+            config: other.clone(),
+        }),
     }
 }
 
@@ -59,10 +112,62 @@ pub fn build_request(
     tools: &[ToolSpec],
     generation: &GenerationParams,
     max_output_tokens: Option<u32>,
-) -> HttpRequest {
-    let body = format_body(model, messages, tools, generation, max_output_tokens);
+) -> Result<HttpRequest, ProviderError> {
+    let (system, rest) = split_system_messages(messages);
+    let msgs: Vec<schema::RequestMessage> = rest.into_iter().map(convert_message).collect();
+
+    let tools_param = if tools.is_empty() {
+        None
+    } else {
+        Some(
+            tools
+                .iter()
+                .map(|t| {
+                    let properties = t
+                        .params
+                        .iter()
+                        .map(|(name, param)| {
+                            let prop = schema::PropertySchema {
+                                ty: param.ty.clone(),
+                                description: param.description.clone(),
+                            };
+                            (
+                                name.clone(),
+                                serde_json::to_value(prop).expect("PropertySchema serialization"),
+                            )
+                        })
+                        .collect();
+
+                    schema::Tool {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: schema::InputSchema {
+                            schema_type: "object".into(),
+                            properties,
+                        },
+                    }
+                })
+                .collect(),
+        )
+    };
+
+    let thinking = generation.thinking.as_ref().map(convert_thinking).transpose()?;
+
+    let request = schema::Request {
+        model: model.to_string(),
+        messages: msgs,
+        max_tokens: max_output_tokens.unwrap_or(4096),
+        system,
+        tools: tools_param,
+        temperature: generation.temperature,
+        top_p: generation.top_p,
+        top_k: generation.top_k,
+        thinking,
+    };
+
+    let body = serde_json::to_value(request).expect("Request serialization");
     let url = format!("{}/v1/messages", config.endpoint);
-    HttpRequest {
+    Ok(HttpRequest {
         url,
         headers: vec![
             ("x-api-key".into(), config.api_key.clone()),
@@ -70,7 +175,7 @@ pub fn build_request(
             ("content-type".into(), "application/json".into()),
         ],
         body,
-    }
+    })
 }
 
 pub fn build_count_tokens_request(
@@ -78,33 +183,16 @@ pub fn build_count_tokens_request(
     model: &str,
     messages: &[Message],
 ) -> HttpRequest {
-    let mut system_text = String::new();
-    let mut msgs = Vec::new();
+    let (system, rest) = split_system_messages(messages);
+    let msgs: Vec<schema::RequestMessage> = rest.into_iter().map(convert_message).collect();
 
-    for m in messages {
-        if let Message::Content { role, content } = m
-            && role == "system"
-        {
-            let Content::Text(text) = content else {
-                panic!("system message must be text, got blob");
-            };
-            if !system_text.is_empty() {
-                system_text.push('\n');
-            }
-            system_text.push_str(text);
-        } else {
-            msgs.push(format_message(m));
-        }
-    }
+    let request = schema::CountTokensRequest {
+        model: model.to_string(),
+        messages: msgs,
+        system,
+    };
 
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": msgs,
-    });
-    if !system_text.is_empty() {
-        body["system"] = serde_json::Value::String(system_text);
-    }
-
+    let body = serde_json::to_value(request).expect("CountTokensRequest serialization");
     let url = format!("{}/v1/messages/count_tokens", config.endpoint);
     HttpRequest {
         url,
@@ -118,205 +206,59 @@ pub fn build_count_tokens_request(
     }
 }
 
-pub fn parse_count_tokens_response(json: &serde_json::Value) -> Result<u32, String> {
-    json.get("input_tokens")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .ok_or_else(|| "missing 'input_tokens' in count tokens response".into())
+pub fn parse_count_tokens_response(json: &serde_json::Value) -> Result<u32, ProviderError> {
+    let resp: schema::CountTokensResponse =
+        serde_json::from_value(json.clone()).map_err(|e| ProviderError::ResponseParse {
+            detail: e.to_string(),
+        })?;
+    resp.input_tokens
+        .ok_or(ProviderError::MissingField { field: "input_tokens" })
 }
 
-fn format_body(
-    model: &str,
-    messages: &[Message],
-    tools: &[ToolSpec],
-    generation: &GenerationParams,
-    max_output_tokens: Option<u32>,
-) -> serde_json::Value {
-    let mut system_text = String::new();
-    let mut msgs = Vec::new();
+pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage), ProviderError> {
+    let resp: schema::Response =
+        serde_json::from_value(json.clone()).map_err(|e| ProviderError::ResponseParse {
+            detail: e.to_string(),
+        })?;
 
-    for m in messages {
-        if let Message::Content { role, content } = m
-            && role == "system"
-        {
-            let Content::Text(text) = content else {
-                panic!("system message must be text, got blob");
-            };
-            if !system_text.is_empty() {
-                system_text.push('\n');
-            }
-            system_text.push_str(text);
-        } else {
-            msgs.push(format_message(m));
-        }
-    }
-
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": msgs,
-        "max_tokens": max_output_tokens.unwrap_or(4096),
-    });
-
-    if let Some(t) = generation.temperature {
-        body["temperature"] = serde_json::to_value(t).unwrap();
-    }
-    if let Some(p) = generation.top_p {
-        body["top_p"] = serde_json::to_value(p).unwrap();
-    }
-    if let Some(k) = generation.top_k {
-        body["top_k"] = serde_json::json!(k);
-    }
-
-    if !system_text.is_empty() {
-        body["system"] = serde_json::Value::String(system_text);
-    }
-
-    if !tools.is_empty() {
-        let tool_specs: Vec<serde_json::Value> = tools
-            .iter()
-            .map(|t| {
-                let properties: serde_json::Map<String, serde_json::Value> = t
-                    .params
-                    .iter()
-                    .map(|(name, type_name)| {
-                        (name.clone(), serde_json::json!({ "type": type_name }))
-                    })
-                    .collect();
-
-                serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": {
-                        "type": "object",
-                        "properties": properties,
-                    }
-                })
-            })
-            .collect();
-
-        body["tools"] = serde_json::Value::Array(tool_specs);
-    }
-
-    body
-}
-
-fn format_message(m: &Message) -> serde_json::Value {
-    match m {
-        Message::Content { role, content } => match content {
-            Content::Text(text) => {
-                serde_json::json!({ "role": role, "content": text })
-            }
-            Content::Blob { mime_type, data } => {
-                serde_json::json!({
-                    "role": role,
-                    "content": [{
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": data,
-                        }
-                    }]
-                })
-            }
+    let usage = match resp.usage {
+        Some(u) => Usage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
         },
-        Message::ToolCalls(calls) => {
-            let content: Vec<serde_json::Value> = calls
-                .iter()
-                .map(|tc| {
-                    serde_json::json!({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.arguments,
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "role": "assistant",
-                "content": content,
-            })
-        }
-        Message::ToolResult { call_id, content } => {
-            serde_json::json!({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": call_id,
-                    "content": content,
-                }]
-            })
-        }
-    }
-}
-
-pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage), String> {
-    let usage = parse_usage(json);
-
-    let content = json
-        .get("content")
-        .and_then(|c| c.as_array())
-        .ok_or("missing 'content' array in response")?;
+        None => Usage::default(),
+    };
 
     let mut tool_calls = Vec::new();
     let mut parts = Vec::new();
 
-    for block in content {
-        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        match block_type {
-            "text" => {
-                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                    parts.push(Content::Text(text.to_string()));
-                }
+    for block in resp.content {
+        match block {
+            schema::ResponseContentBlock::Text { text } => {
+                parts.push(Content::Text(text));
             }
-            "image" => {
-                if let Some(source) = block.get("source") {
-                    let media_type = source
-                        .get("media_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let data = source
-                        .get("data")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    parts.push(Content::Blob {
-                        mime_type: media_type,
-                        data,
-                    });
-                }
+            schema::ResponseContentBlock::Image { source } => {
+                parts.push(Content::Blob {
+                    mime_type: source.media_type.unwrap_or_default(),
+                    data: source.data.unwrap_or_default(),
+                });
             }
-            "tool_use" => {
-                let id = block
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or("missing tool_use id")?
-                    .to_string();
-                let name = block
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or("missing tool_use name")?
-                    .to_string();
-                let arguments = block.get("input").cloned().unwrap_or(serde_json::json!({}));
+            schema::ResponseContentBlock::ToolUse { id, name, input } => {
                 tool_calls.push(ToolCall {
                     id,
                     name,
-                    arguments,
+                    arguments: input.unwrap_or(serde_json::json!({})),
+                    extras: None,
                 });
             }
-            _ => {}
+            schema::ResponseContentBlock::Unknown => {}
         }
     }
 
     if !tool_calls.is_empty() {
         Ok((ModelResponse::ToolCalls(tool_calls), usage))
     } else {
-        let role = json
-            .get("role")
-            .and_then(|r| r.as_str())
-            .unwrap_or("assistant")
-            .to_string();
+        let role = resp.role.unwrap_or_else(|| "assistant".into());
         let items = parts
             .into_iter()
             .map(|content| ContentItem {
@@ -328,23 +270,6 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
     }
 }
 
-fn parse_usage(json: &serde_json::Value) -> Usage {
-    let u = match json.get("usage") {
-        Some(u) => u,
-        None => return Usage::default(),
-    };
-    Usage {
-        input_tokens: u
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-        output_tokens: u
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -352,13 +277,30 @@ mod tests {
 
     use crate::ApiKind;
     use crate::kind::GenerationParams;
-    use crate::message::{Message, ToolSpec};
+    use crate::message::{Message, ToolSpec, ToolSpecParam};
 
     use super::*;
 
+    fn build_body(
+        model: &str,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        generation: &GenerationParams,
+        max_output_tokens: Option<u32>,
+    ) -> serde_json::Value {
+        let config = ProviderConfig {
+            api: ApiKind::Anthropic,
+            endpoint: "https://api.anthropic.com".into(),
+            api_key: "test-key".into(),
+        };
+        let req = build_request(&config, model, messages, tools, generation, max_output_tokens)
+            .unwrap();
+        req.body
+    }
+
     #[test]
     fn format_system_separated() {
-        let body = format_body(
+        let body = build_body(
             "claude-sonnet-4-6",
             &[
                 Message::Content {
@@ -382,7 +324,7 @@ mod tests {
 
     #[test]
     fn format_with_tools() {
-        let body = format_body(
+        let body = build_body(
             "claude-sonnet-4-6",
             &[Message::Content {
                 role: "user".into(),
@@ -391,7 +333,13 @@ mod tests {
             &[ToolSpec {
                 name: "search".into(),
                 description: "Search".into(),
-                params: FxHashMap::from_iter([("query".into(), "string".into())]),
+                params: FxHashMap::from_iter([(
+                    "query".into(),
+                    ToolSpecParam {
+                        ty: "string".into(),
+                        description: None,
+                    },
+                )]),
             }],
             &GenerationParams::default(),
             None,
@@ -408,8 +356,10 @@ mod tests {
             id: "toolu_1".into(),
             name: "search".into(),
             arguments: serde_json::json!({"query": "rust"}),
+            extras: None,
         }]);
-        let formatted = format_message(&msg);
+        let converted = convert_message(&msg);
+        let formatted = serde_json::to_value(converted).unwrap();
         assert_eq!(formatted["role"], "assistant");
         let content = formatted["content"].as_array().unwrap();
         assert_eq!(content[0]["type"], "tool_use");
@@ -422,7 +372,8 @@ mod tests {
             call_id: "toolu_1".into(),
             content: "result data".into(),
         };
-        let formatted = format_message(&msg);
+        let converted = convert_message(&msg);
+        let formatted = serde_json::to_value(converted).unwrap();
         assert_eq!(formatted["role"], "user");
         let content = formatted["content"].as_array().unwrap();
         assert_eq!(content[0]["type"], "tool_result");

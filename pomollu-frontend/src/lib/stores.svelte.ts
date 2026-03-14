@@ -3,7 +3,7 @@ import { createDefaultLayout, HISTORY_BINDING_NAME } from './types.js';
 import { ChatSession, type TurnNode } from '$lib/engine.js';
 import { entityVersions } from '$lib/entity-versions.svelte.js';
 import type { EntityRef, EntityKind } from '$lib/entity-versions.svelte.js';
-import { addNode, removeTreeNode, updateBlock as treeUpdateBlock, updateNodeItem as treeUpdateNodeItem, findTreeNode, findBlock, findNodeItem, collectAllIds, collectBlocks } from './block-tree.js';
+import { addNode, removeTreeNode, updateBlock as treeUpdateBlock, updateNodeItem as treeUpdateNodeItem, findTreeNode, findBlock, findNodeItem, collectAllIds, collectBlocks, collectNodes } from './block-tree.js';
 
 export function createId(): string {
 	return crypto.randomUUID();
@@ -816,6 +816,36 @@ export function collectScopeBlockNames(owner: BlockOwner, excludeId: string): st
 		}
 	}
 	return names;
+}
+
+/** Collect all function nodes in the resolution scope for tool binding.
+ *  - prompt/profile: only own children
+ *  - bot: prompt + profile + bot children
+ *  Excludes the node with `excludeId` (self-reference prevention). */
+export function collectScopeFunctionNodes(owner: BlockOwner, excludeId: string): import('./types.js').Node[] {
+	const nodes: import('./types.js').Node[] = [];
+	function gather(children: BlockNode[] | undefined) {
+		if (!children) return;
+		for (const n of collectNodes(children)) {
+			if (n.id !== excludeId && n.isFunction) nodes.push(n);
+		}
+	}
+	switch (owner.kind) {
+		case 'prompt':
+			gather(promptStore.get(owner.promptId)?.children);
+			break;
+		case 'profile':
+			gather(profileStore.get(owner.profileId)?.children);
+			break;
+		case 'bot': {
+			const bot = botStore.get(owner.botId);
+			gather(bot?.children);
+			if (bot?.promptId) gather(promptStore.get(bot.promptId)?.children);
+			if (bot?.profileId) gather(profileStore.get(bot.profileId)?.children);
+			break;
+		}
+	}
+	return nodes;
 }
 
 // --- Data serialization ---

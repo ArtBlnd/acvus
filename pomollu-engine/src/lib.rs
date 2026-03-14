@@ -190,7 +190,7 @@ fn do_analyze(
                 ok: errors.is_empty(),
                 errors,
                 context_keys: keys,
-                tail_type: TypeDesc::Primitive { name: "String".into() },
+                tail_type: TypeDesc::Primitive { name: "string".into() },
             }
         }
         Mode::Script => {
@@ -772,10 +772,10 @@ mod tests {
     #[test]
     fn test_ty_to_desc_primitives() {
         let interner = test_interner();
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Int)), r#"{"kind":"primitive","name":"Int"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Float)), r#"{"kind":"primitive","name":"Float"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::String)), r#"{"kind":"primitive","name":"String"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Bool)), r#"{"kind":"primitive","name":"Bool"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Int)), r#"{"kind":"primitive","name":"int"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Float)), r#"{"kind":"primitive","name":"float"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::String)), r#"{"kind":"primitive","name":"string"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Bool)), r#"{"kind":"primitive","name":"bool"}"#);
     }
 
     #[test]
@@ -790,7 +790,7 @@ mod tests {
     fn test_ty_to_desc_list() {
         let interner = test_interner();
         let desc = ty_to_desc(&interner, &Ty::List(Box::new(Ty::String)));
-        assert_eq!(desc_json(&desc), r#"{"kind":"list","elem":{"kind":"primitive","name":"String"}}"#);
+        assert_eq!(desc_json(&desc), r#"{"kind":"list","elem":{"kind":"primitive","name":"string"}}"#);
     }
 
     #[test]
@@ -846,8 +846,8 @@ mod tests {
         assert!(result.ok);
         assert_eq!(result.context_keys.len(), 1);
         assert_eq!(result.context_keys[0].name, "x");
-        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"Int"}"#);
-        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"Int"}"#);
+        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"int"}"#);
+        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"int"}"#);
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
         ctx.insert(interner.intern("x"), Ty::Int);
         let result = do_analyze_test(&interner, "@x + 1", &Mode::Script, &ctx);
         assert!(result.ok);
-        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"Int"}"#);
+        assert_eq!(desc_json(&result.context_keys[0].ty), r#"{"kind":"primitive","name":"int"}"#);
     }
 
     #[test]
@@ -868,7 +868,7 @@ mod tests {
         assert!(result.ok);
         assert_eq!(result.context_keys.len(), 1);
         assert_eq!(result.context_keys[0].name, "name");
-        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"String"}"#);
+        assert_eq!(desc_json(&result.tail_type), r#"{"kind":"primitive","name":"string"}"#);
     }
 
     #[test]

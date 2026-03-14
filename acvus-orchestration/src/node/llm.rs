@@ -145,11 +145,11 @@ where
                 &generation,
                 max_tokens.output,
                 cached_content.as_deref(),
-            );
+            ).map_err(|e| RuntimeError::fetch(e.to_string()))?;
             let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
             let (mut response, _usage) = llm_model
                 .parse_response(&json)
-                .map_err(RuntimeError::fetch)?;
+                .map_err(|e| RuntimeError::fetch(e.to_string()))?;
             debug!(
                 input_tokens = _usage.input_tokens,
                 output_tokens = _usage.output_tokens,
@@ -218,11 +218,11 @@ where
                             &generation,
                             max_tokens.output,
                             cached_content.as_deref(),
-                        );
+                        ).map_err(|e| RuntimeError::fetch(e.to_string()))?;
                         let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
                         let parsed = llm_model
                             .parse_response(&json)
-                            .map_err(RuntimeError::fetch)?;
+                            .map_err(|e| RuntimeError::fetch(e.to_string()))?;
                         response = parsed.0;
                     }
                 }

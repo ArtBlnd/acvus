@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::TokenBudget;
 use crate::convert::value_to_known;
-use crate::dsl::{ContextScope, Execution, MessageSpec, NodeLocalTypes, NodeSpec, Persistency};
+use crate::dsl::{ContextScope, Execution, FnParam, MessageSpec, NodeLocalTypes, NodeSpec, Persistency};
 use crate::error::{OrchError, OrchErrorKind};
 use crate::kind::{
     CompiledNodeKind, NodeKind, compile_expr, compile_llm, compile_llm_cache, compile_plain,
@@ -58,7 +58,7 @@ pub struct CompiledNode {
     pub all_context_keys: FxHashSet<Astr>,
     pub strategy: CompiledStrategy,
     pub is_function: bool,
-    pub fn_params: Vec<(Astr, Ty)>,
+    pub fn_params: Vec<FnParam>,
 }
 
 /// Compiled expression (Script → MIR).
@@ -531,7 +531,7 @@ fn resolve_node_locals(
 /// Wrap a type as `Ty::Fn` if the node is a function node.
 fn wrap_fn_ty(spec: &NodeSpec, ty: Ty) -> Ty {
     if spec.is_function {
-        let param_types: Vec<Ty> = spec.fn_params.iter().map(|(_, ty)| ty.clone()).collect();
+        let param_types: Vec<Ty> = spec.fn_params.iter().map(|p| p.ty.clone()).collect();
         Ty::Fn {
             params: param_types,
             ret: Box::new(ty),
@@ -907,7 +907,7 @@ pub fn compile_nodes_with_env(
             let params: Vec<(Astr, Ty)> = tool
                 .params
                 .iter()
-                .filter_map(|(k, v)| Some((interner.intern(k), parse_type_name(v)?)))
+                .filter_map(|(k, v)| Some((interner.intern(k), parse_type_name(&v.ty)?)))
                 .collect();
             tool_param_types
                 .entry(interner.intern(&tool.node))

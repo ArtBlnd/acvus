@@ -28,20 +28,20 @@ pub use display::{
     IterableDisplaySpec, RenderedDisplayEntry, StaticDisplaySpec, compile_iterable_display,
     compile_static_display, render_display, render_display_with_idx,
 };
-pub use dsl::{ContextScope, Execution, MessageSpec, NodeLocalTypes, NodeSpec, Persistency, Strategy, TokenBudget};
+pub use dsl::{ContextScope, Execution, FnParam, MessageSpec, NodeLocalTypes, NodeSpec, Persistency, Strategy, TokenBudget};
 pub use error::{OrchError, OrchErrorDisplay, OrchErrorKind};
 pub use kind::{
     CompiledExpr, CompiledLlm, CompiledLlmCache, CompiledNodeKind, CompiledPlain,
-    CompiledToolBinding, ExprSpec, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, NodeKind,
-    PlainSpec, ToolBinding,
+    CompiledToolBinding, CompiledToolParamInfo, ExprSpec, GenerationParams, LlmCacheSpec, LlmSpec,
+    MaxTokens, NodeKind, PlainSpec, ThinkingConfig, ToolBinding, ToolParamInfo,
 };
 pub use message::{
-    Content, ContentItem, Message, ModelResponse, Output, ToolCall, ToolSpec, Usage,
+    Content, ContentItem, Message, ModelResponse, Output, ToolCall, ToolCallExtras, ToolSpec, ToolSpecParam, Usage,
 };
 pub use node::{ExprNode, LlmCacheNode, LlmNode, Node, PlainNode, build_node_table};
 pub use provider::{
-    ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, build_cache_request, build_request,
-    create_llm_model, parse_cache_response, parse_response,
+    ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, ProviderError,
+    build_cache_request, build_request, create_llm_model, parse_cache_response, parse_response,
 };
 pub use resolve::{ParkedDiag, ResolveError, ResolveState, Resolved, Resolver};
 pub use storage::{

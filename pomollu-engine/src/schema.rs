@@ -342,10 +342,10 @@ pub struct TypeDescVariant {
 
 pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
     match ty {
-        Ty::Int => TypeDesc::Primitive { name: "Int".into() },
-        Ty::Float => TypeDesc::Primitive { name: "Float".into() },
-        Ty::String => TypeDesc::Primitive { name: "String".into() },
-        Ty::Bool => TypeDesc::Primitive { name: "Bool".into() },
+        Ty::Int => TypeDesc::Primitive { name: "int".into() },
+        Ty::Float => TypeDesc::Primitive { name: "float".into() },
+        Ty::String => TypeDesc::Primitive { name: "string".into() },
+        Ty::Bool => TypeDesc::Primitive { name: "bool".into() },
         Ty::Unit => TypeDesc::Unsupported { raw: "Unit".into() },
         Ty::Range => TypeDesc::Unsupported { raw: "Range".into() },
         Ty::Byte => TypeDesc::Unsupported { raw: "Byte".into() },
@@ -399,10 +399,10 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
 pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
     match desc {
         TypeDesc::Primitive { name } => match name.as_str() {
-            "Int" => Ty::Int,
-            "Float" => Ty::Float,
-            "String" => Ty::String,
-            "Bool" => Ty::Bool,
+            "int" => Ty::Int,
+            "float" => Ty::Float,
+            "string" => Ty::String,
+            "bool" => Ty::Bool,
             _ => Ty::Infer,
         },
         TypeDesc::Option { inner } => Ty::Option(Box::new(desc_to_ty(interner, inner))),
@@ -446,15 +446,15 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
     }
 }
 
-/// Parse a simple type string (e.g. "String", "Int", "Bool") into a Ty.
+/// Parse a simple type string (e.g. "string", "int", "bool") into a Ty.
 /// Falls back to Ty::Infer for unknown types.
 pub fn parse_type_string(_interner: &Interner, s: &str) -> Ty {
     match s {
-        "String" => Ty::String,
-        "Int" => Ty::Int,
-        "Float" => Ty::Float,
-        "Bool" => Ty::Bool,
-        "Byte" => Ty::Byte,
+        "string" => Ty::String,
+        "int" => Ty::Int,
+        "float" => Ty::Float,
+        "bool" => Ty::Bool,
+        "byte" => Ty::Byte,
         _ => Ty::Infer,
     }
 }

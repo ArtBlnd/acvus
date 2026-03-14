@@ -80,7 +80,7 @@ export function mapToRecord<V>(mapOrObj: Map<string, V> | Record<string, V>): Re
 // WASM TypeDesc → type-parser TypeDesc conversion
 // ---------------------------------------------------------------------------
 
-const VALID_PRIMITIVES = new Set(['String', 'Int', 'Float', 'Bool']);
+const VALID_PRIMITIVES = new Set(['string', 'int', 'float', 'bool']);
 
 function convertTypeDesc(wasm: WasmTypeDesc): TypeDesc {
 	switch (wasm.kind) {
@@ -88,7 +88,7 @@ function convertTypeDesc(wasm: WasmTypeDesc): TypeDesc {
 			if (!VALID_PRIMITIVES.has(wasm.name)) {
 				throw new Error(`unknown primitive type from WASM: "${wasm.name}"`);
 			}
-			return { kind: 'primitive', name: wasm.name as 'String' | 'Int' | 'Float' | 'Bool' };
+			return { kind: 'primitive', name: wasm.name as 'string' | 'int' | 'float' | 'bool' };
 		}
 		case 'option':
 			return { kind: 'option', inner: convertTypeDesc(wasm.inner) };
@@ -241,12 +241,13 @@ export type WebNode = WebNodeShared & (
 		topP: number | null;
 		topK: number | null;
 		grounding: boolean;
+		thinking: import('./types.js').ThinkingConfig | null;
 		maxTokens: { input: number; output: number };
 		messages: (
 			| { kind: 'block'; role: string; template: string }
 			| { kind: 'iterator'; iterator: string; role?: string; slice?: number[]; tokenBudget?: { priority: number; min?: number; max?: number } }
 		)[];
-		tools: { name: string; description: string; node: string; params: { name: string; type: string }[] }[];
+		tools: { name: string; description: string; node: string; params: { name: string; type: string; description?: string }[] }[];
 	}
 	| {
 		kind: 'expr';
@@ -363,13 +364,14 @@ export type NodeConfig = {
 	top_p?: number | null;
 	top_k?: number | null;
 	grounding?: boolean;
+	thinking?: import('./types.js').ThinkingConfig | null;
 	max_tokens?: { input?: number; output?: number };
 	messages?: MessageConfig[];
-	tools?: { name: string; description: string; node: string; params: Record<string, string> }[];
+	tools?: { name: string; description: string; node: string; params: { name: string; type: string; description?: string }[] }[];
 
 	// Function node
 	is_function?: boolean;
-	fn_params?: { name: string; type: string }[];
+	fn_params?: { name: string; type: string; description?: string }[];
 
 	// Plain/Expr-specific
 	template?: string;

@@ -1,6 +1,7 @@
 use acvus_orchestration::{
     ApiKind, ExprSpec, Execution, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding,
+    FnParam, NodeSpec, Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding,
+    ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
@@ -48,6 +49,7 @@ pub enum WebNodeKind {
         top_k: Option<u32>,
         #[serde(default)]
         grounding: bool,
+        thinking: Option<ThinkingConfig>,
         max_tokens: WebMaxTokens,
         #[serde(default)]
         messages: Vec<WebMessage>,
@@ -115,6 +117,7 @@ pub struct WebToolParam {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +125,7 @@ pub struct WebFnParam {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -146,6 +150,7 @@ impl WebNode {
                 top_p,
                 top_k,
                 grounding,
+                thinking,
                 max_tokens,
                 messages,
                 tools,
@@ -189,7 +194,10 @@ impl WebNode {
                         params: t
                             .params
                             .iter()
-                            .map(|p| (p.name.clone(), p.ty.clone()))
+                            .map(|p| (p.name.clone(), ToolParamInfo {
+                                ty: p.ty.clone(),
+                                description: p.description.clone(),
+                            }))
                             .collect(),
                     })
                     .collect(),
@@ -198,6 +206,7 @@ impl WebNode {
                     top_p: *top_p,
                     top_k: *top_k,
                     grounding: *grounding,
+                    thinking: thinking.clone(),
                 },
                 cache_key: None,
                 max_tokens: MaxTokens {
@@ -251,7 +260,11 @@ impl WebNode {
                 .iter()
                 .map(|p| {
                     let ty = crate::parse_type_string(&interner, &p.ty);
-                    (interner.intern(&p.name), ty)
+                    FnParam {
+                        name: interner.intern(&p.name),
+                        ty,
+                        description: p.description.as_ref().map(|d| interner.intern(d)),
+                    }
                 })
                 .collect(),
         })

@@ -99,8 +99,9 @@ function discoverFnParams(
 	return result;
 }
 
-/** Convert a TypeDesc to a simple type string for fn_params (WASM parse_type_string compatible). */
-function typeDescToFnParamString(desc: TypeDesc): string {
+/** Convert a TypeDesc to a simple type string for fn_params (WASM parse_type_string compatible).
+ *  Returns lowercase: "string", "int", "float", "bool". */
+export function typeDescToFnParamString(desc: TypeDesc): string {
 	if (desc.kind === 'primitive') return desc.name;
 	return '';
 }
@@ -292,9 +293,9 @@ export function twoPassAnalysis(opts: {
 	for (const b of collectBlocks(opts.children)) {
 		if (isRawBlock(b)) blockLookup.set(b.id, b);
 	}
-	const webNodes = collectNodes(opts.children)
-		.filter((n) => n.name)
-		.map((n) => toWebNode(n, opts.getApi(n.providerId), nodeFnParams[n.name], blockLookup));
+	const allNodes = collectNodes(opts.children).filter((n) => n.name);
+	const webNodes = allNodes
+		.map((n) => toWebNode(n, opts.getApi(n.providerId), nodeFnParams[n.name], blockLookup, allNodes));
 	const typecheckResult = typecheckNodes(webNodes, fullTypes);
 	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {} };
 	const env: ContextEnvResult = typecheckResult.envErrors.length > 0
@@ -518,7 +519,7 @@ function sanitizePersistency(persistency: import('./types.js').Persistency | und
 	}
 }
 
-export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnParams?: DiscoveredFnParam[], blockLookup?: Map<string, RawBlock>): WebNode {
+export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnParams?: DiscoveredFnParam[], blockLookup?: Map<string, RawBlock>, allNodes?: Node[]): WebNode {
 	const shared = {
 		name: node.name,
 		strategy: {
@@ -567,12 +568,19 @@ export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnPara
 						tokenBudget: m.tokenBudget,
 					};
 				}),
-				tools: node.tools.map((t) => ({
-					name: t.name,
-					description: t.description,
-					node: t.nodeId,
-					params: t.params,
-				})),
+				tools: node.tools.map((t) => {
+					const target = allNodes?.find((n) => n.id === t.nodeId);
+					return {
+						name: target?.name ?? '',
+						description: t.description,
+						node: target?.name ?? '',
+						params: (target?.fnParams ?? []).map((p) => ({
+							name: p.name,
+							type: p.type,
+							description: p.description,
+						})),
+					};
+				}).filter((t) => t.node !== ''),
 			};
 		case 'expr':
 			return {
