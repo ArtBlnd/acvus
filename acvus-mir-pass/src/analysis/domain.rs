@@ -65,6 +65,7 @@ pub enum FiniteSet {
     Strings(SmallVec<[Astr; 4]>),
     Variants(SmallVec<[(Astr, Box<AbstractValue>); 4]>),
     Literals(SmallVec<[Literal; 4]>),
+    Tuple(Vec<AbstractValue>),
 }
 
 impl SemiLattice for AbstractValue {
@@ -138,6 +139,20 @@ fn join_finite_sets(a: &FiniteSet, b: &FiniteSet) -> AbstractValue {
                 }
             }
             AbstractValue::Finite(FiniteSet::Literals(merged))
+        }
+        (FiniteSet::Tuple(at), FiniteSet::Tuple(bt)) => {
+            if at.len() != bt.len() {
+                return AbstractValue::Top;
+            }
+            let mut elems = at.clone();
+            let mut any_changed = false;
+            for (e, other) in elems.iter_mut().zip(bt.iter()) {
+                if e.join_mut(other) {
+                    any_changed = true;
+                }
+            }
+            let _ = any_changed;
+            AbstractValue::Finite(FiniteSet::Tuple(elems))
         }
         _ => AbstractValue::Top,
     }
@@ -275,6 +290,20 @@ impl AbstractValue {
             (tag, Box::new(payload)),
             1,
         )))
+    }
+
+    pub fn tuple(elements: Vec<AbstractValue>) -> Self {
+        AbstractValue::Finite(FiniteSet::Tuple(elements))
+    }
+
+    pub fn tuple_index(&self, index: usize) -> AbstractValue {
+        match self {
+            AbstractValue::Bottom => AbstractValue::Bottom,
+            AbstractValue::Finite(FiniteSet::Tuple(elems)) => {
+                elems.get(index).cloned().unwrap_or(AbstractValue::Top)
+            }
+            _ => AbstractValue::Top,
+        }
     }
 
     pub fn test_literal(&self, lit: &Literal) -> AbstractValue {

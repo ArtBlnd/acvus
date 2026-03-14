@@ -1539,4 +1539,210 @@ mod tests {
         // post_match is eager (merge_of restores definite)
         assert!(p.eager.contains(&i.intern("post_match")));
     }
+
+    /// Tuple destructuring: context values packed into a tuple, then extracted
+    /// via TupleIndex. The dataflow should track through MakeTuple → TupleIndex
+    /// so that TestLiteral on the extracted element can evaluate against the
+    /// known context value.
+    ///
+    /// Structure:
+    ///   %0 = ContextLoad "role"       (known = "user")
+    ///   %1 = ContextLoad "level"      (known = 5)
+    ///   %2 = MakeTuple [%0, %1]
+    ///   %3 = TupleIndex(%2, 0)        → should track to "role" = "user"
+    ///   %4 = TestLiteral(%3, "admin") → false (known "user" ≠ "admin")
+    ///   JumpIf(%4, admin_arm, else)
+    ///   else:
+    ///     %5 = TestLiteral(%3, "user") → true
+    ///     JumpIf(%5, user_arm, default_arm)
+    #[test]
+    fn tuple_destructure_multi_arm() {
+        let i = Interner::new();
+        let module = make_module(vec![
+            // Pack two known context values into a tuple
+            inst(InstKind::ContextLoad {
+                dst: ValueId(0),
+                name: i.intern("role"),
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(1),
+                name: i.intern("level"),
+            }),
+            inst(InstKind::MakeTuple {
+                dst: ValueId(2),
+                elements: vec![ValueId(0), ValueId(1)],
+            }),
+            // Extract first element and match on it
+            inst(InstKind::TupleIndex {
+                dst: ValueId(3),
+                tuple: ValueId(2),
+                index: 0,
+            }),
+            // Test "admin"
+            inst(InstKind::TestLiteral {
+                dst: ValueId(4),
+                src: ValueId(3),
+                value: Literal::String("admin".into()),
+            }),
+            inst(InstKind::JumpIf {
+                cond: ValueId(4),
+                then_label: Label(10),
+                then_args: vec![],
+                else_label: Label(20),
+                else_args: vec![],
+            }),
+            // admin arm → dead (role = "user", not "admin")
+            inst(InstKind::BlockLabel {
+                label: Label(10),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(10),
+                name: i.intern("admin_data"),
+            }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
+            // else → test "user"
+            inst(InstKind::BlockLabel {
+                label: Label(20),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::TestLiteral {
+                dst: ValueId(5),
+                src: ValueId(3),
+                value: Literal::String("user".into()),
+            }),
+            inst(InstKind::JumpIf {
+                cond: ValueId(5),
+                then_label: Label(30),
+                then_args: vec![],
+                else_label: Label(40),
+                else_args: vec![],
+            }),
+            // user arm → live (role = "user")
+            inst(InstKind::BlockLabel {
+                label: Label(30),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(11),
+                name: i.intern("user_data"),
+            }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
+            // default arm → dead (role matched "user" above)
+            inst(InstKind::BlockLabel {
+                label: Label(40),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(12),
+                name: i.intern("default_data"),
+            }),
+            inst(InstKind::Jump {
+                label: Label(99),
+                args: vec![],
+            }),
+            inst(InstKind::BlockLabel {
+                label: Label(99),
+                params: vec![],
+                merge_of: None,
+            }),
+        ]);
+
+        let val_def = build_val_def(&module);
+        let known = FxHashMap::from_iter([
+            (i.intern("role"), KnownValue::Literal(Literal::String("user".into()))),
+            (i.intern("level"), KnownValue::Literal(Literal::Int(5))),
+        ]);
+        let needed = reachable_context_keys(&module, &known, &val_def);
+
+        // admin_data is dead (role ≠ "admin")
+        assert!(!needed.contains(&i.intern("admin_data")));
+        // user_data is live (role = "user")
+        assert!(needed.contains(&i.intern("user_data")));
+        // default_data is dead (role = "user", matched above)
+        assert!(!needed.contains(&i.intern("default_data")));
+    }
+
+    /// Tuple destructuring with second element: TupleIndex(_, 1) extracts the
+    /// second context value and uses it for range testing.
+    #[test]
+    fn tuple_destructure_second_element_range() {
+        let i = Interner::new();
+        let module = make_module(vec![
+            inst(InstKind::ContextLoad {
+                dst: ValueId(0),
+                name: i.intern("name"),
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(1),
+                name: i.intern("score"),
+            }),
+            inst(InstKind::MakeTuple {
+                dst: ValueId(2),
+                elements: vec![ValueId(0), ValueId(1)],
+            }),
+            // Extract second element (score)
+            inst(InstKind::TupleIndex {
+                dst: ValueId(3),
+                tuple: ValueId(2),
+                index: 1,
+            }),
+            inst(InstKind::TestRange {
+                dst: ValueId(4),
+                src: ValueId(3),
+                start: 0,
+                end: 50,
+                kind: RangeKind::Exclusive,
+            }),
+            inst(InstKind::JumpIf {
+                cond: ValueId(4),
+                then_label: Label(1),
+                then_args: vec![],
+                else_label: Label(2),
+                else_args: vec![],
+            }),
+            // low arm → dead (score = 80, not in [0, 50))
+            inst(InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(5),
+                name: i.intern("low_data"),
+            }),
+            inst(InstKind::Return(ValueId(5))),
+            // high arm → live
+            inst(InstKind::BlockLabel {
+                label: Label(2),
+                params: vec![],
+                merge_of: None,
+            }),
+            inst(InstKind::ContextLoad {
+                dst: ValueId(6),
+                name: i.intern("high_data"),
+            }),
+            inst(InstKind::Return(ValueId(6))),
+        ]);
+
+        let val_def = build_val_def(&module);
+        let known = FxHashMap::from_iter([
+            (i.intern("name"), KnownValue::Literal(Literal::String("alice".into()))),
+            (i.intern("score"), KnownValue::Literal(Literal::Int(80))),
+        ]);
+        let needed = reachable_context_keys(&module, &known, &val_def);
+
+        assert!(!needed.contains(&i.intern("low_data")));
+        assert!(needed.contains(&i.intern("high_data")));
+    }
 }

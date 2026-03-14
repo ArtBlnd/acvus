@@ -127,6 +127,17 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
                 state.set(*dst, AbstractValue::variant(*tag, payload_val));
             }
 
+            InstKind::MakeTuple { dst, elements } => {
+                let elems: Vec<AbstractValue> =
+                    elements.iter().map(|e| state.get(*e)).collect();
+                state.set(*dst, AbstractValue::tuple(elems));
+            }
+
+            InstKind::TupleIndex { dst, tuple, index } => {
+                let tuple_val = state.get(*tuple);
+                state.set(*dst, tuple_val.tuple_index(*index));
+            }
+
             // All other instructions that produce a value → Top
             InstKind::VarLoad { dst, .. }
             | InstKind::FieldGet { dst, .. }
@@ -137,8 +148,6 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             | InstKind::MakeList { dst, .. }
             | InstKind::MakeObject { dst, .. }
             | InstKind::MakeRange { dst, .. }
-            | InstKind::MakeTuple { dst, .. }
-            | InstKind::TupleIndex { dst, .. }
             | InstKind::ListIndex { dst, .. }
             | InstKind::ListGet { dst, .. }
             | InstKind::ListSlice { dst, .. }
