@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use acvus_ast::{Literal, Span};
 use acvus_mir::ir::{DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use acvus_mir::ty::Ty;
@@ -141,8 +143,9 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
         .filter(|l| !registered.all.contains(l))
         .collect();
     for label in closure_labels {
-        let mut closure = module.closures.remove(&label).unwrap();
-        closure.body = rewrite_body(
+        let closure = module.closures.remove(&label).unwrap();
+        let closure = Arc::unwrap_or_clone(closure);
+        let body = rewrite_body(
             closure.body,
             &closure_config,
             &None,
@@ -152,7 +155,11 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
             &mut rng,
             interner,
         );
-        module.closures.insert(label, closure);
+        module.closures.insert(label, Arc::new(acvus_mir::ir::ClosureBody {
+            capture_names: closure.capture_names,
+            param_names: closure.param_names,
+            body,
+        }));
     }
 
     module

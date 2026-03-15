@@ -3,7 +3,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use acvus_mir::ir::Label;
+use acvus_mir::ir::ClosureBody;
 use acvus_utils::{Astr, TrackedDeque};
 use rustc_hash::FxHashMap;
 
@@ -166,6 +166,8 @@ pub enum Value {
     Opaque(OpaqueValue),
     /// Lazy iterator — deferred computation chain.
     Iterator(SharedIter),
+    /// Lazy sequence — deferred deque computation chain.
+    Sequence(SharedIter),
 }
 
 /// An opaque value: carries a type name and an arbitrary payload.
@@ -204,10 +206,10 @@ impl fmt::Debug for OpaqueValue {
     }
 }
 
-/// A closure value: label pointing to its body + captured values.
+/// A closure value: self-contained body + captured values.
 #[derive(Debug, Clone)]
 pub struct FnValue {
-    pub body: Label,
+    pub body: Arc<ClosureBody>,
     pub captures: Vec<Arc<Value>>,
 }
 
@@ -228,6 +230,7 @@ impl Value {
     pub fn into_shared_iter(self) -> SharedIter {
         match self {
             Value::Iterator(s) => s,
+            Value::Sequence(s) => s,
             Value::List(items) => SharedIter::from_list(items),
             Value::Deque(deque) => SharedIter::from_list(deque.into_vec()),
             other => panic!("into_shared_iter: expected Iterator, List, or Deque, got {other:?}"),
@@ -314,6 +317,7 @@ impl Value {
             Value::ExternFn(_) => panic!("cannot convert ExternFn to PureValue"),
             Value::Opaque(o) => panic!("cannot convert Opaque<{}> to PureValue", o.type_name),
             Value::Iterator(_) => panic!("cannot convert Iterator to PureValue"),
+            Value::Sequence(_) => panic!("cannot convert Sequence to PureValue"),
         }
     }
 }

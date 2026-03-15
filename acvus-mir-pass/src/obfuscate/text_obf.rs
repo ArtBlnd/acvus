@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::DebugInfo;
@@ -48,21 +50,21 @@ pub fn register_multistage_decrypt_closures(
         stage_a[i as usize] = label;
         module
             .closures
-            .insert(label, make_stage_a_closure_body(i, interner));
+            .insert(label, Arc::new(make_stage_a_closure_body(i, interner)));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 4 + i);
         stage_b[i as usize] = label;
         module
             .closures
-            .insert(label, make_stage_b_closure_body(i, interner));
+            .insert(label, Arc::new(make_stage_b_closure_body(i, interner)));
     }
     for i in 0..4u32 {
         let label = Label(base_label + 8 + i);
         stage_c[i as usize] = label;
         module
             .closures
-            .insert(label, make_stage_c_closure_body(i, interner));
+            .insert(label, Arc::new(make_stage_c_closure_body(i, interner)));
     }
 
     let max_label = base_label + 12;
@@ -1223,7 +1225,7 @@ pub fn register_factory_closures(
         let label = Label(base_label + rotation);
         labels[rotation as usize] = label;
         let body = make_factory_closure_body(rotation, inner_fn_ty, interner);
-        module.closures.insert(label, body);
+        module.closures.insert(label, Arc::new(body));
         let _ = name_prefix; // for future debug info
     }
 

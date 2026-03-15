@@ -393,6 +393,7 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
         Ty::Opaque(_) => TypeDesc::Unsupported { raw: "Opaque".into() },
         Ty::Tuple(_) => TypeDesc::Unsupported { raw: "Tuple".into() },
         Ty::Iterator(_) => TypeDesc::Unsupported { raw: "Iterator".into() },
+        Ty::Sequence(..) => TypeDesc::Unsupported { raw: "Sequence".into() },
     }
 }
 

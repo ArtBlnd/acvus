@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use acvus_ast::Literal;
 use acvus_mir::ir::{InstKind, MirBody, MirModule, ValueId};
 use rustc_hash::FxHashMap;
@@ -34,7 +36,8 @@ impl LiteralKey {
 pub fn dedup(mut module: MirModule) -> MirModule {
     module.main = dedup_body(module.main);
     for closure in module.closures.values_mut() {
-        closure.body = dedup_body(std::mem::take(&mut closure.body));
+        let c = Arc::make_mut(closure);
+        c.body = dedup_body(std::mem::take(&mut c.body));
     }
     module
 }

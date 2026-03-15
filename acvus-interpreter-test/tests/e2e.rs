@@ -3646,3 +3646,233 @@ async fn builtin_pmap() {
         "2, 4, 6"
     );
 }
+
+// ── Closure self-containment ─────────────────────────────────────
+
+#[tokio::test]
+async fn closure_basic_capture_local() {
+    // A closure captures a local variable and uses it in its body.
+    assert_eq!(
+        run_simple(
+            r#"{{ prefix = "hello" }}{{ f = x -> prefix + " " + x }}{{ f("world") }}{{_}}{{/}}"#,
+        )
+        .await,
+        "hello world"
+    );
+}
+
+#[tokio::test]
+async fn closure_nested_make_closure() {
+    // A closure creates another closure inside (MakeClosure within MakeClosure).
+    // The outer closure captures `base`, the inner captures both `base` (transitively) and `scale`.
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ base = 100 }}{{ make_adder = scale -> (x -> x * scale + base) }}{{ adder = make_adder(10) }}{{ @items | map(adder) | map(x -> (x | to_string)) | collect | join(", ") }}{{_}}{{/}}"#,
+            ty,
+            val,
+        )
+        .await,
+        "110, 120, 130"
+    );
+}
+
+#[tokio::test]
+async fn closure_passed_to_higher_order_function() {
+    // A closure that captures a variable is passed to map as an argument.
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![10, 20, 30]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ offset = 5 }}{{ add_offset = x -> x + offset }}{{ @items | map(add_offset) | map(x -> (x | to_string)) | collect | join(", ") }}{{_}}{{/}}"#,
+            ty,
+            val,
+        )
+        .await,
+        "15, 25, 35"
+    );
+}
+
+#[tokio::test]
+async fn closure_returned_from_closure() {
+    // An inner closure captures the outer closure's parameter.
+    // make_scaler returns a closure that multiplies by the captured factor.
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ make_scaler = factor -> (x -> x * factor) }}{{ double = make_scaler(2) }}{{ @items | map(double) | map(x -> (x | to_string)) | collect | join(", ") }}{{_}}{{/}}"#,
+            ty,
+            val,
+        )
+        .await,
+        "2, 4, 6"
+    );
+}
+
+#[tokio::test]
+async fn multiple_closures_sharing_capture_local() {
+    // Two separate closures capture the same local variable.
+    // Both should independently use the captured value.
+    let i = Interner::new();
+    let (ty, val) = items_context(&i, vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ threshold = 3 }}{{ above = @items | filter(x -> x > threshold) | map(x -> (x | to_string)) | collect | join(", ") }}{{ below = @items | filter(x -> x <= threshold) | map(x -> (x | to_string)) | collect | join(", ") }}{{ above }}|{{ below }}"#,
+            ty,
+            val,
+        )
+        .await,
+        "4, 5|1, 2, 3"
+    );
+}
+
+// ── Closure self-containment ────────────────────────────────────
+
+#[tokio::test]
+async fn closure_basic_map() {
+    // Basic closure |x| x + 1 applied via map.
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3] | map(x -> x + 1) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "2, 3, 4"
+    );
+}
+
+#[tokio::test]
+async fn closure_with_capture() {
+    // Closure captures local variable y.
+    assert_eq!(
+        run_simple(
+            r#"{{ y = 10 }}{{ [1, 2, 3] | map(x -> x + y) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "11, 12, 13"
+    );
+}
+
+#[tokio::test]
+async fn closure_captures_two_locals() {
+    // A single closure captures two local variables.
+    assert_eq!(
+        run_simple(
+            r#"{{ lo = 2 }}{{ hi = 4 }}{{ [1, 2, 3, 4, 5] | filter(x -> x >= lo && x <= hi) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "2, 3, 4"
+    );
+}
+
+#[tokio::test]
+async fn closure_capture_used_in_separate_exprs() {
+    // Same captured variable used by closures in separate template expressions.
+    assert_eq!(
+        run_simple(
+            r#"{{ offset = 100 }}{{ a = [1, 2] | map(x -> x + offset) | map(x -> (x | to_string)) | collect | join(",") }}{{ b = [3, 4] | map(x -> x + offset) | map(x -> (x | to_string)) | collect | join(",") }}{{ a }};{{ b }}"#,
+        )
+        .await,
+        "101,102;103,104"
+    );
+}
+
+#[tokio::test]
+async fn closure_multiple_sharing_capture() {
+    // Two closures capture the same variable and produce different results.
+    assert_eq!(
+        run_simple(
+            r#"{{ base = 10 }}{{ a = [1, 2] | map(x -> x + base) | map(x -> (x | to_string)) | collect | join(",") }}{{ b = [1, 2] | map(x -> x * base) | map(x -> (x | to_string)) | collect | join(",") }}{{ a }}|{{ b }}"#,
+        )
+        .await,
+        "11,12|10,20"
+    );
+}
+
+// ── Sequence builtins (Deque → Sequence lazy ops) ───────────────
+
+#[tokio::test]
+async fn seq_map_deque() {
+    // [1,2,3] is Deque, map coerces it to Sequence, collect coerces to Iterator.
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3] | map(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "2, 4, 6"
+    );
+}
+
+#[tokio::test]
+async fn seq_take_deque() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5] | take(3) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "1, 2, 3"
+    );
+}
+
+#[tokio::test]
+async fn seq_skip_deque() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5] | skip(2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "3, 4, 5"
+    );
+}
+
+#[tokio::test]
+async fn seq_filter_deque() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5] | filter(x -> x > 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "3, 4, 5"
+    );
+}
+
+#[tokio::test]
+async fn seq_collect_after_map() {
+    // Sequence from map, then collect (coerce Sequence → Iterator → List).
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3] | map(x -> x + 1) | collect | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "2, 3, 4"
+    );
+}
+
+#[tokio::test]
+async fn seq_chained_filter_map() {
+    // filter then map on deque — both go through Sequence path.
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5] | filter(x -> x > 2) | map(x -> x * 10) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "30, 40, 50"
+    );
+}
+
+#[tokio::test]
+async fn seq_chain_same_origin() {
+    // chain two slices of the same deque (take + skip) — same origin, ChainSeq applies.
+    assert_eq!(
+        run_simple(
+            r#"{{ d = [10, 20, 30, 40, 50] }}{{ a = d | take(2) }}{{ b = d | skip(3) }}{{ a | chain(b) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+        )
+        .await,
+        "10, 20, 40, 50"
+    );
+}

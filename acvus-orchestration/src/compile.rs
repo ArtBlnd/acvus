@@ -710,6 +710,23 @@ pub fn compute_external_context_env(
         node_locals.insert(spec.name, locals);
     }
 
+    // ── Phase 3b: Validate purity — non-Ephemeral nodes must have pure stored types ──
+    for (i, spec) in specs.iter().enumerate() {
+        if !matches!(spec.strategy.persistency, Persistency::Ephemeral) && !stored_types[i].is_pure() {
+            let persistency_name = match &spec.strategy.persistency {
+                Persistency::Ephemeral => unreachable!(),
+                Persistency::Snapshot => "Snapshot",
+                Persistency::Deque { .. } => "Deque",
+                Persistency::Diff { .. } => "Diff",
+            };
+            return Err(vec![OrchError::new(OrchErrorKind::UnpureStoredType {
+                node: spec.name,
+                persistency: persistency_name.to_string(),
+                ty: stored_types[i].clone(),
+            })]);
+        }
+    }
+
     let storage_types = registry.system().clone();
 
     Ok(ExternalContextEnv {

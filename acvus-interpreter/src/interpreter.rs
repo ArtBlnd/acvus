@@ -324,10 +324,14 @@ impl Interpreter {
                     captures,
                 } => {
                     let captured = frame.collect_args_arc(captures);
+                    let closure_body = Arc::clone(
+                        this.module.closures.get(body)
+                            .unwrap_or_else(|| panic!("closure body not found: {:?}", body))
+                    );
                     frame.set_new(
                         *dst,
                         Value::Fn(FnValue {
-                            body: *body,
+                            body: closure_body,
                             captures: captured,
                         }),
                     );
@@ -683,6 +687,51 @@ impl Interpreter {
                     .collect();
                 Ok((this, Value::String(parts.join(&sep))))
             }
+            // -- Lazy Sequence HOFs (return Sequence) --
+            BuiltinId::MapSeq | BuiltinId::PmapSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Fn(f) = args.remove(0) else {
+                    panic!("map: expected Fn")
+                };
+                Ok((this, Value::Sequence(shared.map(f))))
+            }
+            BuiltinId::FilterSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Fn(f) = args.remove(0) else {
+                    panic!("filter: expected Fn")
+                };
+                Ok((this, Value::Sequence(shared.filter(f))))
+            }
+            BuiltinId::TakeSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Int(n) = args.remove(0) else {
+                    panic!("take: expected Int")
+                };
+                Ok((this, Value::Sequence(shared.take(n as usize))))
+            }
+            BuiltinId::SkipSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Int(n) = args.remove(0) else {
+                    panic!("skip: expected Int")
+                };
+                Ok((this, Value::Sequence(shared.skip(n as usize))))
+            }
+            BuiltinId::ChainSeq => {
+                let a = args.remove(0).into_shared_iter();
+                let b = args.remove(0).into_shared_iter();
+                Ok((this, Value::Sequence(a.chain(b))))
+            }
+            BuiltinId::FlattenSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                Ok((this, Value::Sequence(shared.flatten())))
+            }
+            BuiltinId::FlatMapSeq | BuiltinId::FlatMapIterSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let Value::Fn(f) = args.remove(0) else {
+                    panic!("flat_map: expected Fn")
+                };
+                Ok((this, Value::Sequence(shared.flat_map(f))))
+            }
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
                 let shared = args.remove(0).into_shared_iter();
@@ -1017,11 +1066,7 @@ impl Interpreter {
         args: Vec<Arc<Value>>,
         handle: &'a YieldHandle<Value>,
     ) -> Result<(Self, Value), RuntimeError> {
-        let closure_body = this
-            .module
-            .closures
-            .get(&fn_val.body)
-            .unwrap_or_else(|| panic!("closure body not found: {:?}", fn_val.body));
+        let closure_body = &fn_val.body;
 
         let label_map = build_label_map(&closure_body.body);
         let mut frame = Frame::new(closure_body.body.val_count, label_map);

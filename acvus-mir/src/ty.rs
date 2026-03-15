@@ -80,6 +80,8 @@ pub enum Ty {
     },
     /// Lazy iterator over elements of type T.
     Iterator(Box<Ty>),
+    /// Lazy sequence over elements of type T. Lazy version of Deque with origin identity.
+    Sequence(Box<Ty>, Origin),
     /// Deque type: tracked deque with origin identity.
     /// `Origin` prevents mixing deques from different sources.
     Deque(Box<Ty>, Origin),
@@ -111,7 +113,7 @@ impl Ty {
             Ty::Enum { variants, .. } => variants.values().all(|p| {
                 p.as_ref().map_or(true, |ty| ty.is_pure())
             }),
-            Ty::Fn { .. } | Ty::Opaque(_) | Ty::Iterator(_) => false,
+            Ty::Fn { .. } | Ty::Opaque(_) | Ty::Iterator(_) | Ty::Sequence(..) => false,
             Ty::Var(_) | Ty::Infer | Ty::Error => true,
         }
     }
@@ -181,6 +183,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             }
             Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
             Ty::Iterator(inner) => write!(f, "Iterator<{}>", inner.display(self.interner)),
+            Ty::Sequence(inner, origin) => write!(f, "Sequence<{}, {}>", inner.display(self.interner), origin),
             Ty::Deque(inner, origin) => write!(f, "Deque<{}, {}>", inner.display(self.interner), origin),
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::Opaque(name) => write!(f, "{name}"),
@@ -316,6 +319,7 @@ impl TySubst {
             }
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
             Ty::Iterator(inner) => Ty::Iterator(Box::new(self.resolve(inner))),
+            Ty::Sequence(inner, origin) => Ty::Sequence(Box::new(self.resolve(inner)), self.resolve_origin(*origin)),
             Ty::Deque(inner, origin) => Ty::Deque(Box::new(self.resolve(inner)), self.resolve_origin(*origin)),
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Object(fields) => {
@@ -477,6 +481,29 @@ impl TySubst {
             }
 
             (Ty::Iterator(a), Ty::Iterator(b)) => self.unify(a, b, pol),
+            // Sequence vs Sequence: inner types unify, origins unify.
+            // On origin mismatch with non-Invariant polarity → demote both to Iterator.
+            (Ty::Sequence(ia, oa), Ty::Sequence(ib, ob)) => {
+                match self.unify_origins(*oa, *ob) {
+                    Ok(()) => self.unify(ia, ib, pol),
+                    Err(_) => {
+                        if pol == Polarity::Invariant {
+                            return Err((a.clone(), b.clone()));
+                        }
+                        // Demote to Iterator<T>: unify inner types, then rebind Var leaves to Iterator.
+                        self.unify(ia, ib, pol)?;
+                        let inner_resolved = self.resolve(ia);
+                        let iter_ty = Ty::Iterator(Box::new(inner_resolved));
+                        if let Some(leaf) = self.find_leaf_var(orig_a) {
+                            self.bindings.insert(leaf, iter_ty.clone());
+                        }
+                        if let Some(leaf) = self.find_leaf_var(orig_b) {
+                            self.bindings.insert(leaf, iter_ty);
+                        }
+                        Ok(())
+                    }
+                }
+            }
 
             (Ty::List(a), Ty::List(b)) => self.unify(a, b, pol),
 
@@ -553,6 +580,48 @@ impl TySubst {
             (Ty::Iterator(inner_i), Ty::Deque(inner_d, _)) => {
                 match pol {
                     Polarity::Contravariant => self.unify(inner_i, inner_d, pol),
+                    Polarity::Covariant => Err((a, b)),
+                    Polarity::Invariant => Err((a, b)),
+                }
+            }
+
+            // Deque → Sequence coercion: Covariant (a≤b) means Deque≤Sequence OK (origin preserved).
+            (Ty::Deque(inner_d, od), Ty::Sequence(inner_s, os)) => {
+                match pol {
+                    Polarity::Covariant => {
+                        self.unify_origins(*od, *os).map_err(|_| (a.clone(), b.clone()))?;
+                        self.unify(inner_d, inner_s, pol)
+                    }
+                    Polarity::Contravariant => Err((a, b)),
+                    Polarity::Invariant => Err((a, b)),
+                }
+            }
+
+            // Sequence → Deque: Contravariant (b≤a) means Deque≤Sequence OK.
+            (Ty::Sequence(inner_s, os), Ty::Deque(inner_d, od)) => {
+                match pol {
+                    Polarity::Contravariant => {
+                        self.unify_origins(*os, *od).map_err(|_| (a.clone(), b.clone()))?;
+                        self.unify(inner_s, inner_d, pol)
+                    }
+                    Polarity::Covariant => Err((a, b)),
+                    Polarity::Invariant => Err((a, b)),
+                }
+            }
+
+            // Sequence → Iterator coercion: Covariant (a≤b) means Sequence≤Iterator OK (origin lost).
+            (Ty::Sequence(inner_s, _), Ty::Iterator(inner_i)) => {
+                match pol {
+                    Polarity::Covariant => self.unify(inner_s, inner_i, pol),
+                    Polarity::Contravariant => Err((a, b)),
+                    Polarity::Invariant => Err((a, b)),
+                }
+            }
+
+            // Iterator → Sequence: Contravariant (b≤a) means Sequence≤Iterator OK.
+            (Ty::Iterator(inner_i), Ty::Sequence(inner_s, _)) => {
+                match pol {
+                    Polarity::Contravariant => self.unify(inner_i, inner_s, pol),
                     Polarity::Covariant => Err((a, b)),
                     Polarity::Invariant => Err((a, b)),
                 }
@@ -649,6 +718,7 @@ impl TySubst {
             }
             Ty::List(inner) => self.occurs_in(var, inner),
             Ty::Iterator(inner) => self.occurs_in(var, inner),
+            Ty::Sequence(inner, _) => self.occurs_in(var, inner),
             Ty::Deque(inner, _) => self.occurs_in(var, inner),
             Ty::Option(inner) => self.occurs_in(var, inner),
             Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(var, e)),
@@ -2305,5 +2375,166 @@ mod tests {
         // Still Deque, not List.
         let resolved = s.resolve(&v);
         assert!(matches!(resolved, Ty::Deque(_, _)), "should stay Deque, got {resolved:?}");
+    }
+
+    // ── Sequence origin tracking ─────────────────────────────────
+
+    #[test]
+    fn sequence_same_origin_unifies() {
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        let a = Ty::Sequence(Box::new(Ty::Int), o);
+        let b = Ty::Sequence(Box::new(Ty::Int), o);
+        assert!(s.unify(&a, &b, Invariant).is_ok());
+    }
+
+    #[test]
+    fn sequence_different_origin_demotes_to_iterator() {
+        // Two Sequences with different origins → demote to Iterator (like Deque→List).
+        let mut s = TySubst::new();
+        let o1 = s.fresh_concrete_origin();
+        let o2 = s.fresh_concrete_origin();
+        let v = s.fresh_var();
+        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1);
+        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2);
+        assert!(s.unify(&v, &seq1, Covariant).is_ok());
+        assert!(s.unify(&v, &seq2, Covariant).is_ok());
+        let resolved = s.resolve(&v);
+        assert!(matches!(resolved, Ty::Iterator(_)), "should demote to Iterator, got {resolved:?}");
+    }
+
+    #[test]
+    fn sequence_different_origin_invariant_fails() {
+        let mut s = TySubst::new();
+        let o1 = s.fresh_concrete_origin();
+        let o2 = s.fresh_concrete_origin();
+        let a = Ty::Sequence(Box::new(Ty::Int), o1);
+        let b = Ty::Sequence(Box::new(Ty::Int), o2);
+        assert!(s.unify(&a, &b, Invariant).is_err());
+    }
+
+    #[test]
+    fn deque_coerces_to_sequence_same_origin() {
+        // Deque(T, O) ≤ Sequence(T, O) — covariant, origin preserved.
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let deque = Ty::Deque(Box::new(Ty::Int), o);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o);
+        assert!(s.unify(&deque, &seq, Covariant).is_ok());
+    }
+
+    #[test]
+    fn sequence_does_not_coerce_to_deque() {
+        // Sequence ≤ Deque is NOT allowed (lazy → eager forbidden).
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let seq = Ty::Sequence(Box::new(Ty::Int), o);
+        let deque = Ty::Deque(Box::new(Ty::Int), o);
+        assert!(s.unify(&seq, &deque, Covariant).is_err());
+    }
+
+    #[test]
+    fn sequence_coerces_to_iterator() {
+        // Sequence(T, O) ≤ Iterator(T) — covariant, origin lost.
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        let seq = Ty::Sequence(Box::new(Ty::Int), o);
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        assert!(s.unify(&seq, &iter, Covariant).is_ok());
+    }
+
+    #[test]
+    fn iterator_does_not_coerce_to_sequence() {
+        // Iterator ≤ Sequence is NOT allowed (no origin to create).
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        let seq = Ty::Sequence(Box::new(Ty::Int), o);
+        assert!(s.unify(&iter, &seq, Covariant).is_err());
+    }
+
+    #[test]
+    fn deque_coerces_to_iterator_via_sequence() {
+        // Deque(T, O) ≤ Iterator(T) — transitive through Sequence, origin lost.
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        let deque = Ty::Deque(Box::new(Ty::Int), o);
+        let iter = Ty::Iterator(Box::new(Ty::Int));
+        assert!(s.unify(&deque, &iter, Covariant).is_ok());
+    }
+
+    #[test]
+    fn sequence_structural_op_preserves_origin() {
+        // Simulates take_seq signature: Sequence<T, O> → Sequence<T, O> (same O).
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let c = s.fresh_concrete_origin();
+        let input = Ty::Sequence(Box::new(Ty::Int), o);
+        let output = Ty::Sequence(Box::new(Ty::Int), o);
+        // Bind o to a concrete origin via the input.
+        let concrete_seq = Ty::Sequence(Box::new(Ty::Int), c);
+        assert!(s.unify(&concrete_seq, &input, Covariant).is_ok());
+        // Now output should also resolve to the same concrete origin.
+        let resolved = s.resolve(&output);
+        match resolved {
+            Ty::Sequence(_, resolved_o) => assert_eq!(s.resolve_origin(resolved_o), c),
+            other => panic!("expected Sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sequence_transform_op_creates_new_origin() {
+        // Simulates map_seq output having a different origin from the input.
+        // Two Sequence<Int> with different concrete origins → demote to Iterator.
+        let mut s = TySubst::new();
+        let o1 = s.fresh_concrete_origin();
+        let o2 = s.fresh_concrete_origin();
+        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1);
+        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2);
+        // Different origins should NOT unify invariantly.
+        assert!(s.unify(&seq1, &seq2, Invariant).is_err());
+        // But covariantly, they demote to Iterator.
+        let v = s.fresh_var();
+        assert!(s.unify(&v, &seq1, Covariant).is_ok());
+        assert!(s.unify(&v, &seq2, Covariant).is_ok());
+        let resolved = s.resolve(&v);
+        assert!(matches!(resolved, Ty::Iterator(_)), "should demote to Iterator, got {resolved:?}");
+    }
+
+    #[test]
+    fn sequence_is_not_pure() {
+        let o = Origin::Concrete(0);
+        assert!(!Ty::Sequence(Box::new(Ty::Int), o).is_pure());
+        assert!(!Ty::Iterator(Box::new(Ty::Int)).is_pure());
+        // Deque IS pure (it's an eager, storable container).
+        assert!(Ty::Deque(Box::new(Ty::Int), o).is_pure());
+    }
+
+    #[test]
+    fn sequence_chain_same_origin_ok() {
+        // chain_seq: (Sequence<T, O>, Sequence<T, O>) → Sequence<T, O>
+        // Both inputs must have the same origin.
+        let mut s = TySubst::new();
+        let o = s.fresh_origin();
+        let c = s.fresh_concrete_origin();
+        let a = Ty::Sequence(Box::new(Ty::Int), o);
+        let b = Ty::Sequence(Box::new(Ty::Int), o);
+        // Bind o to concrete.
+        assert!(s.unify(&Ty::Sequence(Box::new(Ty::Int), c), &a, Covariant).is_ok());
+        // b should also resolve to same origin.
+        assert!(s.unify(&Ty::Sequence(Box::new(Ty::Int), c), &b, Covariant).is_ok());
+    }
+
+    #[test]
+    fn sequence_chain_different_origin_fails_invariant() {
+        // chain_seq requires same origin. Different origins in invariant → error.
+        let mut s = TySubst::new();
+        let o1 = s.fresh_concrete_origin();
+        let o2 = s.fresh_concrete_origin();
+        let a = Ty::Sequence(Box::new(Ty::Int), o1);
+        let b = Ty::Sequence(Box::new(Ty::Int), o2);
+        // In a chain_seq signature, both args share the same origin var.
+        // If called with different concrete origins, unification of origins fails.
+        assert!(s.unify_origins(o1, o2).is_err());
     }
 }

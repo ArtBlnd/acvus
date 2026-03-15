@@ -69,6 +69,13 @@ pub enum OrchErrorKind {
         tier_b: &'static str,
     },
 
+    // Persistency
+    UnpureStoredType {
+        node: Astr,
+        persistency: String,
+        ty: Ty,
+    },
+
     // Runtime
     FuelExhausted,
     ModelError(String),
@@ -170,6 +177,15 @@ impl<'a> fmt::Display for OrchErrorDisplay<'a> {
             OrchErrorKind::RegistryConflict { key, tier_a, tier_b } => {
                 write!(f, "context type conflict: key '{}' appears in both '{}' and '{}'",
                     interner.resolve(*key), tier_a, tier_b)
+            }
+            OrchErrorKind::UnpureStoredType { node, persistency, ty } => {
+                write!(
+                    f,
+                    "node '{}' has {} persistency but its stored type {} is not pure (cannot be persisted)",
+                    interner.resolve(*node),
+                    persistency,
+                    ty.display(interner)
+                )
             }
             OrchErrorKind::FuelExhausted => write!(f, "fuel exhausted"),
             OrchErrorKind::ModelError(msg) => write!(f, "model error: {msg}"),

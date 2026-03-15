@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -305,5 +307,5 @@ pub struct ClosureBody {
 #[derive(Debug, Clone)]
 pub struct MirModule {
     pub main: MirBody,
-    pub closures: FxHashMap<Label, ClosureBody>,
+    pub closures: FxHashMap<Label, Arc<ClosureBody>>,
 }

@@ -1,4 +1,5 @@
 
+use std::sync::Arc;
 
 use acvus_ast::{
     Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
@@ -27,7 +28,10 @@ pub struct Lowerer<'a> {
     /// Builtin map from type checker (call_span → resolved BuiltinId).
     builtin_map: BuiltinMap,
     /// Closures produced during lowering.
-    closures: FxHashMap<Label, ClosureBody>,
+    closures: FxHashMap<Label, Arc<ClosureBody>>,
+    /// Global closure label counter — shared across nesting levels to prevent
+    /// label collisions when nested closures each allocate from a sub-body.
+    closure_label_count: u32,
     /// Hint table.
     hints: HintTable,
 }
@@ -117,6 +121,7 @@ impl<'a> Lowerer<'a> {
             type_map,
             builtin_map,
             closures: FxHashMap::default(),
+            closure_label_count: 0,
             hints: HintTable::new(),
         }
     }
@@ -162,6 +167,14 @@ impl<'a> Lowerer<'a> {
     fn alloc_label(&mut self) -> Label {
         let l = Label(self.body.label_count);
         self.body.label_count += 1;
+        l
+    }
+
+    /// Allocate a closure label from the global counter (not body-local).
+    /// Prevents label collisions when nested closures each run in a sub-body.
+    fn alloc_closure_label(&mut self) -> Label {
+        let l = Label(self.closure_label_count);
+        self.closure_label_count += 1;
         l
     }
 
@@ -528,7 +541,7 @@ impl<'a> Lowerer<'a> {
                 let capture_names = free_vars.clone();
 
                 // Create closure body.
-                let closure_label = self.alloc_label();
+                let closure_label = self.alloc_closure_label();
 
                 // Build the closure body MIR in a sub-lowerer.
                 let mut sub_body = MirBody::new();
@@ -572,11 +585,11 @@ impl<'a> Lowerer<'a> {
 
                 self.closures.insert(
                     closure_label,
-                    ClosureBody {
+                    Arc::new(ClosureBody {
                         capture_names,
                         param_names: param_name_list,
                         body: closure_body_mir,
-                    },
+                    }),
                 );
 
                 let dst = self.alloc_typed(*span);

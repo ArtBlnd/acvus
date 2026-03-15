@@ -65,6 +65,16 @@ pub enum BuiltinId {
     ContainsIter,
     FirstIter,
     LastIter,
+    // -- Sequence overloads (lazy Deque ops) --
+    MapSeq,
+    PmapSeq,
+    FilterSeq,
+    TakeSeq,
+    SkipSeq,
+    ChainSeq,
+    FlattenSeq,
+    FlatMapSeq,
+    FlatMapIterSeq,
 }
 
 impl BuiltinId {
@@ -490,16 +500,128 @@ fn sig_chain(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 }
 
 // ---------------------------------------------------------------------------
+// Signature helpers — Sequence ops (lazy Deque)
+// ---------------------------------------------------------------------------
+
+// Structural ops: same origin preserved
+
+fn sig_take_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (vec![Ty::Sequence(Box::new(t.clone()), o), Ty::Int], Ty::Sequence(Box::new(t), o))
+}
+
+fn sig_skip_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_take_seq(s)
+}
+
+fn sig_chain_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (
+        vec![Ty::Sequence(Box::new(t.clone()), o), Ty::Sequence(Box::new(t.clone()), o)],
+        Ty::Sequence(Box::new(t), o),
+    )
+}
+
+// Transform ops: new origin
+
+fn sig_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let u = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (
+        vec![
+            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false },
+        ],
+        Ty::Sequence(Box::new(u), o2),
+    )
+}
+
+fn sig_pmap_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_map_seq(s)
+}
+
+fn sig_filter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (
+        vec![
+            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false },
+        ],
+        Ty::Sequence(Box::new(t), o2),
+    )
+}
+
+fn sig_flatten_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (
+        vec![Ty::Sequence(Box::new(Ty::List(Box::new(t.clone()))), o)],
+        Ty::Sequence(Box::new(t), o2),
+    )
+}
+
+// (Sequence<T, O>, Fn(T) → Iterator<U>) → Sequence<U, O2>
+fn sig_flat_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let u = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (
+        vec![
+            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Fn {
+                params: vec![t],
+                ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
+                is_extern: false,
+            },
+        ],
+        Ty::Sequence(Box::new(u), o2),
+    )
+}
+
+// (Sequence<T, O>, Fn(T) → List<U>) → Sequence<U, O2>
+fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let u = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (
+        vec![
+            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Fn {
+                params: vec![t],
+                ret: Box::new(Ty::List(Box::new(u.clone()))),
+                is_extern: false,
+            },
+        ],
+        Ty::Sequence(Box::new(u), o2),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Registry construction
 // ---------------------------------------------------------------------------
 
 fn build_registry() -> BuiltinRegistry {
     let mut r = BuiltinRegistry::new();
 
-    // -- Iterator HOFs --
-    r.add("filter",      BuiltinId::Filter,      sig_filter,        None);
+    // -- Iterator/Sequence HOFs --
+    // Sequence overloads registered FIRST (first-match overload resolution)
+    r.add("filter",      BuiltinId::FilterSeq,    sig_filter_seq,    None);
+    r.add("filter",      BuiltinId::Filter,       sig_filter,        None);
+    r.add("map",         BuiltinId::MapSeq,       sig_map_seq,       None);
     r.add("map",         BuiltinId::Map,          sig_map,           None);
+    r.add("pmap",        BuiltinId::PmapSeq,      sig_pmap_seq,      None);
     r.add("pmap",        BuiltinId::Pmap,         sig_pmap,          None);
+    // find, reduce, fold, any, all — consumers, no Sequence overloads needed
+    // (Sequence coerces to Iterator via type system)
     r.add("find",        BuiltinId::Find,         sig_find,          None);
     r.add("reduce",      BuiltinId::Reduce,       sig_reduce,        None);
     r.add("fold",        BuiltinId::Fold,         sig_fold,          None);
@@ -517,13 +639,16 @@ fn build_registry() -> BuiltinRegistry {
     r.add("len",         BuiltinId::Len,          sig_len,           None);
     r.add("reverse",     BuiltinId::Reverse,      sig_reverse,       None);
 
-    // -- flatten (overloaded: List + Iterator) --
-    r.add("flatten",     BuiltinId::Flatten,      sig_flatten,       None);
-    r.add("flatten",     BuiltinId::FlattenIter,  sig_flatten_iter,  None);
+    // -- flatten (overloaded: List + Sequence + Iterator) --
+    r.add("flatten",     BuiltinId::FlattenSeq,   sig_flatten_seq,   None);
+    r.add("flatten",     BuiltinId::Flatten,       sig_flatten,       None);
+    r.add("flatten",     BuiltinId::FlattenIter,   sig_flatten_iter,  None);
 
-    // -- flat_map (overloaded: Iterator→Iterator + Iterator→List) --
-    r.add("flat_map",    BuiltinId::FlatMap,      sig_flat_map,      None);
-    r.add("flat_map",    BuiltinId::FlatMapIter,  sig_flat_map_iter, None);
+    // -- flat_map (overloaded: Sequence + Iterator variants) --
+    r.add("flat_map",    BuiltinId::FlatMapSeq,       sig_flat_map_seq,      None);
+    r.add("flat_map",    BuiltinId::FlatMapIterSeq,   sig_flat_map_iter_seq, None);
+    r.add("flat_map",    BuiltinId::FlatMap,           sig_flat_map,          None);
+    r.add("flat_map",    BuiltinId::FlatMapIter,       sig_flat_map_iter,     None);
 
     // -- Deque ops (origin-preserving) --
     r.add("append",      BuiltinId::Append,       sig_append,        None);
@@ -570,8 +695,11 @@ fn build_registry() -> BuiltinRegistry {
     r.add("iter",      BuiltinId::Iter,      sig_iter,      None);
     r.add("rev_iter",  BuiltinId::RevIter,   sig_rev_iter,  None);
     r.add("collect",   BuiltinId::Collect,   sig_collect,   None);
+    r.add("take",      BuiltinId::TakeSeq,   sig_take_seq,  None);
     r.add("take",      BuiltinId::Take,      sig_take,      None);
+    r.add("skip",      BuiltinId::SkipSeq,   sig_skip_seq,  None);
     r.add("skip",      BuiltinId::Skip,      sig_skip,      None);
+    r.add("chain",     BuiltinId::ChainSeq,  sig_chain_seq, None);
     r.add("chain",     BuiltinId::Chain,     sig_chain,     None);
 
     r

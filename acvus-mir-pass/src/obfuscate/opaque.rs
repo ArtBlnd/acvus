@@ -15,6 +15,8 @@
 //! is derived at runtime from a value (`rv % 4` or `rand_val % 4`),
 //! so static analysis cannot determine which closure is called.
 
+use std::sync::Arc;
+
 use acvus_ast::{BinOp, Literal, Span};
 use acvus_mir::builtins::BuiltinId;
 use acvus_mir::ir::{
@@ -55,7 +57,7 @@ pub fn register_opaque_closures(module: &mut MirModule, interner: &Interner) -> 
         let label = Label(base_label + i as u32);
         labels[i] = label;
         let body = make_opaque_closure_body(i as u32, interner);
-        module.closures.insert(label, body);
+        module.closures.insert(label, Arc::new(body));
     }
 
     let max_label = base_label + 4;
