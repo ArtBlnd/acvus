@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, RuntimeError, Value};
+use acvus_interpreter::{Interpreter, LazyValue, PureValue, RuntimeError, Value};
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
@@ -191,7 +191,7 @@ where
                 let name = interner.resolve(request.name()).to_string();
                 let Some(value) = local.get(&name).cloned().or_else(|| entry.get(&name))
                 else {
-                    return Value::Unit;
+                    return Value::unit();
                 };
                 request.resolve(value);
             }
@@ -203,7 +203,7 @@ where
                     Err(e) => panic!("display extern call error: {e}"),
                 }
             }
-            acvus_interpreter::Stepped::Done => return Value::Unit,
+            acvus_interpreter::Stepped::Done => return Value::unit(),
             acvus_interpreter::Stepped::Error(e) => panic!("display runtime error: {e}"),
         }
     }
@@ -225,7 +225,7 @@ where
     loop {
         match coroutine.resume().await {
             acvus_interpreter::Stepped::Emit(value) => match value {
-                Value::String(s) => output.push_str(&s),
+                Value::Pure(PureValue::String(s)) => output.push_str(&s),
                 other => panic!("display template: expected String, got {other:?}"),
             },
             acvus_interpreter::Stepped::NeedContext(request) => {
@@ -265,7 +265,7 @@ where
     for e in entries {
         if let Some(ref cond) = e.condition {
             let val = drive_from_entry(interner, cond, entry, local, extern_handler).await;
-            let Value::Bool(true) = val else {
+            let Value::Pure(PureValue::Bool(true)) = val else {
                 continue;
             };
         }
@@ -324,8 +324,8 @@ where
     .await;
 
     let items = match list {
-        Value::List(items) => items,
-        Value::Deque(deque) => deque.into_vec(),
+        Value::Lazy(LazyValue::List(items)) => items,
+        Value::Lazy(LazyValue::Deque(deque)) => deque.into_vec(),
         _ => return Vec::new(),
     };
     let Some(item) = items.into_iter().nth(index) else {
@@ -334,7 +334,7 @@ where
 
     let mut local = FxHashMap::default();
     local.insert("item".into(), Arc::new(item));
-    local.insert("index".into(), Arc::new(Value::Int(index as i64)));
+    local.insert("index".into(), Arc::new(Value::int(index as i64)));
 
     eval_entries(interner, &display.entries, entry, &local, extern_handler).await
 }
@@ -347,7 +347,7 @@ mod tests {
     use acvus_utils::Interner;
 
     async fn noop_extern(_: Astr, _: Vec<Value>) -> Result<Value, RuntimeError> {
-        Ok(Value::Unit)
+        Ok(Value::unit())
     }
 
     async fn journal_with(entries: Vec<(&str, Value)>) -> (TreeJournal, uuid::Uuid) {
@@ -416,7 +416,7 @@ mod tests {
             template: "hello {{ @greeting }}".into(),
         };
         let compiled = compile_static_display(&interner, &spec, &reg).unwrap();
-        let (journal, uuid) = journal_with(vec![("greeting", Value::String("world".into()))]).await;
+        let (journal, uuid) = journal_with(vec![("greeting", Value::string("world".into()))]).await;
         let result = render_display(&interner, &compiled, &journal.entry(uuid).await, &noop_extern).await;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "hello world");
@@ -440,10 +440,10 @@ mod tests {
         let compiled = compile_iterable_display(&interner, &spec, &reg).unwrap();
         let (journal, uuid) = journal_with(vec![(
             "messages",
-            Value::List(vec![
-                Value::String("a".into()),
-                Value::String("b".into()),
-                Value::String("c".into()),
+            Value::list(vec![
+                Value::string("a".into()),
+                Value::string("b".into()),
+                Value::string("c".into()),
             ]),
         )])
         .await;
@@ -482,7 +482,7 @@ mod tests {
         let compiled = compile_iterable_display(&interner, &spec, &reg).unwrap();
         let (journal, uuid) = journal_with(vec![(
             "nums",
-            Value::List(vec![Value::Int(3), Value::Int(10)]),
+            Value::list(vec![Value::int(3), Value::int(10)]),
         )])
         .await;
 
@@ -515,7 +515,7 @@ mod tests {
         let compiled = compile_iterable_display(&interner, &spec, &reg).unwrap();
         let (journal, uuid) = journal_with(vec![(
             "items",
-            Value::List(vec![Value::String("only".into())]),
+            Value::list(vec![Value::string("only".into())]),
         )])
         .await;
         let result =

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::Value;
+use acvus_interpreter::{LazyValue, Value};
 use acvus_utils::{Astr, OwnedDequeDiff, TrackedDeque};
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
@@ -453,13 +453,13 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
             StorageDiff::Deque { squashed, .. } => {
                 self.inner.nodes[idx]
                     .turn_diff
-                    .insert(key.to_string(), Arc::new(Value::Deque(squashed)));
+                    .insert(key.to_string(), Arc::new(Value::Lazy(LazyValue::Deque(squashed))));
             }
             StorageDiff::Diff(obj_diff) => {
                 let mut fields = self
                     .get(key)
                     .and_then(|arc| match arc.as_ref() {
-                        Value::Object(fields) => Some(fields.clone()),
+                        Value::Lazy(LazyValue::Object(fields)) => Some(fields.clone()),
                         _ => None,
                     })
                     .unwrap_or_default();
@@ -471,7 +471,7 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
                 }
                 self.inner.nodes[idx]
                     .turn_diff
-                    .insert(key.to_string(), Arc::new(Value::Object(fields)));
+                    .insert(key.to_string(), Arc::new(Value::Lazy(LazyValue::Object(fields))));
             }
         }
     }
@@ -597,6 +597,7 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
 
 #[cfg(test)]
 mod tests {
+    use acvus_interpreter::PureValue;
     use acvus_utils::Interner;
 
     use super::*;
@@ -607,10 +608,10 @@ mod tests {
     async fn apply_and_get() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.next().await;
-        e.apply("x", StorageDiff::Snapshot(Value::String("hello".into())));
+        e.apply("x", StorageDiff::Snapshot(Value::string("hello".into())));
         assert!(matches!(
             &*e.get("x").unwrap(),
-            Value::String(v) if v == "hello"
+            Value::Pure(PureValue::String(v)) if v == "hello"
         ));
         assert!(e.get("y").is_none());
     }
@@ -622,16 +623,16 @@ mod tests {
         let mut e = j.entry_mut(root).await.next().await;
         e.apply(
             "x",
-            StorageDiff::Snapshot(Value::String("first".into())),
+            StorageDiff::Snapshot(Value::string("first".into())),
         );
         e.apply(
             "x",
-            StorageDiff::Snapshot(Value::Object(FxHashMap::from_iter([(
+            StorageDiff::Snapshot(Value::object(FxHashMap::from_iter([(
                 interner.intern("v"),
-                Value::Int(2),
+                Value::int(2),
             )]))),
         );
-        assert!(matches!(&*e.get("x").unwrap(), Value::Object(_)));
+        assert!(matches!(&*e.get("x").unwrap(), Value::Lazy(LazyValue::Object(_))));
     }
 
     #[tokio::test]
@@ -646,11 +647,11 @@ mod tests {
     async fn deque_stores_squashed() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.next().await;
-        let squashed = TrackedDeque::from_vec(vec![Value::Int(1), Value::Int(2)]);
+        let squashed = TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]);
         let diff = OwnedDequeDiff {
             consumed: 0,
             removed_back: 0,
-            pushed: vec![Value::Int(1), Value::Int(2)],
+            pushed: vec![Value::int(1), Value::int(2)],
         };
         e.apply(
             "q",
@@ -660,25 +661,26 @@ mod tests {
             },
         );
         let val = e.get("q").unwrap();
-        assert!(
-            matches!(val.as_ref(), Value::Deque(d) if d.as_slice() == squashed.as_slice())
-        );
+        let Value::Lazy(LazyValue::Deque(d)) = val.as_ref() else {
+            panic!("expected Deque");
+        };
+        assert_eq!(d.as_slice(), squashed.as_slice());
     }
 
     #[tokio::test]
     async fn deque_checksum_preserved() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.next().await;
-        let squashed = TrackedDeque::from_vec(vec![Value::Int(1)]);
+        let squashed = TrackedDeque::from_vec(vec![Value::int(1)]);
         let cs = squashed.checksum();
         let diff = OwnedDequeDiff {
             consumed: 0,
             removed_back: 0,
-            pushed: vec![Value::Int(1)],
+            pushed: vec![Value::int(1)],
         };
         e.apply("q", StorageDiff::Deque { squashed, diff });
         let val = e.get("q").unwrap();
-        let Value::Deque(stored) = val.as_ref() else {
+        let Value::Lazy(LazyValue::Deque(stored)) = val.as_ref() else {
             panic!("expected Deque")
         };
         assert_eq!(stored.checksum(), cs);
@@ -694,23 +696,23 @@ mod tests {
         let c = interner.intern("c");
         e.apply(
             "obj",
-            StorageDiff::Snapshot(Value::Object(FxHashMap::from_iter([
-                (a, Value::Int(1)),
-                (b, Value::Int(2)),
+            StorageDiff::Snapshot(Value::object(FxHashMap::from_iter([
+                (a, Value::int(1)),
+                (b, Value::int(2)),
             ]))),
         );
         let diff = ObjectDiff {
-            updates: FxHashMap::from_iter([(a, Value::Int(100)), (c, Value::Int(3))]),
+            updates: FxHashMap::from_iter([(a, Value::int(100)), (c, Value::int(3))]),
             removals: vec![b],
         };
         e.apply("obj", StorageDiff::Diff(diff));
         let val = e.get("obj").unwrap();
-        let Value::Object(fields) = val.as_ref() else {
+        let Value::Lazy(LazyValue::Object(fields)) = val.as_ref() else {
             panic!("expected Object")
         };
-        assert_eq!(fields.get(&a), Some(&Value::Int(100)));
+        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(100))));
         assert_eq!(fields.get(&b), None);
-        assert_eq!(fields.get(&c), Some(&Value::Int(3)));
+        assert_eq!(fields.get(&c), Some(&Value::Pure(PureValue::Int(3))));
     }
 
     #[tokio::test]
@@ -720,15 +722,15 @@ mod tests {
         let mut e = j.entry_mut(root).await.next().await;
         let a = interner.intern("a");
         let diff = ObjectDiff {
-            updates: FxHashMap::from_iter([(a, Value::Int(42))]),
+            updates: FxHashMap::from_iter([(a, Value::int(42))]),
             removals: vec![],
         };
         e.apply("obj", StorageDiff::Diff(diff));
         let val = e.get("obj").unwrap();
-        let Value::Object(fields) = val.as_ref() else {
+        let Value::Lazy(LazyValue::Object(fields)) = val.as_ref() else {
             panic!("expected Object")
         };
-        assert_eq!(fields.get(&a), Some(&Value::Int(42)));
+        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(42))));
     }
 
     // --- Tree structure tests ---
@@ -763,8 +765,8 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.next().await;
             n1 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(1)));
-            e.apply("y", StorageDiff::Snapshot(Value::Int(2)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(1)));
+            e.apply("y", StorageDiff::Snapshot(Value::int(2)));
         }
 
         let n2;
@@ -772,23 +774,23 @@ mod tests {
             let mut e = j.entry_mut(n1).await.next().await;
             n2 = e.uuid();
             // n2 should see parent's values via accumulated
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(1)));
-            assert!(matches!(&*e.get("y").unwrap(), Value::Int(2)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(&*e.get("y").unwrap(), Value::Pure(PureValue::Int(2))));
 
             // Modifying n2 doesn't affect n1
-            e.apply("x", StorageDiff::Snapshot(Value::Int(99)));
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(99)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(99)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(99))));
         }
 
         // n1 still has original value
         {
             let e = j.entry(n1).await;
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(1)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
         }
         // n2 has the override
         {
             let e = j.entry(n2).await;
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(99)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(99))));
         }
     }
 
@@ -800,14 +802,14 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.next().await;
             n1 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(1)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(1)));
         }
 
         let n2;
         {
             let mut e = j.entry_mut(n1).await.next().await;
             n2 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(2)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(2)));
         }
 
         // Fork from n2 — creates sibling of n2 (child of n1)
@@ -815,7 +817,7 @@ mod tests {
             let e = j.entry_mut(n2).await.fork().await;
             assert_eq!(e.depth(), 2);
             // Sees n1's accumulated (x=1), not n2's turn_diff (x=2)
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(1)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
         }
     }
 
@@ -833,7 +835,7 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.next().await;
             n2 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(1)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(1)));
         }
 
         j.entry_mut(n2).await.prune(Prune::Leaf);
@@ -877,7 +879,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.next().await;
             n1 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(1)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(1)));
         }
 
         let n2;
@@ -892,16 +894,16 @@ mod tests {
         }
 
         // Both see parent's data
-        assert!(matches!(&*j.entry(n2).await.get("x").unwrap(), Value::Int(1)));
-        assert!(matches!(&*j.entry(n3).await.get("x").unwrap(), Value::Int(1)));
+        assert!(matches!(&*j.entry(n2).await.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(&*j.entry(n3).await.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
 
         // Modifying one doesn't affect the other
         {
             let mut e = j.entry_mut(n2).await;
-            e.apply("x", StorageDiff::Snapshot(Value::Int(99)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(99)));
         }
-        assert!(matches!(&*j.entry(n2).await.get("x").unwrap(), Value::Int(99)));
-        assert!(matches!(&*j.entry(n3).await.get("x").unwrap(), Value::Int(1)));
+        assert!(matches!(&*j.entry(n2).await.get("x").unwrap(), Value::Pure(PureValue::Int(99))));
+        assert!(matches!(&*j.entry(n3).await.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
     }
 
     #[tokio::test]
@@ -912,16 +914,16 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.next().await;
             n1 = e.uuid();
-            e.apply("x", StorageDiff::Snapshot(Value::Int(1)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(1)));
         }
 
         {
             let mut e = j.entry_mut(n1).await.next().await;
             // x=1 is in accumulated
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(1)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(1))));
             // Now override in turn_diff
-            e.apply("x", StorageDiff::Snapshot(Value::Int(2)));
-            assert!(matches!(&*e.get("x").unwrap(), Value::Int(2)));
+            e.apply("x", StorageDiff::Snapshot(Value::int(2)));
+            assert!(matches!(&*e.get("x").unwrap(), Value::Pure(PureValue::Int(2))));
         }
     }
 }

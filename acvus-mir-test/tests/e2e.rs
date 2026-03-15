@@ -292,6 +292,7 @@ fn extern_async_call() {
         params: vec![Ty::Int],
         ret: Box::new(Ty::String),
         is_extern: true,
+        captures: vec![],
     })]);
     // Variable binding is body-less.
     let ir = compile_to_ir(
@@ -1397,6 +1398,7 @@ fn extern_fn_object_return() {
         params: vec![Ty::Int],
         ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
         is_extern: true,
+        captures: vec![],
     })]);
     let ir = compile_to_ir(
         &i,

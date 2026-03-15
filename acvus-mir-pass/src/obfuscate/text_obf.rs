@@ -1342,6 +1342,7 @@ pub fn emit_factory_dispatch_setup(
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
         is_extern: false,
+        captures: vec![],
     };
 
     // Make 4 factory closures, each capturing all 4 inner closures
@@ -1392,6 +1393,7 @@ fn emit_two_level_dispatch(
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
         is_extern: false,
+        captures: vec![],
     };
 
     // v_factory = ListGet(meta_table, factory_idx)
@@ -1563,6 +1565,7 @@ fn emit_multistage_decrypt_call(
         params: vec![Ty::Int],
         ret: Box::new(Ty::Int),
         is_extern: false,
+        captures: vec![],
     };
     let v_subkey = emit_two_level_dispatch(
         ctx,
@@ -1608,6 +1611,7 @@ fn emit_multistage_decrypt_call(
         params: vec![Ty::Int, Ty::Int],
         ret: Box::new(Ty::Int),
         is_extern: false,
+        captures: vec![],
     };
     let v_combined = emit_two_level_dispatch(
         ctx,
@@ -1662,6 +1666,7 @@ fn emit_multistage_decrypt_call(
         params: vec![Ty::bytes(), Ty::Int],
         ret: Box::new(Ty::String),
         is_extern: false,
+        captures: vec![],
     };
     emit_two_level_dispatch(
         ctx,

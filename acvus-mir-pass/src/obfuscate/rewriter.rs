@@ -40,16 +40,19 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let stage_b_fn_ty = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let stage_c_fn_ty = Ty::Fn {
             params: vec![Ty::bytes(), Ty::Int],
             ret: Box::new(Ty::String),
             is_extern: false,
+            captures: vec![],
         };
 
         let fa = text_obf::register_factory_closures(
@@ -92,6 +95,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let opaque_factory = text_obf::register_factory_closures(
             &mut module,
@@ -228,16 +232,19 @@ fn rewrite_body(
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let stage_b_fn_ty = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let stage_c_fn_ty = Ty::Fn {
             params: vec![Ty::bytes(), Ty::Int],
             ret: Box::new(Ty::String),
             is_extern: false,
+            captures: vec![],
         };
 
         let meta_a =
@@ -315,6 +322,7 @@ fn rewrite_body(
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+            captures: vec![],
         };
         let v_opaque_meta = text_obf::emit_factory_dispatch_setup(
             &mut ctx,

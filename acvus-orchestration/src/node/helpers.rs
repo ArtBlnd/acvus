@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, RuntimeError, Stepped, Value};
+use acvus_interpreter::{Interpreter, LazyValue, PureValue, RuntimeError, Stepped, Value};
 use acvus_utils::{Astr, Interner, YieldHandle};
 use rustc_hash::FxHashMap;
 
@@ -22,7 +22,7 @@ pub async fn render_block_in_coroutine(
     loop {
         match inner.resume().await {
             Stepped::Emit(value) => {
-                let Value::String(s) = value else {
+                let Value::Pure(PureValue::String(s)) = value else {
                     panic!("render_block: expected String, got {value:?}");
                 };
                 output.push_str(&s);
@@ -76,7 +76,7 @@ pub async fn eval_script_in_coroutine(
                     .await;
                 request.resolve(value);
             }
-            Stepped::Done => return Ok(Value::Unit),
+            Stepped::Done => return Ok(Value::unit()),
             Stepped::Error(e) => return Err(e),
         }
     }
@@ -103,8 +103,8 @@ pub async fn expand_iterator_in_coroutine(
 
     let deque_vec;
     let all_items = match &evaluated {
-        Value::List(items) => items.as_slice(),
-        Value::Deque(deque) => {
+        Value::Lazy(LazyValue::List(items)) => items.as_slice(),
+        Value::Lazy(LazyValue::Deque(deque)) => {
             deque_vec = deque.as_slice();
             deque_vec
         }
@@ -154,23 +154,23 @@ pub fn content_to_value(interner: &Interner, items: &[crate::message::ContentIte
                 Content::Text(s) => (s.clone(), "text".to_string()),
                 Content::Blob { mime_type, data } => (data.clone(), mime_type.clone()),
             };
-            Value::Object(FxHashMap::from_iter([
-                (role_key, Value::String(item.role.clone())),
-                (content_key, Value::String(content_str)),
-                (content_type_key, Value::String(content_type_str)),
+            Value::object(FxHashMap::from_iter([
+                (role_key, Value::string(item.role.clone())),
+                (content_key, Value::string(content_str)),
+                (content_type_key, Value::string(content_type_str)),
             ]))
         })
         .collect();
-    Value::List(values)
+    Value::list(values)
 }
 
 pub fn value_to_tool_result(value: &Value) -> String {
     match value {
-        Value::String(s) => s.clone(),
-        Value::Object(obj) => {
+        Value::Pure(PureValue::String(s)) => s.clone(),
+        Value::Lazy(LazyValue::Object(obj)) => {
             // Try to find "content" key by iterating
             for v in obj.values() {
-                if let Value::String(s) = v {
+                if let Value::Pure(PureValue::String(s)) = v {
                     return s.clone();
                 }
             }

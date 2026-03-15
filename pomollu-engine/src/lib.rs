@@ -33,6 +33,7 @@ fn asset_context_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
         params: vec![Ty::String],
         ret: Box::new(Ty::Option(Box::new(Ty::String))),
         is_extern: true,
+        captures: vec![],
     });
     types
 }
@@ -685,8 +686,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
         .into_iter()
         .map(|(k, v)| {
             let cv: acvus_interpreter::ConcreteValue = v.into();
-            let pv = acvus_interpreter::PureValue::from_concrete(&cv, &interner);
-            (interner.intern(&k), Value::from_pure(pv))
+            (interner.intern(&k), Value::from_concrete(&cv, &interner))
         })
         .collect();
 
@@ -698,7 +698,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
             let mut output = String::new();
             for v in &emits {
                 match v {
-                    Value::String(s) => output.push_str(s),
+                    Value::Pure(acvus_interpreter::PureValue::String(s)) => output.push_str(s),
                     other => panic!("template emit: expected String, got {other:?}"),
                 }
             }
@@ -707,7 +707,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
         Mode::Script => {
             assert!(emits.len() <= 1, "script emitted {} values, expected at most 1", emits.len());
             match emits.into_iter().next() {
-                Some(v) => v.into_pure().to_concrete(&interner).into(),
+                Some(v) => v.to_concrete(&interner).into(),
                 None => JsConcreteValue::Unit,
             }
         }

@@ -5,7 +5,7 @@ mod schema;
 
 use std::fmt;
 
-use acvus_interpreter::Value;
+use acvus_interpreter::{LazyValue, PureValue, Value};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -36,19 +36,19 @@ impl ApiKind {
         interner: &Interner,
         item: &'a Value,
     ) -> (&'a str, &'a str, &'a str) {
-        let Value::Object(obj) = item else {
+        let Value::Lazy(LazyValue::Object(obj)) = item else {
             panic!("item_fields: expected Object, got {item:?}");
         };
         let role_key = interner.intern("role");
         let content_key = interner.intern("content");
         let content_type_key = interner.intern("content_type");
-        let Some(Value::String(role)) = obj.get(&role_key) else {
+        let Some(Value::Pure(PureValue::String(role))) = obj.get(&role_key) else {
             panic!("item_fields: missing or non-string 'role'");
         };
-        let Some(Value::String(content)) = obj.get(&content_key) else {
+        let Some(Value::Pure(PureValue::String(content))) = obj.get(&content_key) else {
             panic!("item_fields: missing or non-string 'content'");
         };
-        let Some(Value::String(content_type)) = obj.get(&content_type_key) else {
+        let Some(Value::Pure(PureValue::String(content_type))) = obj.get(&content_type_key) else {
             panic!("item_fields: missing or non-string 'content_type'");
         };
         (role.as_str(), content.as_str(), content_type.as_str())

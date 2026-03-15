@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process;
 
 use acvus_chat::ChatEngine;
-use acvus_interpreter::Value;
+use acvus_interpreter::{LazyValue, PureValue, Value};
 use acvus_mir::ty::Ty;
 use acvus_mir::context_registry::PartialContextTypeRegistry;
 use acvus_orchestration::{
@@ -286,19 +286,19 @@ async fn main() {
             let interner_clone = interner_clone.clone();
             async move {
                 if let Some(v) = context_args_astr.get(&name) {
-                    return Resolved::Turn(Value::String(v.clone()));
+                    return Resolved::Turn(Value::string(v.clone()));
                 }
                 if let Some(val) = defaults.get(&name) {
                     return Resolved::Turn(val.clone());
                 }
                 let name_str = interner_clone.resolve(name);
                 if render_only {
-                    return Resolved::Turn(Value::String(format!("(@{name_str})")));
+                    return Resolved::Turn(Value::string(format!("(@{name_str})")));
                 }
                 eprint!("{name_str}: ");
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                Resolved::Turn(Value::String(input.trim_end().to_string()))
+                Resolved::Turn(Value::string(input.trim_end().to_string()))
             }
         }
     };
@@ -378,11 +378,11 @@ async fn main() {
 
 fn format_output(interner: &Interner, value: &Value) -> String {
     match value {
-        Value::String(s) => s.clone(),
-        Value::Object(obj) => {
+        Value::Pure(PureValue::String(s)) => s.clone(),
+        Value::Lazy(LazyValue::Object(obj)) => {
             let content_key = interner.intern("content");
             match obj.get(&content_key) {
-                Some(Value::String(s)) => s.clone(),
+                Some(Value::Pure(PureValue::String(s))) => s.clone(),
                 _ => format!("{value:?}"),
             }
         }

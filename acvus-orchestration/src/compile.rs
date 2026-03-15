@@ -536,6 +536,7 @@ fn wrap_fn_ty(spec: &NodeSpec, ty: Ty) -> Ty {
             params: param_types,
             ret: Box::new(ty),
             is_extern: true,
+            captures: vec![],
         }
     } else {
         ty
@@ -712,7 +713,7 @@ pub fn compute_external_context_env(
 
     // ── Phase 3b: Validate purity — non-Ephemeral nodes must have pure stored types ──
     for (i, spec) in specs.iter().enumerate() {
-        if !matches!(spec.strategy.persistency, Persistency::Ephemeral) && !stored_types[i].is_pure() {
+        if !matches!(spec.strategy.persistency, Persistency::Ephemeral) && !stored_types[i].is_pureable() {
             let persistency_name = match &spec.strategy.persistency {
                 Persistency::Ephemeral => unreachable!(),
                 Persistency::Snapshot => "Snapshot",

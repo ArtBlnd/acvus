@@ -125,6 +125,7 @@ fn main() {
                 params,
                 ret: Box::new(def.ret.to_ty(&interner)),
                 is_extern: true,
+                captures: vec![],
             },
         );
     }

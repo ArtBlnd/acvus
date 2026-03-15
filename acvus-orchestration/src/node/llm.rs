@@ -85,7 +85,7 @@ where
                     eval_script_in_coroutine(&interner, &ck_script.module, &local, &handle)
                         .await?;
                 match val {
-                    Value::String(s) => Some(s),
+                    Value::Pure(acvus_interpreter::PureValue::String(s)) => Some(s),
                     _ => None,
                 }
             } else {
@@ -189,7 +189,7 @@ where
                                         .collect(),
                                     _ => FxHashMap::default(),
                                 };
-                                let tool_value = Value::Object(tool_args);
+                                let tool_value = Value::object(tool_args);
                                 let result = handle
                                     .request_extern_call(
                                         interner.intern(&binding.node),

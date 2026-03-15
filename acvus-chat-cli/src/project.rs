@@ -99,11 +99,11 @@ pub fn parse_context_entry(interner: &Interner, value: &toml::Value) -> ContextE
 /// Convert a TOML value to a runtime Value.
 pub fn toml_to_value(value: &toml::Value) -> Value {
     match value {
-        toml::Value::String(s) => Value::String(s.clone()),
-        toml::Value::Integer(n) => Value::Int(*n),
-        toml::Value::Float(f) => Value::Float(*f),
-        toml::Value::Boolean(b) => Value::Bool(*b),
-        _ => Value::String(value.to_string()),
+        toml::Value::String(s) => Value::string(s.clone()),
+        toml::Value::Integer(n) => Value::int(*n),
+        toml::Value::Float(f) => Value::float(*f),
+        toml::Value::Boolean(b) => Value::bool_(*b),
+        _ => Value::string(value.to_string()),
     }
 }
 

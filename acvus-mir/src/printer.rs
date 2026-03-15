@@ -744,6 +744,7 @@ mod tests {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
                 is_extern: true,
+                captures: vec![],
             },
         )]);
         let out = compile_and_dump(

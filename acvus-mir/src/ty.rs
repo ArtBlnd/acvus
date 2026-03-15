@@ -26,6 +26,20 @@ impl Polarity {
     }
 }
 
+/// 3-tier purity classification for types.
+///
+/// `Pure` — scalars that can cross context boundaries as-is.
+/// `Lazy` — containers, closures, iterators — need deep inspection to determine pureability.
+/// `Unpure` — opaque types that can never be purified.
+///
+/// `Ord` derive: `Pure < Lazy < Unpure`, so `max()` gives the least-pure tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Purity {
+    Pure,
+    Lazy,
+    Unpure,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(pub u32);
 
@@ -65,6 +79,7 @@ pub enum Ty {
         params: Vec<Ty>,
         ret: Box<Ty>,
         is_extern: bool,
+        captures: Vec<Ty>,
     },
     Byte,
     /// Opaque type: user-defined, identified by name. No internal structure.
@@ -101,6 +116,7 @@ impl Ty {
 
     /// Returns true if this type can be represented as a `PureValue` at runtime.
     /// Non-pure types (Fn, Opaque) can only be used in restricted contexts (e.g. call-only).
+    #[deprecated(note = "use purity() or is_pureable()")]
     pub fn is_pure(&self) -> bool {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
@@ -114,6 +130,41 @@ impl Ty {
                 p.as_ref().map_or(true, |ty| ty.is_pure())
             }),
             Ty::Fn { .. } | Ty::Opaque(_) | Ty::Iterator(_) | Ty::Sequence(..) => false,
+            Ty::Var(_) | Ty::Infer | Ty::Error => true,
+        }
+    }
+
+    /// Returns the purity tier of this type (shallow — does not recurse into containers).
+    pub fn purity(&self) -> Purity {
+        match self {
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
+            | Ty::Range | Ty::Byte => Purity::Pure,
+            Ty::List(_) | Ty::Deque(..) | Ty::Object(_) | Ty::Tuple(_)
+            | Ty::Fn { .. } | Ty::Iterator(_) | Ty::Sequence(..)
+            | Ty::Option(_) | Ty::Enum { .. } => Purity::Lazy,
+            Ty::Opaque(_) => Purity::Unpure,
+            Ty::Var(_) | Ty::Infer | Ty::Error => Purity::Pure,
+        }
+    }
+
+    /// Returns true if this type can be deeply converted to a pure representation.
+    /// Transitively checks container contents — `List<Fn>` returns false.
+    pub fn is_pureable(&self) -> bool {
+        match self {
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
+            | Ty::Range | Ty::Byte => true,
+            Ty::List(inner) | Ty::Iterator(inner) => inner.is_pureable(),
+            Ty::Deque(inner, _) | Ty::Sequence(inner, _) => inner.is_pureable(),
+            Ty::Option(inner) => inner.is_pureable(),
+            Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
+            Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
+            Ty::Enum { variants, .. } => variants.values().all(|p| {
+                p.as_ref().map_or(true, |ty| ty.is_pureable())
+            }),
+            Ty::Fn { captures, ret, .. } => {
+                captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
+            }
+            Ty::Opaque(_) => false,
             Ty::Var(_) | Ty::Infer | Ty::Error => true,
         }
     }
@@ -170,7 +221,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ")")
             }
-            Ty::Fn { params, ret, is_extern } => {
+            Ty::Fn { params, ret, is_extern, captures: _ } => {
                 let prefix = if *is_extern { "ExternFn(" } else { "Fn(" };
                 write!(f, "{prefix}")?;
                 for (i, p) in params.iter().enumerate() {
@@ -328,10 +379,11 @@ impl TySubst {
                 Ty::Object(resolved)
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
-            Ty::Fn { params, ret, is_extern } => Ty::Fn {
+            Ty::Fn { params, ret, is_extern, captures } => Ty::Fn {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(ret)),
                 is_extern: *is_extern,
+                captures: captures.iter().map(|c| self.resolve(c)).collect(),
             },
             Ty::Enum { name, variants } => {
                 let resolved: FxHashMap<_, _> = variants
@@ -680,11 +732,13 @@ impl TySubst {
                     params: pa,
                     ret: ra,
                     is_extern: ea,
+                    captures: _,
                 },
                 Ty::Fn {
                     params: pb,
                     ret: rb,
                     is_extern: eb,
+                    captures: _,
                 },
             ) => {
                 if ea != eb || pa.len() != pb.len() {
@@ -723,8 +777,10 @@ impl TySubst {
             Ty::Option(inner) => self.occurs_in(var, inner),
             Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(var, e)),
             Ty::Object(fields) => fields.values().any(|v| self.occurs_in(var, v)),
-            Ty::Fn { params, ret, .. } => {
-                params.iter().any(|p| self.occurs_in(var, p)) || self.occurs_in(var, ret)
+            Ty::Fn { params, ret, captures, .. } => {
+                params.iter().any(|p| self.occurs_in(var, p))
+                    || self.occurs_in(var, ret)
+                    || captures.iter().any(|c| self.occurs_in(var, c))
             }
             Ty::Enum { variants, .. } => variants
                 .values()
@@ -788,11 +844,13 @@ mod tests {
             params: vec![t.clone()],
             ret: Box::new(u.clone()),
             is_extern: false,
+                captures: vec![],
         };
         let fn_int_bool = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Bool),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_tu, &fn_int_bool, Covariant).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
@@ -806,11 +864,13 @@ mod tests {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+                captures: vec![],
         };
         let fn2 = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn1, &fn2, Invariant).is_err());
     }
@@ -1196,11 +1256,13 @@ mod tests {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o1)),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![Ty::Deque(Box::new(Ty::Int), o2)],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -1438,21 +1500,25 @@ mod tests {
             params: vec![Ty::Deque(Box::new(Ty::Int), o)],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let inner_fn_b = Ty::Fn {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let outer_a = Ty::Fn {
             params: vec![inner_fn_a],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let outer_b = Ty::Fn {
             params: vec![inner_fn_b],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&outer_a, &outer_b, Covariant).is_ok());
     }
@@ -1467,21 +1533,25 @@ mod tests {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let inner_fn_b = Ty::Fn {
             params: vec![Ty::Deque(Box::new(Ty::Int), o)],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let outer_a = Ty::Fn {
             params: vec![inner_fn_a],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let outer_b = Ty::Fn {
             params: vec![inner_fn_b],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&outer_a, &outer_b, Covariant).is_err());
     }
@@ -1496,11 +1566,13 @@ mod tests {
             params: vec![],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o)),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -1515,11 +1587,13 @@ mod tests {
             params: vec![Ty::Deque(Box::new(Ty::Int), o)],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -1534,11 +1608,13 @@ mod tests {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![Ty::Deque(Box::new(Ty::Int), o)],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -1773,6 +1849,7 @@ mod tests {
             params: vec![],
             ret: Box::new(v.clone()),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&v, &cyclic, Covariant).is_err());
     }
@@ -1827,11 +1904,13 @@ mod tests {
             params: vec![Ty::List(Box::new(Ty::Int))],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o1)),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![Ty::Deque(Box::new(Ty::Int), o2)],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
             is_extern: false,
+                captures: vec![],
         };
         let a = Ty::List(Box::new(fn_a));
         let b = Ty::List(Box::new(fn_b));
@@ -1987,6 +2066,7 @@ mod tests {
             ],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![
@@ -1995,6 +2075,7 @@ mod tests {
             ],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -2013,6 +2094,7 @@ mod tests {
             ],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![
@@ -2021,6 +2103,7 @@ mod tests {
             ],
             ret: Box::new(Ty::Unit),
             is_extern: false,
+                captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -2306,12 +2389,15 @@ mod tests {
                         params: vec![inner_param],
                         ret: Box::new(Ty::Unit),
                         is_extern: false,
+                                        captures: vec![],
                     }],
                     ret: Box::new(Ty::Unit),
                     is_extern: false,
+                                captures: vec![],
                 }],
                 ret: Box::new(Ty::Unit),
                 is_extern: false,
+                        captures: vec![],
             }
         };
         let a = mk(Ty::Deque(Box::new(Ty::Int), o));
@@ -2333,12 +2419,15 @@ mod tests {
                         params: vec![inner_param],
                         ret: Box::new(Ty::Unit),
                         is_extern: false,
+                                        captures: vec![],
                     }],
                     ret: Box::new(Ty::Unit),
                     is_extern: false,
+                                captures: vec![],
                 }],
                 ret: Box::new(Ty::Unit),
                 is_extern: false,
+                        captures: vec![],
             }
         };
         let a = mk(Ty::List(Box::new(Ty::Int)));
@@ -2536,5 +2625,525 @@ mod tests {
         // In a chain_seq signature, both args share the same origin var.
         // If called with different concrete origins, unification of origins fails.
         assert!(s.unify_origins(o1, o2).is_err());
+    }
+
+    // ── Purity tier tests ──────────────────────────────────────────────
+
+    #[test]
+    fn purity_scalars_are_pure() {
+        assert_eq!(Ty::Int.purity(), Purity::Pure);
+        assert_eq!(Ty::Float.purity(), Purity::Pure);
+        assert_eq!(Ty::String.purity(), Purity::Pure);
+        assert_eq!(Ty::Bool.purity(), Purity::Pure);
+        assert_eq!(Ty::Unit.purity(), Purity::Pure);
+        assert_eq!(Ty::Range.purity(), Purity::Pure);
+        assert_eq!(Ty::Byte.purity(), Purity::Pure);
+    }
+
+    #[test]
+    fn purity_containers_are_lazy() {
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        assert_eq!(Ty::List(Box::new(Ty::Int)).purity(), Purity::Lazy);
+        assert_eq!(Ty::Deque(Box::new(Ty::Int), o).purity(), Purity::Lazy);
+        assert_eq!(Ty::Iterator(Box::new(Ty::Int)).purity(), Purity::Lazy);
+        assert_eq!(Ty::Sequence(Box::new(Ty::Int), o).purity(), Purity::Lazy);
+        assert_eq!(Ty::Option(Box::new(Ty::Int)).purity(), Purity::Lazy);
+        assert_eq!(Ty::Tuple(vec![Ty::Int]).purity(), Purity::Lazy);
+    }
+
+    #[test]
+    fn purity_object_is_lazy() {
+        let i = Interner::new();
+        let obj = Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)]));
+        assert_eq!(obj.purity(), Purity::Lazy);
+    }
+
+    #[test]
+    fn purity_fn_is_lazy() {
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::String),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert_eq!(fn_ty.purity(), Purity::Lazy);
+    }
+
+    #[test]
+    fn purity_extern_fn_is_lazy() {
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::String],
+            ret: Box::new(Ty::Int),
+            is_extern: true,
+            captures: vec![],
+        };
+        assert_eq!(fn_ty.purity(), Purity::Lazy);
+    }
+
+    #[test]
+    fn purity_enum_is_lazy() {
+        let i = Interner::new();
+        let enum_ty = Ty::Enum {
+            name: i.intern("Color"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Red"), None),
+                (i.intern("Green"), None),
+            ]),
+        };
+        assert_eq!(enum_ty.purity(), Purity::Lazy);
+    }
+
+    #[test]
+    fn purity_opaque_is_unpure() {
+        assert_eq!(Ty::Opaque("HttpResponse".into()).purity(), Purity::Unpure);
+    }
+
+    #[test]
+    fn purity_special_types() {
+        assert_eq!(Ty::Error.purity(), Purity::Pure);
+        assert_eq!(Ty::Infer.purity(), Purity::Pure);
+        assert_eq!(Ty::Var(TyVar(0)).purity(), Purity::Pure);
+    }
+
+    #[test]
+    fn purity_ord_pure_lt_lazy_lt_unpure() {
+        assert!(Purity::Pure < Purity::Lazy);
+        assert!(Purity::Lazy < Purity::Unpure);
+        assert!(Purity::Pure < Purity::Unpure);
+        // max() gives least-pure tier
+        assert_eq!(std::cmp::max(Purity::Pure, Purity::Lazy), Purity::Lazy);
+        assert_eq!(std::cmp::max(Purity::Lazy, Purity::Unpure), Purity::Unpure);
+        assert_eq!(std::cmp::max(Purity::Pure, Purity::Unpure), Purity::Unpure);
+    }
+
+    // ── is_pureable() transitive tests ─────────────────────────────────
+
+    #[test]
+    fn pureable_scalars() {
+        assert!(Ty::Int.is_pureable());
+        assert!(Ty::Float.is_pureable());
+        assert!(Ty::String.is_pureable());
+        assert!(Ty::Bool.is_pureable());
+        assert!(Ty::Unit.is_pureable());
+        assert!(Ty::Range.is_pureable());
+        assert!(Ty::Byte.is_pureable());
+    }
+
+    #[test]
+    fn pureable_list_of_scalars() {
+        assert!(Ty::List(Box::new(Ty::Int)).is_pureable());
+        assert!(Ty::List(Box::new(Ty::String)).is_pureable());
+    }
+
+    #[test]
+    fn pureable_list_of_fn_with_pure_captures() {
+        // Fn with empty captures and pure ret → pureable, so List<Fn> is also pureable.
+        let list_fn = Ty::List(Box::new(Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![],
+        }));
+        assert!(list_fn.is_pureable());
+    }
+
+    #[test]
+    fn pureable_list_of_fn_with_opaque_capture() {
+        // Fn with Opaque capture → not pureable, so List<Fn> is also not pureable.
+        let list_fn = Ty::List(Box::new(Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![Ty::Opaque("Handle".into())],
+        }));
+        assert!(!list_fn.is_pureable());
+    }
+
+    #[test]
+    fn pureable_list_of_opaque_is_not_pureable() {
+        let list_opaque = Ty::List(Box::new(Ty::Opaque("Handle".into())));
+        assert!(!list_opaque.is_pureable());
+    }
+
+    #[test]
+    fn pureable_nested_list_of_scalars() {
+        // List<List<Int>> — pureable
+        let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
+        assert!(nested.is_pureable());
+    }
+
+    #[test]
+    fn pureable_nested_list_of_fn_pure_captures() {
+        // List<List<Fn(Int) -> Int>> with empty captures — pureable
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![],
+        };
+        let nested = Ty::List(Box::new(Ty::List(Box::new(fn_ty))));
+        assert!(nested.is_pureable());
+    }
+
+    #[test]
+    fn pureable_nested_list_of_fn_opaque_capture() {
+        // List<List<Fn(Int) -> Int>> with Opaque capture — not pureable
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![Ty::Opaque("X".into())],
+        };
+        let nested = Ty::List(Box::new(Ty::List(Box::new(fn_ty))));
+        assert!(!nested.is_pureable());
+    }
+
+    #[test]
+    fn pureable_deque_of_scalars() {
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        assert!(Ty::Deque(Box::new(Ty::Int), o).is_pureable());
+    }
+
+    #[test]
+    fn pureable_deque_of_opaque() {
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        assert!(!Ty::Deque(Box::new(Ty::Opaque("X".into())), o).is_pureable());
+    }
+
+    #[test]
+    fn pureable_iterator_of_scalars() {
+        assert!(Ty::Iterator(Box::new(Ty::String)).is_pureable());
+    }
+
+    #[test]
+    fn pureable_iterator_of_fn_pure() {
+        // Fn with empty captures and pure ret → pureable
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(Ty::Iterator(Box::new(fn_ty)).is_pureable());
+    }
+
+    #[test]
+    fn pureable_iterator_of_fn_with_opaque() {
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Opaque("X".into())),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(!Ty::Iterator(Box::new(fn_ty)).is_pureable());
+    }
+
+    #[test]
+    fn pureable_sequence_of_scalars() {
+        let mut s = TySubst::new();
+        let o = s.fresh_concrete_origin();
+        assert!(Ty::Sequence(Box::new(Ty::Int), o).is_pureable());
+    }
+
+    #[test]
+    fn pureable_option_of_scalar() {
+        assert!(Ty::Option(Box::new(Ty::Int)).is_pureable());
+    }
+
+    #[test]
+    fn pureable_option_of_opaque() {
+        assert!(!Ty::Option(Box::new(Ty::Opaque("X".into()))).is_pureable());
+    }
+
+    #[test]
+    fn pureable_tuple_all_scalars() {
+        assert!(Ty::Tuple(vec![Ty::Int, Ty::String, Ty::Bool]).is_pureable());
+    }
+
+    #[test]
+    fn pureable_tuple_with_fn_pure() {
+        // Fn with no captures and pure ret → pureable
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(Ty::Tuple(vec![Ty::Int, fn_ty]).is_pureable());
+    }
+
+    #[test]
+    fn pureable_tuple_with_fn_opaque_capture() {
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            is_extern: false,
+            captures: vec![Ty::Opaque("X".into())],
+        };
+        assert!(!Ty::Tuple(vec![Ty::Int, fn_ty]).is_pureable());
+    }
+
+    #[test]
+    fn pureable_tuple_with_opaque() {
+        assert!(!Ty::Tuple(vec![Ty::Int, Ty::Opaque("X".into())]).is_pureable());
+    }
+
+    #[test]
+    fn pureable_object_all_scalars() {
+        let i = Interner::new();
+        let obj = Ty::Object(FxHashMap::from_iter([
+            (i.intern("x"), Ty::Int),
+            (i.intern("y"), Ty::String),
+        ]));
+        assert!(obj.is_pureable());
+    }
+
+    #[test]
+    fn pureable_object_with_fn_pure() {
+        // Fn with no captures, pure ret → object is pureable
+        let i = Interner::new();
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![],
+        };
+        let obj = Ty::Object(FxHashMap::from_iter([
+            (i.intern("x"), Ty::Int),
+            (i.intern("callback"), fn_ty),
+        ]));
+        assert!(obj.is_pureable());
+    }
+
+    #[test]
+    fn pureable_object_with_fn_opaque_capture() {
+        let i = Interner::new();
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![Ty::Opaque("X".into())],
+        };
+        let obj = Ty::Object(FxHashMap::from_iter([
+            (i.intern("x"), Ty::Int),
+            (i.intern("callback"), fn_ty),
+        ]));
+        assert!(!obj.is_pureable());
+    }
+
+    #[test]
+    fn pureable_object_with_opaque_value() {
+        let i = Interner::new();
+        let obj = Ty::Object(FxHashMap::from_iter([
+            (i.intern("handle"), Ty::Opaque("Handle".into())),
+        ]));
+        assert!(!obj.is_pureable());
+    }
+
+    #[test]
+    fn pureable_enum_all_scalar_payloads() {
+        let i = Interner::new();
+        let enum_ty = Ty::Enum {
+            name: i.intern("Result"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Ok"), Some(Box::new(Ty::Int))),
+                (i.intern("Err"), Some(Box::new(Ty::String))),
+            ]),
+        };
+        assert!(enum_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_enum_no_payload() {
+        let i = Interner::new();
+        let enum_ty = Ty::Enum {
+            name: i.intern("Color"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Red"), None),
+                (i.intern("Green"), None),
+            ]),
+        };
+        assert!(enum_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_enum_with_fn_pure_payload() {
+        // Fn with no captures, pure ret → enum is pureable
+        let i = Interner::new();
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            is_extern: false,
+            captures: vec![],
+        };
+        let enum_ty = Ty::Enum {
+            name: i.intern("Wrap"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Some"), Some(Box::new(fn_ty))),
+                (i.intern("None"), None),
+            ]),
+        };
+        assert!(enum_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_enum_with_fn_opaque_capture_payload() {
+        let i = Interner::new();
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            is_extern: false,
+            captures: vec![Ty::Opaque("X".into())],
+        };
+        let enum_ty = Ty::Enum {
+            name: i.intern("Wrap"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Some"), Some(Box::new(fn_ty))),
+                (i.intern("None"), None),
+            ]),
+        };
+        assert!(!enum_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_enum_with_opaque_payload() {
+        let i = Interner::new();
+        let enum_ty = Ty::Enum {
+            name: i.intern("Wrap"),
+            variants: FxHashMap::from_iter([
+                (i.intern("Some"), Some(Box::new(Ty::Opaque("X".into())))),
+            ]),
+        };
+        assert!(!enum_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_pure_captures_and_ret() {
+        // Fn with captures=[Int, String] and ret=Bool → pureable
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+            is_extern: false,
+            captures: vec![Ty::Int, Ty::String],
+        };
+        assert!(fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_opaque_capture() {
+        // Fn with captures=[Opaque] → not pureable
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+            is_extern: false,
+            captures: vec![Ty::Opaque("Handle".into())],
+        };
+        assert!(!fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_fn_capture() {
+        // Fn with captures=[Fn(Int)->Int (no captures)] → pureable (Fn with empty captures + pure ret)
+        let inner_fn = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![],
+        };
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+            is_extern: false,
+            captures: vec![inner_fn],
+        };
+        assert!(fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_opaque_ret() {
+        // Fn returning Opaque → not pureable
+        let fn_ty = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Opaque("Handle".into())),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(!fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_list_int_ret() {
+        // Fn returning List<Int> → pureable
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::List(Box::new(Ty::Int))),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_fn_with_list_fn_ret() {
+        // Fn returning List<Fn(Int)->Int> → not pureable (transitive)
+        let inner_fn = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+            is_extern: false,
+            captures: vec![Ty::Opaque("X".into())], // inner Fn captures Opaque
+        };
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::List(Box::new(inner_fn))),
+            is_extern: false,
+            captures: vec![],
+        };
+        assert!(!fn_ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_opaque_never() {
+        assert!(!Ty::Opaque("Conn".into()).is_pureable());
+        assert!(!Ty::Opaque("Handle".into()).is_pureable());
+    }
+
+    #[test]
+    fn pureable_mixed_tuple_list_option() {
+        // (Int, List<String>, Option<Bool>) — all pureable
+        let ty = Ty::Tuple(vec![
+            Ty::Int,
+            Ty::List(Box::new(Ty::String)),
+            Ty::Option(Box::new(Ty::Bool)),
+        ]);
+        assert!(ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_mixed_tuple_list_opaque() {
+        // (Int, List<Opaque>) — not pureable
+        let ty = Ty::Tuple(vec![
+            Ty::Int,
+            Ty::List(Box::new(Ty::Opaque("X".into()))),
+        ]);
+        assert!(!ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_deeply_nested_containers() {
+        // List<Option<Tuple<(Int, List<String>)>>> — pureable
+        let inner = Ty::Tuple(vec![Ty::Int, Ty::List(Box::new(Ty::String))]);
+        let ty = Ty::List(Box::new(Ty::Option(Box::new(inner))));
+        assert!(ty.is_pureable());
+    }
+
+    #[test]
+    fn pureable_deeply_nested_with_opaque_leaf() {
+        // List<Option<Tuple<(Int, Opaque)>>> — not pureable
+        let inner = Ty::Tuple(vec![Ty::Int, Ty::Opaque("X".into())]);
+        let ty = Ty::List(Box::new(Ty::Option(Box::new(inner))));
+        assert!(!ty.is_pureable());
     }
 }

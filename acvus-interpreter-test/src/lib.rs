@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, PureValue, Stepped, Value};
+use acvus_interpreter::{Interpreter, Stepped, Value};
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
@@ -34,7 +34,7 @@ fn emits_to_string(emits: Vec<Value>) -> String {
     let mut output = String::new();
     for v in emits {
         match v {
-            Value::String(s) => output.push_str(&s),
+            Value::Pure(acvus_interpreter::PureValue::String(s)) => output.push_str(&s),
             other => panic!("template emit: expected String, got {other:?}"),
         }
     }
@@ -158,7 +158,7 @@ pub async fn run_capturing_context_calls(
     loop {
         match coroutine.resume().await {
             Stepped::Emit(value) => match value {
-                Value::String(s) => output.push_str(&s),
+                Value::Pure(acvus_interpreter::PureValue::String(s)) => output.push_str(&s),
                 other => panic!("expected String, got {other:?}"),
             },
             Stepped::NeedContext(request) => {
@@ -240,7 +240,7 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
                 .map(|(k, v)| {
                     (
                         interner.intern(k),
-                        Value::from_pure(pv_from_json(&interner, v)),
+                        value_from_json(&interner, v),
                     )
                 })
                 .collect();
@@ -267,7 +267,7 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
     }
 }
 
-// ── JSON → Ty / PureValue conversion ────────────────────────────
+// ── JSON → Ty / Value conversion ────────────────────────────────
 
 /// Infer `Ty` from a JSON value.
 pub fn ty_from_json(interner: &Interner, v: &serde_json::Value) -> Ty {
@@ -299,28 +299,28 @@ pub fn ty_from_json(interner: &Interner, v: &serde_json::Value) -> Ty {
     }
 }
 
-/// Convert a JSON value to `PureValue`.
-pub fn pv_from_json(interner: &Interner, v: &serde_json::Value) -> PureValue {
+/// Convert a JSON value to `Value`.
+pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
     match v {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                PureValue::Int(i)
+                Value::int(i)
             } else {
-                PureValue::Float(n.as_f64().unwrap())
+                Value::float(n.as_f64().unwrap())
             }
         }
-        serde_json::Value::String(s) => PureValue::String(s.clone()),
-        serde_json::Value::Bool(b) => PureValue::Bool(*b),
+        serde_json::Value::String(s) => Value::string(s.clone()),
+        serde_json::Value::Bool(b) => Value::bool_(*b),
         serde_json::Value::Null => panic!("null is not a supported value"),
         serde_json::Value::Array(items) => {
-            PureValue::List(items.iter().map(|v| pv_from_json(interner, v)).collect())
+            Value::list(items.iter().map(|v| value_from_json(interner, v)).collect())
         }
         serde_json::Value::Object(fields) => {
             let obj = fields
                 .iter()
-                .map(|(k, v)| (interner.intern(k), pv_from_json(interner, v)))
+                .map(|(k, v)| (interner.intern(k), value_from_json(interner, v)))
                 .collect();
-            PureValue::Object(obj)
+            Value::object(obj)
         }
     }
 }
@@ -334,7 +334,7 @@ pub fn int_context(
 ) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     (
         FxHashMap::from_iter([(interner.intern(name), Ty::Int)]),
-        FxHashMap::from_iter([(interner.intern(name), Value::Int(value))]),
+        FxHashMap::from_iter([(interner.intern(name), Value::int(value))]),
     )
 }
 
@@ -345,7 +345,7 @@ pub fn string_context(
 ) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     (
         FxHashMap::from_iter([(interner.intern(name), Ty::String)]),
-        FxHashMap::from_iter([(interner.intern(name), Value::String(value.into()))]),
+        FxHashMap::from_iter([(interner.intern(name), Value::string(value.into()))]),
     )
 }
 
@@ -355,12 +355,12 @@ pub fn user_context(interner: &Interner) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr
         (interner.intern("age"), Ty::Int),
         (interner.intern("email"), Ty::String),
     ]));
-    let val = Value::Object(FxHashMap::from_iter([
-        (interner.intern("name"), Value::String("alice".into())),
-        (interner.intern("age"), Value::Int(30)),
+    let val = Value::object(FxHashMap::from_iter([
+        (interner.intern("name"), Value::string("alice".into())),
+        (interner.intern("age"), Value::int(30)),
         (
             interner.intern("email"),
-            Value::String("alice@example.com".into()),
+            Value::string("alice@example.com".into()),
         ),
     ]));
     (
@@ -374,14 +374,14 @@ pub fn users_list_context(interner: &Interner) -> (FxHashMap<Astr, Ty>, FxHashMa
         (interner.intern("name"), Ty::String),
         (interner.intern("age"), Ty::Int),
     ]))));
-    let val = Value::List(vec![
-        Value::Object(FxHashMap::from_iter([
-            (interner.intern("name"), Value::String("alice".into())),
-            (interner.intern("age"), Value::Int(30)),
+    let val = Value::list(vec![
+        Value::object(FxHashMap::from_iter([
+            (interner.intern("name"), Value::string("alice".into())),
+            (interner.intern("age"), Value::int(30)),
         ])),
-        Value::Object(FxHashMap::from_iter([
-            (interner.intern("name"), Value::String("bob".into())),
-            (interner.intern("age"), Value::Int(25)),
+        Value::object(FxHashMap::from_iter([
+            (interner.intern("name"), Value::string("bob".into())),
+            (interner.intern("age"), Value::int(25)),
         ])),
     ]);
     (
@@ -395,7 +395,7 @@ pub fn items_context(
     items: Vec<i64>,
 ) -> (FxHashMap<Astr, Ty>, FxHashMap<Astr, Value>) {
     let ty = Ty::List(Box::new(Ty::Int));
-    let val = Value::List(items.into_iter().map(Value::Int).collect());
+    let val = Value::list(items.into_iter().map(Value::int).collect());
     (
         FxHashMap::from_iter([(interner.intern("items"), ty)]),
         FxHashMap::from_iter([(interner.intern("items"), val)]),

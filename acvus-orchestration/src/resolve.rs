@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, RuntimeError, Stepped, Value};
+use acvus_interpreter::{Interpreter, LazyValue, PureValue, RuntimeError, Stepped, Value};
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
 use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner, TrackedDeque};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -285,7 +285,7 @@ where
                             "coroutine finished without emit"
                         );
                     }
-                    self.handle_emit(task_id, Value::Unit, &mut lp, state)?;
+                    self.handle_emit(task_id, Value::unit(), &mut lp, state)?;
                 }
                 Stepped::NeedContext(request) => {
                     self.handle_need_context(task_id, coroutine, request, &mut lp, state)
@@ -478,7 +478,7 @@ where
         if let Some(&dep_idx) = self.name_to_idx.get(&name) {
             // 3a. Function node → ExternFn handle
             if self.nodes[dep_idx].is_function {
-                request.resolve(Arc::new(Value::ExternFn(name)));
+                request.resolve(Arc::new(Value::extern_fn(name)));
                 lp.enqueue_step(task_id, coroutine);
                 return Ok(());
             }
@@ -530,7 +530,7 @@ where
         // 4b. @turn_index — derived from tree depth
         if name == self.interner.intern("turn_index") {
             let depth = state.entry.depth();
-            request.resolve(Arc::new(Value::Int(depth as i64)));
+            request.resolve(Arc::new(Value::int(depth as i64)));
             lp.enqueue_step(task_id, coroutine);
             return Ok(());
         }
@@ -567,7 +567,7 @@ where
                 let node = &self.nodes[dep_idx];
                 let dep_local: FxHashMap<Astr, Arc<Value>> = if node.is_function {
                     // Tool call args come as a single Object — unpack fields by name.
-                    if let Some(Value::Object(obj)) = args.first() {
+                    if let Some(Value::Lazy(LazyValue::Object(obj))) = args.first() {
                         node.fn_params
                             .iter()
                             .filter_map(|p| {
@@ -583,7 +583,7 @@ where
                             .map(|(p, val)| (p.name, Arc::new(val)))
                             .collect()
                     }
-                } else if let Some(Value::Object(obj)) = args.first() {
+                } else if let Some(Value::Lazy(LazyValue::Object(obj))) = args.first() {
                     obj.iter()
                         .map(|(k, v)| (*k, Arc::new(v.clone())))
                         .collect()
@@ -695,7 +695,7 @@ where
             } => {
                 let node_name_str = self.interner.resolve(self.nodes[node_idx].name);
 
-                let Value::Bool(passed) = value else {
+                let Value::Pure(PureValue::Bool(passed)) = value else {
                     return Err(ResolveError::Runtime {
                         node: node_name_str.to_string(),
                         error: RuntimeError::type_mismatch(
@@ -735,7 +735,7 @@ where
                 // what @node_name should resolve to for other nodes.
                 let stored_value = match &node.strategy.persistency {
                     CompiledPersistency::Deque { .. } => {
-                        let Value::Deque(deque) = value else {
+                        let Value::Lazy(LazyValue::Deque(deque)) = value else {
                             panic!(
                                 "bind script for deque node '{}' returned non-Deque value",
                                 node_name_str,
@@ -743,7 +743,7 @@ where
                         };
                         let origin = origin.expect("deque mode must have origin");
                         let (squashed, diff) = deque.into_diff(&origin);
-                        let stored = Value::Deque(squashed.clone());
+                        let stored = Value::deque(squashed.clone());
                         state.entry.apply(
                             node_name_str,
                             StorageDiff::Deque { squashed, diff },
@@ -803,14 +803,14 @@ where
             let self_val = match &node.strategy.persistency {
                 CompiledPersistency::Deque { .. } => {
                     let deque = match prev {
-                        Value::Deque(d) => d,
-                        Value::List(items) => TrackedDeque::from_vec(items),
+                        Value::Lazy(LazyValue::Deque(d)) => d,
+                        Value::Lazy(LazyValue::List(items)) => TrackedDeque::from_vec(items),
                         _ => panic!("deque mode @self: expected Deque or List"),
                     };
                     origin = Some(deque.clone());
                     let mut working = deque;
                     working.checkpoint();
-                    Value::Deque(working)
+                    Value::deque(working)
                 }
                 _ => prev,
             };
@@ -821,7 +821,7 @@ where
             origin = Some(deque.clone());
             let mut working = deque;
             working.checkpoint();
-            locals.insert(interner.intern("self"), Arc::new(Value::Deque(working)));
+            locals.insert(interner.intern("self"), Arc::new(Value::deque(working)));
         }
 
         // @raw = this turn's raw output. Strictly bind-internal — never

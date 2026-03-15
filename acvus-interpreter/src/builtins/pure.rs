@@ -1,13 +1,13 @@
-use crate::value::Value;
+use crate::value::{LazyValue, PureValue, Value};
 
 pub(crate) fn builtin_to_string(v: Value) -> Value {
-    Value::String(value_to_string(v))
+    Value::string(value_to_string(v))
 }
 
 pub(crate) fn builtin_to_int(v: Value) -> Value {
     match v {
-        Value::Float(f) => Value::Int(f as i64),
-        Value::Byte(b) => Value::Int(b as i64),
+        Value::Pure(PureValue::Float(f)) => Value::int(f as i64),
+        Value::Pure(PureValue::Byte(b)) => Value::int(b as i64),
         _ => unreachable!("to_int: expected Float or Byte, got {v:?}"),
     }
 }
@@ -50,7 +50,7 @@ pub(crate) fn builtin_len_str(s: String) -> i64 {
 }
 
 pub(crate) fn builtin_to_bytes(s: String) -> Value {
-    Value::List(s.into_bytes().into_iter().map(Value::Byte).collect())
+    Value::list(s.into_bytes().into_iter().map(Value::byte).collect())
 }
 
 pub(crate) fn builtin_to_utf8(bytes: Vec<u8>) -> Option<String> {
@@ -86,9 +86,9 @@ pub(crate) fn builtin_replace_str(s: String, from: String, to: String) -> String
 }
 
 pub(crate) fn builtin_split_str(s: String, sep: String) -> Value {
-    Value::List(
+    Value::list(
         s.split(&sep)
-            .map(|p| Value::String(p.to_string()))
+            .map(|p| Value::string(p.to_string()))
             .collect(),
     )
 }
@@ -123,11 +123,11 @@ pub(crate) fn builtin_unwrap(v: Value) -> Value {
     let some_tag = interner.intern("Some");
     let none_tag = interner.intern("None");
     match v {
-        Value::Variant {
+        Value::Lazy(LazyValue::Variant {
             tag,
             payload: Some(inner),
-        } if tag == some_tag => *inner,
-        Value::Variant { tag, .. } if tag == none_tag => {
+        }) if tag == some_tag => *inner,
+        Value::Lazy(LazyValue::Variant { tag, .. }) if tag == none_tag => {
             panic!("unwrap: called on None")
         }
         _ => panic!("unwrap: expected Option variant, got {v:?}"),
@@ -136,24 +136,24 @@ pub(crate) fn builtin_unwrap(v: Value) -> Value {
 
 fn value_to_string(v: Value) -> String {
     match v {
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => s,
-        Value::Bool(b) => b.to_string(),
-        Value::Byte(b) => b.to_string(),
-        Value::Unit => "()".to_string(),
+        Value::Pure(PureValue::Int(n)) => n.to_string(),
+        Value::Pure(PureValue::Float(f)) => f.to_string(),
+        Value::Pure(PureValue::String(s)) => s,
+        Value::Pure(PureValue::Bool(b)) => b.to_string(),
+        Value::Pure(PureValue::Byte(b)) => b.to_string(),
+        Value::Pure(PureValue::Unit) => "()".to_string(),
         _ => unreachable!("to_string: expected scalar or Unit, got {v:?}"),
     }
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Byte(a), Value::Byte(b)) => a == b,
-        (Value::Unit, Value::Unit) => true,
+        (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => a == b,
+        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => a == b,
+        (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => a == b,
+        (Value::Pure(PureValue::Bool(a)), Value::Pure(PureValue::Bool(b))) => a == b,
+        (Value::Pure(PureValue::Byte(a)), Value::Pure(PureValue::Byte(b))) => a == b,
+        (Value::Pure(PureValue::Unit), Value::Pure(PureValue::Unit)) => true,
         _ => unreachable!("values_equal: unsupported types ({a:?}, {b:?})"),
     }
 }

@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap;
 use crate::builtins;
 use crate::error::RuntimeError;
 use crate::iter::{IterChain, IterOp, SharedIter};
-use crate::value::{FnValue, Value};
+use crate::value::{FnValue, LazyValue, PureValue, Value};
 use acvus_utils::{Coroutine, Stepped, YieldHandle};
 
 pub struct Interpreter {
@@ -104,7 +104,7 @@ impl Frame {
         then: (&Label, &[ValueId]),
         else_: (&Label, &[ValueId]),
     ) -> usize {
-        let (label, args) = if matches!(self.get(cond), Value::Bool(true)) {
+        let (label, args) = if matches!(self.get(cond), Value::Pure(PureValue::Bool(true))) {
             then
         } else {
             else_
@@ -134,16 +134,16 @@ impl Frame {
 
     fn iter_init(&mut self, dst: ValueId, src: ValueId) {
         let state = match self.take_owned(src) {
-            Value::List(items) => IterState::List { items, pos: 0 },
-            Value::Deque(deque) => IterState::List {
+            Value::Lazy(LazyValue::List(items)) => IterState::List { items, pos: 0 },
+            Value::Lazy(LazyValue::Deque(deque)) => IterState::List {
                 items: deque.into_vec(),
                 pos: 0,
             },
-            Value::Range {
+            Value::Pure(PureValue::Range {
                 start,
                 end,
                 inclusive,
-            } => IterState::Range {
+            }) => IterState::Range {
                 current: start,
                 end,
                 inclusive,
@@ -151,7 +151,7 @@ impl Frame {
             v => panic!("IterInit: expected List or Range, got {v:?}"),
         };
         self.iters.insert(dst, state);
-        self.set_new(dst, Value::Unit);
+        self.set_new(dst, Value::unit());
     }
 
     fn iter_next(&mut self, dst_value: ValueId, dst_done: ValueId, iter: ValueId) {
@@ -166,21 +166,21 @@ impl Frame {
                 *pos += 1;
                 (val, false)
             }
-            IterState::List { .. } => (Value::Unit, true),
+            IterState::List { .. } => (Value::unit(), true),
             IterState::Range {
                 current,
                 end,
                 inclusive,
             } if (*inclusive && *current <= *end) || (!*inclusive && *current < *end) => {
-                let val = Value::Int(*current);
+                let val = Value::int(*current);
                 *current += 1;
                 (val, false)
             }
-            IterState::Range { .. } => (Value::Unit, true),
+            IterState::Range { .. } => (Value::unit(), true),
         };
 
         self.set_new(dst_value, value);
-        self.set_new(dst_done, Value::Bool(done));
+        self.set_new(dst_done, Value::bool_(done));
     }
 }
 
@@ -286,14 +286,14 @@ impl Interpreter {
                 }
                 InstKind::MakeList { dst, elements } => {
                     let items = frame.collect_args(elements);
-                    frame.set_new(*dst, Value::Deque(TrackedDeque::from_vec(items)));
+                    frame.set_new(*dst, Value::deque(TrackedDeque::from_vec(items)));
                 }
                 InstKind::MakeObject { dst, fields } => {
                     let obj: FxHashMap<Astr, Value> = fields
                         .iter()
                         .map(|(k, v)| (*k, frame.take_owned(*v)))
                         .collect();
-                    frame.set_new(*dst, Value::Object(obj));
+                    frame.set_new(*dst, Value::object(obj));
                 }
                 InstKind::MakeRange {
                     dst,
@@ -303,20 +303,16 @@ impl Interpreter {
                 } => {
                     let (s, e) = (frame.get(*start), frame.get(*end));
                     match (s, e) {
-                        (Value::Int(s), Value::Int(e)) => frame.set_new(
+                        (Value::Pure(PureValue::Int(s)), Value::Pure(PureValue::Int(e))) => frame.set_new(
                             *dst,
-                            Value::Range {
-                                start: *s,
-                                end: *e,
-                                inclusive: matches!(kind, RangeKind::InclusiveEnd),
-                            },
+                            Value::range(*s, *e, matches!(kind, RangeKind::InclusiveEnd)),
                         ),
                         _ => panic!("MakeRange: expected Int bounds"),
                     }
                 }
                 InstKind::MakeTuple { dst, elements } => {
                     let items = frame.collect_args(elements);
-                    frame.set_new(*dst, Value::Tuple(items));
+                    frame.set_new(*dst, Value::tuple(items));
                 }
                 InstKind::MakeClosure {
                     dst,
@@ -330,7 +326,7 @@ impl Interpreter {
                     );
                     frame.set_new(
                         *dst,
-                        Value::Fn(FnValue {
+                        Value::closure(FnValue {
                             body: closure_body,
                             captures: captured,
                         }),
@@ -399,7 +395,7 @@ impl Interpreter {
                 } => {
                     let items = expect_list(frame.get(*list), "ListSlice");
                     let end = items.len() - *skip_tail;
-                    frame.set_new(*dst, Value::List(items[*skip_head..end].to_vec()));
+                    frame.set_new(*dst, Value::list(items[*skip_head..end].to_vec()));
                 }
 
                 // -- variant --
@@ -407,23 +403,20 @@ impl Interpreter {
                     let p = payload.as_ref().map(|v| Box::new(frame.take_owned(*v)));
                     frame.set_new(
                         *dst,
-                        Value::Variant {
-                            tag: *tag,
-                            payload: p,
-                        },
+                        Value::variant(*tag, p),
                     );
                 }
                 InstKind::TestVariant { dst, src, tag } => {
-                    let Value::Variant { tag: t, .. } = frame.get(*src) else {
+                    let Value::Lazy(LazyValue::Variant { tag: t, .. }) = frame.get(*src) else {
                         panic!("TestVariant: expected Variant, got {:?}", frame.get(*src));
                     };
-                    frame.set_new(*dst, Value::Bool(*t == *tag));
+                    frame.set_new(*dst, Value::bool_(*t == *tag));
                 }
                 InstKind::UnwrapVariant { dst, src } => {
-                    let Value::Variant {
+                    let Value::Lazy(LazyValue::Variant {
                         payload: Some(inner),
                         ..
-                    } = frame.get(*src)
+                    }) = frame.get(*src)
                     else {
                         panic!(
                             "UnwrapVariant: expected Variant with payload, got {:?}",
@@ -436,7 +429,7 @@ impl Interpreter {
                 // -- pattern testing --
                 InstKind::TestLiteral { dst, src, value } => {
                     let eq = values_equal(frame.get(*src), &literal_to_value(value));
-                    frame.set_new(*dst, Value::Bool(eq));
+                    frame.set_new(*dst, Value::bool_(eq));
                 }
                 InstKind::TestListLen {
                     dst,
@@ -450,11 +443,11 @@ impl Interpreter {
                     } else {
                         items.len() >= *min_len
                     };
-                    frame.set_new(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::bool_(ok));
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
                     let ok = expect_object(frame.get(*src), "TestObjectKey").contains_key(key);
-                    frame.set_new(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::bool_(ok));
                 }
                 InstKind::TestRange {
                     dst,
@@ -469,7 +462,7 @@ impl Interpreter {
                         RangeKind::InclusiveEnd => n >= *start && n <= *end,
                         RangeKind::ExclusiveStart => n > *start && n <= *end,
                     };
-                    frame.set_new(*dst, Value::Bool(ok));
+                    frame.set_new(*dst, Value::bool_(ok));
                 }
 
                 // -- iteration --
@@ -516,13 +509,13 @@ impl Interpreter {
                 InstKind::ClosureCall { dst, closure, args } => {
                     let callee = frame.take_owned(*closure);
                     match callee {
-                        Value::Fn(fn_val) => {
+                        Value::Lazy(LazyValue::Fn(fn_val)) => {
                             let arg_values = frame.collect_args_arc(args);
                             let result;
                             (this, result) = Self::call_closure(this, fn_val, arg_values, handle).await?;
                             frame.set_new(*dst, result);
                         }
-                        Value::ExternFn(name) => {
+                        Value::Lazy(LazyValue::ExternFn(name)) => {
                             let arg_values = frame.collect_args(args);
                             let arc = handle.request_extern_call(name, arg_values).await;
                             frame.set_new(*dst, Arc::unwrap_or_clone(arc));
@@ -612,28 +605,28 @@ impl Interpreter {
             // -- Iterator constructors --
             BuiltinId::Reverse => {
                 let mut items = match args.remove(0) {
-                    Value::List(items) => items,
-                    Value::Deque(d) => d.into_vec(),
+                    Value::Lazy(LazyValue::List(items)) => items,
+                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     other => panic!("reverse: expected List or Deque, got {other:?}"),
                 };
                 items.reverse();
-                Ok((this, Value::List(items)))
+                Ok((this, Value::list(items)))
             }
             BuiltinId::Iter => {
                 let items = match args.remove(0) {
-                    Value::List(items) => items,
-                    Value::Deque(d) => d.into_vec(),
+                    Value::Lazy(LazyValue::List(items)) => items,
+                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     other => panic!("iter: expected List or Deque, got {other:?}"),
                 };
-                Ok((this, Value::Iterator(SharedIter::from_list(items))))
+                Ok((this, Value::iterator(SharedIter::from_list(items))))
             }
             BuiltinId::RevIter => {
                 let items = match args.remove(0) {
-                    Value::List(items) => items,
-                    Value::Deque(d) => d.into_vec(),
+                    Value::Lazy(LazyValue::List(items)) => items,
+                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     other => panic!("rev_iter: expected List or Deque, got {other:?}"),
                 };
-                Ok((this, Value::Iterator(SharedIter::from_list_rev(items))))
+                Ok((this, Value::iterator(SharedIter::from_list_rev(items))))
             }
             BuiltinId::Collect => {
                 let shared = args.remove(0).into_shared_iter();
@@ -641,39 +634,39 @@ impl Interpreter {
             }
             BuiltinId::Take => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Int(n) = args.remove(0) else {
+                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("take: expected Int")
                 };
-                Ok((this, Value::Iterator(shared.take(n as usize))))
+                Ok((this, Value::iterator(shared.take(n as usize))))
             }
             BuiltinId::Skip => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Int(n) = args.remove(0) else {
+                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("skip: expected Int")
                 };
-                Ok((this, Value::Iterator(shared.skip(n as usize))))
+                Ok((this, Value::iterator(shared.skip(n as usize))))
             }
             BuiltinId::Chain => {
                 let a = args.remove(0).into_shared_iter();
                 let b = args.remove(0).into_shared_iter();
-                Ok((this, Value::Iterator(a.chain(b))))
+                Ok((this, Value::iterator(a.chain(b))))
             }
 
             // -- Iterator operations --
             BuiltinId::Flatten | BuiltinId::FlattenIter => {
                 let shared = args.remove(0).into_shared_iter();
-                Ok((this, Value::Iterator(shared.flatten())))
+                Ok((this, Value::iterator(shared.flatten())))
             }
             BuiltinId::FlatMap | BuiltinId::FlatMapIter => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("flat_map: expected Fn")
                 };
-                Ok((this, Value::Iterator(shared.flat_map(f))))
+                Ok((this, Value::iterator(shared.flat_map(f))))
             }
             BuiltinId::Join | BuiltinId::JoinIter => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::String(sep) = args.remove(0) else {
+                let Value::Pure(PureValue::String(sep)) = args.remove(0) else {
                     panic!("join: expected String separator")
                 };
                 let items;
@@ -681,82 +674,82 @@ impl Interpreter {
                 let parts: Vec<String> = items
                     .into_iter()
                     .map(|v| match v {
-                        Value::String(s) => s,
+                        Value::Pure(PureValue::String(s)) => s,
                         _ => panic!("join: element is not String"),
                     })
                     .collect();
-                Ok((this, Value::String(parts.join(&sep))))
+                Ok((this, Value::string(parts.join(&sep))))
             }
             // -- Lazy Sequence HOFs (return Sequence) --
             BuiltinId::MapSeq | BuiltinId::PmapSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("map: expected Fn")
                 };
-                Ok((this, Value::Sequence(shared.map(f))))
+                Ok((this, Value::sequence(shared.map(f))))
             }
             BuiltinId::FilterSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("filter: expected Fn")
                 };
-                Ok((this, Value::Sequence(shared.filter(f))))
+                Ok((this, Value::sequence(shared.filter(f))))
             }
             BuiltinId::TakeSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Int(n) = args.remove(0) else {
+                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("take: expected Int")
                 };
-                Ok((this, Value::Sequence(shared.take(n as usize))))
+                Ok((this, Value::sequence(shared.take(n as usize))))
             }
             BuiltinId::SkipSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Int(n) = args.remove(0) else {
+                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("skip: expected Int")
                 };
-                Ok((this, Value::Sequence(shared.skip(n as usize))))
+                Ok((this, Value::sequence(shared.skip(n as usize))))
             }
             BuiltinId::ChainSeq => {
                 let a = args.remove(0).into_shared_iter();
                 let b = args.remove(0).into_shared_iter();
-                Ok((this, Value::Sequence(a.chain(b))))
+                Ok((this, Value::sequence(a.chain(b))))
             }
             BuiltinId::FlattenSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                Ok((this, Value::Sequence(shared.flatten())))
+                Ok((this, Value::sequence(shared.flatten())))
             }
             BuiltinId::FlatMapSeq | BuiltinId::FlatMapIterSeq => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("flat_map: expected Fn")
                 };
-                Ok((this, Value::Sequence(shared.flat_map(f))))
+                Ok((this, Value::sequence(shared.flat_map(f))))
             }
             BuiltinId::CollectSeq => {
                 let shared = args.remove(0).into_shared_iter();
                 let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                Ok((this, Value::Deque(TrackedDeque::from_vec(items))))
+                Ok((this, Value::deque(TrackedDeque::from_vec(items))))
             }
             BuiltinId::RevSeq => {
                 let shared = args.remove(0).into_shared_iter();
                 let (this, mut items) = Self::exec_collect_vec(this, shared, handle).await?;
                 items.reverse();
-                Ok((this, Value::Sequence(SharedIter::from_list(items))))
+                Ok((this, Value::sequence(SharedIter::from_list(items))))
             }
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("map: expected Fn")
                 };
-                Ok((this, Value::Iterator(shared.map(f))))
+                Ok((this, Value::iterator(shared.map(f))))
             }
             BuiltinId::Filter => {
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Fn(f) = args.remove(0) else {
+                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("filter: expected Fn")
                 };
-                Ok((this, Value::Iterator(shared.filter(f))))
+                Ok((this, Value::iterator(shared.filter(f))))
             }
 
             // -- Consuming HOFs (collect then apply) --
@@ -765,7 +758,7 @@ impl Interpreter {
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Fn(f) = fn_val else {
+                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
                     panic!("find: expected Fn")
                 };
                 Self::exec_hof_find_inner(this, items, f, handle).await
@@ -775,7 +768,7 @@ impl Interpreter {
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Fn(f) = fn_val else {
+                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
                     panic!("reduce: expected Fn")
                 };
                 Self::exec_hof_reduce_inner(this, items, f, handle).await
@@ -786,7 +779,7 @@ impl Interpreter {
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Fn(f) = fn_val else {
+                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
                     panic!("fold: expected Fn")
                 };
                 Self::exec_hof_fold_inner(this, items, init, f, handle).await
@@ -796,7 +789,7 @@ impl Interpreter {
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Fn(f) = fn_val else {
+                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
                     panic!("any: expected Fn")
                 };
                 Self::exec_hof_any_inner(this, items, f, handle).await
@@ -806,7 +799,7 @@ impl Interpreter {
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Fn(f) = fn_val else {
+                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
                     panic!("all: expected Fn")
                 };
                 Self::exec_hof_all_inner(this, items, f, handle).await
@@ -816,33 +809,33 @@ impl Interpreter {
             BuiltinId::Append => {
                 let list = args.remove(0);
                 let item = args.remove(0);
-                let Value::Deque(mut deque) = list else {
+                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
                     panic!("append: expected Deque, got {list:?}")
                 };
                 deque.push(item);
-                Ok((this, Value::Deque(deque)))
+                Ok((this, Value::deque(deque)))
             }
             BuiltinId::Extend => {
                 let list = args.remove(0);
                 let shared = args.remove(0).into_shared_iter();
-                let Value::Deque(mut deque) = list else {
+                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
                     panic!("extend: expected Deque as first arg")
                 };
                 let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
                 deque.extend(items);
-                Ok((this, Value::Deque(deque)))
+                Ok((this, Value::deque(deque)))
             }
             BuiltinId::Consume => {
                 let list = args.remove(0);
                 let n_val = args.remove(0);
-                let Value::Deque(mut deque) = list else {
+                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
                     panic!("consume: expected Deque as first arg")
                 };
-                let Value::Int(n) = n_val else {
+                let Value::Pure(PureValue::Int(n)) = n_val else {
                     panic!("consume: expected Int as second arg")
                 };
                 deque.consume(n as usize);
-                Ok((this, Value::Deque(deque)))
+                Ok((this, Value::deque(deque)))
             }
         }
     }
@@ -893,7 +886,7 @@ impl Interpreter {
                             handle,
                         )
                         .await?;
-                        if matches!(keep, Value::Bool(true)) {
+                        if matches!(keep, Value::Pure(PureValue::Bool(true))) {
                             result.push(Arc::unwrap_or_clone(arc_item));
                         }
                     }
@@ -914,8 +907,8 @@ impl Interpreter {
                     let mut result = Vec::new();
                     for item in items {
                         match item {
-                            Value::List(inner) => result.extend(inner),
-                            Value::Deque(d) => result.extend(d.into_vec()),
+                            Value::Lazy(LazyValue::List(inner)) => result.extend(inner),
+                            Value::Lazy(LazyValue::Deque(d)) => result.extend(d.into_vec()),
                             other => result.push(other),
                         }
                     }
@@ -933,8 +926,8 @@ impl Interpreter {
                         )
                         .await?;
                         match mapped {
-                            Value::List(inner) => result.extend(inner),
-                            Value::Deque(d) => result.extend(d.into_vec()),
+                            Value::Lazy(LazyValue::List(inner)) => result.extend(inner),
+                            Value::Lazy(LazyValue::Deque(d)) => result.extend(d.into_vec()),
                             other => result.push(other),
                         }
                     }
@@ -953,7 +946,7 @@ impl Interpreter {
         handle: &'a YieldHandle<Value>,
     ) -> Result<(Self, Value), RuntimeError> {
         let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-        Ok((this, Value::List(items)))
+        Ok((this, Value::list(items)))
     }
 
     async fn exec_collect_vec<'a>(
@@ -986,7 +979,7 @@ impl Interpreter {
             (this, matched) =
                 Self::call_closure(this, fn_val.clone(), vec![Arc::clone(&arc_item)], handle)
                     .await?;
-            if matches!(matched, Value::Bool(true)) {
+            if matches!(matched, Value::Pure(PureValue::Bool(true))) {
                 return Ok((this, Arc::unwrap_or_clone(arc_item)));
             }
         }
@@ -1045,11 +1038,11 @@ impl Interpreter {
             let result;
             (this, result) =
                 Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await?;
-            if matches!(result, Value::Bool(true)) {
-                return Ok((this, Value::Bool(true)));
+            if matches!(result, Value::Pure(PureValue::Bool(true))) {
+                return Ok((this, Value::bool_(true)));
             }
         }
-        Ok((this, Value::Bool(false)))
+        Ok((this, Value::bool_(false)))
     }
 
     async fn exec_hof_all_inner<'a>(
@@ -1062,11 +1055,11 @@ impl Interpreter {
             let result;
             (this, result) =
                 Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await?;
-            if matches!(result, Value::Bool(false)) {
-                return Ok((this, Value::Bool(false)));
+            if matches!(result, Value::Pure(PureValue::Bool(false))) {
+                return Ok((this, Value::bool_(false)));
             }
         }
-        Ok((this, Value::Bool(true)))
+        Ok((this, Value::bool_(true)))
     }
 
     // -- closure invocation ---------------------------------------------------
@@ -1102,29 +1095,29 @@ impl Interpreter {
 
 fn expect_list<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
     match v {
-        Value::List(items) => items,
-        Value::Deque(d) => d.as_slice(),
+        Value::Lazy(LazyValue::List(items)) => items,
+        Value::Lazy(LazyValue::Deque(d)) => d.as_slice(),
         _ => panic!("{ctx}: expected List, got {v:?}"),
     }
 }
 
 fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a FxHashMap<Astr, Value> {
     match v {
-        Value::Object(fields) => fields,
+        Value::Lazy(LazyValue::Object(fields)) => fields,
         _ => panic!("{ctx}: expected Object, got {v:?}"),
     }
 }
 
 fn expect_tuple<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
     match v {
-        Value::Tuple(elems) => elems,
+        Value::Lazy(LazyValue::Tuple(elems)) => elems,
         _ => panic!("{ctx}: expected Tuple, got {v:?}"),
     }
 }
 
 fn expect_int(v: &Value, ctx: &str) -> i64 {
     match v {
-        Value::Int(n) => *n,
+        Value::Pure(PureValue::Int(n)) => *n,
         _ => panic!("{ctx}: expected Int, got {v:?}"),
     }
 }
@@ -1135,34 +1128,34 @@ fn expect_int(v: &Value, ctx: &str) -> i64 {
 
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
-        Literal::Int(n) => Value::Int(*n),
-        Literal::Float(f) => Value::Float(*f),
-        Literal::String(s) => Value::String(s.clone()),
-        Literal::Bool(b) => Value::Bool(*b),
-        Literal::Byte(b) => Value::Byte(*b),
+        Literal::Int(n) => Value::int(*n),
+        Literal::Float(f) => Value::float(*f),
+        Literal::String(s) => Value::string(s.clone()),
+        Literal::Bool(b) => Value::bool_(*b),
+        Literal::Byte(b) => Value::byte(*b),
         Literal::List(elems) => {
-            Value::Deque(TrackedDeque::from_vec(elems.iter().map(literal_to_value).collect()))
+            Value::deque(TrackedDeque::from_vec(elems.iter().map(literal_to_value).collect()))
         }
     }
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Byte(a), Value::Byte(b)) => a == b,
-        (Value::Unit, Value::Unit) => true,
+        (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => a == b,
+        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => a == b,
+        (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => a == b,
+        (Value::Pure(PureValue::Bool(a)), Value::Pure(PureValue::Bool(b))) => a == b,
+        (Value::Pure(PureValue::Byte(a)), Value::Pure(PureValue::Byte(b))) => a == b,
+        (Value::Pure(PureValue::Unit), Value::Pure(PureValue::Unit)) => true,
         (
-            Value::Variant {
+            Value::Lazy(LazyValue::Variant {
                 tag: ta,
                 payload: pa,
-            },
-            Value::Variant {
+            }),
+            Value::Lazy(LazyValue::Variant {
                 tag: tb,
                 payload: pb,
-            },
+            }),
         ) => {
             ta == tb
                 && match (pa, pb) {
@@ -1178,63 +1171,63 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
     match op {
         BinOp::And => {
-            Value::Bool(matches!(left, Value::Bool(true)) && matches!(right, Value::Bool(true)))
+            Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) && matches!(right, Value::Pure(PureValue::Bool(true))))
         }
         BinOp::Or => {
-            Value::Bool(matches!(left, Value::Bool(true)) || matches!(right, Value::Bool(true)))
+            Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) || matches!(right, Value::Pure(PureValue::Bool(true))))
         }
         BinOp::Add => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            (Value::String(a), Value::String(b)) => {
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_add(*b)),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a + b),
+            (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => {
                 let mut s = a.clone();
                 s.push_str(b);
-                Value::String(s)
+                Value::string(s)
             }
             (l, r) => panic!("Add: incompatible {l:?} + {r:?}"),
         },
         BinOp::Sub => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(*b)),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_sub(*b)),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a - b),
             (l, r) => panic!("Sub: incompatible {l:?} - {r:?}"),
         },
         BinOp::Mul => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(*b)),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_mul(*b)),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a * b),
             (l, r) => panic!("Mul: incompatible {l:?} * {r:?}"),
         },
         BinOp::Div => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a / b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a / b),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a / b),
             (l, r) => panic!("Div: incompatible {l:?} / {r:?}"),
         },
         BinOp::Mod => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a % b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a % b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a % b),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a % b),
             (l, r) => panic!("Mod: incompatible {l:?} % {r:?}"),
         },
         BinOp::Xor => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a ^ b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a ^ b),
             (l, r) => panic!("Xor: incompatible {l:?} ^ {r:?}"),
         },
         BinOp::BitAnd => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a & b),
             (l, r) => panic!("BitAnd: incompatible {l:?} & {r:?}"),
         },
         BinOp::BitOr => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a | b),
             (l, r) => panic!("BitOr: incompatible {l:?} | {r:?}"),
         },
         BinOp::Shl => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a << b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a << b),
             (l, r) => panic!("Shl: incompatible {l:?} << {r:?}"),
         },
         BinOp::Shr => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a >> b),
             (l, r) => panic!("Shr: incompatible {l:?} >> {r:?}"),
         },
-        BinOp::Eq => Value::Bool(values_equal(left, right)),
-        BinOp::Neq => Value::Bool(!values_equal(left, right)),
+        BinOp::Eq => Value::bool_(values_equal(left, right)),
+        BinOp::Neq => Value::bool_(!values_equal(left, right)),
         BinOp::Lt => cmp_values(left, right, Ordering::is_lt),
         BinOp::Gt => cmp_values(left, right, Ordering::is_gt),
         BinOp::Lte => cmp_values(left, right, Ordering::is_le),
@@ -1244,23 +1237,23 @@ fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
 
 fn cmp_values(left: &Value, right: &Value, f: fn(Ordering) -> bool) -> Value {
     let ord = match (left, right) {
-        (Value::Int(a), Value::Int(b)) => a.cmp(b),
-        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap(),
-        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => a.cmp(b),
+        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => a.partial_cmp(b).unwrap(),
+        (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => a.cmp(b),
         (l, r) => panic!("comparison: incompatible {l:?} vs {r:?}"),
     };
-    Value::Bool(f(ord))
+    Value::bool_(f(ord))
 }
 
 fn eval_unaryop(op: UnaryOp, operand: &Value) -> Value {
     match op {
         UnaryOp::Neg => match operand {
-            Value::Int(n) => Value::Int(-n),
-            Value::Float(f) => Value::Float(-f),
+            Value::Pure(PureValue::Int(n)) => Value::int(-n),
+            Value::Pure(PureValue::Float(f)) => Value::float(-f),
             v => panic!("Neg: expected numeric, got {v:?}"),
         },
         UnaryOp::Not => match operand {
-            Value::Bool(b) => Value::Bool(!b),
+            Value::Pure(PureValue::Bool(b)) => Value::bool_(!b),
             v => panic!("Not: expected Bool, got {v:?}"),
         },
     }

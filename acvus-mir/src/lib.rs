@@ -221,6 +221,7 @@ mod tests {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
                 is_extern: true,
+                captures: vec![],
             },
         )]));
         let result = compile_src(
@@ -420,6 +421,7 @@ mod tests {
                     params: vec![Ty::Int],
                     ret: Box::new(Ty::String),
                     is_extern: true,
+                    captures: vec![],
                 },
             ),
             (i.intern("items"), Ty::List(Box::new(Ty::Int))),
@@ -452,16 +454,16 @@ mod tests {
         assert!(result.is_ok(), "direct extern fn call should work: {result:?}");
     }
 
-    /// Bare load: `@mapper` without calling should fail (non-pure context load).
+    /// Bare load: `@mapper` without calling is now allowed (Fn is Lazy, not Unpure).
     #[test]
-    fn bare_extern_fn_load_fails() {
+    fn bare_extern_fn_load_ok() {
         let (i, reg) = extern_fn_context();
         let result = compile_src(
             &i,
             "{{ x = @mapper }}{{ x(1) }}{{_}}{{/}}",
             &reg,
         );
-        assert!(result.is_err(), "bare extern fn load should fail");
+        assert!(result.is_ok(), "bare extern fn load should succeed (Lazy tier): {result:?}");
     }
 
     /// Script: `@mapper(1)` should work.
@@ -473,13 +475,13 @@ mod tests {
         assert!(result.is_ok(), "script extern fn call should work: {result:?}");
     }
 
-    /// Script: bare `@mapper` as tail should fail.
+    /// Script: bare `@mapper` as tail is now allowed (Fn is Lazy, not Unpure).
     #[test]
-    fn script_bare_extern_fn_fails() {
+    fn script_bare_extern_fn_ok() {
         let (i, reg) = extern_fn_context();
         let script = acvus_ast::parse_script(&i, "@mapper").unwrap();
         let result = compile_script(&i, &script, &reg);
-        assert!(result.is_err(), "script bare extern fn should fail");
+        assert!(result.is_ok(), "script bare extern fn should succeed (Lazy tier): {result:?}");
     }
 
     /// Script pipe: `@items | @mapper` should work (pipe = call position).
@@ -493,6 +495,7 @@ mod tests {
                     params: vec![Ty::List(Box::new(Ty::Int))],
                     ret: Box::new(Ty::String),
                     is_extern: true,
+                    captures: vec![],
                 },
             ),
             (i.intern("items"), Ty::List(Box::new(Ty::Int))),

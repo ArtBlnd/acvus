@@ -3,32 +3,33 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::*;
+use crate::value::{LazyValue, PureValue};
 
 #[test]
 fn to_string_int() {
     assert!(
-        matches!(call_pure(BuiltinId::ToString, vec![Value::Int(42)]).unwrap(), Value::String(s) if s == "42")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::int(42)]).unwrap(), Value::Pure(PureValue::String(s)) if s == "42")
     );
 }
 
 #[test]
 fn to_string_float() {
     assert!(
-        matches!(call_pure(BuiltinId::ToString, vec![Value::Float(3.14)]).unwrap(), Value::String(s) if s == "3.14")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::float(3.14)]).unwrap(), Value::Pure(PureValue::String(s)) if s == "3.14")
     );
 }
 
 #[test]
 fn to_string_bool() {
     assert!(
-        matches!(call_pure(BuiltinId::ToString, vec![Value::Bool(true)]).unwrap(), Value::String(s) if s == "true")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::bool_(true)]).unwrap(), Value::Pure(PureValue::String(s)) if s == "true")
     );
 }
 
 #[test]
 fn to_string_string() {
     assert!(
-        matches!(call_pure(BuiltinId::ToString, vec![Value::String("hi".into())]).unwrap(), Value::String(s) if s == "hi")
+        matches!(call_pure(BuiltinId::ToString, vec![Value::string("hi".into())]).unwrap(), Value::Pure(PureValue::String(s)) if s == "hi")
     );
 }
 
@@ -37,7 +38,7 @@ fn to_string_string() {
 fn to_string_list_panics() {
     call_pure(
         BuiltinId::ToString,
-        vec![Value::List(vec![Value::Int(1), Value::Int(2)])],
+        vec![Value::list(vec![Value::int(1), Value::int(2)])],
     )
     .unwrap();
 }
@@ -48,9 +49,9 @@ fn to_string_object_panics() {
     let interner = Interner::new();
     call_pure(
         BuiltinId::ToString,
-        vec![Value::Object(FxHashMap::from_iter([(
+        vec![Value::object(FxHashMap::from_iter([(
             interner.intern("a"),
-            Value::Int(1),
+            Value::int(1),
         )]))],
     )
     .unwrap();
@@ -59,15 +60,15 @@ fn to_string_object_panics() {
 #[test]
 fn to_int_float() {
     assert!(matches!(
-        call_pure(BuiltinId::ToInt, vec![Value::Float(3.7)]).unwrap(),
-        Value::Int(3)
+        call_pure(BuiltinId::ToInt, vec![Value::float(3.7)]).unwrap(),
+        Value::Pure(PureValue::Int(3))
     ));
 }
 
 #[test]
 fn to_float_int() {
     assert!(
-        matches!(call_pure(BuiltinId::ToFloat, vec![Value::Int(5)]).unwrap(), Value::Float(f) if f == 5.0)
+        matches!(call_pure(BuiltinId::ToFloat, vec![Value::int(5)]).unwrap(), Value::Pure(PureValue::Float(f)) if f == 5.0)
     );
 }
 

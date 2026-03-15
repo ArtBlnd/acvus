@@ -92,7 +92,7 @@ where
                 .map_err(|e| RuntimeError::fetch(e.to_string()))?;
             debug!(cache_name = %cache_name, "llm_cache created");
 
-            handle.yield_val(Value::String(cache_name)).await;
+            handle.yield_val(Value::string(cache_name)).await;
             Ok(())
         })
     }

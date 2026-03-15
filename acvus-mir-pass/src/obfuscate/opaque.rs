@@ -395,11 +395,13 @@ fn make_closure_predicate(
         params: vec![Ty::Int],
         ret: Box::new(Ty::Int),
         is_extern: false,
+        captures: vec![],
     };
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
         is_extern: false,
+        captures: vec![],
     };
 
     // Load opaque meta table from variable (stores factory dispatch table).
@@ -643,11 +645,13 @@ fn make_dead_block(
                 params: vec![Ty::bytes(), Ty::Int],
                 ret: Box::new(Ty::String),
                 is_extern: false,
+                captures: vec![],
             };
             let factory_fn_ty = Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
                 is_extern: false,
+                captures: vec![],
             };
 
             let v_factory = ctx.alloc_val(factory_fn_ty);

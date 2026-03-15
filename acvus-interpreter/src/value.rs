@@ -9,11 +9,10 @@ use rustc_hash::FxHashMap;
 
 use crate::iter::SharedIter;
 
-/// Data-only value — no functions, no closures.
+/// Scalar-only data value — no containers, no functions, no closures.
 /// Cloneable, used at context boundaries.
 ///
 /// For serialization, convert to [`ConcreteValue`] via [`PureValue::to_concrete`].
-/// `Astr` fields require an interner for resolution.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PureValue {
     Int(i64),
@@ -26,14 +25,7 @@ pub enum PureValue {
         end: i64,
         inclusive: bool,
     },
-    List(Vec<PureValue>),
-    Object(FxHashMap<Astr, PureValue>),
-    Tuple(Vec<PureValue>),
     Byte(u8),
-    Variant {
-        tag: Astr,
-        payload: Option<Box<PureValue>>,
-    },
 }
 
 /// Serialization-safe mirror of [`PureValue`].
@@ -62,8 +54,7 @@ pub enum ConcreteValue {
 
 impl PureValue {
     /// Convert to a serialization-safe [`ConcreteValue`].
-    /// Every variant is matched explicitly — no `_` catch-all.
-    pub fn to_concrete(&self, interner: &acvus_utils::Interner) -> ConcreteValue {
+    pub fn to_concrete(&self, _interner: &acvus_utils::Interner) -> ConcreteValue {
         match self {
             PureValue::Int(v) => ConcreteValue::Int { v: *v },
             PureValue::Float(v) => ConcreteValue::Float { v: *v },
@@ -75,29 +66,13 @@ impl PureValue {
                 end: *end,
                 inclusive: *inclusive,
             },
-            PureValue::List(items) => ConcreteValue::List {
-                items: items.iter().map(|i| i.to_concrete(interner)).collect(),
-            },
-            PureValue::Object(fields) => ConcreteValue::Object {
-                fields: fields
-                    .iter()
-                    .map(|(k, v)| (interner.resolve(*k).to_string(), v.to_concrete(interner)))
-                    .collect(),
-            },
-            PureValue::Tuple(items) => ConcreteValue::Tuple {
-                items: items.iter().map(|i| i.to_concrete(interner)).collect(),
-            },
             PureValue::Byte(v) => ConcreteValue::Byte { v: *v },
-            PureValue::Variant { tag, payload } => ConcreteValue::Variant {
-                tag: interner.resolve(*tag).to_string(),
-                payload: payload.as_ref().map(|p| Box::new(p.to_concrete(interner))),
-            },
         }
     }
 
     /// Restore from a [`ConcreteValue`].
-    /// Every variant is matched explicitly — no `_` catch-all.
-    pub fn from_concrete(cv: &ConcreteValue, interner: &acvus_utils::Interner) -> Self {
+    /// Only handles scalar variants — container variants are handled by [`Value::from_concrete`].
+    pub fn from_concrete(cv: &ConcreteValue, _interner: &acvus_utils::Interner) -> Self {
         match cv {
             ConcreteValue::Int { v } => PureValue::Int(*v),
             ConcreteValue::Float { v } => PureValue::Float(*v),
@@ -109,65 +84,57 @@ impl PureValue {
                 end: *end,
                 inclusive: *inclusive,
             },
-            ConcreteValue::List { items } => PureValue::List(
-                items.iter().map(|i| PureValue::from_concrete(i, interner)).collect(),
-            ),
-            ConcreteValue::Object { fields } => PureValue::Object(
-                fields
-                    .iter()
-                    .map(|(k, v)| (interner.intern(k), PureValue::from_concrete(v, interner)))
-                    .collect(),
-            ),
-            ConcreteValue::Tuple { items } => PureValue::Tuple(
-                items.iter().map(|i| PureValue::from_concrete(i, interner)).collect(),
-            ),
             ConcreteValue::Byte { v } => PureValue::Byte(*v),
-            ConcreteValue::Variant { tag, payload } => PureValue::Variant {
-                tag: interner.intern(tag),
-                payload: payload.as_ref().map(|p| Box::new(PureValue::from_concrete(p, interner))),
-            },
+            _ => panic!("PureValue::from_concrete: container variants moved to Value::from_concrete"),
         }
     }
 }
 
-/// Runtime value — flat enum for fast dispatch.
-/// Includes everything PureValue has, plus Fn for closures.
-///
-/// `PartialEq` compares structural equality for data variants.
-/// `Fn` and `Opaque` are never equal (not comparable).
+/// Container and callable values — may contain any Value tier inside.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    String(String),
-    Bool(bool),
-    Unit,
-    Range {
-        start: i64,
-        end: i64,
-        inclusive: bool,
-    },
+pub enum LazyValue {
     List(Vec<Value>),
-    /// Tracked deque — origin-safe mutable list with diff tracking.
-    /// Produced by `[]` literals and deque builtins (append, extend, consume).
-    /// Use `into_diff()` after checkpoint to extract `OwnedDequeDiff`.
     Deque(TrackedDeque<Value>),
     Object(FxHashMap<Astr, Value>),
     Tuple(Vec<Value>),
-    Byte(u8),
-    Variant {
-        tag: Astr,
-        payload: Option<Box<Value>>,
-    },
+    Variant { tag: Astr, payload: Option<Box<Value>> },
     Fn(FnValue),
-    /// Opaque handle to an extern function, identified by name.
-    /// Produced by ContextLoad for extern/function-node entries.
     ExternFn(Astr),
-    Opaque(OpaqueValue),
-    /// Lazy iterator — deferred computation chain.
     Iterator(SharedIter),
-    /// Lazy sequence — deferred deque computation chain.
     Sequence(SharedIter),
+}
+
+/// Values that cannot cross context boundaries.
+#[derive(Clone)]
+pub enum UnpureValue {
+    Opaque(OpaqueValue),
+}
+
+impl fmt::Debug for UnpureValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnpureValue::Opaque(o) => write!(f, "{o:?}"),
+        }
+    }
+}
+
+impl PartialEq for UnpureValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UnpureValue::Opaque(a), UnpureValue::Opaque(b)) => a == b,
+        }
+    }
+}
+
+/// Runtime value — 3-tier enum for purity-aware dispatch.
+///
+/// `PartialEq` compares structural equality for data variants.
+/// `Fn`, `ExternFn`, and `Opaque` are never equal (not comparable).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Pure(PureValue),
+    Lazy(LazyValue),
+    Unpure(UnpureValue),
 }
 
 /// An opaque value: carries a type name and an arbitrary payload.
@@ -220,104 +187,125 @@ impl PartialEq for FnValue {
 }
 
 impl Value {
+    // --- Pure constructors ---
+    pub fn int(n: i64) -> Self { Value::Pure(PureValue::Int(n)) }
+    pub fn float(f: f64) -> Self { Value::Pure(PureValue::Float(f)) }
+    pub fn string(s: String) -> Self { Value::Pure(PureValue::String(s)) }
+    pub fn bool_(b: bool) -> Self { Value::Pure(PureValue::Bool(b)) }
+    pub fn unit() -> Self { Value::Pure(PureValue::Unit) }
+    pub fn byte(b: u8) -> Self { Value::Pure(PureValue::Byte(b)) }
+    pub fn range(start: i64, end: i64, inclusive: bool) -> Self {
+        Value::Pure(PureValue::Range { start, end, inclusive })
+    }
+
+    // --- Lazy constructors ---
+    pub fn list(items: Vec<Value>) -> Self { Value::Lazy(LazyValue::List(items)) }
+    pub fn deque(d: TrackedDeque<Value>) -> Self { Value::Lazy(LazyValue::Deque(d)) }
+    pub fn object(fields: FxHashMap<Astr, Value>) -> Self { Value::Lazy(LazyValue::Object(fields)) }
+    pub fn tuple(elems: Vec<Value>) -> Self { Value::Lazy(LazyValue::Tuple(elems)) }
+    pub fn variant(tag: Astr, payload: Option<Box<Value>>) -> Self {
+        Value::Lazy(LazyValue::Variant { tag, payload })
+    }
+    pub fn closure(fv: FnValue) -> Self { Value::Lazy(LazyValue::Fn(fv)) }
+    pub fn extern_fn(name: Astr) -> Self { Value::Lazy(LazyValue::ExternFn(name)) }
+    pub fn iterator(si: SharedIter) -> Self { Value::Lazy(LazyValue::Iterator(si)) }
+    pub fn sequence(si: SharedIter) -> Self { Value::Lazy(LazyValue::Sequence(si)) }
+
+    // --- Unpure constructors ---
+    pub fn opaque(ov: OpaqueValue) -> Self { Value::Unpure(UnpureValue::Opaque(ov)) }
+
     /// Coerce into a `SharedIter`.
     ///
     /// Mirrors the type-level `Deque → Iterator` coercion:
-    /// - `Value::Iterator` is returned as-is.
-    /// - `Value::List` (runtime repr of Deque) is converted via `SharedIter::from_list`.
+    /// - `LazyValue::Iterator` is returned as-is.
+    /// - `LazyValue::List` (runtime repr of Deque) is converted via `SharedIter::from_list`.
     ///
     /// Panics on any other variant.
     pub fn into_shared_iter(self) -> SharedIter {
         match self {
-            Value::Iterator(s) => s,
-            Value::Sequence(s) => s,
-            Value::List(items) => SharedIter::from_list(items),
-            Value::Deque(deque) => SharedIter::from_list(deque.into_vec()),
+            Value::Lazy(LazyValue::Iterator(s)) => s,
+            Value::Lazy(LazyValue::Sequence(s)) => s,
+            Value::Lazy(LazyValue::List(items)) => SharedIter::from_list(items),
+            Value::Lazy(LazyValue::Deque(deque)) => SharedIter::from_list(deque.into_vec()),
             other => panic!("into_shared_iter: expected Iterator, List, or Deque, got {other:?}"),
         }
     }
 
     /// Convert a PureValue into a Value. Infallible.
     pub fn from_pure(pure: PureValue) -> Self {
-        match pure {
-            PureValue::Int(v) => Value::Int(v),
-            PureValue::Float(v) => Value::Float(v),
-            PureValue::String(v) => Value::String(v),
-            PureValue::Bool(v) => Value::Bool(v),
-            PureValue::Unit => Value::Unit,
-            PureValue::Range {
-                start,
-                end,
-                inclusive,
-            } => Value::Range {
-                start,
-                end,
-                inclusive,
+        Value::Pure(pure)
+    }
+
+    /// Convert a storeable Value to ConcreteValue for serialization.
+    /// Panics on Unpure values (type checker guarantees this won't happen at boundaries).
+    pub fn to_concrete(&self, interner: &acvus_utils::Interner) -> ConcreteValue {
+        match self {
+            Value::Pure(pv) => match pv {
+                PureValue::Int(v) => ConcreteValue::Int { v: *v },
+                PureValue::Float(v) => ConcreteValue::Float { v: *v },
+                PureValue::String(v) => ConcreteValue::String { v: v.clone() },
+                PureValue::Bool(v) => ConcreteValue::Bool { v: *v },
+                PureValue::Unit => ConcreteValue::Unit,
+                PureValue::Range { start, end, inclusive } => ConcreteValue::Range {
+                    start: *start, end: *end, inclusive: *inclusive,
+                },
+                PureValue::Byte(v) => ConcreteValue::Byte { v: *v },
             },
-            PureValue::List(items) => {
-                Value::List(items.into_iter().map(Value::from_pure).collect())
-            }
-            PureValue::Object(fields) => Value::Object(
-                fields
-                    .into_iter()
-                    .map(|(k, v)| (k, Value::from_pure(v)))
-                    .collect(),
-            ),
-            PureValue::Tuple(elems) => {
-                Value::Tuple(elems.into_iter().map(Value::from_pure).collect())
-            }
-            PureValue::Byte(b) => Value::Byte(b),
-            PureValue::Variant { tag, payload } => Value::Variant {
-                tag,
-                payload: payload.map(|p| Box::new(Value::from_pure(*p))),
+            Value::Lazy(lv) => match lv {
+                LazyValue::List(items) => ConcreteValue::List {
+                    items: items.iter().map(|i| i.to_concrete(interner)).collect(),
+                },
+                LazyValue::Deque(deque) => ConcreteValue::List {
+                    items: deque.as_slice().iter().map(|i| i.to_concrete(interner)).collect(),
+                },
+                LazyValue::Object(fields) => ConcreteValue::Object {
+                    fields: fields.iter()
+                        .map(|(k, v)| (interner.resolve(*k).to_string(), v.to_concrete(interner)))
+                        .collect(),
+                },
+                LazyValue::Tuple(items) => ConcreteValue::Tuple {
+                    items: items.iter().map(|i| i.to_concrete(interner)).collect(),
+                },
+                LazyValue::Variant { tag, payload } => ConcreteValue::Variant {
+                    tag: interner.resolve(*tag).to_string(),
+                    payload: payload.as_ref().map(|p| Box::new(p.to_concrete(interner))),
+                },
+                LazyValue::Fn(_) => panic!("cannot convert Fn to ConcreteValue"),
+                LazyValue::ExternFn(_) => panic!("cannot convert ExternFn to ConcreteValue"),
+                LazyValue::Iterator(_) => panic!("cannot convert Iterator to ConcreteValue"),
+                LazyValue::Sequence(_) => panic!("cannot convert Sequence to ConcreteValue"),
+            },
+            Value::Unpure(uv) => match uv {
+                UnpureValue::Opaque(o) => panic!("cannot convert Opaque<{}> to ConcreteValue", o.type_name),
             },
         }
     }
 
-    /// Convert a Value into a PureValue.
-    /// Panics if the value contains Fn — the type checker guarantees this won't happen
-    /// at context boundaries.
-    pub fn into_pure(self) -> PureValue {
-        match self {
-            Value::Int(v) => PureValue::Int(v),
-            Value::Float(v) => PureValue::Float(v),
-            Value::String(v) => PureValue::String(v),
-            Value::Bool(v) => PureValue::Bool(v),
-            Value::Unit => PureValue::Unit,
-            Value::Range {
-                start,
-                end,
-                inclusive,
-            } => PureValue::Range {
-                start,
-                end,
-                inclusive,
-            },
-            Value::List(items) => {
-                PureValue::List(items.into_iter().map(Value::into_pure).collect())
-            }
-            Value::Object(fields) => PureValue::Object(
-                fields
-                    .into_iter()
-                    .map(|(k, v)| (k, v.into_pure()))
+    /// Restore a Value from a ConcreteValue.
+    pub fn from_concrete(cv: &ConcreteValue, interner: &acvus_utils::Interner) -> Value {
+        match cv {
+            ConcreteValue::Int { v } => Value::int(*v),
+            ConcreteValue::Float { v } => Value::float(*v),
+            ConcreteValue::String { v } => Value::string(v.clone()),
+            ConcreteValue::Bool { v } => Value::bool_(*v),
+            ConcreteValue::Unit => Value::unit(),
+            ConcreteValue::Range { start, end, inclusive } => Value::range(*start, *end, *inclusive),
+            ConcreteValue::List { items } => Value::list(
+                items.iter().map(|i| Value::from_concrete(i, interner)).collect(),
+            ),
+            ConcreteValue::Object { fields } => Value::object(
+                fields.iter()
+                    .map(|(k, v)| (interner.intern(k), Value::from_concrete(v, interner)))
                     .collect(),
             ),
-            Value::Tuple(elems) => {
-                PureValue::Tuple(elems.into_iter().map(Value::into_pure).collect())
-            }
-            Value::Byte(b) => PureValue::Byte(b),
-            Value::Variant { tag, payload } => PureValue::Variant {
-                tag,
-                payload: payload.map(|p| Box::new((*p).into_pure())),
-            },
-            Value::Deque(deque) => {
-                PureValue::List(deque.into_vec().into_iter().map(Value::into_pure).collect())
-            }
-            Value::Fn(_) => panic!("cannot convert Fn to PureValue"),
-            Value::ExternFn(_) => panic!("cannot convert ExternFn to PureValue"),
-            Value::Opaque(o) => panic!("cannot convert Opaque<{}> to PureValue", o.type_name),
-            Value::Iterator(_) => panic!("cannot convert Iterator to PureValue"),
-            Value::Sequence(_) => panic!("cannot convert Sequence to PureValue"),
+            ConcreteValue::Tuple { items } => Value::tuple(
+                items.iter().map(|i| Value::from_concrete(i, interner)).collect(),
+            ),
+            ConcreteValue::Byte { v } => Value::byte(*v),
+            ConcreteValue::Variant { tag, payload } => Value::variant(
+                interner.intern(tag),
+                payload.as_ref().map(|p| Box::new(Value::from_concrete(p, interner))),
+            ),
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::error::RuntimeError;
-use crate::value::Value;
+use crate::value::{LazyValue, PureValue, Value};
 
 // -- FromValue / IntoValue ------------------------------------------------
 
@@ -14,7 +14,7 @@ pub trait IntoValue {
 impl FromValue for i64 {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::Int(n) => n,
+            Value::Pure(PureValue::Int(n)) => n,
             _ => unreachable!("FromValue<i64>: expected Int, got {v:?}"),
         }
     }
@@ -23,7 +23,7 @@ impl FromValue for i64 {
 impl FromValue for f64 {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::Float(f) => f,
+            Value::Pure(PureValue::Float(f)) => f,
             _ => unreachable!("FromValue<f64>: expected Float, got {v:?}"),
         }
     }
@@ -32,7 +32,7 @@ impl FromValue for f64 {
 impl FromValue for String {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::String(s) => s,
+            Value::Pure(PureValue::String(s)) => s,
             _ => unreachable!("FromValue<String>: expected String, got {v:?}"),
         }
     }
@@ -41,7 +41,7 @@ impl FromValue for String {
 impl FromValue for bool {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::Bool(b) => b,
+            Value::Pure(PureValue::Bool(b)) => b,
             _ => unreachable!("FromValue<bool>: expected Bool, got {v:?}"),
         }
     }
@@ -50,7 +50,7 @@ impl FromValue for bool {
 impl FromValue for u8 {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::Byte(b) => b,
+            Value::Pure(PureValue::Byte(b)) => b,
             _ => unreachable!("FromValue<u8>: expected Byte, got {v:?}"),
         }
     }
@@ -62,8 +62,8 @@ where
 {
     fn from_value(v: Value) -> Self {
         match v {
-            Value::List(items) => items.into_iter().map(T::from_value).collect(),
-            Value::Deque(deque) => {
+            Value::Lazy(LazyValue::List(items)) => items.into_iter().map(T::from_value).collect(),
+            Value::Lazy(LazyValue::Deque(deque)) => {
                 deque.into_vec().into_iter().map(|v| T::from_value(v)).collect()
             }
             _ => unreachable!("FromValue<Vec<T>>: expected List, got {v:?}"),
@@ -79,31 +79,31 @@ impl FromValue for Value {
 
 impl IntoValue for i64 {
     fn into_value(self) -> Value {
-        Value::Int(self)
+        Value::int(self)
     }
 }
 
 impl IntoValue for f64 {
     fn into_value(self) -> Value {
-        Value::Float(self)
+        Value::float(self)
     }
 }
 
 impl IntoValue for String {
     fn into_value(self) -> Value {
-        Value::String(self)
+        Value::string(self)
     }
 }
 
 impl IntoValue for bool {
     fn into_value(self) -> Value {
-        Value::Bool(self)
+        Value::bool_(self)
     }
 }
 
 impl IntoValue for u8 {
     fn into_value(self) -> Value {
-        Value::Byte(self)
+        Value::byte(self)
     }
 }
 
@@ -121,14 +121,14 @@ where
         let interner = crate::interner_ctx::get_interner()
             .expect("IntoValue<Option>: requires interner context");
         match self {
-            Some(v) => Value::Variant {
-                tag: interner.intern("Some"),
-                payload: Some(Box::new(v.into_value())),
-            },
-            None => Value::Variant {
-                tag: interner.intern("None"),
-                payload: None,
-            },
+            Some(v) => Value::variant(
+                interner.intern("Some"),
+                Some(Box::new(v.into_value())),
+            ),
+            None => Value::variant(
+                interner.intern("None"),
+                None,
+            ),
         }
     }
 }
@@ -143,11 +143,11 @@ where
         let some_tag = interner.intern("Some");
         let none_tag = interner.intern("None");
         match v {
-            Value::Variant {
+            Value::Lazy(LazyValue::Variant {
                 tag,
                 payload: Some(inner),
-            } if tag == some_tag => Some(T::from_value(*inner)),
-            Value::Variant { tag, .. } if tag == none_tag => None,
+            }) if tag == some_tag => Some(T::from_value(*inner)),
+            Value::Lazy(LazyValue::Variant { tag, .. }) if tag == none_tag => None,
             _ => unreachable!("FromValue<Option<T>>: expected Variant, got {v:?}"),
         }
     }

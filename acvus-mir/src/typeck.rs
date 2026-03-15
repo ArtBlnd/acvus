@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::{BuiltinId, registry};
 use crate::error::{MirError, MirErrorKind};
-use crate::ty::{Polarity, Ty, TySubst};
+use crate::ty::{Polarity, Purity, Ty, TySubst};
 use crate::variant::VariantPayload;
 
 /// Maps each AST Span to its inferred type.
@@ -38,6 +38,10 @@ pub struct TypeChecker<'a> {
     errors: Vec<MirError>,
     /// Analysis mode: unknown contexts get fresh Vars instead of errors.
     analysis_mode: bool,
+    /// Scope depth when current lambda was entered. Lookups below this are captures.
+    lambda_scope_depth: Option<usize>,
+    /// Collected capture types for current lambda.
+    lambda_captures: Vec<Ty>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -56,6 +60,8 @@ impl<'a> TypeChecker<'a> {
             builtin_map: BuiltinMap::default(),
             errors: Vec::new(),
             analysis_mode: false,
+            lambda_scope_depth: None,
+            lambda_captures: vec![],
         }
     }
 
@@ -229,9 +235,14 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn lookup_var(&self, name: Astr) -> Option<Ty> {
-        for scope in self.scopes.iter().rev() {
+    fn lookup_var(&mut self, name: Astr) -> Option<Ty> {
+        for (depth, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(ty) = scope.get(&name) {
+                if let Some(lambda_depth) = self.lambda_scope_depth {
+                    if depth < lambda_depth {
+                        self.lambda_captures.push(ty.clone());
+                    }
+                }
                 return Some(ty.clone());
             }
         }
@@ -484,7 +495,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = match ref_kind {
                     RefKind::Context => {
                         let ty = self.resolve_context_type(*name, *span);
-                        if !allow_non_pure && !ty.is_pure() && !ty.is_error() {
+                        if !allow_non_pure && ty.purity() == Purity::Unpure && !ty.is_error() {
                             self.error(
                                 MirErrorKind::NonPureContextLoad {
                                     name: self.interner.resolve(*name).to_string(),
@@ -757,12 +768,27 @@ impl<'a> TypeChecker<'a> {
                     self.record(p.span, pt.clone());
                     param_types.push(pt);
                 }
-                let ret = self.check_expr(false,body);
+
+                // Save and setup capture tracker
+                let saved_depth = self.lambda_scope_depth.take();
+                let saved_captures = std::mem::take(&mut self.lambda_captures);
+                self.lambda_scope_depth = Some(self.scopes.len() - 1);
+
+                let ret = self.check_expr(false, body);
+
+                // Collect captures, restore tracker
+                let capture_types: Vec<Ty> = std::mem::replace(&mut self.lambda_captures, saved_captures)
+                    .into_iter()
+                    .map(|t| self.subst.resolve(&t))
+                    .collect();
+                self.lambda_scope_depth = saved_depth;
+
                 self.pop_scope();
                 let ty = Ty::Fn {
                     params: param_types,
                     ret: Box::new(ret),
                     is_extern: false,
+                    captures: capture_types,
                 };
                 self.record_ret(*span, ty)
             }
@@ -1114,6 +1140,7 @@ impl<'a> TypeChecker<'a> {
                     params: arg_types,
                     ret: Box::new(ret.clone()),
                     is_extern: false,
+                    captures: vec![],
                 };
                 if self.subst.unify(func_ty, &fn_ty, Polarity::Covariant).is_err() {
                     self.error(
@@ -1572,6 +1599,7 @@ mod tests {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
                 is_extern: true,
+                captures: vec![],
             },
         )]);
         let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
@@ -1693,6 +1721,7 @@ mod tests {
                 params: vec![Ty::String],
                 ret: Box::new(Ty::String),
                 is_extern: true,
+                captures: vec![],
             }),
             (interner.intern("name"), Ty::String),
         ])
@@ -1708,15 +1737,13 @@ mod tests {
     }
 
     #[test]
-    fn extern_fn_bare_ref_rejected() {
-        // f = @my_fn — bare reference to non-pure type is rejected.
+    fn extern_fn_bare_ref_allowed() {
+        // f = @my_fn — Fn is Lazy tier, allowed in non-call position.
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ f = @my_fn }}{{_}}{{/}}";
-        let err = check_with_interner(src, &ctx, &i);
-        assert!(err.is_err(), "bare reference to extern fn should be rejected");
-        let errors = err.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(&e.kind, MirErrorKind::NonPureContextLoad { .. })));
+        let result = check_with_interner(src, &ctx, &i);
+        assert!(result.is_ok(), "bare reference to extern fn should be allowed (Lazy tier): {result:?}");
     }
 
     #[test]
@@ -1737,6 +1764,7 @@ mod tests {
                 params: vec![Ty::String, Ty::Int],
                 ret: Box::new(Ty::String),
                 is_extern: true,
+                captures: vec![],
             }),
         ]);
         let src = r#"{{ "hello" | @my_fn(42) }}"#;
@@ -1749,6 +1777,202 @@ mod tests {
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ @name }}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    // ── 3-tier purity: Lazy context load tests ──
+
+    #[test]
+    fn lazy_list_context_load_ok() {
+        // @items : List<Int> — Lazy tier, allowed in non-call position.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
+        ]);
+        let src = "{{ x = @items }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_iterator_context_load_ok() {
+        // @it : Iterator<Int> — Lazy tier, allowed in non-call position.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("it"), Ty::Iterator(Box::new(Ty::Int))),
+        ]);
+        let src = "{{ x = @it }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_sequence_context_load_ok() {
+        // @seq : Sequence<Int, O> — Lazy tier, allowed.
+        let i = Interner::new();
+        let mut subst = TySubst::new();
+        let o = subst.fresh_concrete_origin();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("seq"), Ty::Sequence(Box::new(Ty::Int), o)),
+        ]);
+        let src = "{{ x = @seq }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_option_context_load_ok() {
+        // @opt : Option<Int> — Lazy tier, allowed.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("opt"), Ty::Option(Box::new(Ty::Int))),
+        ]);
+        let src = "{{ x = @opt }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_tuple_context_load_ok() {
+        // @pair : (Int, String) — Lazy tier, allowed.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String])),
+        ]);
+        let src = "{{ x = @pair }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_object_context_load_ok() {
+        // @obj : {x: Int} — Lazy tier, allowed.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("obj"), Ty::Object(FxHashMap::from_iter([
+                (i.intern("x"), Ty::Int),
+            ]))),
+        ]);
+        let src = "{{ x = @obj }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_fn_context_load_and_call_ok() {
+        // f = @callback; f(42) — store Fn in variable, then call.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("callback"), Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::String),
+                is_extern: true,
+                captures: vec![],
+            }),
+        ]);
+        let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lazy_list_of_fn_context_load_ok() {
+        // @fns : List<Fn(Int)->Int> — Lazy tier (List is Lazy), allowed.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("fns"), Ty::List(Box::new(Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Int),
+                is_extern: false,
+                captures: vec![],
+            }))),
+        ]);
+        let src = "{{ x = @fns }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    // ── Unpure context load tests (Opaque — must be rejected) ──
+
+    #[test]
+    fn unpure_opaque_context_load_rejected() {
+        // @conn : Opaque("Connection") — Unpure tier, rejected in non-call position.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("conn"), Ty::Opaque("Connection".into())),
+        ]);
+        let src = "{{ x = @conn }}{{_}}{{/}}";
+        let result = check_with_interner(src, &ctx, &i);
+        assert!(result.is_err(), "Opaque context load should be rejected");
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| matches!(&e.kind, MirErrorKind::NonPureContextLoad { .. })));
+    }
+
+    #[test]
+    fn unpure_opaque_in_argument_also_rejected() {
+        // @handler(@conn) — @conn is Opaque, rejected even in argument position.
+        // Arguments are checked with allow_non_pure=false.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("conn"), Ty::Opaque("Connection".into())),
+            (i.intern("handler"), Ty::Fn {
+                params: vec![Ty::Opaque("Connection".into())],
+                ret: Box::new(Ty::String),
+                is_extern: true,
+                captures: vec![],
+            }),
+        ]);
+        let src = "{{ @handler(@conn) }}";
+        let result = check_with_interner(src, &ctx, &i);
+        assert!(result.is_err(), "Opaque in argument should be rejected");
+    }
+
+    // ── Pure context load tests (scalars — always ok) ──
+
+    #[test]
+    fn pure_int_context_load_ok() {
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
+        let src = "{{ x = @count }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn pure_string_context_load_ok() {
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
+        let src = "{{ x = @msg }}{{_}}{{/}}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    // ── Lambda captures type tracking tests ──
+
+    #[test]
+    fn lambda_captures_outer_variable() {
+        // Lambda capturing an outer value should have captures tracked.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
+            (i.intern("threshold"), Ty::Int),
+        ]);
+        // threshold is captured by the lambda
+        let src = "{{ @items | filter(x -> x > @threshold) | collect | len | to_string }}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn lambda_no_capture_local_params() {
+        // Lambda params are local, not captures.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
+        ]);
+        let src = "{{ @items | map(x -> x + 1) | collect | len | to_string }}";
+        assert!(check_with_interner(src, &ctx, &i).is_ok());
+    }
+
+    #[test]
+    fn nested_lambda_captures() {
+        // Nested lambdas: inner captures from outer lambda's scope.
+        let i = Interner::new();
+        let ctx = FxHashMap::from_iter([
+            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
+            (i.intern("factor"), Ty::Int),
+        ]);
+        // Inner lambda captures @factor from context (not from outer lambda scope).
+        let src = "{{ @items | map(x -> x * @factor) | collect | len | to_string }}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
 }

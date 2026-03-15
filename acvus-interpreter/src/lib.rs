@@ -13,7 +13,7 @@ pub use builtins::{FromValue, IntoValue};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use interpreter::Interpreter;
 pub use iter::SharedIter;
-pub use value::{ConcreteValue, FnValue, OpaqueValue, PureValue, Value};
+pub use value::{ConcreteValue, FnValue, LazyValue, OpaqueValue, PureValue, UnpureValue, Value};
 
 /// Set the thread-local interner context for `IntoValue<Option>` / `FromValue<Option>`
 /// and `builtin_unwrap`. Must be called before executing extern fns that return Option.

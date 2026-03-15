@@ -34,7 +34,7 @@ impl Node for PlainNode {
             let output = super::helpers::render_block_in_coroutine(
                 &interner, &module, &local, &handle,
             ).await?;
-            handle.yield_val(Value::String(output)).await;
+            handle.yield_val(Value::string(output)).await;
             Ok(())
         })
     }

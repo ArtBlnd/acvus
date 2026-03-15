@@ -60,7 +60,7 @@ async fn dispatch_extern(
     let name_str = interner.resolve(name);
     match name_str {
         "asset_url" => {
-            let Value::String(ref path) = args[0] else {
+            let Value::Pure(acvus_interpreter::PureValue::String(ref path)) = args[0] else {
                 return Err(acvus_interpreter::RuntimeError::type_mismatch(
                     "asset_url", "String", &format!("{:?}", args[0]),
                 ));
@@ -269,7 +269,7 @@ impl ChatSession {
                 };
 
                 let s: String = value.as_string().unwrap_or_default();
-                Resolved::Turn(Value::String(s))
+                Resolved::Turn(Value::string(s))
             })
         };
 
@@ -293,7 +293,7 @@ impl ChatSession {
         self.engine.journal.flush_tree().await;
         save_cursor(&mut self.engine.journal, self.engine.cursor).await;
 
-        let concrete = result.into_pure().to_concrete(&self.interner);
+        let concrete = result.to_concrete(&self.interner);
         let jcv: JsConcreteValue = concrete.into();
 
         // Build TurnNode for the new cursor
@@ -335,8 +335,8 @@ impl ChatSession {
             match coroutine.resume().await {
                 Stepped::Emit(value) => {
                     let len = match value {
-                        Value::List(items) => items.len(),
-                        Value::Deque(deque) => deque.len(),
+                        Value::Lazy(acvus_interpreter::LazyValue::List(items)) => items.len(),
+                        Value::Lazy(acvus_interpreter::LazyValue::Deque(deque)) => deque.len(),
                         _ => return Ok(0),
                     };
                     return Ok(len);
@@ -489,7 +489,7 @@ impl ChatSession {
                 .entries()
                 .into_iter()
                 .map(|(k, v)| {
-                    let concrete = v.as_ref().clone().into_pure().to_concrete(&self.interner);
+                    let concrete = v.as_ref().clone().to_concrete(&self.interner);
                     (k, JsConcreteValue::from(concrete))
                 })
                 .collect(),
@@ -508,7 +508,7 @@ impl ChatSession {
                 .entries()
                 .into_iter()
                 .map(|(k, v)| {
-                    let concrete = v.as_ref().clone().into_pure().to_concrete(&self.interner);
+                    let concrete = v.as_ref().clone().to_concrete(&self.interner);
                     (k, JsConcreteValue::from(concrete))
                 })
                 .collect(),

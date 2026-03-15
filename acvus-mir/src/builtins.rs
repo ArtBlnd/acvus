@@ -203,7 +203,7 @@ fn sig_filter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false },
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
         ],
         Ty::Iterator(Box::new(t)),
     )
@@ -215,7 +215,7 @@ fn sig_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false },
+            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
         ],
         Ty::Iterator(Box::new(u)),
     )
@@ -244,7 +244,7 @@ fn sig_find(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false },
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
         ],
         t,
     )
@@ -255,7 +255,7 @@ fn sig_reduce(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()), is_extern: false },
+            Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()), is_extern: false, captures: vec![] },
         ],
         t,
     )
@@ -268,7 +268,7 @@ fn sig_fold(s: &mut TySubst) -> (Vec<Ty>, Ty) {
         vec![
             Ty::Iterator(Box::new(t.clone())),
             u.clone(),
-            Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()), is_extern: false },
+            Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
         ],
         u,
     )
@@ -279,7 +279,7 @@ fn sig_any(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool), is_extern: false },
+            Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
         ],
         Ty::Bool,
     )
@@ -325,6 +325,7 @@ fn sig_flat_map_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
                 params: vec![t],
                 ret: Box::new(Ty::List(Box::new(u.clone()))),
                 is_extern: false,
+                captures: vec![],
             },
         ],
         Ty::Iterator(Box::new(u)),
@@ -464,6 +465,7 @@ fn sig_flat_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
                 params: vec![t],
                 ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
                 is_extern: false,
+                captures: vec![],
             },
         ],
         Ty::Iterator(Box::new(u)),
@@ -536,7 +538,7 @@ fn sig_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Sequence(Box::new(t.clone()), o),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false },
+            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
         ],
         Ty::Sequence(Box::new(u), o2),
     )
@@ -553,7 +555,7 @@ fn sig_filter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (
         vec![
             Ty::Sequence(Box::new(t.clone()), o),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false },
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
         ],
         Ty::Sequence(Box::new(t), o2),
     )
@@ -582,6 +584,7 @@ fn sig_flat_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
                 params: vec![t],
                 ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
                 is_extern: false,
+                captures: vec![],
             },
         ],
         Ty::Sequence(Box::new(u), o2),
@@ -601,6 +604,7 @@ fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
                 params: vec![t],
                 ret: Box::new(Ty::List(Box::new(u.clone()))),
                 is_extern: false,
+                captures: vec![],
             },
         ],
         Ty::Sequence(Box::new(u), o2),
