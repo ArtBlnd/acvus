@@ -77,7 +77,9 @@ pub fn call_pure(id: BuiltinId, args: Vec<Value>) -> Result<Value, RuntimeError>
         | BuiltinId::FlatMapSeq
         | BuiltinId::FlatMapIterSeq
         | BuiltinId::CollectSeq
-        | BuiltinId::RevSeq => Err(RuntimeError::other(format!(
+        | BuiltinId::RevSeq
+        | BuiltinId::Next
+        | BuiltinId::NextSeq => Err(RuntimeError::other(format!(
             "not a pure builtin: {}",
             id.name()
         ))),

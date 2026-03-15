@@ -12,7 +12,7 @@ pub type ValueStepped = Stepped<TypedValue, RuntimeError>;
 pub use builtins::{FromValue, IntoValue};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use interpreter::Interpreter;
-pub use iter::{SequenceChain, SharedIter};
+pub use iter::{IterHandle, SequenceChain};
 pub use value::{ConcreteValue, FnValue, OpaqueValue, TypedValue, UnpureValue,PureValue, LazyValue, Value};
 
 /// Set the thread-local interner context for `IntoValue<Option>` / `FromValue<Option>`

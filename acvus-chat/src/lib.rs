@@ -124,7 +124,7 @@ where
                     rdeps: &self.rdeps,
                 };
 
-                ctx.resolve_node(self.entrypoint_idx, &mut rs, FxHashMap::default())
+                ctx.resolve_node(self.entrypoint_idx, &mut rs, FxHashMap::default(), false)
                     .await
                     .map_err(|e| ChatError::Resolve(format!("[entrypoint] {e}")))?;
 
@@ -135,7 +135,7 @@ where
                         .iter()
                         .map(|&idx| (idx, FxHashMap::default()))
                         .collect();
-                    ctx.resolve_nodes(side_effects, &mut rs)
+                    ctx.resolve_nodes(side_effects, &mut rs, false)
                         .await
                         .map_err(|e| ChatError::Resolve(format!("[side_effects] {e}")))?;
                 }

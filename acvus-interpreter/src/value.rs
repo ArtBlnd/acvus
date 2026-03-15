@@ -8,7 +8,7 @@ use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::{Astr, TrackedDeque};
 use rustc_hash::FxHashMap;
 
-use crate::iter::{SequenceChain, SharedIter};
+use crate::iter::{IterHandle, SequenceChain};
 
 /// Scalar-only data value — no containers, no functions, no closures.
 /// Cloneable, used at context boundaries.
@@ -101,7 +101,7 @@ pub enum LazyValue {
     Variant { tag: Astr, payload: Option<Box<Value>> },
     Fn(FnValue),
     ExternFn(Astr),
-    Iterator(SharedIter),
+    Iterator(IterHandle),
     Sequence(SequenceChain),
 }
 
@@ -209,26 +209,27 @@ impl Value {
     }
     pub fn closure(fv: FnValue) -> Self { Value::Lazy(LazyValue::Fn(fv)) }
     pub fn extern_fn(name: Astr) -> Self { Value::Lazy(LazyValue::ExternFn(name)) }
-    pub fn iterator(si: SharedIter) -> Self { Value::Lazy(LazyValue::Iterator(si)) }
+    pub fn iterator(ih: IterHandle) -> Self { Value::Lazy(LazyValue::Iterator(ih)) }
     pub fn sequence(sc: SequenceChain) -> Self { Value::Lazy(LazyValue::Sequence(sc)) }
 
     // --- Unpure constructors ---
     pub fn opaque(ov: OpaqueValue) -> Self { Value::Unpure(UnpureValue::Opaque(ov)) }
 
-    /// Coerce into a `SharedIter`.
+    /// Coerce into an `IterHandle`.
     ///
     /// Mirrors the type-level `Deque → Iterator` coercion:
     /// - `LazyValue::Iterator` is returned as-is.
-    /// - `LazyValue::List` (runtime repr of Deque) is converted via `SharedIter::from_list`.
+    /// - `LazyValue::List` / `LazyValue::Deque` are converted via `IterHandle::from_list`.
+    /// - `LazyValue::Sequence` is converted via `SequenceChain::into_iter_handle`.
     ///
     /// Panics on any other variant.
-    pub fn into_shared_iter(self) -> SharedIter {
+    pub fn into_iter_handle(self, effect: Effect) -> IterHandle {
         match self {
-            Value::Lazy(LazyValue::Iterator(s)) => s,
-            Value::Lazy(LazyValue::Sequence(sc)) => sc.into_shared_iter(),
-            Value::Lazy(LazyValue::List(items)) => SharedIter::from_list(items),
-            Value::Lazy(LazyValue::Deque(deque)) => SharedIter::from_list(deque.into_vec()),
-            other => panic!("into_shared_iter: expected Iterator, List, Sequence, or Deque, got {other:?}"),
+            Value::Lazy(LazyValue::Iterator(ih)) => ih,
+            Value::Lazy(LazyValue::Sequence(sc)) => sc.into_iter_handle(effect),
+            Value::Lazy(LazyValue::List(items)) => IterHandle::from_list(items, effect),
+            Value::Lazy(LazyValue::Deque(deque)) => IterHandle::from_list(deque.into_vec(), effect),
+            other => panic!("into_iter_handle: expected Iterator, List, Sequence, or Deque, got {other:?}"),
         }
     }
 

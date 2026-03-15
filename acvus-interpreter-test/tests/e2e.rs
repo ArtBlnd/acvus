@@ -3536,3 +3536,130 @@ async fn seq_chain_same_origin() {
         "10, 20, 40, 50"
     );
 }
+
+// ── next builtin ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn next_basic() {
+    // $iter is mutable, rebind inside each match block
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3] | iter }}{{ $out = "" }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + (x | to_string) + ", " }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + (x | to_string) + ", " }}{{ Some((x, _)) = $iter | next }}{{ $out = $out + (x | to_string) }}{{/}}{{/}}{{/}}{{ $out }}"#,
+        )
+        .await,
+        "1, 2, 3"
+    );
+}
+
+#[tokio::test]
+async fn next_empty() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [] | iter }}{{ None = $iter | next }}empty{{/}}"#,
+        )
+        .await,
+        "empty"
+    );
+}
+
+#[tokio::test]
+async fn next_exhaustion() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1] | iter }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}{{ None = $iter | next }}-done{{/}}{{/}}"#,
+        )
+        .await,
+        "1-done"
+    );
+}
+
+#[tokio::test]
+async fn next_with_skip() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [10, 20, 30, 40] | iter | skip(2) }}{{ Some((x, _)) = $iter | next }}{{ x | to_string }}{{/}}"#,
+        )
+        .await,
+        "30"
+    );
+}
+
+#[tokio::test]
+async fn next_with_map() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3] | iter | map(x -> x * 10) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}, {{ Some((x, _)) = $iter | next }}{{ x | to_string }}{{/}}{{/}}"#,
+        )
+        .await,
+        "10, 20"
+    );
+}
+
+#[tokio::test]
+async fn next_with_filter() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3, 4, 5] | iter | filter(x -> x > 3) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}, {{ Some((x, _)) = $iter | next }}{{ x | to_string }}{{/}}{{/}}"#,
+        )
+        .await,
+        "4, 5"
+    );
+}
+
+#[tokio::test]
+async fn next_with_take() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3] | iter | take(2) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}, {{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}{{ None = $iter | next }}-end{{/}}{{/}}{{/}}"#,
+        )
+        .await,
+        "1, 2-end"
+    );
+}
+
+#[tokio::test]
+async fn next_with_chain() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2] | iter | chain([3, 4] | iter) }}{{ $out = "" }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + (x | to_string) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + ", " + (x | to_string) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + ", " + (x | to_string) }}{{ Some((x, _)) = $iter | next }}{{ $out = $out + ", " + (x | to_string) }}{{/}}{{/}}{{/}}{{/}}{{ $out }}"#,
+        )
+        .await,
+        "1, 2, 3, 4"
+    );
+}
+
+#[tokio::test]
+async fn next_with_flat_map() {
+    // flat_map: each element expands to a list, next pulls one at a time
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2] | iter | flat_map(x -> [x, x * 10]) }}{{ $out = "" }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + (x | to_string) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + ", " + (x | to_string) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + ", " + (x | to_string) }}{{ Some((x, _)) = $iter | next }}{{ $out = $out + ", " + (x | to_string) }}{{/}}{{/}}{{/}}{{/}}{{ $out }}"#,
+        )
+        .await,
+        "1, 10, 2, 20"
+    );
+}
+
+#[tokio::test]
+async fn next_flat_map_empty_result() {
+    // flat_map where some elements map to empty list (via take(0))
+    // [1, 2, 3] | flat_map(x -> [x, x+10]) | take(3) — just verify flat_map + next works with take
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3] | iter | flat_map(x -> [x, x + 10]) | take(3) }}{{ $out = "" }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + (x | to_string) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ $out = $out + ", " + (x | to_string) }}{{ Some((x, _)) = $iter | next }}{{ $out = $out + ", " + (x | to_string) }}{{/}}{{/}}{{/}}{{ $out }}"#,
+        )
+        .await,
+        "1, 11, 2"
+    );
+}
+
+#[tokio::test]
+async fn next_map_filter_combo() {
+    assert_eq!(
+        run_simple(
+            r#"{{ $iter = [1, 2, 3, 4] | iter | map(x -> x * 10) | filter(x -> x > 20) }}{{ Some((x, rest)) = $iter | next }}{{ $iter = rest }}{{ x | to_string }}, {{ Some((x, _)) = $iter | next }}{{ x | to_string }}{{/}}{{/}}"#,
+        )
+        .await,
+        "30, 40"
+    );
+}

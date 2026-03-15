@@ -12,11 +12,11 @@ use acvus_utils::Interner;
 use acvus_utils::TrackedDeque;
 use rustc_hash::FxHashMap;
 
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, Ty};
 use crate::iter::SequenceChain;
 use crate::builtins;
 use crate::error::RuntimeError;
-use crate::iter::{IterChain, IterOp, SharedIter};
+use crate::iter::{IterChain, IterHandle, IterOp, IterRepr};
 use crate::value::{FnValue, LazyValue, PureValue, TypedValue, Value};
 use acvus_utils::{Coroutine, Stepped, YieldHandle};
 
@@ -638,54 +638,68 @@ impl Interpreter {
                     Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     other => panic!("iter: expected List or Deque, got {other:?}"),
                 };
-                Ok((this, Value::iterator(SharedIter::from_list(items))))
+                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
             }
             BuiltinId::RevIter => {
-                let items = match args.remove(0) {
+                let mut items = match args.remove(0) {
                     Value::Lazy(LazyValue::List(items)) => items,
                     Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     other => panic!("rev_iter: expected List or Deque, got {other:?}"),
                 };
-                Ok((this, Value::iterator(SharedIter::from_list_rev(items))))
+                items.reverse();
+                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
+            }
+            BuiltinId::Next | BuiltinId::NextSeq => {
+                let none_tag = this.interner.intern("None");
+                let some_tag = this.interner.intern("Some");
+                let ih = args.remove(0).into_iter_handle(Effect::Pure);
+                let (this, result) = Self::exec_next(this, ih, handle).await?;
+                match result {
+                    None => Ok((this, Value::variant(none_tag, None))),
+                    Some((item, rest)) => Ok((this, Value::variant(
+                        some_tag,
+                        Some(Box::new(Value::tuple(vec![item, Value::iterator(rest)]))),
+                    ))),
+                }
             }
             BuiltinId::Collect => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 Self::exec_collect(this, shared, handle).await
             }
             BuiltinId::Take => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("take: expected Int")
                 };
                 Ok((this, Value::iterator(shared.take(n as usize))))
             }
             BuiltinId::Skip => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
                     panic!("skip: expected Int")
                 };
                 Ok((this, Value::iterator(shared.skip(n as usize))))
             }
             BuiltinId::Chain => {
-                let a = args.remove(0).into_shared_iter();
-                let b = args.remove(0).into_shared_iter();
+                let a = args.remove(0).into_iter_handle(Effect::Pure);
+                let b = args.remove(0).into_iter_handle(Effect::Pure);
                 Ok((this, Value::iterator(a.chain(b))))
             }
 
             // -- Iterator operations --
             BuiltinId::Flatten | BuiltinId::FlattenIter => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 Ok((this, Value::iterator(shared.flatten())))
             }
             BuiltinId::FlatMap | BuiltinId::FlatMapIter => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("flat_map: expected Fn")
                 };
                 Ok((this, Value::iterator(shared.flat_map(f))))
             }
             BuiltinId::Join | BuiltinId::JoinIter => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Pure(PureValue::String(sep)) = args.remove(0) else {
                     panic!("join: expected String separator")
                 };
@@ -718,32 +732,32 @@ impl Interpreter {
             }
             BuiltinId::ChainSeq => {
                 let sc = into_sequence_chain(args.remove(0), "chain_seq");
-                let rhs = args.remove(0).into_shared_iter();
+                let rhs = args.remove(0).into_iter_handle(Effect::Pure);
                 Ok((this, Value::sequence(sc.chain(rhs))))
             }
             // -- Sequence → Iterator coercion (origin breaks) --
             // map, filter, flatten, flat_map transform elements, so origin
-            // relationship is lost. Coerce to Iterator via into_shared_iter.
+            // relationship is lost. Coerce to Iterator via into_iter_handle.
             BuiltinId::MapSeq | BuiltinId::PmapSeq => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("map_seq: expected Fn")
                 };
                 Ok((this, Value::iterator(shared.map(f))))
             }
             BuiltinId::FilterSeq => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("filter_seq: expected Fn")
                 };
                 Ok((this, Value::iterator(shared.filter(f))))
             }
             BuiltinId::FlattenSeq => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 Ok((this, Value::iterator(shared.flatten())))
             }
             BuiltinId::FlatMapSeq | BuiltinId::FlatMapIterSeq => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("flat_map_seq: expected Fn")
                 };
@@ -753,27 +767,27 @@ impl Interpreter {
             BuiltinId::CollectSeq => {
                 let sc = into_sequence_chain(args.remove(0), "collect_seq");
                 // Apply structural ops to origin TrackedDeque.
-                // Chain ops may contain SharedIter that need drive_chain.
+                // Chain ops may contain IterHandle that need exec_next.
                 let (this, deque) = Self::exec_collect_sequence(this, sc, handle).await?;
                 Ok((this, Value::deque(deque)))
             }
             BuiltinId::RevSeq => {
                 // Rev breaks element order → coerce to Iterator, collect, reverse.
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let (this, mut items) = Self::exec_collect_vec(this, shared, handle).await?;
                 items.reverse();
-                Ok((this, Value::iterator(SharedIter::from_list(items))))
+                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
             }
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("map: expected Fn")
                 };
                 Ok((this, Value::iterator(shared.map(f))))
             }
             BuiltinId::Filter => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
                     panic!("filter: expected Fn")
                 };
@@ -782,7 +796,7 @@ impl Interpreter {
 
             // -- Consuming HOFs (collect then apply) --
             BuiltinId::Find => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -792,7 +806,7 @@ impl Interpreter {
                 Self::exec_hof_find_inner(this, items, f, handle).await
             }
             BuiltinId::Reduce => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -802,7 +816,7 @@ impl Interpreter {
                 Self::exec_hof_reduce_inner(this, items, f, handle).await
             }
             BuiltinId::Fold => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let init = args.remove(0);
                 let fn_val = args.remove(0);
                 let items;
@@ -813,7 +827,7 @@ impl Interpreter {
                 Self::exec_hof_fold_inner(this, items, init, f, handle).await
             }
             BuiltinId::Any => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -823,7 +837,7 @@ impl Interpreter {
                 Self::exec_hof_any_inner(this, items, f, handle).await
             }
             BuiltinId::All => {
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let fn_val = args.remove(0);
                 let items;
                 (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
@@ -845,7 +859,7 @@ impl Interpreter {
             }
             BuiltinId::Extend => {
                 let list = args.remove(0);
-                let shared = args.remove(0).into_shared_iter();
+                let shared = args.remove(0).into_iter_handle(Effect::Pure);
                 let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
                     panic!("extend: expected Deque as first arg")
                 };
@@ -868,134 +882,281 @@ impl Interpreter {
         }
     }
 
-    // -- drive_chain: eagerly execute the chain pipeline -----------------------
+    // -- collect helpers ------------------------------------------------------
 
-    fn drive_chain<'a>(
+    async fn exec_collect<'a>(
         this: Self,
-        chain: &'a IterChain,
+        ih: IterHandle,
         handle: &'a YieldHandle<TypedValue>,
-    ) -> BoxFuture<'a, Result<(Self, Vec<Value>), RuntimeError>> {
-        Box::pin(Self::drive_chain_inner(this, chain, handle))
+    ) -> Result<(Self, Value), RuntimeError> {
+        let (this, items) = Self::exec_collect_vec(this, ih, handle).await?;
+        Ok((this, Value::list(items)))
     }
 
-    async fn drive_chain_inner<'a>(
+    async fn exec_collect_vec<'a>(
         mut this: Self,
-        chain: &IterChain,
+        ih: IterHandle,
         handle: &'a YieldHandle<TypedValue>,
     ) -> Result<(Self, Vec<Value>), RuntimeError> {
-        let mut items: Vec<Value> = chain.source.to_vec();
-
-        for op in &chain.ops {
-            match op {
-                IterOp::Map(f) => {
-                    let mut result = Vec::with_capacity(items.len());
-                    for item in items {
-                        let mapped;
-                        (this, mapped) = Self::call_closure(
-                            this,
-                            f.clone(),
-                            vec![Arc::new(item)],
-                            handle,
-                        )
-                        .await?;
-                        result.push(mapped);
-                    }
-                    items = result;
+        let mut items = Vec::new();
+        let mut current = ih;
+        loop {
+            let result;
+            (this, result) = Self::exec_next(this, current, handle).await?;
+            match result {
+                Some((item, rest)) => {
+                    items.push(item);
+                    current = rest;
                 }
-                IterOp::Filter(f) => {
-                    let mut result = Vec::new();
-                    for item in items {
-                        let arc_item = Arc::new(item);
-                        let keep;
-                        (this, keep) = Self::call_closure(
-                            this,
-                            f.clone(),
-                            vec![Arc::clone(&arc_item)],
-                            handle,
-                        )
-                        .await?;
-                        if matches!(keep, Value::Pure(PureValue::Bool(true))) {
-                            result.push(Arc::unwrap_or_clone(arc_item));
-                        }
-                    }
-                    items = result;
-                }
-                IterOp::Take(n) => {
-                    items.truncate(*n);
-                }
-                IterOp::Skip(n) => {
-                    items = items.into_iter().skip(*n).collect();
-                }
-                IterOp::Chain(other) => {
-                    let more;
-                    (this, more) = Self::drive_chain(this, other, handle).await?;
-                    items.extend(more);
-                }
-                IterOp::Flatten => {
-                    let mut result = Vec::new();
-                    for item in items {
-                        match item {
-                            Value::Lazy(LazyValue::List(inner)) => result.extend(inner),
-                            Value::Lazy(LazyValue::Deque(d)) => result.extend(d.into_vec()),
-                            other => result.push(other),
-                        }
-                    }
-                    items = result;
-                }
-                IterOp::FlatMap(f) => {
-                    let mut result = Vec::new();
-                    for item in items {
-                        let mapped;
-                        (this, mapped) = Self::call_closure(
-                            this,
-                            f.clone(),
-                            vec![Arc::new(item)],
-                            handle,
-                        )
-                        .await?;
-                        match mapped {
-                            Value::Lazy(LazyValue::List(inner)) => result.extend(inner),
-                            Value::Lazy(LazyValue::Deque(d)) => result.extend(d.into_vec()),
-                            other => result.push(other),
-                        }
-                    }
-                    items = result;
-                }
+                None => break,
             }
         }
         Ok((this, items))
     }
 
-    // -- collect helpers ------------------------------------------------------
+    // -- incremental iterator execution (thunk-based) -------------------------
 
-    async fn exec_collect<'a>(
+    /// Pull one element from an IterHandle.
+    ///
+    /// Returns `None` if exhausted, `Some((item, rest))` otherwise.
+    /// For Pure iterators, the result is memoized in the IterHandle state.
+    pub fn exec_next<'a>(
         this: Self,
-        shared: SharedIter,
+        ih: IterHandle,
         handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-        Ok((this, Value::list(items)))
+    ) -> BoxFuture<'a, Result<(Self, Option<(Value, IterHandle)>), RuntimeError>> {
+        Box::pin(Self::exec_next_inner(this, ih, handle))
     }
 
-    async fn exec_collect_vec<'a>(
-        this: Self,
-        shared: SharedIter,
+    async fn exec_next_inner<'a>(
+        mut this: Self,
+        ih: IterHandle,
         handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Vec<Value>), RuntimeError> {
-        // Check cache first (Pure iterators share cache via Arc<OnceLock>)
-        if let Some(cached) = shared.cached() {
-            return Ok((this, cached.clone()));
+    ) -> Result<(Self, Option<(Value, IterHandle)>), RuntimeError> {
+        let state = ih.get_state();
+        match state {
+            IterRepr::Done => Ok((this, None)),
+
+            IterRepr::Evaluated { head, tail } => {
+                Ok((this, Some((head, tail))))
+            }
+
+            IterRepr::Chain { first, second } => {
+                let (this, result) = Self::exec_next(this, first, handle).await?;
+                match result {
+                    Some((item, rest_first)) => {
+                        let rest = rest_first.chain(second);
+                        Ok((this, Some((item, rest))))
+                    }
+                    None => {
+                        // first exhausted, continue with second
+                        Self::exec_next(this, second, handle).await
+                    }
+                }
+            }
+
+            IterRepr::Wrapped { inner, op } => {
+                // Treat as a single-op pipeline on top of inner
+                let (this, result) = Self::exec_next_apply_op(
+                    this, inner, op, ih.effect(), handle,
+                ).await?;
+
+                if ih.effect() == Effect::Pure {
+                    match &result {
+                        Some((item, tail)) => {
+                            ih.set_state(IterRepr::Evaluated {
+                                head: item.clone(),
+                                tail: tail.clone(),
+                            });
+                        }
+                        None => {
+                            ih.set_state(IterRepr::Done);
+                        }
+                    }
+                }
+
+                Ok((this, result))
+            }
+
+            IterRepr::Suspended { source, ops, offset } => {
+                let (this, result) = Self::exec_next_suspended(
+                    this, source, ops, offset, ih.effect(), handle,
+                ).await?;
+
+                // Pure memo
+                if ih.effect() == Effect::Pure {
+                    match &result {
+                        Some((item, tail)) => {
+                            ih.set_state(IterRepr::Evaluated {
+                                head: item.clone(),
+                                tail: tail.clone(),
+                            });
+                        }
+                        None => {
+                            ih.set_state(IterRepr::Done);
+                        }
+                    }
+                }
+
+                Ok((this, result))
+            }
+        }
+    }
+
+    /// Execute one step of a Suspended iterator.
+    async fn exec_next_suspended<'a>(
+        mut this: Self,
+        source: Vec<Value>,
+        ops: Vec<IterOp>,
+        offset: usize,
+        effect: Effect,
+        handle: &'a YieldHandle<TypedValue>,
+    ) -> Result<(Self, Option<(Value, IterHandle)>), RuntimeError> {
+        // No ops: pull directly from source
+        if ops.is_empty() {
+            if offset >= source.len() {
+                return Ok((this, None));
+            }
+            let item = source[offset].clone();
+            let rest = IterHandle::suspended(source, Vec::new(), offset + 1, effect);
+            return Ok((this, Some((item, rest))));
         }
 
-        let chain = shared.snapshot_chain();
-        let (this, items) = Self::drive_chain(this, &chain, handle).await?;
-        shared.set_cache(items.clone());
-        Ok((this, items))
+        // Has ops: peel off the LAST op (outermost), inner keeps remaining ops
+        // Pipeline: source → ops[0] → ops[1] → ... → ops[n-1]
+        // So ops[n-1] is the outermost, applied last.
+        let outer_op = ops[ops.len() - 1].clone();
+        let inner_ops = ops[..ops.len() - 1].to_vec();
+        let inner = IterHandle::suspended(source, inner_ops, offset, effect);
+
+        Self::exec_next_apply_op(this, inner, outer_op, effect, handle).await
+    }
+
+    /// Apply a single IterOp on top of an inner IterHandle, pulling one element.
+    async fn exec_next_apply_op<'a>(
+        mut this: Self,
+        inner: IterHandle,
+        op: IterOp,
+        effect: Effect,
+        handle: &'a YieldHandle<TypedValue>,
+    ) -> Result<(Self, Option<(Value, IterHandle)>), RuntimeError> {
+        match op {
+            IterOp::Map(f) => {
+                let (mut this, result) = Self::exec_next(this, inner, handle).await?;
+                match result {
+                    None => Ok((this, None)),
+                    Some((item, rest_inner)) => {
+                        let mapped;
+                        (this, mapped) = Self::call_closure(
+                            this, f.clone(), vec![Arc::new(item)], handle,
+                        ).await?;
+                        let rest = rest_inner.map(f);
+                        Ok((this, Some((mapped, rest))))
+                    }
+                }
+            }
+
+            IterOp::Filter(f) => {
+                let mut current_inner = inner;
+                loop {
+                    let result;
+                    (this, result) = Self::exec_next(this, current_inner, handle).await?;
+                    match result {
+                        None => return Ok((this, None)),
+                        Some((item, rest_inner)) => {
+                            let arc_item = Arc::new(item);
+                            let keep;
+                            (this, keep) = Self::call_closure(
+                                this, f.clone(), vec![Arc::clone(&arc_item)], handle,
+                            ).await?;
+                            if matches!(keep, Value::Pure(PureValue::Bool(true))) {
+                                let rest = rest_inner.filter(f);
+                                return Ok((this, Some((Arc::unwrap_or_clone(arc_item), rest))));
+                            }
+                            current_inner = rest_inner;
+                        }
+                    }
+                }
+            }
+
+            IterOp::Take(n) => {
+                if n == 0 {
+                    return Ok((this, None));
+                }
+                let (this, result) = Self::exec_next(this, inner, handle).await?;
+                match result {
+                    None => Ok((this, None)),
+                    Some((item, rest_inner)) => {
+                        let rest = rest_inner.take(n - 1);
+                        Ok((this, Some((item, rest))))
+                    }
+                }
+            }
+
+            IterOp::Skip(n) => {
+                let mut current_inner = inner;
+                for _ in 0..n {
+                    let result;
+                    (this, result) = Self::exec_next(this, current_inner, handle).await?;
+                    match result {
+                        None => return Ok((this, None)),
+                        Some((_, rest_inner)) => current_inner = rest_inner,
+                    }
+                }
+                Self::exec_next(this, current_inner, handle).await
+            }
+
+            IterOp::Chain(chain) => {
+                let other = IterHandle::from_chain(chain, effect);
+                let combined = inner.chain(other);
+                Self::exec_next(this, combined, handle).await
+            }
+
+            IterOp::Flatten => {
+                let (this, result) = Self::exec_next(this, inner, handle).await?;
+                match result {
+                    None => Ok((this, None)),
+                    Some((item, rest_inner)) => {
+                        let inner_items = match item {
+                            Value::Lazy(LazyValue::List(items)) => items,
+                            Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
+                            other => vec![other],
+                        };
+                        let items_iter = IterHandle::from_list(inner_items, effect);
+                        let rest_flat = rest_inner.flatten();
+                        let combined = items_iter.chain(rest_flat);
+                        Self::exec_next(this, combined, handle).await
+                    }
+                }
+            }
+
+            IterOp::FlatMap(f) => {
+                let (mut this, result) = Self::exec_next(this, inner, handle).await?;
+                match result {
+                    None => Ok((this, None)),
+                    Some((item, rest_inner)) => {
+                        let mapped;
+                        (this, mapped) = Self::call_closure(
+                            this, f.clone(), vec![Arc::new(item)], handle,
+                        ).await?;
+                        let inner_items = match mapped {
+                            Value::Lazy(LazyValue::List(items)) => items,
+                            Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
+                            other => vec![other],
+                        };
+                        let items_iter = IterHandle::from_list(inner_items, effect);
+                        let rest_fm = rest_inner.flat_map(f);
+                        let combined = items_iter.chain(rest_fm);
+                        Self::exec_next(this, combined, handle).await
+                    }
+                }
+            }
+        }
     }
 
     /// Collect a SequenceChain: apply structural ops to origin TrackedDeque.
     ///
-    /// Chain ops may contain SharedIter with closures, so drive_chain is needed.
+    /// Chain ops may contain IterHandle with closures, so exec_next is needed.
     /// The result preserves the origin's checksum lineage — it can be diffed
     /// against the storage origin via `TrackedDeque::into_diff`.
     async fn exec_collect_sequence<'a>(

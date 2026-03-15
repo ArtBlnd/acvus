@@ -1,8 +1,10 @@
+pub(crate) mod display;
 mod expr;
 mod llm;
 mod llm_cache;
 mod plain;
 
+pub use display::{CompiledDisplay, CompiledDisplayStatic};
 pub use expr::{CompiledExpr, ExprSpec, compile_expr};
 pub(crate) use llm::parse_type_name;
 pub use llm::{
@@ -45,6 +47,8 @@ pub enum CompiledNodeKind {
     Llm(CompiledLlm),
     LlmCache(CompiledLlmCache),
     Expr(CompiledExpr),
+    Display(CompiledDisplay),
+    DisplayStatic(CompiledDisplayStatic),
 }
 
 impl CompiledNodeKind {
@@ -54,6 +58,8 @@ impl CompiledNodeKind {
             Self::Llm(llm) => &llm.messages,
             Self::LlmCache(cache) => &cache.messages,
             Self::Expr(_) => &[],
+            Self::Display(_) => &[],
+            Self::DisplayStatic(_) => &[],
         }
     }
 }

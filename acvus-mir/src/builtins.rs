@@ -77,6 +77,9 @@ pub enum BuiltinId {
     FlatMapIterSeq,
     CollectSeq,
     RevSeq,
+    // -- Iterator next --
+    Next,
+    NextSeq,
 }
 
 impl BuiltinId {
@@ -415,6 +418,25 @@ fn sig_unwrap(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::Option(Box::new(t.clone()))], t)
 }
 
+fn sig_next(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let e = s.fresh_effect_var();
+    (
+        vec![Ty::Iterator(Box::new(t.clone()), e)],
+        Ty::Option(Box::new(Ty::Tuple(vec![t.clone(), Ty::Iterator(Box::new(t), e)]))),
+    )
+}
+
+fn sig_next_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    let e = s.fresh_effect_var();
+    (
+        vec![Ty::Sequence(Box::new(t.clone()), o, e)],
+        Ty::Option(Box::new(Ty::Tuple(vec![t.clone(), Ty::Sequence(Box::new(t), o, e)]))),
+    )
+}
+
 fn sig_first(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (vec![Ty::List(Box::new(t.clone()))], Ty::Option(Box::new(t)))
@@ -732,6 +754,10 @@ fn build_registry() -> BuiltinRegistry {
     // -- Option ops --
     r.add("unwrap",    BuiltinId::Unwrap,    sig_unwrap,    None);
     r.add("unwrap_or", BuiltinId::UnwrapOr,  sig_unwrap_or, None);
+
+    // -- Iterator/Sequence next --
+    r.add("next",      BuiltinId::NextSeq,   sig_next_seq,  None);
+    r.add("next",      BuiltinId::Next,       sig_next,      None);
 
     // -- Iterator/Sequence constructors --
     r.add("iter",      BuiltinId::Iter,      sig_iter,      None);

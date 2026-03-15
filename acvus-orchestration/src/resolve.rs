@@ -179,10 +179,13 @@ struct LoopState<'a> {
     /// 같은 @self를 읽어 lost update가 발생한다.
     /// 이미 in_flight인 경우 여기에 park하고, 완료 시 하나씩 깨워 재실행한다.
     serialized_queue: FxHashMap<usize, VecDeque<Parked>>,
+    /// When true, dependency nodes are NOT executed — served from storage only.
+    /// Root (entrypoint) nodes still execute normally.
+    no_execute: bool,
 }
 
 impl<'a> LoopState<'a> {
-    fn new() -> Self {
+    fn new(no_execute: bool) -> Self {
         Self {
             next_task_id: 0,
             meta: FxHashMap::default(),
@@ -192,6 +195,7 @@ impl<'a> LoopState<'a> {
             remaining_roots: FxHashSet::default(),
             retry_state: FxHashMap::default(),
             serialized_queue: FxHashMap::default(),
+            no_execute,
         }
     }
 
@@ -286,17 +290,19 @@ where
         idx: usize,
         state: &mut ResolveState<E>,
         local: FxHashMap<Astr, Arc<TypedValue>>,
+        no_execute: bool,
     ) -> Result<(), ResolveError>
     where
         E: EntryMut<'j>,
     {
-        self.resolve_nodes(vec![(idx, local)], state).await
+        self.resolve_nodes(vec![(idx, local)], state, no_execute).await
     }
 
     pub async fn resolve_nodes<'j, E>(
         &self,
         roots: Vec<(usize, FxHashMap<Astr, Arc<TypedValue>>)>,
         state: &mut ResolveState<E>,
+        no_execute: bool,
     ) -> Result<(), ResolveError>
     where
         E: EntryMut<'j>,
@@ -305,7 +311,7 @@ where
             return Ok(());
         }
 
-        let mut lp = LoopState::new();
+        let mut lp = LoopState::new(no_execute);
 
         for (idx, local) in roots {
             let max_retries = self.nodes[idx].strategy.retry;
@@ -532,7 +538,7 @@ where
 
             // 3b. Node task → spawn dep if strategy says so
             if lp.is_node_task(task_id) {
-                if self.needs_resolve(dep_idx, state) {
+                if self.needs_resolve(dep_idx, state, lp.no_execute) {
                     // Serialized node already in flight → park in serialized_queue
                     if self.needs_serialized(dep_idx) && lp.in_flight.contains(&dep_idx) {
                         lp.serialized_queue.entry(dep_idx).or_default().push_back(Parked {
@@ -1248,7 +1254,8 @@ where
             && node.strategy.initial_value.is_some()
     }
 
-    fn needs_resolve<E>(&self, idx: usize, state: &ResolveState<E>) -> bool {
+    fn needs_resolve<E>(&self, idx: usize, state: &ResolveState<E>, no_execute: bool) -> bool {
+        if no_execute { return false; }
         let name = self.nodes[idx].name;
         match &self.nodes[idx].strategy.execution {
             // Always: re-execute on every reference within a turn.
@@ -1272,7 +1279,7 @@ where
             return;
         }
         for &candidate in &self.rdeps[completed_idx] {
-            if lp.in_flight.contains(&candidate) || !self.needs_resolve(candidate, state) {
+            if lp.in_flight.contains(&candidate) || !self.needs_resolve(candidate, state, lp.no_execute) {
                 continue;
             }
             let eager_deps = {
@@ -1281,7 +1288,7 @@ where
             };
             if eager_deps
                 .iter()
-                .all(|&dep| !self.needs_resolve(dep, state))
+                .all(|&dep| !self.needs_resolve(dep, state, lp.no_execute))
             {
                 debug!(
                     node = %self.interner.resolve(self.nodes[candidate].name),

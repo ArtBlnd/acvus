@@ -1,40 +1,13 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
+use acvus_mir::ty::Effect;
 use acvus_utils::TrackedDeque;
 
 use crate::value::{FnValue, Value};
 
 // =========================================================================
-// SharedIter — lazy iterator with effect-aware caching
+// IterChain / IterOp — flat chain representation for drive_chain
 // =========================================================================
-
-/// A lazy iterator over `Value`s.
-///
-/// The chain of operations is stored as a flat list ([`IterChain`]).
-/// Actual computation is deferred until `collect` (or a consuming builtin).
-///
-/// ## Clone semantics
-///
-/// Clone copies `ops` and `offset` independently. The `source` and `cache`
-/// are shared via `Arc`.
-///
-/// - **Pure iterators**: `cache` is shared — first collect populates it,
-///   subsequent clones read from cache without re-executing.
-/// - **Effectful iterators**: each clone should get a fresh `cache`
-///   (via [`SharedIter::fork`]) so side effects are re-executed.
-///
-/// ## Offset
-///
-/// `offset` tracks how many items have been consumed by `next()`.
-/// Each clone has its own offset, so multiple consumers can iterate
-/// independently over the same cached data.
-#[derive(Clone)]
-pub struct SharedIter {
-    source: Arc<[Value]>,
-    ops: Vec<IterOp>,
-    offset: usize,
-    cache: Arc<OnceLock<Vec<Value>>>,
-}
 
 /// Flat representation of a lazy iterator pipeline.
 #[derive(Clone)]
@@ -56,125 +29,6 @@ pub enum IterOp {
     Flatten,
     /// Map then flatten: call closure, then inline any `Value::List`.
     FlatMap(FnValue),
-}
-
-impl SharedIter {
-    pub fn from_list(items: Vec<Value>) -> Self {
-        Self {
-            source: items.into(),
-            ops: Vec::new(),
-            offset: 0,
-            cache: Arc::new(OnceLock::new()),
-        }
-    }
-
-    pub fn from_list_rev(mut items: Vec<Value>) -> Self {
-        items.reverse();
-        Self::from_list(items)
-    }
-
-    // -- lazy chain builders (return a *new* SharedIter) ----------------------
-
-    pub fn map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Map(f))
-    }
-
-    pub fn filter(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Filter(f))
-    }
-
-    pub fn take(self, n: usize) -> Self {
-        self.push_op(IterOp::Take(n))
-    }
-
-    pub fn skip(self, n: usize) -> Self {
-        self.push_op(IterOp::Skip(n))
-    }
-
-    pub fn chain(self, other: SharedIter) -> Self {
-        self.push_op(IterOp::Chain(other.snapshot_chain()))
-    }
-
-    pub fn flatten(self) -> Self {
-        self.push_op(IterOp::Flatten)
-    }
-
-    pub fn flat_map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::FlatMap(f))
-    }
-
-    // -- snapshot / access ----------------------------------------------------
-
-    /// Snapshot the current chain for embedding in another chain (e.g. `Chain` op).
-    /// If cache is populated, uses cached data as source (no ops needed).
-    pub fn snapshot_chain(&self) -> IterChain {
-        if let Some(cached) = self.cache.get() {
-            IterChain {
-                source: cached.clone().into(),
-                ops: Vec::new(),
-            }
-        } else {
-            IterChain {
-                source: Arc::clone(&self.source),
-                ops: self.ops.clone(),
-            }
-        }
-    }
-
-    /// Get the cached result, if available.
-    pub fn cached(&self) -> Option<&Vec<Value>> {
-        self.cache.get()
-    }
-
-    /// Store the computed result in the cache.
-    /// No-op if already cached (OnceLock guarantees single initialization).
-    pub fn set_cache(&self, items: Vec<Value>) {
-        let _ = self.cache.set(items);
-    }
-
-    /// Create a fork with independent cache.
-    /// Use this for effectful iterators where re-execution is required.
-    pub fn fork(&self) -> Self {
-        Self {
-            source: Arc::clone(&self.source),
-            ops: self.ops.clone(),
-            offset: self.offset,
-            cache: Arc::new(OnceLock::new()),
-        }
-    }
-
-    /// Current consumption offset (for `next()` support).
-    pub fn offset(&self) -> usize {
-        self.offset
-    }
-
-    /// Advance the offset by one (for `next()`).
-    pub fn advance(&mut self) {
-        self.offset += 1;
-    }
-
-    fn push_op(self, op: IterOp) -> Self {
-        let mut ops = self.ops;
-        ops.push(op);
-        Self {
-            source: self.source,
-            ops,
-            offset: 0,
-            cache: Arc::new(OnceLock::new()),
-        }
-    }
-}
-
-impl std::fmt::Debug for SharedIter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SharedIter(ops={}, offset={})", self.ops.len(), self.offset)
-    }
-}
-
-impl PartialEq for SharedIter {
-    fn eq(&self, _other: &Self) -> bool {
-        false
-    }
 }
 
 // =========================================================================
@@ -200,7 +54,7 @@ impl PartialEq for SharedIter {
 /// elements, so the TrackedDeque's diff tracking remains valid:
 /// - `Take(n)`: keep only the first `n` elements
 /// - `Skip(n)`: consume `n` elements from the front
-/// - `Chain(SharedIter)`: extend with elements from a lazy iterator
+/// - `Chain(IterHandle)`: extend with elements from a lazy iterator
 ///
 /// Element-transforming operations (map, filter) break the origin relationship
 /// and must go through Iterator (Sequence → Iterator coercion).
@@ -218,8 +72,8 @@ pub enum SequenceOp {
     /// Consume `n` elements from the front.
     Skip(usize),
     /// Extend with elements from a lazy iterator.
-    /// Requires runtime to execute (SharedIter may contain closures).
-    Chain(SharedIter),
+    /// Requires runtime to execute (IterHandle may contain closures).
+    Chain(IterHandle),
 }
 
 impl SequenceChain {
@@ -265,7 +119,7 @@ impl SequenceChain {
         self
     }
 
-    pub fn chain(mut self, iter: SharedIter) -> Self {
+    pub fn chain(mut self, iter: IterHandle) -> Self {
         self.ops.push(SequenceOp::Chain(iter));
         self
     }
@@ -282,12 +136,12 @@ impl SequenceChain {
         &self.ops
     }
 
-    /// Convert to a SharedIter (Sequence → Iterator coercion).
+    /// Convert to an IterHandle (Sequence → Iterator coercion).
     ///
     /// The origin's items become the source, and SequenceOps are translated
     /// to IterOps. The result is still lazy — nothing is executed.
-    pub fn into_shared_iter(self) -> SharedIter {
-        let source: Arc<[Value]> = self.origin.into_vec().into();
+    pub fn into_iter_handle(self, effect: Effect) -> IterHandle {
+        let source: Vec<Value> = self.origin.into_vec();
         let ops: Vec<IterOp> = self
             .ops
             .into_iter()
@@ -297,12 +151,7 @@ impl SequenceChain {
                 SequenceOp::Chain(iter) => IterOp::Chain(iter.snapshot_chain()),
             })
             .collect();
-        SharedIter {
-            source,
-            ops,
-            offset: 0,
-            cache: Arc::new(OnceLock::new()),
-        }
+        IterHandle::new(source, ops, effect)
     }
 
     /// Consume and return the origin TrackedDeque (for direct Deque access
@@ -344,6 +193,243 @@ impl std::fmt::Debug for SequenceChain {
 }
 
 impl PartialEq for SequenceChain {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+// =========================================================================
+// IterHandle — thunk-based lazy iterator
+// =========================================================================
+
+/// Internal state of a lazy iterator.
+///
+/// Transitions: `Suspended` → `Evaluated` (on `next`, Pure only) or read-and-discard (Effectful).
+/// `Chain` allows composing two iterators sequentially.
+#[derive(Clone)]
+pub enum IterRepr {
+    /// Not yet executed. Holds source data + pipeline ops.
+    Suspended {
+        source: Vec<Value>,
+        ops: Vec<IterOp>,
+        offset: usize,
+    },
+    /// One element has been computed (Pure memo).
+    /// `head` is the result, `tail` is the rest of the iterator.
+    Evaluated {
+        head: Value,
+        tail: IterHandle,
+    },
+    /// Two iterators in sequence — exhaust `first`, then `second`.
+    Chain {
+        first: IterHandle,
+        second: IterHandle,
+    },
+    /// An op applied on top of another iterator.
+    Wrapped {
+        inner: IterHandle,
+        op: IterOp,
+    },
+    /// No more elements.
+    Done,
+}
+
+/// A lazy iterator handle.
+///
+/// ## Clone semantics
+///
+/// - **Pure** (`Effect::Pure`): `Arc` is shared — clones see the same memo.
+/// - **Effectful**: state is deep-copied — each clone runs independently.
+pub struct IterHandle {
+    state: Arc<Mutex<IterRepr>>,
+    effect: Effect,
+}
+
+impl IterHandle {
+    /// Create a new iterator from source data + ops pipeline.
+    pub fn new(source: Vec<Value>, ops: Vec<IterOp>, effect: Effect) -> Self {
+        Self::suspended(source, ops, 0, effect)
+    }
+
+    /// Create with explicit offset.
+    pub fn suspended(source: Vec<Value>, ops: Vec<IterOp>, offset: usize, effect: Effect) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(IterRepr::Suspended {
+                source,
+                ops,
+                offset,
+            })),
+            effect,
+        }
+    }
+
+    /// Create from a plain list (no ops).
+    pub fn from_list(items: Vec<Value>, effect: Effect) -> Self {
+        Self::new(items, Vec::new(), effect)
+    }
+
+    /// Create from an IterChain.
+    pub fn from_chain(chain: IterChain, effect: Effect) -> Self {
+        Self::new(chain.source.to_vec(), chain.ops, effect)
+    }
+
+    /// Create a done (empty) iterator.
+    pub fn done(effect: Effect) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(IterRepr::Done)),
+            effect,
+        }
+    }
+
+    /// Chain two iterators: exhaust self, then other.
+    pub fn chain(self, other: IterHandle) -> Self {
+        // LUB: if either is Effectful, the chain is Effectful.
+        let effect = match (self.effect, other.effect) {
+            (Effect::Pure, Effect::Pure) => Effect::Pure,
+            _ => Effect::Effectful,
+        };
+        Self {
+            state: Arc::new(Mutex::new(IterRepr::Chain {
+                first: self,
+                second: other,
+            })),
+            effect,
+        }
+    }
+
+    // -- lazy chain builders (push IterOp, return new IterHandle) -------------
+
+    pub fn map(self, f: FnValue) -> Self {
+        self.push_op(IterOp::Map(f))
+    }
+
+    pub fn filter(self, f: FnValue) -> Self {
+        self.push_op(IterOp::Filter(f))
+    }
+
+    pub fn take(self, n: usize) -> Self {
+        self.push_op(IterOp::Take(n))
+    }
+
+    pub fn skip(self, n: usize) -> Self {
+        self.push_op(IterOp::Skip(n))
+    }
+
+    pub fn flatten(self) -> Self {
+        self.push_op(IterOp::Flatten)
+    }
+
+    pub fn flat_map(self, f: FnValue) -> Self {
+        self.push_op(IterOp::FlatMap(f))
+    }
+
+    /// Push an IterOp onto the pipeline.
+    ///
+    /// - Suspended: appends op to ops list (fast path).
+    /// - Other states: wraps in a Wrapped variant (op applied on top).
+    fn push_op(self, op: IterOp) -> Self {
+        let mut state = self.state.lock().unwrap();
+        match &mut *state {
+            IterRepr::Suspended { source, ops, offset } => {
+                let cur_offset = *offset;
+                let mut new_ops = std::mem::take(ops);
+                new_ops.push(op);
+                let new_source = std::mem::take(source);
+                drop(state);
+                Self::suspended(new_source, new_ops, cur_offset, self.effect)
+            }
+            _ => {
+                let effect = self.effect;
+                drop(state);
+                Self {
+                    state: Arc::new(Mutex::new(IterRepr::Wrapped {
+                        inner: self,
+                        op,
+                    })),
+                    effect,
+                }
+            }
+        }
+    }
+
+    // -- snapshot / compatibility with drive_chain ----------------------------
+
+    /// Snapshot the current pipeline as an IterChain (for drive_chain compatibility).
+    ///
+    /// Only works for Suspended state. Panics on other states.
+    pub fn snapshot_chain(&self) -> IterChain {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            IterRepr::Suspended { source, ops, .. } => IterChain {
+                source: source.clone().into(),
+                ops: ops.clone(),
+            },
+            _ => panic!("snapshot_chain: only works on Suspended IterHandle"),
+        }
+    }
+
+    /// Extract source + ops + offset for drive_chain compatibility.
+    ///
+    /// Returns `Some((source, ops, offset))` if Suspended, `None` otherwise.
+    pub fn into_chain_parts(self) -> Option<(Vec<Value>, Vec<IterOp>, usize)> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            IterRepr::Suspended { source, ops, offset } => {
+                Some((source.clone(), ops.clone(), *offset))
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the current state (cloned).
+    pub fn get_state(&self) -> IterRepr {
+        self.state.lock().unwrap().clone()
+    }
+
+    /// Set the state (for Pure memo after evaluation).
+    pub fn set_state(&self, repr: IterRepr) {
+        *self.state.lock().unwrap() = repr;
+    }
+
+    /// The effect of this iterator.
+    pub fn effect(&self) -> Effect {
+        self.effect
+    }
+}
+
+impl Clone for IterHandle {
+    fn clone(&self) -> Self {
+        match self.effect {
+            // Pure: share the Arc — clones see the same memo.
+            Effect::Pure => Self {
+                state: Arc::clone(&self.state),
+                effect: self.effect,
+            },
+            // Effectful: deep copy — each clone runs independently.
+            _ => Self {
+                state: Arc::new(Mutex::new(self.state.lock().unwrap().clone())),
+                effect: self.effect,
+            },
+        }
+    }
+}
+
+impl std::fmt::Debug for IterHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            IterRepr::Suspended { source, ops, offset } => {
+                write!(f, "IterHandle::Suspended(len={}, ops={}, offset={})", source.len(), ops.len(), offset)
+            }
+            IterRepr::Evaluated { .. } => write!(f, "IterHandle::Evaluated"),
+            IterRepr::Chain { .. } => write!(f, "IterHandle::Chain"),
+            IterRepr::Wrapped { .. } => write!(f, "IterHandle::Wrapped"),
+            IterRepr::Done => write!(f, "IterHandle::Done"),
+        }
+    }
+}
+
+impl PartialEq for IterHandle {
     fn eq(&self, _other: &Self) -> bool {
         false
     }

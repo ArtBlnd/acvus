@@ -31,14 +31,14 @@ pub use display::{
 pub use dsl::{ContextScope, Execution, FnParam, MessageSpec, NodeLocalTypes, NodeSpec, Persistency, Strategy, TokenBudget};
 pub use error::{OrchError, OrchErrorDisplay, OrchErrorKind};
 pub use kind::{
-    CompiledExpr, CompiledLlm, CompiledLlmCache, CompiledNodeKind, CompiledPlain,
+    CompiledDisplay, CompiledDisplayStatic, CompiledExpr, CompiledLlm, CompiledLlmCache, CompiledNodeKind, CompiledPlain,
     CompiledToolBinding, CompiledToolParamInfo, ExprSpec, GenerationParams, LlmCacheSpec, LlmSpec,
     MaxTokens, NodeKind, PlainSpec, ThinkingConfig, ToolBinding, ToolParamInfo,
 };
 pub use message::{
     Content, ContentItem, Message, ModelResponse, Output, ToolCall, ToolCallExtras, ToolSpec, ToolSpecParam, Usage,
 };
-pub use node::{ExprNode, LlmCacheNode, LlmNode, Node, PlainNode, build_node_table};
+pub use node::{DisplayNode, DisplayNodeStatic, ExprNode, LlmCacheNode, LlmNode, Node, PlainNode, build_node_table};
 pub use provider::{
     ApiKind, Fetch, HttpRequest, LlmModelKind, ProviderConfig, ProviderError,
     build_cache_request, build_request, create_llm_model, parse_cache_response, parse_response,
