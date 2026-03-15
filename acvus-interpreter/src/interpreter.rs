@@ -732,6 +732,17 @@ impl Interpreter {
                 };
                 Ok((this, Value::Sequence(shared.flat_map(f))))
             }
+            BuiltinId::CollectSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
+                Ok((this, Value::Deque(TrackedDeque::from_vec(items))))
+            }
+            BuiltinId::RevSeq => {
+                let shared = args.remove(0).into_shared_iter();
+                let (this, mut items) = Self::exec_collect_vec(this, shared, handle).await?;
+                items.reverse();
+                Ok((this, Value::Sequence(SharedIter::from_list(items))))
+            }
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
                 let shared = args.remove(0).into_shared_iter();

@@ -75,6 +75,8 @@ pub enum BuiltinId {
     FlattenSeq,
     FlatMapSeq,
     FlatMapIterSeq,
+    CollectSeq,
+    RevSeq,
 }
 
 impl BuiltinId {
@@ -605,6 +607,21 @@ fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     )
 }
 
+// Sequence<T, O> → Deque<T, O> (same origin — lazy materialization)
+fn sig_collect_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    (vec![Ty::Sequence(Box::new(t.clone()), o)], Ty::Deque(Box::new(t), o))
+}
+
+// Sequence<T, O> → Sequence<T, O2> (new origin — order reversed)
+fn sig_rev_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_var();
+    let o = s.fresh_origin();
+    let o2 = s.fresh_concrete_origin();
+    (vec![Ty::Sequence(Box::new(t.clone()), o)], Ty::Sequence(Box::new(t), o2))
+}
+
 // ---------------------------------------------------------------------------
 // Registry construction
 // ---------------------------------------------------------------------------
@@ -691,9 +708,11 @@ fn build_registry() -> BuiltinRegistry {
     r.add("unwrap",    BuiltinId::Unwrap,    sig_unwrap,    None);
     r.add("unwrap_or", BuiltinId::UnwrapOr,  sig_unwrap_or, None);
 
-    // -- Iterator constructors --
+    // -- Iterator/Sequence constructors --
     r.add("iter",      BuiltinId::Iter,      sig_iter,      None);
+    r.add("rev_iter",  BuiltinId::RevSeq,    sig_rev_seq,   None);
     r.add("rev_iter",  BuiltinId::RevIter,   sig_rev_iter,  None);
+    r.add("collect",   BuiltinId::CollectSeq, sig_collect_seq, None);
     r.add("collect",   BuiltinId::Collect,   sig_collect,   None);
     r.add("take",      BuiltinId::TakeSeq,   sig_take_seq,  None);
     r.add("take",      BuiltinId::Take,      sig_take,      None);
