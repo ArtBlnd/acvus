@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use acvus_ast::{Literal, Span};
 use acvus_mir::ir::{DebugInfo, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::Interner;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -39,19 +39,19 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
         let stage_a_fn_ty = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let stage_b_fn_ty = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let stage_c_fn_ty = Ty::Fn {
             params: vec![Ty::bytes(), Ty::Int],
             ret: Box::new(Ty::String),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
 
@@ -94,7 +94,7 @@ pub fn obfuscate(mut module: MirModule, config: &ObfConfig, interner: &Interner)
         let opaque_fn_ty = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let opaque_factory = text_obf::register_factory_closures(
@@ -231,19 +231,19 @@ fn rewrite_body(
         let stage_a_fn_ty = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let stage_b_fn_ty = Ty::Fn {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let stage_c_fn_ty = Ty::Fn {
             params: vec![Ty::bytes(), Ty::Int],
             ret: Box::new(Ty::String),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
 
@@ -321,7 +321,7 @@ fn rewrite_body(
         let opaque_fn_ty = Ty::Fn {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
-            is_extern: false,
+            kind: FnKind::Lambda, effect: Effect::Pure,
             captures: vec![],
         };
         let v_opaque_meta = text_obf::emit_factory_dispatch_setup(

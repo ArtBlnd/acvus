@@ -14,7 +14,7 @@ use crate::hints::{Hint, HintTable};
 use crate::ir::{
     ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
-use crate::ty::Ty;
+use crate::ty::{FnKind, Ty};
 use crate::typeck::{BuiltinMap, TypeMap};
 
 pub struct Lowerer<'a> {
@@ -771,7 +771,7 @@ impl<'a> Lowerer<'a> {
             span,
         } = func
         {
-            if let Some(Ty::Fn { is_extern: true, .. }) = self.type_map.get(span).or_else(|| self.type_map.get(&call_span)) {
+            if let Some(Ty::Fn { kind: FnKind::Extern, .. }) = self.type_map.get(span).or_else(|| self.type_map.get(&call_span)) {
                 self.set_origin(dst, ValOrigin::Call(*name));
                 self.emit_inst(
                     call_span,

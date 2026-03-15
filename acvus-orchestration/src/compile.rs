@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry, RegistryConflictError};
 use acvus_mir::ir::{InstKind, MirModule};
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_mir_pass::AnalysisPass;
 use acvus_mir_pass::analysis::reachable_context::{
     ContextKeyPartition, KnownValue, partition_context_keys, reachable_context_keys,
@@ -535,8 +535,9 @@ fn wrap_fn_ty(spec: &NodeSpec, ty: Ty) -> Ty {
         Ty::Fn {
             params: param_types,
             ret: Box::new(ty),
-            is_extern: true,
+            kind: FnKind::Extern,
             captures: vec![],
+            effect: Effect::Pure,
         }
     } else {
         ty

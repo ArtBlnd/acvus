@@ -14,7 +14,7 @@ fn init() {
 
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir_pass::analysis::reachable_context::KnownValue;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_orchestration::NodeSpec;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -32,8 +32,9 @@ fn asset_context_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
     types.insert(interner.intern("asset_url"), Ty::Fn {
         params: vec![Ty::String],
         ret: Box::new(Ty::Option(Box::new(Ty::String))),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types
 }

@@ -3,7 +3,7 @@ use std::{env, fs, process};
 
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::printer::dump;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
@@ -124,8 +124,9 @@ fn main() {
             Ty::Fn {
                 params,
                 ret: Box::new(def.ret.to_ty(&interner)),
-                is_extern: true,
+                kind: FnKind::Extern,
                 captures: vec![],
+                effect: if def.effectful { Effect::Effectful } else { Effect::Pure },
             },
         );
     }

@@ -656,7 +656,7 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::Ty;
+    use crate::ty::{Effect, FnKind, Ty};
     use acvus_utils::Interner;
 
     fn compile_and_dump(
@@ -743,8 +743,9 @@ mod tests {
             Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
                 captures: vec![],
+                effect: Effect::Pure,
             },
         )]);
         let out = compile_and_dump(

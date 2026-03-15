@@ -6,7 +6,7 @@ use acvus_mir::ir::DebugInfo;
 use acvus_mir::ir::{
     ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::Interner;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -1341,7 +1341,7 @@ pub fn emit_factory_dispatch_setup(
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
-        is_extern: false,
+        kind: FnKind::Lambda, effect: Effect::Pure,
         captures: vec![],
     };
 
@@ -1392,7 +1392,7 @@ fn emit_two_level_dispatch(
     let factory_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::List(Box::new(inner_fn_ty.clone()))),
-        is_extern: false,
+        kind: FnKind::Lambda, effect: Effect::Pure,
         captures: vec![],
     };
 
@@ -1564,7 +1564,7 @@ fn emit_multistage_decrypt_call(
     let stage_a_fn_ty = Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::Int),
-        is_extern: false,
+        kind: FnKind::Lambda, effect: Effect::Pure,
         captures: vec![],
     };
     let v_subkey = emit_two_level_dispatch(
@@ -1610,7 +1610,7 @@ fn emit_multistage_decrypt_call(
     let stage_b_fn_ty = Ty::Fn {
         params: vec![Ty::Int, Ty::Int],
         ret: Box::new(Ty::Int),
-        is_extern: false,
+        kind: FnKind::Lambda, effect: Effect::Pure,
         captures: vec![],
     };
     let v_combined = emit_two_level_dispatch(
@@ -1665,7 +1665,7 @@ fn emit_multistage_decrypt_call(
     let stage_c_fn_ty = Ty::Fn {
         params: vec![Ty::bytes(), Ty::Int],
         ret: Box::new(Ty::String),
-        is_extern: false,
+        kind: FnKind::Lambda, effect: Effect::Pure,
         captures: vec![],
     };
     emit_two_level_dispatch(

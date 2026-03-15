@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::{BuiltinId, registry};
 use crate::error::{MirError, MirErrorKind};
-use crate::ty::{Polarity, Purity, Ty, TySubst};
+use crate::ty::{Effect, FnKind, Polarity, Purity, Ty, TySubst};
 use crate::variant::VariantPayload;
 
 /// Maps each AST Span to its inferred type.
@@ -42,6 +42,8 @@ pub struct TypeChecker<'a> {
     lambda_scope_depth: Option<usize>,
     /// Collected capture types for current lambda.
     lambda_captures: Vec<Ty>,
+    /// Maximum effect observed in current lambda body.
+    lambda_effect: Effect,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -62,6 +64,7 @@ impl<'a> TypeChecker<'a> {
             analysis_mode: false,
             lambda_scope_depth: None,
             lambda_captures: vec![],
+            lambda_effect: Effect::Pure,
         }
     }
 
@@ -772,9 +775,12 @@ impl<'a> TypeChecker<'a> {
                 // Save and setup capture tracker
                 let saved_depth = self.lambda_scope_depth.take();
                 let saved_captures = std::mem::take(&mut self.lambda_captures);
+                let saved_effect = std::mem::replace(&mut self.lambda_effect, Effect::Pure);
                 self.lambda_scope_depth = Some(self.scopes.len() - 1);
 
                 let ret = self.check_expr(false, body);
+
+                let effect = std::mem::replace(&mut self.lambda_effect, saved_effect);
 
                 // Collect captures, restore tracker
                 let capture_types: Vec<Ty> = std::mem::replace(&mut self.lambda_captures, saved_captures)
@@ -787,8 +793,9 @@ impl<'a> TypeChecker<'a> {
                 let ty = Ty::Fn {
                     params: param_types,
                     ret: Box::new(ret),
-                    is_extern: false,
+                    kind: FnKind::Lambda,
                     captures: capture_types,
+                    effect,
                 };
                 self.record_ret(*span, ty)
             }
@@ -1128,7 +1135,12 @@ impl<'a> TypeChecker<'a> {
             .collect();
 
         match func_ty {
-            Ty::Fn { params, ret, .. } => {
+            Ty::Fn { params, ret, effect, .. } => {
+                // Propagate effect to enclosing lambda
+                let resolved_effect = self.subst.resolve_effect(*effect);
+                if resolved_effect == Effect::Effectful {
+                    self.lambda_effect = Effect::Effectful;
+                }
                 if !self.check_args("<closure>", &arg_types, params, call_span) {
                     return Ty::Error;
                 }
@@ -1139,8 +1151,9 @@ impl<'a> TypeChecker<'a> {
                 let fn_ty = Ty::Fn {
                     params: arg_types,
                     ret: Box::new(ret.clone()),
-                    is_extern: false,
+                    kind: FnKind::Lambda,
                     captures: vec![],
+                    effect: Effect::Pure,
                 };
                 if self.subst.unify(func_ty, &fn_ty, Polarity::Covariant).is_err() {
                     self.error(
@@ -1598,7 +1611,8 @@ mod tests {
             Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
+                effect: Effect::Pure,
                 captures: vec![],
             },
         )]);
@@ -1720,7 +1734,8 @@ mod tests {
             (interner.intern("my_fn"), Ty::Fn {
                 params: vec![Ty::String],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
+                effect: Effect::Pure,
                 captures: vec![],
             }),
             (interner.intern("name"), Ty::String),
@@ -1763,7 +1778,8 @@ mod tests {
             (i.intern("my_fn"), Ty::Fn {
                 params: vec![Ty::String, Ty::Int],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
+                effect: Effect::Pure,
                 captures: vec![],
             }),
         ]);
@@ -1798,7 +1814,7 @@ mod tests {
         // @it : Iterator<Int> — Lazy tier, allowed in non-call position.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([
-            (i.intern("it"), Ty::Iterator(Box::new(Ty::Int))),
+            (i.intern("it"), Ty::Iterator(Box::new(Ty::Int), Effect::Pure)),
         ]);
         let src = "{{ x = @it }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
@@ -1811,7 +1827,7 @@ mod tests {
         let mut subst = TySubst::new();
         let o = subst.fresh_concrete_origin();
         let ctx = FxHashMap::from_iter([
-            (i.intern("seq"), Ty::Sequence(Box::new(Ty::Int), o)),
+            (i.intern("seq"), Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure)),
         ]);
         let src = "{{ x = @seq }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
@@ -1860,7 +1876,8 @@ mod tests {
             (i.intern("callback"), Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
+                effect: Effect::Pure,
                 captures: vec![],
             }),
         ]);
@@ -1876,7 +1893,8 @@ mod tests {
             (i.intern("fns"), Ty::List(Box::new(Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::Int),
-                is_extern: false,
+                kind: FnKind::Lambda,
+                effect: Effect::Pure,
                 captures: vec![],
             }))),
         ]);
@@ -1910,7 +1928,8 @@ mod tests {
             (i.intern("handler"), Ty::Fn {
                 params: vec![Ty::Opaque("Connection".into())],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
+                effect: Effect::Pure,
                 captures: vec![],
             }),
         ]);

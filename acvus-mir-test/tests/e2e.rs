@@ -1,5 +1,5 @@
 use acvus_mir::context_registry::ContextTypeRegistry;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -291,8 +291,9 @@ fn extern_async_call() {
     let context = ctx(&i, &[("fetch_user", Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(Ty::String),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     })]);
     // Variable binding is body-less.
     let ir = compile_to_ir(
@@ -1397,8 +1398,9 @@ fn extern_fn_object_return() {
     let context = ctx(&i, &[("get_user", Ty::Fn {
         params: vec![Ty::Int],
         ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     })]);
     let ir = compile_to_ir(
         &i,

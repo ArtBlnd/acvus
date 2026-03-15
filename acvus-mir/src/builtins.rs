@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Ty, TySubst};
+use crate::ty::{Effect, FnKind, Ty, TySubst};
 
 /// Numeric identifier for a builtin function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -200,24 +200,26 @@ fn require_to_int(args: &[Ty], interner: &Interner) -> Option<String> {
 
 fn sig_filter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
+            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
-        Ty::Iterator(Box::new(t)),
+        Ty::Iterator(Box::new(t), e),
     )
 }
 
 fn sig_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
+            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
-        Ty::Iterator(Box::new(u)),
+        Ty::Iterator(Box::new(u), e),
     )
 }
 
@@ -241,10 +243,11 @@ fn sig_to_int(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_find(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
+            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
         t,
     )
@@ -252,10 +255,11 @@ fn sig_find(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_reduce(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()), is_extern: false, captures: vec![] },
+            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
         t,
     )
@@ -264,11 +268,12 @@ fn sig_reduce(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_fold(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
+            Ty::Iterator(Box::new(t.clone()), e),
             u.clone(),
-            Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
+            Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
         u,
     )
@@ -276,10 +281,11 @@ fn sig_fold(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_any(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
-            Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
+            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
         Ty::Bool,
     )
@@ -310,25 +316,27 @@ fn sig_flatten(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_flatten_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (
-        vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))))],
-        Ty::Iterator(Box::new(t)),
+        vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))), Effect::Pure)],
+        Ty::Iterator(Box::new(t), Effect::Pure),
     )
 }
 
 fn sig_flat_map_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
+            Ty::Iterator(Box::new(t.clone()), e),
             Ty::Fn {
                 params: vec![t],
                 ret: Box::new(Ty::List(Box::new(u.clone()))),
-                is_extern: false,
+                kind: FnKind::Lambda,
                 captures: vec![],
+                effect: e,
             },
         ],
-        Ty::Iterator(Box::new(u)),
+        Ty::Iterator(Box::new(u), e),
     )
 }
 
@@ -337,7 +345,7 @@ fn sig_join(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
 }
 
 fn sig_join_iter(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::Iterator(Box::new(Ty::String)), Ty::String], Ty::String)
+    (vec![Ty::Iterator(Box::new(Ty::String), Effect::Pure), Ty::String], Ty::String)
 }
 
 fn sig_char_to_int(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -355,7 +363,7 @@ fn sig_contains(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_contains_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::Iterator(Box::new(t.clone())), t], Ty::Bool)
+    (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure), t], Ty::Bool)
 }
 
 fn sig_contains_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -414,7 +422,7 @@ fn sig_first(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_first_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::Iterator(Box::new(t.clone()))], Ty::Option(Box::new(t)))
+    (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure)], Ty::Option(Box::new(t)))
 }
 
 fn sig_last(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -424,7 +432,7 @@ fn sig_last(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_last_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::Iterator(Box::new(t.clone()))], Ty::Option(Box::new(t)))
+    (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure)], Ty::Option(Box::new(t)))
 }
 
 fn sig_unwrap_or(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -445,7 +453,7 @@ fn sig_append(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_extend(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
-    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Iterator(Box::new(t.clone()))], Ty::Deque(Box::new(t), o))
+    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Iterator(Box::new(t.clone()), Effect::Pure)], Ty::Deque(Box::new(t), o))
 }
 
 fn sig_consume(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -458,23 +466,25 @@ fn sig_consume(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_flat_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone())),
+            Ty::Iterator(Box::new(t.clone()), e),
             Ty::Fn {
                 params: vec![t],
-                ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
-                is_extern: false,
+                ret: Box::new(Ty::Iterator(Box::new(u.clone()), e)),
+                kind: FnKind::Lambda,
                 captures: vec![],
+                effect: e,
             },
         ],
-        Ty::Iterator(Box::new(u)),
+        Ty::Iterator(Box::new(u), e),
     )
 }
 
 fn sig_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::List(Box::new(t.clone()))], Ty::Iterator(Box::new(t)))
+    (vec![Ty::List(Box::new(t.clone()))], Ty::Iterator(Box::new(t), Effect::Pure))
 }
 
 fn sig_rev_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -483,12 +493,12 @@ fn sig_rev_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_collect(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::Iterator(Box::new(t.clone()))], Ty::List(Box::new(t)))
+    (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure)], Ty::List(Box::new(t)))
 }
 
 fn sig_take(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
-    (vec![Ty::Iterator(Box::new(t.clone())), Ty::Int], Ty::Iterator(Box::new(t)))
+    (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure), Ty::Int], Ty::Iterator(Box::new(t), Effect::Pure))
 }
 
 fn sig_skip(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -498,8 +508,8 @@ fn sig_skip(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_chain(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (
-        vec![Ty::Iterator(Box::new(t.clone())), Ty::Iterator(Box::new(t.clone()))],
-        Ty::Iterator(Box::new(t)),
+        vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure), Ty::Iterator(Box::new(t.clone()), Effect::Pure)],
+        Ty::Iterator(Box::new(t), Effect::Pure),
     )
 }
 
@@ -512,7 +522,7 @@ fn sig_chain(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_take_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
-    (vec![Ty::Sequence(Box::new(t.clone()), o), Ty::Int], Ty::Sequence(Box::new(t), o))
+    (vec![Ty::Sequence(Box::new(t.clone()), o, Effect::Pure), Ty::Int], Ty::Sequence(Box::new(t), o, Effect::Pure))
 }
 
 fn sig_skip_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -523,8 +533,8 @@ fn sig_chain_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
     (
-        vec![Ty::Sequence(Box::new(t.clone()), o), Ty::Sequence(Box::new(t.clone()), o)],
-        Ty::Sequence(Box::new(t), o),
+        vec![Ty::Sequence(Box::new(t.clone()), o, Effect::Pure), Ty::Sequence(Box::new(t.clone()), o, Effect::Pure)],
+        Ty::Sequence(Box::new(t), o, Effect::Pure),
     )
 }
 
@@ -535,12 +545,13 @@ fn sig_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let u = s.fresh_var();
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Sequence(Box::new(t.clone()), o),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), is_extern: false, captures: vec![] },
+            Ty::Sequence(Box::new(t.clone()), o, e),
+            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
-        Ty::Sequence(Box::new(u), o2),
+        Ty::Sequence(Box::new(u), o2, e),
     )
 }
 
@@ -552,12 +563,13 @@ fn sig_filter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Sequence(Box::new(t.clone()), o),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), is_extern: false, captures: vec![] },
+            Ty::Sequence(Box::new(t.clone()), o, e),
+            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
         ],
-        Ty::Sequence(Box::new(t), o2),
+        Ty::Sequence(Box::new(t), o2, e),
     )
 }
 
@@ -566,48 +578,52 @@ fn sig_flatten_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
     (
-        vec![Ty::Sequence(Box::new(Ty::List(Box::new(t.clone()))), o)],
-        Ty::Sequence(Box::new(t), o2),
+        vec![Ty::Sequence(Box::new(Ty::List(Box::new(t.clone()))), o, Effect::Pure)],
+        Ty::Sequence(Box::new(t), o2, Effect::Pure),
     )
 }
 
-// (Sequence<T, O>, Fn(T) → Iterator<U>) → Sequence<U, O2>
+// (Sequence<T, O, E>, Fn(T) → Iterator<U>) → Sequence<U, O2, E>
 fn sig_flat_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Sequence(Box::new(t.clone()), o, e),
             Ty::Fn {
                 params: vec![t],
-                ret: Box::new(Ty::Iterator(Box::new(u.clone()))),
-                is_extern: false,
+                ret: Box::new(Ty::Iterator(Box::new(u.clone()), Effect::Pure)),
+                kind: FnKind::Lambda,
                 captures: vec![],
+                effect: e,
             },
         ],
-        Ty::Sequence(Box::new(u), o2),
+        Ty::Sequence(Box::new(u), o2, e),
     )
 }
 
-// (Sequence<T, O>, Fn(T) → List<U>) → Sequence<U, O2>
+// (Sequence<T, O, E>, Fn(T) → List<U>) → Sequence<U, O2, E>
 fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let u = s.fresh_var();
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
+    let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Sequence(Box::new(t.clone()), o),
+            Ty::Sequence(Box::new(t.clone()), o, e),
             Ty::Fn {
                 params: vec![t],
                 ret: Box::new(Ty::List(Box::new(u.clone()))),
-                is_extern: false,
+                kind: FnKind::Lambda,
                 captures: vec![],
+                effect: e,
             },
         ],
-        Ty::Sequence(Box::new(u), o2),
+        Ty::Sequence(Box::new(u), o2, e),
     )
 }
 
@@ -615,7 +631,7 @@ fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_collect_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
-    (vec![Ty::Sequence(Box::new(t.clone()), o)], Ty::Deque(Box::new(t), o))
+    (vec![Ty::Sequence(Box::new(t.clone()), o, Effect::Pure)], Ty::Deque(Box::new(t), o))
 }
 
 // Sequence<T, O> → Sequence<T, O2> (new origin — order reversed)
@@ -623,7 +639,7 @@ fn sig_rev_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     let o = s.fresh_origin();
     let o2 = s.fresh_concrete_origin();
-    (vec![Ty::Sequence(Box::new(t.clone()), o)], Ty::Sequence(Box::new(t), o2))
+    (vec![Ty::Sequence(Box::new(t.clone()), o, Effect::Pure)], Ty::Sequence(Box::new(t), o2, Effect::Pure))
 }
 
 // ---------------------------------------------------------------------------

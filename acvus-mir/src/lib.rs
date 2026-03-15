@@ -137,6 +137,7 @@ pub fn compile_script_analysis_with_tail_partial(
 mod tests {
     use super::*;
     use crate::context_registry::ContextTypeRegistry;
+    use crate::ty::{Effect, FnKind};
     use rustc_hash::FxHashMap;
 
     fn compile_src(
@@ -214,14 +215,15 @@ mod tests {
     #[test]
     fn integration_extern_fn() {
         let i = Interner::new();
-        // Extern functions are now provided via context_types with Ty::Fn { is_extern: true }
+        // Extern functions are now provided via context_types with Ty::Fn { kind: FnKind::Extern, .. }
         let reg = ContextTypeRegistry::all_system(FxHashMap::from_iter([(
             i.intern("fetch_user"),
             Ty::Fn {
                 params: vec![Ty::Int],
                 ret: Box::new(Ty::String),
-                is_extern: true,
+                kind: FnKind::Extern,
                 captures: vec![],
+                effect: Effect::Pure,
             },
         )]));
         let result = compile_src(
@@ -420,8 +422,9 @@ mod tests {
                 Ty::Fn {
                     params: vec![Ty::Int],
                     ret: Box::new(Ty::String),
-                    is_extern: true,
+                    kind: FnKind::Extern,
                     captures: vec![],
+                    effect: Effect::Pure,
                 },
             ),
             (i.intern("items"), Ty::List(Box::new(Ty::Int))),
@@ -494,8 +497,9 @@ mod tests {
                 Ty::Fn {
                     params: vec![Ty::List(Box::new(Ty::Int))],
                     ret: Box::new(Ty::String),
-                    is_extern: true,
+                    kind: FnKind::Extern,
                     captures: vec![],
+                    effect: Effect::Pure,
                 },
             ),
             (i.intern("items"), Ty::List(Box::new(Ty::Int))),

@@ -1,7 +1,7 @@
 use acvus_interpreter::{IntoValue, OpaqueValue, PureValue, RuntimeError, UnpureValue, Value};
 #[cfg(test)]
 use acvus_interpreter::LazyValue;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -29,44 +29,51 @@ pub fn regex_context_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
     types.insert(interner.intern("regex"), Ty::Fn {
         params: vec![Ty::String],
         ret: Box::new(opaque_ty()),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_match"), Ty::Fn {
         params: vec![opaque_ty(), Ty::String],
         ret: Box::new(Ty::Bool),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_find"), Ty::Fn {
         params: vec![opaque_ty(), Ty::String],
         ret: Box::new(Ty::String),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_find_all"), Ty::Fn {
         params: vec![opaque_ty(), Ty::String],
         ret: Box::new(Ty::List(Box::new(Ty::String))),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_replace"), Ty::Fn {
         params: vec![Ty::String, opaque_ty(), Ty::String],
         ret: Box::new(Ty::String),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_split"), Ty::Fn {
         params: vec![opaque_ty(), Ty::String],
         ret: Box::new(Ty::List(Box::new(Ty::String))),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types.insert(interner.intern("regex_extract"), Ty::Fn {
         params: vec![Ty::String, opaque_ty()],
         ret: Box::new(Ty::List(Box::new(Ty::String))),
-        is_extern: true,
+        kind: FnKind::Extern,
         captures: vec![],
+        effect: Effect::Pure,
     });
     types
 }
