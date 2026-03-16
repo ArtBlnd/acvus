@@ -65,18 +65,10 @@ pub enum BuiltinId {
     ContainsIter,
     FirstIter,
     LastIter,
-    // -- Sequence overloads (lazy Deque ops) --
-    MapSeq,
-    PmapSeq,
-    FilterSeq,
+    // -- Sequence overloads (origin-preserving only: chain, take, skip) --
     TakeSeq,
     SkipSeq,
     ChainSeq,
-    FlattenSeq,
-    FlatMapSeq,
-    FlatMapIterSeq,
-    CollectSeq,
-    RevSeq,
     // -- Iterator next --
     Next,
     NextSeq,
@@ -153,6 +145,11 @@ impl BuiltinRegistry {
     /// Check if a name is a known builtin (any overload).
     pub fn is_builtin(&self, name: &str) -> bool {
         self.by_name.contains_key(name)
+    }
+
+    /// Return an iterator over all unique builtin names.
+    pub fn all_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.by_name.keys().copied()
     }
 }
 
@@ -566,108 +563,11 @@ fn sig_chain_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 // Transform ops: new origin
 
-// map/pmap on Sequence: origin breaks → returns Iterator (not Sequence).
-// Element transformation destroys the TrackedDeque diff relationship.
-fn sig_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (
-        vec![
-            Ty::Sequence(Box::new(t.clone()), o, e),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
-        ],
-        Ty::Iterator(Box::new(u), e),
-    )
-}
-
-fn sig_pmap_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_map_seq(s)
-}
-
-// filter on Sequence: origin breaks → returns Iterator.
-fn sig_filter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (
-        vec![
-            Ty::Sequence(Box::new(t.clone()), o, e),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
-        ],
-        Ty::Iterator(Box::new(t), e),
-    )
-}
-
-// flatten on Sequence: origin breaks → returns Iterator.
-fn sig_flatten_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (
-        vec![Ty::Sequence(Box::new(Ty::List(Box::new(t.clone()))), o, e)],
-        Ty::Iterator(Box::new(t), e),
-    )
-}
-
-// (Sequence<T, O, E>, Fn(T) → Iterator<U>) → Iterator<U, E>
-fn sig_flat_map_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (
-        vec![
-            Ty::Sequence(Box::new(t.clone()), o, e),
-            Ty::Fn {
-                params: vec![t],
-                ret: Box::new(Ty::Iterator(Box::new(u.clone()), Effect::Pure)),
-                kind: FnKind::Lambda,
-                captures: vec![],
-                effect: e,
-            },
-        ],
-        Ty::Iterator(Box::new(u), e),
-    )
-}
-
-// (Sequence<T, O, E>, Fn(T) → List<U>) → Iterator<U, E>
-fn sig_flat_map_iter_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (
-        vec![
-            Ty::Sequence(Box::new(t.clone()), o, e),
-            Ty::Fn {
-                params: vec![t],
-                ret: Box::new(Ty::List(Box::new(u.clone()))),
-                kind: FnKind::Lambda,
-                captures: vec![],
-                effect: e,
-            },
-        ],
-        Ty::Iterator(Box::new(u), e),
-    )
-}
-
-// Sequence<T, O, E> → Deque<T, O> (same origin — lazy materialization)
-fn sig_collect_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Sequence(Box::new(t.clone()), o, e)], Ty::Deque(Box::new(t), o))
-}
-
-// Sequence reversal: origin breaks → returns Iterator.
-fn sig_rev_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Sequence(Box::new(t.clone()), o, e)], Ty::Iterator(Box::new(t), e))
-}
+// Deleted Sequence overloads: MapSeq, PmapSeq, FilterSeq, FlattenSeq,
+// FlatMapSeq, FlatMapIterSeq, CollectSeq, RevSeq.
+//
+// Only chain, take, skip preserve Sequence<T, O, E> → Sequence<T, O, E>.
+// All other ops: Sequence coerces to Iterator via the type system.
 
 // ---------------------------------------------------------------------------
 // Registry construction
@@ -676,13 +576,10 @@ fn sig_rev_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn build_registry() -> BuiltinRegistry {
     let mut r = BuiltinRegistry::new();
 
-    // -- Iterator/Sequence HOFs --
-    // Sequence overloads registered FIRST (first-match overload resolution)
-    r.add("filter",      BuiltinId::FilterSeq,    sig_filter_seq,    None);
+    // -- Iterator HOFs --
+    // Sequence coerces to Iterator — no Sequence-specific overloads for these.
     r.add("filter",      BuiltinId::Filter,       sig_filter,        None);
-    r.add("map",         BuiltinId::MapSeq,       sig_map_seq,       None);
     r.add("map",         BuiltinId::Map,          sig_map,           None);
-    r.add("pmap",        BuiltinId::PmapSeq,      sig_pmap_seq,      None);
     r.add("pmap",        BuiltinId::Pmap,         sig_pmap,          None);
     // find, reduce, fold, any, all — consumers, no Sequence overloads needed
     // (Sequence coerces to Iterator via type system)
@@ -703,14 +600,11 @@ fn build_registry() -> BuiltinRegistry {
     r.add("len",         BuiltinId::Len,          sig_len,           None);
     r.add("reverse",     BuiltinId::Reverse,      sig_reverse,       None);
 
-    // -- flatten (overloaded: List + Sequence + Iterator) --
-    r.add("flatten",     BuiltinId::FlattenSeq,   sig_flatten_seq,   None);
+    // -- flatten (overloaded: List + Iterator) --
     r.add("flatten",     BuiltinId::Flatten,       sig_flatten,       None);
     r.add("flatten",     BuiltinId::FlattenIter,   sig_flatten_iter,  None);
 
-    // -- flat_map (overloaded: Sequence + Iterator variants) --
-    r.add("flat_map",    BuiltinId::FlatMapSeq,       sig_flat_map_seq,      None);
-    r.add("flat_map",    BuiltinId::FlatMapIterSeq,   sig_flat_map_iter_seq, None);
+    // -- flat_map (overloaded: Iterator variants) --
     r.add("flat_map",    BuiltinId::FlatMap,           sig_flat_map,          None);
     r.add("flat_map",    BuiltinId::FlatMapIter,       sig_flat_map_iter,     None);
 
@@ -761,9 +655,7 @@ fn build_registry() -> BuiltinRegistry {
 
     // -- Iterator/Sequence constructors --
     r.add("iter",      BuiltinId::Iter,      sig_iter,      None);
-    r.add("rev_iter",  BuiltinId::RevSeq,    sig_rev_seq,   None);
     r.add("rev_iter",  BuiltinId::RevIter,   sig_rev_iter,  None);
-    r.add("collect",   BuiltinId::CollectSeq, sig_collect_seq, None);
     r.add("collect",   BuiltinId::Collect,   sig_collect,   None);
     r.add("take",      BuiltinId::TakeSeq,   sig_take_seq,  None);
     r.add("take",      BuiltinId::Take,      sig_take,      None);

@@ -2,6 +2,7 @@
 	import type { ContextBlock, RawBlock } from '$lib/types.js';
 	import { blockKind, isContextBlock, isRawBlock } from '$lib/types.js';
 	import type { BlockOwner } from '$lib/stores.svelte.js';
+	import type { DocumentManager } from '$lib/document-manager.svelte.js';
 	import { createId, generateName, getOwnerChildren, updateOwnerBlock, collectScopeBlockNames, uiState } from '$lib/stores.svelte.js';
 	import { collectOwnerDeps } from '$lib/dependencies.js';
 	import { findBlock } from '$lib/block-tree.js';
@@ -21,12 +22,16 @@
 		blockId,
 		owner,
 		contextTypes = {},
-		parentLocals
+		parentLocals,
+		docManager,
+		level,
 	}: {
 		blockId: string;
 		owner: BlockOwner;
 		contextTypes?: Record<string, import('$lib/type-parser.js').TypeDesc>;
 		parentLocals?: { raw: import('$lib/type-parser.js').TypeDesc; self: import('$lib/type-parser.js').TypeDesc };
+		docManager?: DocumentManager;
+		level?: string;
 	} = $props();
 
 	let mergedContextTypes = $derived.by((): Record<string, import('$lib/type-parser.js').TypeDesc> => {
@@ -140,7 +145,7 @@
 		</div>
 		{#if isRawBlock(block)}
 			<div class="flex flex-1 min-h-0 px-6 py-4">
-				<RawBlockEditor block={block} onupdate={handleRawUpdate} contextTypes={mergedContextTypes} />
+				<RawBlockEditor block={block} onupdate={handleRawUpdate} {docManager} docKey={docManager && level ? `${level}:rawblock:${block.id}` : undefined} />
 			</div>
 		{:else}
 			<ScrollArea class="flex-1">

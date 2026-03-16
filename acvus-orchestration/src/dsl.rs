@@ -46,7 +46,7 @@ pub enum ContextScope {
     InitialValue,
     /// Node body (messages, expr, assert): @self if initial_value exists
     Body,
-    /// Bind script (Sequence/Diff): @self if initial_value exists, + @raw
+    /// Bind script (Sequence/Patch): @self if initial_value exists, + @raw
     Bind,
 }
 
@@ -133,7 +133,7 @@ pub enum Persistency {
     /// Tracked sequence with diff-based updates. `bind` script transforms @raw → stored value.
     Sequence { bind: Astr },
     /// Object field-level patch. `bind` script transforms @raw → stored value.
-    Diff { bind: Astr },
+    Patch { bind: Astr },
 }
 
 /// A message entry: either a template block or an iterator over a context key.

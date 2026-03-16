@@ -735,49 +735,9 @@ impl Interpreter {
                 let rhs = args.remove(0).into_iter_handle(Effect::Pure);
                 Ok((this, Value::sequence(sc.chain(rhs))))
             }
-            // -- Sequence → Iterator coercion (origin breaks) --
-            // map, filter, flatten, flat_map transform elements, so origin
-            // relationship is lost. Coerce to Iterator via into_iter_handle.
-            BuiltinId::MapSeq | BuiltinId::PmapSeq => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("map_seq: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.map(f))))
-            }
-            BuiltinId::FilterSeq => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("filter_seq: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.filter(f))))
-            }
-            BuiltinId::FlattenSeq => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                Ok((this, Value::iterator(shared.flatten())))
-            }
-            BuiltinId::FlatMapSeq | BuiltinId::FlatMapIterSeq => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("flat_map_seq: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.flat_map(f))))
-            }
-            // -- Sequence collect (origin preserved → Deque) --
-            BuiltinId::CollectSeq => {
-                let sc = into_sequence_chain(args.remove(0), "collect_seq");
-                // Apply structural ops to origin TrackedDeque.
-                // Chain ops may contain IterHandle that need exec_next.
-                let (this, deque) = Self::exec_collect_sequence(this, sc, handle).await?;
-                Ok((this, Value::deque(deque)))
-            }
-            BuiltinId::RevSeq => {
-                // Rev breaks element order → coerce to Iterator, collect, reverse.
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let (this, mut items) = Self::exec_collect_vec(this, shared, handle).await?;
-                items.reverse();
-                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
-            }
+            // Deleted: MapSeq, PmapSeq, FilterSeq, FlattenSeq, FlatMapSeq,
+            // FlatMapIterSeq, CollectSeq, RevSeq — Sequence coerces to Iterator
+            // via the type system for these ops.
             // -- Lazy HOFs (return Iterator) --
             BuiltinId::Map | BuiltinId::Pmap => {
                 let shared = args.remove(0).into_iter_handle(Effect::Pure);

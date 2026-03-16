@@ -1,47 +1,404 @@
-import type { ContextKeyInfo, WebNode, NodeErrors } from './engine.js';
+/**
+ * AnalysisOrchestrator — 3-level hierarchy analysis using LSP DocumentManager.
+ *
+ * Manages Prompt → Profile → Bot topology with incremental document sync.
+ * Per-document scope is constructed here (pomollu-specific).
+ * DocumentManager handles pure document lifecycle.
+ */
+
+import type { ContextKeyInfo, WebNode, NodeErrors, LanguageSession, TypecheckNodesResult, CompletionItem, DocScope } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import type { Node, BlockNode, ContextBinding, DisplayEntry, DisplayRegion, ContextParam, ParamOverride, Prompt, Profile, Bot, ApiKind } from './types.js';
-import { isRawBlock, CONTEXT_TYPE, type RawBlock } from './types.js';
+import { isRawBlock, CONTEXT_TYPE, HISTORY_ENTRY_TYPE, HISTORY_BINDING_NAME, type RawBlock } from './types.js';
 import { collectBlocks, collectNodes } from './block-tree.js';
-import { analyzeWithTypes, analyzeWithKnown, typecheckNodes } from './engine.js';
+import { DocumentManager, type ScriptEntry, type CollectedKeys } from './document-manager.svelte.js';
 
 /**
- * Builtin context refs injected automatically by the WASM engine.
- * These are NOT user-defined params — excluded from param discovery.
+ * Engine-internal context refs — provided by the engine at runtime,
+ * but type unknown at discovery time (resolved after rebuildNodes).
  *
- * - turn_index: current turn index (engine internal)
- * - raw/self/content: node-internal variables (types provided by typecheckNodes)
- * - context: @context object (injected via CONTEXT_TYPE)
- * - item/index: iterator loop variables (injected by typecheckNodes / render_display)
+ * These are NOT user params. Excluded from context_keys results
+ * because they go into the "provided" tier of the scope after Step 5.
+ * At discovery time, their types aren't known yet, so they can't be
+ * in the scope — instead they're filtered via excludeSet.
  *
- * DO NOT move this to another file — internal to param-resolver.
+ * After rebuildNodes (Step 5), they ARE in the provided scope with
+ * correct types, so diagnostics/completions work properly.
  */
-const BUILTIN_CONTEXT_REFS = new Set(['turn_index', 'raw', 'self', 'content', 'context', 'item', 'index']);
+const ENGINE_INTERNAL_REFS = new Set(['self', 'raw', 'item', 'index', 'content']);
 
-export type ScriptEntry = { source: string; mode: 'script' | 'template' };
+// ---------------------------------------------------------------------------
+// AnalysisOrchestrator
+// ---------------------------------------------------------------------------
 
-export function collectScriptsFromBindings(bindings: ContextBinding[]): ScriptEntry[] {
-	return bindings
-		.filter((b) => b.script.trim())
-		.map((b) => ({ source: b.script, mode: 'script' as const }));
-}
+export type LevelResult = {
+	env: ContextEnvResult;
+	params: ContextParam[];
+	activeParams: ContextParam[];
+	ownParams: ContextParam[];
+};
 
-export function collectScriptsFromTree(children: BlockNode[], opts?: { skipFunctionNodes?: boolean }): ScriptEntry[] {
-	const scripts: ScriptEntry[] = [];
-	for (const block of collectBlocks(children)) {
-		if (isRawBlock(block)) {
-			scripts.push({ source: block.text, mode: block.mode });
+type GetApi = (providerId: string) => ApiKind | undefined;
+
+export class AnalysisOrchestrator {
+	private session: LanguageSession;
+	private promptDocs: DocumentManager;
+	private profileDocs: DocumentManager;
+	private botDocs: DocumentManager;
+	private fnParamDocs: DocumentManager;
+
+	constructor(session: LanguageSession) {
+		this.session = session;
+		this.promptDocs = new DocumentManager(session);
+		this.profileDocs = new DocumentManager(session);
+		this.botDocs = new DocumentManager(session);
+		this.fnParamDocs = new DocumentManager(session);
+	}
+
+	get docs(): { prompt: DocumentManager; profile: DocumentManager; bot: DocumentManager } {
+		return { prompt: this.promptDocs, profile: this.profileDocs, bot: this.botDocs };
+	}
+
+	// -----------------------------------------------------------------------
+	// Public API — level analysis
+	// -----------------------------------------------------------------------
+
+	analyzePrompt(prompt: Prompt, getApi: GetApi): LevelResult {
+		const nodeNames = collectNodeNames(prompt.children);
+		nodeNames.add('context');
+		const providedKeys = new Set(prompt.contextBindings.map((b) => b.name).filter((n) => n));
+		const provided: Record<string, TypeDesc> = { context: CONTEXT_TYPE };
+		const userTypes: Record<string, TypeDesc> = {};
+		applyUserTypeOverrides(userTypes, prompt.paramOverrides);
+
+		return this.analyzeLevel(this.promptDocs, 'prompt', {
+			children: prompt.children,
+			bindings: prompt.contextBindings,
+			paramOverrides: prompt.paramOverrides,
+			nodeNames,
+			providedKeys,
+			provided,
+			userTypes,
+			getApi,
+		});
+	}
+
+	analyzeProfile(profile: Profile, getApi: GetApi): LevelResult {
+		const nodeNames = collectNodeNames(profile.children);
+		nodeNames.add('context');
+		const provided: Record<string, TypeDesc> = { context: CONTEXT_TYPE };
+		const userTypes: Record<string, TypeDesc> = {};
+		applyUserTypeOverrides(userTypes, profile.paramOverrides);
+
+		return this.analyzeLevel(this.profileDocs, 'profile', {
+			children: profile.children,
+			bindings: [],
+			paramOverrides: profile.paramOverrides,
+			nodeNames,
+			providedKeys: new Set(),
+			provided,
+			userTypes,
+			getApi,
+		});
+	}
+
+	analyzeBot(bot: Bot, prompt: Prompt, profile: Profile, getApi: GetApi): LevelResult {
+		// Topology: Prompt → Profile → Bot
+		const promptResult = this.analyzePrompt(prompt, getApi);
+		const profileResult = this.analyzeProfile(profile, getApi);
+
+		// provided: CONTEXT_TYPE + prompt/profile params (engine-resolved at this level)
+		const provided: Record<string, TypeDesc> = { context: CONTEXT_TYPE };
+		for (const p of promptResult.params) {
+			provided[p.name] = p.userType ?? p.inferredType;
 		}
+		for (const p of profileResult.params) {
+			provided[p.name] = p.userType ?? p.inferredType;
+		}
+
+		// user: bot-level param overrides only
+		const userTypes: Record<string, TypeDesc> = {};
+		applyUserTypeOverrides(userTypes, bot.paramOverrides);
+
+		// providedKeys: bindings + prompt params + profile params
+		const providedKeys = new Set<string>();
+		for (const b of prompt.contextBindings) if (b.name) providedKeys.add(b.name);
+		for (const p of promptResult.params) providedKeys.add(p.name);
+		for (const p of profileResult.params) providedKeys.add(p.name);
+
+		// nodeNames: all 3 levels
+		const nodeNames = new Set<string>();
+		for (const n of collectNodeNames(prompt.children)) nodeNames.add(n);
+		for (const n of collectNodeNames(profile.children)) nodeNames.add(n);
+		for (const n of collectNodeNames(bot.children)) nodeNames.add(n);
+		nodeNames.add('context');
+
+		// Bot-level analysis includes all 3 levels
+		const allChildren = [...prompt.children, ...profile.children, ...bot.children];
+
+		const result = this.analyzeLevel(this.botDocs, 'bot', {
+			children: allChildren,
+			bindings: prompt.contextBindings,
+			paramOverrides: bot.paramOverrides,
+			nodeNames,
+			providedKeys,
+			provided,
+			userTypes,
+			getApi,
+			extraScripts: collectBotDisplayScripts(bot),
+		});
+
+		// Merge all 3 levels' params
+		const ownParams = result.params;
+		const allParams = [...promptResult.params, ...profileResult.params, ...ownParams];
+		const allActiveParams = allParams.filter((p) => p.active !== false);
+
+		return { env: result.env, params: allParams, activeParams: allActiveParams, ownParams };
 	}
-	for (const node of collectNodes(children)) {
-		if (opts?.skipFunctionNodes && node.isFunction) continue;
-		collectScriptsFromNode(node, scripts);
+
+	dispose(): void {
+		this.promptDocs.dispose();
+		this.profileDocs.dispose();
+		this.botDocs.dispose();
+		this.fnParamDocs.dispose();
 	}
-	return scripts;
+
+	// -----------------------------------------------------------------------
+	// Core: analyzeLevel — 6-step incremental analysis
+	// -----------------------------------------------------------------------
+
+	private analyzeLevel(
+		manager: DocumentManager,
+		level: string,
+		opts: {
+			children: BlockNode[];
+			bindings: ContextBinding[];
+			paramOverrides: Record<string, ParamOverride>;
+			nodeNames: Set<string>;
+			providedKeys: Set<string>;
+			provided: Record<string, TypeDesc>;
+			userTypes: Record<string, TypeDesc>;
+			getApi: GetApi;
+			extraScripts?: Map<string, { source: string; mode: 'script' | 'template' }>;
+		},
+	): LevelResult {
+		const { paramOverrides, nodeNames, providedKeys, getApi } = opts;
+
+		// Step 0: fn_param discovery (function nodes only)
+		const initialScope: DocScope = { provided: opts.provided, user: opts.userTypes };
+		const nodeFnParams = this.discoverFnParams(level, opts.children, initialScope, nodeNames);
+
+		// Step 1: rebuildNodes FIRST — establishes node types + system types.
+		// Uses user overrides only (no discovered params yet).
+		// After this, node_env has system tier with @turn_index + node names + types.
+		const flatInitial: Record<string, TypeDesc> = { ...opts.provided, ...opts.userTypes };
+		const blockLookup = new Map<string, RawBlock>();
+		for (const b of collectBlocks(opts.children)) {
+			if (isRawBlock(b)) blockLookup.set(b.id, b);
+		}
+		const allNodes = collectNodes(opts.children).filter((n) => n.name);
+		const webNodes: import('./engine.js').WebNode[] = allNodes
+			.map((n) => toWebNode(n, getApi(n.providerId), nodeFnParams[n.name], blockLookup, allNodes));
+		// Context bindings → Expr nodes (same as session-builder)
+		for (const b of opts.bindings) {
+			if (!b.name || !b.script.trim()) continue;
+			webNodes.push(bindingToExprNode(b.name, b.script));
+		}
+		const typecheckResult = this.session.rebuildNodes(webNodes, flatInitial);
+
+		const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {}, scriptErrors: {} };
+		const env: ContextEnvResult = typecheckResult.envErrors.length > 0
+			? EMPTY_ENV
+			: { ...typecheckResult, nodeFnParams };
+
+		// Step 2: Build provided scope from rebuildNodes contextTypes.
+		// contextTypes includes system tier (turn_index, node names with correct types).
+		// These go into provided tier → context_keys excludes them.
+		const provided: Record<string, TypeDesc> = { ...opts.provided };
+		if (typecheckResult.envErrors.length === 0) {
+			for (const [name, ty] of Object.entries(typecheckResult.contextTypes)) {
+				// contextTypes = system + user merged.
+				// Only add names that are NOT user-declared params.
+				if (!opts.userTypes[name]) {
+					provided[name] = ty;
+				}
+			}
+		}
+
+		// Step 3: Sync documents with scope (provided has real node types now)
+		const baseDocScope: DocScope = { provided, user: opts.userTypes };
+		const scripts = buildKeyedScripts(level, opts.children, opts.bindings, paramOverrides, baseDocScope);
+		if (opts.extraScripts) {
+			for (const [key, entry] of opts.extraScripts) {
+				scripts.set(key, { source: entry.source, mode: entry.mode, scope: baseDocScope });
+			}
+		}
+		manager.sync(scripts);
+
+		// Step 3.5: Bind node documents to inference units
+		for (const [key] of scripts) {
+			const parts = key.split(':');
+			if (parts.length >= 4 && parts[1] === 'node') {
+				const nodeName = parts[2];
+				const field = parts[3];
+				const fieldMap: Record<string, [string, number | undefined]> = {
+					'init': ['initialValue', undefined],
+					'bind': ['bind', undefined],
+					'assert': ['assert', undefined],
+					'ifmod': ['ifModifiedKey', undefined],
+					'expr': ['exprSource', undefined],
+				};
+				if (fieldMap[field]) {
+					const [apiField, idx] = fieldMap[field];
+					manager.bindDocToNode(key, nodeName, apiField, idx);
+				} else if (field === 'msg' && parts[4] !== undefined) {
+					const msgIdx = parseInt(parts[4]);
+					if (parts[5] === 'tmpl') {
+						manager.bindDocToNode(key, nodeName, 'iteratorTmpl', msgIdx);
+					} else if (parts[5] === 'iter') {
+						manager.bindDocToNode(key, nodeName, 'iteratorExpr', msgIdx);
+					} else {
+						manager.bindDocToNode(key, nodeName, 'message', msgIdx);
+					}
+				}
+			}
+		}
+
+		// Step 4: Discovery — collectAllKeys (no known)
+		// ENGINE_INTERNAL_REFS: @self/@raw/@item/@index — types depend on per-node context,
+		// added to per-document scope in Step 6 after nodeLocals are known.
+		const excludeSet = new Set([...providedKeys, ...ENGINE_INTERNAL_REFS]);
+		const discovery = manager.collectAllKeys({ exclude: excludeSet });
+
+		// Step 5: Scope Enrich — add discovered param types to user tier
+		const enrichedUser = { ...opts.userTypes };
+		for (const k of discovery.keys) {
+			if (!enrichedUser[k.name]) enrichedUser[k.name] = k.type;
+		}
+
+		// Step 6: 2nd rebuild — full typecheck with discovered params.
+		// 1st rebuild established system types (turn_index, node names).
+		// 2nd rebuild includes discovered params → accurate nodeErrors + nodeLocals.
+		// IMPORTANT: only pass CONTEXT_TYPE + user params. Do NOT pass system types
+		// (turn_index, node names) — compute_external_context_env adds those to system tier.
+		// Passing them as user would conflict with system tier.
+		const flatFull: Record<string, TypeDesc> = { ...opts.provided, ...enrichedUser };
+		const fullTypecheckResult = this.session.rebuildNodes(webNodes, flatFull);
+
+		const fullEnv: ContextEnvResult = fullTypecheckResult.envErrors.length > 0
+			? EMPTY_ENV
+			: { ...fullTypecheckResult, nodeFnParams };
+
+		// Step 7: Scope Finalize — add nodeLocals (@self/@raw) to provided tier
+		const enrichedDocScope: DocScope = { provided, user: enrichedUser };
+		if (fullTypecheckResult.envErrors.length === 0) {
+			for (const [key] of scripts) {
+				const docScope = buildDocScope(key, enrichedDocScope, fullTypecheckResult);
+				manager.updateScope(key, docScope);
+			}
+		}
+
+		// Step 8: Notify DocumentManager that rebuild completed → recompute diagnostics.
+		// Bound documents get inference results (shared subst, accurate).
+		// Unbound documents get standalone check_script.
+		manager.onRebuildComplete();
+
+		// Step 9: Pruning — re-query with known values
+		const knownScripts: Record<string, string> = {};
+		for (const [name, ov] of Object.entries(paramOverrides)) {
+			if (ov.resolution.kind === 'static' && ov.resolution.value.trim()) {
+				knownScripts[name] = ov.resolution.value;
+			}
+		}
+
+		const discoveryNames = new Set(discovery.keys.map((k) => k.name));
+		const survivingNames = new Set(discoveryNames);
+
+		if (Object.keys(knownScripts).length > 0) {
+			const pruningResult = manager.collectAllKeys({ exclude: excludeSet }, knownScripts);
+			for (const k of pruningResult.keys) {
+				if (k.status === 'pruned') survivingNames.delete(k.name);
+			}
+		}
+
+		// Step 10: Sanitization
+		const params = sanitizeParams(discovery, paramOverrides, survivingNames);
+		const activeParams = params.filter((p) => p.active);
+
+		return { env: { ...fullEnv, scriptErrors: {} }, params, activeParams, ownParams: params };
+	}
+
+	// nodeErrorsForKey removed — inference results are now stored in LspSession
+	// and returned automatically by diagnostics(docId) for bound documents.
+
+	// -----------------------------------------------------------------------
+	// fn_param discovery
+	// -----------------------------------------------------------------------
+
+	private discoverFnParams(
+		level: string,
+		children: BlockNode[],
+		baseScope: DocScope,
+		nodeNames: Set<string>,
+	): Record<string, DiscoveredFnParam[]> {
+		const result: Record<string, DiscoveredFnParam[]> = {};
+		const scripts = new Map<string, ScriptEntry>();
+
+		for (const node of collectNodes(children)) {
+			if (!node.isFunction || !node.name) continue;
+			const nodeScripts: { source: string; mode: 'script' | 'template' }[] = [];
+			collectScriptsFromNode(node, nodeScripts);
+			if (nodeScripts.length === 0) continue;
+
+			// Register function node scripts as documents
+			for (let i = 0; i < nodeScripts.length; i++) {
+				const s = nodeScripts[i];
+				if (!s.source.trim()) continue;
+				scripts.set(`${level}:fn:${node.name}:${i}`, {
+					source: s.source,
+					mode: s.mode,
+					scope: baseScope,
+				});
+			}
+		}
+
+		this.fnParamDocs.sync(scripts);
+
+		// Collect keys per function node
+		for (const node of collectNodes(children)) {
+			if (!node.isFunction || !node.name) continue;
+			const seen = new Map<string, TypeDesc>();
+
+			// Query each of this node's documents
+			for (let i = 0; ; i++) {
+				const key = `${level}:fn:${node.name}:${i}`;
+				if (!this.fnParamDocs.has(key)) break;
+				const keys = this.fnParamDocs.contextKeys(key);
+				for (const k of keys) {
+					if (nodeNames.has(k.name)) continue;
+					if (!seen.has(k.name) || isUnknownType(seen.get(k.name)!)) {
+						seen.set(k.name, k.type);
+					}
+				}
+			}
+
+			if (seen.size > 0) {
+				result[node.name] = Array.from(seen.entries())
+					.map(([name, inferredType]) => ({ name, inferredType }))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			}
+		}
+
+		return result;
+	}
 }
 
-function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
+// ---------------------------------------------------------------------------
+// Script collection helpers
+// ---------------------------------------------------------------------------
+
+function collectScriptsFromNode(node: Node, out: { source: string; mode: 'script' | 'template' }[]) {
 	if (node.strategy.initialValue?.trim()) out.push({ source: node.strategy.initialValue, mode: 'script' });
 	if (node.strategy.assert?.trim() && node.strategy.assert !== 'true') out.push({ source: node.strategy.assert, mode: 'script' });
 	if (node.strategy.execution?.mode === 'if-modified' && node.strategy.execution.key?.trim()) {
@@ -54,77 +411,182 @@ function collectScriptsFromNode(node: Node, out: ScriptEntry[]) {
 		if (msg.kind === 'iterator' && msg.iterator.trim()) {
 			out.push({ source: msg.iterator, mode: 'script' });
 		}
-		// Do NOT collect iterator templates here.
-		// They use @item/@index loop variables — handled by render_display.
 	}
 	if (node.kind === 'expr' && node.exprSource.trim()) {
 		out.push({ source: node.exprSource, mode: 'script' });
 	}
-	if ((node.strategy.persistency?.kind === 'sequence' || node.strategy.persistency?.kind === 'diff') && node.strategy.persistency.bind?.trim()) {
+	if ((node.strategy.persistency?.kind === 'sequence' || node.strategy.persistency?.kind === 'patch') && node.strategy.persistency.bind?.trim()) {
 		out.push({ source: node.strategy.persistency.bind, mode: 'script' });
 	}
 }
 
-function discoverFnParams(
+/**
+ * Build keyed scripts map with per-document scope.
+ *
+ * Each script gets a unique key ({level}:{kind}:{id}:{field})
+ * and the appropriate scope based on its position.
+ */
+function buildKeyedScripts(
+	level: string,
 	children: BlockNode[],
-	contextTypes: Record<string, TypeDesc>,
-	nodeNames: Set<string>,
-): Record<string, DiscoveredFnParam[]> {
-	const result: Record<string, DiscoveredFnParam[]> = {};
-	for (const node of collectNodes(children)) {
-		if (!node.isFunction || !node.name) continue;
-		const scripts: ScriptEntry[] = [];
-		collectScriptsFromNode(node, scripts);
-		if (scripts.length === 0) continue;
+	bindings: ContextBinding[],
+	paramOverrides: Record<string, ParamOverride>,
+	baseScope: DocScope,
+): Map<string, ScriptEntry> {
+	const scripts = new Map<string, ScriptEntry>();
 
-		// Analyze each script and collect context keys regardless of ok status.
-		// Type errors (e.g. @a + @b where both are unknown) don't invalidate
-		// key discovery — the keys are still valid fn_param candidates.
-		const seen = new Map<string, TypeDesc>();
-		for (const { source, mode } of scripts) {
-			if (!source.trim()) continue;
-			const analysis = analyzeWithTypes(source, mode, contextTypes);
-			for (const k of analysis.contextKeys) {
-				if (BUILTIN_CONTEXT_REFS.has(k.name) || nodeNames.has(k.name)) continue;
-				if (!seen.has(k.name) || isUnknownType(seen.get(k.name)!)) {
-					seen.set(k.name, k.type);
-				}
-			}
+	// Bindings
+	for (const b of bindings) {
+		if (!b.script.trim()) continue;
+		scripts.set(`${level}:binding:${b.name}`, {
+			source: b.script,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	// Raw blocks
+	for (const block of collectBlocks(children)) {
+		if (isRawBlock(block) && block.text.trim()) {
+			scripts.set(`${level}:rawblock:${block.id}`, {
+				source: block.text,
+				mode: block.mode,
+				scope: baseScope,
+			});
 		}
-
-		result[node.name] = Array.from(seen.entries())
-			.map(([name, inferredType]) => ({ name, inferredType }))
-			.sort((a, b) => a.name.localeCompare(b.name));
 	}
-	return result;
-}
 
-/** Convert a TypeDesc to a simple type string for fn_params (WASM parse_type_string compatible).
- *  Returns lowercase: "string", "int", "float", "bool". */
-export function typeDescToFnParamString(desc: TypeDesc): string {
-	if (desc.kind === 'primitive') return desc.name;
-	return '';
-}
-
-export function collectScriptsFromDisplay(entries: DisplayEntry[]): ScriptEntry[] {
-	const scripts: ScriptEntry[] = [];
-	for (const entry of entries) {
-		if (entry.condition.trim()) scripts.push({ source: entry.condition, mode: 'script' });
-		if (entry.template.trim()) scripts.push({ source: entry.template, mode: 'template' });
+	// Node fields (skip function nodes — handled by fn_param discovery)
+	for (const node of collectNodes(children)) {
+		if (node.isFunction || !node.name) continue;
+		addNodeScripts(scripts, level, node, baseScope);
 	}
+
+	// Param static value scripts
+	for (const [name, ov] of Object.entries(paramOverrides)) {
+		if (ov.resolution.kind === 'static' && ov.resolution.value.trim()) {
+			scripts.set(`${level}:param:${name}:static`, {
+				source: ov.resolution.value,
+				mode: 'script',
+				scope: baseScope,
+			});
+		}
+	}
+
 	return scripts;
 }
 
-export function collectScriptsFromRegions(regions: DisplayRegion[]): ScriptEntry[] {
-	const scripts: ScriptEntry[] = [];
-	for (const region of regions) {
-		if (region.kind === 'static' && region.template.trim()) {
-			scripts.push({ source: region.template, mode: 'template' });
-		} else if (region.kind === 'iterable') {
-			if (region.iterator.trim()) scripts.push({ source: region.iterator, mode: 'script' });
-			scripts.push(...collectScriptsFromDisplay(region.entries));
+function addNodeScripts(
+	scripts: Map<string, ScriptEntry>,
+	level: string,
+	node: Node,
+	baseScope: DocScope,
+): void {
+	const prefix = `${level}:node:${node.name}`;
+
+	// All node scripts use baseScope initially.
+	// Step 5 (buildDocScope) adds @self/@raw to provided tier after rebuildNodes.
+
+	if (node.kind === 'expr' && node.exprSource.trim()) {
+		scripts.set(`${prefix}:expr`, {
+			source: node.exprSource,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	if (node.strategy.initialValue?.trim()) {
+		scripts.set(`${prefix}:init`, {
+			source: node.strategy.initialValue,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	if ((node.strategy.persistency?.kind === 'sequence' || node.strategy.persistency?.kind === 'patch') && node.strategy.persistency.bind?.trim()) {
+		scripts.set(`${prefix}:bind`, {
+			source: node.strategy.persistency.bind,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	if (node.strategy.assert?.trim() && node.strategy.assert !== 'true') {
+		scripts.set(`${prefix}:assert`, {
+			source: node.strategy.assert,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	if (node.strategy.execution?.mode === 'if-modified' && node.strategy.execution.key?.trim()) {
+		scripts.set(`${prefix}:ifmod`, {
+			source: node.strategy.execution.key,
+			mode: 'script',
+			scope: baseScope,
+		});
+	}
+
+	for (let i = 0; i < node.messages.length; i++) {
+		const msg = node.messages[i];
+		if (msg.kind === 'block' && msg.source.type === 'inline' && msg.source.template.trim()) {
+			scripts.set(`${prefix}:msg:${i}`, {
+				source: msg.source.template,
+				mode: 'template',
+				scope: baseScope,
+			});
+		}
+		if (msg.kind === 'iterator' && msg.iterator.trim()) {
+			scripts.set(`${prefix}:msg:${i}:iter`, {
+				source: msg.iterator,
+				mode: 'script',
+				scope: baseScope,
+			});
+		}
+		// Iterator template: @item + @index in provided tier (engine loop variables)
+		if (msg.kind === 'iterator' && msg.template?.trim()) {
+			const iterScope: DocScope = {
+				provided: {
+					...baseScope.provided,
+					item: { kind: 'unsupported', raw: '?' },
+					index: { kind: 'primitive', name: 'int' },
+				},
+				user: baseScope.user,
+			};
+			scripts.set(`${prefix}:msg:${i}:tmpl`, {
+				source: msg.template,
+				mode: 'template',
+				scope: iterScope,
+			});
 		}
 	}
+}
+
+function collectBotDisplayScripts(bot: Bot): Map<string, { source: string; mode: 'script' | 'template' }> {
+	const scripts = new Map<string, { source: string; mode: 'script' | 'template' }>();
+
+	if (bot.display.iterator.trim()) {
+		scripts.set('bot:display:iterator', { source: bot.display.iterator, mode: 'script' });
+	}
+
+	for (const region of bot.regions) {
+		if (region.kind === 'static' && region.template.trim()) {
+			scripts.set(`bot:region:${region.id}:template`, { source: region.template, mode: 'template' });
+		} else if (region.kind === 'iterable') {
+			if (region.iterator.trim()) {
+				scripts.set(`bot:region:${region.id}:iterator`, { source: region.iterator, mode: 'script' });
+			}
+			for (const entry of region.entries) {
+				if (entry.condition.trim()) {
+					scripts.set(`bot:region:${region.id}:entry:${entry.id}:cond`, { source: entry.condition, mode: 'script' });
+				}
+				if (entry.template.trim()) {
+					scripts.set(`bot:region:${region.id}:entry:${entry.id}:tmpl`, { source: entry.template, mode: 'template' });
+				}
+			}
+		}
+	}
+
 	return scripts;
 }
 
@@ -132,199 +594,75 @@ export function collectNodeNames(children: BlockNode[]): Set<string> {
 	return new Set(collectNodes(children).map((n) => n.name).filter((n) => n));
 }
 
+// ---------------------------------------------------------------------------
+// Per-document scope construction
+// ---------------------------------------------------------------------------
+
 /**
- * Result of collectUnresolvedParams.
+ * Build the appropriate DocScope for a document based on its key.
  *
- * `hasSkippedScripts`: true if any script failed to analyze (syntax error, etc.)
- * and was skipped. This is critical for Sanitization — see twoPassAnalysis.
+ * @self/@raw go into the **provided** tier (engine-internal, not user params).
+ * After rebuildNodes (typecheckResult available), exact types are used.
+ * Before rebuildNodes (typecheckResult undefined), no @self/@raw in scope.
  */
-type CollectParamsResult = { keys: ContextKeyInfo[]; hasSkippedScripts: boolean };
+function buildDocScope(
+	key: string,
+	baseScope: DocScope,
+	typecheckResult: TypecheckNodesResult | undefined,
+): DocScope {
+	const parts = key.split(':');
+	// {level}:node:{name}:{field}
+	if (parts.length >= 4 && parts[1] === 'node') {
+		const nodeName = parts[2];
+		const field = parts[3];
+		const locals = typecheckResult?.nodeLocals[nodeName];
 
-function collectUnresolvedParams(opts: {
-	scripts: { source: string; mode: 'script' | 'template' }[];
-	nodeNames: Set<string>;
-	providedKeys: Set<string>;
-	contextTypes: Record<string, TypeDesc>;
-	knownScripts?: Record<string, string>;
-}): CollectParamsResult {
-	const seen = new Map<string, { type: TypeDesc; status: 'eager' | 'lazy' | 'pruned' }>();
-	let hasSkippedScripts = false;
+		// Check for iterator template: {level}:node:{name}:msg:{i}:tmpl
+		const isIterTemplate = parts.length >= 6 && parts[5] === 'tmpl';
 
-	const knownEntries = opts.knownScripts ? Object.entries(opts.knownScripts) : [];
-	for (const { source, mode } of opts.scripts) {
-		if (!source.trim()) continue;
-		const useKnown = knownEntries.length > 0;
-		const result = useKnown
-			? analyzeWithKnown(source, mode, opts.contextTypes, opts.knownScripts!)
-			: analyzeWithTypes(source, mode, opts.contextTypes);
-		if (!result.ok) {
-			console.warn('[collectUnresolvedParams] skipping failed script:', mode, source.slice(0, 80), result.errors);
-			hasSkippedScripts = true;
-			continue;
+		if (isIterTemplate) {
+			// Iterator template scope: @self + @item + @index in provided tier
+			const iterProvided: Record<string, TypeDesc> = { ...baseScope.provided };
+			if (locals) iterProvided['self'] = locals.self;
+			iterProvided['item'] = { kind: 'unsupported', raw: '?' }; // TODO: refine from iterator expr type
+			iterProvided['index'] = { kind: 'primitive', name: 'int' };
+			return { provided: iterProvided, user: baseScope.user };
 		}
-		const filteredKeys = result.contextKeys.filter(
-			(k) => !BUILTIN_CONTEXT_REFS.has(k.name) && !opts.nodeNames.has(k.name) && !opts.providedKeys.has(k.name)
-		);
-		for (const key of filteredKeys) {
-			const existing = seen.get(key.name);
-			if (!existing || isUnknownType(existing.type)) {
-				seen.set(key.name, { type: key.type, status: key.status });
-			} else if (existing.status === 'pruned' && key.status !== 'pruned') {
-				// Pruned key found on a live path in another script → upgrade
-				seen.set(key.name, { type: existing.type, status: key.status });
-			} else if (existing.status === 'lazy' && key.status === 'eager') {
-				seen.set(key.name, { type: existing.type, status: 'eager' });
+
+		if (locals) {
+			switch (field) {
+				case 'expr':
+				case 'msg': {
+					// Body scope: @self in provided tier
+					return { provided: { ...baseScope.provided, self: locals.self }, user: baseScope.user };
+				}
+				case 'bind':
+				case 'assert': {
+					// Bind scope: @self + @raw in provided tier
+					return { provided: { ...baseScope.provided, self: locals.self, raw: locals.raw }, user: baseScope.user };
+				}
+				case 'init':
+				case 'ifmod': {
+					// InitialValue scope: no @self, no @raw
+					return baseScope;
+				}
 			}
 		}
 	}
 
-	const keys = Array.from(seen.entries())
-		.map(([name, { type, status }]) => ({ name, type, status }))
-		.sort((a, b) => a.name.localeCompare(b.name));
-	return { keys, hasSkippedScripts };
+	return baseScope;
 }
 
-/**
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * twoPassAnalysis — the ONLY 2-phase analysis function.
- * ALL WASM analysis/typecheck MUST go through this function.
- * No separate WASM calls outside of this function.
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- *
- * ── Phase 1: Pure Type Discovery ──────────────────────────────────
- * Analyzes all scripts WITHOUT known values.
- * All branches are live → all @context refs are discovered with correct types.
- * If all scripts succeed, keys not found here are orphans → deleted.
- * If any script fails, existing params are preserved (see Sanitization).
- *
- * ── Phase 2: Typecheck + Pruning ──────────────────────────────────
- * Typechecks with Phase 1's full type set (compiles including dead branches).
- * Re-analyzes with known values to classify dead-branch keys as pruned.
- * Pruned keys → active: false (hidden in UI, settings preserved).
- *
- * ── Sanitization ──────────────────────────────────────────────────
- * Merges Phase 1 discovered keys with existingParams.
- * Behavior depends on whether Phase 1 had skipped (failed) scripts:
- *
- *   ALL scripts succeeded (hasSkippedScripts = false):
- *     Phase 1 result is AUTHORITATIVE — keys not found are truly gone.
- *     → Only Phase 1 keys survive. Orphan params are deleted.
- *
- *   Some scripts failed (hasSkippedScripts = true):
- *     Phase 1 result is INCOMPLETE — failed scripts may have contributed keys
- *     that we can't see right now.
- *     → Existing params are PRESERVED to protect user settings (resolution,
- *       userType, editorMode) from being destroyed by a transient syntax error.
- *     → Phase 1 keys are merged in (new discoveries added, types updated).
- *
- * This distinction prevents the scenario where a temporary typo wipes out
- * all param settings, which then don't come back even after fixing the typo
- * (because the store was already overwritten with empty params).
- *
- * IMPORTANT: Phase 1 MUST run WITHOUT known values.
- * If known values are provided, the engine's partition logic
- * omits dead-branch known keys entirely, causing Phase 2 typecheck to fail.
- *
- * Each level (Prompt/Profile/Bot) calls this with its OWN params only.
- * Other levels' params are passed as providedKeys (already resolved).
- */
-export type TwoPassResult = {
-	env: ContextEnvResult;
-	params: ContextParam[];
-	activeParams: ContextParam[];
-	ownParams: ContextParam[];
-};
+// ---------------------------------------------------------------------------
+// Sanitization
+// ---------------------------------------------------------------------------
 
-type GetApi = (providerId: string) => ApiKind | undefined;
-
-export function twoPassAnalysis(opts: {
-	scripts: ScriptEntry[];
-	nodeNames: Set<string>;
-	providedKeys: Set<string>;
-	paramOverrides: Record<string, ParamOverride>;
-	baseTypes?: Record<string, TypeDesc>;
-	children: BlockNode[];
-	getApi: GetApi;
-}): TwoPassResult {
-	const { paramOverrides } = opts;
-	const typesFromParams: Record<string, TypeDesc> = { ...(opts.baseTypes ?? {}) };
-	for (const [name, ov] of Object.entries(paramOverrides)) {
-		if (ov.userType) typesFromParams[name] = ov.userType;
-	}
-
-	// Pre-pass: discover fn_params for function nodes.
-	// Function node scripts are excluded from outer Phase 1 analysis
-	// to prevent fn_params from being counted as context params.
-	const nodeFnParams = discoverFnParams(opts.children, typesFromParams, opts.nodeNames);
-
-	const knownScripts: Record<string, string> = {};
-	for (const [name, ov] of Object.entries(paramOverrides)) {
-		if (ov.resolution.kind === 'static' && ov.resolution.value.trim()) {
-			knownScripts[name] = ov.resolution.value;
-		}
-	}
-
-	const allScripts: ScriptEntry[] = [...opts.scripts];
-	for (const [, ov] of Object.entries(paramOverrides)) {
-		if (ov.resolution.kind === 'static' && ov.resolution.value.trim()) {
-			allScripts.push({ source: ov.resolution.value, mode: 'script' });
-		}
-	}
-
-	// ── Phase 1: Pure type discovery (no known values) ──
-	const phase1 = collectUnresolvedParams({
-		scripts: allScripts,
-		nodeNames: opts.nodeNames,
-		providedKeys: opts.providedKeys,
-		contextTypes: typesFromParams,
-	});
-
-	// Full type set from Phase 1.
-	const fullTypes: Record<string, TypeDesc> = { ...typesFromParams };
-	for (const k of phase1.keys) {
-		if (!fullTypes[k.name]) fullTypes[k.name] = k.type;
-	}
-
-	// ── Phase 2: Typecheck + Pruning ──
-	// Build block lookup so toWebNode can resolve block references.
-	// Without this, block-referenced messages are sent as empty strings
-	// and @self / other node-local context is invisible to the typechecker.
-	const blockLookup = new Map<string, RawBlock>();
-	for (const b of collectBlocks(opts.children)) {
-		if (isRawBlock(b)) blockLookup.set(b.id, b);
-	}
-	const allNodes = collectNodes(opts.children).filter((n) => n.name);
-	const webNodes = allNodes
-		.map((n) => toWebNode(n, opts.getApi(n.providerId), nodeFnParams[n.name], blockLookup, allNodes));
-	const typecheckResult = typecheckNodes(webNodes, fullTypes);
-	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {} };
-	const env: ContextEnvResult = typecheckResult.envErrors.length > 0
-		? EMPTY_ENV
-		: { ...typecheckResult, nodeFnParams };
-
-	// Pruning with known values.
-	const phase1Names = new Set(phase1.keys.map((k) => k.name));
-	const survivingNames = new Set(phase1Names);
-
-	if (Object.keys(knownScripts).length > 0) {
-		const phase2 = collectUnresolvedParams({
-			scripts: allScripts,
-			nodeNames: opts.nodeNames,
-			providedKeys: opts.providedKeys,
-			contextTypes: fullTypes,
-			knownScripts,
-		});
-		for (const k of phase2.keys) {
-			if (k.status === 'pruned') survivingNames.delete(k.name);
-		}
-	}
-
-	// ── Sanitization ──
-	// See docstring above for the full explanation of the two modes.
-	const phase1KeySet = new Set(phase1.keys.map((k) => k.name));
-
-	// Build params from Phase 1 discovered keys, merging with overrides.
-	const params: ContextParam[] = phase1.keys.map((k) => {
+function sanitizeParams(
+	discovery: CollectedKeys,
+	paramOverrides: Record<string, ParamOverride>,
+	survivingNames: Set<string>,
+): ContextParam[] {
+	const params: ContextParam[] = discovery.keys.map((k) => {
 		const ov = paramOverrides[k.name];
 		return {
 			name: k.name,
@@ -336,11 +674,11 @@ export function twoPassAnalysis(opts: {
 		};
 	});
 
-	// When scripts were skipped, preserve overrides entries that Phase 1 didn't find.
-	// These may belong to the failed scripts — deleting them would destroy user settings.
-	if (phase1.hasSkippedScripts) {
+	// Preserve overrides for scripts that failed (hasSkippedScripts)
+	if (discovery.hasSkippedScripts) {
+		const discoveredNames = new Set(discovery.keys.map((k) => k.name));
 		for (const [name, ov] of Object.entries(paramOverrides)) {
-			if (!phase1KeySet.has(name)) {
+			if (!discoveredNames.has(name)) {
 				params.push({
 					name,
 					inferredType: { kind: 'unsupported', raw: '?' },
@@ -353,120 +691,18 @@ export function twoPassAnalysis(opts: {
 		params.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	const activeParams = params.filter((p) => p.active);
-	return { env, params, activeParams, ownParams: params };
+	return params;
 }
 
-export function analyzePrompt(prompt: Prompt, getApi: GetApi): TwoPassResult {
-	const nodeNames = collectNodeNames(prompt.children);
-	nodeNames.add('context');
-	return twoPassAnalysis({
-		scripts: [
-			...collectScriptsFromBindings(prompt.contextBindings),
-			...collectScriptsFromTree(prompt.children, { skipFunctionNodes: true }),
-		],
-		nodeNames,
-		providedKeys: new Set(prompt.contextBindings.map((b) => b.name).filter((n) => n)),
-		paramOverrides: prompt.paramOverrides,
-		baseTypes: { context: CONTEXT_TYPE },
-		children: prompt.children,
-		getApi,
-	});
+function applyUserTypeOverrides(scope: Record<string, TypeDesc>, overrides: Record<string, ParamOverride>): void {
+	for (const [name, ov] of Object.entries(overrides)) {
+		if (ov.userType) scope[name] = ov.userType;
+	}
 }
 
-export function analyzeProfile(profile: Profile, getApi: GetApi): TwoPassResult {
-	const nodeNames = collectNodeNames(profile.children);
-	nodeNames.add('context');
-	return twoPassAnalysis({
-		scripts: collectScriptsFromTree(profile.children, { skipFunctionNodes: true }),
-		nodeNames,
-		providedKeys: new Set(),
-		paramOverrides: profile.paramOverrides,
-		baseTypes: { context: CONTEXT_TYPE },
-		children: profile.children,
-		getApi,
-	});
-}
-
-/**
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * analyzeBot — Bot-level param analysis with full hierarchy context.
- *
- * Runs sub-analyses for prompt/profile internally, then discovers
- * bot-level params using twoPassAnalysis. Returns ALL params merged.
- *
- * DO NOT change this structure.
- * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- */
-export function analyzeBot(bot: Bot, prompt: Prompt, profile: Profile, getApi: GetApi): TwoPassResult {
-	// Sub-analyses to get inferred types for prompt/profile params
-	const promptResult = analyzePrompt(prompt, getApi);
-	const profileResult = analyzeProfile(profile, getApi);
-
-	// baseTypes: prompt/profile params' inferred/user types + CONTEXT_TYPE
-	const baseTypes: Record<string, TypeDesc> = { context: CONTEXT_TYPE };
-	for (const p of promptResult.params) {
-		if (p.userType) baseTypes[p.name] = p.userType;
-		else if (p.inferredType) baseTypes[p.name] = p.inferredType;
-	}
-	for (const p of profileResult.params) {
-		if (p.userType) baseTypes[p.name] = p.userType;
-		else if (p.inferredType) baseTypes[p.name] = p.inferredType;
-	}
-
-	// providedKeys: bindings + prompt params + profile params
-	const providedKeys = new Set<string>();
-	for (const b of prompt.contextBindings) if (b.name) providedKeys.add(b.name);
-	for (const p of promptResult.params) providedKeys.add(p.name);
-	for (const p of profileResult.params) providedKeys.add(p.name);
-
-	// nodeNames: all nodes across 3 levels
-	const nodeNames = new Set<string>();
-	for (const n of collectNodeNames(prompt.children)) nodeNames.add(n);
-	for (const n of collectNodeNames(profile.children)) nodeNames.add(n);
-	for (const n of collectNodeNames(bot.children)) nodeNames.add(n);
-	nodeNames.add('context');
-
-	// scripts: all 3 levels + bot display/region iterators only
-	const scripts = [
-		...collectScriptsFromBindings(prompt.contextBindings),
-		...collectScriptsFromTree(prompt.children, { skipFunctionNodes: true }),
-		...collectScriptsFromTree(profile.children, { skipFunctionNodes: true }),
-		...collectScriptsFromTree(bot.children, { skipFunctionNodes: true }),
-	];
-	if (bot.display.iterator.trim()) {
-		scripts.push({ source: bot.display.iterator, mode: 'script' as const });
-	}
-	for (const region of bot.regions) {
-		if (region.kind === 'iterable' && region.iterator.trim()) {
-			scripts.push({ source: region.iterator, mode: 'script' as const });
-		} else if (region.kind === 'static' && region.template.trim()) {
-			scripts.push({ source: region.template, mode: 'template' as const });
-		}
-	}
-
-	// twoPassAnalysis discovers bot-level params only
-	const result = twoPassAnalysis({
-		scripts,
-		nodeNames,
-		providedKeys,
-		paramOverrides: bot.paramOverrides,
-		baseTypes,
-		children: [...prompt.children, ...profile.children, ...bot.children],
-		getApi,
-	});
-
-	// Merge all 3 levels' params into the result
-	const ownParams = result.params;
-	const allParams = [
-		...promptResult.params,
-		...profileResult.params,
-		...ownParams,
-	];
-	const allActiveParams = allParams.filter((p) => p.active !== false);
-
-	return { env: result.env, params: allParams, activeParams: allActiveParams, ownParams };
-}
+// ---------------------------------------------------------------------------
+// Pure helpers (kept from original)
+// ---------------------------------------------------------------------------
 
 export function mergeParams(
 	analysisParams: ContextParam[],
@@ -479,7 +715,6 @@ export function mergeParams(
 	});
 }
 
-/** Remove overrides for params that no longer exist in analysis results. */
 export function pruneOverrides(
 	overrides: Record<string, ParamOverride>,
 	analysisParams: ContextParam[]
@@ -492,10 +727,15 @@ export function pruneOverrides(
 	return pruned;
 }
 
-/**
- * Convert a UI Node to the WebNode format expected by the WASM engine.
- * Message block references are resolved to inline templates.
- */
+export function typeDescToFnParamString(desc: TypeDesc): string {
+	if (desc.kind === 'primitive') return desc.name;
+	return '';
+}
+
+// ---------------------------------------------------------------------------
+// WebNode conversion (kept from original)
+// ---------------------------------------------------------------------------
+
 function sanitizeExecution(execution: import('./types.js').Execution | undefined): import('./types.js').Execution {
 	switch (execution?.mode) {
 		case 'always':
@@ -512,7 +752,7 @@ function sanitizePersistency(persistency: import('./types.js').Persistency | und
 		case 'ephemeral':
 		case 'snapshot':
 		case 'sequence':
-		case 'diff':
+		case 'patch':
 			return persistency;
 		default:
 			return { kind: 'ephemeral' };
@@ -599,10 +839,74 @@ export function toWebNode(node: Node, api: ApiKind | undefined, discoveredFnPara
 
 export type DiscoveredFnParam = { name: string; inferredType: TypeDesc };
 
+/** Convert a context binding to an Expr WebNode. */
+export function bindingToExprNode(name: string, script: string): WebNode {
+	return {
+		name,
+		kind: 'expr',
+		exprSource: script,
+		strategy: {
+			execution: { mode: 'once-per-turn' },
+			persistency: { kind: 'ephemeral' },
+			retry: 0,
+			assert: '',
+		},
+		isFunction: false,
+		fnParams: [],
+	};
+}
+
 export type ContextEnvResult = {
 	contextTypes: Record<string, TypeDesc>;
 	nodeLocals: Record<string, { raw: TypeDesc; self: TypeDesc }>;
 	nodeErrors: Record<string, NodeErrors>;
 	nodeFnParams: Record<string, DiscoveredFnParam[]>;
+	/** Per-document diagnostics — keyed by document key. Reactive via ownerEnv. */
+	scriptErrors: Record<string, import('./engine.js').EngineError[]>;
 };
 
+// Re-export
+export type { ScriptEntry } from './document-manager.svelte.js';
+
+// Display/Region script collection — used by bot-settings and session-builder
+export function collectScriptsFromDisplay(entries: DisplayEntry[]): { source: string; mode: 'script' | 'template' }[] {
+	const scripts: { source: string; mode: 'script' | 'template' }[] = [];
+	for (const entry of entries) {
+		if (entry.condition.trim()) scripts.push({ source: entry.condition, mode: 'script' });
+		if (entry.template.trim()) scripts.push({ source: entry.template, mode: 'template' });
+	}
+	return scripts;
+}
+
+export function collectScriptsFromRegions(regions: DisplayRegion[]): { source: string; mode: 'script' | 'template' }[] {
+	const scripts: { source: string; mode: 'script' | 'template' }[] = [];
+	for (const region of regions) {
+		if (region.kind === 'static' && region.template.trim()) {
+			scripts.push({ source: region.template, mode: 'template' });
+		} else if (region.kind === 'iterable') {
+			if (region.iterator.trim()) scripts.push({ source: region.iterator, mode: 'script' });
+			scripts.push(...collectScriptsFromDisplay(region.entries));
+		}
+	}
+	return scripts;
+}
+
+export function collectScriptsFromBindings(bindings: ContextBinding[]): { source: string; mode: 'script' | 'template' }[] {
+	return bindings
+		.filter((b) => b.script.trim())
+		.map((b) => ({ source: b.script, mode: 'script' as const }));
+}
+
+export function collectScriptsFromTree(children: BlockNode[], opts?: { skipFunctionNodes?: boolean }): { source: string; mode: 'script' | 'template' }[] {
+	const scripts: { source: string; mode: 'script' | 'template' }[] = [];
+	for (const block of collectBlocks(children)) {
+		if (isRawBlock(block)) {
+			scripts.push({ source: block.text, mode: block.mode });
+		}
+	}
+	for (const node of collectNodes(children)) {
+		if (opts?.skipFunctionNodes && node.isFunction) continue;
+		collectScriptsFromNode(node, scripts);
+	}
+	return scripts;
+}

@@ -96,6 +96,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-lsp"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-ext",
+ "acvus-mir",
+ "acvus-mir-pass",
+ "acvus-orchestration",
+ "acvus-utils",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "acvus-mir"
 version = "0.1.0"
 dependencies = [
@@ -1511,6 +1526,7 @@ dependencies = [
  "acvus-chat",
  "acvus-ext",
  "acvus-interpreter",
+ "acvus-lsp",
  "acvus-mir",
  "acvus-mir-pass",
  "acvus-orchestration",

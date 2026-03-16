@@ -19,30 +19,6 @@ pub enum Mode {
 
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-pub struct AnalyzeOptions {
-    pub source: String,
-    pub mode: Mode,
-    #[serde(default)]
-    pub context_types: FxHashMap<String, TypeDesc>,
-    #[serde(default)]
-    pub expected_tail: Option<TypeDesc>,
-    #[serde(default)]
-    pub known_values: FxHashMap<String, String>,
-}
-
-#[derive(Deserialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct TypecheckOptions {
-    pub source: String,
-    pub mode: Mode,
-    #[serde(default)]
-    pub context_types: FxHashMap<String, TypeDesc>,
-    #[serde(default)]
-    pub expected_tail: Option<TypeDesc>,
-}
-
-#[derive(Deserialize, Tsify)]
-#[serde(rename_all = "camelCase")]
 pub struct TypecheckNodesOptions {
     pub nodes: Vec<crate::convert::WebNode>,
     pub injected_types: FxHashMap<String, TypeDesc>,
@@ -60,39 +36,6 @@ pub struct EvaluateOptions {
 // ---------------------------------------------------------------------------
 // Output types
 // ---------------------------------------------------------------------------
-
-#[derive(Serialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyzeResult {
-    pub ok: bool,
-    pub errors: Vec<error::EngineError>,
-    pub context_keys: Vec<ContextKey>,
-    pub tail_type: TypeDesc,
-}
-
-#[derive(Serialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextKey {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: TypeDesc,
-    pub status: ContextKeyStatus,
-}
-
-#[derive(Serialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub enum ContextKeyStatus {
-    Eager,
-    Lazy,
-    Pruned,
-}
-
-#[derive(Serialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct CheckResult {
-    pub ok: bool,
-    pub errors: Vec<error::EngineError>,
-}
 
 #[derive(Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
@@ -114,7 +57,7 @@ impl TypecheckNodesResult {
     }
 }
 
-#[derive(Serialize, Tsify)]
+#[derive(Clone, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeLocalTypes {
     pub raw: TypeDesc,
@@ -122,7 +65,7 @@ pub struct NodeLocalTypes {
     pub self_ty: TypeDesc,
 }
 
-#[derive(Default, Serialize, Tsify)]
+#[derive(Clone, Default, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeErrors {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -435,4 +378,31 @@ pub fn parse_type_string(_interner: &Interner, s: &str) -> Ty {
         "byte" => Ty::Byte,
         _ => Ty::Infer,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Completion types
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: CompletionKind,
+    pub detail: String,
+    pub insert_text: String,
+}
+
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum CompletionKind {
+    Context,
+    Builtin,
+    Keyword,
+}
+
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResult {
+    pub items: Vec<CompletionItem>,
 }

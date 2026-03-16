@@ -132,9 +132,8 @@ pub fn compile_llm(
     let compiled_tools = compile_tool_bindings(&spec.tools)?;
     let compiled_cache_key = match &spec.cache_key {
         Some(ck) => {
-            let (expr, ck_ty) = compile::compile_script(interner, ck, registry)
+            let (expr, _ck_ty) = compile::compile_script_with_hint(interner, ck, registry, Some(&Ty::String))
                 .map_err(|e| vec![e])?;
-            compile::expect_ty("cache_key", &ck_ty, &Ty::String).map_err(|e| vec![e])?;
             all_keys.extend(expr.context_keys.iter().cloned());
             Some(expr)
         }

@@ -13,14 +13,14 @@
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
 
-	import { analyzePrompt, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
+	import { type AnalysisOrchestrator, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import { collectPromptDeps } from '$lib/dependencies.js';
 	import { Download } from 'lucide-svelte';
 	import { exportEntityZip } from '$lib/io.js';
 	import { confirmDelete } from '$lib/confirm-dialog.svelte.js';
 	import BasePage from './base-page.svelte';
 
-	let { promptId }: { promptId: string } = $props();
+	let { promptId, orchestrator }: { promptId: string; orchestrator: AnalysisOrchestrator } = $props();
 
 	let prompt = $derived(promptStore.get(promptId));
 	let deps = $derived(prompt ? collectPromptDeps(prompt) : []);
@@ -73,7 +73,7 @@
 
 	function runAnalysis() {
 		if (!prompt) return;
-		const result = analyzePrompt(prompt, (id) => providerStore.get(id)?.api);
+		const result = orchestrator.analyzePrompt(prompt, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
 		const pruned = pruneOverrides(prompt.paramOverrides, result.params);
@@ -155,8 +155,8 @@
 								value={binding.script}
 								oninput={(v) => updateBinding(i, { script: v })}
 								placeholder="e.g. @messages | map(...)"
-								contextTypes={discoveredContextTypes}
-								expectedTailType={binding.name === HISTORY_BINDING_NAME ? HISTORY_ENTRY_TYPE : undefined}
+								docManager={orchestrator.docs.prompt}
+								docKey={`prompt:binding:${binding.name}`}
 							/>
 							{#if binding.name === HISTORY_BINDING_NAME}
 								<p class="text-xs text-muted-foreground">Expected: <code class="text-[0.65rem]">List&lt;&#123;content: String, content_type: String, role: String&#125;&gt;</code></p>
@@ -196,7 +196,8 @@
 						<ContextParamsEditor
 							params={mergedParams}
 							onupdate={handleParamsUpdate}
-							contextTypes={discoveredContextTypes}
+							docManager={orchestrator.docs.prompt}
+							level="prompt"
 						/>
 					</div>
 				{/if}

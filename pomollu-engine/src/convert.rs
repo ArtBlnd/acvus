@@ -135,7 +135,7 @@ pub enum WebPersistency {
     Ephemeral,
     Snapshot,
     Sequence { bind: String },
-    Diff { bind: String },
+    Patch { bind: String },
 }
 
 impl WebNode {
@@ -237,7 +237,7 @@ impl WebNode {
             WebPersistency::Ephemeral => Persistency::Ephemeral,
             WebPersistency::Snapshot => Persistency::Snapshot,
             WebPersistency::Sequence { bind } => Persistency::Sequence { bind: interner.intern(bind) },
-            WebPersistency::Diff { bind } => Persistency::Diff { bind: interner.intern(bind) },
+            WebPersistency::Patch { bind } => Persistency::Patch { bind: interner.intern(bind) },
         };
 
         Ok(NodeSpec {

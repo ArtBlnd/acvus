@@ -3974,24 +3974,21 @@ mod tests {
     }
 
     #[test]
-    fn builtin_collect_sequence_returns_deque_same_origin() {
+    fn builtin_collect_on_sequence_coerces_to_iterator() {
+        // CollectSeq removed — Sequence coerces to Iterator, then Iterator collect applies.
+        // Result is List (not Deque — origin lost via coercion).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let ret = try_builtin(&mut s, "collect", &[
             Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
         ]).unwrap();
-        match ret {
-            Ty::Deque(_, ret_o) => {
-                assert_eq!(s.resolve_origin(ret_o), s.resolve_origin(o), "collect_seq must preserve origin");
-            }
-            other => panic!("expected Deque, got {other:?}"),
-        }
+        assert!(matches!(ret, Ty::List(_)), "collect on Sequence should return List (via Iterator coercion), got {ret:?}");
     }
 
-    // -- filter on Sequence → Iterator (origin lost) --
-
     #[test]
-    fn builtin_filter_on_sequence_returns_iterator() {
+    fn builtin_filter_on_sequence_coerces_to_iterator() {
+        // FilterSeq removed — Sequence coerces to Iterator, then Iterator filter applies.
+        // Result is Iterator (not Sequence — origin lost).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let ret = try_builtin(&mut s, "filter", &[
@@ -3999,7 +3996,7 @@ mod tests {
             Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool),
                 kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
         ]).unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, Effect::Pure)), "filter on Sequence should return Iterator, got {ret:?}");
+        assert!(matches!(ret, Ty::Iterator(..)), "filter on Sequence should return Iterator (origin lost), got {ret:?}");
     }
 
     // -- Effect propagation through HOF --

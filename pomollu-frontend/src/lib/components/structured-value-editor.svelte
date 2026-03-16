@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { TypeDesc, StructuredValue } from '$lib/type-parser.js';
+	import type { DocumentManager } from '$lib/document-manager.svelte.js';
 	import { createDefaultValue, isStructured, typeDescToString } from '$lib/type-parser.js';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -14,14 +15,16 @@
 		typeDesc,
 		value,
 		onchange,
-		contextTypes = {},
 		depth = 0,
+		docManager,
+		docKey,
 	}: {
 		typeDesc: TypeDesc;
 		value: StructuredValue;
 		onchange: (value: StructuredValue) => void;
-		contextTypes?: Record<string, TypeDesc>;
 		depth?: number;
+		docManager?: DocumentManager;
+		docKey?: string;
 	} = $props();
 
 	// Fall back to raw editor if too deep or unsupported
@@ -36,7 +39,8 @@
 		value={value.kind === 'raw' ? value.script : ''}
 		oninput={(v) => onchange({ kind: 'raw', script: v })}
 		placeholder={typeDescToString(typeDesc)}
-		{contextTypes}
+		{docManager}
+		{docKey}
 	/>
 {:else if typeDesc.kind === 'primitive'}
 	{#if typeDesc.name === 'bool'}
@@ -105,8 +109,9 @@
 						typeDesc={typeDesc.inner}
 						value={value.kind === 'option-some' ? value.inner : createDefaultValue(typeDesc.inner)}
 						onchange={(v: StructuredValue) => onchange({ kind: 'option-some', inner: v })}
-						{contextTypes}
 						depth={depth + 1}
+						{docManager}
+						docKey={docKey ? `${docKey}:some` : undefined}
 					/>
 				</div>
 			{:else}
@@ -115,7 +120,8 @@
 						mode="script"
 						value={value.kind === 'option-some' && value.inner.kind === 'raw' ? value.inner.script : ''}
 						oninput={(v) => onchange({ kind: 'option-some', inner: { kind: 'raw', script: v } })}
-						{contextTypes}
+						{docManager}
+						docKey={docKey ? `${docKey}:some` : undefined}
 					/>
 				</div>
 			{/if}
@@ -155,8 +161,9 @@
 						typeDesc={payloadType}
 						value={payloadValue}
 						onchange={(v: StructuredValue) => onchange({ kind: 'enum-variant', tag: selected, payload: v })}
-						{contextTypes}
 						depth={depth + 1}
+						{docManager}
+						docKey={docKey ? `${docKey}:${selected}` : undefined}
 					/>
 				</div>
 			{:else}
@@ -165,7 +172,8 @@
 						mode="script"
 						value={payloadValue.kind === 'raw' ? payloadValue.script : ''}
 						oninput={(v) => onchange({ kind: 'enum-variant', tag: selected, payload: { kind: 'raw', script: v } })}
-						{contextTypes}
+						{docManager}
+						docKey={docKey ? `${docKey}:${selected}` : undefined}
 					/>
 				</div>
 			{/if}
@@ -186,8 +194,9 @@
 							fields[field.name] = v;
 							onchange({ kind: 'object', fields });
 						}}
-						{contextTypes}
 						depth={depth + 1}
+						{docManager}
+						docKey={docKey ? `${docKey}:${field.name}` : undefined}
 					/>
 				{:else}
 					<AcvusEngineField
@@ -201,7 +210,8 @@
 							onchange({ kind: 'object', fields });
 						}}
 						placeholder={typeDescToString(field.type)}
-						{contextTypes}
+						{docManager}
+						docKey={docKey ? `${docKey}:${field.name}` : undefined}
 					/>
 				{/if}
 			</div>

@@ -129,7 +129,7 @@ export type Persistency =
 	| { kind: 'ephemeral' }
 	| { kind: 'snapshot' }
 	| { kind: 'sequence'; bind: string }
-	| { kind: 'diff'; bind: string };
+	| { kind: 'patch'; bind: string };
 
 export type FnParam = {
 	name: string;

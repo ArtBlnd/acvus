@@ -2,18 +2,20 @@ import type { RenderedCard } from '$lib/types.js';
 import type { TypeDesc } from '$lib/type-parser.js';
 import type {
 	TypeDesc as WasmTypeDesc,
-	AnalyzeResult as WasmAnalyzeResult,
 	TypecheckNodesResult as WasmTypecheckNodesResult,
 	NodeLocalTypes as WasmNodeLocalTypes,
 	EngineError,
 	NodeErrors as WasmNodeErrors,
+	DiagnosticsResult as WasmDiagnosticsResult,
+	ContextKeysResult as WasmContextKeysResult,
+	ContextKey as WasmContextKey,
+	WasmScope,
+	WasmKnownValues,
 } from '$lib/wasm/pomollu_engine.js';
 import {
-	analyze as wasmAnalyze,
-	typecheck as wasmTypecheck,
 	evaluate as wasmEvaluate,
-	typecheck_nodes as wasmTypecheckNodes,
 	ChatSession as WasmChatSession,
+	LanguageSession as WasmLanguageSession,
 } from '$lib/wasm/pomollu_engine.js';
 
 // ---------------------------------------------------------------------------
@@ -64,8 +66,6 @@ export type NodeErrors = {
 // ---------------------------------------------------------------------------
 // Map → Record helper
 // ---------------------------------------------------------------------------
-// Tsify serializes FxHashMap as JS Map, not plain object.
-// We need to convert to Record for TS consumers.
 
 export function mapToRecord<V>(mapOrObj: Map<string, V> | Record<string, V>): Record<string, V> {
 	if (mapOrObj instanceof Map) {
@@ -126,111 +126,14 @@ export function formatErrors(errors: EngineError[] | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// CheckResult — no TypeDesc, pass-through
-// ---------------------------------------------------------------------------
-
-export type CheckResult = { ok: boolean; errors: EngineError[] };
-
-export function typecheck(source: string, mode: 'script' | 'template'): CheckResult {
-	return wasmTypecheck({ source, mode });
-}
-
-export function typecheckWithTypes(
-	source: string,
-	mode: 'script' | 'template',
-	contextTypes: Record<string, TypeDesc>
-): CheckResult {
-	return wasmTypecheck({ source, mode, contextTypes });
-}
-
-export function typecheckWithTail(
-	source: string,
-	mode: 'script' | 'template',
-	contextTypes: Record<string, TypeDesc>,
-	expectedTail: TypeDesc
-): CheckResult {
-	return wasmTypecheck({ source, mode, contextTypes, expectedTail });
-}
-
-// ---------------------------------------------------------------------------
-// AnalyzeResult — convert WASM TypeDesc → type-parser TypeDesc
+// Context key info — returned by LanguageSession.contextKeys()
 // ---------------------------------------------------------------------------
 
 export type ContextKeyInfo = { name: string; type: TypeDesc; status: 'eager' | 'lazy' | 'pruned' };
 
-export type AnalyzeResult = {
-	ok: boolean;
-	errors: EngineError[];
-	contextKeys: ContextKeyInfo[];
-	tailType: TypeDesc;
-};
-
-function convertAnalyzeResult(raw: WasmAnalyzeResult): AnalyzeResult {
-	return {
-		ok: raw.ok,
-		errors: raw.errors,
-		contextKeys: raw.contextKeys.map((k) => ({
-			name: k.name,
-			type: convertTypeDesc(k.type),
-			status: k.status,
-		})),
-		tailType: convertTypeDesc(raw.tailType),
-	};
-}
-
-export function analyze(source: string, mode: 'script' | 'template'): AnalyzeResult {
-	return convertAnalyzeResult(wasmAnalyze({ source, mode }));
-}
-
-export function analyzeWithTypes(
-	source: string,
-	mode: 'script' | 'template',
-	contextTypes: Record<string, TypeDesc>
-): AnalyzeResult {
-	return convertAnalyzeResult(wasmAnalyze({ source, mode, contextTypes }));
-}
-
-export function analyzeWithKnown(
-	source: string,
-	mode: 'script' | 'template',
-	contextTypes: Record<string, TypeDesc>,
-	knownValues: Record<string, string>
-): AnalyzeResult {
-	return convertAnalyzeResult(wasmAnalyze({ source, mode, contextTypes, knownValues }));
-}
-
-export function analyzeWithTail(
-	source: string,
-	mode: 'script' | 'template',
-	contextTypes: Record<string, TypeDesc>,
-	expectedTail: TypeDesc
-): AnalyzeResult {
-	return convertAnalyzeResult(wasmAnalyze({ source, mode, contextTypes, expectedTail }));
-}
-
 // ---------------------------------------------------------------------------
-// TypecheckNodes — convert WASM TypeDesc → type-parser TypeDesc
+// TypecheckNodes result types — used by LanguageSession.rebuildNodes()
 // ---------------------------------------------------------------------------
-
-type WebNodeShared = {
-	name: string;
-	strategy: {
-		execution:
-			| { mode: 'always' }
-			| { mode: 'once-per-turn' }
-			| { mode: 'if-modified'; key: string };
-		persistency:
-			| { kind: 'ephemeral' }
-			| { kind: 'snapshot' }
-			| { kind: 'sequence'; bind: string }
-			| { kind: 'diff'; bind: string };
-		initialValue?: string;
-		retry: number;
-		assert: string;
-	};
-	isFunction: boolean;
-	fnParams: { name: string; type: string }[];
-};
 
 export type WebNode = WebNodeShared & (
 	| {
@@ -257,6 +160,26 @@ export type WebNode = WebNodeShared & (
 		kind: 'plain';
 	}
 );
+
+type WebNodeShared = {
+	name: string;
+	strategy: {
+		execution:
+			| { mode: 'always' }
+			| { mode: 'once-per-turn' }
+			| { mode: 'if-modified'; key: string };
+		persistency:
+			| { kind: 'ephemeral' }
+			| { kind: 'snapshot' }
+			| { kind: 'sequence'; bind: string }
+			| { kind: 'patch'; bind: string };
+		initialValue?: string;
+		retry: number;
+		assert: string;
+	};
+	isFunction: boolean;
+	fnParams: { name: string; type: string }[];
+};
 
 export type TypecheckNodesResult = {
 	envErrors: EngineError[];
@@ -300,11 +223,12 @@ function convertTypecheckNodesResult(raw: WasmTypecheckNodesResult): TypecheckNo
 	};
 }
 
-export function typecheckNodes(
-	nodes: WebNode[],
-	injectedTypes: Record<string, TypeDesc>
-): TypecheckNodesResult {
-	return convertTypecheckNodesResult(wasmTypecheckNodes({ nodes, injectedTypes }));
+function convertContextKey(raw: WasmContextKey): ContextKeyInfo {
+	return {
+		name: raw.name,
+		type: convertTypeDesc(raw.type),
+		status: raw.status,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +240,6 @@ export async function evaluate(
 	mode: 'script' | 'template',
 	context?: Record<string, unknown>
 ): Promise<unknown> {
-	// context values are JsConcreteValue at the WASM boundary — opaque to TS callers
 	return wasmEvaluate({ source, mode, context: context as never });
 }
 
@@ -342,7 +265,7 @@ export type PersistencyConfig =
 	| { kind: 'ephemeral' }
 	| { kind: 'snapshot' }
 	| { kind: 'sequence'; bind: string }
-	| { kind: 'diff'; bind: string };
+	| { kind: 'patch'; bind: string };
 
 export type StrategyConfig = {
 	execution: ExecutionConfig;
@@ -356,8 +279,6 @@ export type NodeConfig = {
 	name: string;
 	kind: string;
 	strategy: StrategyConfig;
-
-	// LLM-specific
 	provider?: string;
 	api?: 'openai' | 'anthropic' | 'google';
 	model?: string;
@@ -369,19 +290,11 @@ export type NodeConfig = {
 	max_tokens?: { input?: number; output?: number };
 	messages?: MessageConfig[];
 	tools?: { name: string; description: string; node: string; params: { name: string; type: string; description?: string }[] }[];
-
-	// Function node
 	is_function?: boolean;
 	fn_params?: { name: string; type: string; description?: string }[];
-
-	// Plain/Expr/Display-specific
 	template?: string;
 	output_ty?: TypeDesc;
-
-	// Display-specific (iterable)
 	iterator?: string;
-
-	// Iterator node-specific
 	sources?: { name: string; node: string }[];
 	unordered?: boolean;
 };
@@ -416,29 +329,18 @@ export class ChatSession {
 		this.inner = inner;
 	}
 
-	/** True while an exclusive operation (turn/undo/goto) holds the lock. */
 	get busy(): boolean {
 		return this._exclusive;
 	}
 
-	/** True after inner WASM object has been freed. */
 	get freed(): boolean {
 		return this._freed;
 	}
 
-	/** True after a WASM panic/trap — session is unusable. */
 	get crashed(): boolean {
 		return this._crashed;
 	}
 
-	// -----------------------------------------------------------------------
-	// Lock primitives
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Acquire exclusive lock. Sets the flag immediately to reject new reads,
-	 * then waits for any in-flight read operations to drain.
-	 */
 	private async acquireExclusive(): Promise<void> {
 		if (this._exclusive) throw new Error('Session is busy');
 		this._exclusive = true;
@@ -453,10 +355,6 @@ export class ChatSession {
 		this._exclusive = false;
 	}
 
-	/**
-	 * Run fn under a shared read guard. If exclusive lock is held or session
-	 * is freed/crashed, returns fallback immediately without touching WASM.
-	 */
 	private async withReadGuard<T>(fallback: T, fn: () => Promise<T>): Promise<T> {
 		if (this._freed || this._exclusive) return fallback;
 		this._inflightReads++;
@@ -472,10 +370,6 @@ export class ChatSession {
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Construction
-	// -----------------------------------------------------------------------
-
 	static async create(
 		config: SessionConfig,
 		sessionId: string,
@@ -487,14 +381,6 @@ export class ChatSession {
 		return new ChatSession(inner);
 	}
 
-	// -----------------------------------------------------------------------
-	// Exclusive operations (turn, undo, goto)
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Start an evaluation. Must be followed by evaluateNext() calls.
-	 * Acquires exclusive lock — release with finishEvaluate() when done.
-	 */
 	async startEvaluate(nodeName: string, noExecute: boolean, resolver: ResolverFn): Promise<void> {
 		if (this._freed) throw new Error('ChatSession already freed');
 		if (this._crashed) throw new Error('ChatSession crashed — recreate session');
@@ -507,30 +393,17 @@ export class ChatSession {
 		}
 	}
 
-	/**
-	 * Pull the next item from the current evaluation.
-	 * Returns the item value, or null when done.
-	 * NeedContext/NeedExternCall are handled internally by the WASM layer.
-	 */
 	async evaluateNext(resolver: ResolverFn): Promise<unknown | null> {
 		if (this._freed) throw new Error('ChatSession already freed');
 		if (this._crashed) throw new Error('ChatSession crashed — recreate session');
 		return await this.inner.evaluate_next(resolver);
 	}
 
-	/**
-	 * Cancel an in-progress evaluation. Rolls back cursor if executing.
-	 */
 	cancelEvaluate(): void {
 		if (this._freed) return;
 		this.inner.cancel_evaluate();
 	}
 
-	/**
-	 * Call after evaluation is complete (evaluateNext returned null).
-	 * Releases the exclusive lock. Actually frees the WASM object if
-	 * free() was called during evaluation.
-	 */
 	finishEvaluate(): void {
 		this.releaseExclusive();
 		if (this._pendingFree && !this._freed) {
@@ -544,7 +417,6 @@ export class ChatSession {
 		this.finishEvaluate();
 	}
 
-	/** Undo: move cursor to parent entry. */
 	async undo(): Promise<void> {
 		if (this._freed) return;
 		await this.acquireExclusive();
@@ -555,7 +427,6 @@ export class ChatSession {
 		}
 	}
 
-	/** Navigate to a specific entry by UUID. */
 	async goto(id: string): Promise<void> {
 		if (this._freed) return;
 		await this.acquireExclusive();
@@ -566,68 +437,25 @@ export class ChatSession {
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// Read operations (shared, rejected while exclusive lock is held)
-	// -----------------------------------------------------------------------
-
 	async turnCount(): Promise<number> {
 		return this.withReadGuard(0, () => this.inner.turn_count());
 	}
 
-	async displayListLen(iteratorScript: string): Promise<number> {
-		return this.withReadGuard(0, () => this.inner.display_list_len(iteratorScript));
-	}
-
-	async renderDisplay(
-		iteratorScript: string,
-		entriesJson: string,
-		index: number
-	): Promise<RenderedCard[]> {
-		return this.withReadGuard([], () =>
-			this.inner.render_display(iteratorScript, entriesJson, index) as unknown as Promise<RenderedCard[]>
-		);
-	}
-
-	async renderStatic(template: string): Promise<RenderedCard[]> {
-		return this.withReadGuard([], () =>
-			this.inner.render_static(template) as unknown as Promise<RenderedCard[]>
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// Tree API (sync — no guard needed, just check flags)
-	// -----------------------------------------------------------------------
-
-	/** Get the full tree of turn nodes and current cursor. */
 	tree(): TreeView | null {
 		if (this._freed || this._exclusive) return null;
 		return this.inner.tree() as unknown as TreeView;
 	}
 
-	// -----------------------------------------------------------------------
-	// History API (sync reads)
-	// -----------------------------------------------------------------------
-
-	/** Get storage state at a specific entry by UUID. */
 	stateAt(id: string): StorageViewResult | null {
 		if (this._freed || this._exclusive) return null;
 		return this.inner.state_at(id) as unknown as StorageViewResult;
 	}
 
-	/** Get visible state at the current cursor. */
 	visibleState(): StorageViewResult | null {
 		if (this._freed || this._exclusive) return null;
 		return this.inner.visible_state() as unknown as StorageViewResult;
 	}
 
-	// -----------------------------------------------------------------------
-	// Lifecycle
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Request free. If an exclusive op is in progress, defers until finishTurn().
-	 * If not busy, frees immediately.
-	 */
 	free(): void {
 		if (this._freed) return;
 		if (this._exclusive) {
@@ -636,5 +464,129 @@ export class ChatSession {
 			this._freed = true;
 			this.inner.free();
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Completion types
+// ---------------------------------------------------------------------------
+
+export type CompletionKind = 'context' | 'builtin' | 'keyword';
+
+export type CompletionItem = {
+	label: string;
+	kind: CompletionKind;
+	detail: string;
+	insertText: string;
+};
+
+// ---------------------------------------------------------------------------
+// Document scope — provided (engine) vs user (params)
+// ---------------------------------------------------------------------------
+
+export type DocScope = {
+	/** Engine-provided types — context_keys excludes these. */
+	provided: Record<string, TypeDesc>;
+	/** User-declared param types — context_keys includes these. */
+	user: Record<string, TypeDesc>;
+};
+
+// ---------------------------------------------------------------------------
+// LanguageSession — document-centric LSP API
+// ---------------------------------------------------------------------------
+
+export class LanguageSession {
+	private inner: WasmLanguageSession;
+	private _freed = false;
+
+	private constructor(inner: WasmLanguageSession) {
+		this.inner = inner;
+	}
+
+	get freed(): boolean {
+		return this._freed;
+	}
+
+	static create(): LanguageSession {
+		return new LanguageSession(new WasmLanguageSession());
+	}
+
+	// --- Document management ---
+
+	/** Open a new document. Returns its numeric ID. */
+	open(source: string, mode: 'script' | 'template', scope: DocScope): number {
+		if (this._freed) throw new Error('LanguageSession already freed');
+		return this.inner.open(source, mode, scope as unknown as WasmScope);
+	}
+
+	/** Update a document's source. Invalidates all caches. */
+	updateSource(docId: number, source: string): void {
+		if (this._freed) return;
+		this.inner.update_source(docId, source);
+	}
+
+	/** Update a document's scope. Invalidates typecheck caches. */
+	updateScope(docId: number, scope: DocScope): void {
+		if (this._freed) return;
+		this.inner.update_scope(docId, scope as unknown as WasmScope);
+	}
+
+	/** Update both source and scope atomically. */
+	update(docId: number, source: string, scope: DocScope): void {
+		if (this._freed) return;
+		this.inner.update(docId, source, scope as unknown as WasmScope);
+	}
+
+	/** Close a document. */
+	close(docId: number): void {
+		if (this._freed) return;
+		this.inner.close(docId);
+	}
+
+	/** Bind a document to a node field (inference unit). */
+	bindDocToNode(docId: number, nodeName: string, field: string, fieldIndex?: number): void {
+		if (this._freed) return;
+		this.inner.bind_doc_to_node(docId, nodeName, field, fieldIndex ?? null);
+	}
+
+	// --- Queries ---
+
+	/** Get diagnostics for a document. */
+	diagnostics(docId: number): { ok: boolean; errors: EngineError[] } {
+		if (this._freed) return { ok: true, errors: [] };
+		const raw = this.inner.diagnostics(docId) as WasmDiagnosticsResult;
+		return { ok: raw.ok, errors: raw.errors };
+	}
+
+	/** Discover context keys for a document. */
+	contextKeys(docId: number, knownValues?: Record<string, string>): ContextKeyInfo[] {
+		if (this._freed) return [];
+		const raw = this.inner.context_keys(
+			docId,
+			{ values: knownValues ?? {} } as unknown as WasmKnownValues,
+		) as WasmContextKeysResult;
+		return raw.keys.map(convertContextKey);
+	}
+
+	/** Get completions at cursor position. */
+	completions(docId: number, cursor: number): CompletionItem[] {
+		if (this._freed) return [];
+		const result = this.inner.completions(docId, cursor) as { items: CompletionItem[] };
+		return result.items;
+	}
+
+	// --- Node-level rebuild ---
+
+	/** Full node-level rebuild — typecheck all nodes. */
+	rebuildNodes(nodes: WebNode[], injectedTypes: Record<string, TypeDesc>): TypecheckNodesResult {
+		if (this._freed) throw new Error('LanguageSession already freed');
+		const raw = this.inner.rebuild_nodes({ nodes, injectedTypes }) as WasmTypecheckNodesResult;
+		return convertTypecheckNodesResult(raw);
+	}
+
+	free(): void {
+		if (this._freed) return;
+		this._freed = true;
+		this.inner.free();
 	}
 }

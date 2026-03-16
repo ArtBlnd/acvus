@@ -40,6 +40,6 @@ pub use provider::{
 };
 pub use resolve::{ParkedDiag, ResolveError, ResolveState, Resolved, Resolver};
 pub use storage::{
-    EntryMut, EntryRef, HistoryEntry, Journal, ObjectDiff, Prune, StoragePatch, TreeEntryMut,
+    EntryMut, EntryRef, HistoryEntry, Journal, PatchDiff, Prune, StoragePatch, TreeEntryMut,
     TreeEntryRef, TreeExport, TreeJournal, TreeNodeExport,
 };

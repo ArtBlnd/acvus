@@ -9,14 +9,14 @@
 	import { profileStore, providerStore, uiState } from '$lib/stores.svelte.js';
 	import ContextParamsEditor from './context-params-editor.svelte';
 
-	import { analyzeProfile, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
+	import { type AnalysisOrchestrator, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import { collectProfileDeps } from '$lib/dependencies.js';
 	import { Download } from 'lucide-svelte';
 	import { exportEntityZip } from '$lib/io.js';
 	import { confirmDelete } from '$lib/confirm-dialog.svelte.js';
 	import BasePage from './base-page.svelte';
 
-	let { profileId }: { profileId: string } = $props();
+	let { profileId, orchestrator }: { profileId: string; orchestrator: AnalysisOrchestrator } = $props();
 
 	let profile = $derived(profileStore.get(profileId));
 
@@ -30,7 +30,7 @@
 
 	function runAnalysis() {
 		if (!profile) return;
-		const result = analyzeProfile(profile, (id) => providerStore.get(id)?.api);
+		const result = orchestrator.analyzeProfile(profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.params;
 		const pruned = pruneOverrides(profile.paramOverrides, result.params);
@@ -97,7 +97,8 @@
 						<ContextParamsEditor
 							params={mergedParams}
 							onupdate={handleParamsUpdate}
-							contextTypes={discoveredContextTypes}
+							docManager={orchestrator.docs.profile}
+							level="profile"
 						/>
 					</div>
 				{/if}

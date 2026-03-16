@@ -4,7 +4,7 @@ use tsify::Tsify;
 use acvus_orchestration::{OrchError, OrchErrorKind};
 use acvus_utils::Interner;
 
-#[derive(Debug, Serialize, Tsify)]
+#[derive(Debug, Clone, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineError {
     pub category: ErrorCategory,
@@ -13,14 +13,14 @@ pub struct EngineError {
     pub span: Option<ErrorSpan>,
 }
 
-#[derive(Debug, Serialize, Tsify)]
+#[derive(Debug, Clone, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorSpan {
     pub start: usize,
     pub end: usize,
 }
 
-#[derive(Debug, Serialize, Tsify)]
+#[derive(Debug, Clone, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCategory {
     Parse,
@@ -96,5 +96,13 @@ impl EngineError {
 
     pub fn from_orch_errors(errs: &[OrchError], interner: &Interner) -> Vec<Self> {
         errs.iter().flat_map(|e| Self::from_orch(e, interner)).collect()
+    }
+
+    pub fn from_lsp(category: ErrorCategory, message: &str, span: Option<(usize, usize)>) -> Self {
+        Self {
+            category,
+            message: message.to_string(),
+            span: span.map(|(start, end)| ErrorSpan { start, end }),
+        }
     }
 }

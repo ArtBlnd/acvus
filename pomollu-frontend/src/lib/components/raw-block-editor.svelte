@@ -1,15 +1,18 @@
 <script lang="ts">
 	import type { RawBlock } from '$lib/types.js';
+	import type { DocumentManager } from '$lib/document-manager.svelte.js';
 	import AcvusEngineField from './acvus-engine-field.svelte';
 
 	let {
 		block,
 		onupdate,
-		contextTypes = {},
+		docManager,
+		docKey,
 	}: {
 		block: RawBlock;
 		onupdate: (updater: (b: RawBlock) => RawBlock) => void;
-		contextTypes?: Record<string, import('$lib/type-parser.js').TypeDesc>;
+		docManager?: DocumentManager;
+		docKey?: string;
 	} = $props();
 </script>
 
@@ -20,8 +23,8 @@
 		oninput={(v) => onupdate((b) => ({ ...b, text: v }))}
 		placeholder="Enter text..."
 		unlimited
-		{contextTypes}
-
+		{docManager}
+		{docKey}
 	/>
 </div>
 

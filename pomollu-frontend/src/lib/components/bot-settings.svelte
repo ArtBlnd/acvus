@@ -15,14 +15,13 @@
 	import GridLayoutEditor from './grid-layout-editor.svelte';
 	import ContextParamsEditor from './context-params-editor.svelte';
 
-	import { analyzeBot, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
-	import { analyzeWithTypes } from '$lib/engine.js';
+	import { type AnalysisOrchestrator, mergeParams, pruneOverrides } from '$lib/param-resolver.js';
 	import type { TypeDesc } from '$lib/type-parser.js';
 	import { collectBotDeps } from '$lib/dependencies.js';
 	import { confirmDelete } from '$lib/confirm-dialog.svelte.js';
 	import BasePage from './base-page.svelte';
 
-	let { botId }: { botId: string } = $props();
+	let { botId, orchestrator }: { botId: string; orchestrator: AnalysisOrchestrator } = $props();
 
 	let bot = $derived(botStore.get(botId));
 	let prompts = $derived(promptStore.prompts);
@@ -168,7 +167,7 @@
 			return;
 		}
 
-		const result = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
+		const result = orchestrator.analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
 		discoveredContextTypes = result.env.contextTypes;
 		analysisResult = result.ownParams;
 		const pruned = pruneOverrides(bot.paramOverrides, result.ownParams);
@@ -205,10 +204,20 @@
 		baseTypes: Record<string, TypeDesc>
 	): Record<string, TypeDesc> {
 		if (!iterator.trim()) return baseTypes;
-		const result = analyzeWithTypes(iterator, 'script', baseTypes);
-		if (!result.ok) return baseTypes;
-		if (result.tailType.kind !== 'list') return baseTypes;
-		return { ...baseTypes, item: result.tailType.elem, index: { kind: 'primitive', name: 'int' } };
+		const session = orchestrator.docs.bot.lspSession;
+		const docId = session.open(iterator, 'script', baseTypes);
+		const diag = session.diagnostics(docId);
+		if (!diag.ok) {
+			session.close(docId);
+			return baseTypes;
+		}
+		const keys = session.contextKeys(docId);
+		session.close(docId);
+		// The iterator expression itself doesn't give us the tail type via contextKeys.
+		// We need to re-open and check the tail type. Since the document API doesn't expose
+		// tailType directly, we keep the baseTypes as-is when we can't determine the element type.
+		// TODO: expose tail type from LanguageSession document API if needed.
+		return baseTypes;
 	}
 </script>
 
@@ -314,7 +323,8 @@
 							placeholder="e.g. @messages"
 							value={bot.display.iterator}
 							oninput={(v) => updateDisplay('iterator', v)}
-							contextTypes={displayContextTypes}
+							docManager={orchestrator.docs.bot}
+							docKey="bot:display:iterator"
 						/>
 						<p class="text-xs text-muted-foreground">Expression that produces a list to iterate over.</p>
 					</div>
@@ -341,7 +351,8 @@
 										placeholder="e.g. @item.role == 'user'"
 										value={entry.condition}
 										oninput={(v) => updateEntry(entry.id, { condition: v })}
-										contextTypes={computeIterableEntryTypes(bot.display.iterator, displayContextTypes)}
+										docManager={orchestrator.docs.bot}
+										docKey={`bot:display:entry:${entry.id}:cond`}
 									/>
 								</div>
 								<div class="space-y-1">
@@ -351,7 +362,8 @@
 										placeholder="Template content..."
 										value={entry.template}
 										oninput={(v) => updateEntry(entry.id, { template: v })}
-										contextTypes={computeIterableEntryTypes(bot.display.iterator, displayContextTypes)}
+										docManager={orchestrator.docs.bot}
+										docKey={`bot:display:entry:${entry.id}:tmpl`}
 									/>
 								</div>
 							</div>
@@ -403,7 +415,8 @@
 										placeholder="Template content..."
 										value={region.template}
 										oninput={(v) => updateRegion(region.id, { template: v })}
-										contextTypes={displayContextTypes}
+										docManager={orchestrator.docs.bot}
+										docKey={`bot:region:${region.id}:template`}
 									/>
 								</div>
 							{:else}
@@ -414,7 +427,8 @@
 										placeholder="e.g. @status"
 										value={region.iterator}
 										oninput={(v) => updateRegion(region.id, { iterator: v })}
-										contextTypes={displayContextTypes}
+										docManager={orchestrator.docs.bot}
+										docKey={`bot:region:${region.id}:iterator`}
 									/>
 								</div>
 
@@ -440,7 +454,8 @@
 													placeholder="e.g. @item.type == 'status'"
 													value={entry.condition}
 													oninput={(v) => updateRegionEntry(region.id, entry.id, { condition: v })}
-													contextTypes={computeIterableEntryTypes(region.iterator, displayContextTypes)}
+													docManager={orchestrator.docs.bot}
+													docKey={`bot:region:${region.id}:entry:${entry.id}:cond`}
 												/>
 											</div>
 											<div class="space-y-1">
@@ -450,7 +465,8 @@
 													placeholder="Template content..."
 													value={entry.template}
 													oninput={(v) => updateRegionEntry(region.id, entry.id, { template: v })}
-													contextTypes={computeIterableEntryTypes(region.iterator, displayContextTypes)}
+													docManager={orchestrator.docs.bot}
+													docKey={`bot:region:${region.id}:entry:${entry.id}:tmpl`}
 												/>
 											</div>
 										</div>
@@ -496,7 +512,8 @@
 						<ContextParamsEditor
 							params={mergedParams}
 							onupdate={handleParamsUpdate}
-							contextTypes={discoveredContextTypes}
+							docManager={orchestrator.docs.bot}
+							level="bot"
 						/>
 					</div>
 				{/if}

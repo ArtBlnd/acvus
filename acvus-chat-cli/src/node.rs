@@ -327,7 +327,7 @@ pub fn resolve_node(
                 def.strategy.persistency.inline_bind.as_deref(),
             )
             .map_err(|e| format!("node '{}': diff persistency bind: {e}", def.name))?;
-            Persistency::Diff { bind: interner.intern(&bind) }
+            Persistency::Patch { bind: interner.intern(&bind) }
         }
     };
 

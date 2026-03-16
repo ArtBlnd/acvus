@@ -20,36 +20,40 @@
 	import { findParentNodeId, findNodeItem } from '$lib/block-tree.js';
 	import { initPersistence } from '$lib/persistence.svelte.js';
 	import { IndexedDBBackend } from '$lib/storage/indexeddb.js';
-	import { analyzePrompt, analyzeProfile, analyzeBot } from '$lib/param-resolver.js';
-	import type { ContextEnvResult, TwoPassResult } from '$lib/param-resolver.js';
+	import { AnalysisOrchestrator } from '$lib/param-resolver.js';
+	import type { ContextEnvResult, LevelResult } from '$lib/param-resolver.js';
+	import { LanguageSession } from '$lib/engine.js';
 	import { entityVersions } from '$lib/entity-versions.svelte.js';
 	import { collectOwnerDeps } from '$lib/dependencies.js';
 	import { onMount } from 'svelte';
+
+	const languageSession = LanguageSession.create();
+	const orchestrator = new AnalysisOrchestrator(languageSession);
 
 	let activeTab = $derived(uiState.activeTab);
 
 	// --- Owner env: inline discovery + orchestration typecheck ---
 
 	const EMPTY_ENV: ContextEnvResult = { contextTypes: {}, nodeLocals: {}, nodeErrors: {}, nodeFnParams: {} };
-	const ENV_DEBOUNCE_MS = 1000;
+	const ENV_DEBOUNCE_MS = 250;
 
 	let ownerEnv = $state<ContextEnvResult>(EMPTY_ENV);
 	let envTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastOwnerKey: string | null = null;
 
-	function computeFullEnv(owner: BlockOwner): TwoPassResult | null {
+	function computeFullEnv(owner: BlockOwner): LevelResult | null {
 		const getApi = (pid: string) => providerStore.get(pid)?.api;
 
 		switch (owner.kind) {
 			case 'prompt': {
 				const prompt = promptStore.get(owner.promptId);
 				if (!prompt) return null;
-				return analyzePrompt(prompt, getApi);
+				return orchestrator.analyzePrompt(prompt, getApi);
 			}
 			case 'profile': {
 				const profile = profileStore.get(owner.profileId);
 				if (!profile) return null;
-				return analyzeProfile(profile, getApi);
+				return orchestrator.analyzeProfile(profile, getApi);
 			}
 			case 'bot': {
 				const bot = botStore.get(owner.botId);
@@ -57,7 +61,7 @@
 				const prompt = promptStore.get(bot.promptId);
 				const profile = profileStore.get(bot.profileId);
 				if (!prompt || !profile) return null;
-				return analyzeBot(bot, prompt, profile, getApi);
+				return orchestrator.analyzeBot(bot, prompt, profile, getApi);
 			}
 		}
 	}
@@ -116,7 +120,11 @@
 		IndexedDBBackend.open().then(async (backend) => {
 			cleanup = await initPersistence(backend);
 		});
-		return () => cleanup?.();
+		return () => {
+			cleanup?.();
+			orchestrator.dispose();
+			languageSession.free();
+		};
 	});
 
 	$effect(() => {
@@ -199,19 +207,19 @@
 							{@const parentNodeId = findParentNodeId(ownerChildren, activeTab.blockId)}
 							{@const parentNode = parentNodeId ? findNodeItem(ownerChildren, parentNodeId) : undefined}
 							{@const parentLocals = parentNode ? ownerEnv.nodeLocals[parentNode.name] : undefined}
-							<BlockEditorPage blockId={activeTab.blockId} owner={activeTab.owner} contextTypes={ownerEnv.contextTypes} {parentLocals} />
+							<BlockEditorPage blockId={activeTab.blockId} owner={activeTab.owner} contextTypes={ownerEnv.contextTypes} {parentLocals} docManager={orchestrator.docs[activeTab.owner.kind]} level={activeTab.owner.kind} />
 						{:else if activeTab?.kind === 'prompt'}
-							<PromptSettings promptId={activeTab.promptId} />
+							<PromptSettings promptId={activeTab.promptId} {orchestrator} />
 						{:else if activeTab?.kind === 'profile'}
-							<ProfileSettings profileId={activeTab.profileId} />
+							<ProfileSettings profileId={activeTab.profileId} {orchestrator} />
 						{:else if activeTab?.kind === 'provider'}
 							<ProviderSettings providerId={activeTab.providerId} />
 						{:else if activeTab?.kind === 'node'}
-							<NodeSettings nodeId={activeTab.nodeId} owner={activeTab.owner} contextTypes={ownerEnv.contextTypes} nodeLocals={ownerEnv.nodeLocals} nodeErrors={ownerEnv.nodeErrors} nodeFnParams={ownerEnv.nodeFnParams} />
+							<NodeSettings nodeId={activeTab.nodeId} owner={activeTab.owner} contextTypes={ownerEnv.contextTypes} nodeLocals={ownerEnv.nodeLocals} nodeErrors={ownerEnv.nodeErrors} nodeFnParams={ownerEnv.nodeFnParams} docManager={orchestrator.docs[activeTab.owner.kind]} level={activeTab.owner.kind} />
 						{:else if activeTab?.kind === 'assets'}
 							<AssetEditor dbName={activeTab.dbName} entityName={activeTab.entityName} />
 						{:else if activeTab?.kind === 'bot-settings'}
-							<BotSettings botId={activeTab.botId} />
+							<BotSettings botId={activeTab.botId} {orchestrator} />
 						{:else if activeTab?.kind === 'chat'}
 						<!-- Chat panel: only active chat is mounted; ephemeral state preserves running turns across tab switches. -->
 						{@const chatSession = sessionStore.sessions.find((s) => s.id === activeTab.sessionId)}

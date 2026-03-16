@@ -18,7 +18,7 @@ fn node_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
     node.strategy.initial_value.as_ref()
 }
 use crate::node::Node;
-use crate::storage::{EntryMut, EntryRef, StoragePatch};
+use crate::storage::{EntryMut, EntryRef, PatchDiff, StoragePatch};
 
 // ---------------------------------------------------------------------------
 // ResolveState — bundled mutable context
@@ -800,15 +800,27 @@ where
                         );
                         stored
                     }
-                    CompiledPersistency::Diff { .. } => {
+                    CompiledPersistency::Patch { .. } => {
+                        // Deep recursive diff: compare bind result against previous @self.
+                        // If they differ, store only the diff (history accumulates).
+                        // If no previous value exists, snapshot the entire value.
+                        let old_value = state.load(node.name, node_name_str);
+                        let patch = old_value
+                            .as_ref()
+                            .and_then(|old| PatchDiff::compute(old.value(), value.value()));
                         let stored = value.clone();
-                        state.persist(
-                            node_name_str,
-                            StoragePatch::Snapshot(value),
-                        );
+                        match patch {
+                            Some(diff) => {
+                                state.persist(node_name_str, StoragePatch::Patch(diff));
+                            }
+                            None => {
+                                // First write or identical value → snapshot
+                                state.persist(node_name_str, StoragePatch::Snapshot(value));
+                            }
+                        }
                         stored
                     }
-                    _ => unreachable!("BindScript only spawned for Sequence/Diff modes"),
+                    _ => unreachable!("BindScript only spawned for Sequence/Patch modes"),
                 };
 
                 // Update turn_context with the bind result (not raw).
@@ -936,9 +948,9 @@ where
                 .push(((**bind_val).clone(), Arc::new(value.clone())));
         }
 
-        // Mode: Sequence/Diff → spawn bind script before completing.
+        // Mode: Sequence/Patch → spawn bind script before completing.
         //
-        // For Deque/Diff modes, turn_context is NOT set here with the raw value.
+        // For Deque/Patch modes, turn_context is NOT set here with the raw value.
         // It will be set to the bind result (accumulated @self) when the bind
         // script completes. This ensures @node_name === @self (not @raw).
         //
@@ -946,7 +958,7 @@ where
         // local variable and MUST NOT leak to turn_context or dep wakers.
         // External consumers of @node_name always see the accumulated value.
         match &node.strategy.persistency {
-            CompiledPersistency::Sequence { bind } | CompiledPersistency::Diff { bind } => {
+            CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
                 let (bind_local, origin) = self.prepare_bind_locals(node_idx, &value, state);
                 debug!(node = %node_name_str, "evaluating bind script");
                 self.spawn_script_task(
@@ -1233,7 +1245,7 @@ where
             _ => {}
         }
         match &node.strategy.persistency {
-            CompiledPersistency::Sequence { bind } | CompiledPersistency::Diff { bind } => {
+            CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
                 eager.extend(bind.context_keys.iter().copied());
             }
             _ => {}

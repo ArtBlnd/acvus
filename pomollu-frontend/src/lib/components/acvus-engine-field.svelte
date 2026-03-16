@@ -1,8 +1,6 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
-	import { typecheckWithTypes, typecheckWithTail, analyzeWithTypes, formatErrors } from '$lib/engine.js';
-	import type { TypeDesc } from '$lib/type-parser.js';
-	import { isUnknownType } from '$lib/type-parser.js';
+	import type { CompletionItem } from '$lib/engine.js';
+	import type { DocumentManager } from '$lib/document-manager.svelte.js';
 	import { highlightTemplate, highlightScript } from '$lib/highlight.js';
 
 	let {
@@ -12,15 +10,8 @@
 		placeholder = '',
 		rows = 1,
 		unlimited = false,
-		contextTypes = {},
-		expectedTailType,
-		// 2-pass typecheck: analyze (lenient) first to discover unresolved context keys,
-		// then hard typecheck with merged context. Only for node-internal fields
-		// (strategy if-modified key, bind, initial value, assert, messages, iterators).
-		// Do NOT enable for context bindings, display entries, or regions.
-		discoverContext = false,
-		// Per-field error from hard typecheck (nodeErrors). Takes priority over inline typecheck.
-		fieldError = '',
+		docManager,
+		docKey,
 	}: {
 		value: string;
 		oninput: (value: string) => void;
@@ -28,27 +19,24 @@
 		placeholder?: string;
 		rows?: number;
 		unlimited?: boolean;
-		contextTypes?: Record<string, TypeDesc>;
-		expectedTailType?: TypeDesc;
-		discoverContext?: boolean;
-		fieldError?: string;
+		docManager: DocumentManager;
+		docKey: string;
 	} = $props();
 
-	let typecheckError = $state('');
-	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let hlHtml = $state('');
 	let textareaEl = $state<HTMLTextAreaElement | null>(null);
 	let hlEl = $state<HTMLDivElement | null>(null);
 
-	const DEBOUNCE_MS = 400;
+	let completionItems = $state<CompletionItem[]>([]);
+	let showDropdown = $state(false);
+	let selectedIndex = $state(0);
+	let dropdownTop = $state(0);
 
-	// Priority: fieldError (hard typecheck) > inline typecheckError.
-	let hasError = $derived(!!fieldError || !!typecheckError);
-	let displayErrors = $derived(
-		fieldError ? [fieldError]
-		: typecheckError ? [typecheckError]
-		: []
-	);
+	// Diagnostics — fully reactive via $derived.
+	// DocumentManager._diag is $state(Map) → .get() is tracked → auto re-evaluate.
+	let diagResult = $derived(docManager.diagnostics(docKey));
+	let hasError = $derived(!diagResult.ok);
+	let displayErrors = $derived(diagResult.ok ? [] : diagResult.errors.map(e => e.message));
 
 	function updateHighlight(source: string) {
 		if (mode === 'template') {
@@ -58,64 +46,108 @@
 		}
 	}
 
-	// Reactive highlight update
 	$effect(() => {
 		updateHighlight(value);
 	});
 
-	async function check(source: string) {
-		// Skip inline typecheck when parent has analysis errors or hard typecheck already reported an error.
-		if (fieldError) {
-			typecheckError = '';
-			return;
-		}
-		if (source === '') {
-			typecheckError = '';
-			return;
-		}
-		let types = contextTypes;
-		if (discoverContext) {
-			const analysis = analyzeWithTypes(source, mode, contextTypes);
-			if (analysis.ok) {
-				const merged = { ...contextTypes };
-				for (const key of analysis.contextKeys) {
-					if (!isUnknownType(key.type) && !(key.name in merged)) {
-						merged[key.name] = key.type;
-					}
-				}
-				types = merged;
-			}
-		}
-		const result = expectedTailType
-			? typecheckWithTail(source, mode, types, expectedTailType)
-			: typecheckWithTypes(source, mode, types);
-		typecheckError = result.ok ? '' : formatErrors(result.errors);
-	}
+	function triggerCompletion() {
+		if (!textareaEl) return;
+		const cursor = textareaEl.selectionStart;
+		const items = docManager.completions(docKey, cursor);
+		completionItems = items;
+		showDropdown = completionItems.length > 0;
+		selectedIndex = 0;
 
-	function scheduleCheck(source: string) {
-		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => {
-			debounceTimer = null;
-			check(source);
-		}, DEBOUNCE_MS);
-	}
-
-	function flushCheck(source: string) {
-		if (debounceTimer) {
-			clearTimeout(debounceTimer);
-			debounceTimer = null;
+		// Position dropdown near cursor
+		if (showDropdown) {
+			const text = textareaEl.value.slice(0, cursor);
+			const lines = text.split('\n');
+			const lineHeight = parseFloat(getComputedStyle(textareaEl).lineHeight) || 20;
+			dropdownTop = (lines.length * lineHeight) - textareaEl.scrollTop + 4;
 		}
-		check(source);
 	}
 
 	function handleInput(e: Event & { currentTarget: HTMLTextAreaElement }) {
 		const v = e.currentTarget.value;
 		oninput(v);
-		scheduleCheck(v);
+		docManager.updateSource(docKey, v);
+		// Check for completion triggers
+		const lastChar = v[e.currentTarget.selectionStart - 1];
+		if (lastChar === '@' || lastChar === '|' || lastChar === '.') {
+			triggerCompletion();
+		} else if (showDropdown) {
+			triggerCompletion(); // Update filter while typing
+		}
 	}
 
-	function handleBlur(e: FocusEvent & { currentTarget: HTMLTextAreaElement }) {
-		flushCheck(e.currentTarget.value);
+	function handleKeydown(e: KeyboardEvent) {
+		if (!showDropdown) {
+			if (e.ctrlKey && e.key === ' ') {
+				e.preventDefault();
+				triggerCompletion();
+			}
+			return;
+		}
+		switch (e.key) {
+			case 'ArrowDown':
+				e.preventDefault();
+				selectedIndex = (selectedIndex + 1) % completionItems.length;
+				break;
+			case 'ArrowUp':
+				e.preventDefault();
+				selectedIndex = (selectedIndex - 1 + completionItems.length) % completionItems.length;
+				break;
+			case 'Enter':
+			case 'Tab':
+				e.preventDefault();
+				applyCompletion(completionItems[selectedIndex]);
+				break;
+			case 'Escape':
+				showDropdown = false;
+				break;
+		}
+	}
+
+	function applyCompletion(item: CompletionItem) {
+		if (!textareaEl) return;
+		const cursor = textareaEl.selectionStart;
+		const before = textareaEl.value.slice(0, cursor);
+		const after = textareaEl.value.slice(cursor);
+
+		// Find how much of the prefix to replace.
+		// Context completions: replace everything after the last '@'
+		// Pipe completions: replace everything after the last '|'
+		// Keyword completions: replace the current word
+		let replaceStart = cursor;
+		if (item.kind === 'context') {
+			const atPos = before.lastIndexOf('@');
+			if (atPos >= 0) replaceStart = atPos + 1; // keep the '@', replace after it
+		} else if (item.kind === 'keyword') {
+			// Find start of current word (unicode-safe for future i18n identifiers)
+			let i = cursor - 1;
+			while (i >= 0 && /[\p{L}\p{N}_]/u.test(before[i])) i--;
+			replaceStart = i + 1;
+		}
+		// For 'builtin' (pipe), insertText already has leading space, cursor is right after '|'
+
+		const prefix = textareaEl.value.slice(0, replaceStart);
+		const newValue = prefix + item.insertText + after;
+		oninput(newValue);
+		docManager.updateSource(docKey, newValue);
+		showDropdown = false;
+		requestAnimationFrame(() => {
+			if (textareaEl) {
+				const newPos = replaceStart + item.insertText.length;
+				textareaEl.selectionStart = newPos;
+				textareaEl.selectionEnd = newPos;
+				textareaEl.focus();
+			}
+		});
+	}
+
+	function handleBlur() {
+		// Delay to allow click on dropdown
+		setTimeout(() => { showDropdown = false; }, 150);
 	}
 
 	function handleScroll() {
@@ -124,17 +156,6 @@
 			hlEl.scrollLeft = textareaEl.scrollLeft;
 		}
 	}
-
-	// Re-check when contextTypes or expectedTailType changes
-	let checkKey = $derived(JSON.stringify([contextTypes, expectedTailType]));
-	$effect(() => {
-		void checkKey;
-		if (value) scheduleCheck(value);
-	});
-
-	onDestroy(() => {
-		if (debounceTimer) clearTimeout(debounceTimer);
-	});
 
 	function autogrow(el: HTMLTextAreaElement, skip: boolean) {
 		if (skip) return;
@@ -159,11 +180,28 @@
 			{value}
 			oninput={handleInput}
 			onblur={handleBlur}
+			onkeydown={handleKeydown}
 			onscroll={handleScroll}
 			spellcheck="false"
 			use:autogrow={unlimited}
 			bind:this={textareaEl}
 		></textarea>
+		{#if showDropdown && completionItems.length > 0}
+			<div class="sf-completions" style="top: {dropdownTop}px">
+				{#each completionItems as item, i}
+					<button
+						class="sf-completion-item"
+						class:sf-selected={i === selectedIndex}
+						onmousedown={(e) => { e.preventDefault(); applyCompletion(item); }}
+					>
+						<span class="sf-completion-label">{item.label}</span>
+						{#if item.detail}
+							<span class="sf-completion-detail">{item.detail}</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
+		{/if}
 	</div>
 	{#each displayErrors as err}
 		<p class="sf-error-msg">{err}</p>
@@ -266,6 +304,47 @@
 		font-size: 0.6875rem;
 		color: var(--color-destructive);
 		margin: 0;
+	}
+	.sf-completions {
+		position: absolute;
+		z-index: 10;
+		left: 0;
+		right: 0;
+		max-height: 12rem;
+		overflow-y: auto;
+		background: var(--color-background);
+		border: 1px solid var(--color-border);
+		border-radius: 0.375rem;
+		box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+		margin-top: 2px;
+	}
+	.sf-completion-item {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.25rem 0.5rem;
+		font-size: 0.75rem;
+		font-family: var(--font-mono, ui-monospace, monospace);
+		text-align: left;
+		border: none;
+		background: transparent;
+		cursor: pointer;
+		color: var(--color-foreground);
+	}
+	.sf-completion-item:hover,
+	.sf-completion-item.sf-selected {
+		background: var(--color-accent);
+	}
+	.sf-completion-label {
+		font-weight: 500;
+	}
+	.sf-completion-detail {
+		color: var(--color-muted-foreground);
+		font-size: 0.6875rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	/* Syntax highlight tokens */

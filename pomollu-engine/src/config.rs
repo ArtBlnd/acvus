@@ -176,7 +176,7 @@ pub(crate) enum PersistencyConfig {
     Ephemeral,
     Snapshot,
     Sequence { bind: String },
-    Diff { bind: String },
+    Patch { bind: String },
 }
 
 #[derive(Deserialize)]
@@ -318,7 +318,7 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
         PersistencyConfig::Ephemeral => Persistency::Ephemeral,
         PersistencyConfig::Snapshot => Persistency::Snapshot,
         PersistencyConfig::Sequence { bind } => Persistency::Sequence { bind: interner.intern(bind) },
-        PersistencyConfig::Diff { bind } => Persistency::Diff { bind: interner.intern(bind) },
+        PersistencyConfig::Patch { bind } => Persistency::Patch { bind: interner.intern(bind) },
     };
 
     Ok(NodeSpec {

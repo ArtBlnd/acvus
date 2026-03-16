@@ -118,7 +118,7 @@ fn apply_diff(
             state.insert(key.to_string(), Arc::clone(&arc));
             turn_diff.insert(key.to_string(), arc);
         }
-        StoragePatch::Object(obj_diff) => {
+        StoragePatch::Patch(patch_diff) => {
             let mut fields: FxHashMap<acvus_utils::Astr, Value> = state
                 .get(key)
                 .and_then(|arc| match arc.value() {
@@ -126,12 +126,7 @@ fn apply_diff(
                     _ => None,
                 })
                 .unwrap_or_default();
-            for (k, v) in obj_diff.updates {
-                fields.insert(k, v);
-            }
-            for k in &obj_diff.removals {
-                fields.remove(k);
-            }
+            patch_diff.apply_to(&mut fields);
             let arc = Arc::new(TypedValue::new(Arc::new(Value::object(fields)), Ty::Infer));
             state.insert(key.to_string(), Arc::clone(&arc));
             turn_diff.insert(key.to_string(), arc);
@@ -389,7 +384,7 @@ impl<S: BlobStore> BlobStoreJournal<S> {
 
     /// Persist the current hot node's state to the blob store.
     ///
-    /// - Diff: always stored if non-empty.
+    /// - Patch: always stored if non-empty.
     /// - Snapshot: only at depth % snapshot_interval == 0 (root always qualifies).
     async fn persist_hot_node(&mut self) {
         let Some(ref hot) = self.hot else { return };
@@ -775,7 +770,7 @@ mod tests {
 
     use super::*;
     use crate::blob::MemBlobStore;
-    use crate::storage::ObjectDiff;
+    use crate::storage::{PatchDiff, PatchOp};
 
     /// Tests use interval=1 to match TreeJournal behavior (snapshot every turn).
     async fn new_journal() -> (BlobStoreJournal<MemBlobStore>, Uuid) {
@@ -863,11 +858,11 @@ mod tests {
                 Ty::Infer,
             )),
         );
-        let diff = ObjectDiff {
-            updates: FxHashMap::from_iter([(a, Value::int(100)), (c, Value::int(3))]),
+        let diff = PatchDiff {
+            updates: FxHashMap::from_iter([(a, PatchOp::Set(Value::int(100))), (c, PatchOp::Set(Value::int(3)))]),
             removals: vec![b],
         };
-        e.apply("obj", StoragePatch::Object(diff));
+        e.apply("obj", StoragePatch::Patch(diff));
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")

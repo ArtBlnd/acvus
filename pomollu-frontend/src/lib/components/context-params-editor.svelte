@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ContextParam } from '$lib/types.js';
 	import type { TypeDesc, StructuredValue } from '$lib/type-parser.js';
+	import type { DocumentManager } from '$lib/document-manager.svelte.js';
 	import { parseTypeDesc, parseScript, isStructured, createDefaultValue, generateScript, isUnknownType, typeDescToString } from '$lib/type-parser.js';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -12,12 +13,14 @@
 		params,
 		onupdate,
 		onTypeChange,
-		contextTypes = {},
+		docManager,
+		level,
 	}: {
 		params: ContextParam[];
 		onupdate: (params: ContextParam[]) => void;
 		onTypeChange?: (name: string, type: string) => void;
-		contextTypes?: Record<string, TypeDesc>;
+		docManager?: DocumentManager;
+		level?: string;
 	} = $props();
 
 	// Component-local cache for in-flight structured edits.
@@ -195,7 +198,8 @@
 							typeDesc={desc}
 							value={getStructuredValue(param)}
 							onchange={(v) => handleStructuredChange(i, param, v)}
-							{contextTypes}
+							{docManager}
+							docKey={docManager && level ? `${level}:param:${param.name}:struct` : undefined}
 						/>
 					{:else}
 						<AcvusEngineField
@@ -203,8 +207,8 @@
 							value={param.resolution.value}
 							oninput={(v) => setStaticValue(i, v)}
 							placeholder={typePlaceholder(param) || 'static value expression...'}
-							{contextTypes}
-							expectedTailType={resolvedTypeDesc(param)}
+							{docManager}
+							docKey={docManager && level ? `${level}:param:${param.name}:static` : undefined}
 						/>
 					{/if}
 					{#if !param.resolution.value.trim()}

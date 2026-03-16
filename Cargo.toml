@@ -13,6 +13,7 @@ members = [
     "acvus-chat",
     "acvus-chat-cli",
     "acvus-ext",
+    "acvus-lsp",
     "pomollu-engine"
 ]
 

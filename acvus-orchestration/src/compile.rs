@@ -37,7 +37,7 @@ pub enum CompiledPersistency {
     Ephemeral,
     Snapshot,
     Sequence { bind: CompiledScript },
-    Diff { bind: CompiledScript },
+    Patch { bind: CompiledScript },
 }
 
 /// Compiled strategy — groups execution, persistency, initial_value, retry, and assert.
@@ -264,35 +264,6 @@ pub(crate) fn compile_script_with_hint_subst(
 //   bind script         (any)
 //
 
-/// Expect the tail type to be `List<T>`. Returns the inner `T`.
-pub(crate) fn expect_list(context: &str, ty: Ty) -> Result<Ty, OrchError> {
-    match ty {
-        Ty::List(inner) | Ty::Deque(inner, _) => Ok(*inner),
-        Ty::Error => Ok(Ty::Error),
-        other => Err(OrchError::new(OrchErrorKind::ScriptTypeMismatch {
-            context: context.into(),
-            expected: Ty::List(Box::new(Ty::Infer)),
-            got: other,
-        })),
-    }
-}
-
-/// Expect the tail type to be exactly `expected`.
-pub(crate) fn expect_ty(context: &str, ty: &Ty, expected: &Ty) -> Result<(), OrchError> {
-    if matches!(ty, Ty::Error) {
-        return Ok(());
-    }
-    let mut subst = acvus_mir::ty::TySubst::new();
-    match subst.unify(ty, expected, acvus_mir::ty::Polarity::Covariant) {
-        Ok(()) => Ok(()),
-        Err(_) => Err(OrchError::new(OrchErrorKind::ScriptTypeMismatch {
-            context: context.into(),
-            expected: expected.clone(),
-            got: ty.clone(),
-        })),
-    }
-}
-
 /// Compile a template source string into a `CompiledBlock`.
 pub(crate) fn compile_template(
     interner: &Interner,
@@ -364,25 +335,17 @@ pub(crate) fn compile_messages(
                 token_budget,
             } => {
                 let ctx = format!("iterator (block {i})");
-                let (expr, tail_ty) =
-                    match compile_script(interner, interner.resolve(*key), registry) {
+                // Hint: Iterator<T> — List/Deque/Sequence all coerce to Iterator.
+                // If it doesn't coerce, compile itself fails — no post-check needed.
+                let iter_hint = Ty::Iterator(Box::new(iterator_elem_ty.clone()), acvus_mir::ty::Effect::Pure);
+                let (expr, _tail_ty) =
+                    match compile_script_with_hint(interner, interner.resolve(*key), registry, Some(&iter_hint)) {
                         Ok(v) => v,
                         Err(e) => {
                             errors.push(e);
                             continue;
                         }
                     };
-                let elem_ty = match expect_list(&ctx, tail_ty) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        errors.push(e);
-                        continue;
-                    }
-                };
-                if let Err(e) = expect_ty(&ctx, &elem_ty, iterator_elem_ty) {
-                    errors.push(e);
-                    continue;
-                }
 
                 all_context_keys.extend(expr.context_keys.iter().copied());
                 compiled_messages.push(CompiledMessage::Iterator {
@@ -435,11 +398,12 @@ pub fn compile_node(
             (CompiledNodeKind::Expr(compiled), keys)
         }
         NodeKind::Display(display_spec) => {
-            let (iter_script, iter_ty) = compile_script(interner, &display_spec.iterator, registry)
+            let iter_hint = Ty::Iterator(Box::new(Ty::Infer), acvus_mir::ty::Effect::Pure);
+            let (iter_script, iter_ty) = compile_script_with_hint(interner, &display_spec.iterator, registry, Some(&iter_hint))
                 .map_err(|e| vec![e])?;
             let item_ty = match &iter_ty {
-                Ty::List(elem) | Ty::Deque(elem, _) => (**elem).clone(),
-                Ty::Iterator(elem, _) | Ty::Sequence(elem, _, _) => (**elem).clone(),
+                Ty::Iterator(elem, _) => (**elem).clone(),
+                Ty::Error => Ty::Error,
                 _ => Ty::Infer,
             };
             let tmpl_registry = registry.with_extra_scoped([
@@ -505,7 +469,7 @@ pub fn compile_node(
     // persistency context keys contribute
     match &compiled_persistency {
         CompiledPersistency::Ephemeral | CompiledPersistency::Snapshot => {}
-        CompiledPersistency::Sequence { bind } | CompiledPersistency::Diff { bind } => {
+        CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
             all_context_keys.extend(bind.context_keys.iter().copied());
         }
     }
@@ -553,7 +517,7 @@ pub struct ExternalContextEnv {
 ///
 /// - `@raw` = `raw_ty` (what the node produces each execution)
 /// - `@self`:
-///   - Sequence/Diff with bind: two-pass — compile bind with `@self = Infer`, use tail_ty as self_ty
+///   - Sequence/Patch with bind: two-pass — compile bind with `@self = Infer`, use tail_ty as self_ty
 ///   - Ephemeral/Snapshot with initial_value: initial_value's return type
 ///   - No initial_value: self_ty = raw_ty (fallback, @self not exposed without initial_value)
 fn resolve_node_locals(
@@ -571,7 +535,7 @@ fn resolve_node_locals(
     };
 
     let self_ty = match &spec.strategy.persistency {
-        Persistency::Sequence { bind } | Persistency::Diff { bind } => {
+        Persistency::Sequence { bind } | Persistency::Patch { bind } => {
             // Two-pass with shared TySubst:
             // Pass 1: compile initial_value → Deque<T, O> (origin allocated in subst)
             // Pass 2: compile bind with @self = Sequence<T, O, Pure> (same origin from subst)
@@ -608,6 +572,8 @@ fn resolve_node_locals(
             };
 
             // Pass 2: compile bind with @self = Sequence<T, O, Pure> — same subst!
+            // bind result must be compatible with self_hint (Sequence<T, O, E>).
+            // If bind returns Iterator (e.g. via map), unification fails → type error.
             let temp_locals = NodeLocalTypes { raw_ty: raw_ty.clone(), self_ty: self_hint.clone() };
             let bind_reg = spec.build_node_context(interner, base_registry, ContextScope::Bind, Some(&temp_locals))
                 .map_err(map_conflict)?;
@@ -615,11 +581,11 @@ fn resolve_node_locals(
                 interner,
                 interner.resolve(*bind),
                 &bind_reg,
-                None,
+                Some(&self_hint),
                 &mut subst,
             )
             .map(|(_, ty)| ty)
-            .unwrap_or(self_hint);
+            .unwrap_or(Ty::Error);
 
             resolved_self
         }
@@ -831,7 +797,7 @@ pub fn compute_external_context_env(
                 Persistency::Ephemeral => unreachable!(),
                 Persistency::Snapshot => "Snapshot",
                 Persistency::Sequence { .. } => "Sequence",
-                Persistency::Diff { .. } => "Diff",
+                Persistency::Patch { .. } => "Patch",
             };
             return Err(vec![OrchError::new(OrchErrorKind::UnpureStoredType {
                 node: spec.name,
@@ -933,13 +899,7 @@ pub fn compile_nodes_with_env(
                 continue;
             }
         };
-        if let Err(e) = expect_ty(
-            &format!("node '{}' initial_value type", interner.resolve(spec.name)),
-            &init_ty,
-            &stored_types[i],
-        ) {
-            errors.push(e);
-        }
+        // Type check is already done via hint in compile_script_with_hint above.
         initial_value_scripts.push(Some(script));
     }
 
@@ -974,7 +934,7 @@ pub fn compile_nodes_with_env(
         let persistency = match &spec.strategy.persistency {
             Persistency::Ephemeral => CompiledPersistency::Ephemeral,
             Persistency::Snapshot => CompiledPersistency::Snapshot,
-            Persistency::Sequence { bind } | Persistency::Diff { bind } => {
+            Persistency::Sequence { bind } | Persistency::Patch { bind } => {
                 // bind context: @self + @raw + all context (via ContextScope::Bind)
                 let bind_reg = match spec.build_node_context(interner, &base_registry, ContextScope::Bind, env.node_locals.get(&spec.name)) {
                     Ok(r) => r,
@@ -998,7 +958,7 @@ pub fn compile_nodes_with_env(
                 };
                 match &spec.strategy.persistency {
                     Persistency::Sequence { .. } => CompiledPersistency::Sequence { bind: script },
-                    Persistency::Diff { .. } => CompiledPersistency::Diff { bind: script },
+                    Persistency::Patch { .. } => CompiledPersistency::Patch { bind: script },
                     _ => unreachable!(),
                 }
             }

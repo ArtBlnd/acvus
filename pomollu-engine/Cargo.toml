@@ -14,6 +14,7 @@ acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-orchestration = { path = "../acvus-orchestration" }
 acvus-chat = { path = "../acvus-chat" }
 acvus-ext = { path = "../acvus-ext" }
+acvus-lsp = { path = "../acvus-lsp" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
 wasm-bindgen = "0.2"

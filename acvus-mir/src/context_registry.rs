@@ -109,12 +109,6 @@ impl PartialContextTypeRegistry {
         }
     }
 
-    /// Merged view of all types (extern + system + user).
-    /// Crate-internal: external callers must use a registry, not a raw map.
-    pub(crate) fn merged(&self) -> &FxHashMap<Astr, Ty> {
-        &self.merged
-    }
-
     /// The extern fn types.
     pub fn extern_fns(&self) -> &FxHashMap<Astr, Ty> {
         &self.extern_fns
@@ -383,19 +377,6 @@ mod tests {
         let c = i.intern("c");
         let d = i.intern("d");
         (i, a, b, c, d)
-    }
-
-    #[test]
-    fn partial_no_conflict() {
-        let (_i, a, b, c, _d) = setup();
-        let extern_fns = FxHashMap::from_iter([(a, Ty::Int)]);
-        let system = FxHashMap::from_iter([(b, Ty::String)]);
-        let user = FxHashMap::from_iter([(c, Ty::Bool)]);
-        let reg = PartialContextTypeRegistry::new(extern_fns, system, user).unwrap();
-        assert_eq!(reg.merged().len(), 3);
-        assert!(!reg.is_user_key(&a)); // extern
-        assert!(!reg.is_user_key(&b)); // system
-        assert!(reg.is_user_key(&c));  // user
     }
 
     #[test]

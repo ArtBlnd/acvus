@@ -14,7 +14,8 @@
 	import AcvusEngineField from './acvus-engine-field.svelte';
 	import BasePage from './base-page.svelte';
 	import { collectOwnerDeps } from '$lib/dependencies.js';
-	import { formatErrors, type NodeErrors } from '$lib/engine.js';
+	import { type NodeErrors } from '$lib/engine.js';
+	import { DocumentManager } from '$lib/document-manager.svelte.js';
 	import { isUnknownType, typeDescToString, parseTypeDesc } from '$lib/type-parser.js';
 	import { typeDescToFnParamString } from '$lib/param-resolver.js';
 
@@ -25,6 +26,8 @@
 		nodeLocals = {},
 		nodeErrors = {},
 		nodeFnParams = {},
+		docManager,
+		level,
 	}: {
 		nodeId: string;
 		owner: BlockOwner;
@@ -32,6 +35,8 @@
 		nodeLocals?: Record<string, { raw: import('$lib/type-parser.js').TypeDesc; self: import('$lib/type-parser.js').TypeDesc }>;
 		nodeErrors?: Record<string, NodeErrors>;
 		nodeFnParams?: Record<string, DiscoveredFnParam[]>;
+		docManager?: DocumentManager;
+		level?: string;
 	} = $props();
 
 	let node = $derived.by(() => {
@@ -60,8 +65,6 @@
 	});
 
 	// Per-field errors from hard typecheck (Phase 2)
-	const EMPTY_NODE_ERRORS: NodeErrors = { initialValue: [], bind: [], ifModifiedKey: [], assert: [], messages: {}, exprSource: [] };
-	let fieldErrors = $derived(node ? (nodeErrors[node.name] ?? EMPTY_NODE_ERRORS) : EMPTY_NODE_ERRORS);
 	let providers = $derived(providerStore.providers);
 	let hasOrphanProvider = $derived(
 		node?.kind === 'llm' && node.providerId !== '' && !providerStore.get(node.providerId)
@@ -95,7 +98,7 @@
 			'ephemeral': { kind: 'ephemeral' },
 			'snapshot': { kind: 'snapshot' },
 			'sequence': { kind: 'sequence', bind: '' },
-			'diff': { kind: 'diff', bind: '' },
+			'patch': { kind: 'patch', bind: '' },
 		};
 		updateNode((n) => ({ ...n, strategy: { ...n.strategy, persistency: persistencies[kind] } }));
 	}
@@ -104,14 +107,14 @@
 		'ephemeral': 'Ephemeral',
 		'snapshot': 'Snapshot',
 		'sequence': 'Sequence',
-		'diff': 'Diff',
+		'patch': 'Patch',
 	};
 
 	const persistencyDescriptions: Record<string, string> = {
 		'ephemeral': 'Output is not persisted to storage.',
 		'snapshot': 'Overwrite stored value entirely each time.',
 		'sequence': 'Tracked sequence. Requires a bind script.',
-		'diff': 'Object field-level patch. Requires a bind script.',
+		'patch': 'Recursive deep-patch. Requires a bind script.',
 	};
 
 	// --- Messages ---
@@ -527,9 +530,8 @@
 									placeholder="e.g. @input | to_string"
 									value={execution.key}
 									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, execution: { mode: 'if-modified', key: v } } }))}
-									contextTypes={mergedContextTypes}
-									fieldError={formatErrors(fieldErrors.ifModifiedKey)}
-									discoverContext
+									{docManager}
+									docKey={level && node ? `${level}:node:${node.name}:ifmod` : undefined}
 								/>
 								<p class="hint">Script expression. Re-executes when this value changes.</p>
 							</div>
@@ -544,12 +546,12 @@
 									<Select.Item value="ephemeral">Ephemeral</Select.Item>
 									<Select.Item value="snapshot">Snapshot</Select.Item>
 									<Select.Item value="sequence">Sequence</Select.Item>
-									<Select.Item value="diff">Diff</Select.Item>
+									<Select.Item value="patch">Patch</Select.Item>
 								</Select.Content>
 							</Select.Root>
 							<p class="hint">{persistencyDescriptions[persistency.kind]}</p>
 						</div>
-						{#if persistency.kind === 'sequence' || persistency.kind === 'diff'}
+						{#if persistency.kind === 'sequence' || persistency.kind === 'patch'}
 							<div class="field">
 								<Label>Bind</Label>
 								<AcvusEngineField
@@ -557,9 +559,8 @@
 									placeholder="e.g. @raw"
 									value={persistency.bind}
 									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, persistency: { ...n.strategy.persistency, bind: v } as Persistency } }))}
-									contextTypes={mergedContextTypes}
-									fieldError={formatErrors(fieldErrors.bind)}
-									discoverContext
+									{docManager}
+									docKey={level && node ? `${level}:node:${node.name}:bind` : undefined}
 								/>
 								<p class="hint">Script with access to @raw (node output) and @self (current stored value).</p>
 							</div>
@@ -573,10 +574,8 @@
 								placeholder=''
 								value={node.strategy.initialValue ?? ''}
 								oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, initialValue: v } }))}
-								contextTypes={mergedContextTypes}
-								expectedTailType={locals?.self}
-								fieldError={formatErrors(fieldErrors.initialValue)}
-								discoverContext
+								{docManager}
+								docKey={level && node ? `${level}:node:${node.name}:init` : undefined}
 							/>
 							<p class="hint">Initial @self value. When set, @self is available in the node body (previous stored value or this initial value on first run). Leave empty to disable @self.</p>
 						</div>
@@ -599,10 +598,8 @@
 									placeholder="e.g. @self | length > 0"
 									value={node.strategy.assert ?? ''}
 									oninput={(v) => updateNode((n) => ({ ...n, strategy: { ...n.strategy, assert: v } }))}
-									contextTypes={mergedContextTypes}
-									expectedTailType={{ kind: 'primitive', name: 'bool' }}
-									fieldError={formatErrors(fieldErrors.assert)}
-									discoverContext
+									{docManager}
+									docKey={level && node ? `${level}:node:${node.name}:assert` : undefined}
 								/>
 							</div>
 						</div>
@@ -721,9 +718,8 @@
 															placeholder="Template content..."
 															value={src.template}
 															oninput={(v) => setMessageSource(i, { type: 'inline', template: v })}
-															contextTypes={mergedContextTypes}
-															fieldError={formatErrors(fieldErrors.messages?.[String(i)])}
-															discoverContext
+															{docManager}
+															docKey={level && node ? `${level}:node:${node.name}:msg:${i}` : undefined}
 														/>
 													{:else}
 														<div class="flex gap-1 items-center">
@@ -759,9 +755,8 @@
 														placeholder="Iterator expression"
 														value={msg.iterator}
 														oninput={(v) => updateMessage(i, { iterator: v })}
-														contextTypes={mergedContextTypes}
-														fieldError={formatErrors(fieldErrors.messages?.[String(i)])}
-														discoverContext
+														{docManager}
+														docKey={level && node ? `${level}:node:${node.name}:msg:${i}:iter` : undefined}
 													/>
 													<!-- Slice -->
 													{#if msg.slice}
@@ -819,8 +814,8 @@
 															placeholder="Item template (optional)..."
 															value={msg.template ?? ''}
 															oninput={(v) => updateMessage(i, { template: v })}
-															contextTypes={mergedContextTypes}
-															discoverContext
+															{docManager}
+															docKey={level && node ? `${level}:node:${node.name}:msg:${i}:tmpl` : undefined}
 														/>
 													{:else}
 														<button
@@ -937,9 +932,8 @@
 								placeholder="Acvus script expression..."
 								value={node.exprSource}
 								oninput={(v) => updateNode((n) => ({ ...n, exprSource: v }))}
-								contextTypes={mergedContextTypes}
-								fieldError={formatErrors(fieldErrors?.exprSource)}
-								discoverContext
+								{docManager}
+								docKey={level && node ? `${level}:node:${node.name}:expr` : undefined}
 								unlimited
 							/>
 						</div>

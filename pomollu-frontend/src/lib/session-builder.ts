@@ -1,11 +1,12 @@
 import type { Bot, Prompt, Profile, Node, MessageDef, Block, RawBlock, ContextBlock, ContextBinding } from './types.js';
 import { isRawBlock, isContextBlock, CONTEXT_TYPE, HISTORY_BINDING_NAME } from './types.js';
 import type { SessionConfig, NodeConfig, MessageConfig, ProviderConfig, ExecutionConfig, PersistencyConfig, StrategyConfig } from './engine.js';
+import { LanguageSession } from './engine.js';
 import type { TypeDesc } from './type-parser.js';
 import { isUnknownType } from './type-parser.js';
 import { collectNodes, collectBlocks } from './block-tree.js';
 import { promptStore, profileStore, providerStore } from './stores.svelte.js';
-import { analyzeBot, typeDescToFnParamString, type DiscoveredFnParam } from './param-resolver.js';
+import { AnalysisOrchestrator, bindingToExprNode, typeDescToFnParamString, type DiscoveredFnParam } from './param-resolver.js';
 
 function convertMessage(msg: MessageDef, blockLookup: Map<string, RawBlock>): MessageConfig {
 	switch (msg.kind) {
@@ -138,24 +139,24 @@ function convertPersistency(persistency: import('./types.js').Persistency | unde
 	switch (persistency?.kind) {
 		case 'snapshot': return { kind: 'snapshot' };
 		case 'sequence': return { kind: 'sequence', bind: persistency.bind };
-		case 'diff': return { kind: 'diff', bind: persistency.bind };
+		case 'patch': return { kind: 'patch', bind: persistency.bind };
 		default: return { kind: 'ephemeral' };
 	}
 }
 
-/** Convert a Prompt contextBinding to an Expr NodeConfig.
- * All bindings use snapshot persistency — display engine reads values from journal. */
-function bindingToExprNode(binding: ContextBinding): NodeConfig {
-	return {
-		name: binding.name,
-		kind: 'expr',
-		template: binding.script,
-		strategy: {
-			execution: { mode: 'once-per-turn' },
-			persistency: { kind: 'snapshot' },
-			retry: 0,
-		},
+/** Convert a WebNode (from bindingToExprNode) to a NodeConfig for ChatSession. */
+function webNodeToNodeConfig(wn: import('./engine.js').WebNode): NodeConfig {
+	const strategy: StrategyConfig = {
+		execution: wn.strategy.execution,
+		persistency: wn.strategy.persistency,
+		retry: wn.strategy.retry,
+		assert_script: wn.strategy.assert || undefined,
+		initial_value: wn.strategy.initialValue,
 	};
+	if (wn.kind === 'expr') {
+		return { name: wn.name, kind: 'expr', template: wn.exprSource, strategy };
+	}
+	return { name: wn.name, kind: wn.kind, strategy };
 }
 
 function escapeAcvusString(s: string): string {
@@ -281,7 +282,11 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 
 	// analyzeBot typechecks all 3 levels and returns ALL params merged
 	// (prompt + profile + bot). This is the single source of truth.
-	const analysisResult = analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
+	const session = LanguageSession.create();
+	const orchestrator = new AnalysisOrchestrator(session);
+	const analysisResult = orchestrator.analyzeBot(bot, prompt, profile, (id) => providerStore.get(id)?.api);
+	orchestrator.dispose();
+	session.free();
 	const allDiscovered = analysisResult.env.nodeFnParams;
 
 
@@ -296,7 +301,7 @@ export function buildSessionConfig(bot: Bot): BuildResult | null {
 				errors.push(`binding '${binding.name}' conflicts with a node name`);
 			}
 			seenNodeNames.add(binding.name);
-			nodeConfigs.push(bindingToExprNode(binding));
+			nodeConfigs.push(webNodeToNodeConfig(bindingToExprNode(binding.name, binding.script)));
 			sideEffects.push(binding.name);
 		}
 	}
