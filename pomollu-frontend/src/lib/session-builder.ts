@@ -154,7 +154,7 @@ function webNodeToNodeConfig(wn: import('./engine.js').WebNode): NodeConfig {
 		initial_value: wn.strategy.initialValue,
 	};
 	if (wn.kind === 'expr') {
-		return { name: wn.name, kind: 'expr', template: wn.exprSource, strategy };
+		return { name: wn.name, kind: 'expr', template: wn.exprSource, output_ty: wn.outputTy, strategy };
 	}
 	return { name: wn.name, kind: wn.kind, strategy };
 }

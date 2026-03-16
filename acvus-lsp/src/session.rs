@@ -509,7 +509,7 @@ impl LspSession {
             None => return vec![],
         };
 
-        if cursor == 0 || cursor > doc.source.len() {
+        if cursor == 0 || cursor > doc.source.len() || !doc.source.is_char_boundary(cursor) {
             return vec![];
         }
 
@@ -938,7 +938,7 @@ fn typecheck_node(
         }
     }
 
-    // expr source — use output_ty as hint (forced type for bindings like @history)
+    // expr source — output_ty as hint (forces return type for @history etc.)
     if let acvus_orchestration::NodeKind::Expr(expr_spec) = &spec.kind {
         let hint = match &expr_spec.output_ty {
             Ty::Infer => None,

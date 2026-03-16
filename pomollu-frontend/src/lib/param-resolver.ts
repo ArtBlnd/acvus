@@ -249,6 +249,11 @@ export class AnalysisOrchestrator {
 		// Step 3.5: Bind node documents to inference units
 		for (const [key] of scripts) {
 			const parts = key.split(':');
+			// Bindings are Expr WebNodes — bind them too
+			if (parts.length >= 3 && parts[1] === 'binding') {
+				const bindingName = parts[2];
+				manager.bindDocToNode(key, bindingName, 'exprSource');
+			}
 			if (parts.length >= 4 && parts[1] === 'node') {
 				const nodeName = parts[2];
 				const field = parts[3];
@@ -295,7 +300,6 @@ export class AnalysisOrchestrator {
 		// Passing them as user would conflict with system tier.
 		const flatFull: Record<string, TypeDesc> = { ...opts.provided, ...enrichedUser };
 		const fullTypecheckResult = this.session.rebuildNodes(webNodes, flatFull);
-
 		const fullEnv: ContextEnvResult = fullTypecheckResult.envErrors.length > 0
 			? EMPTY_ENV
 			: { ...fullTypecheckResult, nodeFnParams };

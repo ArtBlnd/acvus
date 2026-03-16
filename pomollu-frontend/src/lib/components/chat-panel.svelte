@@ -599,7 +599,7 @@
 
 	{#if errorMsg}
 		<div class="shrink-0 px-4 pt-2">
-			<div class="mx-auto max-w-4xl rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+			<div class="mx-auto max-w-4xl rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive whitespace-pre-wrap">
 				{errorMsg}
 			</div>
 		</div>
