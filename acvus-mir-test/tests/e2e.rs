@@ -1777,9 +1777,9 @@ fn pruned_context_keys_in_dead_catch_all() {
     // Outer match on @Impersonation with catch_all containing @Pov.
     // When Impersonation=NoPersona is known, catch_all is dead,
     // so @Pov should appear in partition.pruned.
-    use acvus_mir_pass::AnalysisPass;
-    use acvus_mir_pass::analysis::val_def::ValDefMapAnalysis;
-    use acvus_mir_pass::analysis::reachable_context::{partition_context_keys, KnownValue};
+    use acvus_mir::AnalysisPass;
+    use acvus_mir::analysis::val_def::ValDefMapAnalysis;
+    use acvus_mir::analysis::reachable_context::{partition_context_keys, KnownValue};
 
     let i = Interner::new();
     let src = r#"{-{ Impersonation::NoPersona = @Impersonation }}{-{_}}{-{ Pov::User = @Pov }}user{-{ Pov::Char = }}char{-{_}}other{-{ / }}{-{ / }}"#;

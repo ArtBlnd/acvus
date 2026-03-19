@@ -150,7 +150,7 @@ impl Interpreter {
 
     pub fn execute(self) -> Coroutine<TypedValue, RuntimeError> {
         acvus_utils::coroutine(|handle| async move {
-            crate::verify::verify_module(&self.module);
+            // Type verification now happens at compile time via acvus_mir::validate.
             crate::set_interner_ctx(&self.interner);
             let insts = self.module.main.insts.clone();
             let val_types = self.module.main.val_types.clone();

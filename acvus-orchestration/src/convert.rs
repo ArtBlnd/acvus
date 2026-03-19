@@ -1,6 +1,6 @@
 use acvus_ast::Literal;
 use acvus_interpreter::{LazyValue, PureValue, TypedValue, Value};
-use acvus_mir_pass::analysis::reachable_context::KnownValue;
+use acvus_mir::analysis::reachable_context::KnownValue;
 use acvus_utils::Interner;
 
 pub fn json_to_value(interner: &Interner, v: &serde_json::Value) -> Value {

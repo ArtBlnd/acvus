@@ -6,7 +6,6 @@ members = [
     "acvus-interpreter-test",
     "acvus-ast",
     "acvus-mir",
-    "acvus-mir-pass",
     "acvus-mir-cli",
     "acvus-mir-test",
     "acvus-orchestration",

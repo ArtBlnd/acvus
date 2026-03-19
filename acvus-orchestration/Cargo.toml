@@ -7,7 +7,6 @@ edition = "2024"
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-interpreter = { path = "../acvus-interpreter" }
-acvus-mir-pass = { path = "../acvus-mir-pass" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
 serde = { version = "1", features = ["derive"] }

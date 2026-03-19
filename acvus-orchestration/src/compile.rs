@@ -5,11 +5,11 @@ use std::collections::VecDeque;
 use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry, RegistryConflictError};
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::{Effect, FnKind, Ty};
-use acvus_mir_pass::AnalysisPass;
-use acvus_mir_pass::analysis::reachable_context::{
+use acvus_mir::AnalysisPass;
+use acvus_mir::analysis::reachable_context::{
     ContextKeyPartition, KnownValue, partition_context_keys, reachable_context_keys,
 };
-use acvus_mir_pass::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
+use acvus_mir::analysis::val_def::{ValDefMap, ValDefMapAnalysis};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 

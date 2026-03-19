@@ -5,7 +5,7 @@ use std::sync::Arc;
 use acvus_interpreter::{Interpreter, IterHandle, LazyValue, PureValue, RuntimeError, Stepped, TypedValue, Value, ValueKind};
 use acvus_mir::ir::MirModule;
 use acvus_mir::ty::Ty;
-use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
+use acvus_mir::analysis::reachable_context::partition_context_keys;
 use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner, TrackedDeque};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};

@@ -1,7 +1,7 @@
 use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry};
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::{Ty, TySubst};
-use acvus_mir_pass::analysis::reachable_context::KnownValue;
+use acvus_mir::analysis::reachable_context::KnownValue;
 use acvus_orchestration::{ContextScope, Execution, NodeSpec, Persistency};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -723,9 +723,9 @@ fn extract_context_keys(
     known: &FxHashMap<Astr, KnownValue>,
 ) -> Vec<ContextKeyInfo> {
     use acvus_mir::ir::ValueId;
-    use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
-    use acvus_mir_pass::analysis::val_def::ValDefMapAnalysis;
-    use acvus_mir_pass::AnalysisPass;
+    use acvus_mir::analysis::reachable_context::partition_context_keys;
+    use acvus_mir::analysis::val_def::ValDefMapAnalysis;
+    use acvus_mir::AnalysisPass;
 
     let val_def = ValDefMapAnalysis.run(module, ());
     let partition = partition_context_keys(module, known, &val_def);

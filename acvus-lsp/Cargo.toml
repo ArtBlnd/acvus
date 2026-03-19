@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
-acvus-mir-pass = { path = "../acvus-mir-pass" }
 acvus-orchestration = { path = "../acvus-orchestration" }
 acvus-ext = { path = "../acvus-ext" }
 acvus-utils = { path = "../acvus-utils" }

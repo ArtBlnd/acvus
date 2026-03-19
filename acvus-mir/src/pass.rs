@@ -1,12 +1,8 @@
-pub mod analysis;
-pub mod optimize;
-pub mod validate;
-
 use std::any::{Any, TypeId};
 
 use std::marker::PhantomData;
 
-use acvus_mir::ir::{MirBody, MirModule};
+use crate::ir::{MirBody, MirModule};
 use rustc_hash::FxHashMap;
 
 /// Analysis result store. Each analysis deposits its output here, keyed by TypeId.
@@ -250,7 +246,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_mir::ir::MirModule;
+    use crate::ir::MirModule;
 
     // -- Dummy analyses for testing --
 
@@ -285,7 +281,7 @@ mod tests {
     }
 
     fn empty_module() -> MirModule {
-        use acvus_mir::ir::MirBody;
+        use crate::ir::MirBody;
 
         MirModule {
             main: MirBody::new(),

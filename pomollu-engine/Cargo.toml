@@ -9,7 +9,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
-acvus-mir-pass = { path = "../acvus-mir-pass" }
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-orchestration = { path = "../acvus-orchestration" }
 acvus-chat = { path = "../acvus-chat" }

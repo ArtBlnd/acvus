@@ -101,7 +101,6 @@ dependencies = [
  "acvus-ast",
  "acvus-ext",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-orchestration",
  "acvus-utils",
  "rustc-hash",
@@ -116,8 +115,10 @@ dependencies = [
  "acvus-ast",
  "acvus-utils",
  "insta",
+ "rand 0.9.2",
  "rustc-hash",
  "serde",
+ "smallvec",
 ]
 
 [[package]]
@@ -133,24 +134,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "acvus-mir-pass"
-version = "0.1.0"
-dependencies = [
- "acvus-ast",
- "acvus-mir",
- "acvus-utils",
- "rand 0.9.2",
- "rustc-hash",
- "smallvec",
-]
-
-[[package]]
 name = "acvus-mir-test"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-utils",
  "insta",
  "rustc-hash",
@@ -163,7 +151,6 @@ dependencies = [
  "acvus-ast",
  "acvus-interpreter",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-utils",
  "blake3",
  "futures",
@@ -1527,7 +1514,6 @@ dependencies = [
  "acvus-interpreter",
  "acvus-lsp",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-orchestration",
  "acvus-utils",
  "console_error_panic_hook",

@@ -1,14 +1,20 @@
+pub mod analysis;
 pub mod builtins;
 pub mod context_registry;
 pub mod error;
 pub mod hints;
 pub mod ir;
 pub mod lower;
+pub mod optimize;
+pub mod pass;
 pub mod printer;
 pub mod ty;
 pub mod ser_ty;
 pub mod typeck;
+pub mod validate;
 pub mod variant;
+
+pub use pass::AnalysisPass;
 
 use acvus_ast::{Script, Template};
 use acvus_utils::Interner;
@@ -37,6 +43,10 @@ pub fn compile(
     let (type_map, builtin_map, coercion_map) = checker.check_template(template)?;
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
     Ok((module, hints))
 }
 
@@ -74,6 +84,10 @@ pub fn compile_script_with_hint_subst(
         checker.check_script_with_hint(script, expected_tail)?;
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
     Ok((module, hints, tail_ty))
 }
 
@@ -90,6 +104,10 @@ pub fn compile_analysis(
     let (type_map, builtin_map, coercion_map) = checker.check_template(template)?;
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
     Ok((module, hints))
 }
 
@@ -103,9 +121,11 @@ pub fn compile_analysis_partial(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map, coercion_map, errors) = checker.check_template_partial(template);
+    let (type_map, builtin_map, coercion_map, mut errors) = checker.check_template_partial(template);
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
+    let validation_errors = validate::validate(&module);
+    errors.extend(validation_errors.into_iter().map(|e| e.into_mir_error()));
     (module, hints, errors)
 }
 
@@ -132,6 +152,10 @@ pub fn compile_script_analysis_with_tail(
         checker.check_script_with_hint(script, expected_tail)?;
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
     Ok((module, hints, tail_ty))
 }
 
@@ -145,10 +169,12 @@ pub fn compile_script_analysis_with_tail_partial(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map, coercion_map, tail_ty, errors) =
+    let (type_map, builtin_map, coercion_map, tail_ty, mut errors) =
         checker.check_script_with_hint_partial(script, expected_tail);
     let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
+    let validation_errors = validate::validate(&module);
+    errors.extend(validation_errors.into_iter().map(|e| e.into_mir_error()));
     (module, hints, tail_ty, errors)
 }
 

@@ -1,6 +1,6 @@
 use acvus_lsp::{DocId, LspError, LspErrorCategory, LspSession, ScriptMode};
 use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry};
-use acvus_mir_pass::analysis::reachable_context::KnownValue;
+use acvus_mir::analysis::reachable_context::KnownValue;
 use rustc_hash::FxHashMap;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;

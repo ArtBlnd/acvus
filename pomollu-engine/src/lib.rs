@@ -15,7 +15,7 @@ fn init() {
 }
 
 use acvus_mir::ir::{InstKind};
-use acvus_mir_pass::analysis::reachable_context::KnownValue;
+use acvus_mir::analysis::reachable_context::KnownValue;
 use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap};

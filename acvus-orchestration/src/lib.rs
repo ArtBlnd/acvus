@@ -14,7 +14,7 @@ mod storage;
 
 pub use blob::{BlobHash, BlobStore, MemBlobStore};
 pub use blob_journal::BlobStoreJournal;
-pub use acvus_mir_pass::analysis::reachable_context::ContextKeyPartition;
+pub use acvus_mir::analysis::reachable_context::ContextKeyPartition;
 pub use compile::{
     CompiledBlock, CompiledExecution, CompiledMessage, CompiledNode, CompiledNodeGraph,
     CompiledScript, CompiledStrategy, ExternalContextEnv, NodeId, NodeRole, PersistMode,

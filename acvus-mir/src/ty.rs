@@ -515,16 +515,29 @@ impl TySubst {
     /// Lattice join unification: max(a, b).
     /// Pure + Pure = Pure, Effectful + _ = Effectful.
     /// Var binds to concrete, or two Vars are unified.
-    fn unify_effects(&mut self, a: Effect, b: Effect) -> Result<(), (Effect, Effect)> {
+    ///
+    /// Effect unification with subtyping: `Pure ≤ Effectful`.
+    ///
+    /// - **Covariant** (`a ≤ b`): `Pure` flows into `Effectful` → OK.
+    /// - **Contravariant** (`b ≤ a`): reversed direction.
+    /// - **Invariant**: must be exactly equal.
+    /// - **Var**: binds to concrete regardless of polarity.
+    fn unify_effects(&mut self, a: Effect, b: Effect, pol: Polarity) -> Result<(), (Effect, Effect)> {
         let a = self.resolve_effect(a);
         let b = self.resolve_effect(b);
         match (a, b) {
-            (Effect::Pure, Effect::Pure) => Ok(()),
-            (Effect::Effectful, Effect::Effectful) => Ok(()),
-            (Effect::Pure, Effect::Effectful) | (Effect::Effectful, Effect::Pure) => {
-                // Lattice join: result is Effectful. Rebind any vars in chains.
-                Err((a, b))
-            }
+            (Effect::Pure, Effect::Pure) | (Effect::Effectful, Effect::Effectful) => Ok(()),
+
+            // Pure ≤ Effectful (subeffect direction)
+            (Effect::Pure, Effect::Effectful) => match pol {
+                Polarity::Covariant => Ok(()),
+                Polarity::Contravariant | Polarity::Invariant => Err((a, b)),
+            },
+            (Effect::Effectful, Effect::Pure) => match pol {
+                Polarity::Contravariant => Ok(()),
+                Polarity::Covariant | Polarity::Invariant => Err((a, b)),
+            },
+
             (Effect::Var(v), other) | (other, Effect::Var(v)) => {
                 if let Effect::Var(v2) = other {
                     if v == v2 {
@@ -845,7 +858,7 @@ impl TySubst {
 
             (Ty::Iterator(ia, ea), Ty::Iterator(ib, eb)) => {
                 self.unify(ia, ib, Polarity::Invariant)?;
-                self.unify_effects(*ea, *eb)
+                self.unify_effects(*ea, *eb, pol)
                     .or_else(|_| self.lub_or_err(pol, orig_a, orig_b, &a, &b))
             }
 
@@ -853,7 +866,7 @@ impl TySubst {
                 // Origin mismatch or effect mismatch → both go through lub_or_err.
                 let origin_ok = self.unify_origins(*oa, *ob).is_ok();
                 let inner_ok = self.unify(ia, ib, Polarity::Invariant).is_ok();
-                let effect_ok = origin_ok && self.unify_effects(*ea, *eb).is_ok();
+                let effect_ok = origin_ok && self.unify_effects(*ea, *eb, pol).is_ok();
                 if origin_ok && inner_ok && effect_ok {
                     Ok(())
                 } else if !inner_ok {
@@ -946,7 +959,7 @@ impl TySubst {
                 }
                 // Return type keeps polarity.
                 self.unify(ra, rb, pol)?;
-                self.unify_effects(*ea, *eb)
+                self.unify_effects(*ea, *eb, pol)
                     .or_else(|_| self.lub_or_err(pol, orig_a, orig_b, &a, &b))
             }
 
@@ -981,23 +994,23 @@ impl TySubst {
             }
             // List<T> ≤ Iterator<T, E> (E must accept Pure)
             (Ty::List(inner_l), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(Effect::Pure, *e).map_err(|_| ())?;
+                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
                 self.unify(inner_l, inner_i, Polarity::Invariant).map_err(|_| ())
             }
             // Deque<T, O> ≤ Iterator<T, E> (E must accept Pure)
             (Ty::Deque(inner_d, _), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(Effect::Pure, *e).map_err(|_| ())?;
+                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
                 self.unify(inner_d, inner_i, Polarity::Invariant).map_err(|_| ())
             }
             // Deque<T, O> ≤ Sequence<T, O', E> (origin preserved, E must accept Pure)
             (Ty::Deque(inner_d, od), Ty::Sequence(inner_s, os, e)) => {
                 self.unify_origins(*od, *os).map_err(|_| ())?;
-                self.unify_effects(Effect::Pure, *e).map_err(|_| ())?;
+                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
                 self.unify(inner_d, inner_s, Polarity::Invariant).map_err(|_| ())
             }
             // Sequence<T, O, E> ≤ Iterator<T, E'> (origin lost, effect preserved)
             (Ty::Sequence(inner_s, _, es), Ty::Iterator(inner_i, ei)) => {
-                self.unify_effects(*es, *ei).map_err(|_| ())?;
+                self.unify_effects(*es, *ei, Polarity::Invariant).map_err(|_| ())?;
                 self.unify(inner_s, inner_i, Polarity::Invariant).map_err(|_| ())
             }
             _ => Err(()),
@@ -3427,7 +3440,7 @@ mod tests {
 
     #[test]
     fn iterator_pure_to_effectful_covariant() {
-        // Pure ≤ Effectful in Covariant → coerce to Effectful
+        // Pure ≤ Effectful in Covariant → subtyping OK, v stays Pure (more specific)
         let mut s = TySubst::new();
         let v = s.fresh_var();
         let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
@@ -3436,7 +3449,7 @@ mod tests {
         assert!(s.unify(&v, &effectful_iter, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::Pure),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3479,8 +3492,8 @@ mod tests {
 
     #[test]
     fn iterator_shared_effect_var_pure_then_effectful() {
-        // Simulates HOF: effect var e is shared, first binds Pure, then needs Effectful.
-        // In Covariant, should coerce e to Effectful.
+        // Simulates HOF: effect var e is shared, first binds Pure, then sees Effectful.
+        // In Covariant, Pure ≤ Effectful succeeds without promoting — e stays Pure.
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
         // First: bind e = Pure (from input iterator)
@@ -3504,9 +3517,9 @@ mod tests {
             captures: vec![],
             effect: callback_effect,
         };
-        // Covariant: Pure Fn ≤ Effectful Fn → coerce e to Effectful
+        // Covariant: Pure ≤ Effectful succeeds, but e stays as Pure (more specific).
         assert!(s.unify(&fn_sig, &fn_actual, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful);
+        assert_eq!(s.resolve_effect(e), Effect::Pure);
     }
 
     // -- Sequence effect coercion --
@@ -3531,7 +3544,7 @@ mod tests {
         assert!(s.unify(&v, &effectful_seq, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Sequence(_, _, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Sequence(_, _, e) => assert_eq!(e, Effect::Pure),
             other => panic!("expected Sequence, got {other:?}"),
         }
     }
@@ -3623,7 +3636,7 @@ mod tests {
         assert!(s.unify(&v, &pure_fn, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_fn, Covariant).is_ok());
         match s.resolve(&v) {
-            Ty::Fn { effect, .. } => assert_eq!(effect, Effect::Effectful),
+            Ty::Fn { effect, .. } => assert_eq!(effect, Effect::Pure),
             other => panic!("expected Fn, got {other:?}"),
         }
     }
@@ -3753,7 +3766,7 @@ mod tests {
         assert!(s.unify(&v, &effectful, Covariant).is_ok());
         assert!(s.unify(&v, &pure2, Covariant).is_ok());
         match s.resolve(&v) {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::Pure),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
