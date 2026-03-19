@@ -196,9 +196,9 @@ fn rebuild_fingerprint(specs: &[NodeSpec], registry: &PartialContextTypeRegistry
         spec.is_function.hash(&mut hasher);
         // Hash kind-specific source strings
         match &spec.kind {
-            acvus_orchestration::NodeKind::Expr(e) => e.source.hash(&mut hasher),
-            acvus_orchestration::NodeKind::Llm(llm) => {
-                for msg in &llm.messages {
+            acvus_orchestration::NodeKind::Expression(e) => e.source.hash(&mut hasher),
+            _ => {
+                for msg in spec.kind.messages() {
                     match msg {
                         acvus_orchestration::MessageSpec::Block { source, .. } => source.hash(&mut hasher),
                         acvus_orchestration::MessageSpec::Iterator { key, .. } => {
@@ -207,9 +207,6 @@ fn rebuild_fingerprint(specs: &[NodeSpec], registry: &PartialContextTypeRegistry
                     }
                 }
             }
-            acvus_orchestration::NodeKind::Plain(_)
-            | acvus_orchestration::NodeKind::LlmCache(_)
-            | acvus_orchestration::NodeKind::Iterator(_) => {}
         }
         // Hash strategy
         if let Some(iv) = spec.strategy.initial_value {
@@ -740,7 +737,7 @@ fn extract_context_keys(
             if let InstKind::ContextLoad { dst, name, .. } = &inst.kind {
                 type_map
                     .entry(*name)
-                    .or_insert_with(|| val_types.get(dst).cloned().unwrap_or(Ty::Infer));
+                    .or_insert_with(|| val_types.get(dst).cloned().unwrap_or_else(Ty::error));
             }
         }
     };
@@ -754,25 +751,25 @@ fn extract_context_keys(
 
     for name in &partition.eager {
         if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or(Ty::Infer);
+            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
             keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Eager });
         }
     }
     for name in &partition.lazy {
         if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or(Ty::Infer);
+            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
             keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Lazy });
         }
     }
     for name in &partition.reachable_known {
         if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or(Ty::Infer);
+            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
             keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Eager });
         }
     }
     for name in &partition.pruned {
         if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or(Ty::Infer);
+            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
             keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Pruned });
         }
     }
@@ -856,7 +853,7 @@ fn typecheck_node(
             }
             Persistency::Ephemeral => {
                 let hint = match &locals.self_ty {
-                    Ty::Error => None,
+                    Ty::Error(_) => None,
                     ty => Some(ty),
                 };
                 errors.initial_value =
@@ -884,7 +881,7 @@ fn typecheck_node(
             // raw_ty is Deque<T,O> but @self is coerced to Sequence<T,O,Pure>.
             // bind must return something assignable back to self_ty.
             let bind_hint = match &locals.self_ty {
-                Ty::Error => None,
+                Ty::Error(_) => None,
                 ty => Some(ty),
             };
             errors.bind = check_script_with_subst(
@@ -912,13 +909,7 @@ fn typecheck_node(
     }
 
     // messages (LLM only)
-    let messages: &[acvus_orchestration::MessageSpec] = match &spec.kind {
-        acvus_orchestration::NodeKind::Llm(llm) => &llm.messages,
-        acvus_orchestration::NodeKind::Plain(_)
-        | acvus_orchestration::NodeKind::Expr(_)
-        | acvus_orchestration::NodeKind::LlmCache(_)
-        | acvus_orchestration::NodeKind::Iterator(_) => &[],
-    };
+    let messages: &[acvus_orchestration::MessageSpec] = spec.kind.messages();
 
     for (mi, msg) in messages.iter().enumerate() {
         let errs = match msg {
@@ -935,12 +926,8 @@ fn typecheck_node(
     }
 
     // expr source — output_ty as hint (forces return type for @history etc.)
-    if let acvus_orchestration::NodeKind::Expr(expr_spec) = &spec.kind {
-        let hint = match &expr_spec.output_ty {
-            Ty::Infer => None,
-            ty => Some(ty),
-        };
-        errors.expr_source = check_script(interner, &expr_spec.source, &node_reg, hint);
+    if let acvus_orchestration::NodeKind::Expression(expr_spec) = &spec.kind {
+        errors.expr_source = check_script(interner, &expr_spec.source, &node_reg, expr_spec.output_ty.as_ref());
     }
 
     errors
@@ -1027,7 +1014,7 @@ fn infer_tail_type(
         acvus_mir::compile_script_analysis_with_tail_partial(interner, &script, scope, None);
     // Resolve through substitution — if still Var/Infer, return None
     match &tail_ty {
-        Ty::Var(_) | Ty::Infer | Ty::Error => None,
+        Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => None,
         _ => Some(tail_ty),
     }
 }
@@ -1177,7 +1164,7 @@ mod tests {
     use super::*;
     use acvus_mir::ty::Ty;
     use acvus_orchestration::{
-        Execution, ExprSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy,
+        Execution, ExpressionSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy,
     };
 
     fn make_session() -> LspSession {
@@ -1249,9 +1236,9 @@ mod tests {
     fn expr_node(interner: &Interner, name: &str, source: &str) -> NodeSpec {
         NodeSpec {
             name: interner.intern(name),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: source.to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -1273,9 +1260,9 @@ mod tests {
     ) -> NodeSpec {
         NodeSpec {
             name: interner.intern(name),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: source.to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -1298,9 +1285,9 @@ mod tests {
     ) -> NodeSpec {
         NodeSpec {
             name: interner.intern(name),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: source.to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -1325,9 +1312,9 @@ mod tests {
     ) -> NodeSpec {
         NodeSpec {
             name: interner.intern(name),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: source.to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -2024,9 +2011,9 @@ mod tests {
         let interner = session.interner();
         let node = NodeSpec {
             name: interner.intern("guarded"),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: "42".to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -2053,9 +2040,9 @@ mod tests {
         let interner = session.interner();
         let node = NodeSpec {
             name: interner.intern("bad_assert"),
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source: "42".to_string(),
-                output_ty: Ty::Infer,
+                output_ty: None,
             }),
             strategy: Strategy {
                 execution: Execution::Always,
@@ -2414,7 +2401,7 @@ mod tests {
         let interner = session.interner();
         let node = NodeSpec {
             name: interner.intern("g"),
-            kind: NodeKind::Expr(ExprSpec { source: "42".into(), output_ty: Ty::Infer }),
+            kind: NodeKind::Expression(ExpressionSpec { source: "42".into(), output_ty: None }),
             strategy: Strategy {
                 execution: Execution::Always,
                 persistency: Persistency::Ephemeral,
@@ -2441,7 +2428,7 @@ mod tests {
         let interner = session.interner();
         let node = NodeSpec {
             name: interner.intern("g"),
-            kind: NodeKind::Expr(ExprSpec { source: "42".into(), output_ty: Ty::Infer }),
+            kind: NodeKind::Expression(ExpressionSpec { source: "42".into(), output_ty: None }),
             strategy: Strategy {
                 execution: Execution::Always,
                 persistency: Persistency::Ephemeral,

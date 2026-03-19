@@ -5,20 +5,29 @@ expression: ir
 === main ===
      0 │   r0 = context_load @items
      1 │   r1 = call reverse(r0)
-     2 │   r2 = iter_init r1
-     3 │ L0:
-     4 │   r3, r4 = iter_next r2
-     5 │   jump_if r4 then L1 else L3
-     6 │ L3:
-     7 │   r5 = call to_string(r3)
-     8 │   yield r5
-     9 │   jump L0
-    10 │ L1:
-    11 │ L2:
+     2 │   r2 = cast ListToIterator r1
+     3 │   jump L0(r2)
+     4 │ L0(r3: Iterator<Int>):
+     5 │   r4 = iter_step r3
+     6 │   r5 = test r4 is None
+     7 │   jump_if r5 then L1 else L3
+     8 │ L3:
+     9 │   r6 = unwrap r4
+    10 │   r7 = r6.0
+    11 │   r8 = r6.1
+    12 │   r9 = call to_string(r7)
+    13 │   yield r9
+    14 │   jump L0(r8)
+    15 │ L1:
+    16 │ L2:
 
     ; r0 (@items) : List<Int>
     ; r1 (reverse(...)) : List<Int>
-    ; r2 (v2) : Unit
-    ; r3 (x) : Int
-    ; r4 (v4) : Bool
-    ; r5 (to_string(...)) : String
+    ; r2 (v2) : Iterator<Int>
+    ; r3 (v3) : Iterator<Int>
+    ; r4 (v4) : Option<(Int, Iterator<Int>)>
+    ; r5 (v5) : Bool
+    ; r6 (v6) : (Int, Iterator<Int>)
+    ; r7 (x) : Int
+    ; r8 (v8) : Iterator<Int>
+    ; r9 (to_string(...)) : String

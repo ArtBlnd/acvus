@@ -4,34 +4,52 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @users
-     1 │   r1 = iter_init r0
-     2 │ L0:
-     3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L1 else L3
-     5 │ L3:
-     6 │   r4 = r2.name
-     7 │   r5 = r2.posts
-     8 │   r6 = iter_init r5
-     9 │ L4:
-    10 │   r7, r8 = iter_next r6
-    11 │   jump_if r8 then L5 else L7
-    12 │ L7:
-    13 │   r9 = r7.title
-    14 │   yield r9
-    15 │   jump L4
-    16 │ L5:
-    17 │ L6:
-    18 │   jump L0
-    19 │ L1:
-    20 │ L2:
+     1 │   r1 = cast ListToIterator r0
+     2 │   jump L0(r1)
+     3 │ L0(r2: Iterator<{name: String, posts: List<{title: String}>}>):
+     4 │   r3 = iter_step r2
+     5 │   r4 = test r3 is None
+     6 │   jump_if r4 then L1 else L3
+     7 │ L3:
+     8 │   r5 = unwrap r3
+     9 │   r6 = r5.0
+    10 │   r7 = r5.1
+    11 │   r8 = r6.name
+    12 │   r9 = r6.posts
+    13 │   r10 = cast ListToIterator r9
+    14 │   jump L4(r10)
+    15 │ L4(r11: Iterator<{title: String}>):
+    16 │   r12 = iter_step r11
+    17 │   r13 = test r12 is None
+    18 │   jump_if r13 then L5 else L7
+    19 │ L7:
+    20 │   r14 = unwrap r12
+    21 │   r15 = r14.0
+    22 │   r16 = r14.1
+    23 │   r17 = r15.title
+    24 │   yield r17
+    25 │   jump L4(r16)
+    26 │ L5:
+    27 │ L6:
+    28 │   jump L0(r7)
+    29 │ L1:
+    30 │ L2:
 
     ; r0 (@users) : List<{name: String, posts: List<{title: String}>}>
-    ; r1 (v1) : Unit
-    ; r2 (v2) : {name: String, posts: List<{title: String}>}
-    ; r3 (v3) : Bool
-    ; r4 (name) : String
-    ; r5 (posts) : List<{title: String}>
-    ; r6 (v6) : Unit
-    ; r7 (v7) : {title: String}
-    ; r8 (v8) : Bool
-    ; r9 (title) : String
+    ; r1 (v1) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r2 (v2) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r3 (v3) : Option<({name: String, posts: List<{title: String}>}, Iterator<{name: String, posts: List<{title: String}>}>)>
+    ; r4 (v4) : Bool
+    ; r5 (v5) : ({name: String, posts: List<{title: String}>}, Iterator<{name: String, posts: List<{title: String}>}>)
+    ; r6 (v6) : {name: String, posts: List<{title: String}>}
+    ; r7 (v7) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r8 (name) : String
+    ; r9 (posts) : List<{title: String}>
+    ; r10 (v10) : Iterator<{title: String}>
+    ; r11 (v11) : Iterator<{title: String}>
+    ; r12 (v12) : Option<({title: String}, Iterator<{title: String}>)>
+    ; r13 (v13) : Bool
+    ; r14 (v14) : ({title: String}, Iterator<{title: String}>)
+    ; r15 (v15) : {title: String}
+    ; r16 (v16) : Iterator<{title: String}>
+    ; r17 (title) : String

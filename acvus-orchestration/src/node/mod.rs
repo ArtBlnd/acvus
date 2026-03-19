@@ -1,38 +1,44 @@
-mod expr;
+mod anthropic;
+mod expression;
+mod google;
+mod google_cache;
 pub(crate) mod helpers;
 mod iterator;
-mod llm;
-mod llm_cache;
+mod openai;
 mod plain;
+mod schema;
 
-use acvus_utils::{Astr, Interner};
+use acvus_utils::Interner;
+pub use anthropic::AnthropicNode;
+pub use expression::ExpressionNode;
+pub use google::GoogleAINode;
+pub use google_cache::GoogleAICacheNode;
 pub use iterator::IteratorNode;
-pub use expr::ExprNode;
-pub use llm::LlmNode;
-pub use llm_cache::LlmCacheNode;
+pub use openai::OpenAICompatibleNode;
 pub use plain::PlainNode;
-use rustc_hash::FxHashMap;
 
 use std::sync::Arc;
 
 use acvus_interpreter::{Coroutine, RuntimeError, TypedValue};
+use acvus_utils::Astr;
+use rustc_hash::FxHashMap;
 
-use crate::{CompiledNode, CompiledNodeKind, provider::{Fetch, ProviderConfig}};
+use crate::{CompiledNode, CompiledNodeKind};
+use crate::http::Fetch;
 
-/// Node = 함수. kind에 무관하게 동일한 인터페이스.
-/// spawn으로 coroutine 생성 → resolver가 uniform하게 drive.
+/// Node = function. kind-agnostic uniform interface.
+/// spawn creates a coroutine -> resolver drives it uniformly.
 pub trait Node: Send + Sync {
     fn spawn(
         &self,
-        local_context: FxHashMap<Astr, Arc<TypedValue>>,
+        local_context: FxHashMap<Astr, TypedValue>,
     ) -> Coroutine<TypedValue, RuntimeError>;
 }
 
 /// Build a node table from compiled nodes.
-/// Match once here → uniform `Arc<dyn Node>` everywhere else.
+/// Match once here -> uniform `Arc<dyn Node>` everywhere else.
 pub fn build_node_table<F>(
     compiled: &[CompiledNode],
-    providers: &FxHashMap<String, ProviderConfig>,
     fetch: Arc<F>,
     interner: &Interner,
 ) -> Vec<Arc<dyn Node>>
@@ -47,38 +53,35 @@ where
                     plain.block.module.clone(),
                     interner,
                 )),
-                CompiledNodeKind::Expr(expr) => Arc::new(ExprNode::new(
+                CompiledNodeKind::Expression(expr) => Arc::new(ExpressionNode::new(
                     expr.script.module.clone(),
                     interner,
                 )),
-                CompiledNodeKind::Llm(llm) => {
-                    let provider_config = providers
-                        .get(&llm.provider)
-                        .cloned()
-                        .unwrap_or_else(|| panic!("unknown provider: {}", llm.provider));
-                    Arc::new(LlmNode::new(
-                        llm,
-                        provider_config,
-                        Arc::clone(&fetch),
-                        interner,
-                    ))
-                }
-                CompiledNodeKind::LlmCache(cache) => {
-                    let provider_config = providers
-                        .get(&cache.provider)
-                        .cloned()
-                        .unwrap_or_else(|| panic!("unknown provider: {}", cache.provider));
-                    Arc::new(LlmCacheNode::new(
-                        cache,
-                        provider_config,
-                        Arc::clone(&fetch),
-                        interner,
-                    ))
-                }
+                CompiledNodeKind::OpenAICompatible(c) => Arc::new(OpenAICompatibleNode::new(
+                    c,
+                    Arc::clone(&fetch),
+                    interner,
+                )),
+                CompiledNodeKind::Anthropic(c) => Arc::new(AnthropicNode::new(
+                    c,
+                    Arc::clone(&fetch),
+                    interner,
+                )),
+                CompiledNodeKind::GoogleAI(c) => Arc::new(GoogleAINode::new(
+                    c,
+                    Arc::clone(&fetch),
+                    interner,
+                )),
+                CompiledNodeKind::GoogleAICache(c) => Arc::new(GoogleAICacheNode::new(
+                    c,
+                    Arc::clone(&fetch),
+                    interner,
+                )),
                 CompiledNodeKind::Iterator { sources, unordered } => {
                     Arc::new(IteratorNode::new(
                         sources.clone(),
                         *unordered,
+                        &node.output_ty,
                         interner,
                     ))
                 }

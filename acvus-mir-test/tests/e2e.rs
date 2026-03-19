@@ -1,5 +1,5 @@
 use acvus_mir::context_registry::ContextTypeRegistry;
-use acvus_mir::ty::{Effect, FnKind, Ty};
+use acvus_mir::ty::{Effect, FnKind, InferToken, Ty};
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -1770,21 +1770,6 @@ fn variant_merge_inside_list_pattern() {
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("A"), "variant A missing:\n{ir}");
     assert!(ir.contains("B"), "variant B missing:\n{ir}");
-}
-
-#[test]
-fn infer_unifies_with_concrete_type() {
-    // Ty::Infer in context types should not block unification.
-    let i = Interner::new();
-    let mut variants = FxHashMap::default();
-    variants.insert(i.intern("X"), Some(Box::new(Ty::Infer)));
-    let ctx_types = ctx(&i, &[("a", Ty::Enum { name: i.intern("A"), variants })]);
-    let src = r#"{{ A::X(x) = @a }}{{ x + 1 | to_string }}{{_}}no{{/}}"#;
-    let template = acvus_ast::parse(&i, src).unwrap();
-    // Should compile without error — Infer payload unifies with Int from `x + 1`.
-    acvus_mir::compile_analysis(
-        &i, &template, &ContextTypeRegistry::all_system(ctx_types),
-    ).unwrap();
 }
 
 #[test]

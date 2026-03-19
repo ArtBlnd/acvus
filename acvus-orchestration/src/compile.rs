@@ -15,11 +15,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::TokenBudget;
 use crate::convert::value_to_known;
-use crate::dsl::{ContextScope, Execution, FnParam, MessageSpec, NodeLocalTypes, NodeSpec, Persistency};
+use crate::dsl::{ContextScope, Execution, FnParam, MessageSpec, NodeLocalTypes, NodeSpec, Persistency, KEY_SELF, KEY_RAW, KEY_TURN_INDEX, KEY_ITEM, KEY_INDEX};
 use crate::error::{OrchError, OrchErrorKind};
-use crate::kind::{
-    CompiledNodeKind, NodeKind, compile_expr, compile_llm, compile_llm_cache, compile_plain,
-    parse_type_name,
+use crate::spec::{
+    CompiledExpression, CompiledNodeKind, NodeKind,
+    compile_anthropic, compile_expression, compile_google, compile_google_cache,
+    compile_openai, compile_plain, parse_type_name,
 };
 use crate::storage::EntryRef;
 
@@ -31,44 +32,60 @@ pub enum CompiledExecution {
     IfModified { key: CompiledScript },
 }
 
-/// Compiled persistency mode.
+/// Persist mode for non-ephemeral nodes.
 #[derive(Debug, Clone)]
-pub enum CompiledPersistency {
-    Ephemeral,
-    Sequence { bind: CompiledScript },
-    Patch { bind: CompiledScript },
+pub enum PersistMode {
+    Sequence,
+    Patch,
 }
 
-/// Compiled strategy — groups execution, persistency, initial_value, retry, and assert.
+/// Compiled strategy — groups execution, initial_value, retry, and assert.
 ///
-/// Execution × Persistency matrix behavior is defined here as methods,
-/// not scattered across resolver code.
+/// Persistency information (mode + bind script) lives in `NodeRole::Persistent`,
+/// not here. Only Persistent nodes have that data; Body and Standalone nodes
+/// never carry it.
 #[derive(Debug, Clone)]
 pub struct CompiledStrategy {
     pub execution: CompiledExecution,
-    pub persistency: CompiledPersistency,
     pub initial_value: Option<CompiledScript>,
     pub retry: u32,
     pub assert: Option<CompiledScript>,
 }
 
-impl CompiledStrategy {
-    /// Whether this node's output is persisted to storage.
-    /// Ephemeral nodes only live in turn_context.
-    pub fn persists(&self) -> bool {
-        !matches!(self.persistency, CompiledPersistency::Ephemeral)
-    }
+/// Unique identifier for a node in the compiled graph.
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct NodeId(pub usize);
 
-    /// Whether the output type must be storable (`Ty::is_storable()`).
-    /// Only persistent nodes need storable values.
-    pub fn requires_storable(&self) -> bool {
-        self.persists()
+impl NodeId {
+    pub fn index(self) -> usize {
+        self.0
     }
+}
+
+/// Role of a compiled node in the execution graph.
+///
+/// Determines how the resolver prepares, executes, and finalizes the node.
+#[derive(Debug, Clone)]
+pub enum NodeRole {
+    /// Lazy body node — spawned on-demand when its bind node requests @raw.
+    /// Does NOT appear in the DAG. Has no initial_value or IfModified of its own.
+    Body { bind_id: NodeId },
+    /// Persistent node with storage (Sequence or Patch).
+    /// Always the bind half of a body+bind split pair.
+    /// Carries the persist mode and compiled bind script.
+    Persistent {
+        body_id: NodeId,
+        mode: PersistMode,
+        bind: CompiledScript,
+    },
+    /// Standalone ephemeral node — no bind accumulation.
+    Standalone,
 }
 
 /// A compiled orchestration node.
 #[derive(Debug, Clone)]
 pub struct CompiledNode {
+    pub id: NodeId,
     pub name: Astr,
     pub kind: CompiledNodeKind,
     pub all_context_keys: FxHashSet<Astr>,
@@ -78,6 +95,28 @@ pub struct CompiledNode {
     /// The type of values this node produces (stored or ephemeral).
     /// Used at storage boundaries to construct TypedValue and verify storability.
     pub output_ty: Ty,
+    /// Role of this node in the execution graph.
+    pub role: NodeRole,
+}
+
+/// The compiled node graph with Id-based identification.
+///
+/// For Sequence/Patch nodes, the DSL-level node is split into two:
+/// - **Body node**: executes the computation (LLM/Expr/etc), produces @raw
+/// - **Bind node**: executes the bind script, produces the accumulated value
+///
+/// External consumers see the bind node as the primary (via `name_to_primary`).
+/// The body node is an internal dependency resolved via scope-aware NeedContext.
+#[derive(Debug, Clone)]
+pub struct CompiledNodeGraph {
+    pub nodes: Vec<CompiledNode>,
+    pub name_to_primary: FxHashMap<Astr, NodeId>,
+}
+
+impl CompiledNodeGraph {
+    pub fn node(&self, id: NodeId) -> &CompiledNode {
+        &self.nodes[id.0]
+    }
 }
 
 /// Compiled expression (Script → MIR).
@@ -333,7 +372,7 @@ pub(crate) fn compile_messages(
                 role,
                 token_budget,
             } => {
-                let ctx = format!("iterator (block {i})");
+                let _ctx = format!("iterator (block {i})");
                 // Hint: Iterator<T> — List/Deque/Sequence all coerce to Iterator.
                 // If it doesn't coerce, compile itself fails — no post-check needed.
                 let iter_hint = Ty::Iterator(Box::new(iterator_elem_ty.clone()), acvus_mir::ty::Effect::Pure);
@@ -372,29 +411,37 @@ pub fn compile_node(
     interner: &Interner,
     spec: &NodeSpec,
     registry: &ContextTypeRegistry,
+    id: NodeId,
     initial_value: Option<CompiledScript>,
     compiled_execution: CompiledExecution,
-    compiled_persistency: CompiledPersistency,
     compiled_assert: Option<CompiledScript>,
     output_ty: Ty,
+    role: NodeRole,
 ) -> Result<CompiledNode, Vec<OrchError>> {
     let (kind, mut all_context_keys): (_, FxHashSet<_>) = match &spec.kind {
         NodeKind::Plain(plain_spec) => {
             let (compiled, keys) = compile_plain(interner, plain_spec, registry)?;
             (CompiledNodeKind::Plain(compiled), keys)
         }
-        NodeKind::Llm(llm_spec) => {
-            let (compiled, keys) = compile_llm(interner, llm_spec, registry)?;
-            (CompiledNodeKind::Llm(compiled), keys)
+        NodeKind::OpenAICompatible(spec) => {
+            let (compiled, keys) = compile_openai(interner, spec, registry)?;
+            (CompiledNodeKind::OpenAICompatible(compiled), keys)
         }
-        NodeKind::LlmCache(cache_spec) => {
-            let (compiled, keys) =
-                compile_llm_cache(interner, cache_spec, registry)?;
-            (CompiledNodeKind::LlmCache(compiled), keys)
+        NodeKind::Anthropic(spec) => {
+            let (compiled, keys) = compile_anthropic(interner, spec, registry)?;
+            (CompiledNodeKind::Anthropic(compiled), keys)
         }
-        NodeKind::Expr(expr_spec) => {
-            let (compiled, keys) = compile_expr(interner, expr_spec, registry)?;
-            (CompiledNodeKind::Expr(compiled), keys)
+        NodeKind::GoogleAI(spec) => {
+            let (compiled, keys) = compile_google(interner, spec, registry)?;
+            (CompiledNodeKind::GoogleAI(compiled), keys)
+        }
+        NodeKind::GoogleAICache(spec) => {
+            let (compiled, keys) = compile_google_cache(interner, spec, registry)?;
+            (CompiledNodeKind::GoogleAICache(compiled), keys)
+        }
+        NodeKind::Expression(expr_spec) => {
+            let (compiled, keys) = compile_expression(interner, expr_spec, registry)?;
+            (CompiledNodeKind::Expression(compiled), keys)
         }
         NodeKind::Iterator(iter_spec) => {
             let mut keys = FxHashSet::default();
@@ -412,14 +459,20 @@ pub fn compile_node(
                     | Ty::Sequence(elem, _, _)
                     | Ty::List(elem)
                     | Ty::Deque(elem, _) => (**elem).clone(),
-                    Ty::Error => Ty::Error,
-                    _ => Ty::Infer,
+                    Ty::Error(_) => Ty::error(),
+                    other => {
+                        return Err(vec![OrchError::new(OrchErrorKind::ScriptTypeMismatch {
+                            context: format!("iterator source expr '{}'", source.name),
+                            expected: Ty::Iterator(Box::new(Ty::error()), acvus_mir::ty::Effect::Pure),
+                            got: other.clone(),
+                        })]);
+                    }
                 };
 
                 // Entry scripts need @item and @index in scope
                 let transform_registry = registry.with_extra_scoped([
-                    (interner.intern("item"), item_ty.clone()),
-                    (interner.intern("index"), Ty::Int),
+                    (interner.intern(KEY_ITEM), item_ty.clone()),
+                    (interner.intern(KEY_INDEX), Ty::Int),
                 ]).map_err(|e| vec![OrchError::new(OrchErrorKind::RegistryConflict {
                     key: e.key, tier_a: e.tier_a, tier_b: e.tier_b,
                 })])?;
@@ -440,25 +493,25 @@ pub fn compile_node(
 
                     // Compile transform (Template or Script)
                     let transform = match &entry.transform {
-                        crate::kind::SourceTransform::Template(src) => {
+                        crate::spec::SourceTransform::Template(src) => {
                             let tmpl_block = compile_template(interner, interner.resolve(*src), 0, &transform_registry)
                                 .map_err(|e| vec![e])?;
                             keys.extend(tmpl_block.context_keys.iter().copied());
-                            crate::kind::CompiledSourceTransform::Template(CompiledScript {
+                            crate::spec::CompiledSourceTransform::Template(CompiledScript {
                                 module: tmpl_block.module,
                                 context_keys: tmpl_block.context_keys,
                                 val_def: tmpl_block.val_def,
                             })
                         }
-                        crate::kind::SourceTransform::Script(src) => {
+                        crate::spec::SourceTransform::Script(src) => {
                             let (script, _) = compile_script(interner, interner.resolve(*src), &transform_registry)
                                 .map_err(|e| vec![e])?;
                             keys.extend(script.context_keys.iter().copied());
-                            crate::kind::CompiledSourceTransform::Script(script)
+                            crate::spec::CompiledSourceTransform::Script(script)
                         }
                     };
 
-                    compiled_entries.push(crate::kind::CompiledIteratorEntry {
+                    compiled_entries.push(crate::spec::CompiledIteratorEntry {
                         condition,
                         transform,
                     });
@@ -489,7 +542,7 @@ pub fn compile_node(
                     None => None,
                 };
 
-                compiled_sources.push(crate::kind::CompiledIteratorSource {
+                compiled_sources.push(crate::spec::CompiledIteratorSource {
                     name: source.name.clone(),
                     expr: expr_script,
                     entries: compiled_entries,
@@ -523,21 +576,18 @@ pub fn compile_node(
         }
     }
 
-    // persistency context keys contribute
-    match &compiled_persistency {
-        CompiledPersistency::Ephemeral => {}
-        CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
-            all_context_keys.extend(bind.context_keys.iter().copied());
-        }
+    // persistency context keys contribute (bind script lives in NodeRole::Persistent)
+    if let NodeRole::Persistent { bind, .. } = &role {
+        all_context_keys.extend(bind.context_keys.iter().copied());
     }
 
     Ok(CompiledNode {
+        id,
         name: spec.name,
         kind,
         all_context_keys,
         strategy: CompiledStrategy {
             execution: compiled_execution,
-            persistency: compiled_persistency,
             initial_value,
             retry: spec.strategy.retry,
             assert: compiled_assert,
@@ -545,6 +595,7 @@ pub fn compile_node(
         is_function: spec.is_function,
         fn_params: spec.fn_params.clone(),
         output_ty,
+        role,
     })
 }
 
@@ -581,7 +632,7 @@ fn resolve_node_locals(
     interner: &Interner,
     spec: &NodeSpec,
     base_registry: &ContextTypeRegistry,
-    raw_ty: Ty,
+    raw_ty: Option<Ty>,
 ) -> Result<NodeLocalTypes, Vec<OrchError>> {
     let map_conflict = |e: RegistryConflictError| {
         vec![OrchError::new(OrchErrorKind::RegistryConflict {
@@ -600,26 +651,27 @@ fn resolve_node_locals(
             let mut subst = acvus_mir::ty::TySubst::new();
 
             // Pass 1: initial_value → Deque<T, O>
-            let init_hint: Option<Ty> = match &raw_ty {
+            let init_hint: Option<Ty> = raw_ty.as_ref().and_then(|ty| match ty {
                 Ty::List(elem) => Some(Ty::List(elem.clone())),
                 Ty::Deque(elem, origin) => Some(Ty::Deque(elem.clone(), *origin)),
                 Ty::Sequence(elem, origin, effect) => Some(Ty::Sequence(elem.clone(), *origin, *effect)),
                 _ => None,
-            };
+            });
             let init_ty = if let Some(ref init_src) = spec.strategy.initial_value {
                 let init_reg = spec.build_node_context(interner, base_registry, ContextScope::InitialValue, None)
                     .map_err(map_conflict)?;
-                compile_script_with_hint_subst(
-                    interner,
-                    interner.resolve(*init_src),
-                    &init_reg,
-                    init_hint.as_ref(),
-                    &mut subst,
-                )
-                .map(|(_, ty)| ty)
-                .unwrap_or(Ty::Error)
+                // Poison on failure: actual error reported during Phase 4 compilation.
+                match compile_script_with_hint_subst(
+                    interner, interner.resolve(*init_src), &init_reg,
+                    init_hint.as_ref(), &mut subst,
+                ) {
+                    Ok((_, ty)) => ty,
+                    Err(_) => Ty::error(),
+                }
             } else {
-                raw_ty.clone()
+                // No initial_value: fall back to raw_ty. For Sequence this should
+                // be unreachable (MissingInitialValue error reported elsewhere).
+                raw_ty.clone().unwrap_or_else(Ty::error)
             };
 
             // Coerce Deque<T, O> → Sequence<T, O, Pure> for @self
@@ -631,18 +683,18 @@ fn resolve_node_locals(
             // Pass 2: compile bind with @self = Sequence<T, O, Pure> — same subst!
             // bind result must be compatible with self_hint (Sequence<T, O, E>).
             // If bind returns Iterator (e.g. via map), unification fails → type error.
-            let temp_locals = NodeLocalTypes { raw_ty: raw_ty.clone(), self_ty: self_hint.clone() };
+            let raw_for_locals = raw_ty.clone().unwrap_or_else(Ty::error);
+            let temp_locals = NodeLocalTypes { raw_ty: raw_for_locals, self_ty: self_hint.clone() };
             let bind_reg = spec.build_node_context(interner, base_registry, ContextScope::Bind, Some(&temp_locals))
                 .map_err(map_conflict)?;
-            let resolved_self = compile_script_with_hint_subst(
-                interner,
-                interner.resolve(*bind),
-                &bind_reg,
-                Some(&self_hint),
-                &mut subst,
-            )
-            .map(|(_, ty)| ty)
-            .unwrap_or(Ty::Error);
+            // Poison on failure: actual error reported during Phase 4 compilation.
+            let resolved_self = match compile_script_with_hint_subst(
+                interner, interner.resolve(*bind), &bind_reg,
+                Some(&self_hint), &mut subst,
+            ) {
+                Ok((_, ty)) => ty,
+                Err(_) => Ty::error(),
+            };
 
             resolved_self
         }
@@ -651,15 +703,18 @@ fn resolve_node_locals(
             if let Some(ref init_src) = spec.strategy.initial_value {
                 let init_reg = spec.build_node_context(interner, base_registry, ContextScope::InitialValue, None)
                     .map_err(map_conflict)?;
-                compile_script_with_hint(interner, interner.resolve(*init_src), &init_reg, None)
-                    .map(|(_, ty)| ty)
-                    .unwrap_or(Ty::Error)
+                // Poison on failure: actual error reported during Phase 4 compilation.
+                match compile_script_with_hint(interner, interner.resolve(*init_src), &init_reg, None) {
+                    Ok((_, ty)) => ty,
+                    Err(_) => Ty::error(),
+                }
             } else {
-                raw_ty.clone()
+                raw_ty.clone().unwrap_or_else(Ty::error)
             }
         }
     };
 
+    let raw_ty = raw_ty.unwrap_or_else(Ty::error);
     Ok(NodeLocalTypes { raw_ty, self_ty })
 }
 
@@ -708,31 +763,29 @@ pub fn compute_external_context_env(
     // For intermediate compilation (Phase 2-3), create temporary full registries
     // via `registry.to_full()`.
 
-    let raw_types: Vec<Ty> = specs
+    let raw_types: Vec<Option<Ty>> = specs
         .iter()
         .map(|s| s.kind.raw_output_ty(interner))
         .collect();
 
     registry
-        .insert_system(interner.intern("turn_index"), Ty::Int)
+        .insert_system(interner.intern(KEY_TURN_INDEX), Ty::Int)
         .map_err(map_conflict)?;
 
     for (spec, ty) in specs.iter().zip(raw_types.iter()) {
-        if *ty == Ty::Infer {
-            continue;
-        }
+        let Some(ty) = ty else { continue };
         registry.insert_system(spec.name, wrap_fn_ty(spec, ty.clone()))
             .map_err(map_conflict)?;
     }
 
     // ── Phase 2: Resolve Expr node types via topo sort ───────────────────
     //
-    // Expr nodes start with raw_type = Infer. Topo sort compiles them in
-    // dependency order, progressively adding resolved types to the registry.
-    // expr_resolved[idx] holds the resolved raw type for each Expr node.
+    // Expr nodes start with raw_type = None (inferred). Topo sort compiles
+    // them in dependency order, progressively adding resolved types to the
+    // registry. expr_resolved[idx] holds the resolved raw type for each node.
 
     let infer_indices: Vec<usize> = (0..specs.len())
-        .filter(|&i| raw_types[i] == Ty::Infer)
+        .filter(|&i| raw_types[i].is_none())
         .collect();
 
     let mut expr_resolved: FxHashMap<usize, Ty> = FxHashMap::default();
@@ -749,7 +802,7 @@ pub fn compute_external_context_env(
         // Use a temporary full registry for analysis extraction
         let temp_reg = registry.to_full();
         for &idx in &infer_indices {
-            if let NodeKind::Expr(expr_spec) = &specs[idx].kind {
+            if let NodeKind::Expression(expr_spec) = &specs[idx].kind {
                 let keys =
                     analysis_extract_script_keys(interner, &expr_spec.source, &temp_reg);
                 for key in keys {
@@ -799,11 +852,8 @@ pub fn compute_external_context_env(
         }
 
         for &idx in &topo {
-            if let NodeKind::Expr(expr_spec) = &specs[idx].kind {
-                let hint = match &expr_spec.output_ty {
-                    Ty::Infer => None,
-                    ty => Some(ty),
-                };
+            if let NodeKind::Expression(expr_spec) = &specs[idx].kind {
+                let hint = expr_spec.output_ty.as_ref();
                 let full_reg = registry.to_full();
                 let temp_raw_ty = specs[idx].kind.raw_output_ty(interner);
                 let temp_locals = resolve_node_locals(interner, &specs[idx], &full_reg, temp_raw_ty)?;
@@ -816,7 +866,7 @@ pub fn compute_external_context_env(
                     hint,
                 )
                 .map(|(_, ty)| ty)
-                .unwrap_or(Ty::Error);
+                .unwrap_or_else(|_| Ty::error());
 
                 registry.insert_system(specs[idx].name, wrap_fn_ty(&specs[idx], resolved.clone()))
                     .map_err(map_conflict)?;
@@ -836,7 +886,8 @@ pub fn compute_external_context_env(
     let mut stored_types: Vec<Ty> = Vec::with_capacity(specs.len());
 
     for (i, spec) in specs.iter().enumerate() {
-        let raw_ty = expr_resolved.get(&i).cloned().unwrap_or_else(|| raw_types[i].clone());
+        let raw_ty: Option<Ty> = expr_resolved.get(&i).cloned()
+            .or_else(|| raw_types[i].clone());
         let locals = resolve_node_locals(interner, spec, &full_reg, raw_ty)?;
         let name_ty = if spec.strategy.initial_value.is_some() {
             locals.self_ty.clone()
@@ -881,7 +932,7 @@ pub fn compile_nodes(
     interner: &Interner,
     specs: &[NodeSpec],
     registry: PartialContextTypeRegistry,
-) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
+) -> Result<CompiledNodeGraph, Vec<OrchError>> {
     let env = compute_external_context_env(interner, specs, registry)?;
     compile_nodes_with_env(interner, specs, env)
 }
@@ -894,7 +945,7 @@ pub fn compile_nodes_with_env(
     interner: &Interner,
     specs: &[NodeSpec],
     env: ExternalContextEnv,
-) -> Result<Vec<CompiledNode>, Vec<OrchError>> {
+) -> Result<CompiledNodeGraph, Vec<OrchError>> {
     let base_registry = env.registry.to_full();
     let stored_types = env.stored_types;
     let mut errors = Vec::new();
@@ -915,16 +966,9 @@ pub fn compile_nodes_with_env(
             continue;
         };
         let hint = match &stored_types[i] {
-            Ty::Error => None,
+            Ty::Error(_) => None,
             ty => Some(ty),
         };
-        eprintln!(
-            "[initial_value compile] node='{}' stored_type={} hint={:?} source='{}'",
-            interner.resolve(spec.name),
-            stored_types[i].display(interner),
-            hint.map(|h| format!("{}", h.display(interner))),
-            interner.resolve(*init_src),
-        );
         let init_reg = match spec.build_node_context(interner, &base_registry, ContextScope::InitialValue, env.node_locals.get(&spec.name)) {
             Ok(r) => r,
             Err(e) => {
@@ -933,7 +977,7 @@ pub fn compile_nodes_with_env(
                 continue;
             }
         };
-        let (script, init_ty) = match compile_script_with_hint(
+        let (script, _init_ty) = match compile_script_with_hint(
             interner,
             interner.resolve(*init_src),
             &init_reg,
@@ -984,11 +1028,12 @@ pub fn compile_nodes_with_env(
         compiled_executions.push(exec);
     }
 
-    // Compile persistency for each node
-    let mut compiled_persistencies: Vec<CompiledPersistency> = Vec::new();
+    // Compile persistency bind scripts for each node.
+    // Ephemeral → None, Sequence/Patch → Some((mode, bind_script)).
+    let mut compiled_persistencies: Vec<Option<(PersistMode, CompiledScript)>> = Vec::new();
     for spec in specs.iter() {
         let persistency = match &spec.strategy.persistency {
-            Persistency::Ephemeral => CompiledPersistency::Ephemeral,
+            Persistency::Ephemeral => None,
             Persistency::Sequence { bind } | Persistency::Patch { bind } => {
                 // Sequence requires initial_value (bind always references @self for accumulation)
                 if matches!(&spec.strategy.persistency, Persistency::Sequence { .. })
@@ -998,7 +1043,7 @@ pub fn compile_nodes_with_env(
                         node: spec.name,
                         persistency: "Sequence",
                     }));
-                    compiled_persistencies.push(CompiledPersistency::Ephemeral);
+                    compiled_persistencies.push(None);
                     continue;
                 }
 
@@ -1007,7 +1052,7 @@ pub fn compile_nodes_with_env(
                     Ok(r) => r,
                     Err(e) => {
                         errors.push(map_conflict(e));
-                        compiled_persistencies.push(CompiledPersistency::Ephemeral);
+                        compiled_persistencies.push(None);
                         continue;
                     }
                 };
@@ -1019,15 +1064,16 @@ pub fn compile_nodes_with_env(
                     Ok(v) => v,
                     Err(e) => {
                         errors.push(e);
-                        compiled_persistencies.push(CompiledPersistency::Ephemeral);
+                        compiled_persistencies.push(None);
                         continue;
                     }
                 };
-                match &spec.strategy.persistency {
-                    Persistency::Sequence { .. } => CompiledPersistency::Sequence { bind: script },
-                    Persistency::Patch { .. } => CompiledPersistency::Patch { bind: script },
+                let mode = match &spec.strategy.persistency {
+                    Persistency::Sequence { .. } => PersistMode::Sequence,
+                    Persistency::Patch { .. } => PersistMode::Patch,
                     _ => unreachable!(),
-                }
+                };
+                Some((mode, script))
             }
         };
         compiled_persistencies.push(persistency);
@@ -1069,15 +1115,16 @@ pub fn compile_nodes_with_env(
         return Err(errors);
     }
 
-    // Tool param types must be injected from the caller (LlmSpec) side because
+    // Tool param types must be injected from the caller (LLM node spec) side because
     // the target node alone cannot know what types its params will have — the
     // param types are declared in ToolBinding, not in the target node itself.
     let mut tool_param_types: FxHashMap<Astr, Vec<(Astr, Ty)>> = FxHashMap::default();
     for spec in specs {
-        let NodeKind::Llm(llm_spec) = &spec.kind else {
+        let tools = spec.kind.tools();
+        if tools.is_empty() {
             continue;
-        };
-        for tool in &llm_spec.tools {
+        }
+        for tool in tools {
             let params: Vec<(Astr, Ty)> = tool
                 .params
                 .iter()
@@ -1090,7 +1137,13 @@ pub fn compile_nodes_with_env(
         }
     }
 
-    let mut nodes = Vec::new();
+    let mut nodes: Vec<CompiledNode> = Vec::new();
+    let mut name_to_primary: FxHashMap<Astr, NodeId> = FxHashMap::default();
+    let mut next_id: usize = 0;
+
+    let raw_key = interner.intern(KEY_RAW);
+    let self_key = interner.intern(KEY_SELF);
+
     for (i, spec) in specs.iter().enumerate() {
         let mut node_reg = match spec.build_node_context(interner, &base_registry, ContextScope::Body, env.node_locals.get(&spec.name)) {
             Ok(r) => r,
@@ -1108,37 +1161,131 @@ pub fn compile_nodes_with_env(
                 }
             };
         }
-        // Validate fn_param names don't conflict with context keys
-        // (fn_params are already in the registry via build_node_context, so
-        // conflicts would have been caught by with_extra_scoped above)
-        let initial_value = initial_value_scripts[i].clone();
+
         let compiled_execution = compiled_executions[i].clone();
-        let compiled_persistency = compiled_persistencies[i].clone();
+        let compiled_persist = compiled_persistencies[i].clone();
         let compiled_assert = compiled_asserts[i].clone();
-        let output_ty = stored_types[i].clone();
-        match compile_node(
-            interner,
-            spec,
-            &node_reg,
-            initial_value,
-            compiled_execution,
-            compiled_persistency,
-            compiled_assert,
-            output_ty,
-        ) {
-            Ok(node) => {
+
+        match compiled_persist {
+            None => {
+                // Ephemeral: single node, no split
+                let initial_value = initial_value_scripts[i].clone();
+                let output_ty = stored_types[i].clone();
+                let id = NodeId(next_id);
+                next_id += 1;
+
+                match compile_node(
+                    interner,
+                    spec,
+                    &node_reg,
+                    id,
+                    initial_value,
+                    compiled_execution,
+                    compiled_assert,
+                    output_ty,
+                    NodeRole::Standalone,
+                ) {
+                    Ok(node) => {
+                        name_to_primary.insert(spec.name, id);
+                        nodes.push(node);
+                    }
+                    Err(errs) => {
+                        errors.extend(errs);
+                        continue;
+                    }
+                }
+            }
+            Some((mode, bind_script)) => {
+                // Split into body + bind nodes.
+
+                // Pre-compute both IDs so body can reference bind and vice versa.
+                let body_id = NodeId(next_id);
+                let bind_id = NodeId(next_id + 1);
+                next_id += 2;
+
+                // ── Body node ──
+                // Executes the computation (LLM/Expr/etc), produces @raw.
+                // Role = Body (body itself doesn't persist).
+                // Context keys = only body kind keys (no bind/initial_value/assert).
+                let body_raw_ty = env.node_locals.get(&spec.name)
+                    .map(|l| l.raw_ty.clone())
+                    .unwrap_or_else(|| stored_types[i].clone());
+
+                match compile_node(
+                    interner,
+                    spec,
+                    &node_reg,
+                    body_id,
+                    None, // no initial_value for body
+                    compiled_execution.clone(),
+                    None, // no assert for body
+                    body_raw_ty,
+                    NodeRole::Body { bind_id },
+                ) {
+                    Ok(body_node) => {
+                        nodes.push(body_node);
+                    }
+                    Err(errs) => {
+                        errors.extend(errs);
+                        continue;
+                    }
+                }
+
+                // ── Bind node ──
+                // Executes the bind script, produces the accumulated value.
+                // Kind = Expr (using the bind CompiledScript).
+                // Role = Persistent (with mode + bind script — resolver uses this).
+                // Context keys = bind script's keys minus "raw" and "self".
+
+                let bind_kind = CompiledNodeKind::Expression(CompiledExpression {
+                    script: bind_script.clone(),
+                });
+
+                let mut bind_context_keys: FxHashSet<Astr> = bind_script.context_keys.clone();
+                bind_context_keys.remove(&raw_key);
+                bind_context_keys.remove(&self_key);
+
+                // Include initial_value and assert context keys in the bind node
+                if let Some(ref iv) = initial_value_scripts[i] {
+                    bind_context_keys.extend(iv.context_keys.iter().copied());
+                }
+                if let Some(ref assert_script) = compiled_assert {
+                    bind_context_keys.extend(assert_script.context_keys.iter().copied());
+                }
+
+                let role = NodeRole::Persistent {
+                    body_id,
+                    mode: mode.clone(),
+                    bind: bind_script,
+                };
+
+                let bind_node = CompiledNode {
+                    id: bind_id,
+                    name: spec.name,
+                    kind: bind_kind,
+                    all_context_keys: bind_context_keys,
+                    strategy: CompiledStrategy {
+                        execution: compiled_execution,
+                        initial_value: initial_value_scripts[i].clone(),
+                        retry: spec.strategy.retry,
+                        assert: compiled_assert,
+                    },
+                    is_function: spec.is_function,
+                    fn_params: spec.fn_params.clone(),
+                    output_ty: stored_types[i].clone(),
+                    role,
+                };
+
                 // Validate: persistent nodes must have storable output types.
-                if node.strategy.requires_storable() && !node.output_ty.is_storable() {
+                if !bind_node.output_ty.is_storable() {
                     errors.push(OrchError::new(OrchErrorKind::NonStorableOutput {
                         node: interner.resolve(spec.name).to_string(),
-                        ty: node.output_ty.clone(),
+                        ty: bind_node.output_ty.clone(),
                     }));
                 }
-                nodes.push(node);
-            }
-            Err(errs) => {
-                errors.extend(errs);
-                continue;
+
+                name_to_primary.insert(spec.name, bind_id);
+                nodes.push(bind_node);
             }
         }
     }
@@ -1149,10 +1296,11 @@ pub fn compile_nodes_with_env(
     // Tool targets are not captured in all_context_keys (they are invoked
     // dynamically by the model, not via @ref in templates), so we validate
     // their existence separately.
-    let node_names: FxHashSet<Astr> = nodes.iter().map(|n| n.name).collect();
+    let node_names: FxHashSet<Astr> = name_to_primary.keys().copied().collect();
     for node in &nodes {
-        if let CompiledNodeKind::Llm(llm) = &node.kind {
-            for tool in &llm.tools {
+        {
+            let tools = node.kind.tools();
+            for tool in tools {
                 let tool_node = interner.intern(&tool.node);
                 if !node_names.contains(&tool_node) {
                     errors.push(OrchError::new(OrchErrorKind::ToolTargetNotFound {
@@ -1165,7 +1313,10 @@ pub fn compile_nodes_with_env(
     }
 
     if errors.is_empty() {
-        Ok(nodes)
+        Ok(CompiledNodeGraph {
+            nodes,
+            name_to_primary,
+        })
     } else {
         Err(errors)
     }
@@ -1221,7 +1372,7 @@ mod tests {
     use acvus_utils::Interner;
     use rustc_hash::FxHashMap;
     use crate::dsl::*;
-    use crate::kind::{NodeKind, LlmSpec};
+    use crate::spec::{NodeKind, OpenAICompatibleSpec, MaxTokens};
     use crate::MessageSpec as MsgSpec;
 
     #[test]
@@ -1235,18 +1386,19 @@ mod tests {
 
         let spec = NodeSpec {
             name: interner.intern("chat"),
-            kind: NodeKind::Llm(LlmSpec {
-                api: crate::ApiKind::OpenAI,
-                provider: String::new(),
+            kind: NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                endpoint: String::new(),
+                api_key: String::new(),
                 model: String::new(),
                 messages: vec![MsgSpec::Block {
                     role: interner.intern("user"),
                     source: "hello".into(),
                 }],
                 tools: vec![],
-                generation: Default::default(),
+                temperature: None,
+                top_p: None,
                 cache_key: None,
-                max_tokens: Default::default(),
+                max_tokens: MaxTokens::default(),
             }),
             strategy: Strategy {
                 execution: Execution::OncePerTurn,
@@ -1280,15 +1432,16 @@ mod tests {
         let full_reg = env.registry.to_full();
         let chat_spec = NodeSpec {
             name: chat_name,
-            kind: NodeKind::Llm(LlmSpec {
-                api: crate::ApiKind::OpenAI,
-                provider: String::new(),
+            kind: NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                endpoint: String::new(),
+                api_key: String::new(),
                 model: String::new(),
                 messages: vec![],
                 tools: vec![],
-                generation: Default::default(),
+                temperature: None,
+                top_p: None,
                 cache_key: None,
-                max_tokens: Default::default(),
+                max_tokens: MaxTokens::default(),
             }),
             strategy: Strategy {
                 execution: Execution::OncePerTurn,
@@ -1303,8 +1456,8 @@ mod tests {
             fn_params: vec![],
         };
         let bind_reg = chat_spec.build_node_context(&interner, &full_reg, ContextScope::Bind, Some(locals)).unwrap();
-        eprintln!("bind_ctx @self = {:?}", bind_reg.scoped().get(&interner.intern("self")).map(|t| format!("{}", t.display(&interner))));
-        eprintln!("bind_ctx @raw = {:?}", bind_reg.scoped().get(&interner.intern("raw")).map(|t| format!("{}", t.display(&interner))));
+        eprintln!("bind_ctx @self = {:?}", bind_reg.scoped().get(&interner.intern(KEY_SELF)).map(|t| format!("{}", t.display(&interner))));
+        eprintln!("bind_ctx @raw = {:?}", bind_reg.scoped().get(&interner.intern(KEY_RAW)).map(|t| format!("{}", t.display(&interner))));
 
         let hint = Some(&locals.self_ty);
         let result = compile_script_with_hint(
@@ -1331,5 +1484,159 @@ mod tests {
             Ok((_, ty)) => eprintln!("init typecheck OK, tail = {}", ty.display(&interner)),
             Err(e) => eprintln!("init typecheck FAILED: {}", e.display(&interner)),
         }
+    }
+
+    // ── Helper ──────────────────────────────────────────────────────
+
+    fn empty_registry() -> PartialContextTypeRegistry {
+        PartialContextTypeRegistry::new(
+            FxHashMap::default(),
+            FxHashMap::default(),
+            FxHashMap::default(),
+        ).unwrap()
+    }
+
+    fn expr_node(interner: &Interner, name: &str, source: &str) -> NodeSpec {
+        NodeSpec {
+            name: interner.intern(name),
+            kind: NodeKind::Expression(crate::spec::ExpressionSpec {
+                source: source.into(),
+                output_ty: None,
+            }),
+            strategy: Strategy {
+                execution: Execution::OncePerTurn,
+                persistency: Persistency::Ephemeral,
+                initial_value: None,
+                retry: 0,
+                assert: None,
+            },
+            is_function: false,
+            fn_params: vec![],
+        }
+    }
+
+    fn llm_node(interner: &Interner, name: &str) -> NodeSpec {
+        NodeSpec {
+            name: interner.intern(name),
+            kind: NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                endpoint: String::new(),
+                api_key: String::new(),
+                model: String::new(),
+                messages: vec![],
+                tools: vec![],
+                temperature: None,
+                top_p: None,
+                cache_key: None,
+                max_tokens: MaxTokens::default(),
+            }),
+            strategy: Strategy {
+                execution: Execution::OncePerTurn,
+                persistency: Persistency::Ephemeral,
+                initial_value: None,
+                retry: 0,
+                assert: None,
+            },
+            is_function: false,
+            fn_params: vec![],
+        }
+    }
+
+    // ── Soundness tests ─────────────────────────────────────────────
+
+    #[test]
+    fn cycle_detected_between_expr_nodes() {
+        let i = Interner::new();
+        // A depends on @B, B depends on @A → cycle
+        let specs = vec![
+            expr_node(&i, "A", "@B"),
+            expr_node(&i, "B", "@A"),
+        ];
+        let result = compile_nodes(&i, &specs, empty_registry());
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| matches!(&e.kind, OrchErrorKind::CycleDetected { .. })),
+            "expected CycleDetected, got: {errors:?}");
+    }
+
+    #[test]
+    fn missing_initial_value_for_sequence() {
+        let i = Interner::new();
+        let mut node = llm_node(&i, "chat");
+        node.strategy.persistency = Persistency::Sequence {
+            bind: i.intern("@self | chain(@raw | iter)"),
+        };
+        // No initial_value but Sequence persistency → should fail
+        let result = compile_nodes(&i, &[node], empty_registry());
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| matches!(&e.kind, OrchErrorKind::MissingInitialValue { .. })),
+            "expected MissingInitialValue, got: {errors:?}");
+    }
+
+    // ── Completeness tests ──────────────────────────────────────────
+
+    #[test]
+    fn ephemeral_node_compiles_without_storable_constraint() {
+        let i = Interner::new();
+        // Ephemeral Expr node — no storability requirement
+        let specs = vec![expr_node(&i, "x", "1 + 2")];
+        let result = compile_nodes(&i, &specs, empty_registry());
+        assert!(result.is_ok(), "Ephemeral Expr should compile: {result:?}");
+    }
+
+    #[test]
+    fn expr_type_inference_chain() {
+        let i = Interner::new();
+        // A = 42 (Int), B = @A + 1 (depends on A, should infer Int)
+        let specs = vec![
+            expr_node(&i, "A", "42"),
+            expr_node(&i, "B", "@A + 1"),
+        ];
+        let result = compile_nodes(&i, &specs, empty_registry());
+        assert!(result.is_ok(), "Expr chain should compile: {result:?}");
+        let graph = result.unwrap();
+        // B should have Int output type
+        let b_id = graph.name_to_primary[&i.intern("B")];
+        assert_eq!(graph.nodes[b_id.index()].output_ty, Ty::Int,
+            "B should have Int type");
+    }
+
+    #[test]
+    fn linear_dependency_compiles() {
+        let i = Interner::new();
+        // C references @B which references @A — linear chain
+        let specs = vec![
+            expr_node(&i, "A", "10"),
+            expr_node(&i, "B", "@A * 2"),
+            expr_node(&i, "C", "@B + 1"),
+        ];
+        let result = compile_nodes(&i, &specs, empty_registry());
+        assert!(result.is_ok(), "Linear dependency chain should compile: {result:?}");
+    }
+
+    #[test]
+    fn sequence_with_initial_value_compiles() {
+        let i = Interner::new();
+        let mut node = llm_node(&i, "chat");
+        node.strategy.persistency = Persistency::Sequence {
+            bind: i.intern("@self | chain(@raw | iter)"),
+        };
+        node.strategy.initial_value = Some(i.intern("[]"));
+        node.kind = NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+            endpoint: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            messages: vec![MsgSpec::Block {
+                role: i.intern("user"),
+                source: "hello".into(),
+            }],
+            tools: vec![],
+            temperature: None,
+            top_p: None,
+            cache_key: None,
+            max_tokens: MaxTokens::default(),
+        });
+        let result = compile_nodes(&i, &[node], empty_registry());
+        assert!(result.is_ok(), "Sequence with initial_value should compile: {result:?}");
     }
 }

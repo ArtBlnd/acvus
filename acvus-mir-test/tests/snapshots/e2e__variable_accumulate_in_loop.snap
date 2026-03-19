@@ -5,27 +5,36 @@ expression: ir
 === main ===
      1 │   var_store $sum = 0 (r0)
      2 │   r1 = context_load @items
-     3 │   r2 = iter_init r1
-     4 │ L0:
-     5 │   r3, r4 = iter_next r2
-     6 │   jump_if r4 then L1 else L3
-     7 │ L3:
-     8 │   r5 = var_load $sum
-     9 │   r6 = r5 + r3
-    10 │   var_store $sum = r6
-    11 │   jump L0
-    12 │ L1:
-    13 │ L2:
-    14 │   r7 = var_load $sum
-    15 │   r8 = call to_string(r7)
-    16 │   yield r8
+     3 │   r2 = cast ListToIterator r1
+     4 │   jump L0(r2)
+     5 │ L0(r3: Iterator<Int>):
+     6 │   r4 = iter_step r3
+     7 │   r5 = test r4 is None
+     8 │   jump_if r5 then L1 else L3
+     9 │ L3:
+    10 │   r6 = unwrap r4
+    11 │   r7 = r6.0
+    12 │   r8 = r6.1
+    13 │   r9 = var_load $sum
+    14 │   r10 = r9 + r7
+    15 │   var_store $sum = r10
+    16 │   jump L0(r8)
+    17 │ L1:
+    18 │ L2:
+    19 │   r11 = var_load $sum
+    20 │   r12 = call to_string(r11)
+    21 │   yield r12
 
     ; r0 (v0) : Int
     ; r1 (@items) : List<Int>
-    ; r2 (v2) : Unit
-    ; r3 (x) : Int
-    ; r4 (v4) : Bool
-    ; r5 ($sum) : Int
-    ; r6 (v6) : Int
-    ; r7 ($sum) : Int
-    ; r8 (to_string(...)) : String
+    ; r2 (v2) : Iterator<Int>
+    ; r3 (v3) : Iterator<Int>
+    ; r4 (v4) : Option<(Int, Iterator<Int>)>
+    ; r5 (v5) : Bool
+    ; r6 (v6) : (Int, Iterator<Int>)
+    ; r7 (x) : Int
+    ; r8 (v8) : Iterator<Int>
+    ; r9 ($sum) : Int
+    ; r10 (v10) : Int
+    ; r11 ($sum) : Int
+    ; r12 (to_string(...)) : String

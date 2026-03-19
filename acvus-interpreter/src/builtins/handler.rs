@@ -1,116 +1,36 @@
 use crate::error::RuntimeError;
-use crate::value::{LazyValue, PureValue, Value};
+use crate::value::Value;
 
-// -- FromValue / IntoValue ------------------------------------------------
-
-pub trait FromValue: Sized {
-    fn from_value(v: Value) -> Self;
-}
+// ── IntoValue ──────────────────────────────────────────────────────
+// Converts a Rust value into a `Value`. Used by external crates
+// (pomollu-engine, acvus-ext) for ExternFn return values.
 
 pub trait IntoValue {
     fn into_value(self) -> Value;
 }
 
-impl FromValue for i64 {
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Pure(PureValue::Int(n)) => n,
-            _ => unreachable!("FromValue<i64>: expected Int, got {v:?}"),
-        }
-    }
-}
-
-impl FromValue for f64 {
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Pure(PureValue::Float(f)) => f,
-            _ => unreachable!("FromValue<f64>: expected Float, got {v:?}"),
-        }
-    }
-}
-
-impl FromValue for String {
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Pure(PureValue::String(s)) => s,
-            _ => unreachable!("FromValue<String>: expected String, got {v:?}"),
-        }
-    }
-}
-
-impl FromValue for bool {
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Pure(PureValue::Bool(b)) => b,
-            _ => unreachable!("FromValue<bool>: expected Bool, got {v:?}"),
-        }
-    }
-}
-
-impl FromValue for u8 {
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Pure(PureValue::Byte(b)) => b,
-            _ => unreachable!("FromValue<u8>: expected Byte, got {v:?}"),
-        }
-    }
-}
-
-impl<T> FromValue for Vec<T>
-where
-    T: FromValue,
-{
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Lazy(LazyValue::List(items)) => items.into_iter().map(T::from_value).collect(),
-            Value::Lazy(LazyValue::Deque(deque)) => {
-                deque.into_vec().into_iter().map(|v| T::from_value(v)).collect()
-            }
-            _ => unreachable!("FromValue<Vec<T>>: expected List, got {v:?}"),
-        }
-    }
-}
-
-impl FromValue for Value {
-    fn from_value(v: Value) -> Self {
-        v
-    }
-}
-
 impl IntoValue for i64 {
-    fn into_value(self) -> Value {
-        Value::int(self)
-    }
+    fn into_value(self) -> Value { Value::int(self) }
 }
 
 impl IntoValue for f64 {
-    fn into_value(self) -> Value {
-        Value::float(self)
-    }
+    fn into_value(self) -> Value { Value::float(self) }
 }
 
 impl IntoValue for String {
-    fn into_value(self) -> Value {
-        Value::string(self)
-    }
+    fn into_value(self) -> Value { Value::string(self) }
 }
 
 impl IntoValue for bool {
-    fn into_value(self) -> Value {
-        Value::bool_(self)
-    }
+    fn into_value(self) -> Value { Value::bool_(self) }
 }
 
 impl IntoValue for u8 {
-    fn into_value(self) -> Value {
-        Value::byte(self)
-    }
+    fn into_value(self) -> Value { Value::byte(self) }
 }
 
 impl IntoValue for Value {
-    fn into_value(self) -> Value {
-        self
-    }
+    fn into_value(self) -> Value { self }
 }
 
 impl<T> IntoValue for Option<T>
@@ -133,73 +53,134 @@ where
     }
 }
 
-impl<T> FromValue for Option<T>
-where
-    T: FromValue,
-{
-    fn from_value(v: Value) -> Self {
-        let interner = crate::interner_ctx::get_interner()
-            .expect("FromValue<Option>: requires interner context");
-        let some_tag = interner.intern("Some");
-        let none_tag = interner.intern("None");
-        match v {
-            Value::Lazy(LazyValue::Variant {
-                tag,
-                payload: Some(inner),
-            }) if tag == some_tag => Some(T::from_value(*inner)),
-            Value::Lazy(LazyValue::Variant { tag, .. }) if tag == none_tag => None,
-            _ => unreachable!("FromValue<Option<T>>: expected Variant, got {v:?}"),
-        }
-    }
+// ── BuiltinFn trait (TypedValue-based, with auto signature) ────────
+
+use super::types::{FromTyped, IntoTyped, HasTy, SigCtx};
+use crate::value::TypedValue;
+use acvus_mir::ty::Ty;
+
+/// A builtin function that can automatically extract its type signature
+/// from its Rust parameter types (via `HasTy`) and convert args at runtime
+/// (via `FromTyped`/`IntoTyped`).
+pub trait BuiltinFn<Args> {
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty);
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError>;
 }
 
-// -- PureBuiltin trait (Axum Handler pattern) -----------------------------
-
-pub trait PureBuiltin<Args> {
-    fn call(self, args: Vec<Value>) -> Result<Value, RuntimeError>;
-}
-
-impl<F, R, A> PureBuiltin<(A,)> for F
+// 1-arg: Fn(A) -> R
+impl<F, A, R> BuiltinFn<(A,)> for F
 where
     F: Fn(A) -> R,
-    A: FromValue,
-    R: IntoValue,
+    A: FromTyped + HasTy,
+    R: IntoTyped + HasTy,
 {
-    fn call(self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
+        (vec![A::ty(ctx)], R::ty(ctx))
+    }
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
         let mut it = args.into_iter();
-        let a = A::from_value(it.next().unwrap());
-        Ok(self(a).into_value())
+        let a = A::from_typed(it.next().expect("missing arg 0"))?;
+        Ok(self(a).into_typed())
     }
 }
 
-impl<F, R, A, B> PureBuiltin<(A, B)> for F
+// 2-arg: Fn(A, B) -> R
+impl<F, A, B, R> BuiltinFn<(A, B)> for F
 where
     F: Fn(A, B) -> R,
-    A: FromValue,
-    B: FromValue,
-    R: IntoValue,
+    A: FromTyped + HasTy,
+    B: FromTyped + HasTy,
+    R: IntoTyped + HasTy,
 {
-    fn call(self, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
+        (vec![A::ty(ctx), B::ty(ctx)], R::ty(ctx))
+    }
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
         let mut it = args.into_iter();
-        let a = A::from_value(it.next().unwrap());
-        let b = B::from_value(it.next().unwrap());
-        Ok(self(a, b).into_value())
+        let a = A::from_typed(it.next().expect("missing arg 0"))?;
+        let b = B::from_typed(it.next().expect("missing arg 1"))?;
+        Ok(self(a, b).into_typed())
     }
 }
 
-impl<F, R, A, B, C> PureBuiltin<(A, B, C)> for F
+// 3-arg: Fn(A, B, C) -> R
+impl<F, A, B, C, R> BuiltinFn<(A, B, C)> for F
 where
     F: Fn(A, B, C) -> R,
-    A: FromValue,
-    B: FromValue,
-    C: FromValue,
-    R: IntoValue,
+    A: FromTyped + HasTy,
+    B: FromTyped + HasTy,
+    C: FromTyped + HasTy,
+    R: IntoTyped + HasTy,
 {
-    fn call(self, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let mut it = args.into_iter();
-        let a = A::from_value(it.next().unwrap());
-        let b = B::from_value(it.next().unwrap());
-        let c = C::from_value(it.next().unwrap());
-        Ok(self(a, b, c).into_value())
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
+        (vec![A::ty(ctx), B::ty(ctx), C::ty(ctx)], R::ty(ctx))
     }
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
+        let mut it = args.into_iter();
+        let a = A::from_typed(it.next().expect("missing arg 0"))?;
+        let b = B::from_typed(it.next().expect("missing arg 1"))?;
+        let c = C::from_typed(it.next().expect("missing arg 2"))?;
+        Ok(self(a, b, c).into_typed())
+    }
+}
+
+// ── Result-returning variants ──────────────────────────────────────
+
+/// Marker wrapper to distinguish `Fn(A) -> Result<R, RuntimeError>` from `Fn(A) -> R`.
+pub struct Fallible<F>(pub F);
+
+impl<F, A, R> BuiltinFn<(Fallible<A>,)> for Fallible<F>
+where
+    F: Fn(A) -> Result<R, RuntimeError>,
+    A: FromTyped + HasTy,
+    R: IntoTyped + HasTy,
+{
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
+        (vec![A::ty(ctx)], R::ty(ctx))
+    }
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
+        let mut it = args.into_iter();
+        let a = A::from_typed(it.next().expect("missing arg 0"))?;
+        Ok(self.0(a)?.into_typed())
+    }
+}
+
+impl<F, A, B, R> BuiltinFn<(Fallible<A>, B)> for Fallible<F>
+where
+    F: Fn(A, B) -> Result<R, RuntimeError>,
+    A: FromTyped + HasTy,
+    B: FromTyped + HasTy,
+    R: IntoTyped + HasTy,
+{
+    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
+        (vec![A::ty(ctx), B::ty(ctx)], R::ty(ctx))
+    }
+    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
+        let mut it = args.into_iter();
+        let a = A::from_typed(it.next().expect("missing arg 0"))?;
+        let b = B::from_typed(it.next().expect("missing arg 1"))?;
+        Ok(self.0(a, b)?.into_typed())
+    }
+}
+
+// ── sync() wrapper ─────────────────────────────────────────────────
+
+/// Type-erased builtin implementation. Stored in the ImplRegistry.
+pub type BuiltinExecute = Box<dyn Fn(Vec<TypedValue>) -> Result<TypedValue, RuntimeError> + Send + Sync>;
+
+/// Wrap a synchronous `BuiltinFn` into a `BuiltinExecute`.
+pub fn sync<F, Args>(f: F) -> BuiltinExecute
+where
+    F: BuiltinFn<Args> + Send + Sync + 'static,
+{
+    Box::new(move |args| f.call(args))
+}
+
+/// Signature extractor — calls `BuiltinFn::signature` for a given function type.
+pub fn extract_signature<F, Args>(subst: &mut acvus_mir::ty::TySubst) -> (Vec<Ty>, Ty)
+where
+    F: BuiltinFn<Args>,
+{
+    let mut ctx = SigCtx::new(subst);
+    F::signature(&mut ctx)
 }

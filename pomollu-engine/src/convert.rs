@@ -1,11 +1,21 @@
 use acvus_orchestration::{
-    ApiKind, ExprSpec, Execution, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    FnParam, NodeSpec, Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding,
-    ToolParamInfo,
+    AnthropicSpec, ExpressionSpec, Execution, GoogleAISpec, MaxTokens, MessageSpec, NodeKind,
+    FnParam, NodeSpec, OpenAICompatibleSpec, Persistency, PlainSpec, Strategy, ThinkingConfig,
+    TokenBudget, ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
 use serde::Deserialize;
+
+/// Local API kind enum for WebNode deserialization.
+/// Determines which provider-specific NodeKind variant to create.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WebApiKind {
+    OpenAI,
+    Anthropic,
+    Google,
+}
 
 /// JSON-deserializable strategy definition from the web UI.
 #[derive(Deserialize)]
@@ -42,7 +52,7 @@ pub enum WebNodeKind {
     #[serde(rename = "llm", rename_all = "camelCase")]
     Llm {
         #[serde(default)]
-        api: Option<ApiKind>,
+        api: Option<WebApiKind>,
         model: String,
         temperature: Decimal,
         top_p: Option<Decimal>,
@@ -157,14 +167,8 @@ impl WebNode {
                 max_tokens,
                 messages,
                 tools,
-            } => NodeKind::Llm(LlmSpec {
-                // Fallback to OpenAI when unset — ApiKind is only used at runtime
-                // for LLM calls, not during typechecking. Allows nodes with no
-                // provider to still participate in type analysis.
-                api: api.clone().unwrap_or(ApiKind::OpenAI),
-                provider: String::new(),
-                model: model.clone(),
-                messages: messages
+            } => {
+                let msgs: Vec<MessageSpec> = messages
                     .iter()
                     .map(|m| match m {
                         WebMessage::Block { role, template } => MessageSpec::Block {
@@ -187,8 +191,8 @@ impl WebNode {
                             }),
                         },
                     })
-                    .collect(),
-                tools: tools
+                    .collect();
+                let tool_bindings: Vec<ToolBinding> = tools
                     .iter()
                     .map(|t| ToolBinding {
                         name: t.name.clone(),
@@ -203,29 +207,63 @@ impl WebNode {
                             }))
                             .collect(),
                     })
-                    .collect(),
-                generation: GenerationParams {
-                    temperature: Some(*temperature),
-                    top_p: *top_p,
-                    top_k: *top_k,
-                    grounding: *grounding,
-                    thinking: thinking.clone(),
-                },
-                cache_key: None,
-                max_tokens: MaxTokens {
+                    .collect();
+                let max_tokens_val = MaxTokens {
                     input: Some(max_tokens.input),
                     output: Some(max_tokens.output),
-                },
-            }),
+                };
+
+                // Fallback to OpenAI when unset — variant is only used at runtime
+                // for LLM calls, not during typechecking. Allows nodes with no
+                // provider to still participate in type analysis.
+                // Endpoint/api_key are empty — resolved at session creation time.
+                match api.as_ref().map(|a| a).unwrap_or(&WebApiKind::OpenAI) {
+                    WebApiKind::OpenAI => NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                        endpoint: String::new(),
+                        api_key: String::new(),
+                        model: model.clone(),
+                        messages: msgs,
+                        tools: tool_bindings,
+                        temperature: Some(*temperature),
+                        top_p: *top_p,
+                        cache_key: None,
+                        max_tokens: max_tokens_val,
+                    }),
+                    WebApiKind::Anthropic => NodeKind::Anthropic(AnthropicSpec {
+                        endpoint: String::new(),
+                        api_key: String::new(),
+                        model: model.clone(),
+                        messages: msgs,
+                        tools: tool_bindings,
+                        temperature: Some(*temperature),
+                        top_p: *top_p,
+                        top_k: *top_k,
+                        max_tokens: max_tokens_val,
+                        thinking: thinking.clone(),
+                        cache_key: None,
+                    }),
+                    WebApiKind::Google => NodeKind::GoogleAI(GoogleAISpec {
+                        endpoint: String::new(),
+                        api_key: String::new(),
+                        model: model.clone(),
+                        messages: msgs,
+                        tools: tool_bindings,
+                        temperature: Some(*temperature),
+                        top_p: *top_p,
+                        top_k: *top_k,
+                        max_tokens: max_tokens_val,
+                        thinking: thinking.clone(),
+                        grounding: *grounding,
+                        cache_key: None,
+                    }),
+                }
+            }
             WebNodeKind::Expr {
                 expr_source,
                 output_ty,
-            } => NodeKind::Expr(ExprSpec {
+            } => NodeKind::Expression(ExpressionSpec {
                 source: expr_source.clone(),
-                output_ty: match output_ty {
-                    Some(desc) => crate::schema::desc_to_ty(interner, desc),
-                    None => acvus_mir::ty::Ty::Infer,
-                },
+                output_ty: output_ty.as_ref().map(|desc| crate::schema::desc_to_ty(interner, desc)),
             }),
             WebNodeKind::Plain {} => NodeKind::Plain(PlainSpec {
                 source: String::new(),

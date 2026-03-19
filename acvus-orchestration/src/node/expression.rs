@@ -1,17 +1,15 @@
-use std::sync::Arc;
-
 use acvus_interpreter::{RuntimeError, TypedValue};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use super::Node;
 
-pub struct ExprNode {
+pub struct ExpressionNode {
     module: acvus_mir::ir::MirModule,
     interner: Interner,
 }
 
-impl ExprNode {
+impl ExpressionNode {
     pub fn new(
         module: acvus_mir::ir::MirModule,
         interner: &Interner,
@@ -23,10 +21,10 @@ impl ExprNode {
     }
 }
 
-impl Node for ExprNode {
+impl Node for ExpressionNode {
     fn spawn(
         &self,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        local: FxHashMap<Astr, TypedValue>,
     ) -> acvus_utils::Coroutine<TypedValue, RuntimeError> {
         let interner = self.interner.clone();
         let module = self.module.clone();

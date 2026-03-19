@@ -1,4 +1,4 @@
-use acvus_interpreter::{IntoValue, OpaqueValue, PureValue, RuntimeError, UnpureValue, Value};
+use acvus_interpreter::{IntoValue, OpaqueValue, PureValue, RuntimeError, UnpureValue, Value, ValueKind};
 #[cfg(test)]
 use acvus_interpreter::{LazyValue, TypedValue};
 #[cfg(test)]
@@ -90,10 +90,10 @@ pub async fn regex_call(
     match name_str {
         "regex" => {
             let Value::Pure(PureValue::String(pattern)) = &args[0] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex",
-                    "String",
-                    &format!("{:?}", args[0]),
+                    &[ValueKind::String],
+                    args[0].kind(),
                 ));
             };
             Ok(Value::opaque(OpaqueValue::new(
@@ -104,10 +104,10 @@ pub async fn regex_call(
         "regex_match" => {
             let re = extract_regex(&args[0]);
             let Value::Pure(PureValue::String(s)) = &args[1] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_match",
-                    "String",
-                    &format!("{:?}", args[1]),
+                    &[ValueKind::String],
+                    args[1].kind(),
                 ));
             };
             Ok(Value::bool_(re.is_match(s)))
@@ -116,10 +116,10 @@ pub async fn regex_call(
             acvus_interpreter::set_interner_ctx(interner);
             let re = extract_regex(&args[0]);
             let Value::Pure(PureValue::String(s)) = &args[1] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_find",
-                    "String",
-                    &format!("{:?}", args[1]),
+                    &[ValueKind::String],
+                    args[1].kind(),
                 ));
             };
             let result: Option<String> = re.find(s).map(|m| m.as_str().to_string());
@@ -128,10 +128,10 @@ pub async fn regex_call(
         "regex_find_all" => {
             let re = extract_regex(&args[0]);
             let Value::Pure(PureValue::String(s)) = &args[1] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_find_all",
-                    "String",
-                    &format!("{:?}", args[1]),
+                    &[ValueKind::String],
+                    args[1].kind(),
                 ));
             };
             let matches: Vec<Value> = re
@@ -142,18 +142,18 @@ pub async fn regex_call(
         }
         "regex_replace" => {
             let Value::Pure(PureValue::String(s)) = &args[0] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_replace",
-                    "String",
-                    &format!("{:?}", args[0]),
+                    &[ValueKind::String],
+                    args[0].kind(),
                 ));
             };
             let re = extract_regex(&args[1]);
             let Value::Pure(PureValue::String(rep)) = &args[2] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_replace",
-                    "String",
-                    &format!("{:?}", args[2]),
+                    &[ValueKind::String],
+                    args[2].kind(),
                 ));
             };
             Ok(Value::string(re.replace_all(s, rep.as_str()).into_owned()))
@@ -161,10 +161,10 @@ pub async fn regex_call(
         "regex_split" => {
             let re = extract_regex(&args[0]);
             let Value::Pure(PureValue::String(s)) = &args[1] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_split",
-                    "String",
-                    &format!("{:?}", args[1]),
+                    &[ValueKind::String],
+                    args[1].kind(),
                 ));
             };
             let parts: Vec<Value> = re.split(s).map(|p| Value::string(p.to_string())).collect();
@@ -172,10 +172,10 @@ pub async fn regex_call(
         }
         "regex_extract" => {
             let Value::Pure(PureValue::String(s)) = &args[0] else {
-                return Err(RuntimeError::type_mismatch(
+                return Err(RuntimeError::unexpected_type(
                     "regex_extract",
-                    "String",
-                    &format!("{:?}", args[0]),
+                    &[ValueKind::String],
+                    args[0].kind(),
                 ));
             };
             let re = extract_regex(&args[1]);
@@ -185,9 +185,7 @@ pub async fn regex_call(
                 .collect();
             Ok(Value::list(parts))
         }
-        _ => Err(RuntimeError::other(&format!(
-            "unknown regex function: {name_str}"
-        ))),
+        _ => Err(RuntimeError::extern_call(name_str, "unknown regex function")),
     }
 }
 
@@ -205,7 +203,7 @@ mod tests {
         let value = regex_call(interner, interner.intern(name), refs)
             .await
             .unwrap();
-        TypedValue::new(Arc::new(value), Ty::Infer)
+        TypedValue::new(value, Ty::error())
     }
 
     #[tokio::test]
@@ -249,7 +247,7 @@ mod tests {
         assert!(matches!(
             value,
             Value::Lazy(LazyValue::Variant { tag, payload: Some(inner) })
-            if *tag == some_tag && **inner == Value::string("123".into())
+            if *tag == some_tag && **inner == Value::string("123")
         ));
     }
 
@@ -267,9 +265,9 @@ mod tests {
             panic!("expected List");
         };
         assert_eq!(items.len(), 3);
-        assert_eq!(items[0], Value::string("1".into()));
-        assert_eq!(items[1], Value::string("22".into()));
-        assert_eq!(items[2], Value::string("333".into()));
+        assert_eq!(items[0], Value::string("1"));
+        assert_eq!(items[1], Value::string("22"));
+        assert_eq!(items[2], Value::string("333"));
     }
 
     #[tokio::test]
@@ -286,7 +284,7 @@ mod tests {
             ],
         )
         .await;
-        assert_eq!(*result.value(), Value::string("hello world !".into()));
+        assert_eq!(*result.value(), Value::string("hello world !"));
     }
 
     #[tokio::test]
@@ -310,10 +308,10 @@ mod tests {
         assert_eq!(
             *items,
             vec![
-                Value::string("a".into()),
-                Value::string("b".into()),
-                Value::string("c".into()),
-                Value::string("d".into()),
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c"),
+                Value::string("d"),
             ]
         );
     }
@@ -342,8 +340,8 @@ mod tests {
             panic!("expected List");
         };
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0], Value::string("inner1".into()));
-        assert_eq!(items[1], Value::string("inner2".into()));
+        assert_eq!(items[0], Value::string("inner1"));
+        assert_eq!(items[1], Value::string("inner2"));
     }
 
     #[tokio::test]

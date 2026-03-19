@@ -20,6 +20,7 @@ members = [
 [workspace.dependencies]
 rustc-hash = "2"
 uuid = { version = "1", features = ["v4", "js"] }
+unwrap_let = "0.1"
 
 [profile.release]
 opt-level = 'z'

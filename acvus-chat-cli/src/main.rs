@@ -10,8 +10,8 @@ use acvus_interpreter::{LazyValue, PureValue, TypedValue, Value};
 use acvus_mir::ty::Ty;
 use acvus_mir::context_registry::PartialContextTypeRegistry;
 use acvus_orchestration::{
-    ApiKind, EntryRef, Execution, ExprSpec, Fetch, HttpRequest, Journal, NodeKind, NodeSpec,
-    Persistency, ProviderConfig, Resolved, Strategy, TreeJournal, compile_nodes, compile_script,
+    EntryRef, Execution, ExpressionSpec, Fetch, HttpRequest, Journal, NodeKind, NodeSpec,
+    Persistency, Resolved, Strategy, TreeJournal, compile_nodes, compile_script,
 };
 use acvus_utils::{Astr, Interner};
 use node::NodeDef;
@@ -38,46 +38,43 @@ impl Fetch for HttpFetch {
     }
 }
 
-/// Dummy fetch for `--render-only` mode. Returns provider-appropriate dummy responses.
+/// Dummy fetch for `--render-only` mode. Returns provider-appropriate dummy responses
+/// based on URL patterns (no ApiKind needed — the URL tells us which provider).
 #[derive(Clone)]
-struct RenderOnlyFetch {
-    /// endpoint prefix → API kind
-    endpoints: FxHashMap<String, ApiKind>,
-}
+struct RenderOnlyFetch;
 
 impl Fetch for RenderOnlyFetch {
     async fn fetch(&self, request: &HttpRequest) -> Result<serde_json::Value, String> {
-        let api = self
-            .endpoints
-            .iter()
-            .find(|(prefix, _)| request.url.starts_with(prefix.as_str()))
-            .map(|(_, kind)| kind.clone())
-            .unwrap_or(ApiKind::OpenAI);
-
-        // countTokens → fixed token count
-        if request.url.contains("countTokens") {
-            return Ok(serde_json::json!({"totalTokens": 100}));
+        // countTokens -> fixed token count
+        if request.url.contains("countTokens") || request.url.contains("count_tokens") {
+            return Ok(serde_json::json!({"totalTokens": 100, "input_tokens": 100}));
         }
-        // cachedContents → dummy cache name
+        // cachedContents -> dummy cache name
         if request.url.contains("cachedContents") {
             return Ok(serde_json::json!({"name": "cachedContents/render-only"}));
         }
 
-        Ok(match api {
-            ApiKind::OpenAI => serde_json::json!({
-                "choices": [{"message": {"role": "assistant", "content": "(render-only)"}}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }),
-            ApiKind::Anthropic => serde_json::json!({
+        // Dispatch based on URL pattern
+        if request.url.contains("/v1/messages") {
+            // Anthropic
+            Ok(serde_json::json!({
                 "content": [{"type": "text", "text": "(render-only)"}],
                 "role": "assistant",
                 "usage": {"input_tokens": 0, "output_tokens": 0}
-            }),
-            ApiKind::Google => serde_json::json!({
+            }))
+        } else if request.url.contains("/v1beta/models/") {
+            // Google
+            Ok(serde_json::json!({
                 "candidates": [{"content": {"parts": [{"text": "(render-only)"}]}}],
                 "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
-            }),
-        })
+            }))
+        } else {
+            // Default: OpenAI
+            Ok(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "(render-only)"}}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            }))
+        }
     }
 }
 
@@ -131,12 +128,13 @@ async fn main() {
 
     // Context types + defaults
     let mut user_types: FxHashMap<Astr, Ty> = FxHashMap::default();
-    let mut context_defaults: FxHashMap<Astr, Value> = FxHashMap::default();
+    let mut context_defaults: FxHashMap<Astr, TypedValue> = FxHashMap::default();
     for (k, v) in &spec.context {
         let entry = parse_context_entry(&interner, v);
+        let ty = entry.ty.clone();
         user_types.insert(interner.intern(k), entry.ty);
         if let Some(default) = entry.default {
-            context_defaults.insert(interner.intern(k), default);
+            context_defaults.insert(interner.intern(k), TypedValue::new(default, ty));
         }
     }
 
@@ -189,9 +187,9 @@ async fn main() {
             });
         expr_node_specs.push(NodeSpec {
             name: expr_name,
-            kind: NodeKind::Expr(ExprSpec {
+            kind: NodeKind::Expression(ExpressionSpec {
                 source,
-                output_ty: tail_ty,
+                output_ty: Some(tail_ty),
             }),
             strategy: Strategy {
                 execution: Execution::default(),
@@ -205,12 +203,23 @@ async fn main() {
         });
     }
 
-    // Build provider name → ApiKind map (needed for node resolution)
-    let provider_apis: FxHashMap<String, ApiKind> = spec
-        .providers
-        .iter()
-        .map(|(name, config)| (name.clone(), config.api.clone()))
-        .collect();
+    let mut resolved_api_keys: FxHashMap<String, String> = FxHashMap::default();
+    for (name, config) in &spec.providers {
+        let api_key = if render_only {
+            String::new()
+        } else if let Some(key) = &config.api_key {
+            key.clone()
+        } else if let Some(env_name) = &config.api_key_env {
+            std::env::var(env_name).unwrap_or_else(|_| {
+                eprintln!("environment variable {env_name} not set (provider: {name})");
+                process::exit(1);
+            })
+        } else {
+            eprintln!("no api_key or api_key_env set (provider: {name})");
+            process::exit(1);
+        };
+        resolved_api_keys.insert(name.clone(), api_key);
+    }
 
     let mut node_specs = Vec::new();
     for node_file in &spec.nodes {
@@ -222,7 +231,7 @@ async fn main() {
             eprintln!("failed to parse {node_file}: {e}");
             process::exit(1);
         });
-        let node_spec = node::resolve_node(&interner, node_def, &project_dir, &provider_apis)
+        let node_spec = node::resolve_node(&interner, node_def, &project_dir, &spec.providers, &resolved_api_keys)
             .unwrap_or_else(|e| {
                 eprintln!("failed to resolve {node_file}: {e}");
                 process::exit(1);
@@ -246,34 +255,6 @@ async fn main() {
     // Storage starts empty — context is type-only
     let (journal, root) = TreeJournal::new();
 
-    let mut providers: FxHashMap<String, ProviderConfig> = FxHashMap::default();
-    let mut endpoint_apis: FxHashMap<String, ApiKind> = FxHashMap::default();
-    for (name, config) in &spec.providers {
-        let api = config.api.clone();
-        let api_key = if render_only {
-            String::new()
-        } else if let Some(key) = &config.api_key {
-            key.clone()
-        } else if let Some(env_name) = &config.api_key_env {
-            std::env::var(env_name).unwrap_or_else(|_| {
-                eprintln!("environment variable {env_name} not set (provider: {name})");
-                process::exit(1);
-            })
-        } else {
-            eprintln!("no api_key or api_key_env set (provider: {name})");
-            process::exit(1);
-        };
-        endpoint_apis.insert(config.endpoint.clone(), api.clone());
-        providers.insert(
-            name.clone(),
-            ProviderConfig {
-                api,
-                endpoint: config.endpoint.clone(),
-                api_key,
-            },
-        );
-    }
-
     let resolver = {
         let defaults = context_defaults.clone();
         let context_args_astr: FxHashMap<Astr, String> = context_args
@@ -287,19 +268,19 @@ async fn main() {
             let interner_clone = interner_clone.clone();
             async move {
                 if let Some(v) = context_args_astr.get(&name) {
-                    return Resolved::Turn(TypedValue::new(Arc::new(Value::string(v.clone())), Ty::Infer));
+                    return Resolved::Turn(TypedValue::string(v.clone()));
                 }
                 if let Some(val) = defaults.get(&name) {
-                    return Resolved::Turn(TypedValue::new(Arc::new(val.clone()), Ty::Infer));
+                    return Resolved::Turn(val.clone());
                 }
                 let name_str = interner_clone.resolve(name);
                 if render_only {
-                    return Resolved::Turn(TypedValue::new(Arc::new(Value::string(format!("(@{name_str})"))), Ty::Infer));
+                    return Resolved::Turn(TypedValue::string(format!("(@{name_str})")));
                 }
                 eprint!("{name_str}: ");
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                Resolved::Turn(TypedValue::new(Arc::new(Value::string(input.trim_end().to_string())), Ty::Infer))
+                Resolved::Turn(TypedValue::string(input.trim_end().to_string()))
             }
         }
     };
@@ -313,18 +294,16 @@ async fn main() {
                     tv.value()
                 }).collect();
                 let result = acvus_ext::regex_call(&interner, name, values).await?;
-                Ok(TypedValue::new(Arc::new(result), Ty::Infer))
+                // regex_call returns Value — type is String (regex always produces strings)
+                Ok(TypedValue::new(result, Ty::String))
             }
         }
     };
 
     if render_only {
-        let fetch = RenderOnlyFetch {
-            endpoints: endpoint_apis,
-        };
+        let fetch = RenderOnlyFetch;
         let mut engine = ChatEngine::new(
             compiled_nodes,
-            providers,
             fetch,
             journal,
             root,
@@ -353,7 +332,6 @@ async fn main() {
         };
         let mut engine = ChatEngine::new(
             compiled_nodes,
-            providers,
             fetch,
             journal,
             root,
@@ -379,7 +357,10 @@ async fn main() {
                         Err(e) => { eprintln!("evaluate error: {e}"); process::exit(1); }
                     }
                 }
-                println!("cursor depth: {}", engine.journal.entry(engine.cursor).await.depth());
+                match engine.journal.entry(engine.cursor).await {
+                    Ok(e) => println!("cursor depth: {}", e.depth()),
+                    Err(e) => eprintln!("failed to read journal entry: {e}"),
+                }
             }
         } else {
             engine.start_evaluate(&spec.entrypoint, false, &resolver, &extern_handler).await.unwrap_or_else(|e| {

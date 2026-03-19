@@ -6,6 +6,39 @@ use acvus_utils::{Astr, OwnedDequeDiff, TrackedDeque};
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
+// NOTE: Arc<TypedValue> has been removed from the public API.
+// TypedValue already contains Arc<Value> internally, so wrapping
+// it in another Arc was unnecessary double-indirection. TypedValue::clone
+// is cheap (Arc::clone on the inner value + Ty::clone).
+
+// ── JournalError ───────────────────────────────────────────────────
+
+/// Errors from journal storage operations (serialization, blob access, etc.).
+#[derive(Debug, Clone)]
+pub enum JournalError {
+    /// Serialization of entries or tree metadata failed.
+    Serialization(String),
+    /// Deserialization of entries or tree metadata failed.
+    Deserialization(String),
+    /// A referenced blob was not found in the store.
+    MissingBlob(String),
+    /// Stored data is structurally invalid (e.g. bad UUID).
+    CorruptedData(String),
+}
+
+impl std::fmt::Display for JournalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JournalError::Serialization(detail) => write!(f, "journal serialization: {detail}"),
+            JournalError::Deserialization(detail) => write!(f, "journal deserialization: {detail}"),
+            JournalError::MissingBlob(detail) => write!(f, "journal missing blob: {detail}"),
+            JournalError::CorruptedData(detail) => write!(f, "journal corrupted data: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for JournalError {}
+
 /// Storage operation — a complete instruction for what to store and at what type.
 ///
 /// Every variant carries `ty: Ty` — the output type of the stored value.
@@ -50,7 +83,7 @@ pub enum PatchDiff {
 impl PatchDiff {
     /// Create a full-replacement patch from a TypedValue.
     pub fn set(tv: TypedValue) -> Self {
-        PatchDiff::Set(Arc::unwrap_or_clone(tv.into_value()))
+        PatchDiff::Set(tv.into_inner())
     }
 
     /// Compute a recursive diff between two Values.
@@ -114,7 +147,7 @@ impl PatchDiff {
     pub fn apply(self, existing: Option<&TypedValue>, ty: Ty) -> TypedValue {
         let old_value = existing.map(|e| e.value().clone());
         let new_value = self.apply_value(old_value.as_ref());
-        TypedValue::new(Arc::new(new_value), ty)
+        TypedValue::new(new_value, ty)
     }
 
     fn apply_value(self, existing: Option<&Value>) -> Value {
@@ -153,7 +186,7 @@ pub enum Prune {
 
 /// Read-only handle to a single storage entry.
 pub trait EntryRef<'a> {
-    fn get(&self, key: &str) -> Option<Arc<TypedValue>>;
+    fn get(&self, key: &str) -> Option<TypedValue>;
     fn depth(&self) -> usize;
     fn uuid(&self) -> Uuid;
 }
@@ -168,10 +201,10 @@ pub trait EntryMut<'a>: Sized {
         'a: 'x,
         Self: 'x;
 
-    fn get(&self, key: &str) -> Option<Arc<TypedValue>>;
+    fn get(&self, key: &str) -> Option<TypedValue>;
     fn apply(&mut self, key: &str, patch: StorageOps);
-    async fn next(self) -> Self;
-    async fn fork(self) -> Self;
+    async fn next(self) -> Result<Self, JournalError>;
+    async fn fork(self) -> Result<Self, JournalError>;
     fn prune(self, mode: Prune);
     fn depth(&self) -> usize;
     fn uuid(&self) -> Uuid;
@@ -192,8 +225,8 @@ pub trait Journal {
     where
         Self: 'a;
 
-    async fn entry(&self, id: Uuid) -> Self::Ref<'_>;
-    async fn entry_mut(&mut self, id: Uuid) -> Self::Mut<'_>;
+    async fn entry(&self, id: Uuid) -> Result<Self::Ref<'_>, JournalError>;
+    async fn entry_mut(&mut self, id: Uuid) -> Result<Self::Mut<'_>, JournalError>;
     fn parent_of(&self, id: Uuid) -> Option<Uuid>;
     fn contains(&self, id: Uuid) -> bool;
 }
@@ -206,7 +239,7 @@ pub struct TreeNodeExport {
     pub parent: Option<Uuid>,
     pub depth: usize,
     /// Only turn_diff entries (not accumulated — that's derived).
-    pub turn_diff: FxHashMap<String, Arc<TypedValue>>,
+    pub turn_diff: FxHashMap<String, TypedValue>,
 }
 
 /// Full tree export — enough to reconstruct the entire TreeJournal.
@@ -231,9 +264,9 @@ struct TreeNode {
     parent: Option<usize>,
     children: Vec<usize>,
     /// Squashed state from all ancestors (shared via Arc for COW).
-    accumulated: Arc<FxHashMap<String, Arc<TypedValue>>>,
+    accumulated: Arc<FxHashMap<String, TypedValue>>,
     /// Changes made during this turn.
-    turn_diff: FxHashMap<String, Arc<TypedValue>>,
+    turn_diff: FxHashMap<String, TypedValue>,
     depth: usize,
     uuid: Uuid,
 }
@@ -353,7 +386,7 @@ impl TreeJournal {
                     // Merge parent's accumulated + parent's turn_diff.
                     let mut merged = (*parent.accumulated).clone();
                     for (k, v) in &parent.turn_diff {
-                        merged.insert(k.clone(), Arc::clone(v));
+                        merged.insert(k.clone(), v.clone());
                     }
                     (Some(pidx), Arc::new(merged))
                 }
@@ -467,20 +500,20 @@ impl Journal for TreeJournal {
     type Ref<'a> = TreeEntryRef<'a> where Self: 'a;
     type Mut<'a> = TreeEntryMut<'a> where Self: 'a;
 
-    async fn entry(&self, id: Uuid) -> TreeEntryRef<'_> {
+    async fn entry(&self, id: Uuid) -> Result<TreeEntryRef<'_>, JournalError> {
         let idx = self.inner.uuid_to_idx[&id];
-        TreeEntryRef {
+        Ok(TreeEntryRef {
             inner: &self.inner,
             idx,
-        }
+        })
     }
 
-    async fn entry_mut(&mut self, id: Uuid) -> TreeEntryMut<'_> {
+    async fn entry_mut(&mut self, id: Uuid) -> Result<TreeEntryMut<'_>, JournalError> {
         let idx = self.inner.uuid_to_idx[&id];
-        TreeEntryMut {
+        Ok(TreeEntryMut {
             inner: &mut self.inner,
             idx,
-        }
+        })
     }
 
     fn parent_of(&self, id: Uuid) -> Option<Uuid> {
@@ -507,21 +540,21 @@ pub struct TreeEntryMut<'a> {
 
 impl<'a> TreeEntryRef<'a> {
     /// Return all key-value pairs visible from this entry (accumulated + turn_diff merged).
-    pub fn entries(&self) -> FxHashMap<String, Arc<TypedValue>> {
+    pub fn entries(&self) -> FxHashMap<String, TypedValue> {
         let node = &self.inner.nodes[self.idx];
         let mut result = (*node.accumulated).clone();
         for (k, v) in &node.turn_diff {
-            result.insert(k.clone(), Arc::clone(v));
+            result.insert(k.clone(), v.clone());
         }
         result
     }
 }
 
 impl<'a> EntryRef<'a> for TreeEntryRef<'a> {
-    fn get(&self, key: &str) -> Option<Arc<TypedValue>> {
+    fn get(&self, key: &str) -> Option<TypedValue> {
         let node = &self.inner.nodes[self.idx];
         if let Some(val) = node.turn_diff.get(key) {
-            return Some(Arc::clone(val));
+            return Some(val.clone());
         }
         node.accumulated.get(key).cloned()
     }
@@ -538,10 +571,10 @@ impl<'a> EntryRef<'a> for TreeEntryRef<'a> {
 impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
     type Ref<'x> = TreeEntryRef<'x> where 'a: 'x;
 
-    fn get(&self, key: &str) -> Option<Arc<TypedValue>> {
+    fn get(&self, key: &str) -> Option<TypedValue> {
         let node = &self.inner.nodes[self.idx];
         if let Some(val) = node.turn_diff.get(key) {
-            return Some(Arc::clone(val));
+            return Some(val.clone());
         }
         node.accumulated.get(key).cloned()
     }
@@ -556,34 +589,34 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         match patch {
             StorageOps::Sequence { squashed, ty, .. } => {
                 let value_deque = TrackedDeque::from_vec(
-                    squashed.into_vec().into_iter().map(|tv| Arc::unwrap_or_clone(tv.into_value())).collect(),
+                    squashed.into_vec().into_iter().map(|tv| tv.into_inner()).collect(),
                 );
                 let stored = TypedValue::new(
-                    Arc::new(Value::Lazy(LazyValue::Deque(value_deque))),
+                    Value::Lazy(LazyValue::Deque(value_deque)),
                     ty,
                 );
                 self.inner.nodes[idx]
                     .turn_diff
-                    .insert(key.to_string(), Arc::new(stored));
+                    .insert(key.to_string(), stored);
             }
             StorageOps::Patch { diff, ty } => {
                 let existing = self.get(key);
-                let new_val = diff.apply(existing.as_deref(), ty);
+                let new_val = diff.apply(existing.as_ref(), ty);
                 self.inner.nodes[idx]
                     .turn_diff
-                    .insert(key.to_string(), Arc::new(new_val));
+                    .insert(key.to_string(), new_val);
             }
         }
     }
 
-    async fn next(self) -> Self {
+    async fn next(self) -> Result<Self, JournalError> {
         let parent_idx = self.idx;
         let inner = self.inner;
 
         let parent_node = &inner.nodes[parent_idx];
         let mut merged = (*parent_node.accumulated).clone();
         for (k, v) in &parent_node.turn_diff {
-            merged.insert(k.clone(), Arc::clone(v));
+            merged.insert(k.clone(), v.clone());
         }
         let depth = parent_node.depth + 1;
         let new_uuid = Uuid::new_v4();
@@ -601,10 +634,10 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         inner.nodes[parent_idx].children.push(new_idx);
         inner.uuid_to_idx.insert(new_uuid, new_idx);
 
-        TreeEntryMut { inner, idx: new_idx }
+        Ok(TreeEntryMut { inner, idx: new_idx })
     }
 
-    async fn fork(self) -> Self {
+    async fn fork(self) -> Result<Self, JournalError> {
         let sibling_idx = self.idx;
         let inner = self.inner;
         let parent_idx = inner.nodes[sibling_idx]
@@ -614,7 +647,7 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         let parent_node = &inner.nodes[parent_idx];
         let mut merged = (*parent_node.accumulated).clone();
         for (k, v) in &parent_node.turn_diff {
-            merged.insert(k.clone(), Arc::clone(v));
+            merged.insert(k.clone(), v.clone());
         }
         let depth = parent_node.depth + 1;
         let new_uuid = Uuid::new_v4();
@@ -632,7 +665,7 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         inner.nodes[parent_idx].children.push(new_idx);
         inner.uuid_to_idx.insert(new_uuid, new_idx);
 
-        TreeEntryMut { inner, idx: new_idx }
+        Ok(TreeEntryMut { inner, idx: new_idx })
     }
 
     fn prune(self, mode: Prune) {
@@ -710,8 +743,8 @@ mod tests {
     #[tokio::test]
     async fn apply_and_get() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("hello".to_string())), ty: Ty::Infer });
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("hello".to_string())), ty: Ty::error() });
         assert!(matches!(
             e.get("x").unwrap().value(),
             Value::Pure(PureValue::String(v)) if v == "hello"
@@ -723,20 +756,20 @@ mod tests {
     async fn overwrite() {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         e.apply(
             "x",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("first")), ty: Ty::Infer },
+            StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("first")), ty: Ty::error() },
         );
         e.apply(
             "x",
             StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
-                Arc::new(Value::object(FxHashMap::from_iter([(
+                Value::object(FxHashMap::from_iter([(
                     interner.intern("v"),
                     Value::int(2),
-                )]))),
-                Ty::Infer,
-            )), ty: Ty::Infer },
+                )])),
+                Ty::error(),
+            )), ty: Ty::error() },
         );
         assert!(matches!(e.get("x").unwrap().value(), Value::Lazy(LazyValue::Object(_))));
     }
@@ -744,7 +777,7 @@ mod tests {
     #[tokio::test]
     async fn deque_stores_squashed() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
         let diff = OwnedDequeDiff {
             consumed: 0,
@@ -756,7 +789,7 @@ mod tests {
             StorageOps::Sequence {
                 squashed,
                 diff,
-                ty: Ty::Infer,
+                ty: Ty::error(),
             },
         );
         let val = e.get("q").unwrap();
@@ -769,14 +802,14 @@ mod tests {
     #[tokio::test]
     async fn deque_checksum_preserved() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1)]);
         let diff = OwnedDequeDiff {
             consumed: 0,
             removed_back: 0,
             pushed: vec![TypedValue::int(1)],
         };
-        e.apply("q", StorageOps::Sequence { squashed, diff, ty: Ty::Infer });
+        e.apply("q", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
         let val = e.get("q").unwrap();
         let Value::Lazy(LazyValue::Deque(stored)) = val.value() else {
             panic!("expected Deque")
@@ -789,25 +822,25 @@ mod tests {
     async fn object_diff_updates_and_removals() {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let a = interner.intern("a");
         let b = interner.intern("b");
         let c = interner.intern("c");
         e.apply(
             "obj",
             StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
-                Arc::new(Value::object(FxHashMap::from_iter([
+                Value::object(FxHashMap::from_iter([
                     (a, Value::int(1)),
                     (b, Value::int(2)),
-                ]))),
-                Ty::Infer,
-            )), ty: Ty::Infer },
+                ])),
+                Ty::error(),
+            )), ty: Ty::error() },
         );
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100))), (c, PatchDiff::Set(Value::int(3)))]),
             removals: vec![b],
         };
-        e.apply("obj", StorageOps::Patch { diff, ty: Ty::Infer });
+        e.apply("obj", StorageOps::Patch { diff, ty: Ty::error() });
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")
@@ -821,13 +854,13 @@ mod tests {
     async fn object_diff_on_missing_key() {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let a = interner.intern("a");
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
             removals: vec![],
         };
-        e.apply("obj", StorageOps::Patch { diff, ty: Ty::Infer });
+        e.apply("obj", StorageOps::Patch { diff, ty: Ty::error() });
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")
@@ -842,19 +875,19 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
 
         {
-            let e = j.entry(root).await;
+            let e = j.entry(root).await.unwrap();
             assert_eq!(e.depth(), 0);
         }
 
         let n1;
         {
-            let e = j.entry_mut(root).await.next().await;
+            let e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             assert_eq!(e.depth(), 1);
         }
 
         {
-            let e = j.entry_mut(n1).await.next().await;
+            let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             assert_eq!(e.depth(), 2);
         }
     }
@@ -865,33 +898,33 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
-            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
         }
 
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // n2 should see parent's values via accumulated
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
             assert!(matches!(e.get("y").unwrap().value(), Value::Pure(PureValue::Int(2))));
 
             // Modifying n2 doesn't affect n1
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         }
 
         // n1 still has original value
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
         }
         // n2 has the override
         {
-            let e = j.entry(n2).await;
+            let e = j.entry(n2).await.unwrap();
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         }
     }
@@ -902,21 +935,21 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         }
 
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
         }
 
         // Fork from n2 — creates sibling of n2 (child of n1)
         {
-            let e = j.entry_mut(n2).await.fork().await;
+            let e = j.entry_mut(n2).await.unwrap().fork().await.unwrap();
             assert_eq!(e.depth(), 2);
             // Sees n1's accumulated (x=1), not n2's turn_diff (x=2)
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
@@ -929,22 +962,22 @@ mod tests {
 
         let n1;
         {
-            let e = j.entry_mut(root).await.next().await;
+            let e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
         }
 
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         }
 
-        j.entry_mut(n2).await.prune(Prune::Leaf);
+        j.entry_mut(n2).await.unwrap().prune(Prune::Leaf);
 
         // n1 still accessible
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             assert_eq!(e.depth(), 1);
         }
     }
@@ -955,20 +988,20 @@ mod tests {
 
         let n1;
         {
-            let e = j.entry_mut(root).await.next().await;
+            let e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
         }
         {
-            let e = j.entry_mut(n1).await.next().await;
+            let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             let _n2 = e.uuid();
             // n3 = child of n2 — all will be pruned
         }
 
-        j.entry_mut(n1).await.prune(Prune::Subtree);
+        j.entry_mut(n1).await.unwrap().prune(Prune::Subtree);
 
         // root still accessible
         {
-            let e = j.entry(root).await;
+            let e = j.entry(root).await.unwrap();
             assert_eq!(e.depth(), 0);
         }
     }
@@ -979,33 +1012,33 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         }
 
         let n2;
         {
-            let e = j.entry_mut(n1).await.next().await;
+            let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
         }
         let n3;
         {
-            let e = j.entry_mut(n1).await.next().await;
+            let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
         }
 
         // Both see parent's data
-        assert!(matches!(j.entry(n2).await.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
-        assert!(matches!(j.entry(n3).await.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
 
         // Modifying one doesn't affect the other
         {
-            let mut e = j.entry_mut(n2).await;
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::Infer });
+            let mut e = j.entry_mut(n2).await.unwrap();
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
         }
-        assert!(matches!(j.entry(n2).await.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
-        assert!(matches!(j.entry(n3).await.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
+        assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
     }
 
     #[tokio::test]
@@ -1014,17 +1047,17 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         }
 
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // x=1 is in accumulated
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
             // Now override in turn_diff
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
         }
     }
@@ -1238,12 +1271,12 @@ mod tests {
         let i = Interner::new();
         let a = i.intern("a");
         let fields = FxHashMap::from_iter([(a, Value::int(1))]);
-        let existing = TypedValue::new(Arc::new(Value::object(fields)), Ty::Infer);
+        let existing = TypedValue::new(Value::object(fields), Ty::error());
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(2)))]),
             removals: vec![],
         };
-        let result = diff.apply(Some(&existing), Ty::Infer);
+        let result = diff.apply(Some(&existing), Ty::error());
         let result_fields = get_obj_fields(&result);
         assert_eq!(result_fields.get(&a), Some(&Value::Pure(PureValue::Int(2))));
     }
@@ -1260,7 +1293,7 @@ mod tests {
                 (b, Value::int(2)),
             ]))),
         ]);
-        let existing = TypedValue::new(Arc::new(Value::object(fields)), Ty::Infer);
+        let existing = TypedValue::new(Value::object(fields), Ty::error());
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(nested_key, PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(99)))]),
@@ -1268,7 +1301,7 @@ mod tests {
             })]),
             removals: vec![],
         };
-        let result = diff.apply(Some(&existing), Ty::Infer);
+        let result = diff.apply(Some(&existing), Ty::error());
         let result_fields = get_obj_fields(&result);
         let Value::Lazy(LazyValue::Object(inner)) = result_fields.get(&nested_key).unwrap() else { panic!() };
         assert_eq!(inner.get(&a), Some(&Value::Pure(PureValue::Int(1)))); // unchanged
@@ -1281,12 +1314,12 @@ mod tests {
         let a = i.intern("a");
         let b = i.intern("b");
         let fields = FxHashMap::from_iter([(a, Value::int(1)), (b, Value::int(2))]);
-        let existing = TypedValue::new(Arc::new(Value::object(fields)), Ty::Infer);
+        let existing = TypedValue::new(Value::object(fields), Ty::error());
         let diff = PatchDiff::Rec {
             updates: FxHashMap::default(),
             removals: vec![b],
         };
-        let result = diff.apply(Some(&existing), Ty::Infer);
+        let result = diff.apply(Some(&existing), Ty::error());
         let result_fields = get_obj_fields(&result);
         assert_eq!(result_fields.len(), 1);
         assert!(result_fields.contains_key(&a));
@@ -1304,7 +1337,7 @@ mod tests {
             })]),
             removals: vec![],
         };
-        let result = diff.apply(None, Ty::Infer);
+        let result = diff.apply(None, Ty::error());
         let result_fields = get_obj_fields(&result);
         let Value::Lazy(LazyValue::Object(inner)) = result_fields.get(&x).unwrap() else { panic!() };
         assert_eq!(inner.get(&a), Some(&Value::Pure(PureValue::Int(1))));
@@ -1317,10 +1350,10 @@ mod tests {
     #[tokio::test]
     async fn snapshot_overwrites_entirely() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
         assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
     }
 
@@ -1329,18 +1362,18 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
         }
         // Going back to n1 → should see value 1, not 2
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
         }
     }
@@ -1348,11 +1381,11 @@ mod tests {
     #[tokio::test]
     async fn snapshot_string_value() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         e.apply("msg", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
-            Arc::new(Value::string("hello".to_string())),
+            Value::string("hello".to_string()),
             Ty::String,
-        )), ty: Ty::Infer });
+        )), ty: Ty::error() });
         match e.get("msg").unwrap().value() {
             Value::Pure(PureValue::String(s)) => assert_eq!(s, "hello"),
             other => panic!("expected String, got {:?}", other),
@@ -1366,14 +1399,14 @@ mod tests {
     #[tokio::test]
     async fn sequence_stores_deque() {
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
         let diff = OwnedDequeDiff {
             consumed: 0,
             removed_back: 0,
             pushed: vec![TypedValue::int(1), TypedValue::int(2)],
         };
-        e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::Infer });
+        e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
         let val = e.get("seq").unwrap();
         assert!(matches!(val.value(), Value::Lazy(LazyValue::Deque(_))));
     }
@@ -1386,7 +1419,7 @@ mod tests {
     async fn patch_recursive_nested_object() {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         let a = interner.intern("a");
         let b = interner.intern("b");
         let inner_key = interner.intern("inner");
@@ -1396,7 +1429,7 @@ mod tests {
             (a, Value::int(1)),
             (inner_key, Value::object(FxHashMap::from_iter([(b, Value::int(10))]))),
         ]));
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(initial), Ty::Infer)), ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
 
         // Patch: inner.b = 99 (recursive)
         let diff = PatchDiff::Rec {
@@ -1406,7 +1439,7 @@ mod tests {
             })]),
             removals: vec![],
         };
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
 
         let val = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!("expected Object") };
@@ -1426,30 +1459,30 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let initial = Value::object(FxHashMap::from_iter([
                 (a, Value::int(1)),
                 (b, Value::int(2)),
             ]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(initial), Ty::Infer)), ty: Ty::Infer });
+            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
         }
 
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Patch: a = 10
             let diff = PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
                 removals: vec![],
             };
-            e.apply("state", StorageOps::Patch { diff, ty: Ty::Infer });
+            e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
         }
 
         // At n2: a=10, b=2
         {
-            let e = j.entry(n2).await;
+            let e = j.entry(n2).await.unwrap();
             let val = e.get("state").unwrap();
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(10))));
@@ -1458,7 +1491,7 @@ mod tests {
 
         // At n1: a=1, b=2 (history preserved!)
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("state").unwrap();
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
@@ -1473,25 +1506,25 @@ mod tests {
         let a = interner.intern("a");
         let b = interner.intern("b");
         let c = interner.intern("c");
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
         let initial = Value::object(FxHashMap::from_iter([
             (a, Value::int(1)),
             (b, Value::int(2)),
         ]));
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(initial), Ty::Infer)), ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
 
         // First patch: update a
         e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
             removals: vec![],
-        }, ty: Ty::Infer });
+        }, ty: Ty::error() });
 
         // Second patch: add c, remove b
         e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
             updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(3)))]),
             removals: vec![b],
-        }, ty: Ty::Infer });
+        }, ty: Ty::error() });
 
         let val = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
@@ -1505,12 +1538,12 @@ mod tests {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
         let a = interner.intern("a");
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
         e.apply("new_obj", StorageOps::Patch { diff: PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
             removals: vec![],
-        }, ty: Ty::Infer });
+        }, ty: Ty::error() });
 
         let val = e.get("new_obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
@@ -1524,7 +1557,7 @@ mod tests {
         let a = interner.intern("a");
         let b = interner.intern("b");
         let c = interner.intern("c");
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
         let old_val = Value::object(FxHashMap::from_iter([
             (a, Value::int(1)),
@@ -1537,10 +1570,10 @@ mod tests {
             // c removed
         ]));
 
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(old_val.clone()), Ty::Infer)), ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), ty: Ty::error() });
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
 
         let result = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
@@ -1556,7 +1589,7 @@ mod tests {
         let a = interner.intern("a");
         let x = interner.intern("x");
         let y = interner.intern("y");
-        let mut e = j.entry_mut(root).await.next().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
         let old_val = Value::object(FxHashMap::from_iter([
             (a, Value::object(FxHashMap::from_iter([
@@ -1571,12 +1604,12 @@ mod tests {
             ]))),
         ]));
 
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(old_val.clone()), Ty::Infer)), ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), ty: Ty::error() });
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
         // The diff should be Rec, not Set for the whole object
         assert!(matches!(&diff, PatchDiff::Rec { updates, .. } if matches!(updates.get(&a), Some(PatchDiff::Rec { .. }))));
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::Infer });
+        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
 
         let result = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
@@ -1596,7 +1629,7 @@ mod tests {
             removed_back: 0,
             pushed: items,
         };
-        StorageOps::Sequence { squashed, diff, ty: Ty::Infer }
+        StorageOps::Sequence { squashed, diff, ty: Ty::error() }
     }
 
     fn seq_patch_with_diff(
@@ -1607,7 +1640,7 @@ mod tests {
     ) -> StorageOps {
         let squashed = TrackedDeque::from_vec(squashed_items);
         let diff = OwnedDequeDiff { consumed, removed_back, pushed };
-        StorageOps::Sequence { squashed, diff, ty: Ty::Infer }
+        StorageOps::Sequence { squashed, diff, ty: Ty::error() }
     }
 
     fn get_deque_values(val: &TypedValue) -> Vec<Value> {
@@ -1629,13 +1662,13 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             // Initial: [1, 2]
             e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2)]));
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Append 3: squashed=[1,2,3], diff={pushed=[3]}
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)],
@@ -1648,7 +1681,7 @@ mod tests {
         }
         // Go back to n1: should see [1, 2]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             let vals = get_deque_values(&val);
             assert_eq!(vals, vec![Value::int(1), Value::int(2)]);
@@ -1660,12 +1693,12 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)]));
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Consumed 1 from front: squashed=[2,3], diff={consumed=1}
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(2), TypedValue::int(3)],
@@ -1678,7 +1711,7 @@ mod tests {
         }
         // Go back to n1: should see [1, 2, 3]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             let vals = get_deque_values(&val);
             assert_eq!(vals, vec![Value::int(1), Value::int(2), Value::int(3)]);
@@ -1690,12 +1723,12 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.apply("q", seq_patch(vec![TypedValue::int(10), TypedValue::int(20)]));
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Consume 1 + append 30: squashed=[20,30], diff={consumed=1, pushed=[30]}
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(20), TypedValue::int(30)],
@@ -1707,7 +1740,7 @@ mod tests {
             assert_eq!(vals, vec![Value::int(20), Value::int(30)]);
         }
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             let vals = get_deque_values(&val);
             assert_eq!(vals, vec![Value::int(10), Value::int(20)]);
@@ -1719,13 +1752,13 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.apply("q", seq_patch(vec![TypedValue::int(1)]));
         }
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2)],
@@ -1734,7 +1767,7 @@ mod tests {
         }
         let n3;
         {
-            let mut e = j.entry_mut(n2).await.next().await;
+            let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)],
@@ -1743,19 +1776,19 @@ mod tests {
         }
         // n3: [1, 2, 3]
         {
-            let e = j.entry(n3).await;
+            let e = j.entry(n3).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(3)]);
         }
         // n2: [1, 2]
         {
-            let e = j.entry(n2).await;
+            let e = j.entry(n2).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2)]);
         }
         // n1: [1]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
         }
@@ -1766,12 +1799,12 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.apply("q", seq_patch(vec![]));
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1)],
                 0, 0, vec![TypedValue::int(1)],
@@ -1780,7 +1813,7 @@ mod tests {
             assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
         }
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), Vec::<Value>::new());
         }
@@ -1791,14 +1824,14 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2)]));
         }
         // Fork: two children from n1
         let branch_a;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             branch_a = e.uuid();
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(100)],
@@ -1807,7 +1840,7 @@ mod tests {
         }
         let branch_b;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             branch_b = e.uuid();
             e.apply("q", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(200)],
@@ -1816,19 +1849,19 @@ mod tests {
         }
         // branch_a: [1, 2, 100]
         {
-            let e = j.entry(branch_a).await;
+            let e = j.entry(branch_a).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(100)]);
         }
         // branch_b: [1, 2, 200]
         {
-            let e = j.entry(branch_b).await;
+            let e = j.entry(branch_b).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(200)]);
         }
         // n1: still [1, 2]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2)]);
         }
@@ -1845,14 +1878,14 @@ mod tests {
         let a = interner.intern("a");
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::Infer });
+            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::error() });
             e.apply("log", seq_patch(vec![TypedValue::int(1)]));
         }
         {
-            let mut e = j.entry_mut(n1).await.next().await;
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
             e.apply("log", seq_patch_with_diff(
                 vec![TypedValue::int(1), TypedValue::int(2)],
                 0, 0, vec![TypedValue::int(2)],
@@ -1864,7 +1897,7 @@ mod tests {
         }
         // Back to n1: counter=0, log=[1]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(0))));
             let val = e.get("log").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
@@ -1878,21 +1911,21 @@ mod tests {
         let a = interner.intern("a");
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let state = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(state), Ty::Infer)), ty: Ty::Infer });
+            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(state, Ty::error())), ty: Ty::error() });
             e.apply("log", seq_patch(vec![]));
         }
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Patch state.a = 1
             e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
             // Append to log
             e.apply("log", seq_patch_with_diff(
                 vec![TypedValue::int(100)],
@@ -1901,7 +1934,7 @@ mod tests {
         }
         // n2: state.a=1, log=[100]
         {
-            let e = j.entry(n2).await;
+            let e = j.entry(n2).await.unwrap();
             let val = e.get("state").unwrap();
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
@@ -1910,7 +1943,7 @@ mod tests {
         }
         // n1: state.a=0, log=[]
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("state").unwrap();
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(0))));
@@ -1926,18 +1959,18 @@ mod tests {
         let x = interner.intern("x");
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::Infer });
+            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::error() });
             e.apply("seq", seq_patch(vec![TypedValue::int(10)]));
             let obj = Value::object(FxHashMap::from_iter([(x, Value::int(100))]));
-            e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(obj), Ty::Infer)), ty: Ty::Infer });
+            e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
         }
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::Infer });
+            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
             e.apply("seq", seq_patch_with_diff(
                 vec![TypedValue::int(10), TypedValue::int(20)],
                 0, 0, vec![TypedValue::int(20)],
@@ -1945,13 +1978,13 @@ mod tests {
             e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         let n3;
         {
-            let mut e = j.entry_mut(n2).await.next().await;
+            let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::Infer });
+            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
             e.apply("seq", seq_patch_with_diff(
                 vec![TypedValue::int(10), TypedValue::int(20), TypedValue::int(30)],
                 0, 0, vec![TypedValue::int(30)],
@@ -1959,11 +1992,11 @@ mod tests {
             e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(300)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         // n3: snap=2, seq=[10,20,30], patch_obj.x=300
         {
-            let e = j.entry(n3).await;
+            let e = j.entry(n3).await.unwrap();
             assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(2))));
             let val = e.get("seq").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(10), Value::int(20), Value::int(30)]);
@@ -1973,7 +2006,7 @@ mod tests {
         }
         // n1: snap=0, seq=[10], patch_obj.x=100
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(0))));
             let val = e.get("seq").unwrap();
             assert_eq!(get_deque_values(&val), vec![Value::int(10)]);
@@ -1996,32 +2029,32 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0)), (b, Value::int(0))]));
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(obj), Ty::Infer)), ty: Ty::Infer });
+            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
         }
         let n2;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         let n3;
         {
-            let mut e = j.entry_mut(n2).await.next().await;
+            let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(2)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         // n3: a=1, b=2
         {
-            let e = j.entry(n3).await;
+            let e = j.entry(n3).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(1))));
@@ -2029,7 +2062,7 @@ mod tests {
         }
         // n2: a=1, b=0
         {
-            let e = j.entry(n2).await;
+            let e = j.entry(n2).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(1))));
@@ -2037,7 +2070,7 @@ mod tests {
         }
         // n1: a=0, b=0
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(0))));
@@ -2053,44 +2086,44 @@ mod tests {
 
         let n1;
         {
-            let mut e = j.entry_mut(root).await.next().await;
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(Arc::new(obj), Ty::Infer)), ty: Ty::Infer });
+            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
         }
         let ba;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             ba = e.uuid();
             e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         let bb;
         {
-            let mut e = j.entry_mut(n1).await.next().await;
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             bb = e.uuid();
             e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::Infer });
+            }, ty: Ty::error() });
         }
         // ba.a=100, bb.a=200, n1.a=0
         {
-            let e = j.entry(ba).await;
+            let e = j.entry(ba).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(100))));
         }
         {
-            let e = j.entry(bb).await;
+            let e = j.entry(bb).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(200))));
         }
         {
-            let e = j.entry(n1).await;
+            let e = j.entry(n1).await.unwrap();
             let val = e.get("s").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(0))));

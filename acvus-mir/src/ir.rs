@@ -5,7 +5,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinId;
-use crate::ty::Ty;
+use crate::ty::{Effect, Origin, Ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(pub u32);
@@ -17,6 +17,65 @@ pub struct Label(pub u32);
 pub struct Inst {
     pub span: Span,
     pub kind: InstKind,
+}
+
+/// Type coercion kind — 1:1 with the subtyping rules in `try_coerce`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastKind {
+    /// `Deque<T, O> → List<T>` — origin erased, container preserved.
+    DequeToList,
+    /// `List<T> → Iterator<T, Pure>` — lazy iteration.
+    ListToIterator,
+    /// `Deque<T, O> → Iterator<T, Pure>` — direct consumption.
+    DequeToIterator,
+    /// `Deque<T, O> → Sequence<T, O, Pure>` — origin preserved.
+    DequeToSequence,
+    /// `Sequence<T, O, E> → Iterator<T, E>` — origin erased.
+    SequenceToIterator,
+    /// `Range → Iterator<Int, Pure>` — materialise range into lazy iterator.
+    RangeToIterator,
+}
+
+impl CastKind {
+    /// Determine the CastKind needed when a value of type `from` flows into
+    /// a position expecting type `to`. Returns `None` if no cast is needed
+    /// (types are compatible without coercion).
+    pub fn between(from: &Ty, to: &Ty) -> Option<CastKind> {
+        match (from, to) {
+            (Ty::Deque(..), Ty::List(_)) => Some(CastKind::DequeToList),
+            (Ty::List(_), Ty::Iterator(..)) => Some(CastKind::ListToIterator),
+            (Ty::Deque(..), Ty::Iterator(..)) => Some(CastKind::DequeToIterator),
+            (Ty::Deque(..), Ty::Sequence(..)) => Some(CastKind::DequeToSequence),
+            (Ty::Sequence(..), Ty::Iterator(..)) => Some(CastKind::SequenceToIterator),
+            (Ty::Range, Ty::Iterator(..)) => Some(CastKind::RangeToIterator),
+            _ => None,
+        }
+    }
+
+    /// Compute the result type of applying this cast to a value of the given
+    /// source type. Panics if `src_ty` doesn't match the expected source
+    /// constructor for this CastKind.
+    pub fn result_ty(&self, src_ty: &Ty) -> Ty {
+        match (self, src_ty) {
+            (CastKind::DequeToList, Ty::Deque(elem, _)) => Ty::List(elem.clone()),
+            (CastKind::ListToIterator, Ty::List(elem)) => {
+                Ty::Iterator(elem.clone(), Effect::Pure)
+            }
+            (CastKind::DequeToIterator, Ty::Deque(elem, _)) => {
+                Ty::Iterator(elem.clone(), Effect::Pure)
+            }
+            (CastKind::DequeToSequence, Ty::Deque(elem, o)) => {
+                Ty::Sequence(elem.clone(), *o, Effect::Pure)
+            }
+            (CastKind::SequenceToIterator, Ty::Sequence(elem, _, e)) => {
+                Ty::Iterator(elem.clone(), *e)
+            }
+            (CastKind::RangeToIterator, Ty::Range) => {
+                Ty::Iterator(Box::new(Ty::Int), Effect::Pure)
+            }
+            _ => panic!("CastKind::result_ty: {self:?} incompatible with {src_ty:?}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +132,7 @@ pub enum InstKind {
     },
 
     // Composite constructors
-    MakeList {
+    MakeDeque {
         dst: ValueId,
         elements: Vec<ValueId>,
     },
@@ -155,15 +214,19 @@ pub enum InstKind {
         args: Vec<ValueId>,
     },
 
-    // Iteration
-    IterInit {
+    /// Pull one element from an Iterator.
+    ///
+    /// `src` must be an `Iterator<T, E>` value.
+    /// `dst` receives `Option<(T, Iterator<T, E>)>`:
+    /// - `Some((item, rest))` if an element is available
+    /// - `None` if exhausted
+    ///
+    /// This is the language-level iteration primitive. The user-facing `next()`
+    /// builtin delegates to `ExecCtx::exec_next`, which is the same underlying
+    /// operation, but for-loops use this instruction directly — no builtin dependency.
+    IterStep {
         dst: ValueId,
         src: ValueId,
-    },
-    IterNext {
-        dst_value: ValueId,
-        dst_done: ValueId,
-        iter: ValueId,
     },
 
     // Variant (tagged union)
@@ -205,6 +268,14 @@ pub enum InstKind {
     },
     Return(ValueId),
     Nop,
+
+    /// Explicit type coercion — inserted by the lowerer when the type checker
+    /// determines a subtype cast is needed (e.g. `Deque → List`).
+    Cast {
+        dst: ValueId,
+        src: ValueId,
+        kind: CastKind,
+    },
 
     /// Poison value: result of a compile-time error (e.g. undefined function).
     /// The typechecker already reported the error; this exists so the lowerer
@@ -304,7 +375,7 @@ pub struct ClosureBody {
     pub body: MirBody,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, Arc<ClosureBody>>,

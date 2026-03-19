@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use acvus_orchestration::{
-    ApiKind, Execution, GenerationParams, LlmCacheSpec, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    NodeSpec, Persistency, PlainSpec, Strategy, TokenBudget, ToolBinding, ToolParamInfo,
+    AnthropicSpec, Execution, GoogleAICacheSpec, GoogleAISpec, MaxTokens, MessageSpec,
+    NodeKind, NodeSpec, OpenAICompatibleSpec, Persistency, PlainSpec, Strategy, TokenBudget,
+    ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -170,7 +171,8 @@ pub fn resolve_node(
     interner: &Interner,
     def: NodeDef,
     base_dir: &Path,
-    provider_apis: &FxHashMap<String, ApiKind>,
+    providers: &FxHashMap<String, crate::project::ProviderConfig>,
+    resolved_api_keys: &FxHashMap<String, String>,
 ) -> Result<NodeSpec, String> {
     let mut messages = Vec::new();
     for (i, msg) in def.messages.into_iter().enumerate() {
@@ -224,14 +226,6 @@ pub fn resolve_node(
         }
     };
 
-    let generation = GenerationParams {
-        temperature: def.generation.temperature,
-        top_p: def.generation.top_p,
-        top_k: def.generation.top_k,
-        grounding: def.generation.grounding,
-        thinking: def.generation.thinking.clone(),
-    };
-
     let max_tokens = MaxTokens {
         input: def.max_tokens.input,
         output: def.max_tokens.output,
@@ -264,41 +258,73 @@ pub fn resolve_node(
             NodeKind::Plain(PlainSpec { source })
         }
         NodeKindDef::Llm => {
-            let provider = def
+            let provider_name = def
                 .provider
                 .ok_or_else(|| format!("node '{}': llm requires 'provider'", def.name))?;
             let model = def
                 .model
                 .ok_or_else(|| format!("node '{}': llm requires 'model'", def.name))?;
-            let api = provider_apis
-                .get(&provider)
-                .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", def.name))?
-                .clone();
-            NodeKind::Llm(LlmSpec {
-                api,
-                provider,
-                model,
-                messages,
-                tools,
-                generation,
-                cache_key,
-                max_tokens,
-            })
+            let pcfg = providers
+                .get(&provider_name)
+                .ok_or_else(|| format!("node '{}': unknown provider '{provider_name}'", def.name))?;
+            let endpoint = pcfg.endpoint.clone();
+            let api_key = resolved_api_keys.get(&provider_name).cloned().unwrap_or_default();
+            match &pcfg.api {
+                crate::project::ApiKind::OpenAI => NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                    endpoint,
+                    api_key,
+                    model,
+                    messages,
+                    tools,
+                    temperature: def.generation.temperature,
+                    top_p: def.generation.top_p,
+                    cache_key,
+                    max_tokens,
+                }),
+                crate::project::ApiKind::Anthropic => NodeKind::Anthropic(AnthropicSpec {
+                    endpoint,
+                    api_key,
+                    model,
+                    messages,
+                    tools,
+                    temperature: def.generation.temperature,
+                    top_p: def.generation.top_p,
+                    top_k: def.generation.top_k,
+                    max_tokens,
+                    thinking: def.generation.thinking.clone(),
+                    cache_key,
+                }),
+                crate::project::ApiKind::Google => NodeKind::GoogleAI(GoogleAISpec {
+                    endpoint,
+                    api_key,
+                    model,
+                    messages,
+                    tools,
+                    temperature: def.generation.temperature,
+                    top_p: def.generation.top_p,
+                    top_k: def.generation.top_k,
+                    max_tokens,
+                    thinking: def.generation.thinking.clone(),
+                    grounding: def.generation.grounding,
+                    cache_key,
+                }),
+            }
         }
         NodeKindDef::LlmCache { ttl, cache_config } => {
-            let provider = def
+            let provider_name = def
                 .provider
                 .ok_or_else(|| format!("node '{}': llm-cache requires 'provider'", def.name))?;
             let model = def
                 .model
                 .ok_or_else(|| format!("node '{}': llm-cache requires 'model'", def.name))?;
-            let api = provider_apis
-                .get(&provider)
-                .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", def.name))?
-                .clone();
-            NodeKind::LlmCache(LlmCacheSpec {
-                api,
-                provider,
+            let pcfg = providers
+                .get(&provider_name)
+                .ok_or_else(|| format!("node '{}': unknown provider '{provider_name}'", def.name))?;
+            let endpoint = pcfg.endpoint.clone();
+            let api_key = resolved_api_keys.get(&provider_name).cloned().unwrap_or_default();
+            NodeKind::GoogleAICache(GoogleAICacheSpec {
+                endpoint,
+                api_key,
                 model,
                 messages,
                 ttl,

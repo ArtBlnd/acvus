@@ -23,7 +23,7 @@ struct CoroutineShared<V> {
 // ---------------------------------------------------------------------------
 
 struct ContextSlot<V> {
-    value: Option<Arc<V>>,
+    value: Option<V>,
     waker: Option<Waker>,
 }
 
@@ -107,9 +107,9 @@ impl<V> Future for ContextFuture<'_, V>
 where
     V: Unpin,
 {
-    type Output = Arc<V>;
+    type Output = V;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<V>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<V> {
         let this = self.get_mut();
 
         if let Some(name) = this.request_data.take() {
@@ -160,7 +160,7 @@ impl<V> ContextRequest<V> {
     }
 
     /// Provide the resolved value. Wakes the coroutine if it is waiting.
-    pub fn resolve(self, value: Arc<V>) {
+    pub fn resolve(self, value: V) {
         let mut slot = self.slot.lock();
         slot.value = Some(value);
         if let Some(waker) = slot.waker.take() {
@@ -189,7 +189,7 @@ impl<V> ExternCallRequest<V> {
     }
 
     /// Provide the resolved value. Wakes the coroutine if it is waiting.
-    pub fn resolve(self, value: Arc<V>) {
+    pub fn resolve(self, value: V) {
         let mut slot = self.slot.lock();
         slot.value = Some(value);
         if let Some(waker) = slot.waker.take() {
@@ -212,9 +212,9 @@ impl<V> Future for ExternCallFuture<'_, V>
 where
     V: Unpin,
 {
-    type Output = Arc<V>;
+    type Output = V;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Arc<V>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<V> {
         let this = self.get_mut();
 
         if let Some((name, args)) = this.request_data.take() {
@@ -436,7 +436,7 @@ mod tests {
             panic!("expected NeedContext");
         };
         assert_eq!(request.name(), user);
-        request.resolve(Arc::new("alice".to_string()));
+        request.resolve("alice".to_string());
 
         let Stepped::Emit(value) = step(&mut co).await else {
             panic!("expected Emit");
@@ -463,7 +463,7 @@ mod tests {
         };
         assert_eq!(request.name(), add);
         assert_eq!(request.args(), &["1".to_string(), "2".to_string()]);
-        request.resolve(Arc::new("3".to_string()));
+        request.resolve("3".to_string());
 
         let Stepped::Emit(value) = step(&mut co).await else {
             panic!("expected Emit");
@@ -498,7 +498,7 @@ mod tests {
             panic!("expected NeedContext");
         };
         assert_eq!(request.name(), name_key);
-        request.resolve(Arc::new("eve".to_string()));
+        request.resolve("eve".to_string());
 
         // yield "hello eve"
         let Stepped::Emit(value) = step(&mut co).await else {
@@ -511,7 +511,7 @@ mod tests {
             panic!("expected NeedContext");
         };
         assert_eq!(request.name(), age_key);
-        request.resolve(Arc::new("30".to_string()));
+        request.resolve("30".to_string());
 
         // yield "eve is 30"
         let Stepped::Emit(value) = step(&mut co).await else {
@@ -538,13 +538,13 @@ mod tests {
             panic!("expected NeedContext a");
         };
         assert_eq!(request.name(), a_key);
-        request.resolve(Arc::new("1".to_string()));
+        request.resolve("1".to_string());
 
         let Stepped::NeedContext(request) = step(&mut co).await else {
             panic!("expected NeedContext b");
         };
         assert_eq!(request.name(), b_key);
-        request.resolve(Arc::new("2".to_string()));
+        request.resolve("2".to_string());
 
         let Stepped::Emit(value) = step(&mut co).await else {
             panic!("expected Emit");
@@ -597,7 +597,7 @@ mod tests {
         let Stepped::NeedContext(request) = step(&mut co).await else {
             panic!("expected NeedContext");
         };
-        request.resolve(Arc::new("value".to_string()));
+        request.resolve("value".to_string());
         assert!(matches!(step(&mut co).await, Stepped::Done));
     }
 

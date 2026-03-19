@@ -244,7 +244,7 @@ fn write_body(
             )?,
 
             // Composite constructors
-            InstKind::MakeList { dst, elements } => writeln!(
+            InstKind::MakeDeque { dst, elements } => writeln!(
                 f,
                 "{} = list [{}]",
                 fmt_val(*dst),
@@ -416,22 +416,11 @@ fn write_body(
             )?,
 
             // Iteration
-            InstKind::IterInit { dst, src } => writeln!(
+            InstKind::IterStep { dst, src } => writeln!(
                 f,
-                "{} = iter_init {}",
+                "{} = iter_step {}",
                 fmt_val(*dst),
                 fmt_use(*src, &consts, &texts)
-            )?,
-            InstKind::IterNext {
-                dst_value,
-                dst_done,
-                iter,
-            } => writeln!(
-                f,
-                "{}, {} = iter_next {}",
-                fmt_val(*dst_value),
-                fmt_val(*dst_done),
-                fmt_use(*iter, &consts, &texts)
             )?,
 
             // Control flow
@@ -505,6 +494,13 @@ fn write_body(
             }
             InstKind::Return(r) => writeln!(f, "return {}", fmt_use(*r, &consts, &texts))?,
             InstKind::Nop => writeln!(f, "nop")?,
+            InstKind::Cast { dst, src, kind } => writeln!(
+                f,
+                "{} = cast {:?} {}",
+                fmt_val(*dst),
+                kind,
+                fmt_use(*src, &consts, &texts)
+            )?,
             InstKind::Poison { dst } => writeln!(f, "{} = poison", fmt_val(*dst))?,
         }
     }
@@ -793,7 +789,7 @@ mod tests {
             &interner,
         );
         assert!(out.contains("=== main ==="));
-        assert!(out.contains("iter_init"));
+        assert!(out.contains("iter_step"));
         assert!(out.contains("yield"));
     }
 

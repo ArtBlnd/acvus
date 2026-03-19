@@ -11,4 +11,10 @@ pub enum ChatError {
 
     #[error("resolve error: {0}")]
     Resolve(String),
+
+    #[error("orchestration error: {0}")]
+    Orchestration(String),
+
+    #[error("journal error: {0}")]
+    Journal(#[from] acvus_orchestration::JournalError),
 }

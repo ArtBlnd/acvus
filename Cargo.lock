@@ -86,7 +86,6 @@ dependencies = [
  "acvus-ast",
  "acvus-interpreter",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-utils",
  "glob",
  "libtest-mimic",
@@ -127,7 +126,6 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-mir",
- "acvus-mir-pass",
  "acvus-utils",
  "rustc-hash",
  "serde",

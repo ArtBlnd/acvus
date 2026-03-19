@@ -9,60 +9,65 @@ use tracing::{debug, info};
 use super::Node;
 use super::helpers::render_block_in_coroutine;
 use crate::compile::CompiledMessage;
+use crate::http::Fetch;
+use crate::spec::CompiledGoogleAICache;
 use crate::message::{Content, Message};
-use crate::provider::{Fetch, ProviderConfig};
 
-pub struct LlmCacheNode<F> {
-    provider_config: ProviderConfig,
+/// Shared config for Google AI cache node.
+struct GoogleAICacheConfig {
+    endpoint: String,
+    api_key: String,
     model: String,
     messages: Vec<CompiledMessage>,
     ttl: String,
     cache_config: FxHashMap<String, serde_json::Value>,
+}
+
+pub struct GoogleAICacheNode<F> {
+    config: Arc<GoogleAICacheConfig>,
     fetch: Arc<F>,
     interner: Interner,
 }
 
-impl<F> LlmCacheNode<F>
+impl<F> GoogleAICacheNode<F>
 where
     F: Fetch + 'static,
 {
     pub fn new(
-        cache: &crate::kind::CompiledLlmCache,
-        provider_config: ProviderConfig,
+        cache: &CompiledGoogleAICache,
         fetch: Arc<F>,
         interner: &Interner,
     ) -> Self {
         Self {
-            provider_config,
-            model: cache.model.clone(),
-            messages: cache.messages.clone(),
-            ttl: cache.ttl.clone(),
-            cache_config: cache.cache_config.clone(),
+            config: Arc::new(GoogleAICacheConfig {
+                endpoint: cache.endpoint.clone(),
+                api_key: cache.api_key.clone(),
+                model: cache.model.clone(),
+                messages: cache.messages.clone(),
+                ttl: cache.ttl.clone(),
+                cache_config: cache.cache_config.clone(),
+            }),
             fetch,
             interner: interner.clone(),
         }
     }
 }
 
-impl<F> Node for LlmCacheNode<F>
+impl<F> Node for GoogleAICacheNode<F>
 where
     F: Fetch + 'static,
 {
     fn spawn(
         &self,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        local: FxHashMap<Astr, TypedValue>,
     ) -> acvus_utils::Coroutine<TypedValue, RuntimeError> {
-        let messages = self.messages.clone();
-        let model = self.model.clone();
-        let ttl = self.ttl.clone();
-        let cache_config = self.cache_config.clone();
-        let provider_config = self.provider_config.clone();
+        let config = Arc::clone(&self.config);
         let fetch = Arc::clone(&self.fetch);
         let interner = self.interner.clone();
 
         acvus_utils::coroutine(move |handle| async move {
             let mut rendered = Vec::new();
-            for msg in &messages {
+            for msg in &config.messages {
                 let CompiledMessage::Block(block) = msg else {
                     continue;
                 };
@@ -79,18 +84,19 @@ where
                 });
             }
 
-            info!(model = %model, ttl = %ttl, messages = rendered.len(), "llm_cache request");
-            let request = crate::provider::build_cache_request(
-                &provider_config,
-                &model,
+            info!(model = %config.model, ttl = %config.ttl, messages = rendered.len(), "google_cache request");
+            let request = super::google::build_cache_request(
+                &config.endpoint,
+                &config.api_key,
+                &config.model,
                 &rendered,
-                &ttl,
-                &cache_config,
-            );
+                &config.ttl,
+                &config.cache_config,
+            ).map_err(|e| RuntimeError::fetch(e.to_string()))?;
             let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
-            let cache_name = crate::provider::parse_cache_response(&provider_config.api, &json)
+            let cache_name = super::google::parse_cache_response(&json)
                 .map_err(|e| RuntimeError::fetch(e.to_string()))?;
-            debug!(cache_name = %cache_name, "llm_cache created");
+            debug!(cache_name = %cache_name, "google_cache created");
 
             handle.yield_val(TypedValue::string(cache_name)).await;
             Ok(())

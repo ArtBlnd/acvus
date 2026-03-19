@@ -6,29 +6,19 @@ use futures::future::BoxFuture;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_mir::builtins::BuiltinId;
-use acvus_mir::ir::{Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_mir::ir::{CastKind, Inst, InstKind, Label, MirBody, MirModule, ValueId};
 use acvus_utils::Astr;
 use acvus_utils::Interner;
 use acvus_utils::TrackedDeque;
 use rustc_hash::FxHashMap;
 
 use acvus_mir::ty::{Effect, Ty};
-use crate::iter::SequenceChain;
 use crate::builtins;
 use crate::error::RuntimeError;
-use crate::iter::{IterHandle, IterOp, IterRepr};
-use crate::value::{FnValue, LazyValue, PureValue, TypedValue, Value};
+use crate::iter::{IterHandle, IterOp, IterRepr, SequenceChain};
+use crate::value::{FnValue, LazyValue, PureValue, Tuple, TypedValue, Value};
 use acvus_utils::{Coroutine, Stepped, YieldHandle};
 
-/// Runtime coercion: Deque → SequenceChain (Deque ≤ Sequence).
-/// Panics if the value is neither Sequence nor Deque.
-fn into_sequence_chain(value: Value, context: &str) -> SequenceChain {
-    match value {
-        Value::Lazy(LazyValue::Sequence(sc)) => sc,
-        Value::Lazy(LazyValue::Deque(d)) => SequenceChain::from_stored(d),
-        other => panic!("{context}: expected Sequence or Deque, got {other:?}"),
-    }
-}
 
 pub struct Interpreter {
     interner: Interner,
@@ -43,19 +33,6 @@ pub struct Interpreter {
 struct Frame {
     vals: Vec<Option<Arc<Value>>>,
     label_map: FxHashMap<Label, usize>,
-    iters: FxHashMap<ValueId, IterState>,
-}
-
-enum IterState {
-    List {
-        items: Vec<Value>,
-        pos: usize,
-    },
-    Range {
-        current: i64,
-        end: i64,
-        inclusive: bool,
-    },
 }
 
 impl Frame {
@@ -63,7 +40,6 @@ impl Frame {
         Self {
             vals: vec![None; val_count as usize],
             label_map,
-            iters: FxHashMap::default(),
         }
     }
 
@@ -116,11 +92,8 @@ impl Frame {
         then: (&Label, &[ValueId]),
         else_: (&Label, &[ValueId]),
     ) -> usize {
-        let (label, args) = if matches!(self.get(cond), Value::Pure(PureValue::Bool(true))) {
-            then
-        } else {
-            else_
-        };
+        let cond_val = *self.get(cond).expect_ref::<bool>("jump_if");
+        let (label, args) = if cond_val { then } else { else_ };
         let target = self.resolve_label(label);
         self.bind_block_params(insts, target, args);
         target
@@ -142,58 +115,6 @@ impl Frame {
         }
     }
 
-    // -- iteration ------------------------------------------------------------
-
-    fn iter_init(&mut self, dst: ValueId, src: ValueId) {
-        let state = match self.take_owned(src) {
-            Value::Lazy(LazyValue::List(items)) => IterState::List { items, pos: 0 },
-            Value::Lazy(LazyValue::Deque(deque)) => IterState::List {
-                items: deque.into_vec(),
-                pos: 0,
-            },
-            Value::Pure(PureValue::Range {
-                start,
-                end,
-                inclusive,
-            }) => IterState::Range {
-                current: start,
-                end,
-                inclusive,
-            },
-            v => panic!("IterInit: expected List or Range, got {v:?}"),
-        };
-        self.iters.insert(dst, state);
-        self.set_new(dst, Value::unit());
-    }
-
-    fn iter_next(&mut self, dst_value: ValueId, dst_done: ValueId, iter: ValueId) {
-        let state = self
-            .iters
-            .get_mut(&iter)
-            .unwrap_or_else(|| panic!("IterNext: no iterator for Val({})", iter.0));
-
-        let (value, done) = match state {
-            IterState::List { items, pos } if *pos < items.len() => {
-                let val = items[*pos].clone();
-                *pos += 1;
-                (val, false)
-            }
-            IterState::List { .. } => (Value::unit(), true),
-            IterState::Range {
-                current,
-                end,
-                inclusive,
-            } if (*inclusive && *current <= *end) || (!*inclusive && *current < *end) => {
-                let val = Value::int(*current);
-                *current += 1;
-                (val, false)
-            }
-            IterState::Range { .. } => (Value::unit(), true),
-        };
-
-        self.set_new(dst_value, value);
-        self.set_new(dst_done, Value::bool_(done));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +150,7 @@ impl Interpreter {
 
     pub fn execute(self) -> Coroutine<TypedValue, RuntimeError> {
         acvus_utils::coroutine(|handle| async move {
+            crate::verify::verify_module(&self.module);
             crate::set_interner_ctx(&self.interner);
             let insts = self.module.main.insts.clone();
             let val_types = self.module.main.val_types.clone();
@@ -255,7 +177,7 @@ impl Interpreter {
                         .unwrap_or_else(|| {
                             panic!("undefined context @{}", interner.resolve(name))
                         });
-                    request.resolve(Arc::new(v.clone()));
+                    request.resolve(v.clone());
                 }
                 Stepped::NeedExternCall(_) => {
                     panic!("unexpected extern call in execute_with_context");
@@ -293,14 +215,14 @@ impl Interpreter {
                 InstKind::Yield(v) => {
                     let val = frame.take(*v);
                     let ty = val_types[v].clone();
-                    handle.yield_val(TypedValue::new(val, ty)).await;
+                    handle.yield_val(TypedValue::new_shared(val, ty)).await;
                 }
 
                 // -- constants / constructors --
                 InstKind::Const { dst, value } => {
                     frame.set_new(*dst, literal_to_value(value));
                 }
-                InstKind::MakeList { dst, elements } => {
+                InstKind::MakeDeque { dst, elements } => {
                     let items = frame.collect_args(elements);
                     frame.set_new(*dst, Value::deque(TrackedDeque::from_vec(items)));
                 }
@@ -317,14 +239,12 @@ impl Interpreter {
                     end,
                     kind,
                 } => {
-                    let (s, e) = (frame.get(*start), frame.get(*end));
-                    match (s, e) {
-                        (Value::Pure(PureValue::Int(s)), Value::Pure(PureValue::Int(e))) => frame.set_new(
-                            *dst,
-                            Value::range(*s, *e, matches!(kind, RangeKind::InclusiveEnd)),
-                        ),
-                        _ => panic!("MakeRange: expected Int bounds"),
-                    }
+                    let s = *frame.get(*start).expect_ref::<i64>("MakeRange start");
+                    let e = *frame.get(*end).expect_ref::<i64>("MakeRange end");
+                    frame.set_new(
+                        *dst,
+                        Value::range(s, e, matches!(kind, RangeKind::InclusiveEnd)),
+                    );
                 }
                 InstKind::MakeTuple { dst, elements } => {
                     let items = frame.collect_args(elements);
@@ -356,52 +276,54 @@ impl Interpreter {
                     left,
                     right,
                 } => {
-                    let result = eval_binop(*op, frame.get(*left), frame.get(*right));
+                    let result = eval_binop(*op, frame.get(*left), frame.get(*right))?;
                     frame.set_new(*dst, result);
                 }
                 InstKind::UnaryOp { dst, op, operand } => {
-                    frame.set_new(*dst, eval_unaryop(*op, frame.get(*operand)));
+                    frame.set_new(*dst, eval_unaryop(*op, frame.get(*operand))?);
                 }
 
                 // -- access --
                 InstKind::FieldGet { dst, object, field } => {
-                    let v = expect_object(frame.get(*object), "FieldGet")
-                        .get(field)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "FieldGet: key '{}' not found",
-                                field.display(&this.interner)
-                            )
-                        })
+                    let obj = frame.get(*object).expect_ref::<FxHashMap<Astr, Value>>("field_get");
+                    let v = obj.get(field)
+                        .ok_or_else(|| RuntimeError::missing_field(this.interner.resolve(*field)))?
                         .clone();
                     frame.set_new(*dst, v);
                 }
                 InstKind::ObjectGet { dst, object, key } => {
-                    let v = expect_object(frame.get(*object), "ObjectGet")
-                        .get(key)
-                        .unwrap_or_else(|| {
-                            panic!("ObjectGet: key '{}' not found", key.display(&this.interner))
-                        })
+                    let obj = frame.get(*object).expect_ref::<FxHashMap<Astr, Value>>("object_get");
+                    let v = obj.get(key)
+                        .ok_or_else(|| RuntimeError::missing_field(this.interner.resolve(*key)))?
                         .clone();
                     frame.set_new(*dst, v);
                 }
                 InstKind::TupleIndex { dst, tuple, index } => {
-                    let v = expect_tuple(frame.get(*tuple), "TupleIndex")[*index].clone();
+                    let elems = frame.get(*tuple).expect_ref::<Tuple>("tuple_index");
+                    let v = elems.0.get(*index)
+                        .ok_or_else(|| RuntimeError::index_out_of_bounds(*index as i64, elems.0.len()))?
+                        .clone();
                     frame.set_new(*dst, v);
                 }
                 InstKind::ListIndex { dst, list, index } => {
-                    let items = expect_list(frame.get(*list), "ListIndex");
+                    let items = frame.get(*list).expect_ref::<[Value]>("list_index");
                     let i = if *index >= 0 {
                         *index as usize
                     } else {
                         (items.len() as i32 + *index) as usize
                     };
-                    frame.set_new(*dst, items[i].clone());
+                    let v = items.get(i)
+                        .ok_or_else(|| RuntimeError::index_out_of_bounds(*index as i64, items.len()))?
+                        .clone();
+                    frame.set_new(*dst, v);
                 }
                 InstKind::ListGet { dst, list, index } => {
-                    let items = expect_list(frame.get(*list), "ListGet");
-                    let idx = expect_int(frame.get(*index), "ListGet index");
-                    frame.set_new(*dst, items[idx as usize].clone());
+                    let items = frame.get(*list).expect_ref::<[Value]>("list_get");
+                    let idx = *frame.get(*index).expect_ref::<i64>("list_get_index");
+                    let v = items.get(idx as usize)
+                        .ok_or_else(|| RuntimeError::index_out_of_bounds(idx, items.len()))?
+                        .clone();
+                    frame.set_new(*dst, v);
                 }
                 InstKind::ListSlice {
                     dst,
@@ -409,9 +331,10 @@ impl Interpreter {
                     skip_head,
                     skip_tail,
                 } => {
-                    let items = expect_list(frame.get(*list), "ListSlice");
-                    let end = items.len() - *skip_tail;
-                    frame.set_new(*dst, Value::list(items[*skip_head..end].to_vec()));
+                    let items = frame.get(*list).expect_ref::<[Value]>("list_slice");
+                    let end = items.len().saturating_sub(*skip_tail);
+                    let start = (*skip_head).min(end);
+                    frame.set_new(*dst, Value::list(items[start..end].to_vec()));
                 }
 
                 // -- variant --
@@ -444,7 +367,7 @@ impl Interpreter {
 
                 // -- pattern testing --
                 InstKind::TestLiteral { dst, src, value } => {
-                    let eq = values_equal(frame.get(*src), &literal_to_value(value));
+                    let eq = frame.get(*src).structural_eq(&literal_to_value(value));
                     frame.set_new(*dst, Value::bool_(eq));
                 }
                 InstKind::TestListLen {
@@ -453,7 +376,7 @@ impl Interpreter {
                     min_len,
                     exact,
                 } => {
-                    let items = expect_list(frame.get(*src), "TestListLen");
+                    let items = frame.get(*src).expect_ref::<[Value]>("test_list_len");
                     let ok = if *exact {
                         items.len() == *min_len
                     } else {
@@ -462,7 +385,7 @@ impl Interpreter {
                     frame.set_new(*dst, Value::bool_(ok));
                 }
                 InstKind::TestObjectKey { dst, src, key } => {
-                    let ok = expect_object(frame.get(*src), "TestObjectKey").contains_key(key);
+                    let ok = frame.get(*src).expect_ref::<FxHashMap<Astr, Value>>("test_object_key").contains_key(key);
                     frame.set_new(*dst, Value::bool_(ok));
                 }
                 InstKind::TestRange {
@@ -472,7 +395,7 @@ impl Interpreter {
                     end,
                     kind,
                 } => {
-                    let n = expect_int(frame.get(*src), "TestRange");
+                    let n = *frame.get(*src).expect_ref::<i64>("test_range");
                     let ok = match kind {
                         RangeKind::Exclusive => n >= *start && n < *end,
                         RangeKind::InclusiveEnd => n >= *start && n <= *end,
@@ -481,20 +404,31 @@ impl Interpreter {
                     frame.set_new(*dst, Value::bool_(ok));
                 }
 
-                // -- iteration --
-                InstKind::IterInit { dst, src } => frame.iter_init(*dst, *src),
-                InstKind::IterNext {
-                    dst_value,
-                    dst_done,
-                    iter,
-                } => {
-                    frame.iter_next(*dst_value, *dst_done, *iter);
+                // -- iterator step (async) --
+                InstKind::IterStep { dst, src } => {
+                    let ih = frame.take_owned(*src).expect::<IterHandle>("IterStep");
+                    let result;
+                    (this, result) = Self::exec_next(this, ih, handle).await?;
+                    let value = match result {
+                        Some((item, rest)) => {
+                            let some_tag = this.interner.intern("Some");
+                            Value::variant(
+                                some_tag,
+                                Some(Box::new(Value::tuple(vec![item, Value::iterator(rest)]))),
+                            )
+                        }
+                        None => {
+                            let none_tag = this.interner.intern("None");
+                            Value::variant(none_tag, None)
+                        }
+                    };
+                    frame.set_new(*dst, value);
                 }
 
                 // -- context / variable I/O --
                 InstKind::ContextLoad { dst, name } => {
                     let typed = handle.request_context(*name).await;
-                    frame.set(*dst, Arc::unwrap_or_clone(typed).into_value());
+                    frame.set(*dst, Arc::new(typed.into_inner()));
                 }
                 InstKind::VarLoad { dst, name } => {
                     let v = this.variables.get(name).unwrap_or_else(|| {
@@ -512,17 +446,20 @@ impl Interpreter {
                 // -- calls (async, ownership-passing) --
                 InstKind::BuiltinCall { dst, builtin, args } => {
                     let arg_values = frame.collect_args(args);
+                    let arg_types: Vec<Ty> = args.iter()
+                        .map(|a| val_types[a].clone())
+                        .collect();
                     let result;
                     (this, result) =
-                        Self::exec_builtin(this, *builtin, arg_values, handle).await?;
+                        Self::exec_builtin(this, *builtin, arg_values, arg_types, handle).await?;
                     frame.set_new(*dst, result);
                 }
                 InstKind::ExternCall { dst, name, args } => {
                     let typed_args: Vec<TypedValue> = args.iter().map(|a| {
-                        TypedValue::new(frame.take(*a), val_types[a].clone())
+                        TypedValue::new_shared(frame.take(*a), val_types[a].clone())
                     }).collect();
-                    let arc = handle.request_extern_call(*name, typed_args).await;
-                    frame.set(*dst, Arc::unwrap_or_clone(arc).into_value());
+                    let result = handle.request_extern_call(*name, typed_args).await;
+                    frame.set(*dst, Arc::new(result.into_inner()));
                 }
                 InstKind::ClosureCall { dst, closure, args } => {
                     let callee = frame.take_owned(*closure);
@@ -535,10 +472,10 @@ impl Interpreter {
                         }
                         Value::Lazy(LazyValue::ExternFn(name)) => {
                             let typed_args: Vec<TypedValue> = args.iter().map(|a| {
-                                TypedValue::new(frame.take(*a), val_types[a].clone())
+                                TypedValue::new_shared(frame.take(*a), val_types[a].clone())
                             }).collect();
-                            let arc = handle.request_extern_call(name, typed_args).await;
-                            frame.set(*dst, Arc::unwrap_or_clone(arc).into_value());
+                            let result = handle.request_extern_call(name, typed_args).await;
+                            frame.set(*dst, Arc::new(result.into_inner()));
                         }
                         _ => panic!("ClosureCall: expected Fn or ExternFn, got {callee:?}"),
                     }
@@ -570,6 +507,14 @@ impl Interpreter {
                     return Ok((this, frame, Some(v)));
                 }
                 InstKind::Nop => {}
+
+                // -- type coercion --
+                InstKind::Cast { dst, src, kind } => {
+                    let value = frame.take_owned(*src);
+                    let result = exec_cast(*kind, value, &val_types[src]);
+                    frame.set_new(*dst, result);
+                }
+
                 InstKind::Poison { .. } => {
                     panic!("reached poison value: typechecker should have prevented this");
                 }
@@ -582,346 +527,32 @@ impl Interpreter {
     // -- builtin dispatch -----------------------------------------------------
 
     async fn exec_builtin<'a>(
-        mut this: Self,
-        id: BuiltinId,
-        mut args: Vec<Value>,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        match id {
-            BuiltinId::ToString
-            | BuiltinId::ToInt
-            | BuiltinId::ToFloat
-            | BuiltinId::CharToInt
-            | BuiltinId::IntToChar
-            | BuiltinId::Len
-            | BuiltinId::Contains
-            | BuiltinId::ContainsStr
-            | BuiltinId::Substring
-            | BuiltinId::LenStr
-            | BuiltinId::ToBytes
-            | BuiltinId::ToUtf8
-            | BuiltinId::ToUtf8Lossy
-            | BuiltinId::Trim
-            | BuiltinId::TrimStart
-            | BuiltinId::TrimEnd
-            | BuiltinId::Upper
-            | BuiltinId::Lower
-            | BuiltinId::ReplaceStr
-            | BuiltinId::SplitStr
-            | BuiltinId::StartsWithStr
-            | BuiltinId::EndsWithStr
-            | BuiltinId::RepeatStr
-            | BuiltinId::Unwrap
-            | BuiltinId::First
-            | BuiltinId::Last
-            | BuiltinId::UnwrapOr => {
-                let result = builtins::call_pure(id, args)?;
-                Ok((this, result))
-            }
-
-            // -- Iterator-consuming builtins (need exec_next with handle) --
-            // Return Option<Value> as Variant (Some/None) to match pure versions.
-            BuiltinId::FirstIter => {
-                let some_tag = this.interner.intern("Some");
-                let none_tag = this.interner.intern("None");
-                let ih = args.remove(0).into_iter_handle(Effect::Pure);
-                let (this, result) = Self::exec_next(this, ih, handle).await?;
-                match result {
-                    Some((item, _rest)) => Ok((this, Value::variant(some_tag, Some(Box::new(item))))),
-                    None => Ok((this, Value::variant(none_tag, None))),
-                }
-            }
-            BuiltinId::LastIter => {
-                let some_tag = this.interner.intern("Some");
-                let none_tag = this.interner.intern("None");
-                let ih = args.remove(0).into_iter_handle(Effect::Pure);
-                let mut current = ih;
-                let mut last_item: Option<Value> = None;
-                loop {
-                    let result;
-                    (this, result) = Self::exec_next(this, current, handle).await?;
-                    match result {
-                        Some((item, rest)) => {
-                            last_item = Some(item);
-                            current = rest;
-                        }
-                        None => break,
-                    }
-                }
-                match last_item {
-                    Some(item) => Ok((this, Value::variant(some_tag, Some(Box::new(item))))),
-                    None => Ok((this, Value::variant(none_tag, None))),
-                }
-            }
-            BuiltinId::ContainsIter => {
-                let ih = args.remove(0).into_iter_handle(Effect::Pure);
-                let needle = args.remove(0);
-                let mut current = ih;
-                loop {
-                    let result;
-                    (this, result) = Self::exec_next(this, current, handle).await?;
-                    match result {
-                        Some((item, rest)) => {
-                            if item == needle {
-                                return Ok((this, Value::Pure(PureValue::Bool(true))));
-                            }
-                            current = rest;
-                        }
-                        None => return Ok((this, Value::Pure(PureValue::Bool(false)))),
-                    }
-                }
-            }
-
-            // -- Iterator constructors --
-            BuiltinId::Reverse => {
-                let mut items = match args.remove(0) {
-                    Value::Lazy(LazyValue::List(items)) => items,
-                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
-                    other => panic!("reverse: expected List or Deque, got {other:?}"),
-                };
-                items.reverse();
-                Ok((this, Value::list(items)))
-            }
-            BuiltinId::Iter => {
-                let items = match args.remove(0) {
-                    Value::Lazy(LazyValue::List(items)) => items,
-                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
-                    other => panic!("iter: expected List or Deque, got {other:?}"),
-                };
-                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
-            }
-            BuiltinId::RevIter => {
-                let mut items = match args.remove(0) {
-                    Value::Lazy(LazyValue::List(items)) => items,
-                    Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
-                    other => panic!("rev_iter: expected List or Deque, got {other:?}"),
-                };
-                items.reverse();
-                Ok((this, Value::iterator(IterHandle::from_list(items, Effect::Pure))))
-            }
-            BuiltinId::Next | BuiltinId::NextSeq => {
-                let none_tag = this.interner.intern("None");
-                let some_tag = this.interner.intern("Some");
-                let ih = args.remove(0).into_iter_handle(Effect::Pure);
-                let (this, result) = Self::exec_next(this, ih, handle).await?;
-                match result {
-                    None => Ok((this, Value::variant(none_tag, None))),
-                    Some((item, rest)) => Ok((this, Value::variant(
-                        some_tag,
-                        Some(Box::new(Value::tuple(vec![item, Value::iterator(rest)]))),
-                    ))),
-                }
-            }
-            BuiltinId::Collect => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                Self::exec_collect(this, shared, handle).await
-            }
-            BuiltinId::Take => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
-                    panic!("take: expected Int")
-                };
-                Ok((this, Value::iterator(shared.take(n as usize))))
-            }
-            BuiltinId::Skip => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
-                    panic!("skip: expected Int")
-                };
-                Ok((this, Value::iterator(shared.skip(n as usize))))
-            }
-            BuiltinId::Chain => {
-                let a = args.remove(0).into_iter_handle(Effect::Pure);
-                let b = args.remove(0).into_iter_handle(Effect::Pure);
-                Ok((this, Value::iterator(a.chain(b))))
-            }
-
-            // -- Iterator operations --
-            BuiltinId::Flatten | BuiltinId::FlattenIter => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                Ok((this, Value::iterator(shared.flatten())))
-            }
-            BuiltinId::FlatMap | BuiltinId::FlatMapIter => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("flat_map: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.flat_map(f))))
-            }
-            BuiltinId::Join | BuiltinId::JoinIter => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Pure(PureValue::String(sep)) = args.remove(0) else {
-                    panic!("join: expected String separator")
-                };
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let parts: Vec<String> = items
-                    .into_iter()
-                    .map(|v| match v {
-                        Value::Pure(PureValue::String(s)) => s,
-                        _ => panic!("join: element is not String"),
-                    })
-                    .collect();
-                Ok((this, Value::string(parts.join(&sep))))
-            }
-            // -- Sequence structural ops (origin preserved) --
-            // Deque ≤ Sequence coercion: Deque values are accepted and wrapped.
-            BuiltinId::TakeSeq => {
-                let sc = into_sequence_chain(args.remove(0), "take_seq");
-                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
-                    panic!("take_seq: expected Int")
-                };
-                Ok((this, Value::sequence(sc.take(n as usize))))
-            }
-            BuiltinId::SkipSeq => {
-                let sc = into_sequence_chain(args.remove(0), "skip_seq");
-                let Value::Pure(PureValue::Int(n)) = args.remove(0) else {
-                    panic!("skip_seq: expected Int")
-                };
-                Ok((this, Value::sequence(sc.skip(n as usize))))
-            }
-            BuiltinId::ChainSeq => {
-                let sc = into_sequence_chain(args.remove(0), "chain_seq");
-                let rhs = args.remove(0).into_iter_handle(Effect::Pure);
-                Ok((this, Value::sequence(sc.chain(rhs))))
-            }
-            // Deleted: MapSeq, PmapSeq, FilterSeq, FlattenSeq, FlatMapSeq,
-            // FlatMapIterSeq, CollectSeq, RevSeq — Sequence coerces to Iterator
-            // via the type system for these ops.
-            // -- Lazy HOFs (return Iterator) --
-            BuiltinId::Map | BuiltinId::Pmap => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("map: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.map(f))))
-            }
-            BuiltinId::Filter => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Fn(f)) = args.remove(0) else {
-                    panic!("filter: expected Fn")
-                };
-                Ok((this, Value::iterator(shared.filter(f))))
-            }
-
-            // -- Consuming HOFs (collect then apply) --
-            BuiltinId::Find => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let fn_val = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
-                    panic!("find: expected Fn")
-                };
-                Self::exec_hof_find_inner(this, items, f, handle).await
-            }
-            BuiltinId::Reduce => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let fn_val = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
-                    panic!("reduce: expected Fn")
-                };
-                Self::exec_hof_reduce_inner(this, items, f, handle).await
-            }
-            BuiltinId::Fold => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let init = args.remove(0);
-                let fn_val = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
-                    panic!("fold: expected Fn")
-                };
-                Self::exec_hof_fold_inner(this, items, init, f, handle).await
-            }
-            BuiltinId::Any => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let fn_val = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
-                    panic!("any: expected Fn")
-                };
-                Self::exec_hof_any_inner(this, items, f, handle).await
-            }
-            BuiltinId::All => {
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let fn_val = args.remove(0);
-                let items;
-                (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                let Value::Lazy(LazyValue::Fn(f)) = fn_val else {
-                    panic!("all: expected Fn")
-                };
-                Self::exec_hof_all_inner(this, items, f, handle).await
-            }
-
-            // -- Deque ops --
-            BuiltinId::Append => {
-                let list = args.remove(0);
-                let item = args.remove(0);
-                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
-                    panic!("append: expected Deque, got {list:?}")
-                };
-                deque.push(item);
-                Ok((this, Value::deque(deque)))
-            }
-            BuiltinId::Extend => {
-                let list = args.remove(0);
-                let shared = args.remove(0).into_iter_handle(Effect::Pure);
-                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
-                    panic!("extend: expected Deque as first arg")
-                };
-                let (this, items) = Self::exec_collect_vec(this, shared, handle).await?;
-                deque.extend(items);
-                Ok((this, Value::deque(deque)))
-            }
-            BuiltinId::Consume => {
-                let list = args.remove(0);
-                let n_val = args.remove(0);
-                let Value::Lazy(LazyValue::Deque(mut deque)) = list else {
-                    panic!("consume: expected Deque as first arg")
-                };
-                let Value::Pure(PureValue::Int(n)) = n_val else {
-                    panic!("consume: expected Int as second arg")
-                };
-                deque.consume(n as usize);
-                Ok((this, Value::deque(deque)))
-            }
-        }
-    }
-
-    // -- collect helpers ------------------------------------------------------
-
-    async fn exec_collect<'a>(
         this: Self,
-        ih: IterHandle,
+        id: BuiltinId,
+        args: Vec<Value>,
+        arg_types: Vec<Ty>,
         handle: &'a YieldHandle<TypedValue>,
     ) -> Result<(Self, Value), RuntimeError> {
-        let (this, items) = Self::exec_collect_vec(this, ih, handle).await?;
-        Ok((this, Value::list(items)))
-    }
+        let typed_args: Vec<TypedValue> = args
+            .into_iter()
+            .zip(arg_types)
+            .map(|(v, ty)| TypedValue::new(v, ty))
+            .collect();
 
-    async fn exec_collect_vec<'a>(
-        mut this: Self,
-        ih: IterHandle,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Vec<Value>), RuntimeError> {
-        let mut items = Vec::new();
-        let mut current = ih;
-        loop {
-            let result;
-            (this, result) = Self::exec_next(this, current, handle).await?;
-            match result {
-                Some((item, rest)) => {
-                    items.push(item);
-                    current = rest;
-                }
-                None => break,
-            }
+        // Try sync registry first
+        if let Some(exec_fn) = builtins::get_builtin_impl(id) {
+            let result = exec_fn(typed_args)?;
+            return Ok((this, result.into_inner()));
         }
-        Ok((this, items))
+
+        // Try async builtins (hof.rs)
+        if let Some((this, value)) =
+            builtins::hof::dispatch(this, id, typed_args, handle).await?
+        {
+            return Ok((this, value));
+        }
+
+        unreachable!("builtin {id:?} not in sync registry and not handled as async")
     }
 
     // -- incremental iterator execution (thunk-based) -------------------------
@@ -1127,14 +758,12 @@ impl Interpreter {
                 match result {
                     None => Ok((this, None)),
                     Some((item, rest_inner)) => {
-                        let inner_items = match item {
-                            Value::Lazy(LazyValue::List(items)) => items,
-                            Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
-                            other => vec![other],
-                        };
-                        let items_iter = IterHandle::from_list(inner_items, effect);
+                        // Flatten signature: Iterator<List<T>> → Iterator<T>.
+                        // Each element is a List — convert to IterHandle for lazy chaining.
+                        let items = item.expect::<Vec<Value>>("Flatten");
+                        let item_iter = IterHandle::from_list(items, effect);
                         let rest_flat = rest_inner.flatten();
-                        let combined = items_iter.chain(rest_flat);
+                        let combined = item_iter.chain(rest_flat);
                         Self::exec_next(this, combined, handle).await
                     }
                 }
@@ -1149,166 +778,15 @@ impl Interpreter {
                         (this, mapped) = Self::call_closure(
                             this, f.clone(), vec![Arc::new(item)], handle,
                         ).await?;
-                        let inner_items = match mapped {
-                            Value::Lazy(LazyValue::List(items)) => items,
-                            Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
-                            other => vec![other],
-                        };
-                        let items_iter = IterHandle::from_list(inner_items, effect);
+                        // flat_map signature: Fn(T) → Iterator<U>, so mapped is Iterator.
+                        let mapped_iter = mapped.expect::<IterHandle>("FlatMap");
                         let rest_fm = rest_inner.flat_map(f);
-                        let combined = items_iter.chain(rest_fm);
+                        let combined = mapped_iter.chain(rest_fm);
                         Self::exec_next(this, combined, handle).await
                     }
                 }
             }
         }
-    }
-
-    /// Collect a SequenceChain: apply structural ops to origin TrackedDeque.
-    ///
-    /// Chain ops may contain IterHandle with closures, so exec_next is needed.
-    /// The result preserves the origin's checksum lineage — it can be diffed
-    /// against the storage origin via `TrackedDeque::into_diff`.
-    async fn exec_collect_sequence<'a>(
-        mut this: Self,
-        sc: SequenceChain,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, TrackedDeque<Value>), RuntimeError> {
-        let origin_checksum = sc.origin_checksum();
-        let mut deque = sc.origin().clone();
-
-        for op in sc.ops() {
-            match op {
-                crate::iter::SequenceOp::Take(n) => {
-                    // Keep only first n elements: remove excess from back
-                    let n = *n;
-                    let len = deque.len();
-                    if n < len {
-                        for _ in 0..(len - n) {
-                            deque.pop();
-                        }
-                    }
-                }
-                crate::iter::SequenceOp::Skip(n) => {
-                    deque.consume(*n);
-                }
-                crate::iter::SequenceOp::Chain(iter) => {
-                    let items;
-                    (this, items) = Self::exec_collect_vec(this, iter.clone(), handle).await?;
-                    deque.extend(items);
-                }
-            }
-        }
-
-        // Runtime assertion: checksum must still match origin.
-        // If it doesn't, something corrupted the TrackedDeque.
-        assert_eq!(
-            deque.checksum(),
-            origin_checksum,
-            "SequenceChain collect: checksum diverged from origin ({:#x} vs {:#x}). \
-             This indicates a bug in structural op application.",
-            deque.checksum(),
-            origin_checksum,
-        );
-
-        Ok((this, deque))
-    }
-
-    // -- consuming HOF inner implementations ----------------------------------
-
-    async fn exec_hof_find_inner<'a>(
-        mut this: Self,
-        items: Vec<Value>,
-        fn_val: FnValue,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        for item in items {
-            let arc_item = Arc::new(item);
-            let matched;
-            (this, matched) =
-                Self::call_closure(this, fn_val.clone(), vec![Arc::clone(&arc_item)], handle)
-                    .await?;
-            if matches!(matched, Value::Pure(PureValue::Bool(true))) {
-                return Ok((this, Arc::unwrap_or_clone(arc_item)));
-            }
-        }
-        Err(RuntimeError::empty_collection("find"))
-    }
-
-    async fn exec_hof_reduce_inner<'a>(
-        mut this: Self,
-        items: Vec<Value>,
-        fn_val: FnValue,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        let mut it = items.into_iter();
-        let Some(mut acc) = it.next() else {
-            return Err(RuntimeError::empty_collection("reduce"));
-        };
-        for item in it {
-            (this, acc) = Self::call_closure(
-                this,
-                fn_val.clone(),
-                vec![Arc::new(acc), Arc::new(item)],
-                handle,
-            )
-            .await?;
-        }
-        Ok((this, acc))
-    }
-
-    async fn exec_hof_fold_inner<'a>(
-        mut this: Self,
-        items: Vec<Value>,
-        init: Value,
-        fn_val: FnValue,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        let mut acc = init;
-        for item in items {
-            (this, acc) = Self::call_closure(
-                this,
-                fn_val.clone(),
-                vec![Arc::new(acc), Arc::new(item)],
-                handle,
-            )
-            .await?;
-        }
-        Ok((this, acc))
-    }
-
-    async fn exec_hof_any_inner<'a>(
-        mut this: Self,
-        items: Vec<Value>,
-        fn_val: FnValue,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        for item in items {
-            let result;
-            (this, result) =
-                Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await?;
-            if matches!(result, Value::Pure(PureValue::Bool(true))) {
-                return Ok((this, Value::bool_(true)));
-            }
-        }
-        Ok((this, Value::bool_(false)))
-    }
-
-    async fn exec_hof_all_inner<'a>(
-        mut this: Self,
-        items: Vec<Value>,
-        fn_val: FnValue,
-        handle: &'a YieldHandle<TypedValue>,
-    ) -> Result<(Self, Value), RuntimeError> {
-        for item in items {
-            let result;
-            (this, result) =
-                Self::call_closure(this, fn_val.clone(), vec![Arc::new(item)], handle).await?;
-            if matches!(result, Value::Pure(PureValue::Bool(false))) {
-                return Ok((this, Value::bool_(false)));
-            }
-        }
-        Ok((this, Value::bool_(true)))
     }
 
     // -- closure invocation ---------------------------------------------------
@@ -1340,35 +818,74 @@ impl Interpreter {
 }
 
 // ---------------------------------------------------------------------------
-// Value extractors — flat panic on type mismatch
+// ExecCtx — delegates to Interpreter's exec_next / call_closure
 // ---------------------------------------------------------------------------
 
-fn expect_list<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
-    match v {
-        Value::Lazy(LazyValue::List(items)) => items,
-        Value::Lazy(LazyValue::Deque(d)) => d.as_slice(),
-        _ => panic!("{ctx}: expected List, got {v:?}"),
+impl builtins::ExecCtx for Interpreter {
+    fn exec_next<'a>(
+        self,
+        ih: IterHandle,
+        handle: &'a YieldHandle<TypedValue>,
+    ) -> BoxFuture<'a, Result<(Self, Option<(Value, IterHandle)>), RuntimeError>> {
+        Self::exec_next(self, ih, handle)
+    }
+
+    fn call_closure<'a>(
+        self,
+        f: FnValue,
+        args: Vec<Arc<Value>>,
+        handle: &'a YieldHandle<TypedValue>,
+    ) -> BoxFuture<'a, Result<(Self, Value), RuntimeError>> {
+        Box::pin(Self::call_closure(self, f, args, handle))
+    }
+
+    fn interner(&self) -> &Interner {
+        &self.interner
     }
 }
 
-fn expect_object<'a>(v: &'a Value, ctx: &str) -> &'a FxHashMap<Astr, Value> {
-    match v {
-        Value::Lazy(LazyValue::Object(fields)) => fields,
-        _ => panic!("{ctx}: expected Object, got {v:?}"),
-    }
-}
 
-fn expect_tuple<'a>(v: &'a Value, ctx: &str) -> &'a [Value] {
-    match v {
-        Value::Lazy(LazyValue::Tuple(elems)) => elems,
-        _ => panic!("{ctx}: expected Tuple, got {v:?}"),
-    }
-}
+// ---------------------------------------------------------------------------
+// Cast execution
+// ---------------------------------------------------------------------------
 
-fn expect_int(v: &Value, ctx: &str) -> i64 {
-    match v {
-        Value::Pure(PureValue::Int(n)) => *n,
-        _ => panic!("{ctx}: expected Int, got {v:?}"),
+fn exec_cast(kind: CastKind, value: Value, src_ty: &Ty) -> Value {
+    match kind {
+        CastKind::DequeToList => {
+            let d = value.expect::<TrackedDeque<Value>>("Cast DequeToList");
+            Value::list(d.into_vec())
+        }
+        CastKind::ListToIterator => {
+            let items = value.expect::<Vec<Value>>("Cast ListToIterator");
+            Value::iterator(IterHandle::from_list(items, Effect::Pure))
+        }
+        CastKind::DequeToIterator => {
+            let d = value.expect::<TrackedDeque<Value>>("Cast DequeToIterator");
+            Value::iterator(IterHandle::from_list(d.into_vec(), Effect::Pure))
+        }
+        CastKind::DequeToSequence => {
+            let d = value.expect::<TrackedDeque<Value>>("Cast DequeToSequence");
+            Value::sequence(SequenceChain::from_stored(d))
+        }
+        CastKind::SequenceToIterator => {
+            let effect = match src_ty {
+                Ty::Sequence(_, _, e) => *e,
+                _ => Effect::Pure,
+            };
+            let sc = value.expect::<SequenceChain>("Cast SequenceToIterator");
+            Value::iterator(sc.into_iter_handle(effect))
+        }
+        CastKind::RangeToIterator => {
+            let Value::Pure(PureValue::Range { start, end, inclusive }) = value else {
+                panic!("Cast RangeToIterator: expected Range, got {value:?}")
+            };
+            let items: Vec<Value> = if inclusive {
+                (start..=end).map(Value::int).collect()
+            } else {
+                (start..end).map(Value::int).collect()
+            };
+            Value::iterator(IterHandle::from_list(items, Effect::Pure))
+        }
     }
 }
 
@@ -1389,95 +906,69 @@ fn literal_to_value(lit: &Literal) -> Value {
     }
 }
 
-fn values_equal(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => a == b,
-        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => a == b,
-        (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => a == b,
-        (Value::Pure(PureValue::Bool(a)), Value::Pure(PureValue::Bool(b))) => a == b,
-        (Value::Pure(PureValue::Byte(a)), Value::Pure(PureValue::Byte(b))) => a == b,
-        (Value::Pure(PureValue::Unit), Value::Pure(PureValue::Unit)) => true,
-        (
-            Value::Lazy(LazyValue::Variant {
-                tag: ta,
-                payload: pa,
-            }),
-            Value::Lazy(LazyValue::Variant {
-                tag: tb,
-                payload: pb,
-            }),
-        ) => {
-            ta == tb
-                && match (pa, pb) {
-                    (Some(a), Some(b)) => values_equal(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        }
-        _ => false,
-    }
-}
-
-fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
+fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
+    let mismatch = || RuntimeError::bin_op_mismatch(op, left.kind(), right.kind());
     match op {
         BinOp::And => {
-            Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) && matches!(right, Value::Pure(PureValue::Bool(true))))
+            Ok(Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) && matches!(right, Value::Pure(PureValue::Bool(true)))))
         }
         BinOp::Or => {
-            Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) || matches!(right, Value::Pure(PureValue::Bool(true))))
+            Ok(Value::bool_(matches!(left, Value::Pure(PureValue::Bool(true))) || matches!(right, Value::Pure(PureValue::Bool(true)))))
         }
         BinOp::Add => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_add(*b)),
-            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a + b),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a.wrapping_add(*b))),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Ok(Value::float(a + b)),
             (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => {
                 let mut s = a.clone();
                 s.push_str(b);
-                Value::string(s)
+                Ok(Value::string(s))
             }
-            (l, r) => panic!("Add: incompatible {l:?} + {r:?}"),
+            _ => Err(mismatch()),
         },
         BinOp::Sub => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_sub(*b)),
-            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a - b),
-            (l, r) => panic!("Sub: incompatible {l:?} - {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a.wrapping_sub(*b))),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Ok(Value::float(a - b)),
+            _ => Err(mismatch()),
         },
         BinOp::Mul => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a.wrapping_mul(*b)),
-            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a * b),
-            (l, r) => panic!("Mul: incompatible {l:?} * {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a.wrapping_mul(*b))),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Ok(Value::float(a * b)),
+            _ => Err(mismatch()),
         },
         BinOp::Div => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a / b),
-            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a / b),
-            (l, r) => panic!("Div: incompatible {l:?} / {r:?}"),
+            (Value::Pure(PureValue::Int(_)), Value::Pure(PureValue::Int(0))) => Err(RuntimeError::division_by_zero()),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a.wrapping_div(*b))),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Ok(Value::float(a / b)),
+            _ => Err(mismatch()),
         },
         BinOp::Mod => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a % b),
-            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Value::float(a % b),
-            (l, r) => panic!("Mod: incompatible {l:?} % {r:?}"),
+            (Value::Pure(PureValue::Int(_)), Value::Pure(PureValue::Int(0))) => Err(RuntimeError::division_by_zero()),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a.wrapping_rem(*b))),
+            (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => Ok(Value::float(a % b)),
+            _ => Err(mismatch()),
         },
         BinOp::Xor => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a ^ b),
-            (l, r) => panic!("Xor: incompatible {l:?} ^ {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a ^ b)),
+            _ => Err(mismatch()),
         },
         BinOp::BitAnd => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a & b),
-            (l, r) => panic!("BitAnd: incompatible {l:?} & {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a & b)),
+            _ => Err(mismatch()),
         },
         BinOp::BitOr => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a | b),
-            (l, r) => panic!("BitOr: incompatible {l:?} | {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a | b)),
+            _ => Err(mismatch()),
         },
         BinOp::Shl => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a << b),
-            (l, r) => panic!("Shl: incompatible {l:?} << {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a << b)),
+            _ => Err(mismatch()),
         },
         BinOp::Shr => match (left, right) {
-            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Value::int(a >> b),
-            (l, r) => panic!("Shr: incompatible {l:?} >> {r:?}"),
+            (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => Ok(Value::int(a >> b)),
+            _ => Err(mismatch()),
         },
-        BinOp::Eq => Value::bool_(values_equal(left, right)),
-        BinOp::Neq => Value::bool_(!values_equal(left, right)),
+        BinOp::Eq => Ok(Value::bool_(left.structural_eq(right))),
+        BinOp::Neq => Ok(Value::bool_(!left.structural_eq(right))),
         BinOp::Lt => cmp_values(left, right, Ordering::is_lt),
         BinOp::Gt => cmp_values(left, right, Ordering::is_gt),
         BinOp::Lte => cmp_values(left, right, Ordering::is_le),
@@ -1485,26 +976,28 @@ fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Value {
     }
 }
 
-fn cmp_values(left: &Value, right: &Value, f: fn(Ordering) -> bool) -> Value {
+fn cmp_values(left: &Value, right: &Value, f: fn(Ordering) -> bool) -> Result<Value, RuntimeError> {
     let ord = match (left, right) {
         (Value::Pure(PureValue::Int(a)), Value::Pure(PureValue::Int(b))) => a.cmp(b),
-        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => a.partial_cmp(b).unwrap(),
+        (Value::Pure(PureValue::Float(a)), Value::Pure(PureValue::Float(b))) => {
+            a.partial_cmp(b).ok_or_else(RuntimeError::nan_comparison)?
+        }
         (Value::Pure(PureValue::String(a)), Value::Pure(PureValue::String(b))) => a.cmp(b),
-        (l, r) => panic!("comparison: incompatible {l:?} vs {r:?}"),
+        _ => return Err(RuntimeError::bin_op_mismatch(BinOp::Lt, left.kind(), right.kind())),
     };
-    Value::bool_(f(ord))
+    Ok(Value::bool_(f(ord)))
 }
 
-fn eval_unaryop(op: UnaryOp, operand: &Value) -> Value {
+fn eval_unaryop(op: UnaryOp, operand: &Value) -> Result<Value, RuntimeError> {
     match op {
         UnaryOp::Neg => match operand {
-            Value::Pure(PureValue::Int(n)) => Value::int(-n),
-            Value::Pure(PureValue::Float(f)) => Value::float(-f),
-            v => panic!("Neg: expected numeric, got {v:?}"),
+            Value::Pure(PureValue::Int(n)) => Ok(Value::int(-n)),
+            Value::Pure(PureValue::Float(f)) => Ok(Value::float(-f)),
+            _ => Err(RuntimeError::unary_op_mismatch(op, operand.kind())),
         },
         UnaryOp::Not => match operand {
-            Value::Pure(PureValue::Bool(b)) => Value::bool_(!b),
-            v => panic!("Not: expected Bool, got {v:?}"),
+            Value::Pure(PureValue::Bool(b)) => Ok(Value::bool_(!b)),
+            _ => Err(RuntimeError::unary_op_mismatch(op, operand.kind())),
         },
     }
 }

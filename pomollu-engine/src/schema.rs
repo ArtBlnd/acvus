@@ -368,7 +368,7 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
             },
             effect: effect_to_desc(effect),
         },
-        Ty::Var(_) | Ty::Infer | Ty::Error => TypeDesc::Unsupported { raw: "?".into() },
+        Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => TypeDesc::Unsupported { raw: "?".into() },
         Ty::Opaque(_) => TypeDesc::Unsupported { raw: "Opaque".into() },
     }
 }
@@ -380,7 +380,7 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
             "float" => Ty::Float,
             "string" => Ty::String,
             "bool" => Ty::Bool,
-            _ => Ty::Infer,
+            _ => panic!("DO NOT FALLBACK"),
         },
         TypeDesc::Option { inner } => Ty::Option(Box::new(desc_to_ty(interner, inner))),
         TypeDesc::List { elem } => Ty::List(Box::new(desc_to_ty(interner, elem))),
@@ -406,7 +406,7 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
                     let payload = if v.has_payload {
                         let ty = v.payload_type.as_ref()
                             .map(|pt| desc_to_ty(interner, pt))
-                            .unwrap_or(Ty::Infer);
+                            .unwrap_or_else(Ty::error);
                         Some(Box::new(ty))
                     } else {
                         None
@@ -442,12 +442,12 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
         TypeDesc::Unit => Ty::Unit,
         TypeDesc::Byte => Ty::Byte,
         TypeDesc::Range => Ty::Range,
-        TypeDesc::Unsupported { .. } => Ty::Infer,
+        TypeDesc::Unsupported { .. } => Ty::error(),
     }
 }
 
 /// Parse a simple type string (e.g. "string", "int", "bool") into a Ty.
-/// Falls back to Ty::Infer for unknown types.
+/// Falls back to Ty::Error for unknown types.
 pub fn parse_type_string(_interner: &Interner, s: &str) -> Ty {
     match s {
         "string" => Ty::String,
@@ -455,7 +455,7 @@ pub fn parse_type_string(_interner: &Interner, s: &str) -> Ty {
         "float" => Ty::Float,
         "bool" => Ty::Bool,
         "byte" => Ty::Byte,
-        _ => Ty::Infer,
+        _ => panic!("DO NOT FALLBACK"),
     }
 }
 

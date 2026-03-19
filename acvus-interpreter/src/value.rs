@@ -91,13 +91,20 @@ impl PureValue {
     }
 }
 
+/// Tuple value — heterogeneous, positional elements.
+///
+/// Distinct from `List`/`Deque` (homogeneous, variable-length).
+/// Each position may have a different type at the type level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tuple(pub Vec<Value>);
+
 /// Container and callable values — may contain any Value tier inside.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LazyValue {
     List(Vec<Value>),
     Deque(TrackedDeque<Value>),
     Object(FxHashMap<Astr, Value>),
-    Tuple(Vec<Value>),
+    Tuple(Tuple),
     Variant { tag: Astr, payload: Option<Box<Value>> },
     Fn(FnValue),
     ExternFn(Astr),
@@ -136,6 +143,32 @@ pub enum Value {
     Pure(PureValue),
     Lazy(LazyValue),
     Unpure(UnpureValue),
+}
+
+impl Value {
+    /// Lightweight discriminant for error reporting.
+    pub fn kind(&self) -> crate::error::ValueKind {
+        use crate::error::ValueKind;
+        match self {
+            Value::Pure(PureValue::Int(_)) => ValueKind::Int,
+            Value::Pure(PureValue::Float(_)) => ValueKind::Float,
+            Value::Pure(PureValue::String(_)) => ValueKind::String,
+            Value::Pure(PureValue::Bool(_)) => ValueKind::Bool,
+            Value::Pure(PureValue::Unit) => ValueKind::Unit,
+            Value::Pure(PureValue::Range { .. }) => ValueKind::Range,
+            Value::Pure(PureValue::Byte(_)) => ValueKind::Byte,
+            Value::Lazy(LazyValue::List(_)) => ValueKind::List,
+            Value::Lazy(LazyValue::Deque(_)) => ValueKind::Deque,
+            Value::Lazy(LazyValue::Object(_)) => ValueKind::Object,
+            Value::Lazy(LazyValue::Tuple(_)) => ValueKind::Tuple,
+            Value::Lazy(LazyValue::Variant { .. }) => ValueKind::Variant,
+            Value::Lazy(LazyValue::Fn(_)) => ValueKind::Fn,
+            Value::Lazy(LazyValue::ExternFn(_)) => ValueKind::ExternFn,
+            Value::Lazy(LazyValue::Iterator(_)) => ValueKind::Iterator,
+            Value::Lazy(LazyValue::Sequence(_)) => ValueKind::Sequence,
+            Value::Unpure(UnpureValue::Opaque(_)) => ValueKind::Opaque,
+        }
+    }
 }
 
 /// An opaque value: carries a type name and an arbitrary payload.
@@ -191,7 +224,7 @@ impl Value {
     // --- Pure constructors ---
     pub fn int(n: i64) -> Self { Value::Pure(PureValue::Int(n)) }
     pub fn float(f: f64) -> Self { Value::Pure(PureValue::Float(f)) }
-    pub fn string(s: String) -> Self { Value::Pure(PureValue::String(s)) }
+    pub fn string(s: impl Into<String>) -> Self { Value::Pure(PureValue::String(s.into())) }
     pub fn bool_(b: bool) -> Self { Value::Pure(PureValue::Bool(b)) }
     pub fn unit() -> Self { Value::Pure(PureValue::Unit) }
     pub fn byte(b: u8) -> Self { Value::Pure(PureValue::Byte(b)) }
@@ -203,7 +236,7 @@ impl Value {
     pub fn list(items: Vec<Value>) -> Self { Value::Lazy(LazyValue::List(items)) }
     pub fn deque(d: TrackedDeque<Value>) -> Self { Value::Lazy(LazyValue::Deque(d)) }
     pub fn object(fields: FxHashMap<Astr, Value>) -> Self { Value::Lazy(LazyValue::Object(fields)) }
-    pub fn tuple(elems: Vec<Value>) -> Self { Value::Lazy(LazyValue::Tuple(elems)) }
+    pub fn tuple(elems: Vec<Value>) -> Self { Value::Lazy(LazyValue::Tuple(Tuple(elems))) }
     pub fn variant(tag: Astr, payload: Option<Box<Value>>) -> Self {
         Value::Lazy(LazyValue::Variant { tag, payload })
     }
@@ -215,21 +248,51 @@ impl Value {
     // --- Unpure constructors ---
     pub fn opaque(ov: OpaqueValue) -> Self { Value::Unpure(UnpureValue::Opaque(ov)) }
 
-    /// Coerce into an `IterHandle`.
+    // --- Extraction ---
+
+    /// Consume and extract an inner type. Panics if the variant doesn't match.
     ///
-    /// Mirrors the type-level `Deque → Iterator` coercion:
-    /// - `LazyValue::Iterator` is returned as-is.
-    /// - `LazyValue::List` / `LazyValue::Deque` are converted via `IterHandle::from_list`.
-    /// - `LazyValue::Sequence` is converted via `SequenceChain::into_iter_handle`.
+    /// Use when the type checker guarantees the variant — a panic indicates
+    /// a programmer bug, not a user error.
+    pub fn expect<T: FromValue>(self, ctx: &'static str) -> T {
+        T::from_value(self)
+            .unwrap_or_else(|| panic!("{ctx}: expected {}", T::KIND_NAME))
+    }
+
+    /// Consume and try to extract an inner type. Returns `None` if the variant
+    /// doesn't match.
+    pub fn try_expect<T: FromValue>(self) -> Option<T> {
+        T::from_value(self)
+    }
+
+    /// Borrow and extract a reference to an inner type. Panics if the variant
+    /// doesn't match.
+    pub fn expect_ref<T: FromValueRef + ?Sized>(&self, ctx: &'static str) -> &T {
+        T::from_value_ref(self)
+            .unwrap_or_else(|| panic!("{ctx}: expected {}", T::KIND_NAME))
+    }
+
+    /// Borrow and try to extract a reference to an inner type. Returns `None`
+    /// if the variant doesn't match.
+    pub fn try_expect_ref<T: FromValueRef + ?Sized>(&self) -> Option<&T> {
+        T::from_value_ref(self)
+    }
+
+    /// Structural equality for language-level `==` and pattern matching.
     ///
-    /// Panics on any other variant.
-    pub fn into_iter_handle(self, effect: Effect) -> IterHandle {
-        match self {
-            Value::Lazy(LazyValue::Iterator(ih)) => ih,
-            Value::Lazy(LazyValue::Sequence(sc)) => sc.into_iter_handle(effect),
-            Value::Lazy(LazyValue::List(items)) => IterHandle::from_list(items, effect),
-            Value::Lazy(LazyValue::Deque(deque)) => IterHandle::from_list(deque.into_vec(), effect),
-            other => panic!("into_iter_handle: expected Iterator, List, Sequence, or Deque, got {other:?}"),
+    /// Compares values by structure. Each variant only compares with itself —
+    /// Cast ensures type consistency before comparison.
+    /// Functions, iterators, sequences, and opaque values are never equal.
+    pub fn structural_eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            // Pure scalars — delegate to derived PartialEq (handles Range too)
+            (Value::Pure(a), Value::Pure(b)) => a == b,
+
+            // List/Deque — treat as equivalent sequences
+            (Value::Lazy(a), Value::Lazy(b)) => lazy_structural_eq(a, b),
+
+            // Pure vs Lazy, or anything involving Unpure → not equal
+            _ => false,
         }
     }
 
@@ -265,8 +328,8 @@ impl Value {
                         .map(|(k, v)| (interner.resolve(*k).to_string(), v.to_concrete(interner)))
                         .collect(),
                 },
-                LazyValue::Tuple(items) => ConcreteValue::Tuple {
-                    items: items.iter().map(|i| i.to_concrete(interner)).collect(),
+                LazyValue::Tuple(tuple) => ConcreteValue::Tuple {
+                    items: tuple.0.iter().map(|i| i.to_concrete(interner)).collect(),
                 },
                 LazyValue::Variant { tag, payload } => ConcreteValue::Variant {
                     tag: interner.resolve(*tag).to_string(),
@@ -341,8 +404,17 @@ pub struct TypedValue {
 }
 
 impl TypedValue {
-    /// Create a new TypedValue. Debug-asserts that value and ty are consistent.
-    pub fn new(value: Arc<Value>, ty: Ty) -> Self {
+    /// Create a TypedValue from an owned Value. Wraps in Arc internally.
+    pub fn new(value: Value, ty: Ty) -> Self {
+        debug_assert!(
+            value_matches_ty(&value, &ty),
+            "TypedValue invariant violated: value={value:?}, ty={ty:?}"
+        );
+        Self { value: Arc::new(value), ty }
+    }
+
+    /// Create a TypedValue from a shared Arc<Value>.
+    pub fn new_shared(value: Arc<Value>, ty: Ty) -> Self {
         debug_assert!(
             value_matches_ty(&value, &ty),
             "TypedValue invariant violated: value={value:?}, ty={ty:?}"
@@ -356,11 +428,14 @@ impl TypedValue {
     /// Borrow the type.
     pub fn ty(&self) -> &Ty { &self.ty }
 
-    /// Consume and return the inner Arc<Value>, discarding the type.
-    pub fn into_value(self) -> Arc<Value> { self.value }
+    /// Consume and return the inner `Value`, discarding the type.
+    ///
+    /// Unwraps the internal `Arc<Value>` — if this is the only reference,
+    /// avoids a clone; otherwise clones the value.
+    pub fn into_inner(self) -> Value { Arc::unwrap_or_clone(self.value) }
 
-    /// Consume and return both parts.
-    pub fn into_parts(self) -> (Arc<Value>, Ty) { (self.value, self.ty) }
+    /// Consume and return both parts as owned values.
+    pub fn into_inner_with_ty(self) -> (Value, Ty) { (Arc::unwrap_or_clone(self.value), self.ty) }
 
     /// Whether this value can be persisted to storage.
     /// Delegates to [`Ty::is_storable`].
@@ -385,7 +460,7 @@ impl TypedValue {
     /// Restore a TypedValue from a [`ConcreteValue`].
     /// The type must be provided externally since ConcreteValue is untyped.
     pub fn from_concrete(cv: &ConcreteValue, interner: &acvus_utils::Interner, ty: Ty) -> Self {
-        Self::new(Arc::new(Value::from_concrete(cv, interner)), ty)
+        Self::new(Value::from_concrete(cv, interner), ty)
     }
 }
 
@@ -410,6 +485,57 @@ impl Clone for TypedValue {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Structural equality helpers
+// ---------------------------------------------------------------------------
+
+/// Compare two slices of Values structurally.
+fn slice_structural_eq(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.structural_eq(y))
+}
+
+/// Structural equality for LazyValue.
+///
+/// Each variant only compares with itself — Cast ensures type consistency.
+/// Fn, ExternFn, Iterator, Sequence are never equal.
+fn lazy_structural_eq(a: &LazyValue, b: &LazyValue) -> bool {
+    match (a, b) {
+        // List ↔ List
+        (LazyValue::List(a), LazyValue::List(b)) => slice_structural_eq(a, b),
+        // Deque ↔ Deque
+        (LazyValue::Deque(a), LazyValue::Deque(b)) => {
+            slice_structural_eq(a.as_slice(), b.as_slice())
+        }
+        // Tuple
+        (LazyValue::Tuple(a), LazyValue::Tuple(b)) => slice_structural_eq(&a.0, &b.0),
+        // Object — unordered field comparison
+        (LazyValue::Object(a), LazyValue::Object(b)) => {
+            a.len() == b.len()
+                && a.iter().all(|(k, v)| b.get(k).is_some_and(|bv| v.structural_eq(bv)))
+        }
+        // Variant — tag + payload
+        (
+            LazyValue::Variant {
+                tag: ta,
+                payload: pa,
+            },
+            LazyValue::Variant {
+                tag: tb,
+                payload: pb,
+            },
+        ) => {
+            ta == tb
+                && match (pa, pb) {
+                    (Some(a), Some(b)) => a.structural_eq(b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        // Fn, ExternFn, Iterator, Sequence — not comparable
+        _ => false,
+    }
+}
+
 /// Shallow check that a Value variant matches its Ty.
 ///
 /// This is a **debug-only sanity check**, not a full recursive validation.
@@ -418,7 +544,7 @@ impl Clone for TypedValue {
 /// not recursively checked — that would be too expensive for a debug assert.
 fn value_matches_ty(value: &Value, ty: &Ty) -> bool {
     // Error/Infer/Var types accept any value (unresolved or poison types).
-    if matches!(ty, Ty::Error | Ty::Infer | Ty::Var(_)) {
+    if matches!(ty, Ty::Error(_) | Ty::Infer(_) | Ty::Var(_)) {
         return true;
     }
     match (value, ty) {
@@ -440,8 +566,201 @@ fn value_matches_ty(value: &Value, ty: &Ty) -> bool {
         (Value::Lazy(LazyValue::Iterator(_)), Ty::Iterator(..)) => true,
         (Value::Lazy(LazyValue::Sequence(_)), Ty::Sequence(..)) => true,
         (Value::Unpure(UnpureValue::Opaque(_)), Ty::Opaque(_)) => true,
+        // Deque values can also appear as Sequence type (storage stores collected Sequence as Deque)
+        (Value::Lazy(LazyValue::Deque(_)), Ty::Sequence(..)) => true,
         // Deque values can also appear as List type (after coercion at type level)
         (Value::Lazy(LazyValue::Deque(_)), Ty::List(_)) => true,
         _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FromValue — owned extraction (consumes the Value)
+// ---------------------------------------------------------------------------
+
+/// Extract an owned inner type from a `Value`.
+///
+/// Used with `Value::expect` for cases where the type checker guarantees the
+/// variant. A `None` return indicates a programmer bug.
+pub trait FromValue: Sized {
+    const KIND_NAME: &'static str;
+    fn from_value(value: Value) -> Option<Self>;
+}
+
+// --- Scalars ---
+
+impl FromValue for i64 {
+    const KIND_NAME: &'static str = "Int";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Pure(PureValue::Int(n)) => Some(n), _ => None }
+    }
+}
+
+impl FromValue for f64 {
+    const KIND_NAME: &'static str = "Float";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Pure(PureValue::Float(f)) => Some(f), _ => None }
+    }
+}
+
+impl FromValue for String {
+    const KIND_NAME: &'static str = "String";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Pure(PureValue::String(s)) => Some(s), _ => None }
+    }
+}
+
+impl FromValue for bool {
+    const KIND_NAME: &'static str = "Bool";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Pure(PureValue::Bool(b)) => Some(b), _ => None }
+    }
+}
+
+impl FromValue for u8 {
+    const KIND_NAME: &'static str = "Byte";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Pure(PureValue::Byte(b)) => Some(b), _ => None }
+    }
+}
+
+// --- Containers ---
+
+impl FromValue for TrackedDeque<Value> {
+    const KIND_NAME: &'static str = "Deque";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Deque(d)) => Some(d), _ => None }
+    }
+}
+
+impl FromValue for Vec<Value> {
+    const KIND_NAME: &'static str = "List";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::List(v)) => Some(v), _ => None }
+    }
+}
+
+impl FromValue for Tuple {
+    const KIND_NAME: &'static str = "Tuple";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Tuple(t)) => Some(t), _ => None }
+    }
+}
+
+impl FromValue for FxHashMap<Astr, Value> {
+    const KIND_NAME: &'static str = "Object";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Object(o)) => Some(o), _ => None }
+    }
+}
+
+impl FromValue for FnValue {
+    const KIND_NAME: &'static str = "Fn";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Fn(f)) => Some(f), _ => None }
+    }
+}
+
+impl FromValue for IterHandle {
+    const KIND_NAME: &'static str = "Iterator";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Iterator(ih)) => Some(ih), _ => None }
+    }
+}
+
+impl FromValue for SequenceChain {
+    const KIND_NAME: &'static str = "Sequence";
+    fn from_value(value: Value) -> Option<Self> {
+        match value { Value::Lazy(LazyValue::Sequence(sc)) => Some(sc), _ => None }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FromValueRef — borrowed extraction (borrows the Value)
+// ---------------------------------------------------------------------------
+
+/// Extract a borrowed reference to an inner type from a `&Value`.
+///
+/// Used with `Value::expect_ref` for read-only access where the type checker
+/// guarantees the variant.
+pub trait FromValueRef {
+    const KIND_NAME: &'static str;
+    fn from_value_ref(value: &Value) -> Option<&Self>;
+}
+
+impl FromValueRef for i64 {
+    const KIND_NAME: &'static str = "Int";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Pure(PureValue::Int(n)) => Some(n), _ => None }
+    }
+}
+
+impl FromValueRef for f64 {
+    const KIND_NAME: &'static str = "Float";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Pure(PureValue::Float(f)) => Some(f), _ => None }
+    }
+}
+
+impl FromValueRef for str {
+    const KIND_NAME: &'static str = "String";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Pure(PureValue::String(s)) => Some(s.as_str()), _ => None }
+    }
+}
+
+impl FromValueRef for bool {
+    const KIND_NAME: &'static str = "Bool";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Pure(PureValue::Bool(b)) => Some(b), _ => None }
+    }
+}
+
+impl FromValueRef for TrackedDeque<Value> {
+    const KIND_NAME: &'static str = "Deque";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Deque(d)) => Some(d), _ => None }
+    }
+}
+
+impl FromValueRef for [Value] {
+    const KIND_NAME: &'static str = "List";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::List(v)) => Some(v.as_slice()), _ => None }
+    }
+}
+
+impl FromValueRef for Tuple {
+    const KIND_NAME: &'static str = "Tuple";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Tuple(t)) => Some(t), _ => None }
+    }
+}
+
+impl FromValueRef for FxHashMap<Astr, Value> {
+    const KIND_NAME: &'static str = "Object";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Object(o)) => Some(o), _ => None }
+    }
+}
+
+impl FromValueRef for FnValue {
+    const KIND_NAME: &'static str = "Fn";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Fn(f)) => Some(f), _ => None }
+    }
+}
+
+impl FromValueRef for IterHandle {
+    const KIND_NAME: &'static str = "Iterator";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Iterator(ih)) => Some(ih), _ => None }
+    }
+}
+
+impl FromValueRef for SequenceChain {
+    const KIND_NAME: &'static str = "Sequence";
+    fn from_value_ref(value: &Value) -> Option<&Self> {
+        match value { Value::Lazy(LazyValue::Sequence(sc)) => Some(sc), _ => None }
     }
 }

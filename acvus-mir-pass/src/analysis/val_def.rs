@@ -40,7 +40,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::FieldGet { dst, .. }
         | InstKind::BuiltinCall { dst, .. }
         | InstKind::ExternCall { dst, .. }
-        | InstKind::MakeList { dst, .. }
+        | InstKind::MakeDeque { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeRange { dst, .. }
         | InstKind::MakeTuple { dst, .. }
@@ -55,14 +55,12 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
         | InstKind::ClosureCall { dst, .. }
-        | InstKind::IterInit { dst, .. }
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
+        | InstKind::Cast { dst, .. }
+        | InstKind::IterStep { dst, .. }
         | InstKind::Poison { dst } => Some(*dst),
-
-        // IterNext defines dst_value as primary
-        InstKind::IterNext { dst_value, .. } => Some(*dst_value),
 
         // These don't define a new Val
         InstKind::Yield(_)
@@ -80,7 +78,6 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 /// Additional destination Vals beyond the primary one.
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
-        InstKind::IterNext { dst_done, .. } => vec![*dst_done],
         InstKind::BlockLabel { params, .. } => params.clone(),
         _ => vec![],
     }
@@ -157,18 +154,6 @@ mod tests {
         assert_eq!(result.0[&ValueId(0)], 0);
         assert_eq!(result.0[&ValueId(1)], 1);
         assert_eq!(result.0[&ValueId(2)], 2);
-    }
-
-    #[test]
-    fn iter_next_defines_two_vals() {
-        let module = make_module(vec![inst(InstKind::IterNext {
-            dst_value: ValueId(0),
-            dst_done: ValueId(1),
-            iter: ValueId(2),
-        })]);
-        let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&ValueId(0)], 0);
-        assert_eq!(result.0[&ValueId(1)], 0);
     }
 
     #[test]

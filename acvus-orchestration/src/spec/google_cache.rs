@@ -1,5 +1,3 @@
-
-
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
@@ -8,13 +6,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::compile::CompiledMessage;
 use crate::dsl::MessageSpec;
 use crate::error::OrchError;
-use crate::provider::ApiKind;
 
-/// LLM cache node spec — cached model call.
+/// Google AI context caching node spec.
 #[derive(Debug, Clone)]
-pub struct LlmCacheSpec {
-    pub api: ApiKind,
-    pub provider: String,
+pub struct GoogleAICacheSpec {
+    pub endpoint: String,
+    pub api_key: String,
     pub model: String,
     pub messages: Vec<MessageSpec>,
     /// TTL string, e.g. "300s", "1h".
@@ -23,30 +20,30 @@ pub struct LlmCacheSpec {
     pub cache_config: FxHashMap<String, serde_json::Value>,
 }
 
-impl LlmCacheSpec {
+impl GoogleAICacheSpec {
     pub fn output_ty(&self) -> Ty {
         Ty::String
     }
 }
 
-/// Compiled LLM cache node.
+/// Compiled Google AI context caching node.
 #[derive(Debug, Clone)]
-pub struct CompiledLlmCache {
-    pub api: ApiKind,
-    pub provider: String,
+pub struct CompiledGoogleAICache {
+    pub endpoint: String,
+    pub api_key: String,
     pub model: String,
     pub messages: Vec<CompiledMessage>,
     pub ttl: String,
     pub cache_config: FxHashMap<String, serde_json::Value>,
 }
 
-/// Compile an LLM cache node spec.
-pub fn compile_llm_cache(
+/// Compile a Google AI cache node spec.
+pub fn compile_google_cache(
     interner: &Interner,
-    spec: &LlmCacheSpec,
+    spec: &GoogleAICacheSpec,
     registry: &ContextTypeRegistry,
-) -> Result<(CompiledLlmCache, FxHashSet<Astr>), Vec<OrchError>> {
-    let elem_ty = spec.api.message_elem_ty(interner);
+) -> Result<(CompiledGoogleAICache, FxHashSet<Astr>), Vec<OrchError>> {
+    let elem_ty = crate::dsl::message_elem_ty(interner);
     let (compiled_messages, keys) = crate::compile::compile_messages(
         interner,
         &spec.messages,
@@ -54,9 +51,9 @@ pub fn compile_llm_cache(
         &elem_ty,
     )?;
     Ok((
-        CompiledLlmCache {
-            api: spec.api.clone(),
-            provider: spec.provider.clone(),
+        CompiledGoogleAICache {
+            endpoint: spec.endpoint.clone(),
+            api_key: spec.api_key.clone(),
             model: spec.model.clone(),
             messages: compiled_messages,
             ttl: spec.ttl.clone(),

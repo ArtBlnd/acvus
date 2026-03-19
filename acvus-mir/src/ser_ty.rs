@@ -61,8 +61,8 @@ impl Ty {
             Ty::Unit => SerTy::Unit,
             Ty::Range => SerTy::Range,
             Ty::Byte => SerTy::Byte,
-            Ty::Infer => SerTy::Infer,
-            Ty::Error => SerTy::Error,
+            Ty::Infer(_) => SerTy::Infer,
+            Ty::Error(_) => SerTy::Error,
             Ty::List(elem) => SerTy::List { elem: Box::new(elem.to_ser(interner)) },
             Ty::Object(fields) => SerTy::Object {
                 fields: fields
@@ -122,8 +122,8 @@ impl SerTy {
             SerTy::Unit => Ty::Unit,
             SerTy::Range => Ty::Range,
             SerTy::Byte => Ty::Byte,
-            SerTy::Infer => Ty::Infer,
-            SerTy::Error => Ty::Error,
+            SerTy::Infer => Ty::infer(),
+            SerTy::Error => Ty::error(),
             SerTy::List { elem } => Ty::List(Box::new(elem.to_ty(interner))),
             SerTy::Object { fields } => Ty::Object(
                 fields

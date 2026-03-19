@@ -4,13 +4,15 @@ expression: ir
 ---
 === main ===
      3 │   r3 = list [1 (r0), 2 (r1), 3 (r2)]
-     4 │   r4 = call len(r3)
-     5 │   r5 = call to_string(r4)
-     6 │   yield r5
+     4 │   r4 = cast DequeToList r3
+     5 │   r5 = call len(r4)
+     6 │   r6 = call to_string(r5)
+     7 │   yield r6
 
     ; r0 (v0) : Int
     ; r1 (v1) : Int
     ; r2 (v2) : Int
     ; r3 (v3) : Deque<Int, Origin(0)>
-    ; r4 (len(...)) : Int
-    ; r5 (to_string(...)) : String
+    ; r4 (v4) : List<Int>
+    ; r5 (len(...)) : Int
+    ; r6 (to_string(...)) : String

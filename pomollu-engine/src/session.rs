@@ -5,7 +5,7 @@ use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::ty::Ty;
 use acvus_orchestration::{
     BlobStore, BlobStoreJournal, EntryRef, Journal,
-    ProviderConfig, Resolved,
+    Resolved,
 };
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -53,30 +53,30 @@ async fn dispatch_extern(
     match name_str {
         "asset_url" => {
             let Value::Pure(acvus_interpreter::PureValue::String(ref path)) = *args[0].value() else {
-                return Err(acvus_interpreter::RuntimeError::type_mismatch(
-                    "asset_url", "String", &format!("{:?}", args[0].value()),
+                return Err(acvus_interpreter::RuntimeError::unexpected_type(
+                    "asset_url", &[acvus_interpreter::ValueKind::String], args[0].value().kind(),
                 ));
             };
             acvus_interpreter::set_interner_ctx(interner);
+            let option_string_ty = Ty::Option(Box::new(Ty::String));
             let Some(store) = asset_store else {
                 let result: Option<String> = None;
-                return Ok(TypedValue::new(Arc::new(result.into_value()), Ty::Infer));
+                return Ok(TypedValue::new(result.into_value(), option_string_ty));
             };
-            // Check if the asset actually exists
             let exists = store.exists(path).await;
             if !exists {
                 let result: Option<String> = None;
-                return Ok(TypedValue::new(Arc::new(result.into_value()), Ty::Infer));
+                return Ok(TypedValue::new(result.into_value(), option_string_ty));
             }
             let version = store.version().await;
             let db_name = store.db_name();
             let result: Option<String> = Some(format!("/asset/{db_name}/{path}?v={version}"));
-            Ok(TypedValue::new(Arc::new(result.into_value()), Ty::Infer))
+            Ok(TypedValue::new(result.into_value(), option_string_ty))
         }
         _ => {
             let plain_args: Vec<&Value> = args.iter().map(|tv| tv.value()).collect();
             let value = acvus_ext::regex_call(interner, name, plain_args).await?;
-            Ok(TypedValue::new(Arc::new(value), Ty::Infer))
+            Ok(TypedValue::new(value, Ty::String))
         }
     }
 }
@@ -123,7 +123,7 @@ impl ChatSession {
         let specs: Vec<acvus_orchestration::NodeSpec> = cfg
             .nodes
             .iter()
-            .map(|n| config::convert_node(&interner, n))
+            .map(|n| config::convert_node(&interner, n, &cfg.providers))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| JsValue::from_str(&e))?;
 
@@ -160,26 +160,12 @@ impl ChatSession {
             )?;
 
 
-        // Providers
-        let providers: FxHashMap<String, ProviderConfig> = cfg
-            .providers
-            .into_iter()
-            .map(|(name, p)| {
-                (
-                    name,
-                    ProviderConfig {
-                        api: p.api,
-                        endpoint: p.endpoint,
-                        api_key: p.api_key,
-                    },
-                )
-            })
-            .collect();
-
         // Open IDB store and journal
         let session_id_owned = session_id.to_string();
         let store = IdbBlobStore::open(session_id_owned.clone()).await;
-        let (journal, cursor) = match BlobStoreJournal::open(store, interner.clone()).await {
+        let (journal, cursor) = match BlobStoreJournal::open(store, interner.clone()).await
+            .map_err(|e| JsError::new(&format!("journal open: {e}")))?
+        {
             Some(journal) => {
                 let cursor = load_cursor(&journal)
                     .await
@@ -189,6 +175,7 @@ impl ChatSession {
             None => {
                 let store = IdbBlobStore::open(session_id_owned).await;
                 BlobStoreJournal::new(store, interner.clone()).await
+                    .map_err(|e| JsError::new(&format!("journal new: {e}")))?
             }
         };
 
@@ -200,7 +187,6 @@ impl ChatSession {
 
         let engine = acvus_chat::ChatEngine::new(
             compiled,
-            providers,
             WebFetch,
             journal,
             cursor,
@@ -373,8 +359,9 @@ impl ChatSession {
     }
 
     /// Current turn count.
-    pub async fn turn_count(&self) -> usize {
+    pub async fn turn_count(&self) -> Result<usize, JsError> {
         self.engine.history_len().await
+            .map_err(|e| JsError::new(&format!("turn_count: {e}")))
     }
 }
 
@@ -413,7 +400,8 @@ impl ChatSession {
         if !self.engine.journal.contains(uuid) {
             return Err(JsError::new("entry not found in history tree"));
         }
-        let entry = self.engine.journal.entry(uuid).await;
+        let entry = self.engine.journal.entry(uuid).await
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let view = crate::history::StorageView {
             cursor: uuid.to_string(),
             depth: entry.depth(),
@@ -421,7 +409,7 @@ impl ChatSession {
                 .entries()
                 .into_iter()
                 .map(|(k, v)| {
-                    let concrete = v.as_ref().clone().to_concrete(&self.interner);
+                    let concrete = v.to_concrete(&self.interner);
                     (k, JsConcreteValue::from(concrete))
                 })
                 .collect(),
@@ -432,7 +420,8 @@ impl ChatSession {
     /// Get visible state at the current cursor.
     pub async fn visible_state(&self) -> Result<JsValue, JsError> {
         let cursor = self.engine.cursor;
-        let entry = self.engine.journal.entry(cursor).await;
+        let entry = self.engine.journal.entry(cursor).await
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let view = crate::history::StorageView {
             cursor: cursor.to_string(),
             depth: entry.depth(),
@@ -440,7 +429,7 @@ impl ChatSession {
                 .entries()
                 .into_iter()
                 .map(|(k, v)| {
-                    let concrete = v.as_ref().clone().to_concrete(&self.interner);
+                    let concrete = v.to_concrete(&self.interner);
                     (k, JsConcreteValue::from(concrete))
                 })
                 .collect(),

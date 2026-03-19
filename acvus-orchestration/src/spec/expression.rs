@@ -10,30 +10,28 @@ use crate::error::OrchError;
 
 /// Expr node spec — evaluates a script expression and stores the result.
 #[derive(Debug, Clone)]
-pub struct ExprSpec {
+pub struct ExpressionSpec {
     pub source: String,
-    pub output_ty: Ty,
+    /// Explicit output type hint. `None` = infer from the expression.
+    pub output_ty: Option<Ty>,
 }
 
 /// Compiled expr node.
 #[derive(Debug, Clone)]
-pub struct CompiledExpr {
+pub struct CompiledExpression {
     pub script: CompiledScript,
 }
 
 /// Compile an expr node spec.
-pub fn compile_expr(
+pub fn compile_expression(
     interner: &Interner,
-    spec: &ExprSpec,
+    spec: &ExpressionSpec,
     registry: &ContextTypeRegistry,
-) -> Result<(CompiledExpr, FxHashSet<Astr>), Vec<OrchError>> {
-    let hint = match &spec.output_ty {
-        Ty::Infer => None,
-        ty => Some(ty),
-    };
+) -> Result<(CompiledExpression, FxHashSet<Astr>), Vec<OrchError>> {
+    let hint = spec.output_ty.as_ref();
     let (script, _ty) =
         compile_script_with_hint(interner, &spec.source, registry, hint)
             .map_err(|e| vec![e])?;
     let keys = script.context_keys.clone();
-    Ok((CompiledExpr { script }, keys))
+    Ok((CompiledExpression { script }, keys))
 }

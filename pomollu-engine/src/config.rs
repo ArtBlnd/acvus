@@ -1,8 +1,7 @@
-use acvus_mir::ty::Ty;
 use acvus_orchestration::{
-    ApiKind, ExprSpec, Execution, GenerationParams, LlmSpec, MaxTokens, MessageSpec, NodeKind,
-    FnParam, NodeSpec, Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding,
-    ToolParamInfo,
+    AnthropicSpec, ExpressionSpec, Execution, GoogleAISpec, GoogleAICacheSpec,
+    MaxTokens, MessageSpec, NodeKind, FnParam, NodeSpec, OpenAICompatibleSpec,
+    Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
@@ -26,9 +25,19 @@ pub(crate) struct SessionConfig {
 
 #[derive(Deserialize)]
 pub(crate) struct ProviderConfigJson {
-    pub api: ApiKind,
+    pub api: ApiKindJson,
     pub endpoint: String,
     pub api_key: String,
+}
+
+/// Provider API kind — local to pomollu-engine for deserializing config.
+/// Used to dispatch which NodeKind variant to create.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ApiKindJson {
+    OpenAI,
+    Anthropic,
+    Google,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +84,7 @@ pub(crate) enum NodeKindConfig {
     #[serde(rename = "llm")]
     Llm {
         provider: String,
-        api: ApiKind,
+        api: ApiKindJson,
         model: String,
         temperature: Option<Decimal>,
         top_p: Option<Decimal>,
@@ -202,7 +211,11 @@ pub(crate) enum ExecutionConfig {
 // NodeConfig → NodeSpec conversion
 // ---------------------------------------------------------------------------
 
-pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<NodeSpec, String> {
+pub(crate) fn convert_node(
+    interner: &Interner,
+    cfg: &NodeConfig,
+    providers: &FxHashMap<String, ProviderConfigJson>,
+) -> Result<NodeSpec, String> {
     let kind = match &cfg.kind {
         NodeKindConfig::Llm {
             provider,
@@ -217,6 +230,11 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
             messages,
             tools,
         } => {
+            let provider_cfg = providers.get(provider)
+                .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", cfg.name))?;
+            let endpoint = provider_cfg.endpoint.clone();
+            let api_key = provider_cfg.api_key.clone();
+
             let messages: Vec<MessageSpec> = messages
                 .iter()
                 .filter_map(|m| {
@@ -245,39 +263,67 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
                 })
                 .collect();
 
-            NodeKind::Llm(LlmSpec {
-                api: api.clone(),
-                provider: provider.clone(),
-                model: model.clone(),
-                messages,
-                tools: tools
-                    .iter()
-                    .map(|t| ToolBinding {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        node: t.node.clone(),
-                        params: t.params.iter().map(|p| (p.name.clone(), ToolParamInfo {
-                            ty: p.ty.clone(),
-                            description: p.description.clone(),
-                        })).collect(),
-                    })
-                    .collect(),
-                generation: GenerationParams {
+            let compiled_tools: Vec<ToolBinding> = tools
+                .iter()
+                .map(|t| ToolBinding {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    node: t.node.clone(),
+                    params: t.params.iter().map(|p| (p.name.clone(), ToolParamInfo {
+                        ty: p.ty.clone(),
+                        description: p.description.clone(),
+                    })).collect(),
+                })
+                .collect();
+
+            let max_tokens_val = max_tokens
+                .as_ref()
+                .map(|mt| MaxTokens {
+                    input: mt.input,
+                    output: mt.output,
+                })
+                .unwrap_or_default();
+
+            match api {
+                ApiKindJson::OpenAI => NodeKind::OpenAICompatible(OpenAICompatibleSpec {
+                    endpoint,
+                    api_key,
+                    model: model.clone(),
+                    messages,
+                    tools: compiled_tools,
+                    temperature: *temperature,
+                    top_p: *top_p,
+                    cache_key: None,
+                    max_tokens: max_tokens_val,
+                }),
+                ApiKindJson::Anthropic => NodeKind::Anthropic(AnthropicSpec {
+                    endpoint,
+                    api_key,
+                    model: model.clone(),
+                    messages,
+                    tools: compiled_tools,
                     temperature: *temperature,
                     top_p: *top_p,
                     top_k: *top_k,
-                    grounding: *grounding,
+                    max_tokens: max_tokens_val,
                     thinking: thinking.clone(),
-                },
-                cache_key: None,
-                max_tokens: max_tokens
-                    .as_ref()
-                    .map(|mt| MaxTokens {
-                        input: mt.input,
-                        output: mt.output,
-                    })
-                    .unwrap_or_default(),
-            })
+                    cache_key: None,
+                }),
+                ApiKindJson::Google => NodeKind::GoogleAI(GoogleAISpec {
+                    endpoint,
+                    api_key,
+                    model: model.clone(),
+                    messages,
+                    tools: compiled_tools,
+                    temperature: *temperature,
+                    top_p: *top_p,
+                    top_k: *top_k,
+                    max_tokens: max_tokens_val,
+                    thinking: thinking.clone(),
+                    grounding: *grounding,
+                    cache_key: None,
+                }),
+            }
         }
         NodeKindConfig::Expr {
             template,
@@ -285,9 +331,8 @@ pub(crate) fn convert_node(interner: &Interner, cfg: &NodeConfig) -> Result<Node
         } => {
             let output_ty = output_ty
                 .as_ref()
-                .map(|desc| crate::desc_to_ty(interner, desc))
-                .unwrap_or(Ty::Infer);
-            NodeKind::Expr(ExprSpec {
+                .map(|desc| crate::desc_to_ty(interner, desc));
+            NodeKind::Expression(ExpressionSpec {
                 source: template.clone(),
                 output_ty,
             })

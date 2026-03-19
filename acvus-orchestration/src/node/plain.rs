@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use acvus_interpreter::{RuntimeError, TypedValue};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -26,7 +24,7 @@ impl PlainNode {
 impl Node for PlainNode {
     fn spawn(
         &self,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        local: FxHashMap<Astr, TypedValue>,
     ) -> acvus_utils::Coroutine<TypedValue, RuntimeError> {
         let interner = self.interner.clone();
         let module = self.module.clone();

@@ -144,10 +144,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::ObjectGet { object, .. } => remap_val(object, remap),
 
-        InstKind::IterInit { src, .. } => remap_val(src, remap),
-
-        InstKind::IterNext { iter, .. } => remap_val(iter, remap),
-
         // Two uses
         InstKind::BinOp { left, right, .. } => {
             remap_val(left, remap);
@@ -169,7 +165,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_vec(args, remap);
         }
 
-        InstKind::MakeList { elements, .. } | InstKind::MakeTuple { elements, .. } => {
+        InstKind::MakeDeque { elements, .. } | InstKind::MakeTuple { elements, .. } => {
             remap_vec(elements, remap);
         }
 
@@ -212,6 +208,10 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         InstKind::TestVariant { src, .. } => remap_val(src, remap),
 
         InstKind::UnwrapVariant { src, .. } => remap_val(src, remap),
+
+        InstKind::Cast { src, .. } => remap_val(src, remap),
+
+        InstKind::IterStep { src, .. } => remap_val(src, remap),
     }
 }
 
@@ -222,7 +222,7 @@ mod tests {
     use acvus_mir::ir::{DebugInfo, Inst, MirBody};
 
     fn span() -> Span {
-        Span { start: 0, end: 0 }
+        Span::ZERO
     }
 
     fn make_body(insts: Vec<Inst>) -> MirBody {

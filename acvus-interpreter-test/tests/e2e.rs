@@ -1,12 +1,8 @@
-use std::sync::Arc;
-
 use acvus_interpreter::{
-    Interpreter, LazyValue,
+    CollectionOp, Interpreter, LazyValue,
     RuntimeErrorKind, TypedValue, Value,
 };
 use acvus_interpreter_test::*;
-#[allow(unused_imports)]
-use acvus_interpreter_test::{run_obfuscated, run_simple_obfuscated};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -21,7 +17,7 @@ fn typed_ctx(i: &Interner, pairs: &[(&str, TypedValue)]) -> FxHashMap<acvus_util
 
 /// Helper: build a TypedValue from a Ty and a Value.
 fn typed_val(ty: Ty, val: Value) -> TypedValue {
-    TypedValue::new(Arc::new(val), ty)
+    TypedValue::new(val, ty)
 }
 
 /// Helper: build an Object type from string-keyed fields.
@@ -441,8 +437,8 @@ async fn iter_tuple_destructure() {
             typed_val(
                 Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
                 Value::list(vec![
-                    Value::tuple(vec![Value::string("a".into()), Value::int(1)]),
-                    Value::tuple(vec![Value::string("b".into()), Value::int(2)]),
+                    Value::tuple(vec![Value::string("a"), Value::int(1)]),
+                    Value::tuple(vec![Value::string("b"), Value::int(2)]),
                 ]),
             ),
         )],
@@ -621,7 +617,7 @@ async fn deeply_nested_object_access() {
                 &i,
                 &[(
                     "address",
-                    obj_val(&i, &[("city", Value::string("Seoul".into()))]),
+                    obj_val(&i, &[("city", Value::string("Seoul"))]),
                 )],
             ),
         )],
@@ -657,7 +653,7 @@ async fn tuple_pattern_binding() {
         "pair",
         typed_val(
             Ty::Tuple(vec![Ty::String, Ty::Int]),
-            Value::tuple(vec![Value::string("alice".into()), Value::int(30)]),
+            Value::tuple(vec![Value::string("alice"), Value::int(30)]),
         ),
     )]);
     assert_eq!(
@@ -678,7 +674,7 @@ async fn tuple_pattern_wildcard() {
         "pair",
         typed_val(
             Ty::Tuple(vec![Ty::String, Ty::Int]),
-            Value::tuple(vec![Value::string("alice".into()), Value::int(30)]),
+            Value::tuple(vec![Value::string("alice"), Value::int(30)]),
         ),
     )]);
     assert_eq!(
@@ -716,7 +712,7 @@ async fn nested_tuple_pattern() {
             Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
             Value::tuple(vec![
                 Value::tuple(vec![Value::int(1), Value::int(2)]),
-                Value::string("hello".into()),
+                Value::string("hello"),
             ]),
         ),
     )]);
@@ -950,8 +946,8 @@ async fn lambda_string_concat() {
         typed_val(
             Ty::List(Box::new(Ty::String)),
             Value::list(vec![
-                Value::string("alice".into()),
-                Value::string("bob".into()),
+                Value::string("alice"),
+                Value::string("bob"),
             ]),
         ),
     )]);
@@ -1152,21 +1148,21 @@ async fn filter_map_with_object_pattern() {
         obj_val(
             &i,
             &[
-                ("name", Value::string("apple".into())),
+                ("name", Value::string("apple")),
                 ("price", Value::int(100)),
             ],
         ),
         obj_val(
             &i,
             &[
-                ("name", Value::string("banana".into())),
+                ("name", Value::string("banana")),
                 ("price", Value::int(50)),
             ],
         ),
         obj_val(
             &i,
             &[
-                ("name", Value::string("cherry".into())),
+                ("name", Value::string("cherry")),
                 ("price", Value::int(200)),
             ],
         ),
@@ -1322,7 +1318,7 @@ async fn complex_object_filter_format() {
         obj_val(
             &i,
             &[
-                ("name", Value::string("alice".into())),
+                ("name", Value::string("alice")),
                 ("age", Value::int(30)),
                 ("active", Value::bool_(true)),
             ],
@@ -1330,7 +1326,7 @@ async fn complex_object_filter_format() {
         obj_val(
             &i,
             &[
-                ("name", Value::string("bob".into())),
+                ("name", Value::string("bob")),
                 ("age", Value::int(17)),
                 ("active", Value::bool_(true)),
             ],
@@ -1338,7 +1334,7 @@ async fn complex_object_filter_format() {
         obj_val(
             &i,
             &[
-                ("name", Value::string("carol".into())),
+                ("name", Value::string("carol")),
                 ("age", Value::int(25)),
                 ("active", Value::bool_(false)),
             ],
@@ -1346,7 +1342,7 @@ async fn complex_object_filter_format() {
         obj_val(
             &i,
             &[
-                ("name", Value::string("dave".into())),
+                ("name", Value::string("dave")),
                 ("age", Value::int(40)),
                 ("active", Value::bool_(true)),
             ],
@@ -1423,291 +1419,6 @@ async fn multi_arm_range_and_literal_high() {
     );
 }
 
-// ── Obfuscation equivalence ────────────────────────────────────
-
-#[tokio::test]
-async fn obf_text_only() {
-    assert_eq!(run_simple_obfuscated("hello world").await, "hello world");
-}
-
-#[tokio::test]
-async fn obf_string_emit() {
-    assert_eq!(run_simple_obfuscated(r#"{{ "hello" }}"#).await, "hello");
-}
-
-#[tokio::test]
-async fn obf_string_concat() {
-    assert_eq!(
-        run_simple_obfuscated(r#"{{ "hello" + " " + "world" }}"#).await,
-        "hello world"
-    );
-}
-
-#[tokio::test]
-async fn obf_mixed_text_and_expr() {
-    let i = Interner::new();
-    let val = string_context(&i, "name", "alice");
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            "Hello, {{ @name }}!",
-            val,
-        )
-        .await,
-        "Hello, alice!"
-    );
-}
-
-#[tokio::test]
-async fn obf_int_arithmetic() {
-    let i = Interner::new();
-    let ctx = typed_ctx(&i, &[("a", TypedValue::int(3)), ("b", TypedValue::int(7))]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            "{{ @a + @b | to_string }}",
-            ctx,
-        )
-        .await,
-        "10"
-    );
-}
-
-#[tokio::test]
-async fn obf_match_literal() {
-    let i = Interner::new();
-    let val = int_context(&i, "n", 42);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ 42 = @n }}yes{{_}}no{{/}}"#,
-            val,
-        )
-        .await,
-        "yes"
-    );
-}
-
-#[tokio::test]
-async fn obf_match_string_literal() {
-    let i = Interner::new();
-    let val = string_context(&i, "name", "alice");
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ "alice" = @name }}found{{_}}nope{{/}}"#,
-            val,
-        )
-        .await,
-        "found"
-    );
-}
-
-#[tokio::test]
-async fn obf_variable_write_read() {
-    assert_eq!(
-        run_simple_obfuscated("{{ $x = 42 }}{{ $x | to_string }}").await,
-        "42"
-    );
-}
-
-#[tokio::test]
-async fn obf_iteration() {
-    let i = Interner::new();
-    let val = items_context(&i, vec![1, 2, 3]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ x in @items }}{{ x | to_string }} {{/}}"#,
-            val,
-        )
-        .await,
-        "1 2 3 "
-    );
-}
-
-#[tokio::test]
-async fn obf_nested_match_with_variable() {
-    let i = Interner::new();
-    let ctx = typed_ctx(&i, &[("role", TypedValue::string("admin")), ("level", TypedValue::int(5))]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ "admin" = @role }}{{ 0..10 = @level }}{{ $result = "low-admin" }}{{_}}{{ $result = "high-admin" }}{{/}}{{_}}{{ $result = "guest" }}{{/}}{{ $result }}"#,
-            ctx,
-        )
-        .await,
-        "low-admin"
-    );
-}
-
-#[tokio::test]
-async fn obf_lambda_filter_map() {
-    let i = Interner::new();
-    let val = items_context(&i, vec![0, 1, 2, 0, 3]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ x = @items | filter(x -> x != 0) | map(x -> (x | to_string)) | collect }}{{ x | join(", ") }}"#,
-            val,
-        )
-        .await,
-        "1, 2, 3"
-    );
-}
-
-// ── Complex obfuscation tests ─────────────────────────────────
-
-#[tokio::test]
-async fn obf_variable_accumulate_in_loop() {
-    let i = Interner::new();
-    let val = items_context(&i, vec![10, 20, 30]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
-            val,
-        )
-        .await,
-        "60"
-    );
-}
-
-#[tokio::test]
-async fn obf_nested_iteration_with_match() {
-    let i = Interner::new();
-    let val = typed_ctx(&i, &[(
-        "rows",
-        typed_val(
-            Ty::List(Box::new(Ty::List(Box::new(Ty::Int)))),
-            Value::list(vec![
-                Value::list(vec![Value::int(1), Value::int(2)]),
-                Value::list(vec![Value::int(3), Value::int(4)]),
-            ]),
-        ),
-    )]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ row in @rows }}[{{ x in row }}{{ 3 = x }}three{{_}}{{ x | to_string }}{{/}} {{/}}]{{/}}"#,
-            val,
-        )
-        .await,
-        "[1 2 ][three 4 ]"
-    );
-}
-
-#[tokio::test]
-async fn obf_object_destructure_and_format() {
-    let i = Interner::new();
-    let val = users_list_context(&i);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ { name, age, } in @users }}{{ name }}({{ age | to_string }}) {{/}}"#,
-            val,
-        )
-        .await,
-        "alice(30) bob(25) "
-    );
-}
-
-#[tokio::test]
-async fn obf_multi_variable_interaction() {
-    assert_eq!(
-        run_simple_obfuscated(
-            r#"{{ $a = 10 }}{{ $b = 20 }}{{ $c = $a + $b }}{{ $a = $c * 2 }}{{ $a | to_string }}-{{ $b | to_string }}-{{ $c | to_string }}"#,
-        )
-        .await,
-        "60-20-30"
-    );
-}
-
-#[tokio::test]
-async fn obf_string_match_multi_arm() {
-    let i = Interner::new();
-    let val = string_context(&i, "lang", "rust");
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ "go" = @lang }}Go{{ "rust" = }}Rust{{ "python" = }}Python{{_}}Other{{/}}"#,
-            val,
-        )
-        .await,
-        "Rust"
-    );
-}
-
-#[tokio::test]
-async fn obf_range_pattern_with_variable() {
-    let i = Interner::new();
-    let ctx = typed_ctx(&i, &[("score", TypedValue::int(85))]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ 90..=100 = @score }}{{ $grade = "A" }}{{ 80..90 = }}{{ $grade = "B" }}{{ 70..80 = }}{{ $grade = "C" }}{{_}}{{ $grade = "F" }}{{/}}{{ $grade }}"#,
-            ctx,
-        )
-        .await,
-        "B"
-    );
-}
-
-#[tokio::test]
-async fn obf_filter_accumulate_complex() {
-    let i = Interner::new();
-    let val = items_context(&i, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ $sum = 0 }}{{ x in (@items | filter(x -> x > 5) | collect) }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}"#,
-            val,
-        )
-        .await,
-        "40"
-    );
-}
-
-#[tokio::test]
-async fn obf_pipe_chain_with_context() {
-    let i = Interner::new();
-    let ctx = typed_ctx(&i, &[(
-        "names",
-        typed_val(
-            Ty::List(Box::new(Ty::String)),
-            Value::list(vec![
-                Value::string("alice".into()),
-                Value::string("bob".into()),
-                Value::string("charlie".into()),
-            ]),
-        ),
-    )]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ @names | join(", ") }}"#,
-            ctx,
-        )
-        .await,
-        "alice, bob, charlie"
-    );
-}
-
-#[tokio::test]
-async fn obf_boolean_logic_in_match() {
-    let i = Interner::new();
-    let ctx = typed_ctx(&i, &[("a", TypedValue::int(5)), ("b", TypedValue::int(10))]);
-    assert_eq!(
-        run_obfuscated(
-            &i,
-            r#"{{ $result = "none" }}{{ 1..10 = @a }}{{ 5..15 = @b }}{{ $result = "both" }}{{_}}{{ $result = "a-only" }}{{/}}{{_}}{{ $result = "other" }}{{/}}{{ $result }}"#,
-            ctx,
-        )
-        .await,
-        "both"
-    );
-}
-
 // ── Variant (Option) ────────────────────────────────────────────
 
 #[tokio::test]
@@ -1717,7 +1428,7 @@ async fn variant_some_extract_value() {
         "opt",
         typed_val(
             Ty::Option(Box::new(Ty::String)),
-            Value::variant(i.intern("Some"), Some(Box::new(Value::string("hello".into())))),
+            Value::variant(i.intern("Some"), Some(Box::new(Value::string("hello")))),
         ),
     )]);
     assert_eq!(
@@ -1858,7 +1569,7 @@ async fn error_find_empty_list() {
     .await;
 
     assert!(
-        matches!(err.kind, RuntimeErrorKind::EmptyCollection { ref operation } if operation == "find"),
+        matches!(err.kind, RuntimeErrorKind::EmptyCollection { op: CollectionOp::Find }),
         "expected EmptyCollection error, got: {err}",
     );
 }
@@ -1877,7 +1588,7 @@ async fn error_reduce_empty_list() {
     .await;
 
     assert!(
-        matches!(err.kind, RuntimeErrorKind::EmptyCollection { ref operation } if operation == "reduce"),
+        matches!(err.kind, RuntimeErrorKind::EmptyCollection { op: CollectionOp::Reduce }),
         "expected EmptyCollection error, got: {err}",
     );
 }
@@ -1950,7 +1661,7 @@ async fn structural_enum_with_payload_match() {
             (i.intern("Err"), None),
         ]),
     };
-    let ctx = typed_ctx(&i, &[("r", typed_val(res_ty, Value::variant(i.intern("Ok"), Some(Box::new(Value::string("hello".into()))))))]);
+    let ctx = typed_ctx(&i, &[("r", typed_val(res_ty, Value::variant(i.intern("Ok"), Some(Box::new(Value::string("hello"))))))]);
     assert_eq!(
         run_ctx(&i, "{{ Res::Ok(v) = @r }}{{ v }}{{_}}err{{/}}", ctx).await,
         "hello"
@@ -2009,7 +1720,7 @@ async fn run_script_with_hint(
     let interp = Interpreter::new(interner, module);
     let emits = interp.execute_with_context(FxHashMap::default()).await;
     assert!(emits.len() <= 1, "script emitted {} values, expected at most 1", emits.len());
-    emits.into_iter().next().map(|tv| Arc::try_unwrap(tv.into_value()).unwrap_or_else(|arc| (*arc).clone())).unwrap_or(Value::unit())
+    emits.into_iter().next().map(|tv| tv.into_inner()).unwrap_or(Value::unit())
 }
 
 #[tokio::test]
@@ -2041,7 +1752,7 @@ async fn script_hint_bool() {
 async fn script_hint_string() {
     let i = Interner::new();
     let result = run_script_with_hint(&i, "\"\"", &FxHashMap::default(), Some(&Ty::String)).await;
-    assert_eq!(result, Value::string("".into()));
+    assert_eq!(result, Value::string(""));
 }
 
 #[tokio::test]
@@ -2172,7 +1883,7 @@ async fn template_enum_match_with_payload_full_type() {
 
     // Test with Custom variant
     let ctx = typed_ctx(&i, &[("Focus", typed_val(focus_ty.clone(), Value::variant(i.intern("Custom"), Some(Box::new(Value::object(FxHashMap::from_iter([
-            (i.intern("custom"), Value::string("hello".into())),
+            (i.intern("custom"), Value::string("hello")),
         ])))))))]);
 
     let output = run_ctx(
@@ -2516,9 +2227,9 @@ async fn builtin_join_list() {
         typed_val(
             Ty::List(Box::new(Ty::String)),
             Value::list(vec![
-                Value::string("a".into()),
-                Value::string("b".into()),
-                Value::string("c".into()),
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c"),
             ]),
         ),
     )]);
@@ -3095,8 +2806,8 @@ async fn builtin_join_iter() {
         typed_val(
             Ty::List(Box::new(Ty::String)),
             Value::list(vec![
-                Value::string("hello".into()),
-                Value::string("world".into()),
+                Value::string("hello"),
+                Value::string("world"),
             ]),
         ),
     )]);
@@ -3661,5 +3372,337 @@ async fn next_map_filter_combo() {
         )
         .await,
         "30, 40"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cast soundness & completeness tests
+//
+// Verify that the type system correctly inserts Cast instructions and
+// that the interpreter executes them soundly (no implicit coercions).
+// ═══════════════════════════════════════════════════════════════════
+
+// -- A: Cast insertion correctness (verify pass catches mismatches) --
+// These tests exercise paths that require Cast.  If Cast insertion is
+// broken, the verify pass panics before execution begins.
+
+// A1: Deque piped into List parameter (len)
+#[tokio::test]
+async fn cast_deque_to_list_via_len() {
+    assert_eq!(run_simple(r#"{{ [1, 2, 3] | len | to_string }}"#).await, "3");
+}
+
+// A2: Deque piped into List parameter (reverse)
+#[tokio::test]
+async fn cast_deque_to_list_via_reverse() {
+    assert_eq!(
+        run_simple(r#"{{ [3, 2, 1] | reverse | first | unwrap | to_string }}"#).await,
+        "1"
+    );
+}
+
+// A3: Deque piped into Iterator parameter (filter)
+#[tokio::test]
+async fn cast_deque_to_iter_via_filter() {
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3, 4] | filter(x -> x > 2) | collect | len | to_string }}"#).await,
+        "2"
+    );
+}
+
+// A4: Deque in iteration block
+#[tokio::test]
+async fn cast_deque_to_iter_loop() {
+    assert_eq!(
+        run_simple(r#"{{ x in [10, 20, 30] }}{{ x | to_string }} {{/}}"#).await,
+        "10 20 30 "
+    );
+}
+
+// A5: List (from context) in iteration block
+#[tokio::test]
+async fn cast_list_to_iter_loop() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, r#"{{ x in @items }}{{ x | to_string }}{{/}}"#, ctx).await,
+        "123"
+    );
+}
+
+// A6: Range in iteration block
+#[tokio::test]
+async fn cast_range_to_iter_loop() {
+    assert_eq!(
+        run_simple(r#"{{ x in 1..4 }}{{ x | to_string }}{{/}}"#).await,
+        "123"
+    );
+}
+
+// A9: Exactly one Cast for Deque → List (no double cast)
+#[tokio::test]
+async fn cast_deque_to_list_single_step() {
+    // [1,2] | contains(1) requires Deque→List cast, then contains operates on List
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3] | contains(2) | to_string }}"#).await,
+        "true"
+    );
+}
+
+// -- B: Soundness (structural_eq respects variant boundaries) --
+
+// B4: Two Deque literals have different Origins — comparing them is a type error (soundness)
+#[test]
+fn soundness_deque_different_origin_eq_rejected() {
+    let i = Interner::new();
+    let template = acvus_ast::parse(&i, r#"{{ [1, 2] == [1, 2] | to_string }}"#).unwrap();
+    let reg = acvus_mir::context_registry::ContextTypeRegistry::all_system(FxHashMap::default());
+    let result = acvus_mir::compile(&i, &template, &reg);
+    assert!(result.is_err(), "different-origin Deque == should be rejected by typechecker");
+}
+
+// B4b: Same-origin comparison works (via context List)
+#[tokio::test]
+async fn soundness_list_eq_same_type() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, r#"{{ @items == @items | to_string }}"#, ctx).await,
+        "true"
+    );
+}
+
+// -- D: Completeness (end-to-end correct output) --
+
+// D1: Deque | len
+#[tokio::test]
+async fn completeness_deque_len() {
+    assert_eq!(run_simple(r#"{{ [1, 2, 3] | len | to_string }}"#).await, "3");
+}
+
+// D2: Deque | reverse
+#[tokio::test]
+async fn completeness_deque_reverse() {
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3] | reverse | len | to_string }}"#).await,
+        "3"
+    );
+}
+
+// D3: iteration over Deque
+#[tokio::test]
+async fn completeness_iter_deque() {
+    assert_eq!(
+        run_simple(r#"{{ x in [1, 2, 3] }}{{ x | to_string }}{{/}}"#).await,
+        "123"
+    );
+}
+
+// D4: iteration over Range
+#[tokio::test]
+async fn completeness_iter_range() {
+    assert_eq!(
+        run_simple(r#"{{ x in 1..4 }}{{ x | to_string }}{{/}}"#).await,
+        "123"
+    );
+}
+
+// D5: Deque | map
+#[tokio::test]
+async fn completeness_deque_map() {
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3] | map(x -> x * 2) | collect | len | to_string }}"#).await,
+        "3"
+    );
+}
+
+// D6: Deque | filter
+#[tokio::test]
+async fn completeness_deque_filter() {
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3, 4] | filter(x -> x > 2) | collect | len | to_string }}"#).await,
+        "2"
+    );
+}
+
+// D7: Deque | fold
+#[tokio::test]
+async fn completeness_deque_fold() {
+    assert_eq!(
+        run_simple(r#"{{ [1, 2, 3] | fold(0, (acc, x) -> acc + x) | to_string }}"#).await,
+        "6"
+    );
+}
+
+// D8: Deque | find
+#[tokio::test]
+async fn completeness_deque_find() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, r#"{{ @items | find(x -> x == 2) | to_string }}"#, ctx).await,
+        "2"
+    );
+}
+
+// D9: nested list flatten via iter path
+#[tokio::test]
+async fn completeness_nested_flatten() {
+    let i = Interner::new();
+    let ty = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
+    let val = Value::list(vec![
+        Value::list(vec![Value::int(1), Value::int(2)]),
+        Value::list(vec![Value::int(3)]),
+    ]);
+    let ctx = typed_ctx(&i, &[("nested", typed_val(ty, val))]);
+    // Use iter path: List → Iterator via iter builtin, then flatten_iter
+    assert_eq!(
+        run_ctx(&i, r#"{{ @nested | iter | flatten | collect | len | to_string }}"#, ctx).await,
+        "3"
+    );
+}
+
+// D10: chained pipe operations
+#[tokio::test]
+async fn completeness_chained_pipe() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5] | filter(x -> x > 2) | map(x -> x * 10) | collect | len | to_string }}"#,
+        )
+        .await,
+        "3"
+    );
+}
+
+// D12: equality on same-type lists (via context)
+#[tokio::test]
+async fn completeness_list_equality() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(&i, r#"{{ @items == @items | to_string }}"#, ctx).await,
+        "true"
+    );
+}
+
+// -- E: Edge cases --
+
+// E1: empty deque | len
+#[tokio::test]
+async fn edge_empty_deque_len() {
+    assert_eq!(run_simple(r#"{{ [] | len | to_string }}"#).await, "0");
+}
+
+// E2: empty range iteration
+#[tokio::test]
+async fn edge_empty_range_iter() {
+    assert_eq!(
+        run_simple(r#"before{{ x in 0..0 }}x{{/}}after"#).await,
+        "beforeafter"
+    );
+}
+
+// E3: single element reverse
+#[tokio::test]
+async fn edge_single_element_reverse() {
+    assert_eq!(
+        run_simple(r#"{{ [42] | reverse | first | unwrap | to_string }}"#).await,
+        "42"
+    );
+}
+
+// E4: multi-stage pipe chain
+#[tokio::test]
+async fn edge_multi_stage_pipe() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3, 4, 5, 6] | filter(x -> x > 1) | map(x -> x * 2) | take(3) | collect | len | to_string }}"#,
+        )
+        .await,
+        "3"
+    );
+}
+
+// E5: Deque inside closure body (closure captures Deque, uses it with List builtin)
+#[tokio::test]
+async fn edge_closure_with_cast() {
+    assert_eq!(
+        run_simple(
+            r#"{{ [1, 2, 3] | map(x -> x + 1) | collect | len | to_string }}"#,
+        )
+        .await,
+        "3"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Lambda return coercion tests
+//
+// When a lambda body returns Deque but the signature expects Iterator,
+// the typechecker detects the Fn ret coercion and the lowerer inserts
+// a Cast at the lambda return site.
+// ═══════════════════════════════════════════════════════════════════
+
+// Lambda returns Deque, flat_map expects Fn(T) → Iterator<U>
+#[tokio::test]
+async fn lambda_ret_coercion_flat_map() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | flat_map(x -> [x, x * 10]) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ctx,
+        )
+        .await,
+        "1, 10, 2, 20, 3, 30"
+    );
+}
+
+// Nested lambda: outer flat_map returns Deque (coercion), then map on result
+#[tokio::test]
+async fn lambda_ret_coercion_nested() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | flat_map(x -> [x, x + 10]) | map(x -> x * 2) | map(x -> (x | to_string)) | collect | join(", ") }}"#,
+            ctx,
+        )
+        .await,
+        "2, 22, 4, 24, 6, 26"
+    );
+}
+
+// Lambda ret coercion with Deque → List (used with flatten)
+#[tokio::test]
+async fn lambda_ret_coercion_flat_map_then_flatten() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | flat_map(x -> [x * 10, x * 100]) | collect | len | to_string }}"#,
+            ctx,
+        )
+        .await,
+        "4"
+    );
+}
+
+// Empty result from lambda in flat_map
+#[tokio::test]
+async fn lambda_ret_coercion_flat_map_empty() {
+    let i = Interner::new();
+    let ctx = items_context(&i, vec![1, 2, 3]);
+    assert_eq!(
+        run_ctx(
+            &i,
+            r#"{{ @items | flat_map(x -> []) | collect | len | to_string }}"#,
+            ctx,
+        )
+        .await,
+        "0"
     );
 }

@@ -145,17 +145,18 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             | InstKind::BuiltinCall { dst, .. }
             | InstKind::ExternCall { dst, .. }
             | InstKind::ClosureCall { dst, .. }
-            | InstKind::MakeList { dst, .. }
+            | InstKind::MakeDeque { dst, .. }
             | InstKind::MakeObject { dst, .. }
             | InstKind::MakeRange { dst, .. }
             | InstKind::ListIndex { dst, .. }
             | InstKind::ListGet { dst, .. }
             | InstKind::ListSlice { dst, .. }
             | InstKind::MakeClosure { dst, .. }
-            | InstKind::IterInit { dst, .. }
             | InstKind::UnwrapVariant { dst, .. }
             | InstKind::TestListLen { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
+            | InstKind::Cast { dst, .. }
+            | InstKind::IterStep { dst, .. }
             | InstKind::Poison { dst } => {
                 state.set(*dst, AbstractValue::Top);
             }
@@ -168,15 +169,6 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             InstKind::UnaryOp { dst, .. } => {
                 // Other UnaryOps → Top
                 state.set(*dst, AbstractValue::Top);
-            }
-
-            InstKind::IterNext {
-                dst_value,
-                dst_done,
-                ..
-            } => {
-                state.set(*dst_value, AbstractValue::Top);
-                state.set(*dst_done, AbstractValue::Top);
             }
 
             // Instructions that don't produce values

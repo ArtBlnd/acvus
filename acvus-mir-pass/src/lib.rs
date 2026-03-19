@@ -1,5 +1,4 @@
 pub mod analysis;
-pub mod obfuscate;
 pub mod optimize;
 
 use std::any::{Any, TypeId};

@@ -92,6 +92,9 @@ pub enum OrchErrorKind {
     FuelExhausted,
     ModelError(String),
     ToolNotFound(String),
+
+    // Provider
+    UnknownProvider { provider: String },
 }
 
 impl OrchError {
@@ -215,6 +218,9 @@ impl<'a> fmt::Display for OrchErrorDisplay<'a> {
                     interner.resolve(*node),
                     persistency,
                 )
+            }
+            OrchErrorKind::UnknownProvider { provider } => {
+                write!(f, "unknown provider: {provider}")
             }
             OrchErrorKind::FuelExhausted => write!(f, "fuel exhausted"),
             OrchErrorKind::ModelError(msg) => write!(f, "model error: {msg}"),

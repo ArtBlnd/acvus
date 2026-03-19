@@ -14,19 +14,24 @@ expression: ir
     11 │   r8 = r0.0
     12 │   r9 = r0.1
     13 │   yield r8
-    14 │   r10 = iter_init r9
-    15 │ L4:
-    16 │   r11, r12 = iter_next r10
-    17 │   jump_if r12 then L5 else L7
-    18 │ L7:
-    19 │   r13 = call to_string(r11)
-    20 │   yield r13
-    21 │   jump L4
-    22 │ L5:
-    23 │ L6:
-    24 │   jump L0
-    25 │ L1:
-    26 │ L0:  ; merge_of L2
+    14 │   r10 = cast ListToIterator r9
+    15 │   jump L4(r10)
+    16 │ L4(r11: Iterator<Int>):
+    17 │   r12 = iter_step r11
+    18 │   r13 = test r12 is None
+    19 │   jump_if r13 then L5 else L7
+    20 │ L7:
+    21 │   r14 = unwrap r12
+    22 │   r15 = r14.0
+    23 │   r16 = r14.1
+    24 │   r17 = call to_string(r15)
+    25 │   yield r17
+    26 │   jump L4(r16)
+    27 │ L5:
+    28 │ L6:
+    29 │   jump L0
+    30 │ L1:
+    31 │ L0:  ; merge_of L2
 
     ; r0 (@data) : (String, List<Int>)
     ; r1 (v1) : Bool
@@ -38,7 +43,11 @@ expression: ir
     ; r7 (v7) : Bool
     ; r8 (label) : String
     ; r9 (items) : List<Int>
-    ; r10 (v10) : Unit
-    ; r11 (x) : Int
-    ; r12 (v12) : Bool
-    ; r13 (to_string(...)) : String
+    ; r10 (v10) : Iterator<Int>
+    ; r11 (v11) : Iterator<Int>
+    ; r12 (v12) : Option<(Int, Iterator<Int>)>
+    ; r13 (v13) : Bool
+    ; r14 (v14) : (Int, Iterator<Int>)
+    ; r15 (x) : Int
+    ; r16 (v16) : Iterator<Int>
+    ; r17 (to_string(...)) : String

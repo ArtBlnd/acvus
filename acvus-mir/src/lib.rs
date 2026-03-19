@@ -35,8 +35,8 @@ pub fn compile(
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let mut subst = TySubst::new();
     let checker = TypeChecker::new(interner, registry.merged(), &mut subst);
-    let (type_map, builtin_map) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let (type_map, builtin_map, coercion_map) = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -71,9 +71,9 @@ pub fn compile_script_with_hint_subst(
     subst: &mut TySubst,
 ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
     let checker = TypeChecker::new(interner, registry.merged(), subst);
-    let (type_map, builtin_map, tail_ty) =
+    let (type_map, builtin_map, coercion_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -88,8 +88,8 @@ pub fn compile_analysis(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map) = checker.check_template(template)?;
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let (type_map, builtin_map, coercion_map) = checker.check_template(template)?;
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
     Ok((module, hints))
 }
@@ -104,8 +104,8 @@ pub fn compile_analysis_partial(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map, errors) = checker.check_template_partial(template);
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let (type_map, builtin_map, coercion_map, errors) = checker.check_template_partial(template);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_template(template);
     (module, hints, errors)
 }
@@ -129,9 +129,9 @@ pub fn compile_script_analysis_with_tail(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map, tail_ty) =
+    let (type_map, builtin_map, coercion_map, tail_ty) =
         checker.check_script_with_hint(script, expected_tail)?;
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
     Ok((module, hints, tail_ty))
 }
@@ -146,9 +146,9 @@ pub fn compile_script_analysis_with_tail_partial(
     let mut subst = TySubst::new();
     let checker =
         TypeChecker::new(interner, registry.merged(), &mut subst).with_analysis_mode();
-    let (type_map, builtin_map, tail_ty, errors) =
+    let (type_map, builtin_map, coercion_map, tail_ty, errors) =
         checker.check_script_with_hint_partial(script, expected_tail);
-    let lowerer = Lowerer::new(interner, type_map, builtin_map);
+    let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
     let (module, hints) = lowerer.lower_script(script);
     (module, hints, tail_ty, errors)
 }

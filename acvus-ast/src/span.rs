@@ -5,6 +5,10 @@ pub struct Span {
 }
 
 impl Span {
+    /// Zero-length span at position 0. Used when no source location is available
+    /// (e.g. compiler-generated nodes, error recovery).
+    pub const ZERO: Self = Self { start: 0, end: 0 };
+
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }

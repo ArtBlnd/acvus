@@ -3,6 +3,39 @@ use std::fmt;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
+/// Private token that prevents `Ty::Infer` from being constructed outside `acvus_mir`.
+///
+/// `Ty::Infer` is strictly for the type checker's internal use — it signals
+/// "create a fresh type variable here". Downstream crates must never use it
+/// as a "don't know / don't care" placeholder. Use the concrete type instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InferToken(());
+
+impl InferToken {
+    pub(crate) fn new() -> Self { Self(()) }
+}
+
+/// Token for `Ty::Error` construction.
+///
+/// `Ty::Error` is a **poison type** — it suppresses cascading errors by unifying
+/// with anything. Permitted uses:
+///
+/// - **Type checker / compiler**: After reporting a type error, return `Ty::error()`
+///   so compilation continues and collects all errors (not just the first one).
+/// - **Deserialization recovery**: When loading a persisted type that can't be parsed.
+///
+/// **Forbidden uses**:
+///
+/// - As a "don't know" placeholder (use the actual type instead).
+/// - As a default/fallback when you're too lazy to propagate the real type.
+/// - In runtime code paths — Error must never appear in a running program's types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ErrorToken(());
+
+impl ErrorToken {
+    fn new() -> Self { Self(()) }
+}
+
 /// Polarity for subtyping direction in unification.
 ///
 /// - `Covariant`: `a ≤ b` — `a` may be a subtype of `b` (e.g. Deque → List).
@@ -133,14 +166,35 @@ pub enum Ty {
     Var(TyVar),
     /// Inferred type: signals the type checker to create a fresh Var internally.
     /// Input-only -- must not appear in output types.
-    Infer,
+    ///
+    /// Contains a private token so it can only be constructed via `Ty::infer()`
+    /// within the `acvus_mir` crate. This prevents misuse as a "any type" placeholder
+    /// in downstream crates.
+    Infer(InferToken),
     /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
-    Error,
+    ///
+    /// Contains a private token — only constructible via `Ty::error()` within `acvus_mir`.
+    /// Downstream crates must never fabricate error types.
+    Error(ErrorToken),
 }
 
 impl Ty {
+    /// Create an `Infer` type. Only callable within `acvus_mir`.
+    pub(crate) fn infer() -> Self {
+        Ty::Infer(InferToken::new())
+    }
+
+    /// Create an `Error` (poison) type. See [`ErrorToken`] for permitted uses.
+    pub fn error() -> Self {
+        Ty::Error(ErrorToken::new())
+    }
+
+    pub fn is_infer(&self) -> bool {
+        matches!(self, Ty::Infer(_))
+    }
+
     pub fn is_error(&self) -> bool {
-        matches!(self, Ty::Error)
+        matches!(self, Ty::Error(_))
     }
 
     /// Returns true if this type can be represented as a `PureValue` at runtime.
@@ -159,7 +213,7 @@ impl Ty {
                 p.as_ref().map_or(true, |ty| ty.is_pure())
             }),
             Ty::Fn { .. } | Ty::Opaque(_) | Ty::Iterator(..) | Ty::Sequence(..) => false,
-            Ty::Var(_) | Ty::Infer | Ty::Error => true,
+            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
         }
     }
 
@@ -172,7 +226,7 @@ impl Ty {
             | Ty::Fn { .. } | Ty::Iterator(..) | Ty::Sequence(..)
             | Ty::Option(_) | Ty::Enum { .. } => Purity::Lazy,
             Ty::Opaque(_) => Purity::Unpure,
-            Ty::Var(_) | Ty::Infer | Ty::Error => Purity::Pure,
+            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => Purity::Pure,
         }
     }
 
@@ -194,7 +248,7 @@ impl Ty {
                 captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
             }
             Ty::Opaque(_) => false,
-            Ty::Var(_) | Ty::Infer | Ty::Error => true,
+            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
         }
     }
 
@@ -227,7 +281,7 @@ impl Ty {
                 *effect != Effect::Effectful && inner.is_storable()
             }
             Ty::Fn { .. } | Ty::Opaque(_) => false,
-            Ty::Var(_) | Ty::Infer | Ty::Error => true,
+            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
         }
     }
 
@@ -312,8 +366,8 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::Opaque(name) => write!(f, "{name}"),
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
             Ty::Var(v) => write!(f, "?{}", v.0),
-            Ty::Infer => write!(f, "<infer>"),
-            Ty::Error => write!(f, "<error>"),
+            Ty::Infer(_) => write!(f, "<infer>"),
+            Ty::Error(_) => write!(f, "<error>"),
         }
     }
 }
@@ -702,7 +756,7 @@ impl TySubst {
 
         match (&a, &b) {
             // Error (poison) and Infer (unknown) unify with anything.
-            (Ty::Error, _) | (_, Ty::Error) | (Ty::Infer, _) | (_, Ty::Infer) => Ok(()),
+            (Ty::Error(_), _) | (_, Ty::Error(_)) | (Ty::Infer(_), _) | (_, Ty::Infer(_)) => Ok(()),
 
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -2416,9 +2470,9 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        assert!(s.unify(&Ty::Error, &d, Covariant).is_ok());
-        assert!(s.unify(&d, &Ty::Error, Contravariant).is_ok());
-        assert!(s.unify(&Ty::Error, &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
+        assert!(s.unify(&Ty::error(), &d, Covariant).is_ok());
+        assert!(s.unify(&d, &Ty::error(), Contravariant).is_ok());
+        assert!(s.unify(&Ty::error(), &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
     }
 
     #[test]
@@ -2426,9 +2480,9 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        assert!(s.unify(&Ty::Infer, &d, Covariant).is_ok());
-        assert!(s.unify(&d, &Ty::Infer, Contravariant).is_ok());
-        assert!(s.unify(&Ty::Infer, &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
+        assert!(s.unify(&Ty::infer(), &d, Covariant).is_ok());
+        assert!(s.unify(&d, &Ty::infer(), Contravariant).is_ok());
+        assert!(s.unify(&Ty::infer(), &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
     }
 
     // ================================================================
@@ -2895,8 +2949,8 @@ mod tests {
 
     #[test]
     fn purity_special_types() {
-        assert_eq!(Ty::Error.purity(), Purity::Pure);
-        assert_eq!(Ty::Infer.purity(), Purity::Pure);
+        assert_eq!(Ty::error().purity(), Purity::Pure);
+        assert_eq!(Ty::infer().purity(), Purity::Pure);
         assert_eq!(Ty::Var(TyVar(0)).purity(), Purity::Pure);
     }
 

@@ -4,16 +4,18 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     2 │   r2 = closure L0 []
-     3 │   r3 = call fold(r0, 0 (r1), r2)
-     4 │   r4 = call to_string(r3)
-     5 │   yield r4
+     1 │   r1 = cast ListToIterator r0
+     3 │   r3 = closure L0 []
+     4 │   r4 = call fold(r1, 0 (r2), r3)
+     5 │   r5 = call to_string(r4)
+     6 │   yield r5
 
     ; r0 (@items) : List<Int>
-    ; r1 (v1) : Int
-    ; r2 (v2) : Fn(Int, Int) -> Int
-    ; r3 (fold(...)) : Int
-    ; r4 (to_string(...)) : String
+    ; r1 (v1) : Iterator<Int>
+    ; r2 (v2) : Int
+    ; r3 (v3) : Fn(Int, Int) -> Int
+    ; r4 (fold(...)) : Int
+    ; r5 (to_string(...)) : String
 
 === closure L0 (acc, x) ===
      0 │   r2 = r0 + r1

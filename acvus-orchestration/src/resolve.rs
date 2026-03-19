@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, LazyValue, PureValue, RuntimeError, Stepped, TypedValue, Value};
+use acvus_interpreter::{Interpreter, IterHandle, LazyValue, PureValue, RuntimeError, Stepped, TypedValue, Value, ValueKind};
+use acvus_mir::ir::MirModule;
 use acvus_mir::ty::Ty;
 use acvus_mir_pass::analysis::reachable_context::partition_context_keys;
 use acvus_utils::{Astr, ContextRequest, Coroutine, ExternCallRequest, Interner, TrackedDeque};
@@ -11,7 +12,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, info, warn};
 
 use crate::CompiledNodeKind;
-use crate::compile::{CompiledExecution, CompiledMessage, CompiledNode, CompiledPersistency, CompiledScript};
+use crate::compile::{CompiledExecution, CompiledMessage, CompiledNode, CompiledNodeGraph, CompiledScript, NodeId, NodeRole, PersistMode};
+use crate::dsl::{KEY_SELF, KEY_RAW, KEY_BIND, KEY_TURN_INDEX};
 
 /// Access a node's initial_value script.
 fn node_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
@@ -40,14 +42,14 @@ use crate::storage::{EntryMut, EntryRef, PatchDiff, StorageOps};
 /// 5. **External resolver** — fallback for names not produced by any node
 pub struct ResolveState<E> {
     pub entry: E,
-    pub turn_context: FxHashMap<Astr, Arc<TypedValue>>,
-    pub bind_cache: FxHashMap<Astr, Vec<(TypedValue, Arc<TypedValue>)>>,
+    pub turn_context: FxHashMap<Astr, TypedValue>,
+    pub bind_cache: FxHashMap<Astr, Vec<(TypedValue, TypedValue)>>,
 }
 
 impl<E> ResolveState<E> {
     /// Cache a value in turn_context. This is the **single entry point**
     /// for all turn_context insertions.
-    pub fn cache(&mut self, name: Astr, value: Arc<TypedValue>) {
+    pub fn cache(&mut self, name: Astr, value: TypedValue) {
         self.turn_context.insert(name, value);
     }
 
@@ -57,7 +59,7 @@ impl<E> ResolveState<E> {
     }
 
     /// Get a cached value from turn_context.
-    pub fn get_cached(&self, name: &Astr) -> Option<Arc<TypedValue>> {
+    pub fn get_cached(&self, name: &Astr) -> Option<TypedValue> {
         self.turn_context.get(name).cloned()
     }
 }
@@ -72,8 +74,21 @@ impl<'j, E: EntryMut<'j>> ResolveState<E> {
         self.entry.apply(key, diff);
     }
 
+    /// Persist a value to storage, re-load the canonical stored form, and cache it.
+    ///
+    /// This is the **single entry point** for the persist → re-load → cache pattern.
+    /// Re-loading from storage is necessary because storage may transform the value
+    /// (e.g. Sequence → Deque conversion in `StorageOps::Sequence`).
+    pub fn persist_and_cache(&mut self, name: Astr, key: &str, diff: StorageOps) -> TypedValue {
+        self.entry.apply(key, diff);
+        let stored = self.entry.get(key)
+            .expect("value must be in storage after persist");
+        self.turn_context.insert(name, stored.clone());
+        stored
+    }
+
     /// Load a value by name: turn_context first (most recent), then storage.
-    pub fn load(&self, name: Astr, name_str: &str) -> Option<Arc<TypedValue>> {
+    pub fn load(&self, name: Astr, name_str: &str) -> Option<TypedValue> {
         self.turn_context
             .get(&name)
             .cloned()
@@ -82,7 +97,7 @@ impl<'j, E: EntryMut<'j>> ResolveState<E> {
 
     /// Load @self for a node: turn_context first (this turn's update),
     /// then storage (previous turn's value).
-    pub fn load_self(&self, name: Astr, name_str: &str) -> Option<Arc<TypedValue>> {
+    pub fn load_self(&self, name: Astr, name_str: &str) -> Option<TypedValue> {
         self.turn_context
             .get(&name)
             .cloned()
@@ -120,31 +135,62 @@ struct StepResult {
 /// What a task is doing — side table keyed by TaskId.
 enum TaskMeta {
     Node {
-        node_idx: usize,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        node_id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
         is_root: bool,
     },
     Script {
-        purpose: ScriptPurpose,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        phase: Phase,
+        local: FxHashMap<Astr, TypedValue>,
     },
 }
 
-enum ScriptPurpose {
-    IfModifiedKey { node_idx: usize },
-    InitialValue { node_idx: usize },
-    Assert { node_idx: usize, value: TypedValue },
-    BindScript {
-        node_idx: usize,
+// ---------------------------------------------------------------------------
+// NextStep / Phase — intent-based lifecycle state machine
+// ---------------------------------------------------------------------------
+
+/// What to do next in a node's lifecycle.
+/// Handlers return this to declare their intent. The event loop executes it.
+enum NextStep {
+    /// Evaluate a script/coroutine asynchronously, then route the result to a Phase handler.
+    Eval {
+        _node_id: NodeId,
+        source: EvalSource,
+        local: FxHashMap<Astr, TypedValue>,
+        then: Phase,
+    },
+    /// Inject @self (role-dependent) and spawn the node's coroutine.
+    Spawn {
+        node_id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
+        is_root: bool,
+    },
+    /// Node is done. Execute common completion: cache + mark_complete + wake deps.
+    /// The exact behavior depends on NodeRole (handled inside execute).
+    Propagate {
+        node_id: NodeId,
         value: TypedValue,
-        origin: Option<TrackedDeque<Value>>,
     },
-    /// Collect a Sequence(Pure) into a TrackedDeque for storage.
-    /// Spawned by BindScript handler when the bind result is a Sequence.
-    CollectSequence {
-        node_idx: usize,
-        origin: TrackedDeque<Value>,
-    },
+    /// Nothing to do.
+    Noop,
+}
+
+/// Source for Eval — compiled script or raw coroutine.
+enum EvalSource {
+    Script(CompiledScript),
+    Coroutine(Coroutine<TypedValue, RuntimeError>),
+}
+
+/// Async evaluation completion point. Each variant's handler returns NextStep.
+enum Phase {
+    /// IfModified key evaluated → check bind cache for hit.
+    IfModifiedKey { node_id: NodeId },
+    /// InitialValue evaluated → persist and spawn or propagate.
+    InitialValue { node_id: NodeId },
+    /// Assert evaluated → if passed, finalize; if failed, retry or error.
+    Assert { node_id: NodeId, value: TypedValue },
+    /// Sequence collect completed → compute diff, persist, propagate.
+    PersistSequence { node_id: NodeId, origin: TrackedDeque<Value> },
 }
 
 enum PendingRequest {
@@ -153,7 +199,7 @@ enum PendingRequest {
 }
 
 impl PendingRequest {
-    fn resolve(self, value: Arc<TypedValue>) {
+    fn resolve(self, value: TypedValue) {
         match self {
             PendingRequest::Context(r) => r.resolve(value),
             PendingRequest::ExternCall(r) => r.resolve(value),
@@ -171,28 +217,52 @@ struct Parked {
 // LoopState — all mutable loop bookkeeping in one place
 // ---------------------------------------------------------------------------
 
-pub struct LoopState<'a> {
-    next_task_id: TaskId,
-    meta: FxHashMap<TaskId, TaskMeta>,
-    futs: FuturesUnordered<Pin<Box<dyn Future<Output = StepResult> + Send + 'a>>>,
-    dep_waiters: FxHashMap<Astr, Vec<Parked>>,
-    in_flight: FxHashSet<usize>,
-    pub remaining_roots: FxHashSet<usize>,
-    pub retry_state: FxHashMap<usize, (u32, u32, FxHashMap<Astr, Arc<TypedValue>>)>,
+/// Tracks node lifecycle: which nodes are in-flight, who is waiting for
+/// whom, and the serialization queue for nodes that must not run concurrently.
+struct NodeTracker {
+    in_flight: FxHashSet<NodeId>,
+    dep_waiters: FxHashMap<NodeId, Vec<Parked>>,
     /// Always + initial_value Expr 노드의 직렬화 큐.
     ///
     /// 이런 노드는 @self를 읽고 갱신하므로, 동시에 여러 인스턴스가 실행되면
     /// 같은 @self를 읽어 lost update가 발생한다.
     /// 이미 in_flight인 경우 여기에 park하고, 완료 시 하나씩 깨워 재실행한다.
-    serialized_queue: FxHashMap<usize, VecDeque<Parked>>,
+    serialized_queue: FxHashMap<NodeId, VecDeque<Parked>>,
+}
+
+impl NodeTracker {
+    fn take_waiters(&mut self, id: &NodeId) -> Vec<Parked> {
+        self.dep_waiters.remove(id).unwrap_or_default()
+    }
+}
+
+/// Progress state for streaming root nodes.
+struct RootProgress {
+    /// Last value emitted by the root node (for finalization on Done).
+    last_emit: Option<TypedValue>,
+    /// For streaming roots: the original sequence value before unpack.
+    /// Used for storage finalization after unpack Done.
+    finalize_value: Option<TypedValue>,
+}
+
+pub struct LoopState<'a> {
+    next_task_id: TaskId,
+    meta: FxHashMap<TaskId, TaskMeta>,
+    futs: FuturesUnordered<Pin<Box<dyn Future<Output = StepResult> + Send + 'a>>>,
+    tracker: NodeTracker,
+    pub remaining_roots: FxHashSet<NodeId>,
+    pub retry_state: FxHashMap<NodeId, (u32, u32, FxHashMap<Astr, TypedValue>)>,
     /// When true, dependency nodes are NOT executed — served from storage only.
     /// Root (entrypoint) nodes still execute normally.
     no_execute: bool,
     /// When true, only evaluate initial_value scripts and store results.
     /// Node body execution is skipped entirely.
     initial_value_only: bool,
-    /// Last value emitted by the root node (for finalization on Done).
-    last_root_emit: Option<TypedValue>,
+    root: RootProgress,
+    /// TrackedDeque origin checkpoints for bind nodes (Sequence mode).
+    /// Stored when bind node's @self is loaded at spawn time.
+    /// Consumed by CollectSequence after bind finishes.
+    bind_origins: FxHashMap<NodeId, TrackedDeque<Value>>,
 }
 
 impl<'a> LoopState<'a> {
@@ -201,14 +271,20 @@ impl<'a> LoopState<'a> {
             next_task_id: 0,
             meta: FxHashMap::default(),
             futs: FuturesUnordered::new(),
-            dep_waiters: FxHashMap::default(),
-            in_flight: FxHashSet::default(),
+            tracker: NodeTracker {
+                in_flight: FxHashSet::default(),
+                dep_waiters: FxHashMap::default(),
+                serialized_queue: FxHashMap::default(),
+            },
             remaining_roots: FxHashSet::default(),
             retry_state: FxHashMap::default(),
-            serialized_queue: FxHashMap::default(),
             no_execute,
             initial_value_only: false,
-            last_root_emit: None,
+            root: RootProgress {
+                last_emit: None,
+                finalize_value: None,
+            },
+            bind_origins: FxHashMap::default(),
         }
     }
 
@@ -229,11 +305,11 @@ impl<'a> LoopState<'a> {
         }));
     }
 
-    fn local(&self, task_id: TaskId) -> &FxHashMap<Astr, Arc<TypedValue>> {
+    fn local(&self, task_id: TaskId) -> &FxHashMap<Astr, TypedValue> {
         match self.meta.get(&task_id) {
             Some(TaskMeta::Node { local, .. }) | Some(TaskMeta::Script { local, .. }) => local,
             None => {
-                static EMPTY: std::sync::LazyLock<FxHashMap<Astr, Arc<TypedValue>>> =
+                static EMPTY: std::sync::LazyLock<FxHashMap<Astr, TypedValue>> =
                     std::sync::LazyLock::new(FxHashMap::default);
                 &EMPTY
             }
@@ -244,24 +320,21 @@ impl<'a> LoopState<'a> {
         matches!(self.meta.get(&task_id), Some(TaskMeta::Node { .. }))
     }
 
-    fn wake_waiters(&mut self, name: Astr, value: TypedValue) {
-        let arc = Arc::new(value);
-        if let Some(waiters) = self.dep_waiters.remove(&name) {
-            for w in waiters {
-                w.request.resolve(Arc::clone(&arc));
-                self.enqueue_step(w.task_id, w.coroutine);
-            }
+    fn wake_waiters(&mut self, id: NodeId, value: TypedValue) {
+        for w in self.tracker.take_waiters(&id) {
+            w.request.resolve(value.clone());
+            self.enqueue_step(w.task_id, w.coroutine);
         }
     }
 
     fn park_for_dep(
         &mut self,
-        name: Astr,
+        id: NodeId,
         task_id: TaskId,
         coroutine: Coroutine<TypedValue, RuntimeError>,
         request: PendingRequest,
     ) {
-        self.dep_waiters.entry(name).or_default().push(Parked {
+        self.tracker.dep_waiters.entry(id).or_default().push(Parked {
             task_id,
             coroutine,
             request,
@@ -280,13 +353,12 @@ impl<'a> LoopState<'a> {
 /// Script phases (IfModified, InitialValue, Assert, BindScript) are driven
 /// as first-class coroutine tasks, identical to node coroutines.
 pub struct Resolver<'a, R, EH> {
-    pub nodes: &'a [CompiledNode],
+    pub graph: &'a CompiledNodeGraph,
     pub node_table: &'a [Arc<dyn Node>],
-    pub name_to_idx: &'a FxHashMap<Astr, usize>,
     pub resolver: &'a R,
     pub extern_handler: &'a EH,
     pub interner: &'a Interner,
-    pub rdeps: &'a [FxHashSet<usize>],
+    pub rdeps: &'a [FxHashSet<NodeId>],
 }
 
 impl<'a, R, EH> Resolver<'a, R, EH>
@@ -300,20 +372,20 @@ where
 
     pub async fn resolve_node<'j, E>(
         &self,
-        idx: usize,
+        id: NodeId,
         state: &mut ResolveState<E>,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        local: FxHashMap<Astr, TypedValue>,
         no_execute: bool,
     ) -> Result<(), ResolveError>
     where
         E: EntryMut<'j>,
     {
-        self.resolve_nodes(vec![(idx, local)], state, no_execute).await
+        self.resolve_nodes(vec![(id, local)], state, no_execute).await
     }
 
     pub async fn resolve_nodes<'j, E>(
         &self,
-        roots: Vec<(usize, FxHashMap<Astr, Arc<TypedValue>>)>,
+        roots: Vec<(NodeId, FxHashMap<Astr, TypedValue>)>,
         state: &mut ResolveState<E>,
         no_execute: bool,
     ) -> Result<(), ResolveError>
@@ -326,32 +398,35 @@ where
 
         let mut lp = LoopState::new(no_execute);
 
-        for (idx, local) in roots {
-            let max_retries = self.nodes[idx].strategy.retry;
-            lp.retry_state.insert(idx, (max_retries, 0, local.clone()));
-            lp.remaining_roots.insert(idx);
-            self.start_prepare(idx, local, true, &mut lp, state)?;
+        for (id, local) in roots {
+            let max_retries = self.graph.node(id).strategy.retry;
+            lp.retry_state.insert(id, (max_retries, 0, local.clone()));
+            lp.remaining_roots.insert(id);
+            let step = self.on_prepare(id, local, true, &mut lp, state)?;
+            self.execute(step, &mut lp, state)?;
         }
 
-        while let Some(step) = lp.futs.next().await {
+        while let Some(sr) = lp.futs.next().await {
             let StepResult {
                 task_id,
                 coroutine,
                 stepped,
-            } = step;
+            } = sr;
 
             match stepped {
                 Stepped::Emit(value) => {
-                    self.handle_emit(task_id, value, &mut lp, state)?;
+                    let next = self.on_emit(task_id, value, &mut lp, state)?;
+                    self.execute(next, &mut lp, state)?;
                 }
                 Stepped::Done => {
-                    if let Some(TaskMeta::Node { node_idx, .. }) = lp.meta.get(&task_id) {
+                    if let Some(TaskMeta::Node { node_id, .. }) = lp.meta.get(&task_id) {
                         warn!(
-                            node = %self.interner.resolve(self.nodes[*node_idx].name),
+                            node = %self.interner.resolve(self.graph.node(*node_id).name),
                             "coroutine finished without emit"
                         );
                     }
-                    self.handle_emit(task_id, TypedValue::unit(), &mut lp, state)?;
+                    let next = self.on_emit(task_id, TypedValue::unit(), &mut lp, state)?;
+                    self.execute(next, &mut lp, state)?;
                 }
                 Stepped::NeedContext(request) => {
                     self.handle_need_context(task_id, coroutine, request, &mut lp, state)
@@ -371,32 +446,32 @@ where
             }
         }
 
-        let stuck_roots: Vec<String> = lp.remaining_roots.iter().map(|&idx| {
-            self.interner.resolve(self.nodes[idx].name).to_string()
+        let stuck_roots: Vec<String> = lp.remaining_roots.iter().map(|&id| {
+            self.interner.resolve(self.graph.node(id).name).to_string()
         }).collect();
-        let dep_waiters: Vec<String> = lp.dep_waiters.keys().map(|&name| {
-            self.interner.resolve(name).to_string()
+        let dep_waiters: Vec<String> = lp.tracker.dep_waiters.keys().map(|&id| {
+            self.interner.resolve(self.graph.node(id).name).to_string()
         }).collect();
-        let serialized_queue: Vec<String> = lp.serialized_queue.keys().map(|&idx| {
-            self.interner.resolve(self.nodes[idx].name).to_string()
+        let serialized_queue: Vec<String> = lp.tracker.serialized_queue.keys().map(|&id| {
+            self.interner.resolve(self.graph.node(id).name).to_string()
         }).collect();
         let turn_context_keys: Vec<String> = state.turn_context.keys().map(|&name| {
             self.interner.resolve(name).to_string()
         }).collect();
-        let in_flight: Vec<String> = lp.in_flight.iter().map(|&idx| {
-            self.interner.resolve(self.nodes[idx].name).to_string()
+        let in_flight: Vec<String> = lp.tracker.in_flight.iter().map(|&id| {
+            self.interner.resolve(self.graph.node(id).name).to_string()
         }).collect();
         let mut parked: Vec<ParkedDiag> = Vec::new();
         // dep_waiters
-        for (name, waiters) in &lp.dep_waiters {
-            let waiting_for = self.interner.resolve(*name).to_string();
+        for (id, waiters) in &lp.tracker.dep_waiters {
+            let waiting_for = self.interner.resolve(self.graph.node(*id).name).to_string();
             for w in waiters {
                 let task = match lp.meta.get(&w.task_id) {
-                    Some(TaskMeta::Node { node_idx, .. }) =>
-                        self.interner.resolve(self.nodes[*node_idx].name).to_string(),
-                    Some(TaskMeta::Script { purpose, .. }) => {
-                        let idx = script_purpose_node_idx(purpose);
-                        format!("script:{}", self.interner.resolve(self.nodes[idx].name))
+                    Some(TaskMeta::Node { node_id, .. }) =>
+                        self.interner.resolve(self.graph.node(*node_id).name).to_string(),
+                    Some(TaskMeta::Script { phase, .. }) => {
+                        let id = phase_node_id(phase);
+                        format!("script:{}", self.interner.resolve(self.graph.node(id).name))
                     }
                     None => format!("task#{}", w.task_id),
                 };
@@ -404,15 +479,15 @@ where
             }
         }
         // serialized_queue
-        for (&idx, queue) in &lp.serialized_queue {
-            let waiting_for = self.interner.resolve(self.nodes[idx].name).to_string();
+        for (&id, queue) in &lp.tracker.serialized_queue {
+            let waiting_for = self.interner.resolve(self.graph.node(id).name).to_string();
             for w in queue {
                 let task = match lp.meta.get(&w.task_id) {
-                    Some(TaskMeta::Node { node_idx, .. }) =>
-                        self.interner.resolve(self.nodes[*node_idx].name).to_string(),
-                    Some(TaskMeta::Script { purpose, .. }) => {
-                        let idx = script_purpose_node_idx(purpose);
-                        format!("script:{}", self.interner.resolve(self.nodes[idx].name))
+                    Some(TaskMeta::Node { node_id, .. }) =>
+                        self.interner.resolve(self.graph.node(*node_id).name).to_string(),
+                    Some(TaskMeta::Script { phase, .. }) => {
+                        let id = phase_node_id(phase);
+                        format!("script:{}", self.interner.resolve(self.graph.node(id).name))
                     }
                     None => format!("task#{}", w.task_id),
                 };
@@ -462,10 +537,12 @@ where
                         // coroutine that pulls items via exec_next and
                         // yield_vals each one. This preserves lazy evaluation.
                         if is_iterable(&value) {
+                            // Save original for storage finalization
+                            lp.root.finalize_value = Some(value.clone());
                             // Drop the original coroutine (it already emitted).
                             // Spawn an unpack coroutine in its place.
                             let meta = lp.meta.remove(&task_id).unwrap();
-                            let unpack = unpack_coroutine(value);
+                            let unpack = unpack_coroutine(value, self.interner.clone());
                             let new_tid = lp.alloc_id();
                             lp.meta.insert(new_tid, meta);
                             lp.enqueue_step(new_tid, unpack);
@@ -474,11 +551,12 @@ where
                         }
 
                         // Scalar — return directly to caller.
-                        lp.last_root_emit = Some(value.clone());
+                        lp.root.last_emit = Some(value.clone());
                         lp.enqueue_step(task_id, coroutine);
                         return Ok(Some(value));
                     } else {
-                        self.handle_emit(task_id, value, lp, state)?;
+                        let next = self.on_emit(task_id, value, lp, state)?;
+                        self.execute(next, lp, state)?;
                     }
                 }
                 Stepped::Done => {
@@ -488,10 +566,13 @@ where
                     );
                     if is_root {
                         // ROOT done → finalize with last emitted value.
-                        // Don't return yet — bind script may still be running.
-                        // Loop continues until remaining_roots is empty.
-                        let final_value = lp.last_root_emit.take().unwrap_or_else(TypedValue::unit);
-                        self.handle_emit(task_id, final_value, lp, state)?;
+                        // Prefer root.finalize_value (original iterable before unpack),
+                        // then root.last_emit, then unit.
+                        let final_value = lp.root.finalize_value.take()
+                            .or_else(|| lp.root.last_emit.take())
+                            .unwrap_or_else(TypedValue::unit);
+                        let next = self.on_emit(task_id, final_value, lp, state)?;
+                        self.execute(next, lp, state)?;
                         if lp.remaining_roots.is_empty() {
                             return Ok(None);
                         }
@@ -499,7 +580,8 @@ where
                         if lp.meta.contains_key(&task_id) {
                             warn!("dep coroutine finished without emit");
                         }
-                        self.handle_emit(task_id, TypedValue::unit(), lp, state)?;
+                        let next = self.on_emit(task_id, TypedValue::unit(), lp, state)?;
+                        self.execute(next, lp, state)?;
                     }
                 }
                 Stepped::NeedContext(request) => {
@@ -538,16 +620,15 @@ where
     where
         E: EntryMut<'j>,
     {
-        let needs_init: Vec<usize> = self
-            .nodes
+        let needs_init: Vec<NodeId> = self
+            .graph.nodes
             .iter()
-            .enumerate()
-            .filter(|(idx, node)| {
+            .filter(|node| {
                 node.strategy.initial_value.is_some()
-                    && !matches!(node.strategy.persistency, CompiledPersistency::Ephemeral)
-                    && self.load_self_value(*idx, state).is_none()
+                    && matches!(node.role, NodeRole::Persistent { .. })
+                    && self.load_self_value(node.id, state).is_none()
             })
-            .map(|(idx, _)| idx)
+            .map(|node| node.id)
             .collect();
 
         if needs_init.is_empty() {
@@ -557,24 +638,27 @@ where
         let mut lp = LoopState::new(false);
         lp.initial_value_only = true;
 
-        for idx in needs_init {
-            lp.remaining_roots.insert(idx);
-            self.start_prepare(idx, FxHashMap::default(), true, &mut lp, state)?;
+        for id in needs_init {
+            lp.remaining_roots.insert(id);
+            let step = self.on_prepare(id, FxHashMap::default(), true, &mut lp, state)?;
+            self.execute(step, &mut lp, state)?;
         }
 
-        while let Some(step) = lp.futs.next().await {
+        while let Some(sr) = lp.futs.next().await {
             let StepResult {
                 task_id,
                 coroutine,
                 stepped,
-            } = step;
+            } = sr;
 
             match stepped {
                 Stepped::Emit(value) => {
-                    self.handle_emit(task_id, value, &mut lp, state)?;
+                    let next = self.on_emit(task_id, value, &mut lp, state)?;
+                    self.execute(next, &mut lp, state)?;
                 }
                 Stepped::Done => {
-                    self.handle_emit(task_id, TypedValue::unit(), &mut lp, state)?;
+                    let next = self.on_emit(task_id, TypedValue::unit(), &mut lp, state)?;
+                    self.execute(next, &mut lp, state)?;
                 }
                 Stepped::NeedContext(request) => {
                     self.handle_need_context(task_id, coroutine, request, &mut lp, state)
@@ -598,12 +682,85 @@ where
     }
 
     // -----------------------------------------------------------------------
-    // Emit (unified Emit + Done)
+    // NextStep execute dispatcher
     // -----------------------------------------------------------------------
 
-    fn handle_emit<'j, E>(
+    fn execute<'j, E>(
         &self,
-        task_id: TaskId,
+        step: NextStep,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<(), ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        match step {
+            NextStep::Eval { _node_id: _, source, local, then } => {
+                let tid = lp.alloc_id();
+                let coroutine = match source {
+                    EvalSource::Script(script) => {
+                        Interpreter::new(self.interner, script.module.clone()).execute()
+                    }
+                    EvalSource::Coroutine(c) => c,
+                };
+                lp.meta.insert(tid, TaskMeta::Script { phase: then, local });
+                lp.enqueue_step(tid, coroutine);
+                Ok(())
+            }
+            NextStep::Spawn { node_id, local, is_root } => {
+                self.execute_spawn(node_id, local, is_root, lp, state);
+                Ok(())
+            }
+            NextStep::Propagate { node_id, value } => {
+                self.execute_propagate(node_id, value, lp, state)
+            }
+            NextStep::Noop => Ok(()),
+        }
+    }
+
+    /// Role-dependent @self injection + spawn the node's coroutine.
+    fn execute_spawn<'j, E>(
+        &self,
+        node_id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
+        is_root: bool,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    )
+    where
+        E: EntryMut<'j>,
+    {
+        let mut local = local;
+
+        // @self injection — role determines how
+        match &self.graph.node(node_id).role {
+            NodeRole::Body { bind_id } => {
+                if let Some(prev) = self.load_self_value(*bind_id, state) {
+                    local.insert(self.interner.intern(KEY_SELF), prev);
+                }
+            }
+            NodeRole::Persistent { .. } => {
+                self.prepare_bind_self(node_id, &mut local, lp, state);
+            }
+            NodeRole::Standalone => {
+                if let Some(prev) = self.load_self_value(node_id, state) {
+                    local.insert(self.interner.intern(KEY_SELF), prev);
+                }
+            }
+        }
+
+        // Spawn coroutine
+        let tid = lp.alloc_id();
+        let coroutine = self.node_table[node_id.index()].spawn(local.clone());
+        lp.meta.insert(tid, TaskMeta::Node { node_id, local, is_root });
+        lp.tracker.in_flight.insert(node_id);
+        lp.enqueue_step(tid, coroutine);
+    }
+
+    /// Role-dependent completion: cache + mark_complete + wake deps.
+    fn execute_propagate<'j, E>(
+        &self,
+        node_id: NodeId,
         value: TypedValue,
         lp: &mut LoopState<'_>,
         state: &mut ResolveState<E>,
@@ -611,29 +768,508 @@ where
     where
         E: EntryMut<'j>,
     {
-        match lp.meta.remove(&task_id) {
-            Some(TaskMeta::Node {
-                node_idx,
-                local,
-                is_root: _,
-            }) => {
-                if matches!(self.nodes[node_idx].strategy.execution, CompiledExecution::Always) {
-                    lp.in_flight.remove(&node_idx);
-                }
-                self.start_root_finalize(node_idx, value, local, lp, state)?;
+        match &self.graph.node(node_id).role {
+            NodeRole::Body { .. } => {
+                // Body: just wake @raw waiters, no cache/persist
+                lp.tracker.in_flight.remove(&node_id);
+                lp.wake_waiters(node_id, value);
             }
-            Some(TaskMeta::Script { purpose, local }) => {
-                self.handle_script_emit(purpose, value, local, lp, state)?;
+            NodeRole::Persistent { .. } | NodeRole::Standalone => {
+                // Cache in turn_context
+                let node = self.graph.node(node_id);
+                let node_name_str = self.interner.resolve(node.name);
+                state.cache(node.name, value.clone());
+                info!(node = %node_name_str, "resolve node complete");
+                lp.remaining_roots.remove(&node_id);
+                self.finish_dep_wake(node_id, value, lp, state)?;
+            }
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // on_emit — unified dispatch for Emit/Done
+    // -----------------------------------------------------------------------
+
+    fn on_emit<'j, E>(
+        &self,
+        task_id: TaskId,
+        value: TypedValue,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        match lp.meta.remove(&task_id) {
+            Some(TaskMeta::Node { node_id, local, is_root: _ }) => {
+                self.on_node_emit(node_id, value, local, lp, state)
+            }
+            Some(TaskMeta::Script { phase, local }) => {
+                self.on_phase_complete(phase, value, local, lp, state)
             }
             None => {
                 panic!(
-                    "handle_emit: task {} emitted but has no meta — \
+                    "on_emit: task {} emitted but has no meta — \
                      possible second emit from a node whose meta was already consumed",
                     task_id,
                 );
             }
         }
-        Ok(())
+    }
+
+    /// Handle emit from a Node task — dispatch by role.
+    fn on_node_emit<'j, E>(
+        &self,
+        node_id: NodeId,
+        value: TypedValue,
+        local: FxHashMap<Astr, TypedValue>,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(node_id);
+
+        // Always strategy: remove from in_flight on every emit
+        if matches!(node.strategy.execution, CompiledExecution::Always) {
+            lp.tracker.in_flight.remove(&node_id);
+        }
+
+        match &node.role {
+            NodeRole::Body { .. } => {
+                // Body: check assert, then propagate (wake @raw waiters)
+                if let Some(assert_script) = &node.strategy.assert {
+                    debug!(node = %self.interner.resolve(node.name), "evaluating body assert");
+                    let mut assert_local = FxHashMap::default();
+                    assert_local.insert(self.interner.intern(KEY_RAW), value.clone());
+                    Ok(NextStep::Eval {
+                        _node_id: node_id,
+                        source: EvalSource::Script(assert_script.clone()),
+                        local: assert_local,
+                        then: Phase::Assert { node_id, value },
+                    })
+                } else {
+                    Ok(NextStep::Propagate { node_id, value })
+                }
+            }
+            NodeRole::Persistent { .. } => {
+                // IfModified bind cache update
+                if matches!(node.strategy.execution, CompiledExecution::IfModified { .. }) {
+                    if let Some(bind_val) = local.get(&self.interner.intern(KEY_BIND)) {
+                        state.bind_cache.entry(node.name).or_default()
+                            .push((bind_val.clone(), value.clone()));
+                    }
+                }
+                // Assert check, then finalize
+                if let Some(assert_script) = &node.strategy.assert {
+                    debug!(node = %self.interner.resolve(node.name), "evaluating bind assert");
+                    let mut assert_local = FxHashMap::default();
+                    assert_local.insert(self.interner.intern(KEY_RAW), value.clone());
+                    Ok(NextStep::Eval {
+                        _node_id: node_id,
+                        source: EvalSource::Script(assert_script.clone()),
+                        local: assert_local,
+                        then: Phase::Assert { node_id, value },
+                    })
+                } else {
+                    self.finalize_persistent(node_id, &value, lp, state)
+                }
+            }
+            NodeRole::Standalone => {
+                // IfModified bind cache update
+                if matches!(node.strategy.execution, CompiledExecution::IfModified { .. }) {
+                    if let Some(bind_val) = local.get(&self.interner.intern(KEY_BIND)) {
+                        state.bind_cache.entry(node.name).or_default()
+                            .push((bind_val.clone(), value.clone()));
+                    }
+                }
+                // Assert check, then propagate
+                if let Some(assert_script) = &node.strategy.assert {
+                    debug!(node = %self.interner.resolve(node.name), "evaluating assert");
+                    let mut assert_local = FxHashMap::default();
+                    assert_local.insert(self.interner.intern(KEY_RAW), value.clone());
+                    Ok(NextStep::Eval {
+                        _node_id: node_id,
+                        source: EvalSource::Script(assert_script.clone()),
+                        local: assert_local,
+                        then: Phase::Assert { node_id, value },
+                    })
+                } else {
+                    Ok(NextStep::Propagate { node_id, value })
+                }
+            }
+        }
+    }
+
+    /// Finalize a persistent (Sequence/Patch) node — returns NextStep.
+    fn finalize_persistent<'j, E>(
+        &self,
+        node_id: NodeId,
+        value: &TypedValue,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(node_id);
+        let node_name_str = self.interner.resolve(node.name);
+
+        match &node.role {
+            NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
+                let origin = lp.bind_origins.remove(&node_id).expect(
+                    "bind node for Sequence must have origin from prepare"
+                );
+                let collect_coroutine = collect_sequence_coroutine(value.clone());
+                Ok(NextStep::Eval {
+                    _node_id: node_id,
+                    source: EvalSource::Coroutine(collect_coroutine),
+                    local: FxHashMap::default(),
+                    then: Phase::PersistSequence { node_id, origin },
+                })
+            }
+            NodeRole::Persistent { mode: PersistMode::Patch, .. } => {
+                let old_value = state.load(node.name, node_name_str);
+                let patch = old_value
+                    .as_ref()
+                    .and_then(|old| PatchDiff::compute(old.value(), value.value()));
+                let ty = node.output_ty.clone();
+                let ops = match patch {
+                    Some(diff) => StorageOps::Patch { diff, ty },
+                    None => StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty },
+                };
+                let stored = state.persist_and_cache(node.name, node_name_str, ops);
+                Ok(NextStep::Propagate { node_id, value: stored })
+            }
+            _ => {
+                unreachable!("finalize_persistent called on non-Persistent node")
+            }
+        }
+    }
+
+    /// Handle completion of a Phase (script) task — dispatch by phase variant.
+    fn on_phase_complete<'j, E>(
+        &self,
+        phase: Phase,
+        value: TypedValue,
+        local: FxHashMap<Astr, TypedValue>,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        match phase {
+            Phase::IfModifiedKey { node_id } => {
+                self.on_if_modified_key(node_id, value, local, lp, state)
+            }
+            Phase::InitialValue { node_id } => {
+                self.on_initial_value(node_id, value, local, lp, state)
+            }
+            Phase::Assert { node_id, value: original_value } => {
+                self.on_assert(node_id, value, original_value, local, lp, state)
+            }
+            Phase::PersistSequence { node_id, origin } => {
+                self.on_persist_sequence(node_id, value, origin, lp, state)
+            }
+        }
+    }
+
+    /// IfModified key evaluated → check bind cache for hit, else spawn.
+    fn on_if_modified_key<'j, E>(
+        &self,
+        node_id: NodeId,
+        value: TypedValue,
+        local: FxHashMap<Astr, TypedValue>,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(node_id);
+        let node_name_str = self.interner.resolve(node.name);
+
+        // Cache hit check
+        if let Some(entries) = state.bind_cache.get(&node.name)
+            && let Some((_, cached)) = entries.iter().find(|(v, _)| v == &value)
+        {
+            let cached_value = cached.clone();
+            debug!(node = %node_name_str, "if_modified cache hit, skipping execution");
+            state.cache(node.name, cached_value.clone());
+            if lp.remaining_roots.contains(&node_id) {
+                lp.remaining_roots.remove(&node_id);
+            }
+            lp.wake_waiters(node_id, cached_value);
+            return Ok(NextStep::Noop);
+        }
+
+        debug!(node = %node_name_str, "if_modified cache miss, will execute");
+        let mut new_local = local;
+        new_local.insert(self.interner.intern(KEY_BIND), value);
+
+        // Check initial_value
+        if let Some(init_script) = node_initial_value(node) {
+            if self.load_self_value(node_id, state).is_some() {
+                // Has stored value → spawn directly (execute_spawn handles @self)
+                let is_root = lp.remaining_roots.contains(&node_id);
+                Ok(NextStep::Spawn { node_id, local: new_local, is_root })
+            } else {
+                Ok(NextStep::Eval {
+                    _node_id: node_id,
+                    source: EvalSource::Script(init_script.clone()),
+                    local: new_local,
+                    then: Phase::InitialValue { node_id },
+                })
+            }
+        } else {
+            // No initial_value → spawn directly
+            let is_root = lp.remaining_roots.contains(&node_id);
+            Ok(NextStep::Spawn { node_id, local: new_local, is_root })
+        }
+    }
+
+    /// InitialValue evaluated → persist and spawn or propagate.
+    fn on_initial_value<'j, E>(
+        &self,
+        node_id: NodeId,
+        value: TypedValue,
+        local: FxHashMap<Astr, TypedValue>,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        if lp.initial_value_only {
+            self.persist_initial_value(node_id, &value, state);
+            lp.tracker.in_flight.remove(&node_id);
+            lp.remaining_roots.remove(&node_id);
+            // Must still go through finish_dep_wake to wake dependents
+            self.finish_dep_wake(node_id, value, lp, state)?;
+            return Ok(NextStep::Noop);
+        }
+
+        // Normal mode: persist initial value, then spawn
+        self.persist_initial_value(node_id, &value, state);
+        let is_root = lp.remaining_roots.contains(&node_id);
+        Ok(NextStep::Spawn {
+            node_id,
+            local,
+            is_root,
+        })
+    }
+
+    /// Assert evaluated → if passed, finalize; if failed, retry or error.
+    fn on_assert<'j, E>(
+        &self,
+        node_id: NodeId,
+        assert_result: TypedValue,
+        original_value: TypedValue,
+        _local: FxHashMap<Astr, TypedValue>,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(node_id);
+        let node_name = self.interner.resolve(node.name).to_string();
+
+        let Value::Pure(PureValue::Bool(passed)) = assert_result.value() else {
+            return Err(ResolveError::Runtime {
+                node: node_name,
+                error: RuntimeError::unexpected_type(
+                    "assert",
+                    &[ValueKind::Bool],
+                    assert_result.value().kind(),
+                ),
+            });
+        };
+
+        if !*passed {
+            info!(node = %node_name, "assert failed, triggering retry");
+            let error = RuntimeError::assert_failed();
+            if !self.try_retry(node_id, &node_name, &error, lp, state)? {
+                return Err(ResolveError::Runtime { node: node_name, error });
+            }
+            return Ok(NextStep::Noop);
+        }
+
+        // Assert passed — finalize based on role
+        match &node.role {
+            NodeRole::Body { .. } => {
+                Ok(NextStep::Propagate { node_id, value: original_value })
+            }
+            NodeRole::Persistent { .. } => {
+                self.finalize_persistent(node_id, &original_value, lp, state)
+            }
+            NodeRole::Standalone => {
+                Ok(NextStep::Propagate { node_id, value: original_value })
+            }
+        }
+    }
+
+    /// Sequence collect completed → compute diff, persist, propagate.
+    fn on_persist_sequence<'j, E>(
+        &self,
+        node_id: NodeId,
+        value: TypedValue,
+        origin: TrackedDeque<Value>,
+        _lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(node_id);
+        let node_name_str = self.interner.resolve(node.name);
+        let ty = node.output_ty.clone();
+
+        let working_deque = extract_deque(&value, "PersistSequence result");
+        let elem_ty = sequence_elem_ty(&ty);
+
+        let (squashed, diff) = working_deque.into_diff(&origin);
+        let squashed_typed = wrap_deque_items(squashed, elem_ty);
+        let diff_typed = acvus_utils::OwnedDequeDiff {
+            consumed: diff.consumed,
+            removed_back: diff.removed_back,
+            pushed: diff.pushed.into_iter()
+                .map(|v| TypedValue::new(v, elem_ty.clone()))
+                .collect(),
+        };
+
+        let stored_value = state.persist_and_cache(
+            node.name,
+            node_name_str,
+            StorageOps::Sequence { squashed: squashed_typed, diff: diff_typed, ty },
+        );
+
+        info!(node = %node_name_str, "sequence collect + persist complete");
+
+        Ok(NextStep::Propagate { node_id, value: stored_value })
+    }
+
+    // -----------------------------------------------------------------------
+    // on_prepare — replaces start_prepare
+    // -----------------------------------------------------------------------
+
+    /// Public entry point: prepare and execute a node.
+    /// This is the replacement for the old `start_prepare` method.
+    pub fn start_prepare<'j, E>(
+        &self,
+        id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
+        is_root: bool,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<(), ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let step = self.on_prepare(id, local, is_root, lp, state)?;
+        self.execute(step, lp, state)
+    }
+
+    fn on_prepare<'j, E>(
+        &self,
+        id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
+        is_root: bool,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(id);
+        info!(node = %self.interner.resolve(node.name), "prepare node");
+
+        match &node.role {
+            NodeRole::Body { .. } => {
+                // Body: just spawn (execute_spawn injects @self from bind storage)
+                Ok(NextStep::Spawn { node_id: id, local, is_root })
+            }
+            NodeRole::Persistent { .. } | NodeRole::Standalone => {
+                self.on_prepare_lifecycle(id, local, is_root, lp, state)
+            }
+        }
+    }
+
+    /// Unified prepare for Persistent + Standalone nodes.
+    /// @self injection is handled by execute_spawn (role-dependent).
+    fn on_prepare_lifecycle<'j, E>(
+        &self,
+        id: NodeId,
+        local: FxHashMap<Astr, TypedValue>,
+        is_root: bool,
+        lp: &mut LoopState<'_>,
+        state: &mut ResolveState<E>,
+    ) -> Result<NextStep, ResolveError>
+    where
+        E: EntryMut<'j>,
+    {
+        let node = self.graph.node(id);
+        let node_name_str = self.interner.resolve(node.name);
+
+        // initial_value_only mode
+        if lp.initial_value_only {
+            if let Some(init_script) = node_initial_value(node) {
+                if let Some(prev) = self.load_self_value(id, state) {
+                    if is_root { lp.remaining_roots.remove(&id); }
+                    self.finish_dep_wake(id, prev, lp, state)?;
+                    return Ok(NextStep::Noop);
+                }
+
+                debug!(node = %node_name_str, "evaluating initial_value (populate)");
+                lp.tracker.in_flight.insert(id);
+                return Ok(NextStep::Eval {
+                    _node_id: id,
+                    source: EvalSource::Script(init_script.clone()),
+                    local,
+                    then: Phase::InitialValue { node_id: id },
+                });
+            }
+            
+            if is_root { lp.remaining_roots.remove(&id); }
+            return Ok(NextStep::Noop);
+        }
+
+        // IfModified
+        if let CompiledExecution::IfModified { key } = &node.strategy.execution {
+            lp.tracker.in_flight.insert(id);
+            return Ok(NextStep::Eval {
+                _node_id: id,
+                source: EvalSource::Script(key.clone()),
+                local,
+                then: Phase::IfModifiedKey { node_id: id },
+            });
+        }
+
+        // InitialValue
+        if let Some(init_script) = node_initial_value(node) {
+            if self.load_self_value(id, state).is_some() {
+                // Has stored value → spawn directly (execute_spawn injects @self)
+                debug!(node = %node_name_str, "spawning coroutine");
+                return Ok(NextStep::Spawn { node_id: id, local, is_root });
+            } else {
+                // First run → evaluate initial_value
+                debug!(node = %node_name_str, "evaluating initial_value (first run)");
+                lp.tracker.in_flight.insert(id);
+                return Ok(NextStep::Eval {
+                    _node_id: id,
+                    source: EvalSource::Script(init_script.clone()),
+                    local,
+                    then: Phase::InitialValue { node_id: id },
+                });
+            }
+        }
+
+        // Default: just spawn
+        debug!(node = %node_name_str, "spawning coroutine");
+        Ok(NextStep::Spawn { node_id: id, local, is_root })
     }
 
     // -----------------------------------------------------------------------
@@ -651,9 +1287,9 @@ where
         E: EntryMut<'j>,
     {
         let task_meta = lp.meta.remove(&task_id);
-        let node_idx = match &task_meta {
-            Some(TaskMeta::Node { node_idx, .. }) => *node_idx,
-            Some(TaskMeta::Script { purpose, .. }) => script_purpose_node_idx(purpose),
+        let node_id = match &task_meta {
+            Some(TaskMeta::Node { node_id, .. }) => *node_id,
+            Some(TaskMeta::Script { phase, .. }) => phase_node_id(phase),
             None => {
                 return Err(ResolveError::Runtime {
                     node: String::new(),
@@ -665,10 +1301,10 @@ where
         let is_root = matches!(&task_meta, Some(TaskMeta::Node { is_root: true, .. }));
         let node_name = self
             .interner
-            .resolve(self.nodes[node_idx].name)
+            .resolve(self.graph.node(node_id).name)
             .to_string();
 
-        if is_root && self.try_retry(node_idx, &node_name, &error, lp, state)? {
+        if is_root && self.try_retry(node_id, &node_name, &error, lp, state)? {
             return Ok(());
         }
 
@@ -700,9 +1336,9 @@ where
         let name_str = self.interner.resolve(name);
 
         // 1. Local context (highest priority)
-        if let Some(arc) = lp.local(task_id).get(&name) {
+        if let Some(val) = lp.local(task_id).get(&name) {
             debug!(context = %name_str, "resolved from local");
-            request.resolve(Arc::clone(arc));
+            request.resolve(val.clone());
             lp.enqueue_step(task_id, coroutine);
             return Ok(());
         }
@@ -715,11 +1351,37 @@ where
             return Ok(());
         }
 
+        // 2b. Scope resolution: bind node requesting @raw → spawn body on demand
+        if let Some(TaskMeta::Node { node_id, .. }) = lp.meta.get(&task_id) {
+            if let NodeRole::Persistent { body_id, .. } = &self.graph.node(*node_id).role {
+                let raw_name = self.interner.intern(KEY_RAW);
+                if name == raw_name {
+                    let body_id = *body_id;
+                    // @raw → spawn body node and park until it emits
+                    if !lp.tracker.in_flight.contains(&body_id) {
+                        debug!(context = %name_str, "bind requesting @raw, spawning body node");
+                        let step = self.on_prepare(body_id, FxHashMap::default(), false, lp, state)?;
+                        self.execute(step, lp, state)?;
+                    }
+                    lp.park_for_dep(body_id, task_id, coroutine, PendingRequest::Context(request));
+                    return Ok(());
+                }
+            }
+        }
+
         // 3. Known node — check before storage so Node > Storage
-        if let Some(&dep_idx) = self.name_to_idx.get(&name) {
+        if let Some(&dep_id) = self.graph.name_to_primary.get(&name) {
             // 3a. Function node → ExternFn handle
-            if self.nodes[dep_idx].is_function {
-                request.resolve(Arc::new(TypedValue::new(Arc::new(Value::extern_fn(name)), Ty::Infer)));
+            if self.graph.node(dep_id).is_function {
+                let node = self.graph.node(dep_id);
+                let fn_ty = Ty::Fn {
+                    params: node.fn_params.iter().map(|p| p.ty.clone()).collect(),
+                    ret: Box::new(node.output_ty.clone()),
+                    kind: acvus_mir::ty::FnKind::Extern,
+                    captures: vec![],
+                    effect: acvus_mir::ty::Effect::Effectful,
+                };
+                request.resolve(TypedValue::new(Value::extern_fn(name), fn_ty));
                 lp.enqueue_step(task_id, coroutine);
                 return Ok(());
             }
@@ -727,24 +1389,25 @@ where
             // 3b. Node task → spawn dep if strategy says so
             if lp.is_node_task(task_id) {
                 let needs = if lp.initial_value_only {
-                    self.needs_resolve_initial_value_only(dep_idx, state)
+                    self.needs_resolve_initial_value_only(dep_id, state)
                 } else {
-                    self.needs_resolve(dep_idx, state, lp.no_execute)?
+                    self.needs_resolve(dep_id, state, lp.no_execute)?
                 };
                 if needs {
                     // Serialized node already in flight → park in serialized_queue
-                    if self.needs_serialized(dep_idx) && lp.in_flight.contains(&dep_idx) {
-                        lp.serialized_queue.entry(dep_idx).or_default().push_back(Parked {
+                    if self.needs_serialized(dep_id) && lp.tracker.in_flight.contains(&dep_id) {
+                        lp.tracker.serialized_queue.entry(dep_id).or_default().push_back(Parked {
                             task_id, coroutine,
                             request: PendingRequest::Context(request),
                         });
                         return Ok(());
                     }
-                    if !lp.in_flight.contains(&dep_idx) {
+                    if !lp.tracker.in_flight.contains(&dep_id) {
                         debug!(context = %name_str, "spawning dependency node");
-                        self.start_prepare(dep_idx, FxHashMap::default(), false, lp, state)?;
+                        let step = self.on_prepare(dep_id, FxHashMap::default(), false, lp, state)?;
+                        self.execute(step, lp, state)?;
                     }
-                    lp.park_for_dep(name, task_id, coroutine, PendingRequest::Context(request));
+                    lp.park_for_dep(dep_id, task_id, coroutine, PendingRequest::Context(request));
                     return Ok(());
                 }
 
@@ -757,10 +1420,11 @@ where
                 }
 
                 // Node exists but not in storage either → park for dep
-                if !lp.in_flight.contains(&dep_idx) {
-                    self.start_prepare(dep_idx, FxHashMap::default(), false, lp, state)?;
+                if !lp.tracker.in_flight.contains(&dep_id) {
+                    let step = self.on_prepare(dep_id, FxHashMap::default(), false, lp, state)?;
+                    self.execute(step, lp, state)?;
                 }
-                lp.park_for_dep(name, task_id, coroutine, PendingRequest::Context(request));
+                lp.park_for_dep(dep_id, task_id, coroutine, PendingRequest::Context(request));
                 return Ok(());
             }
         }
@@ -774,9 +1438,9 @@ where
         }
 
         // 4b. @turn_index — derived from tree depth
-        if name == self.interner.intern("turn_index") {
+        if name == self.interner.intern(KEY_TURN_INDEX) {
             let depth = state.entry.depth();
-            request.resolve(Arc::new(TypedValue::int(depth as i64)));
+            request.resolve(TypedValue::int(depth as i64));
             lp.enqueue_step(task_id, coroutine);
             return Ok(());
         }
@@ -808,10 +1472,10 @@ where
 
         // 1. Node task → spawn dep node
         if lp.is_node_task(task_id) {
-            if let Some(&dep_idx) = self.name_to_idx.get(&name) {
+            if let Some(&dep_id) = self.graph.name_to_primary.get(&name) {
                 let args = request.args().to_vec();
-                let node = &self.nodes[dep_idx];
-                let dep_local: FxHashMap<Astr, Arc<TypedValue>> = if node.is_function {
+                let node = self.graph.node(dep_id);
+                let dep_local: FxHashMap<Astr, TypedValue> = if node.is_function {
                     // Tool call args come as a single Object — unpack fields by name.
                     if let Some(tv) = args.first()
                         && let Value::Lazy(LazyValue::Object(obj)) = tv.value()
@@ -820,7 +1484,7 @@ where
                             .iter()
                             .filter_map(|p| {
                                 let val = obj.get(&p.name)?.clone();
-                                Some((p.name, Arc::new(TypedValue::new(Arc::new(val), Ty::Infer))))
+                                Some((p.name, TypedValue::new(val, p.ty.clone())))
                             })
                             .collect()
                     } else {
@@ -828,22 +1492,33 @@ where
                         node.fn_params
                             .iter()
                             .zip(args.into_iter())
-                            .map(|(p, val)| (p.name, Arc::new(val)))
+                            .map(|(p, val)| (p.name, val))
                             .collect()
                     }
                 } else if let Some(tv) = args.first()
                     && let Value::Lazy(LazyValue::Object(obj)) = tv.value()
                 {
+                    // Extract field types from the Object's Ty.
+                    let field_types = match tv.ty() {
+                        Ty::Object(fields) => Some(fields),
+                        _ => None,
+                    };
                     obj.iter()
-                        .map(|(k, v)| (*k, Arc::new(TypedValue::new(Arc::new(v.clone()), Ty::Infer))))
+                        .map(|(k, v)| {
+                            let field_ty = field_types
+                                .and_then(|ft| ft.get(k))
+                                .cloned()
+                                .unwrap_or_else(Ty::error);
+                            (*k, TypedValue::new(v.clone(), field_ty))
+                        })
                         .collect()
                 } else {
                     FxHashMap::default()
                 };
 
                 // Serialized node already in flight → park in serialized_queue
-                if self.needs_serialized(dep_idx) && lp.in_flight.contains(&dep_idx) {
-                    lp.serialized_queue.entry(dep_idx).or_default().push_back(Parked {
+                if self.needs_serialized(dep_id) && lp.tracker.in_flight.contains(&dep_id) {
+                    lp.tracker.serialized_queue.entry(dep_id).or_default().push_back(Parked {
                         task_id, coroutine,
                         request: PendingRequest::ExternCall(request),
                     });
@@ -854,8 +1529,9 @@ where
                     context = %self.interner.resolve(name),
                     "spawning tool node via extern call"
                 );
-                self.start_prepare(dep_idx, dep_local, false, lp, state)?;
-                lp.park_for_dep(name, task_id, coroutine, PendingRequest::ExternCall(request));
+                let step = self.on_prepare(dep_id, dep_local, false, lp, state)?;
+                self.execute(step, lp, state)?;
+                lp.park_for_dep(dep_id, task_id, coroutine, PendingRequest::ExternCall(request));
                 return Ok(());
             }
         }
@@ -865,13 +1541,13 @@ where
         debug!(context = %self.interner.resolve(name), "calling extern_handler");
         match (self.extern_handler)(name, args).await {
             Ok(value) => {
-                request.resolve(Arc::new(value));
+                request.resolve(value);
                 lp.enqueue_step(task_id, coroutine);
             }
             Err(e) => {
-                let node_idx = match lp.meta.get(&task_id) {
-                    Some(TaskMeta::Node { node_idx, .. }) => *node_idx,
-                    Some(TaskMeta::Script { purpose, .. }) => script_purpose_node_idx(purpose),
+                let node_id = match lp.meta.get(&task_id) {
+                    Some(TaskMeta::Node { node_id, .. }) => *node_id,
+                    Some(TaskMeta::Script { phase, .. }) => phase_node_id(phase),
                     None => {
                         return Err(ResolveError::Runtime {
                             node: String::new(),
@@ -882,7 +1558,7 @@ where
                 return Err(ResolveError::Runtime {
                     node: self
                         .interner
-                        .resolve(self.nodes[node_idx].name)
+                        .resolve(self.graph.node(node_id).name)
                         .to_string(),
                     error: e,
                 });
@@ -892,363 +1568,58 @@ where
     }
 
     // -----------------------------------------------------------------------
-    // Script phase transitions
+    // Bind-scope locals: @self injection for bind nodes
     // -----------------------------------------------------------------------
 
-    fn handle_script_emit<'j, E>(
+    /// Prepare @self local for a bind node at spawn time.
+    /// For Sequence mode: clones deque, checkpoints, stores origin in `lp.bind_origins`.
+    fn prepare_bind_self<'j, E>(
         &self,
-        purpose: ScriptPurpose,
-        value: TypedValue,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        bind_id: NodeId,
+        local: &mut FxHashMap<Astr, TypedValue>,
         lp: &mut LoopState<'_>,
-        state: &mut ResolveState<E>,
-    ) -> Result<(), ResolveError>
-    where
-        E: EntryMut<'j>,
-    {
-        match purpose {
-            ScriptPurpose::IfModifiedKey { node_idx } => {
-                let node = &self.nodes[node_idx];
-                let node_name_str = self.interner.resolve(node.name);
-
-                // Cache hit → skip execution
-                if let Some(entries) = state.bind_cache.get(&node.name)
-                    && let Some((_, cached)) = entries.iter().find(|(v, _)| v == &value)
-                {
-                    let cached_value = TypedValue::clone(cached);
-                    debug!(node = %node_name_str, "if_modified cache hit, skipping execution");
-                    state.cache(node.name, Arc::new(cached_value.clone()));
-                    if lp.remaining_roots.contains(&node_idx) {
-                        lp.remaining_roots.remove(&node_idx);
-                    }
-                    lp.wake_waiters(node.name, cached_value);
-                    return Ok(());
-                }
-
-                debug!(node = %node_name_str, "if_modified cache miss, will execute");
-                let mut new_local = local;
-                new_local.insert(self.interner.intern("bind"), Arc::new(value));
-                self.start_after_if_modified(node_idx, new_local, lp, state);
-            }
-
-            ScriptPurpose::InitialValue { node_idx } => {
-                if lp.initial_value_only {
-                    // initial_value_only: store directly, skip node body execution
-                    self.persist_initial_value(node_idx, &value, state);
-                    lp.in_flight.remove(&node_idx);
-                    lp.remaining_roots.remove(&node_idx);
-                    self.finish_dep_wake(node_idx, value, lp, state)?;
-                } else {
-                    let mut new_local = local;
-                    new_local.insert(self.interner.intern("self"), Arc::new(value));
-                    let is_root = lp.remaining_roots.contains(&node_idx);
-                    self.spawn_node_task(node_idx, new_local, is_root, lp);
-                }
-            }
-
-            ScriptPurpose::Assert {
-                node_idx,
-                value: node_value,
-            } => {
-                let node_name_str = self.interner.resolve(self.nodes[node_idx].name);
-
-                let Value::Pure(PureValue::Bool(passed)) = value.value() else {
-                    return Err(ResolveError::Runtime {
-                        node: node_name_str.to_string(),
-                        error: RuntimeError::type_mismatch(
-                            "assert",
-                            "bool",
-                            &format!("{value:?}"),
-                        ),
-                    });
-                };
-
-                if !*passed {
-                    info!(node = %node_name_str, "assert failed, triggering retry");
-                    let node_name = node_name_str.to_string();
-                    let error = RuntimeError::other("assert failed");
-                    if !self.try_retry(node_idx, &node_name, &error, lp, state)? {
-                        return Err(ResolveError::Runtime {
-                            node: node_name,
-                            error,
-                        });
-                    }
-                    return Ok(());
-                }
-
-                self.apply_root_finalize(node_idx, &node_value, &local, lp, state)?;
-            }
-
-            ScriptPurpose::BindScript {
-                node_idx,
-                value: _raw_value,
-                origin,
-            } => {
-                let node = &self.nodes[node_idx];
-                let node_name_str = self.interner.resolve(node.name);
-                let _ty = self.nodes[node_idx].output_ty.clone();
-
-                match &node.strategy.persistency {
-                    CompiledPersistency::Sequence { .. } => {
-                        // Bind result should be Sequence(Pure).
-                        // Spawn a collect coroutine to collect it into a TrackedDeque
-                        // via the FuturesUnordered loop (async, with handle for exec_next).
-                        let origin = origin.expect(
-                            "BindScript for Sequence must have origin from prepare_bind_locals"
-                        );
-                        let collect_coroutine = collect_sequence_coroutine(value);
-                        self.spawn_script_task_raw(
-                            collect_coroutine,
-                            FxHashMap::default(),
-                            ScriptPurpose::CollectSequence { node_idx, origin },
-                            lp,
-                        );
-                        // CollectSequence will handle persist + cache + wake.
-                        return Ok(());
-                    }
-                    CompiledPersistency::Patch { .. } => {
-                        let old_value = state.load(node.name, node_name_str);
-                        let patch = old_value
-                            .as_ref()
-                            .and_then(|old| PatchDiff::compute(old.value(), value.value()));
-                        let ty = self.nodes[node_idx].output_ty.clone();
-                        match patch {
-                            Some(diff) => {
-                                state.persist(node_name_str, StorageOps::Patch { diff, ty });
-                            }
-                            None => {
-                                state.persist(node_name_str, StorageOps::Patch { diff: PatchDiff::set(value), ty });
-                            }
-                        }
-                    }
-                    _ => unreachable!("BindScript only spawned for Sequence/Patch modes"),
-                }
-
-                // Re-load from storage — this is the canonical value after
-                // storage-level type conversions (e.g. Sequence → Deque).
-                // Cache and wake deps with this value, not the raw bind result.
-                let stored_value = state.entry.get(node_name_str)
-                    .expect("value must be in storage after persist");
-
-                state.cache(node.name, Arc::clone(&stored_value));
-
-                info!(node = %node_name_str, "resolve node complete");
-
-                let wake_value = TypedValue::clone(&stored_value);
-                lp.remaining_roots.remove(&node_idx);
-                self.finish_dep_wake(node_idx, wake_value, lp, state)?;
-            }
-
-            ScriptPurpose::CollectSequence { node_idx, origin } => {
-                let node = &self.nodes[node_idx];
-                let node_name_str = self.interner.resolve(node.name);
-                let ty = self.nodes[node_idx].output_ty.clone();
-
-                // value is a Deque (collected from Sequence by collect_sequence_coroutine).
-                let working_deque = match value.value() {
-                    Value::Lazy(LazyValue::Deque(d)) => d.clone(),
-                    other => panic!(
-                        "CollectSequence result must be Deque, got {other:?}"
-                    ),
-                };
-
-                // Compute diff against origin (checkpoint from prepare_bind_locals).
-                let (squashed, diff) = working_deque.into_diff(&origin);
-
-                // Convert TrackedDeque<Value> → TrackedDeque<TypedValue> for storage.
-                let squashed_typed = TrackedDeque::from_vec(
-                    squashed.into_vec().into_iter()
-                        .map(|v| TypedValue::new(Arc::new(v), Ty::Infer))
-                        .collect()
-                );
-                let diff_typed = acvus_utils::OwnedDequeDiff {
-                    consumed: diff.consumed,
-                    removed_back: diff.removed_back,
-                    pushed: diff.pushed.into_iter()
-                        .map(|v| TypedValue::new(Arc::new(v), Ty::Infer))
-                        .collect(),
-                };
-
-                state.persist(
-                    node_name_str,
-                    StorageOps::Sequence { squashed: squashed_typed, diff: diff_typed, ty },
-                );
-
-                // Re-load from storage for caching.
-                let stored_value = state.entry.get(node_name_str)
-                    .expect("value must be in storage after persist");
-
-                state.cache(node.name, Arc::clone(&stored_value));
-
-                info!(node = %node_name_str, "sequence collect + persist complete");
-
-                let wake_value = TypedValue::clone(&stored_value);
-                lp.remaining_roots.remove(&node_idx);
-                self.finish_dep_wake(node_idx, wake_value, lp, state)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Bind-scope locals: @self + @raw injection (single source of truth)
-    // -----------------------------------------------------------------------
-
-    /// Prepare locals for Bind scope (@self + @raw).
-    /// Returns `(locals, origin)` where `origin` is the Deque checkpoint
-    /// needed by bind to compute diffs. Assert callers can ignore `origin`.
-    fn prepare_bind_locals<'j, E>(
-        &self,
-        node_idx: usize,
-        raw_value: &TypedValue,
         state: &ResolveState<E>,
-    ) -> (FxHashMap<Astr, Arc<TypedValue>>, Option<TrackedDeque<Value>>)
+    )
     where
         E: EntryMut<'j>,
     {
-        let node = &self.nodes[node_idx];
+        let node = self.graph.node(bind_id);
         let interner = self.interner;
-        let mut locals = FxHashMap::default();
-        let mut origin: Option<TrackedDeque<Value>> = None;
 
         // @self = previous stored value (or initial_value on first run)
-        if let Some(prev) = self.load_self_value(node_idx, state) {
-            let self_val = match &node.strategy.persistency {
-                CompiledPersistency::Sequence { .. } => {
-                    let deque = match prev.value() {
-                        Value::Lazy(LazyValue::Deque(d)) => d.clone(),
-                        Value::Lazy(LazyValue::List(items)) => TrackedDeque::from_vec(items.clone()),
-                        _ => panic!("sequence mode @self: expected Deque or List"),
-                    };
-                    origin = Some(deque.clone());
+        if let Some(prev) = self.load_self_value(bind_id, state) {
+            let self_val = match &node.role {
+                NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
+                    let deque = extract_deque(&prev, "sequence mode @self");
+                    lp.bind_origins.insert(bind_id, deque.clone());
                     let mut working = deque;
                     working.checkpoint();
-                    TypedValue::new(Arc::new(Value::deque(working)), node.output_ty.clone())
+                    let sc = acvus_interpreter::SequenceChain::new(working);
+                    TypedValue::new(Value::sequence(sc), node.output_ty.clone())
                 }
                 _ => prev,
             };
-            locals.insert(interner.intern("self"), Arc::new(self_val));
+            local.insert(interner.intern(KEY_SELF), self_val);
         } else if node.strategy.initial_value.is_some() {
             // initial_value exists but no stored value → populate_initial_values was not called or bug
             let name_str = self.interner.resolve(node.name);
             panic!(
-                "node '{}' has initial_value but no stored value in prepare_bind_locals — \
+                "node '{}' has initial_value but no stored value in prepare_bind_self — \
                  populate_initial_values must be called before resolve",
                 name_str,
             );
         }
-
-        // @raw = this turn's raw output. Strictly bind-internal — never
-        // exposed via turn_context or dep wake.
-        locals.insert(interner.intern("raw"), Arc::new(raw_value.clone()));
-
-        (locals, origin)
     }
 
     // -----------------------------------------------------------------------
-    // Root finalize: assert → cache → store → bind
-    // -----------------------------------------------------------------------
-
-    fn start_root_finalize<'j, E>(
-        &self,
-        node_idx: usize,
-        value: TypedValue,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        lp: &mut LoopState<'_>,
-        state: &mut ResolveState<E>,
-    ) -> Result<(), ResolveError>
-    where
-        E: EntryMut<'j>,
-    {
-        let node = &self.nodes[node_idx];
-
-        if let Some(ref assert_script) = node.strategy.assert {
-            let (assert_local, _origin) = self.prepare_bind_locals(node_idx, &value, state);
-            debug!(node = %self.interner.resolve(node.name), "evaluating assert");
-            self.spawn_script_task(
-                assert_script,
-                assert_local,
-                ScriptPurpose::Assert { node_idx, value },
-                lp,
-            );
-        } else {
-            self.apply_root_finalize(node_idx, &value, &local, lp, state)?;
-        }
-        Ok(())
-    }
-
-    fn apply_root_finalize<'j, E>(
-        &self,
-        node_idx: usize,
-        value: &TypedValue,
-        local: &FxHashMap<Astr, Arc<TypedValue>>,
-        lp: &mut LoopState<'_>,
-        state: &mut ResolveState<E>,
-    ) -> Result<(), ResolveError>
-    where
-        E: EntryMut<'j>,
-    {
-        let node = &self.nodes[node_idx];
-        let interner = self.interner;
-        let node_name_str = interner.resolve(node.name);
-
-        // IfModified: cache update
-        if matches!(node.strategy.execution, CompiledExecution::IfModified { .. })
-            && let Some(bind_val) = local.get(&interner.intern("bind"))
-        {
-            state
-                .bind_cache
-                .entry(node.name)
-                .or_default()
-                .push(((**bind_val).clone(), Arc::new(value.clone())));
-        }
-
-        // Mode: Sequence/Patch → spawn bind script before completing.
-        //
-        // For Deque/Patch modes, turn_context is NOT set here with the raw value.
-        // It will be set to the bind result (accumulated @self) when the bind
-        // script completes. This ensures @node_name === @self (not @raw).
-        //
-        // @raw is strictly internal to the bind script — it is injected as a
-        // local variable and MUST NOT leak to turn_context or dep wakers.
-        // External consumers of @node_name always see the accumulated value.
-        match &node.strategy.persistency {
-            CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
-                let (bind_local, origin) = self.prepare_bind_locals(node_idx, &value, state);
-                debug!(node = %node_name_str, "evaluating bind script");
-                self.spawn_script_task(
-                    bind,
-                    bind_local,
-                    ScriptPurpose::BindScript {
-                        node_idx,
-                        value: value.clone(),
-                        origin,
-                    },
-                    lp,
-                );
-                return Ok(()); // BindScript will remove from remaining_roots
-            }
-            CompiledPersistency::Ephemeral => {
-                state.cache(node.name, Arc::new(value.clone()));
-            }
-        }
-
-        info!(node = %node_name_str, "resolve node complete");
-        lp.remaining_roots.remove(&node_idx);
-        self.finish_dep_wake(node_idx, value.clone(), lp, state)?;
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Prepare phase: IfModified → InitialValue → Node spawn
+    // Dep wake + scheduling
     // -----------------------------------------------------------------------
 
     /// Wake dep waiters after a node completes. For serialized nodes,
     /// wakes one waiter at a time via re-execution to avoid lost updates.
     fn finish_dep_wake<'j, E>(
         &self,
-        node_idx: usize,
+        node_id: NodeId,
         value: TypedValue,
         lp: &mut LoopState<'_>,
         state: &mut ResolveState<E>,
@@ -1256,145 +1627,38 @@ where
     where
         E: EntryMut<'j>,
     {
-        let node_name = self.nodes[node_idx].name;
-        if self.needs_serialized(node_idx) {
-            if let Some(queue) = lp.serialized_queue.get_mut(&node_idx)
+        if self.needs_serialized(node_id) {
+            if let Some(queue) = lp.tracker.serialized_queue.get_mut(&node_id)
                 && let Some(parked) = queue.pop_front()
             {
                 // 다음 waiter를 dep_waiters로 이동 → 재실행 결과를 받게 됨
-                lp.dep_waiters.entry(node_name).or_default().push(parked);
+                lp.tracker.dep_waiters.entry(node_id).or_default().push(parked);
                 // 노드 재실행 (갱신된 @self from turn_context)
-                self.start_prepare(node_idx, FxHashMap::default(), false, lp, state)?;
+                let step = self.on_prepare(node_id, FxHashMap::default(), false, lp, state)?;
+                self.execute(step, lp, state)?;
             } else {
                 // 직렬화 큐 비었음 → 일반 wake
-                lp.wake_waiters(node_name, value);
-                self.try_eager_schedule(node_idx, lp, state)?;
+                lp.wake_waiters(node_id, value);
+                self.try_eager_schedule(node_id, lp, state)?;
             }
         } else {
-            lp.wake_waiters(node_name, value);
-            self.try_eager_schedule(node_idx, lp, state)?;
+            lp.wake_waiters(node_id, value);
+            self.try_eager_schedule(node_id, lp, state)?;
         }
         Ok(())
     }
 
-    pub fn start_prepare<'j, E>(
-        &self,
-        idx: usize,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        is_root: bool,
-        lp: &mut LoopState<'_>,
-        state: &mut ResolveState<E>,
-    ) -> Result<(), ResolveError>
-    where
-        E: EntryMut<'j>,
-    {
-        let node = &self.nodes[idx];
-        let interner = self.interner;
-        let node_name_str = interner.resolve(node.name);
-        info!(node = %node_name_str, "prepare node");
 
-        // initial_value_only mode: only evaluate initial_value scripts
-        if lp.initial_value_only {
-            if let Some(init_script) = node_initial_value(node) {
-                if let Some(prev) = self.load_self_value(idx, state) {
-                    // Already populated → skip (don't cache — node should still execute this turn)
-                    if is_root { lp.remaining_roots.remove(&idx); }
-                    self.finish_dep_wake(idx, prev, lp, state)?;
-                } else {
-                    debug!(node = %node_name_str, "evaluating initial_value (populate)");
-                    self.spawn_script_task(
-                        init_script,
-                        local,
-                        ScriptPurpose::InitialValue { node_idx: idx },
-                        lp,
-                    );
-                    lp.in_flight.insert(idx);
-                }
-            } else {
-                // No initial_value in initial_value_only mode → nothing to do
-                if is_root { lp.remaining_roots.remove(&idx); }
-            }
-            return Ok(());
-        }
-
-        // IfModified: spawn key script
-        if let CompiledExecution::IfModified { ref key } = node.strategy.execution {
-            self.spawn_script_task(
-                key,
-                local,
-                ScriptPurpose::IfModifiedKey { node_idx: idx },
-                lp,
-            );
-            lp.in_flight.insert(idx);
-            return Ok(());
-        }
-
-        // InitialValue
-        if let Some(init_script) = node_initial_value(node) {
-            if let Some(prev) = self.load_self_value(idx, state) {
-                let mut new_local = local;
-                new_local.insert(interner.intern("self"), Arc::new(prev));
-                debug!(node = %node_name_str, "spawning coroutine");
-                self.spawn_node_task(idx, new_local, is_root, lp);
-            } else {
-                debug!(node = %node_name_str, "evaluating initial_value (first run)");
-                self.spawn_script_task(
-                    init_script,
-                    local,
-                    ScriptPurpose::InitialValue { node_idx: idx },
-                    lp,
-                );
-                lp.in_flight.insert(idx);
-            }
-            return Ok(());
-        }
-
-        debug!(node = %node_name_str, "spawning coroutine");
-        self.spawn_node_task(idx, local, is_root, lp);
-        Ok(())
-    }
-
-    /// After IfModified key resolved (cache miss): check initial_value, then spawn node.
-    fn start_after_if_modified<'j, E>(
-        &self,
-        node_idx: usize,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        lp: &mut LoopState<'_>,
-        state: &mut ResolveState<E>,
-    ) where
-        E: EntryMut<'j>,
-    {
-        let node = &self.nodes[node_idx];
-
-        if let Some(init_script) = node_initial_value(node) {
-            if let Some(prev) = self.load_self_value(node_idx, state) {
-                let mut new_local = local;
-                new_local.insert(self.interner.intern("self"), Arc::new(prev));
-                let is_root = lp.remaining_roots.contains(&node_idx);
-                self.spawn_node_task(node_idx, new_local, is_root, lp);
-            } else {
-                self.spawn_script_task(
-                    init_script,
-                    local,
-                    ScriptPurpose::InitialValue { node_idx },
-                    lp,
-                );
-            }
-        } else {
-            let is_root = lp.remaining_roots.contains(&node_idx);
-            self.spawn_node_task(node_idx, local, is_root, lp);
-        }
-    }
 
     /// Try to load the existing @self value from turn_context (this turn's
     /// update) first, then storage (previous turn's value).
-    fn load_self_value<'j, E>(&self, idx: usize, state: &ResolveState<E>) -> Option<TypedValue>
+    fn load_self_value<'j, E>(&self, id: NodeId, state: &ResolveState<E>) -> Option<TypedValue>
     where
         E: EntryMut<'j>,
     {
-        let node = &self.nodes[idx];
+        let node = self.graph.node(id);
         let name_str = self.interner.resolve(node.name);
-        state.load_self(node.name, name_str).map(|arc| TypedValue::clone(&arc))
+        state.load_self(node.name, name_str)
     }
 
     // -----------------------------------------------------------------------
@@ -1409,15 +1673,36 @@ where
     /// - `prepare_bind_locals` already handles List→Deque coercion
     fn persist_initial_value<'j, E>(
         &self,
-        idx: usize,
+        id: NodeId,
         value: &TypedValue,
         state: &mut ResolveState<E>,
     ) where
         E: EntryMut<'j>,
     {
-        let node = &self.nodes[idx];
+        let node = self.graph.node(id);
         let name_str = self.interner.resolve(node.name);
-        state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty: node.output_ty.clone() });
+        let ty = node.output_ty.clone();
+        match &node.role {
+            NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
+                // Convert value to TrackedDeque for Sequence storage
+                let items = extract_deque(value, "Sequence persistency initial value");
+                let elem_ty = sequence_elem_ty(&ty);
+                let squashed = wrap_deque_items(items, elem_ty);
+                let diff = acvus_utils::OwnedDequeDiff {
+                    consumed: 0,
+                    removed_back: 0,
+                    pushed: squashed.as_slice().to_vec(),
+                };
+                state.persist(name_str, StorageOps::Sequence { squashed, diff, ty });
+            }
+            NodeRole::Persistent { mode: PersistMode::Patch, .. } => {
+                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+            }
+            _ => {
+                // Standalone with initial_value: persist as Patch
+                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+            }
+        }
     }
 
 
@@ -1427,7 +1712,7 @@ where
 
     fn try_retry<'j, E>(
         &self,
-        idx: usize,
+        id: NodeId,
         node_name: &str,
         error: &RuntimeError,
         lp: &mut LoopState<'_>,
@@ -1436,7 +1721,7 @@ where
     where
         E: EntryMut<'j>,
     {
-        let Some((max_retries, attempt, local)) = lp.retry_state.get_mut(&idx) else {
+        let Some((max_retries, attempt, local)) = lp.retry_state.get_mut(&id) else {
             return Ok(false);
         };
         if *attempt >= *max_retries {
@@ -1451,7 +1736,8 @@ where
             "retrying node after runtime error",
         );
         let local_clone = local.clone();
-        self.start_prepare(idx, local_clone, true, lp, state)?;
+        let step = self.on_prepare(id, local_clone, true, lp, state)?;
+        self.execute(step, lp, state)?;
         Ok(true)
     }
 
@@ -1463,7 +1749,7 @@ where
         &self,
         name: Astr,
         state: &mut ResolveState<E>,
-    ) -> Result<Arc<TypedValue>, ResolveError>
+    ) -> Result<TypedValue, ResolveError>
     where
         E: EntryMut<'j>,
     {
@@ -1472,19 +1758,18 @@ where
         match (self.resolver)(name).await {
             Resolved::Once(value) => {
                 debug!(name = %name_str, kind = "once", "external resolver returned");
-                Ok(Arc::new(value))
+                Ok(value)
             }
             Resolved::Turn(value) => {
                 debug!(name = %name_str, kind = "turn", "external resolver returned");
-                let arc = Arc::new(value);
-                state.cache(name, Arc::clone(&arc));
-                Ok(arc)
+                state.cache(name, value.clone());
+                Ok(value)
             }
             Resolved::Persist(value) => {
                 debug!(name = %name_str, kind = "persist", "external resolver returned");
-                let arc = Arc::new(value);
-                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(TypedValue::clone(&arc)), ty: Ty::Infer });
-                Ok(arc)
+                let ty = value.ty().clone();
+                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+                Ok(value)
             }
         }
     }
@@ -1493,8 +1778,8 @@ where
     // Eager dependency scheduling
     // -----------------------------------------------------------------------
 
-    fn eager_node_deps(&self, idx: usize, entry: &dyn EntryRef<'_>) -> Vec<usize> {
-        let node = &self.nodes[idx];
+    fn eager_node_deps(&self, id: NodeId, entry: &dyn EntryRef<'_>) -> Vec<NodeId> {
+        let node = self.graph.node(id);
         let known = node.known_from_entry(self.interner, entry);
         let mut eager = FxHashSet::default();
 
@@ -1512,12 +1797,18 @@ where
                         partition_context_keys(&plain.block.module, &known, &plain.block.val_def);
                     eager.extend(p.eager);
                 }
-                CompiledNodeKind::Expr(expr) => {
+                CompiledNodeKind::Expression(expr) => {
                     let p =
                         partition_context_keys(&expr.script.module, &known, &expr.script.val_def);
                     eager.extend(p.eager);
                 }
-                _ => {}
+                CompiledNodeKind::OpenAICompatible(_)
+                | CompiledNodeKind::Anthropic(_)
+                | CompiledNodeKind::GoogleAI(_)
+                | CompiledNodeKind::GoogleAICache(_)
+                | CompiledNodeKind::Iterator { .. } => {
+                    // LLM/Cache/Iterator: no script-level context_keys to partition
+                }
             }
         }
 
@@ -1530,35 +1821,32 @@ where
             CompiledExecution::IfModified { key } => {
                 eager.extend(key.context_keys.iter().copied());
             }
-            _ => {}
+            CompiledExecution::Always | CompiledExecution::OncePerTurn => {}
         }
-        match &node.strategy.persistency {
-            CompiledPersistency::Sequence { bind } | CompiledPersistency::Patch { bind } => {
-                eager.extend(bind.context_keys.iter().copied());
-            }
-            _ => {}
+        if let NodeRole::Persistent { bind, .. } = &node.role {
+            eager.extend(bind.context_keys.iter().copied());
         }
 
         eager
             .iter()
-            .filter_map(|name| self.name_to_idx.get(name).copied())
-            .filter(|&i| i != idx)
+            .filter_map(|name| self.graph.name_to_primary.get(name).copied())
+            .filter(|&dep_id| dep_id != id)
             .collect()
     }
 
     /// Always 전략 + initial_value를 가진 노드인지.
     /// 이 조건이면 동시 실행 시 @self lost update가 발생하므로 직렬화 필요.
-    fn needs_serialized(&self, idx: usize) -> bool {
-        let node = &self.nodes[idx];
+    fn needs_serialized(&self, id: NodeId) -> bool {
+        let node = self.graph.node(id);
         matches!(node.strategy.execution, CompiledExecution::Always)
             && node.strategy.initial_value.is_some()
     }
 
-    fn needs_resolve_initial_value_only<'j, E>(&self, idx: usize, state: &ResolveState<E>) -> bool
+    fn needs_resolve_initial_value_only<'j, E>(&self, id: NodeId, state: &ResolveState<E>) -> bool
     where
         E: EntryMut<'j>,
     {
-        let name = self.nodes[idx].name;
+        let name = self.graph.node(id).name;
         if state.is_cached(&name) {
             return false;
         }
@@ -1567,18 +1855,17 @@ where
             return false;
         }
         // Need to evaluate if this node has an initial_value
-        node_initial_value(&self.nodes[idx]).is_some()
+        node_initial_value(self.graph.node(id)).is_some()
     }
 
-    fn needs_resolve<'j, E>(&self, idx: usize, state: &ResolveState<E>, no_execute: bool) -> Result<bool, ResolveError>
+    fn needs_resolve<'j, E>(&self, id: NodeId, state: &ResolveState<E>, no_execute: bool) -> Result<bool, ResolveError>
     where
         E: EntryMut<'j>,
     {
         if no_execute {
-            match self.nodes[idx].strategy.persistency {
-                CompiledPersistency::Ephemeral => return Ok(true),
-                _ => {
-                    let name = self.nodes[idx].name;
+            match &self.graph.node(id).role {
+                NodeRole::Persistent { .. } => {
+                    let name = self.graph.node(id).name;
                     let name_str = self.interner.resolve(name);
                     // Already resolved this turn or persisted in storage → no resolve needed.
                     if state.is_cached(&name) || state.entry.get(name_str).is_some() {
@@ -1587,38 +1874,39 @@ where
                     // Non-ephemeral, not in turn_context, not in storage → error.
                     return Err(ResolveError::UnresolvedContext(name_str.to_string()));
                 }
+                NodeRole::Standalone | NodeRole::Body { .. } => return Ok(true),
             }
         }
-        let name = self.nodes[idx].name;
-        Ok(match &self.nodes[idx].strategy.execution {
+        let name = self.graph.node(id).name;
+        Ok(match self.graph.node(id).strategy.execution {
             // Always: re-execute on every reference within a turn.
             CompiledExecution::Always => true,
-            // All other strategies: execute once per turn.
+            // OncePerTurn / IfModified: execute once per turn.
             // Only turn_context counts — storage values from previous turns
             // do NOT satisfy this. The node must re-run each turn.
-            _ => !state.is_cached(&name),
+            CompiledExecution::OncePerTurn | CompiledExecution::IfModified { .. } => !state.is_cached(&name),
         })
     }
 
     fn try_eager_schedule<'j, E>(
         &self,
-        completed_idx: usize,
+        completed_id: NodeId,
         lp: &mut LoopState<'_>,
         state: &mut ResolveState<E>,
     ) -> Result<(), ResolveError>
     where
         E: EntryMut<'j>,
     {
-        if completed_idx >= self.rdeps.len() {
+        if completed_id.index() >= self.rdeps.len() {
             return Ok(());
         }
-        for &candidate in &self.rdeps[completed_idx] {
+        for &candidate in &self.rdeps[completed_id.index()] {
             let candidate_needs = if lp.initial_value_only {
                 self.needs_resolve_initial_value_only(candidate, state)
             } else {
                 self.needs_resolve(candidate, state, lp.no_execute)?
             };
-            if lp.in_flight.contains(&candidate) || !candidate_needs {
+            if lp.tracker.in_flight.contains(&candidate) || !candidate_needs {
                 continue;
             }
             let eager_deps = {
@@ -1634,66 +1922,50 @@ where
             if all_deps_ready
             {
                 debug!(
-                    node = %self.interner.resolve(self.nodes[candidate].name),
+                    node = %self.interner.resolve(self.graph.node(candidate).name),
                     "eager scheduling"
                 );
-                self.start_prepare(candidate, FxHashMap::default(), false, lp, state)?;
+                let step = self.on_prepare(candidate, FxHashMap::default(), false, lp, state)?;
+                self.execute(step, lp, state)?;
             }
         }
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Task spawning
-    // -----------------------------------------------------------------------
+}
 
-    fn spawn_node_task(
-        &self,
-        node_idx: usize,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        is_root: bool,
-        lp: &mut LoopState<'_>,
-    ) {
-        let tid = lp.alloc_id();
-        let coroutine = self.node_table[node_idx].spawn(local.clone());
-        lp.meta.insert(
-            tid,
-            TaskMeta::Node {
-                node_idx,
-                local,
-                is_root,
-            },
-        );
-        lp.in_flight.insert(node_idx);
-        lp.enqueue_step(tid, coroutine);
-    }
+// ---------------------------------------------------------------------------
+// Helpers: value → TrackedDeque extraction
+// ---------------------------------------------------------------------------
 
-    fn spawn_script_task(
-        &self,
-        script: &CompiledScript,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        purpose: ScriptPurpose,
-        lp: &mut LoopState<'_>,
-    ) {
-        let tid = lp.alloc_id();
-        let interp = Interpreter::new(self.interner, script.module.clone());
-        let coroutine = interp.execute();
-        lp.meta.insert(tid, TaskMeta::Script { purpose, local });
-        lp.enqueue_step(tid, coroutine);
+/// Extract a `TrackedDeque<Value>` from a value that should be Deque, List, or Sequence.
+///
+/// Used at storage boundaries when converting runtime values to the tracked deque
+/// representation for Sequence persistency mode.
+fn extract_deque(value: &TypedValue, context: &str) -> TrackedDeque<Value> {
+    match value.value() {
+        Value::Lazy(LazyValue::Deque(d)) => d.clone(),
+        Value::Lazy(LazyValue::List(items)) => TrackedDeque::from_vec(items.clone()),
+        Value::Lazy(LazyValue::Sequence(sc)) => sc.origin().clone(),
+        other => panic!("{context}: expected Deque, List, or Sequence, got {other:?}"),
     }
+}
 
-    /// Spawn a raw coroutine as a script task.
-    fn spawn_script_task_raw(
-        &self,
-        coroutine: Coroutine<TypedValue, RuntimeError>,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
-        purpose: ScriptPurpose,
-        lp: &mut LoopState<'_>,
-    ) {
-        let tid = lp.alloc_id();
-        lp.meta.insert(tid, TaskMeta::Script { purpose, local });
-        lp.enqueue_step(tid, coroutine);
+/// Extract the element type from a Sequence type.
+fn sequence_elem_ty(ty: &Ty) -> &Ty {
+    match ty {
+        Ty::Sequence(elem, ..) => elem,
+        other => unreachable!("expected Sequence type, got {other:?}"),
     }
+}
+
+/// Wrap raw `Value` items into `TypedValue` items with the given element type.
+fn wrap_deque_items(items: TrackedDeque<Value>, elem_ty: &Ty) -> TrackedDeque<TypedValue> {
+    TrackedDeque::from_vec(
+        items.into_vec().into_iter()
+            .map(|v| TypedValue::new(v, elem_ty.clone()))
+            .collect()
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,25 +1989,28 @@ fn is_iterable(value: &TypedValue) -> bool {
 ///
 /// Element type is extracted from the value's Ty:
 /// `Iterator(elem, _)` / `Sequence(elem, _, _)` / `List(elem)` / `Deque(elem, _)` → elem.
-fn unpack_coroutine(value: TypedValue) -> Coroutine<TypedValue, RuntimeError> {
+fn unpack_coroutine(value: TypedValue, interner: Interner) -> Coroutine<TypedValue, RuntimeError> {
     // Extract element type from the container's Ty.
     let elem_ty = match value.ty() {
         Ty::Iterator(elem, _) | Ty::Sequence(elem, ..) | Ty::List(elem) | Ty::Deque(elem, _) => {
             (**elem).clone()
         }
-        _ => Ty::Infer, // fallback for Ty::Infer containers
+        _ => panic!("unpack_coroutine: expected iterable type (Iterator/Sequence/List/Deque), got {:?}", value.ty()),
     };
 
     acvus_utils::coroutine(move |handle| async move {
         match value.value() {
             Value::Lazy(LazyValue::Iterator(_)) | Value::Lazy(LazyValue::Sequence(_)) => {
-                let ih = Arc::unwrap_or_clone(value.into_value())
-                    .into_iter_handle(acvus_mir::ty::Effect::Pure);
-                let empty_module = acvus_mir::ir::MirModule {
-                    main: acvus_mir::ir::MirBody::default(),
-                    closures: Default::default(),
+                let effect = match value.ty() {
+                    Ty::Iterator(_, e) | Ty::Sequence(_, _, e) => *e,
+                    _ => acvus_mir::ty::Effect::Pure,
                 };
-                let mut interp = Interpreter::new(&Interner::new(), empty_module);
+                let ih = match value.into_inner() {
+                    Value::Lazy(LazyValue::Iterator(ih)) => ih,
+                    Value::Lazy(LazyValue::Sequence(sc)) => sc.into_iter_handle(effect),
+                    _ => unreachable!(),
+                };
+                let mut interp = Interpreter::new(&interner, MirModule::default());
                 let mut current = ih;
                 loop {
                     let result;
@@ -1745,7 +2020,7 @@ fn unpack_coroutine(value: TypedValue) -> Coroutine<TypedValue, RuntimeError> {
                         Some((item, rest)) => {
                             current = rest;
                             handle
-                                .yield_val(TypedValue::new(Arc::new(item), elem_ty.clone()))
+                                .yield_val(TypedValue::new(item, elem_ty.clone()))
                                 .await;
                         }
                         None => break,
@@ -1753,14 +2028,14 @@ fn unpack_coroutine(value: TypedValue) -> Coroutine<TypedValue, RuntimeError> {
                 }
             }
             Value::Lazy(LazyValue::List(_)) | Value::Lazy(LazyValue::Deque(_)) => {
-                let items = match Arc::unwrap_or_clone(value.into_value()) {
+                let items = match value.into_inner() {
                     Value::Lazy(LazyValue::List(items)) => items,
                     Value::Lazy(LazyValue::Deque(d)) => d.into_vec(),
                     _ => unreachable!(),
                 };
                 for item in items {
                     handle
-                        .yield_val(TypedValue::new(Arc::new(item), elem_ty.clone()))
+                        .yield_val(TypedValue::new(item, elem_ty.clone()))
                         .await;
                 }
             }
@@ -1778,26 +2053,32 @@ fn collect_sequence_coroutine(seq_value: TypedValue) -> Coroutine<TypedValue, Ru
     acvus_utils::coroutine(move |handle| async move {
         let ty = seq_value.ty().clone();
 
-        let sc = match Arc::unwrap_or_clone(seq_value.into_value()) {
+        let sc = match seq_value.into_inner() {
             Value::Lazy(LazyValue::Sequence(sc)) => sc,
             other => panic!("collect_sequence_coroutine: expected Sequence, got {other:?}"),
         };
 
         let deque = sc.collect(&handle).await?;
+        // Collected Deque — CollectSequence handler extracts the TrackedDeque
+        // for into_diff, then persists via StorageOps::Sequence.
+        // Use Deque type derived from the Sequence's element type + origin.
+        let deque_ty = match &ty {
+            Ty::Sequence(elem, origin, _effect) => Ty::Deque(elem.clone(), *origin),
+            _ => panic!("collect_sequence_coroutine: expected Sequence ty, got {ty:?}"),
+        };
         handle
-            .yield_val(TypedValue::new(Arc::new(Value::deque(deque)), ty))
+            .yield_val(TypedValue::new(Value::deque(deque), deque_ty))
             .await;
         Ok(())
     })
 }
 
-fn script_purpose_node_idx(purpose: &ScriptPurpose) -> usize {
-    match purpose {
-        ScriptPurpose::IfModifiedKey { node_idx }
-        | ScriptPurpose::InitialValue { node_idx }
-        | ScriptPurpose::Assert { node_idx, .. }
-        | ScriptPurpose::BindScript { node_idx, .. }
-        | ScriptPurpose::CollectSequence { node_idx, .. } => *node_idx,
+fn phase_node_id(phase: &Phase) -> NodeId {
+    match phase {
+        Phase::IfModifiedKey { node_id }
+        | Phase::InitialValue { node_id }
+        | Phase::Assert { node_id, .. }
+        | Phase::PersistSequence { node_id, .. } => *node_id,
     }
 }
 

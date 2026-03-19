@@ -215,7 +215,7 @@ fn jcv_to_ty(interner: &Interner, v: &JsConcreteValue) -> Ty {
             let elem_ty = items
                 .first()
                 .map(|i| jcv_to_ty(interner, i))
-                .unwrap_or(Ty::Infer);
+                .unwrap_or_else(Ty::error);
             Ty::List(Box::new(elem_ty))
         }
         JsConcreteValue::Object { fields } => {
@@ -265,8 +265,8 @@ mod tests {
     fn test_ty_to_desc_unsupported() {
         let interner = test_interner();
         assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Var(acvus_mir::ty::TyVar(0)))), r#"{"kind":"unsupported","raw":"?"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Infer)), r#"{"kind":"unsupported","raw":"?"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Error)), r#"{"kind":"unsupported","raw":"?"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::error())), r#"{"kind":"unsupported","raw":"?"}"#);
+        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::error())), r#"{"kind":"unsupported","raw":"?"}"#);
     }
 
     #[test]

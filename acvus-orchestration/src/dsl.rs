@@ -2,8 +2,44 @@ use acvus_mir::context_registry::{ContextTypeRegistry, RegistryConflictError};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 
+use crate::spec::NodeKind;
 
-use crate::kind::NodeKind;
+// ── Scope key constants ────────────────────────────────────────────
+// These are the canonical names for node-local context keys.
+// Using constants instead of inline string literals prevents typo-driven bugs
+// and makes rename-refactoring possible.
+
+/// `@self` — accumulated persistent value.
+pub const KEY_SELF: &str = "self";
+/// `@raw` — raw output of the body computation.
+pub const KEY_RAW: &str = "raw";
+/// `@bind` — bind key value (for IfModified).
+pub const KEY_BIND: &str = "bind";
+/// `@turn_index` — current turn number.
+pub const KEY_TURN_INDEX: &str = "turn_index";
+/// `@item` — current element in iterator.
+pub const KEY_ITEM: &str = "item";
+/// `@index` — current iteration index.
+pub const KEY_INDEX: &str = "index";
+
+// ── Message field constants ────────────────────────────────────────
+// Canonical field names for the message Object { role, content, content_type }.
+
+pub const MSG_ROLE: &str = "role";
+pub const MSG_CONTENT: &str = "content";
+pub const MSG_CONTENT_TYPE: &str = "content_type";
+
+/// The canonical Ty for a single message element: `{ role: String, content: String, content_type: String }`.
+///
+/// This is the **single source of truth** for the message Object schema.
+/// Used by LlmSpec::output_ty, content_to_value, and ApiKind::message_elem_ty.
+pub fn message_elem_ty(interner: &Interner) -> Ty {
+    Ty::Object(rustc_hash::FxHashMap::from_iter([
+        (interner.intern(MSG_ROLE), Ty::String),
+        (interner.intern(MSG_CONTENT), Ty::String),
+        (interner.intern(MSG_CONTENT_TYPE), Ty::String),
+    ]))
+}
 
 /// Strategy — groups execution, persistency, initial_value, retry, and assert.
 #[derive(Debug, Clone)]
@@ -79,15 +115,15 @@ impl NodeSpec {
                 ContextScope::Body => {
                     // @self only if initial_value exists
                     if self.strategy.initial_value.is_some() {
-                        extra.push((interner.intern("self"), locals.self_ty.clone()));
+                        extra.push((interner.intern(KEY_SELF), locals.self_ty.clone()));
                     }
                 }
                 ContextScope::Bind => {
                     // @self if initial_value exists + @raw always
                     if self.strategy.initial_value.is_some() {
-                        extra.push((interner.intern("self"), locals.self_ty.clone()));
+                        extra.push((interner.intern(KEY_SELF), locals.self_ty.clone()));
                     }
-                    extra.push((interner.intern("raw"), locals.raw_ty.clone()));
+                    extra.push((interner.intern(KEY_RAW), locals.raw_ty.clone()));
                 }
             }
         }

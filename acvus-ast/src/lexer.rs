@@ -297,7 +297,8 @@ impl<'input> Iterator for ExprTokenizer<'input> {
             }
             Ok(token) => Some(Ok((start, token, end))),
             Err(()) => {
-                let c = self.lexer.slice().chars().next().unwrap_or('?');
+                let c = self.lexer.slice().chars().next()
+                    .expect("lexer error token must contain at least one character");
                 Some(Err(ParseError::new(
                     ParseErrorKind::UnexpectedCharacter(c),
                     Span::new(start, end),
@@ -403,30 +404,51 @@ fn expand_format_string(
     let mut out = VecDeque::new();
     let last_text_idx = texts.len() - 1;
 
+    // Compute byte offsets for each text/expr segment within the source.
+    // base_start points to the opening `"` of the string literal.
+    // Content positions: `"` (1 byte) + content bytes.
+    // Text/expr boundaries were tracked in phase 1 via `pos`.
+    //
+    // Rebuild positions: walk the content structure to assign correct offsets.
+    // The content layout is: text₀ {{ expr₀ }} text₁ {{ expr₁ }} … textₙ
+    let quote_offset = 1; // opening `"`
+    let mut cursor = base_start + quote_offset;
+
     for (i, text) in texts.into_iter().enumerate() {
+        let text_len = text.len();
+        let tok_start = cursor;
+        let tok_end = cursor + text_len;
+        cursor = tok_end;
+
         let tok = match i {
             0 => Token::FmtStringStart(text),
             n if n == last_text_idx => Token::FmtStringEnd(text),
             _ => Token::FmtStringMid(text),
         };
-        out.push_back(Ok((base_start, tok, base_end)));
+        out.push_back(Ok((tok_start, tok, tok_end)));
 
         // After each text except the last, emit the corresponding expression tokens
         if let Some(expr_str) = exprs.get(i) {
+            cursor += 2; // skip `{{`
+            let expr_base = cursor;
             for (result, span) in Token::lexer_with_extras(expr_str, interner.clone()).spanned() {
+                let tok_start = expr_base + span.start;
+                let tok_end = expr_base + span.end;
                 match result {
                     Ok(token) => {
-                        out.push_back(Ok((base_start, token, base_start)));
+                        out.push_back(Ok((tok_start, token, tok_end)));
                     }
                     Err(()) => {
-                        let c = expr_str[span.start..].chars().next().unwrap_or('?');
+                        let c = expr_str[span.start..].chars().next()
+                            .expect("interpolation lexer error must contain at least one character");
                         out.push_back(Err(ParseError::new(
                             ParseErrorKind::UnexpectedCharacter(c),
-                            err_span,
+                            Span::new(tok_start, tok_end),
                         )));
                     }
                 }
             }
+            cursor += expr_str.len() + 2; // expr content + `}}`
         }
     }
 

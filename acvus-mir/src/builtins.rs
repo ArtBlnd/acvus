@@ -23,6 +23,7 @@ pub enum BuiltinId {
     Len,
     Reverse,
     Flatten,
+    FlatMap,
     Join,
     CharToInt,
     IntToChar,
@@ -57,14 +58,6 @@ pub enum BuiltinId {
     Append,
     Extend,
     Consume,
-    // -- Iterator overloads --
-    FlattenIter,
-    FlatMap,
-    FlatMapIter,
-    JoinIter,
-    ContainsIter,
-    FirstIter,
-    LastIter,
     // -- Sequence overloads (origin-preserving only: chain, take, skip) --
     TakeSeq,
     SkipSeq,
@@ -175,7 +168,7 @@ fn is_scalar(ty: &Ty) -> bool {
 fn require_scalar(args: &[Ty], interner: &Interner) -> Option<String> {
     match &args[0] {
         ty if is_scalar(ty) => None,
-        Ty::Var(_) | Ty::Error => None,
+        Ty::Var(_) | Ty::Error(_) => None,
         ty => Some(format!(
             "`to_string` requires a scalar type (Int, Float, Bool, String, Byte), got {}",
             ty.display(interner),
@@ -186,7 +179,7 @@ fn require_scalar(args: &[Ty], interner: &Interner) -> Option<String> {
 fn require_to_int(args: &[Ty], interner: &Interner) -> Option<String> {
     match &args[0] {
         Ty::Float | Ty::Byte => None,
-        Ty::Var(_) | Ty::Error => None,
+        Ty::Var(_) | Ty::Error(_) => None,
         ty => Some(format!(
             "`to_int` requires Float or Byte, got {}",
             ty.display(interner),
@@ -600,32 +593,20 @@ fn build_registry() -> BuiltinRegistry {
     r.add("len",         BuiltinId::Len,          sig_len,           None);
     r.add("reverse",     BuiltinId::Reverse,      sig_reverse,       None);
 
-    // -- flatten (overloaded: List + Iterator) --
-    r.add("flatten",     BuiltinId::Flatten,       sig_flatten,       None);
-    r.add("flatten",     BuiltinId::FlattenIter,   sig_flatten_iter,  None);
-
-    // -- flat_map (overloaded: Iterator variants) --
-    r.add("flat_map",    BuiltinId::FlatMap,           sig_flat_map,          None);
-    r.add("flat_map",    BuiltinId::FlatMapIter,       sig_flat_map_iter,     None);
+    // -- flatten / flat_map (Iterator only — List coerces via Cast) --
+    r.add("flatten",     BuiltinId::Flatten,      sig_flatten_iter,  None);
+    r.add("flat_map",    BuiltinId::FlatMap,       sig_flat_map,      None);
 
     // -- Deque ops (origin-preserving) --
     r.add("append",      BuiltinId::Append,       sig_append,        None);
     r.add("extend",      BuiltinId::Extend,       sig_extend,        None);
     r.add("consume",     BuiltinId::Consume,      sig_consume,       None);
 
-    // -- join (overloaded: List + Iterator) --
-    r.add("join",        BuiltinId::Join,         sig_join,          None);
-    r.add("join",        BuiltinId::JoinIter,     sig_join_iter,     None);
-
-    // -- contains (overloaded: List + Iterator) --
-    r.add("contains",    BuiltinId::Contains,     sig_contains,      None);
-    r.add("contains",    BuiltinId::ContainsIter, sig_contains_iter, None);
-
-    // -- first / last (overloaded: List + Iterator) --
-    r.add("first",       BuiltinId::First,        sig_first,         None);
-    r.add("first",       BuiltinId::FirstIter,    sig_first_iter,    None);
-    r.add("last",        BuiltinId::Last,         sig_last,          None);
-    r.add("last",        BuiltinId::LastIter,     sig_last_iter,     None);
+    // -- join / contains / first / last (Iterator only — List coerces via Cast) --
+    r.add("join",        BuiltinId::Join,         sig_join_iter,     None);
+    r.add("contains",    BuiltinId::Contains,     sig_contains_iter, None);
+    r.add("first",       BuiltinId::First,        sig_first_iter,    None);
+    r.add("last",        BuiltinId::Last,         sig_last_iter,     None);
 
     // -- String ops --
     r.add("contains_str",    BuiltinId::ContainsStr,    sig_contains_str,     None);

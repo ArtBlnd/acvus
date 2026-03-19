@@ -1,62 +1,29 @@
-use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
-use crate::kind::{GenerationParams, ThinkingConfig};
+use acvus_interpreter::{PureValue, RuntimeError, TypedValue, Value};
+use acvus_utils::{Astr, Interner};
+
+use rust_decimal::Decimal;
+use rustc_hash::FxHashMap;
+use tracing::{debug, info};
+
+use super::Node;
+use super::helpers::{
+    allocate_token_budgets, content_to_value, eval_script_in_coroutine,
+    execute_tool_calls, flatten_segments, make_tool_specs,
+    render_messages, split_system_messages,
+};
+use super::schema::google as schema;
+use crate::compile::{CompiledMessage, CompiledScript};
+use crate::http::{Fetch, HttpRequest, RequestError};
+use crate::spec::{CompiledGoogleAI, CompiledToolBinding, MaxTokens, ThinkingConfig};
 use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, ToolCallExtras, ToolSpec, Usage};
 
-use super::schema::google as schema;
-use super::{HttpRequest, ProviderConfig, ProviderError, split_system_messages};
+// ── Provider logic (absorbed from provider/google.rs) ───────────────
 
-pub struct GoogleModel {
-    config: ProviderConfig,
-    model: String,
-}
-
-impl GoogleModel {
-    pub fn new(config: ProviderConfig, model: String) -> Self {
-        Self { config, model }
-    }
-
-    pub fn build_request(
-        &self,
-        messages: &[Message],
-        tools: &[ToolSpec],
-        generation: &GenerationParams,
-        max_output_tokens: Option<u32>,
-        cached_content: Option<&str>,
-    ) -> Result<HttpRequest, ProviderError> {
-        build_request(
-            &self.config,
-            &self.model,
-            messages,
-            tools,
-            generation,
-            max_output_tokens,
-            cached_content,
-        )
-    }
-
-    pub fn parse_response(
-        &self,
-        json: &serde_json::Value,
-    ) -> Result<(ModelResponse, Usage), ProviderError> {
-        parse_response(json)
-    }
-
-    pub fn build_count_tokens_request(&self, messages: &[Message]) -> Option<HttpRequest> {
-        Some(build_count_tokens_request(
-            &self.config,
-            &self.model,
-            messages,
-        ))
-    }
-
-    pub fn parse_count_tokens_response(
-        &self,
-        json: &serde_json::Value,
-    ) -> Result<u32, ProviderError> {
-        parse_count_tokens_response(json)
-    }
-}
+const THINKING_LEVEL_LOW: &str = "LOW";
+const THINKING_LEVEL_MEDIUM: &str = "MEDIUM";
+const THINKING_LEVEL_HIGH: &str = "HIGH";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -116,24 +83,27 @@ fn convert_content(m: &Message) -> schema::Content {
     }
 }
 
-/// Build a `schema::GenerationConfig` from generation params and optional max_output_tokens.
+/// Build a `schema::GenerationConfig` from individual params and optional max_output_tokens.
 fn build_generation_config(
-    generation: &GenerationParams,
+    temperature: Option<Decimal>,
+    top_p: Option<Decimal>,
+    top_k: Option<u32>,
+    thinking: &Option<ThinkingConfig>,
     max_output_tokens: Option<u32>,
 ) -> Option<schema::GenerationConfig> {
-    let thinking_config = match &generation.thinking {
+    let thinking_config = match thinking {
         None | Some(ThinkingConfig::Off) => None,
         Some(ThinkingConfig::Low) => Some(schema::ThinkingConfig {
             thinking_budget: None,
-            thinking_level: Some("LOW".into()),
+            thinking_level: Some(THINKING_LEVEL_LOW.into()),
         }),
         Some(ThinkingConfig::Medium) => Some(schema::ThinkingConfig {
             thinking_budget: None,
-            thinking_level: Some("MEDIUM".into()),
+            thinking_level: Some(THINKING_LEVEL_MEDIUM.into()),
         }),
         Some(ThinkingConfig::High) => Some(schema::ThinkingConfig {
             thinking_budget: None,
-            thinking_level: Some("HIGH".into()),
+            thinking_level: Some(THINKING_LEVEL_HIGH.into()),
         }),
         Some(ThinkingConfig::Custom(n)) => Some(schema::ThinkingConfig {
             thinking_budget: Some(*n),
@@ -141,9 +111,9 @@ fn build_generation_config(
         }),
     };
 
-    let has_any = generation.temperature.is_some()
-        || generation.top_p.is_some()
-        || generation.top_k.is_some()
+    let has_any = temperature.is_some()
+        || top_p.is_some()
+        || top_k.is_some()
         || max_output_tokens.is_some()
         || thinking_config.is_some();
 
@@ -152,16 +122,16 @@ fn build_generation_config(
     }
 
     Some(schema::GenerationConfig {
-        temperature: generation.temperature,
-        top_p: generation.top_p,
-        top_k: generation.top_k,
+        temperature,
+        top_p,
+        top_k,
         max_output_tokens,
         thinking_config,
     })
 }
 
 /// Build tool declarations from `ToolSpec` slice and grounding flag.
-fn build_tools(tools: &[ToolSpec], grounding: bool) -> Option<Vec<schema::ToolDeclaration>> {
+fn build_tools(tools: &[ToolSpec], grounding: bool) -> Result<Option<Vec<schema::ToolDeclaration>>, RequestError> {
     let mut entries = Vec::new();
 
     if !tools.is_empty() {
@@ -177,13 +147,15 @@ fn build_tools(tools: &[ToolSpec], grounding: bool) -> Option<Vec<schema::ToolDe
                             ty: gemini_ty.into(),
                             description: param.description.clone(),
                         };
-                        Some((name.clone(), serde_json::to_value(prop).unwrap()))
+                        Some(serde_json::to_value(prop)
+                            .map(|v| (name.clone(), v))
+                            .map_err(|e| RequestError::Serialization { detail: e.to_string() }))
                     })
-                    .collect();
+                    .collect::<Result<_, RequestError>>()?;
 
                 let required: Vec<String> = t.params.keys().cloned().collect();
 
-                schema::FunctionDecl {
+                Ok(schema::FunctionDecl {
                     name: t.name.clone(),
                     description: t.description.clone(),
                     parameters: schema::GeminiSchema {
@@ -191,9 +163,9 @@ fn build_tools(tools: &[ToolSpec], grounding: bool) -> Option<Vec<schema::ToolDe
                         properties,
                         required,
                     },
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, RequestError>>()?;
 
         entries.push(schema::ToolDeclaration::Functions {
             function_declarations: declarations,
@@ -207,9 +179,9 @@ fn build_tools(tools: &[ToolSpec], grounding: bool) -> Option<Vec<schema::ToolDe
     }
 
     if entries.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(entries)
+        Ok(Some(entries))
     }
 }
 
@@ -235,64 +207,67 @@ fn to_gemini_type(ty: &str) -> Option<&'static str> {
 
 // ── Request building ───────────────────────────────────────────────
 
-pub fn build_request(
-    config: &ProviderConfig,
+fn build_request(
+    endpoint: &str,
+    api_key: &str,
     model: &str,
     messages: &[Message],
     tools: &[ToolSpec],
-    generation: &GenerationParams,
+    temperature: Option<Decimal>,
+    top_p: Option<Decimal>,
+    top_k: Option<u32>,
+    thinking: &Option<ThinkingConfig>,
+    grounding: bool,
     max_output_tokens: Option<u32>,
     cached_content: Option<&str>,
-) -> Result<HttpRequest, ProviderError> {
+) -> Result<HttpRequest, RequestError> {
     let body = match cached_content {
         Some(cache_name) => {
-            let (_, rest) = split_system_messages(messages);
+            let (_, rest) = split_system_messages(messages)?;
             let contents: Vec<schema::Content> = rest.into_iter().map(convert_content).collect();
 
             let req = schema::CachedRequest {
                 cached_content: cache_name.to_string(),
                 contents,
-                tools: build_tools(tools, generation.grounding),
-                generation_config: build_generation_config(generation, max_output_tokens),
+                tools: build_tools(tools, grounding)?,
+                generation_config: build_generation_config(temperature, top_p, top_k, thinking, max_output_tokens),
             };
-            serde_json::to_value(req).unwrap()
+            serde_json::to_value(req).map_err(|e| RequestError::Serialization { detail: e.to_string() })?
         }
         None => {
-            let (system_text, rest) = split_system_messages(messages);
+            let (system_text, rest) = split_system_messages(messages)?;
             let contents: Vec<schema::Content> = rest.into_iter().map(convert_content).collect();
 
             let req = schema::Request {
                 contents,
                 system_instruction: build_system_instruction(system_text),
-                tools: build_tools(tools, generation.grounding),
-                generation_config: build_generation_config(generation, max_output_tokens),
+                tools: build_tools(tools, grounding)?,
+                generation_config: build_generation_config(temperature, top_p, top_k, thinking, max_output_tokens),
             };
-            serde_json::to_value(req).unwrap()
+            serde_json::to_value(req).map_err(|e| RequestError::Serialization { detail: e.to_string() })?
         }
     };
 
-    let url = format!(
-        "{}/v1beta/models/{}:generateContent",
-        config.endpoint, model
-    );
+    let url = format!("{endpoint}/v1beta/models/{model}:generateContent");
     Ok(HttpRequest {
         url,
         headers: vec![
-            ("x-goog-api-key".into(), config.api_key.clone()),
+            ("x-goog-api-key".into(), api_key.to_string()),
             ("content-type".into(), "application/json".into()),
         ],
         body,
     })
 }
 
-pub fn build_cache_request(
-    config: &ProviderConfig,
+pub(super) fn build_cache_request(
+    endpoint: &str,
+    api_key: &str,
     model: &str,
     messages: &[Message],
     ttl: &str,
     cache_config: &FxHashMap<String, serde_json::Value>,
-) -> HttpRequest {
-    let (system_text, rest) = split_system_messages(messages);
+) -> Result<HttpRequest, RequestError> {
+    let (system_text, rest) = split_system_messages(messages)?;
     let contents: Vec<schema::Content> = rest.into_iter().map(convert_content).collect();
 
     let extra: serde_json::Map<String, serde_json::Value> = cache_config
@@ -307,35 +282,36 @@ pub fn build_cache_request(
         system_instruction: build_system_instruction(system_text),
         extra,
     };
-    let body = serde_json::to_value(req).unwrap();
+    let body = serde_json::to_value(req).map_err(|e| RequestError::Serialization { detail: e.to_string() })?;
 
-    let url = format!("{}/v1beta/cachedContents", config.endpoint);
-    HttpRequest {
+    let url = format!("{endpoint}/v1beta/cachedContents");
+    Ok(HttpRequest {
         url,
         headers: vec![
-            ("x-goog-api-key".into(), config.api_key.clone()),
+            ("x-goog-api-key".into(), api_key.to_string()),
             ("content-type".into(), "application/json".into()),
         ],
         body,
-    }
+    })
 }
 
-pub fn parse_cache_response(json: &serde_json::Value) -> Result<String, ProviderError> {
+pub(super) fn parse_cache_response(json: &serde_json::Value) -> Result<String, RequestError> {
     let resp: schema::CacheResponse = serde_json::from_value(json.clone()).map_err(|e| {
-        ProviderError::ResponseParse {
+        RequestError::ResponseParse {
             detail: e.to_string(),
         }
     })?;
     resp.name
-        .ok_or(ProviderError::MissingField { field: "name" })
+        .ok_or(RequestError::MissingField { field: "name" })
 }
 
-pub fn build_count_tokens_request(
-    config: &ProviderConfig,
+pub(super) fn build_count_tokens_request(
+    endpoint: &str,
+    api_key: &str,
     model: &str,
     messages: &[Message],
-) -> HttpRequest {
-    let (system_text, rest) = split_system_messages(messages);
+) -> Result<HttpRequest, RequestError> {
+    let (system_text, rest) = split_system_messages(messages)?;
     let contents: Vec<schema::Content> = rest.into_iter().map(convert_content).collect();
 
     let req = schema::CountTokensRequest {
@@ -345,33 +321,33 @@ pub fn build_count_tokens_request(
             system_instruction: build_system_instruction(system_text),
         },
     };
-    let body = serde_json::to_value(req).unwrap();
+    let body = serde_json::to_value(req).map_err(|e| RequestError::Serialization { detail: e.to_string() })?;
 
-    let url = format!("{}/v1beta/models/{}:countTokens", config.endpoint, model);
-    HttpRequest {
+    let url = format!("{endpoint}/v1beta/models/{model}:countTokens");
+    Ok(HttpRequest {
         url,
         headers: vec![
-            ("x-goog-api-key".into(), config.api_key.clone()),
+            ("x-goog-api-key".into(), api_key.to_string()),
             ("content-type".into(), "application/json".into()),
         ],
         body,
-    }
+    })
 }
 
-pub fn parse_count_tokens_response(json: &serde_json::Value) -> Result<u32, ProviderError> {
+pub(super) fn parse_count_tokens_response(json: &serde_json::Value) -> Result<u32, RequestError> {
     let resp: schema::CountTokensResponse =
-        serde_json::from_value(json.clone()).map_err(|e| ProviderError::ResponseParse {
+        serde_json::from_value(json.clone()).map_err(|e| RequestError::ResponseParse {
             detail: e.to_string(),
         })?;
     resp.total_tokens
-        .ok_or(ProviderError::MissingField { field: "totalTokens" })
+        .ok_or(RequestError::MissingField { field: "totalTokens" })
 }
 
 // ── Response parsing ───────────────────────────────────────────────
 
-pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage), ProviderError> {
+fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
     let resp: schema::Response =
-        serde_json::from_value(json.clone()).map_err(|e| ProviderError::ResponseParse {
+        serde_json::from_value(json.clone()).map_err(|e| RequestError::ResponseParse {
             detail: e.to_string(),
         })?;
 
@@ -386,22 +362,22 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
     let candidates = resp
         .candidates
         .as_ref()
-        .ok_or(ProviderError::MissingField {
+        .ok_or(RequestError::MissingField {
             field: "candidates",
         })?;
     let candidate = candidates
         .first()
-        .ok_or(ProviderError::MissingField {
+        .ok_or(RequestError::MissingField {
             field: "candidates",
         })?;
     let content = candidate
         .content
         .as_ref()
-        .ok_or(ProviderError::MissingField { field: "content" })?;
+        .ok_or(RequestError::MissingField { field: "content" })?;
     let parts = content
         .parts
         .as_ref()
-        .ok_or(ProviderError::MissingField { field: "parts" })?;
+        .ok_or(RequestError::MissingField { field: "parts" })?;
 
     let mut tool_calls = Vec::new();
     let mut content_parts = Vec::new();
@@ -411,12 +387,17 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
             let name = fc
                 .name
                 .as_deref()
-                .ok_or(ProviderError::MissingField {
+                .ok_or(RequestError::MissingField {
                     field: "functionCall name",
                 })?
                 .to_string();
-            let arguments = fc.args.clone().unwrap_or(serde_json::json!({}));
+            let arguments = fc.args.clone()
+                .ok_or(RequestError::MissingField { field: "functionCall.args" })?;
             let thought_signature = part.thought_signature.clone();
+            // Google Gemini API does not provide a tool call ID in responses
+            // (unlike OpenAI). We synthesize one from the function name.
+            // This is a known fabrication — if multiple calls share the same
+            // name within a single response, IDs will collide.
             let id = format!("call_{name}");
             tool_calls.push(ToolCall {
                 id,
@@ -427,8 +408,8 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
         } else if let Some(text) = &part.text {
             content_parts.push(Content::Text(text.clone()));
         } else if let Some(inline) = &part.inline_data {
-            let mime_type = inline.mime_type.clone().unwrap_or_default();
-            let data = inline.data.clone().unwrap_or_default();
+            let mime_type = inline.mime_type.clone().ok_or(RequestError::MissingField { field: "mime_type" })?;
+            let data = inline.data.clone().ok_or(RequestError::MissingField { field: "data" })?;
             content_parts.push(Content::Blob { mime_type, data });
         }
     }
@@ -452,10 +433,175 @@ pub fn parse_response(json: &serde_json::Value) -> Result<(ModelResponse, Usage)
     }
 }
 
+// ── Node ────────────────────────────────────────────────────────────
+
+const MAX_TOOL_ROUNDS: usize = 10;
+
+struct GoogleAIConfig {
+    endpoint: String,
+    api_key: String,
+    model: String,
+    messages: Vec<CompiledMessage>,
+    tools: Vec<CompiledToolBinding>,
+    temperature: Option<rust_decimal::Decimal>,
+    top_p: Option<rust_decimal::Decimal>,
+    top_k: Option<u32>,
+    max_tokens: MaxTokens,
+    thinking: Option<ThinkingConfig>,
+    grounding: bool,
+    cache_key: Option<CompiledScript>,
+}
+
+pub struct GoogleAINode<F> {
+    config: Arc<GoogleAIConfig>,
+    fetch: Arc<F>,
+    interner: Interner,
+}
+
+impl<F> GoogleAINode<F>
+where
+    F: Fetch + 'static,
+{
+    pub fn new(
+        compiled: &CompiledGoogleAI,
+        fetch: Arc<F>,
+        interner: &Interner,
+    ) -> Self {
+        Self {
+            config: Arc::new(GoogleAIConfig {
+                endpoint: compiled.endpoint.clone(),
+                api_key: compiled.api_key.clone(),
+                model: compiled.model.clone(),
+                messages: compiled.messages.clone(),
+                tools: compiled.tools.clone(),
+                temperature: compiled.temperature,
+                top_p: compiled.top_p,
+                top_k: compiled.top_k,
+                max_tokens: compiled.max_tokens.clone(),
+                thinking: compiled.thinking.clone(),
+                grounding: compiled.grounding,
+                cache_key: compiled.cache_key.clone(),
+            }),
+            fetch,
+            interner: interner.clone(),
+        }
+    }
+}
+
+impl<F> Node for GoogleAINode<F>
+where
+    F: Fetch + 'static,
+{
+    fn spawn(
+        &self,
+        local: FxHashMap<Astr, TypedValue>,
+    ) -> acvus_utils::Coroutine<TypedValue, RuntimeError> {
+        let config = Arc::clone(&self.config);
+        let fetch = Arc::clone(&self.fetch);
+        let interner = self.interner.clone();
+
+        acvus_utils::coroutine(move |handle| async move {
+            let model_name = config.model.clone();
+
+            let cached_content = if let Some(ref ck_script) = config.cache_key {
+                let val =
+                    eval_script_in_coroutine(&interner, &ck_script.module, &local, &handle)
+                        .await?;
+                match val.value() {
+                    Value::Pure(PureValue::String(s)) => Some(s.clone()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            // Render messages
+            let mut segments = render_messages(&config.messages, &interner, &local, &handle).await?;
+
+            allocate_token_budgets(
+                &config.endpoint, &config.api_key, &config.model,
+                "google",
+                &*fetch, &mut segments, config.max_tokens.input,
+            ).await;
+
+            let mut rendered = flatten_segments(segments);
+            let specs = make_tool_specs(&config.tools);
+
+            info!(model = %model_name, messages = rendered.len(), tools = specs.len(), "google request");
+            let request = build_request(
+                &config.endpoint,
+                &config.api_key,
+                &config.model,
+                &rendered,
+                &specs,
+                config.temperature,
+                config.top_p,
+                config.top_k,
+                &config.thinking,
+                config.grounding,
+                config.max_tokens.output,
+                cached_content.as_deref(),
+            ).map_err(|e| RuntimeError::fetch(e.to_string()))?;
+            let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
+            let (mut response, _usage) = parse_response(&json)
+                .map_err(|e| RuntimeError::fetch(e.to_string()))?;
+            debug!(
+                input_tokens = _usage.input_tokens,
+                output_tokens = _usage.output_tokens,
+                "google response received",
+            );
+
+            let mut tool_rounds = 0usize;
+            loop {
+                match response {
+                    ModelResponse::Content(items) => {
+                        debug!(items = items.len(), "google returned content");
+                        handle.yield_val(content_to_value(&interner, &items)).await;
+                        return Ok(());
+                    }
+                    ModelResponse::ToolCalls(calls) => {
+                        tool_rounds += 1;
+                        info!(round = tool_rounds, count = calls.len(), "google tool calls");
+                        if tool_rounds > MAX_TOOL_ROUNDS {
+                            return Err(RuntimeError::tool_call_limit(MAX_TOOL_ROUNDS));
+                        }
+
+                        rendered.push(Message::ToolCalls(calls.clone()));
+                        let tool_results = execute_tool_calls(&calls, &config.tools, &interner, &handle).await;
+                        rendered.extend(tool_results);
+
+                        debug!(
+                            round = tool_rounds,
+                            "google follow-up request after tool results"
+                        );
+                        let request = build_request(
+                            &config.endpoint,
+                            &config.api_key,
+                            &config.model,
+                            &rendered,
+                            &specs,
+                            config.temperature,
+                            config.top_p,
+                            config.top_k,
+                            &config.thinking,
+                            config.grounding,
+                            config.max_tokens.output,
+                            cached_content.as_deref(),
+                        ).map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                        let json = fetch.fetch(&request).await.map_err(RuntimeError::fetch)?;
+                        let parsed = parse_response(&json)
+                            .map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                        response = parsed.0;
+                    }
+                }
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
-    use crate::ApiKind;
     use crate::message::{Message, ToolSpec, ToolSpecParam};
 
     use super::*;
@@ -473,7 +619,7 @@ mod tests {
                     content: Content::Text("Hello".into()),
                 },
             ];
-            let (system_text, rest) = split_system_messages(messages);
+            let (system_text, rest) = split_system_messages(messages).unwrap();
             let contents: Vec<schema::Content> = rest.into_iter().map(convert_content).collect();
             let req = schema::Request {
                 contents,
@@ -515,7 +661,7 @@ mod tests {
                 },
             )]),
         }];
-        let tool_decls = build_tools(tools_list, false).unwrap();
+        let tool_decls = build_tools(tools_list, false).unwrap().unwrap();
         let body = serde_json::to_value(&tool_decls).unwrap();
         let decls = &body[0]["functionDeclarations"];
         assert_eq!(decls.as_array().unwrap().len(), 1);
@@ -611,19 +757,15 @@ mod tests {
 
     #[test]
     fn count_tokens_request_format() {
-        let config = ProviderConfig {
-            api: ApiKind::Google,
-            endpoint: "https://generativelanguage.googleapis.com".into(),
-            api_key: "test-key".into(),
-        };
         let req = build_count_tokens_request(
-            &config,
+            "https://generativelanguage.googleapis.com",
+            "test-key",
             "gemini-2.0-flash",
             &[Message::Content {
                 role: "user".into(),
                 content: Content::Text("hello".into()),
             }],
-        );
+        ).unwrap();
         assert!(req.url.contains(":countTokens"));
         assert!(req.url.contains("gemini-2.0-flash"));
         let gen_req = req.body.get("generateContentRequest").unwrap();

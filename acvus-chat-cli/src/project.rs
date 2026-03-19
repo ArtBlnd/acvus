@@ -30,12 +30,21 @@ fn default_fuel_limit() -> u64 {
     50
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
-    pub api: acvus_orchestration::ApiKind,
+    pub api: ApiKind,
     pub endpoint: String,
     pub api_key_env: Option<String>,
     pub api_key: Option<String>,
+}
+
+/// Provider API kind — local to acvus-chat-cli.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiKind {
+    OpenAI,
+    Anthropic,
+    Google,
 }
 
 /// Resolve a `Ty` from a TOML value.

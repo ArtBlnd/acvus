@@ -12,10 +12,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::builtins::registry;
 use crate::hints::{Hint, HintTable};
 use crate::ir::{
-    ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+    CastKind, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
-use crate::ty::{FnKind, Ty};
-use crate::typeck::{BuiltinMap, TypeMap};
+use crate::ty::{Effect, FnKind, Ty};
+use crate::typeck::{BuiltinMap, CoercionMap, TypeMap};
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -27,6 +27,8 @@ pub struct Lowerer<'a> {
     type_map: TypeMap,
     /// Builtin map from type checker (call_span → resolved BuiltinId).
     builtin_map: BuiltinMap,
+    /// Coercion map from type checker (expr_span → CastKind).
+    coercion_lookup: FxHashMap<Span, CastKind>,
     /// Closures produced during lowering.
     closures: FxHashMap<Label, Arc<ClosureBody>>,
     /// Global closure label counter — shared across nesting levels to prevent
@@ -113,13 +115,17 @@ impl<'a> Lowerer<'a> {
         interner: &'a Interner,
         type_map: TypeMap,
         builtin_map: BuiltinMap,
+        coercion_map: CoercionMap,
     ) -> Self {
+        let coercion_lookup: FxHashMap<Span, CastKind> =
+            coercion_map.into_iter().collect();
         Self {
             body: MirBody::new(),
             interner,
             scopes: vec![FxHashMap::default()],
             type_map,
             builtin_map,
+            coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
             hints: HintTable::new(),
@@ -215,9 +221,9 @@ impl<'a> Lowerer<'a> {
 
     fn tuple_elem_type(&self, tuple_val: ValueId, index: usize) -> Ty {
         if let Some(Ty::Tuple(elems)) = self.body.val_types.get(&tuple_val) {
-            elems.get(index).cloned().unwrap_or(Ty::Error)
+            elems.get(index).cloned().unwrap_or(Ty::error())
         } else {
-            Ty::Error
+            Ty::error()
         }
     }
 
@@ -225,15 +231,15 @@ impl<'a> Lowerer<'a> {
         if let Some(Ty::List(elem) | Ty::Deque(elem, _)) = self.body.val_types.get(&list_val) {
             elem.as_ref().clone()
         } else {
-            Ty::Error
+            Ty::error()
         }
     }
 
     fn object_field_type(&self, object_val: ValueId, key: Astr) -> Ty {
         if let Some(Ty::Object(fields)) = self.body.val_types.get(&object_val) {
-            fields.get(&key).cloned().unwrap_or(Ty::Error)
+            fields.get(&key).cloned().unwrap_or(Ty::error())
         } else {
-            Ty::Error
+            Ty::error()
         }
     }
 
@@ -241,7 +247,7 @@ impl<'a> Lowerer<'a> {
         if let Some(Ty::Option(inner)) = self.body.val_types.get(&variant_val) {
             inner.as_ref().clone()
         } else {
-            Ty::Error
+            Ty::error()
         }
     }
 
@@ -249,7 +255,7 @@ impl<'a> Lowerer<'a> {
         match self.body.val_types.get(&src_val) {
             Some(Ty::List(elem) | Ty::Deque(elem, _)) => elem.as_ref().clone(),
             Some(Ty::Range) => Ty::Int,
-            _ => Ty::Error,
+            _ => Ty::error(),
         }
     }
 
@@ -356,7 +362,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn type_of_span(&self, span: Span) -> Ty {
-        self.type_map.get(&span).cloned().unwrap_or(Ty::Error)
+        self.type_map.get(&span).cloned().unwrap_or(Ty::error())
     }
 
     // --- Node lowering ---
@@ -392,9 +398,29 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// If the coercion map indicates this span needs a cast, emit a Cast
+    /// instruction and return the new ValueId. Otherwise return `val` as-is.
+    fn maybe_cast(&mut self, span: Span, val: ValueId) -> ValueId {
+        if let Some(&kind) = self.coercion_lookup.get(&span) {
+            let src_ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
+            let dst_ty = kind.result_ty(&src_ty);
+            let cast_dst = self.alloc_val();
+            self.set_val_type(cast_dst, dst_ty);
+            self.emit_inst(span, InstKind::Cast { dst: cast_dst, src: val, kind });
+            cast_dst
+        } else {
+            val
+        }
+    }
+
     // --- Expression lowering ---
 
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
+        let val = self.lower_expr_inner(expr);
+        self.maybe_cast(expr.span(), val)
+    }
+
+    fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {
         match expr {
             Expr::Literal { value, span } => {
                 let dst = self.alloc_expr(*span);
@@ -577,7 +603,11 @@ impl<'a> Lowerer<'a> {
                 let saved_body = std::mem::replace(&mut self.body, sub_body);
                 let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
 
+                // lower_expr calls maybe_cast(body.span(), val) which will
+                // pick up any lambda return coercion registered by the typechecker.
                 let result_reg = self.lower_expr(body);
+                // Capture the actual return type (may differ from type_map if Cast was inserted).
+                let actual_ret_ty = self.body.val_types.get(&result_reg).cloned().unwrap_or(Ty::error());
                 self.emit_inst(*span, InstKind::Return(result_reg));
 
                 let closure_body_mir = std::mem::replace(&mut self.body, saved_body);
@@ -592,7 +622,14 @@ impl<'a> Lowerer<'a> {
                     }),
                 );
 
-                let dst = self.alloc_typed(*span);
+                // Allocate dst with Fn type. If a return-site Cast was inserted,
+                // update the Fn's ret to match the actual (cast) return type.
+                let dst = self.alloc_val();
+                let mut fn_ty = self.type_of_span(*span);
+                if let Ty::Fn { ref mut ret, .. } = fn_ty {
+                    *ret = Box::new(actual_ret_ty);
+                }
+                self.set_val_type(dst, fn_ty);
                 self.emit_inst(
                     *span,
                     InstKind::MakeClosure {
@@ -618,7 +655,7 @@ impl<'a> Lowerer<'a> {
                     .map(|e| self.lower_expr(e))
                     .collect();
                 let dst = self.alloc_typed(*span);
-                self.emit_inst(*span, InstKind::MakeList { dst, elements });
+                self.emit_inst(*span, InstKind::MakeDeque { dst, elements });
                 dst
             }
 
@@ -974,13 +1011,25 @@ impl<'a> Lowerer<'a> {
 
         let source_reg = self.lower_expr(&ib.source);
 
-        let iter_reg = self.alloc_val();
-        self.set_val_type(iter_reg, Ty::Unit);
+        // Determine element type and CastKind from the source type.
+        let elem_ty = self.iterable_elem_type(source_reg);
+        let iter_ty = Ty::Iterator(Box::new(elem_ty.clone()), Effect::Pure);
+        let cast_kind = match self.body.val_types.get(&source_reg) {
+            Some(Ty::Deque(..)) => CastKind::DequeToIterator,
+            Some(Ty::List(_)) => CastKind::ListToIterator,
+            Some(Ty::Range) => CastKind::RangeToIterator,
+            _ => CastKind::DequeToIterator, // fallback — type checker should prevent this
+        };
+
+        // Cast source → Iterator.
+        let cast_dst = self.alloc_val();
+        self.set_val_type(cast_dst, iter_ty.clone());
         self.emit_inst(
             ib.span,
-            InstKind::IterInit {
-                dst: iter_reg,
+            InstKind::Cast {
+                dst: cast_dst,
                 src: source_reg,
+                kind: cast_kind,
             },
         );
 
@@ -988,35 +1037,100 @@ impl<'a> Lowerer<'a> {
         let catch_all_label = self.alloc_label();
         let end_label = self.alloc_label();
 
-        // Loop header.
-        self.emit_label(ib.span, loop_label);
-
-        let value_reg = self.alloc_val();
-        let done_reg = self.alloc_val();
-        self.set_val_type(value_reg, self.iterable_elem_type(source_reg));
-        self.set_val_type(done_reg, Ty::Bool);
+        // Jump to loop with initial iterator.
         self.emit_inst(
             ib.span,
-            InstKind::IterNext {
-                dst_value: value_reg,
-                dst_done: done_reg,
-                iter: iter_reg,
+            InstKind::Jump {
+                label: loop_label,
+                args: vec![cast_dst],
             },
         );
 
-        // If done, jump to catch-all.
-        let body_label = self.alloc_label();
+        // Loop header — receives iterator as block param.
+        let iter_param = self.alloc_val();
+        self.set_val_type(iter_param, iter_ty.clone());
+        self.emit_inst(
+            ib.span,
+            InstKind::BlockLabel {
+                label: loop_label,
+                params: vec![iter_param],
+                merge_of: None,
+            },
+        );
+
+        // Pull one element: Option<(T, Iterator<T, Pure>)>.
+        let next_opt_ty = Ty::Option(Box::new(Ty::Tuple(vec![
+            elem_ty.clone(),
+            iter_ty.clone(),
+        ])));
+        let next_opt = self.alloc_val();
+        self.set_val_type(next_opt, next_opt_ty);
+        self.emit_inst(
+            ib.span,
+            InstKind::IterStep {
+                dst: next_opt,
+                src: iter_param,
+            },
+        );
+
+        // Test for None → done.
+        let none_tag = self.interner.intern("None");
+        let is_none = self.alloc_val();
+        self.set_val_type(is_none, Ty::Bool);
+        self.emit_inst(
+            ib.span,
+            InstKind::TestVariant {
+                dst: is_none,
+                src: next_opt,
+                tag: none_tag,
+            },
+        );
+
+        let some_block = self.alloc_label();
         self.emit_inst(
             ib.span,
             InstKind::JumpIf {
-                cond: done_reg,
+                cond: is_none,
                 then_label: catch_all_label,
                 then_args: vec![],
-                else_label: body_label,
+                else_label: some_block,
                 else_args: vec![],
             },
         );
-        self.emit_label(ib.span, body_label);
+        self.emit_label(ib.span, some_block);
+
+        // Unwrap Some((value, rest_iter)).
+        let tuple_reg = self.alloc_val();
+        self.set_val_type(tuple_reg, Ty::Tuple(vec![elem_ty.clone(), iter_ty.clone()]));
+        self.emit_inst(
+            ib.span,
+            InstKind::UnwrapVariant {
+                dst: tuple_reg,
+                src: next_opt,
+            },
+        );
+
+        let value_reg = self.alloc_val();
+        self.set_val_type(value_reg, elem_ty);
+        self.emit_inst(
+            ib.span,
+            InstKind::TupleIndex {
+                dst: value_reg,
+                tuple: tuple_reg,
+                index: 0,
+            },
+        );
+
+        let rest_iter = self.alloc_val();
+        self.set_val_type(rest_iter, iter_ty);
+        self.emit_inst(
+            ib.span,
+            InstKind::TupleIndex {
+                dst: rest_iter,
+                tuple: tuple_reg,
+                index: 1,
+            },
+        );
 
         // Bind pattern (irrefutable — no test needed).
         self.push_scope();
@@ -1028,12 +1142,12 @@ impl<'a> Lowerer<'a> {
 
         self.pop_scope();
 
-        // Jump back to loop.
+        // Jump back to loop with rest iterator.
         self.emit_inst(
             ib.span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![],
+                args: vec![rest_iter],
             },
         );
 
@@ -1515,10 +1629,10 @@ mod tests {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut subst = TySubst::new();
     let checker = TypeChecker::new(interner, context, &mut subst);
-        let (type_map, builtin_map) = checker
+        let (type_map, builtin_map, coercion_map) = checker
             .check_template(&template)
             .expect("type check failed");
-        let lowerer = Lowerer::new(interner, type_map, builtin_map);
+        let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
         let (module, _hints) = lowerer.lower_template(&template);
         module
     }
@@ -1566,13 +1680,6 @@ mod tests {
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
         );
-        // Match block should NOT have IterInit/IterNext — it's single-value matching.
-        let has_iter_init = module
-            .main
-            .insts
-            .iter()
-            .any(|i| matches!(&i.kind, InstKind::IterInit { .. }));
-        assert!(!has_iter_init);
         // Should have pattern test and conditional jump.
         let has_jump_if = module
             .main

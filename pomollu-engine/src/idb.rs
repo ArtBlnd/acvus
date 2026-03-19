@@ -475,7 +475,8 @@ impl IdbAssetStore {
             if result.is_undefined() || result.is_null() {
                 0
             } else {
-                result.as_f64().unwrap_or(0.0) as i64
+                result.as_f64()
+                    .expect("IDB version must be a number") as i64
             }
         })
         .await

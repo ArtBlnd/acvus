@@ -10,8 +10,13 @@ pub fn json_to_value(interner: &Interner, v: &serde_json::Value) -> Value {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Value::int(i)
+            } else if let Some(u) = n.as_u64() {
+                // u64 values > i64::MAX: store as float (lossy for very large u64,
+                // but no fabrication — the value originated from the JSON source).
+                Value::float(u as f64)
             } else {
-                Value::float(n.as_f64().unwrap_or(0.0))
+                // Must be an f64.
+                Value::float(n.as_f64().expect("serde_json Number must be representable as i64, u64, or f64"))
             }
         }
         serde_json::Value::String(s) => Value::string(s.clone()),

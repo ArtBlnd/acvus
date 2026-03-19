@@ -1,14 +1,13 @@
-use std::sync::Arc;
-
-use acvus_interpreter::{Interpreter, PureValue, RuntimeError, TypedValue, Value};
+use acvus_interpreter::{Interpreter, LazyValue, PureValue, RuntimeError, TypedValue, Value, ValueKind};
 use acvus_mir::ir::MirModule;
-use acvus_mir::ty::Effect;
+use acvus_mir::ty::{Effect, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use super::Node;
 use super::helpers::{eval_script_in_coroutine, render_block_in_coroutine};
-use crate::kind::{CompiledIteratorEntry, CompiledIteratorSource, CompiledSourceTransform};
+use crate::dsl::{KEY_ITEM, KEY_INDEX};
+use crate::spec::{CompiledIteratorEntry, CompiledIteratorSource, CompiledSourceTransform};
 
 /// Composite iterator node: pulls from multiple sources, yields items one by one.
 ///
@@ -24,6 +23,9 @@ use crate::kind::{CompiledIteratorEntry, CompiledIteratorSource, CompiledSourceT
 pub struct IteratorNode {
     sources: Vec<CompiledIteratorSource>,
     unordered: bool,
+    /// The element type yielded by this iterator (from compiled output_ty).
+    /// For `Iterator(elem, _)` output_ty, this is `elem`.
+    yield_ty: Ty,
     interner: Interner,
 }
 
@@ -31,11 +33,18 @@ impl IteratorNode {
     pub fn new(
         sources: Vec<CompiledIteratorSource>,
         unordered: bool,
+        output_ty: &Ty,
         interner: &Interner,
     ) -> Self {
+        let yield_ty = match output_ty {
+            Ty::Iterator(elem, _) => (**elem).clone(),
+            // Fallback: if not Iterator type, use the output_ty itself.
+            other => other.clone(),
+        };
         Self {
             sources,
             unordered,
+            yield_ty,
             interner: interner.clone(),
         }
     }
@@ -44,19 +53,20 @@ impl IteratorNode {
 impl Node for IteratorNode {
     fn spawn(
         &self,
-        local: FxHashMap<Astr, Arc<TypedValue>>,
+        local: FxHashMap<Astr, TypedValue>,
     ) -> acvus_utils::Coroutine<TypedValue, RuntimeError> {
         let sources = self.sources.clone();
         let unordered = self.unordered;
+        let yield_ty = self.yield_ty.clone();
         let interner = self.interner.clone();
 
         acvus_utils::coroutine(move |handle| async move {
             if unordered {
                 // TODO: FuturesUnordered concurrent execution
                 // For now, fall back to sequential
-                sequential_iterate(&interner, &sources, &local, &handle).await?;
+                sequential_iterate(&interner, &sources, &local, &yield_ty, &handle).await?;
             } else {
-                sequential_iterate(&interner, &sources, &local, &handle).await?;
+                sequential_iterate(&interner, &sources, &local, &yield_ty, &handle).await?;
             }
             Ok(())
         })
@@ -67,11 +77,12 @@ impl Node for IteratorNode {
 async fn sequential_iterate(
     interner: &Interner,
     sources: &[CompiledIteratorSource],
-    local: &FxHashMap<Astr, Arc<TypedValue>>,
+    local: &FxHashMap<Astr, TypedValue>,
+    yield_ty: &Ty,
     handle: &acvus_utils::YieldHandle<TypedValue>,
 ) -> Result<(), RuntimeError> {
     let name_key = interner.intern("name");
-    let item_key = interner.intern("item");
+    let item_key = interner.intern(KEY_ITEM);
 
     for source in sources {
         // Evaluate pagination bounds
@@ -81,8 +92,13 @@ async fn sequential_iterate(
                     interner, &start_script.module, local, handle,
                 ).await?;
                 match val.value() {
-                    Value::Pure(PureValue::Int(n)) => *n as usize,
-                    _ => 0,
+                    Value::Pure(PureValue::Int(n)) if *n >= 0 => *n as usize,
+                    Value::Pure(PureValue::Int(_)) => 0, // negative start clamped to 0
+                    other => return Err(RuntimeError::unexpected_type(
+                        "iterator start",
+                        &[ValueKind::Int],
+                        other.kind(),
+                    )),
                 }
             }
             None => 0,
@@ -90,18 +106,35 @@ async fn sequential_iterate(
 
         let end: Option<usize> = match &source.end {
             Some(end_script) => {
+                let some_tag = interner.intern("Some");
                 let val = eval_script_in_coroutine(
                     interner, &end_script.module, local, handle,
                 ).await?;
-                match val.to_concrete(interner) {
-                    acvus_interpreter::ConcreteValue::Variant { tag, payload } if tag == "Some" => {
+                match val.value() {
+                    Value::Lazy(acvus_interpreter::LazyValue::Variant { tag, payload })
+                        if *tag == some_tag =>
+                    {
                         match payload.as_deref() {
-                            Some(acvus_interpreter::ConcreteValue::Int { v }) => Some(*v as usize),
-                            _ => None,
+                            Some(Value::Pure(PureValue::Int(v))) if *v >= 0 => Some(*v as usize),
+                            Some(Value::Pure(PureValue::Int(_))) => Some(0), // negative end clamped to 0
+                            Some(other) => return Err(RuntimeError::unexpected_type(
+                                "iterator end (Some payload)",
+                                &[ValueKind::Int],
+                                other.kind(),
+                            )),
+                            None => None, // Some(Unit) — treat as no end bound
                         }
                     }
-                    acvus_interpreter::ConcreteValue::Int { v } => Some(v as usize),
-                    _ => None,
+                    Value::Pure(PureValue::Int(v)) if *v >= 0 => Some(*v as usize),
+                    Value::Pure(PureValue::Int(_)) => Some(0), // negative end clamped to 0
+                    // None variant — no end bound
+                    Value::Lazy(LazyValue::Variant { tag, .. })
+                        if interner.resolve(*tag) == "None" => None,
+                    other => return Err(RuntimeError::unexpected_type(
+                        "iterator end",
+                        &[ValueKind::Int, ValueKind::Variant],
+                        other.kind(),
+                    )),
                 }
             }
             None => None,
@@ -112,20 +145,22 @@ async fn sequential_iterate(
             interner, &source.expr.module, local, handle,
         ).await?;
 
-        let inner = Arc::unwrap_or_clone(source_val.into_value());
+        // Extract element type from the source value's type.
+        let elem_ty = match source_val.ty() {
+            Ty::Iterator(elem, _)
+            | Ty::Sequence(elem, ..)
+            | Ty::List(elem)
+            | Ty::Deque(elem, _) => (**elem).clone(),
+            other => other.clone(), // scalar source — the item IS the value
+        };
+
+        let inner = source_val.into_inner();
 
         // Determine if iterable or scalar
-        let is_iterable = matches!(
-            &inner,
-            Value::Lazy(acvus_interpreter::LazyValue::Iterator(_))
-            | Value::Lazy(acvus_interpreter::LazyValue::List(_))
-            | Value::Lazy(acvus_interpreter::LazyValue::Deque(_))
-            | Value::Lazy(acvus_interpreter::LazyValue::Sequence(_))
-        );
-
-        if is_iterable {
-            let ih = inner.into_iter_handle(Effect::Pure);
-            let empty_module = MirModule { main: acvus_mir::ir::MirBody::default(), closures: Default::default() };
+        let is_iterator = inner.try_expect_ref::<acvus_interpreter::IterHandle>().is_some();
+        if is_iterator {
+            let ih = inner.expect::<acvus_interpreter::IterHandle>("iter_node");
+            let empty_module = MirModule::default();
             let mut interp = Interpreter::new(interner, empty_module);
             let mut current = Some(ih);
 
@@ -158,22 +193,22 @@ async fn sequential_iterate(
                 current = Some(rest);
 
                 let transformed = apply_entries(
-                    interner, &source.entries, item, start + count, local, handle,
+                    interner, &source.entries, item, start + count, &elem_ty, local, handle,
                 ).await?;
 
                 if let Some(val) = transformed {
-                    yield_tagged(handle, name_key, item_key, &source.name, val).await;
+                    yield_tagged(handle, name_key, item_key, &source.name, val, yield_ty).await;
                 }
                 count += 1;
             }
         } else {
             // Scalar: apply entries and yield once
             let transformed = apply_entries(
-                interner, &source.entries, inner, 0, local, handle,
+                interner, &source.entries, inner, 0, &elem_ty, local, handle,
             ).await?;
 
             if let Some(val) = transformed {
-                yield_tagged(handle, name_key, item_key, &source.name, val).await;
+                yield_tagged(handle, name_key, item_key, &source.name, val, yield_ty).await;
             }
         }
     }
@@ -193,24 +228,25 @@ async fn apply_entries(
     entries: &[CompiledIteratorEntry],
     item: Value,
     index: usize,
-    local: &FxHashMap<Astr, Arc<TypedValue>>,
+    elem_ty: &Ty,
+    local: &FxHashMap<Astr, TypedValue>,
     handle: &acvus_utils::YieldHandle<TypedValue>,
 ) -> Result<Option<Value>, RuntimeError> {
     if entries.is_empty() {
         return Ok(Some(item));
     }
 
-    let item_key = interner.intern("item");
-    let index_key = interner.intern("index");
+    let item_key = interner.intern(KEY_ITEM);
+    let index_key = interner.intern(KEY_INDEX);
 
     let mut entry_local = local.clone();
     entry_local.insert(
         item_key,
-        Arc::new(TypedValue::new(Arc::new(item.clone()), acvus_mir::ty::Ty::Infer)),
+        TypedValue::new(item.clone(), elem_ty.clone()),
     );
     entry_local.insert(
         index_key,
-        Arc::new(TypedValue::int(index as i64)),
+        TypedValue::int(index as i64),
     );
 
     for entry in entries {
@@ -241,7 +277,7 @@ async fn apply_entries(
 async fn apply_transform(
     interner: &Interner,
     transform: &CompiledSourceTransform,
-    local: &FxHashMap<Astr, Arc<TypedValue>>,
+    local: &FxHashMap<Astr, TypedValue>,
     handle: &acvus_utils::YieldHandle<TypedValue>,
 ) -> Result<Value, RuntimeError> {
     match transform {
@@ -249,7 +285,7 @@ async fn apply_transform(
             let result = eval_script_in_coroutine(
                 interner, &script.module, local, handle,
             ).await?;
-            Ok(Arc::unwrap_or_clone(result.into_value()))
+            Ok(result.into_inner())
         }
         CompiledSourceTransform::Template(template) => {
             let rendered = render_block_in_coroutine(
@@ -267,13 +303,11 @@ async fn yield_tagged(
     item_key: Astr,
     name_tag: &str,
     item: Value,
+    yield_ty: &Ty,
 ) {
     let mut fields = FxHashMap::default();
-    fields.insert(name_key, Value::Pure(PureValue::String(name_tag.to_string())));
+    fields.insert(name_key, Value::string(name_tag));
     fields.insert(item_key, item);
     let obj = Value::object(fields);
-    handle.yield_val(TypedValue::new(
-        Arc::new(obj),
-        acvus_mir::ty::Ty::Infer,
-    )).await;
+    handle.yield_val(TypedValue::new(obj, yield_ty.clone())).await;
 }

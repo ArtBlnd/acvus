@@ -60,15 +60,13 @@ impl TypeDef {
 fn main() {
     let interner = Interner::new();
     let args: Vec<String> = env::args().collect();
-    let obfuscate = args.iter().any(|a| a == "--obfuscate");
     let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
 
     if args.len() < 2 || *args[1] == "--help" || *args[1] == "-h" {
-        eprintln!("Usage: acvus-mir-cli <template-file> [context.json] [--obfuscate]");
+        eprintln!("Usage: acvus-mir-cli <template-file> [context.json]");
         eprintln!();
         eprintln!("  template-file   Path to .acvus template (or - for stdin)");
         eprintln!("  context.json    Optional JSON with context types and extern fns");
-        eprintln!("  --obfuscate     Apply MIR obfuscation pass");
         eprintln!();
         eprintln!("Context JSON format:");
         eprintln!(r#"  {{"#);
@@ -147,18 +145,7 @@ fn main() {
         &template,
         &reg,
     ) {
-        Ok((mut module, _hints)) => {
-            if obfuscate {
-                use acvus_mir_pass::obfuscate::{ObfConfig, ObfuscatePass};
-                let pass = ObfuscatePass {
-                    config: ObfConfig::default(),
-                    interner: interner.clone(),
-                };
-                module = acvus_mir_pass::TransformPass::transform(&pass, module, ());
-
-                use acvus_mir_pass::optimize::ConstDedupPass;
-                module = acvus_mir_pass::TransformPass::transform(&ConstDedupPass, module, ());
-            }
+        Ok((module, _hints)) => {
             println!("{}", dump(&interner, &module));
         }
         Err(errors) => {

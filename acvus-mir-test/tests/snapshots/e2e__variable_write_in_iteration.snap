@@ -4,22 +4,31 @@ expression: ir
 ---
 === main ===
      0 │   r0 = context_load @items
-     1 │   r1 = iter_init r0
-     2 │ L0:
-     3 │   r2, r3 = iter_next r1
-     4 │   jump_if r3 then L1 else L3
-     5 │ L3:
-     6 │   var_store $last = r2
-     7 │   jump L0
-     8 │ L1:
-     9 │ L2:
-    10 │   r4 = var_load $last
-    11 │   r5 = call to_string(r4)
-    12 │   yield r5
+     1 │   r1 = cast ListToIterator r0
+     2 │   jump L0(r1)
+     3 │ L0(r2: Iterator<Int>):
+     4 │   r3 = iter_step r2
+     5 │   r4 = test r3 is None
+     6 │   jump_if r4 then L1 else L3
+     7 │ L3:
+     8 │   r5 = unwrap r3
+     9 │   r6 = r5.0
+    10 │   r7 = r5.1
+    11 │   var_store $last = r6
+    12 │   jump L0(r7)
+    13 │ L1:
+    14 │ L2:
+    15 │   r8 = var_load $last
+    16 │   r9 = call to_string(r8)
+    17 │   yield r9
 
     ; r0 (@items) : List<Int>
-    ; r1 (v1) : Unit
-    ; r2 (x) : Int
-    ; r3 (v3) : Bool
-    ; r4 ($last) : Int
-    ; r5 (to_string(...)) : String
+    ; r1 (v1) : Iterator<Int>
+    ; r2 (v2) : Iterator<Int>
+    ; r3 (v3) : Option<(Int, Iterator<Int>)>
+    ; r4 (v4) : Bool
+    ; r5 (v5) : (Int, Iterator<Int>)
+    ; r6 (x) : Int
+    ; r7 (v7) : Iterator<Int>
+    ; r8 ($last) : Int
+    ; r9 (to_string(...)) : String
