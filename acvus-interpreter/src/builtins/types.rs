@@ -1,4 +1,4 @@
-//! Phantom types and conversion traits for declarative builtin signatures.
+//! Phantom types and conversion traits for builtin signatures.
 //!
 //! Builtin functions are written as plain Rust functions whose parameter and
 //! return types encode the script-level type signature:
@@ -8,68 +8,16 @@
 //! fn map(iter: Iter<T<0>, E<0>>, f: Fun1<T<0>, T<1>, E<0>>) -> Iter<T<1>, E<0>> { ... }
 //! ```
 //!
-//! The `HasTy` trait extracts the `Ty` representation from each Rust type,
-//! and `FromTyped`/`IntoTyped` handle runtime value conversion.
+//! `FromTyped`/`IntoTyped` handle runtime value conversion.
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{Effect, FnKind, Origin, Ty, TySubst, TyVar};
+use acvus_mir::ty::{Effect, Origin, Ty};
 
 use crate::error::RuntimeError;
 use crate::iter::{IterHandle, SequenceChain};
 use crate::value::{FnValue, LazyValue, PureValue, TypedValue, Value};
 use acvus_utils::TrackedDeque;
-
-// ── Signature context ──────────────────────────────────────────────
-
-/// Context for building a type signature from phantom types.
-///
-/// Caches variable allocations so that `T<0>` always maps to the same
-/// `TyVar` within a single signature, regardless of how many times it appears.
-pub struct SigCtx<'a> {
-    subst: &'a mut TySubst,
-    ty_vars: [Option<Ty>; 8],
-    effect_vars: [Option<Effect>; 4],
-    origin_vars: [Option<Origin>; 4],
-}
-
-impl<'a> SigCtx<'a> {
-    pub fn new(subst: &'a mut TySubst) -> Self {
-        Self {
-            subst,
-            ty_vars: Default::default(),
-            effect_vars: Default::default(),
-            origin_vars: Default::default(),
-        }
-    }
-
-    pub fn ty_var(&mut self, n: usize) -> Ty {
-        if let Some(ref ty) = self.ty_vars[n] {
-            return ty.clone();
-        }
-        let ty = self.subst.fresh_var();
-        self.ty_vars[n] = Some(ty.clone());
-        ty
-    }
-
-    pub fn effect_var(&mut self, n: usize) -> Effect {
-        if let Some(e) = self.effect_vars[n] {
-            return e;
-        }
-        let e = self.subst.fresh_effect_var();
-        self.effect_vars[n] = Some(e);
-        e
-    }
-
-    pub fn origin_var(&mut self, n: usize) -> Origin {
-        if let Some(o) = self.origin_vars[n] {
-            return o;
-        }
-        let o = self.subst.fresh_origin();
-        self.origin_vars[n] = Some(o);
-        o
-    }
-}
 
 // ── Phantom types ──────────────────────────────────────────────────
 
@@ -84,77 +32,6 @@ pub struct PureEffect;
 
 /// Origin variable placeholder. `O<0>` represents a polymorphic origin.
 pub struct O<const N: usize>;
-
-// ── HasTy / HasEffect / HasOrigin ──────────────────────────────────
-
-/// Extract a `Ty` from a Rust type, using `SigCtx` for variable allocation.
-pub trait HasTy {
-    fn ty(ctx: &mut SigCtx) -> Ty;
-}
-
-/// Extract an `Effect` from a Rust type.
-pub trait HasEffect {
-    fn effect(ctx: &mut SigCtx) -> Effect;
-}
-
-/// Extract an `Origin` from a Rust type.
-pub trait HasOrigin {
-    fn origin(ctx: &mut SigCtx) -> Origin;
-}
-
-// ── HasTy impls: scalars ───────────────────────────────────────────
-
-impl HasTy for String {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::String }
-}
-
-impl HasTy for i64 {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::Int }
-}
-
-impl HasTy for f64 {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::Float }
-}
-
-impl HasTy for bool {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::Bool }
-}
-
-impl HasTy for u8 {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::Byte }
-}
-
-impl HasTy for () {
-    fn ty(_ctx: &mut SigCtx) -> Ty { Ty::Unit }
-}
-
-// ── HasTy impls: type variables ────────────────────────────────────
-
-impl<const N: usize> HasTy for T<N> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        ctx.ty_var(N)
-    }
-}
-
-// ── HasEffect impls ────────────────────────────────────────────────
-
-impl HasEffect for PureEffect {
-    fn effect(_ctx: &mut SigCtx) -> Effect { Effect::Pure }
-}
-
-impl<const N: usize> HasEffect for E<N> {
-    fn effect(ctx: &mut SigCtx) -> Effect {
-        ctx.effect_var(N)
-    }
-}
-
-// ── HasOrigin impls ────────────────────────────────────────────────
-
-impl<const N: usize> HasOrigin for O<N> {
-    fn origin(ctx: &mut SigCtx) -> Origin {
-        ctx.origin_var(N)
-    }
-}
 
 // ── Wrapper types (phantom + runtime value) ────────────────────────
 
@@ -179,83 +56,8 @@ pub struct Opt<Inner>(pub Option<Value>, pub PhantomData<Inner>);
 /// Polymorphic value wrapper: `TVal<T<0>>` documents a type-variable position.
 ///
 /// At runtime this is just a `Value`. The phantom parameter is purely for
-/// self-describing function signatures and `HasTy` extraction.
+/// self-describing function signatures.
 pub struct TVal<P>(pub Value, pub PhantomData<P>);
-
-/// Tuple-2 phantom marker: `Tup2<A, B>` = `(A, B)` in script.
-///
-/// Used inside other wrappers (e.g. `Opt<Tup2<TVal<T<0>>, Iter<T<0>, E<0>>>>`)
-/// for type-level documentation. Not constructed at runtime — the actual value
-/// is a `Value::Tuple` built directly.
-pub struct Tup2<A, B>(pub PhantomData<(A, B)>);
-
-// ── HasTy impls: containers ────────────────────────────────────────
-
-impl<Elem: HasTy, Eff: HasEffect> HasTy for Iter<Elem, Eff> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Iterator(Box::new(Elem::ty(ctx)), Eff::effect(ctx))
-    }
-}
-
-impl<Elem: HasTy, Orig: HasOrigin> HasTy for Deq<Elem, Orig> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Deque(Box::new(Elem::ty(ctx)), Orig::origin(ctx))
-    }
-}
-
-impl<Elem: HasTy, Orig: HasOrigin, Eff: HasEffect> HasTy for Seq<Elem, Orig, Eff> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Sequence(Box::new(Elem::ty(ctx)), Orig::origin(ctx), Eff::effect(ctx))
-    }
-}
-
-impl<Arg: HasTy, Ret: HasTy, Eff: HasEffect> HasTy for Fun1<Arg, Ret, Eff> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Fn {
-            params: vec![Arg::ty(ctx)],
-            ret: Box::new(Ret::ty(ctx)),
-            kind: FnKind::Lambda,
-            captures: vec![],
-            effect: Eff::effect(ctx),
-        }
-    }
-}
-
-impl<A: HasTy, B: HasTy, Ret: HasTy, Eff: HasEffect> HasTy for Fun2<A, B, Ret, Eff> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Fn {
-            params: vec![A::ty(ctx), B::ty(ctx)],
-            ret: Box::new(Ret::ty(ctx)),
-            kind: FnKind::Lambda,
-            captures: vec![],
-            effect: Eff::effect(ctx),
-        }
-    }
-}
-
-impl<Inner: HasTy> HasTy for Opt<Inner> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Option(Box::new(Inner::ty(ctx)))
-    }
-}
-
-impl<Elem: HasTy> HasTy for Vec<Elem> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::List(Box::new(Elem::ty(ctx)))
-    }
-}
-
-impl<P: HasTy> HasTy for TVal<P> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        P::ty(ctx)
-    }
-}
-
-impl<A: HasTy, B: HasTy> HasTy for Tup2<A, B> {
-    fn ty(ctx: &mut SigCtx) -> Ty {
-        Ty::Tuple(vec![A::ty(ctx), B::ty(ctx)])
-    }
-}
 
 // ── FromTyped / IntoTyped ──────────────────────────────────────────
 

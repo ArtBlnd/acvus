@@ -5,7 +5,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinId;
-use crate::ty::{Effect, Origin, Ty};
+use crate::ty::{Effect, Ty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(pub u32);

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use acvus_utils::{Interner, YieldHandle};
+use acvus_utils::YieldHandle;
 
 use crate::error::RuntimeError;
 use crate::iter::IterHandle;
@@ -41,9 +41,6 @@ pub trait ExecCtx: Sized {
         args: Vec<Arc<Value>>,
         handle: &'a YieldHandle<TypedValue>,
     ) -> BoxFuture<'a, Result<(Self, Value), RuntimeError>>;
-
-    /// Borrow the string interner.
-    fn interner(&self) -> &Interner;
 }
 
 // ── Derived helpers ─────────────────────────────────────────────────

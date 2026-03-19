@@ -53,17 +53,14 @@ where
     }
 }
 
-// ── BuiltinFn trait (TypedValue-based, with auto signature) ────────
+// ── BuiltinFn trait (TypedValue-based) ─────────────────────────────
 
-use super::types::{FromTyped, IntoTyped, HasTy, SigCtx};
+use super::types::{FromTyped, IntoTyped};
 use crate::value::TypedValue;
-use acvus_mir::ty::Ty;
 
-/// A builtin function that can automatically extract its type signature
-/// from its Rust parameter types (via `HasTy`) and convert args at runtime
+/// A builtin function that converts args at runtime
 /// (via `FromTyped`/`IntoTyped`).
 pub trait BuiltinFn<Args> {
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty);
     fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError>;
 }
 
@@ -71,12 +68,9 @@ pub trait BuiltinFn<Args> {
 impl<F, A, R> BuiltinFn<(A,)> for F
 where
     F: Fn(A) -> R,
-    A: FromTyped + HasTy,
-    R: IntoTyped + HasTy,
+    A: FromTyped,
+    R: IntoTyped,
 {
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
-        (vec![A::ty(ctx)], R::ty(ctx))
-    }
     fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
         let mut it = args.into_iter();
         let a = A::from_typed(it.next().expect("missing arg 0"))?;
@@ -88,13 +82,10 @@ where
 impl<F, A, B, R> BuiltinFn<(A, B)> for F
 where
     F: Fn(A, B) -> R,
-    A: FromTyped + HasTy,
-    B: FromTyped + HasTy,
-    R: IntoTyped + HasTy,
+    A: FromTyped,
+    B: FromTyped,
+    R: IntoTyped,
 {
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
-        (vec![A::ty(ctx), B::ty(ctx)], R::ty(ctx))
-    }
     fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
         let mut it = args.into_iter();
         let a = A::from_typed(it.next().expect("missing arg 0"))?;
@@ -107,59 +98,17 @@ where
 impl<F, A, B, C, R> BuiltinFn<(A, B, C)> for F
 where
     F: Fn(A, B, C) -> R,
-    A: FromTyped + HasTy,
-    B: FromTyped + HasTy,
-    C: FromTyped + HasTy,
-    R: IntoTyped + HasTy,
+    A: FromTyped,
+    B: FromTyped,
+    C: FromTyped,
+    R: IntoTyped,
 {
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
-        (vec![A::ty(ctx), B::ty(ctx), C::ty(ctx)], R::ty(ctx))
-    }
     fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
         let mut it = args.into_iter();
         let a = A::from_typed(it.next().expect("missing arg 0"))?;
         let b = B::from_typed(it.next().expect("missing arg 1"))?;
         let c = C::from_typed(it.next().expect("missing arg 2"))?;
         Ok(self(a, b, c).into_typed())
-    }
-}
-
-// ── Result-returning variants ──────────────────────────────────────
-
-/// Marker wrapper to distinguish `Fn(A) -> Result<R, RuntimeError>` from `Fn(A) -> R`.
-pub struct Fallible<F>(pub F);
-
-impl<F, A, R> BuiltinFn<(Fallible<A>,)> for Fallible<F>
-where
-    F: Fn(A) -> Result<R, RuntimeError>,
-    A: FromTyped + HasTy,
-    R: IntoTyped + HasTy,
-{
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
-        (vec![A::ty(ctx)], R::ty(ctx))
-    }
-    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
-        let mut it = args.into_iter();
-        let a = A::from_typed(it.next().expect("missing arg 0"))?;
-        Ok(self.0(a)?.into_typed())
-    }
-}
-
-impl<F, A, B, R> BuiltinFn<(Fallible<A>, B)> for Fallible<F>
-where
-    F: Fn(A, B) -> Result<R, RuntimeError>,
-    A: FromTyped + HasTy,
-    B: FromTyped + HasTy,
-    R: IntoTyped + HasTy,
-{
-    fn signature(ctx: &mut SigCtx) -> (Vec<Ty>, Ty) {
-        (vec![A::ty(ctx), B::ty(ctx)], R::ty(ctx))
-    }
-    fn call(&self, args: Vec<TypedValue>) -> Result<TypedValue, RuntimeError> {
-        let mut it = args.into_iter();
-        let a = A::from_typed(it.next().expect("missing arg 0"))?;
-        let b = B::from_typed(it.next().expect("missing arg 1"))?;
-        Ok(self.0(a, b)?.into_typed())
     }
 }
 
@@ -174,13 +123,4 @@ where
     F: BuiltinFn<Args> + Send + Sync + 'static,
 {
     Box::new(move |args| f.call(args))
-}
-
-/// Signature extractor — calls `BuiltinFn::signature` for a given function type.
-pub fn extract_signature<F, Args>(subst: &mut acvus_mir::ty::TySubst) -> (Vec<Ty>, Ty)
-where
-    F: BuiltinFn<Args>,
-{
-    let mut ctx = SigCtx::new(subst);
-    F::signature(&mut ctx)
 }

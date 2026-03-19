@@ -8,7 +8,6 @@ pub mod printer;
 pub mod ty;
 pub mod ser_ty;
 pub mod typeck;
-pub mod user_type;
 pub mod variant;
 
 use acvus_ast::{Script, Template};

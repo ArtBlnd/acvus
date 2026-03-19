@@ -298,43 +298,12 @@ fn sig_reverse(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::List(Box::new(t.clone()))], Ty::List(Box::new(t)))
 }
 
-fn sig_flatten(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    (
-        vec![Ty::List(Box::new(Ty::List(Box::new(t.clone()))))],
-        Ty::List(Box::new(t)),
-    )
-}
-
 fn sig_flatten_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (
         vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))), Effect::Pure)],
         Ty::Iterator(Box::new(t), Effect::Pure),
     )
-}
-
-fn sig_flat_map_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
-    let e = s.fresh_effect_var();
-    (
-        vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn {
-                params: vec![t],
-                ret: Box::new(Ty::List(Box::new(u.clone()))),
-                kind: FnKind::Lambda,
-                captures: vec![],
-                effect: e,
-            },
-        ],
-        Ty::Iterator(Box::new(u), e),
-    )
-}
-
-fn sig_join(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::List(Box::new(Ty::String)), Ty::String], Ty::String)
 }
 
 fn sig_join_iter(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -347,11 +316,6 @@ fn sig_char_to_int(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_int_to_char(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::Int], Ty::String)
-}
-
-fn sig_contains(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    (vec![Ty::List(Box::new(t.clone())), t], Ty::Bool)
 }
 
 fn sig_contains_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -427,19 +391,9 @@ fn sig_next_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     )
 }
 
-fn sig_first(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    (vec![Ty::List(Box::new(t.clone()))], Ty::Option(Box::new(t)))
-}
-
 fn sig_first_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_var();
     (vec![Ty::Iterator(Box::new(t.clone()), Effect::Pure)], Ty::Option(Box::new(t)))
-}
-
-fn sig_last(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    (vec![Ty::List(Box::new(t.clone()))], Ty::Option(Box::new(t)))
 }
 
 fn sig_last_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {

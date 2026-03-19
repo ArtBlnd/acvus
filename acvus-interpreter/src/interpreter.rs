@@ -838,10 +838,6 @@ impl builtins::ExecCtx for Interpreter {
     ) -> BoxFuture<'a, Result<(Self, Value), RuntimeError>> {
         Box::pin(Self::call_closure(self, f, args, handle))
     }
-
-    fn interner(&self) -> &Interner {
-        &self.interner
-    }
 }
 
 
