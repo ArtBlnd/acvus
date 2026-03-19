@@ -1416,6 +1416,7 @@ mod tests {
         assert_eq!(*turn2[4].value(), Value::Pure(PureValue::Int(101)));
     }
 
+    #[tokio::test]
     async fn lazy_evaluation_streams_one_by_one() {
         let interner = Interner::new();
 
