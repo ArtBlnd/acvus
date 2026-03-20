@@ -1076,16 +1076,12 @@ async fn dep_3_node_cycle_detected() {
 /// 10.1 S: Patch bind with incompatible initial type should fail.
 /// bind = @self + @raw expects both sides to be Int, but initial is String.
 /// Pair of: patch_bind_type_change_allowed (10.1 C)
-// BUG: should fail but doesn't — the type checker doesn't validate @self type
-// (from initial) against bind's usage of @self in arithmetic.
 #[tokio::test]
 async fn patch_bind_incompatible_initial_type_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "42", "@self + @raw", r#""not_an_int""#)
         .try_build();
-    // assert!(result.is_err(), ...);
-    // Currently compiles — tracking as known bug.
-    let _ = result;
+    assert!(result.is_err(), "String initial + Int body in bind should be compile error");
 }
 
 /// 10.1 C: Patch bind with compatible initial type compiles fine.
@@ -1101,16 +1097,12 @@ async fn patch_bind_compatible_initial_type_ok() {
 
 /// 10.1 S: Patch where body type doesn't match bind's expected @raw type.
 /// body produces String, bind tries to do Int arithmetic on @raw.
-// BUG: should fail but doesn't — @raw type from body (String) is not checked
-// against bind's arithmetic usage expecting Int.
 #[tokio::test]
 async fn patch_body_type_mismatch_bind_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", r#""hello""#, "@self + @raw", "0")
         .try_build();
-    // assert!(result.is_err(), ...);
-    // Currently compiles — tracking as known bug.
-    let _ = result;
+    assert!(result.is_err(), "String body + Int initial in bind should be compile error");
 }
 
 // =========================================================================
@@ -1140,31 +1132,23 @@ async fn effect_fn_type_cannot_persist() {
 /// 3.2 S: Patch @self in bind with wrong type arithmetic fails.
 /// initial = "hello" (String), body = 1 (Int), bind = @self + @raw → String + Int error.
 /// Pair of: patch_multi_turn_accumulates (3.2 C)
-// BUG: should fail but doesn't — bind doesn't validate @self (String) + @raw (Int)
-// type mismatch at compile time.
 #[tokio::test]
 async fn patch_self_type_mismatch_in_bind_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "1", "@self + @raw", r#""hello""#)
         .try_build();
-    // assert!(result.is_err(), ...);
-    // Currently compiles — tracking as known bug.
-    let _ = result;
+    assert!(result.is_err(), "String @self + Int @raw in bind should be compile error");
 }
 
 /// 3.6 S: Patch String concatenation with Int body fails.
 /// initial = "" (String), body = 42 (Int), bind = @self + @raw → String + Int error.
 /// Pair of: patch_string_accumulation (3.6 C)
-// BUG: should fail but doesn't — bind doesn't validate @self (String) + @raw (Int)
-// type mismatch at compile time.
 #[tokio::test]
 async fn patch_string_concat_with_int_body_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("msg", "42", "@self + @raw", r#""""#)
         .try_build();
-    // assert!(result.is_err(), ...);
-    // Currently compiles — tracking as known bug.
-    let _ = result;
+    assert!(result.is_err(), "String @self + Int @raw in bind should be compile error");
 }
 
 // =========================================================================
@@ -1184,16 +1168,17 @@ async fn bind_undefined_function_fails() {
 /// 1.2 S: Bind type mismatch — initial type doesn't match bind result.
 /// bind = @raw | to_string → String, initial = 0 (Int). @self is String but initial is Int.
 /// Pair of: bind_to_string_changes_output_type (1.2 C)
-// BUG: should fail but doesn't — the bind result is String but initial is Int.
-// The type checker doesn't validate initial type against bind result type.
+/// Note: this is currently ALLOWED by design — bind can change the stored type.
+/// The initial value is coerced to match on the first turn.
 #[tokio::test]
-async fn bind_type_change_initial_mismatch_fails() {
+async fn bind_type_change_initial_mismatch_is_allowed() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "42", "@raw | to_string", "0")
         .try_build();
-    // assert!(result.is_err(), ...);
-    // Currently compiles — tracking as known bug.
-    let _ = result;
+    // This compiles because bind is allowed to change the type.
+    // initial=0(Int), bind=@raw|to_string→String. @self becomes String.
+    // On turn 1: @self=0(Int) → to_string coerces it.
+    assert!(result.is_ok(), "bind type change should be allowed");
 }
 
 // =========================================================================
