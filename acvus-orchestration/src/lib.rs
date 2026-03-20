@@ -43,6 +43,6 @@ pub use node::{
 pub use http::{Fetch, HttpRequest, RequestError};
 pub use resolve::{LoopState, ParkedDiag, ResolveError, ResolveState, Resolved, Resolver};
 pub use storage::{
-    EntryMut, EntryRef, HistoryEntry, Journal, JournalError, PatchDiff, Prune, StorageOps,
+    EntryMut, EntryRef, HistoryEntry, Journal, JournalError, PatchDiff, Prune,
     TreeEntryMut, TreeEntryRef, TreeExport, TreeJournal, TreeNodeExport,
 };

@@ -11,6 +11,7 @@ futures = "0.3"
 parking_lot = "0.12"
 rust_decimal = "1.40.0"
 rustc-hash = { workspace = true }
+tracing = "0.1"
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]

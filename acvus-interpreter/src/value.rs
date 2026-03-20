@@ -51,6 +51,7 @@ pub enum ConcreteValue {
     Tuple { items: Vec<ConcreteValue> },
     Byte { v: u8 },
     Variant { tag: String, payload: Option<Box<ConcreteValue>> },
+    Sequence { items: Vec<ConcreteValue> },
 }
 
 impl PureValue {
@@ -338,7 +339,9 @@ impl Value {
                 LazyValue::Fn(_) => panic!("cannot convert Fn to ConcreteValue"),
                 LazyValue::ExternFn(_) => panic!("cannot convert ExternFn to ConcreteValue"),
                 LazyValue::Iterator(_) => panic!("cannot convert Iterator to ConcreteValue"),
-                LazyValue::Sequence(_) => panic!("cannot convert Sequence to ConcreteValue"),
+                LazyValue::Sequence(sc) => ConcreteValue::Sequence {
+                    items: sc.origin().as_slice().iter().map(|i| i.to_concrete(interner)).collect(),
+                },
             },
             Value::Unpure(uv) => match uv {
                 UnpureValue::Opaque(o) => panic!("cannot convert Opaque<{}> to ConcreteValue", o.type_name),
@@ -371,6 +374,11 @@ impl Value {
                 interner.intern(tag),
                 payload.as_ref().map(|p| Box::new(Value::from_concrete(p, interner))),
             ),
+            ConcreteValue::Sequence { items } => {
+                let values: Vec<Value> = items.iter().map(|i| Value::from_concrete(i, interner)).collect();
+                let deque = acvus_utils::TrackedDeque::from_vec(values);
+                Value::sequence(crate::iter::SequenceChain::from_stored(deque))
+            }
         }
     }
 }
@@ -459,6 +467,8 @@ impl TypedValue {
 
     /// Restore a TypedValue from a [`ConcreteValue`].
     /// The type must be provided externally since ConcreteValue is untyped.
+    ///
+    /// `ConcreteValue::Sequence` → SequenceChain directly via `Value::from_concrete`.
     pub fn from_concrete(cv: &ConcreteValue, interner: &acvus_utils::Interner, ty: Ty) -> Self {
         Self::new(Value::from_concrete(cv, interner), ty)
     }
@@ -566,10 +576,6 @@ fn value_matches_ty(value: &Value, ty: &Ty) -> bool {
         (Value::Lazy(LazyValue::Iterator(_)), Ty::Iterator(..)) => true,
         (Value::Lazy(LazyValue::Sequence(_)), Ty::Sequence(..)) => true,
         (Value::Unpure(UnpureValue::Opaque(_)), Ty::Opaque(_)) => true,
-        // Deque values can also appear as Sequence type (storage stores collected Sequence as Deque)
-        (Value::Lazy(LazyValue::Deque(_)), Ty::Sequence(..)) => true,
-        // Deque values can also appear as List type (after coercion at type level)
-        (Value::Lazy(LazyValue::Deque(_)), Ty::List(_)) => true,
         _ => false,
     }
 }

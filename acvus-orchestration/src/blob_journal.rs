@@ -1,10 +1,12 @@
-use acvus_interpreter::{ConcreteValue, LazyValue, TypedValue, Value};
-use acvus_utils::{Interner, TrackedDeque};
+use acvus_interpreter::{ConcreteValue, LazyValue, SequenceChain, TypedValue, Value};
+use acvus_utils::{Interner, OwnedDequeDiff, TrackedDeque};
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
+use acvus_mir::ty::Ty;
+
 use crate::blob::{BlobHash, BlobStore};
-use crate::storage::{EntryMut, EntryRef, Journal, JournalError, Prune, StorageOps};
+use crate::storage::{EntryMut, EntryRef, Journal, JournalError, PatchDiff, Prune};
 
 // ── Serialization types ──────────────────────────────────────────────
 
@@ -33,8 +35,14 @@ struct SerNodeEntryV1 {
     // children: derived from parent pointers on load. Not stored.
     #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     snapshot_hash: Option<[u8; 32]>,
+    /// Patch diff blob hash (non-Sequence keys changed this turn).
     #[serde(rename = "f", skip_serializing_if = "Option::is_none")]
     diff_hash: Option<[u8; 32]>,
+    /// Sequence diff blob hash (Sequence keys changed this turn).
+    /// Stored separately from patch diffs so that Sequence keys never
+    /// go through the ConcreteValue serialization path.
+    #[serde(rename = "q", skip_serializing_if = "Option::is_none", default)]
+    seq_diff_hash: Option<[u8; 32]>,
 }
 
 // ── Internal tree ───────────────────────────────────────────────────
@@ -46,6 +54,7 @@ struct NodeEntry {
     depth: usize,
     snapshot_hash: Option<BlobHash>,
     diff_hash: Option<BlobHash>,
+    seq_diff_hash: Option<BlobHash>,
 }
 
 struct TreeMeta {
@@ -57,10 +66,14 @@ struct TreeMeta {
 
 struct HotNode {
     idx: usize,
-    /// Full accumulated state at this node.
+    /// Full accumulated state at this node (all keys, all types).
     state: FxHashMap<String, TypedValue>,
-    /// Keys changed during this node's turn (subset of `state`).
-    turn_diff: FxHashMap<String, TypedValue>,
+    /// Patch keys changed during this node's turn.
+    /// Stored as PatchDiff — only the changed fields, not the full post-apply value.
+    turn_patches: FxHashMap<String, (PatchDiff, Ty)>,
+    /// Sequence keys changed during this node's turn.
+    /// Stored as diff only — serialized separately, never via ConcreteValue.
+    turn_sequence_diffs: FxHashMap<String, OwnedDequeDiff<Value>>,
 }
 
 // ── Value serialization helpers ─────────────────────────────────────
@@ -96,36 +109,146 @@ fn deserialize_entries(
         .collect())
 }
 
-// ── StoragePatch application ─────────────────────────────────────────
+// ── Sequence diff serialization ─────────────────────────────────────
+//
+// Sequence diffs are stored separately from patch diffs.
+// They NEVER go through ConcreteValue — only the pushed items are
+// converted to ConcreteValue for individual element serialization.
 
-fn apply_diff(
-    state: &mut FxHashMap<String, TypedValue>,
-    turn_diff: &mut FxHashMap<String, TypedValue>,
-    key: &str,
-    diff: StorageOps,
-) {
-    match diff {
-        StorageOps::Sequence { squashed, ty, .. } => {
-            let values = TrackedDeque::from_vec(
-                squashed.into_vec().into_iter().map(|tv| tv.into_inner()).collect(),
-            );
-            let stored = TypedValue::new(
-                Value::Lazy(LazyValue::Deque(values)),
-                ty,
-            );
-            let key_owned = key.to_string();
-            state.insert(key_owned.clone(), stored.clone());
-            turn_diff.insert(key_owned, stored);
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SerSequenceDiff {
+    #[serde(rename = "c")]
+    consumed: usize,
+    #[serde(rename = "r")]
+    removed_back: usize,
+    #[serde(rename = "p")]
+    pushed: Vec<ConcreteValue>,
+    /// Element type — needed to reconstruct TypedValue on load.
+    #[serde(rename = "t")]
+    elem_ty: acvus_mir::ser_ty::SerTy,
+}
+
+fn serialize_seq_diffs(
+    diffs: &FxHashMap<String, OwnedDequeDiff<Value>>,
+    interner: &Interner,
+) -> Result<Vec<u8>, JournalError> {
+    let ser: Vec<(String, SerSequenceDiff)> = diffs
+        .iter()
+        .map(|(k, diff)| {
+            let pushed_concrete: Vec<ConcreteValue> = diff.pushed
+                .iter()
+                .map(|v| v.to_concrete(interner))
+                .collect();
+            (k.clone(), SerSequenceDiff {
+                consumed: diff.consumed,
+                removed_back: diff.removed_back,
+                pushed: pushed_concrete,
+                // Element type inferred from first pushed item, or Int as fallback.
+                // TODO: carry elem_ty through record_sequence_diff.
+                elem_ty: acvus_mir::ty::Ty::Int.to_ser(interner),
+            })
+        })
+        .collect();
+    serde_json::to_vec(&ser).map_err(|e| JournalError::Serialization(e.to_string()))
+}
+
+fn deserialize_seq_diffs(
+    bytes: &[u8],
+    interner: &Interner,
+) -> Result<FxHashMap<String, OwnedDequeDiff<Value>>, JournalError> {
+    let ser: Vec<(String, SerSequenceDiff)> = serde_json::from_slice(bytes)
+        .map_err(|e| JournalError::Deserialization(e.to_string()))?;
+    Ok(ser
+        .into_iter()
+        .map(|(k, sd)| {
+            let pushed: Vec<Value> = sd.pushed
+                .iter()
+                .map(|cv| Value::from_concrete(cv, interner))
+                .collect();
+            (k, OwnedDequeDiff {
+                consumed: sd.consumed,
+                removed_back: sd.removed_back,
+                pushed,
+            })
+        })
+        .collect())
+}
+
+// ── Patch diff serialization ────────────────────────────────────────
+//
+// Patch diffs are stored as PatchDiff structures, not as post-apply values.
+// This means PatchDiff::Rec stores only the changed keys, not the full object.
+// PatchDiff::Set stores the full replacement value (unavoidable).
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "k")]
+enum SerPatchDiff {
+    #[serde(rename = "s")]
+    Set { v: ConcreteValue },
+    #[serde(rename = "r")]
+    Rec {
+        #[serde(rename = "u")]
+        updates: Vec<(String, SerPatchDiff)>,
+        #[serde(rename = "d", skip_serializing_if = "Vec::is_empty", default)]
+        removals: Vec<String>,
+    },
+}
+
+impl SerPatchDiff {
+    fn from_patch_diff(diff: &PatchDiff, interner: &Interner) -> Self {
+        match diff {
+            PatchDiff::Set(v) => SerPatchDiff::Set { v: v.to_concrete(interner) },
+            PatchDiff::Rec { updates, removals } => SerPatchDiff::Rec {
+                updates: updates.iter()
+                    .map(|(k, d)| (interner.resolve(*k).to_string(), Self::from_patch_diff(d, interner)))
+                    .collect(),
+                removals: removals.iter().map(|k| interner.resolve(*k).to_string()).collect(),
+            },
         }
-        StorageOps::Patch { diff, ty } => {
-            let existing = state.get(key);
-            let new_val = diff.apply(existing, ty);
-            let key_owned = key.to_string();
-            state.insert(key_owned.clone(), new_val.clone());
-            turn_diff.insert(key_owned, new_val);
+    }
+
+    fn to_patch_diff(&self, interner: &Interner) -> PatchDiff {
+        match self {
+            SerPatchDiff::Set { v } => PatchDiff::Set(Value::from_concrete(v, interner)),
+            SerPatchDiff::Rec { updates, removals } => PatchDiff::Rec {
+                updates: updates.iter()
+                    .map(|(k, d)| (interner.intern(k), d.to_patch_diff(interner)))
+                    .collect(),
+                removals: removals.iter().map(|k| interner.intern(k)).collect(),
+            },
         }
     }
 }
+
+fn serialize_patch_diffs(
+    diffs: &FxHashMap<String, (PatchDiff, Ty)>,
+    interner: &Interner,
+) -> Result<Vec<u8>, JournalError> {
+    let ser: Vec<(String, SerPatchDiff, acvus_mir::ser_ty::SerTy)> = diffs
+        .iter()
+        .map(|(k, (diff, ty))| {
+            (k.clone(), SerPatchDiff::from_patch_diff(diff, interner), ty.to_ser(interner))
+        })
+        .collect();
+    serde_json::to_vec(&ser).map_err(|e| JournalError::Serialization(e.to_string()))
+}
+
+fn deserialize_patch_diffs(
+    bytes: &[u8],
+    interner: &Interner,
+) -> Result<FxHashMap<String, (PatchDiff, Ty)>, JournalError> {
+    let ser: Vec<(String, SerPatchDiff, acvus_mir::ser_ty::SerTy)> = serde_json::from_slice(bytes)
+        .map_err(|e| JournalError::Deserialization(e.to_string()))?;
+    Ok(ser
+        .into_iter()
+        .map(|(k, sd, ser_ty)| {
+            let ty = ser_ty.to_ty(interner);
+            (k, (sd.to_patch_diff(interner), ty))
+        })
+        .collect())
+}
+
+// ── StoragePatch application ─────────────────────────────────────────
 
 // ── BlobStoreJournal ────────────────────────────────────────────────
 
@@ -173,6 +296,7 @@ impl<S: BlobStore> BlobStoreJournal<S> {
             depth: 0,
             snapshot_hash: None,
             diff_hash: None,
+            seq_diff_hash: None,
         };
         let mut uuid_to_idx = FxHashMap::default();
         uuid_to_idx.insert(root_uuid, 0);
@@ -292,6 +416,9 @@ impl<S: BlobStore> BlobStoreJournal<S> {
             if let Some(h) = node.diff_hash {
                 live.insert(h);
             }
+            if let Some(h) = node.seq_diff_hash {
+                live.insert(h);
+            }
         }
         // Also keep the tree metadata blob itself.
         if let Some(h) = self.tree_ref {
@@ -370,15 +497,43 @@ impl<S: BlobStore> BlobStoreJournal<S> {
 
         // Apply diffs forward from snapshot descendant toward target.
         for &node_idx in path.iter().rev() {
+            // Patch diffs: apply PatchDiff to existing state.
             if let Some(diff_hash) = self.tree.nodes[node_idx].diff_hash {
                 let diff_bytes = self
                     .store
                     .get(&diff_hash)
                     .await
                     .ok_or_else(|| JournalError::MissingBlob("diff".into()))?;
-                let diff = deserialize_entries(&diff_bytes, &self.interner)?;
-                for (k, v) in diff {
-                    state.insert(k, v);
+                let patch_diffs = deserialize_patch_diffs(&diff_bytes, &self.interner)?;
+                for (k, (patch, ty)) in patch_diffs {
+                    let existing = state.get(&k);
+                    let new_val = patch.apply(existing, ty);
+                    state.insert(k, new_val);
+                }
+            }
+            // Sequence diffs: apply OwnedDequeDiff to existing sequence state.
+            if let Some(seq_diff_hash) = self.tree.nodes[node_idx].seq_diff_hash {
+                let seq_diff_bytes = self
+                    .store
+                    .get(&seq_diff_hash)
+                    .await
+                    .ok_or_else(|| JournalError::MissingBlob("seq_diff".into()))?;
+                let seq_diffs = deserialize_seq_diffs(&seq_diff_bytes, &self.interner)?;
+                for (k, diff) in seq_diffs {
+                    let prev_items = state.get(&k)
+                        .map(|tv| {
+                            let sc = tv.value().expect_ref::<SequenceChain>("load_state seq_diff");
+                            sc.origin().as_slice().to_vec()
+                        })
+                        .unwrap_or_default();
+                    let new_items = diff.apply(prev_items);
+                    let new_deque = TrackedDeque::from_vec(new_items);
+                    let sc = SequenceChain::from_stored(new_deque);
+                    // Preserve the existing type if available.
+                    let ty = state.get(&k)
+                        .map(|tv| tv.ty().clone())
+                        .unwrap_or_else(|| acvus_mir::ty::Ty::error());
+                    state.insert(k, TypedValue::new(Value::sequence(sc), ty));
                 }
             }
         }
@@ -395,11 +550,18 @@ impl<S: BlobStore> BlobStoreJournal<S> {
         let idx = hot.idx;
         let depth = self.tree.nodes[idx].depth;
 
-        // Always store diff if non-empty.
-        if !hot.turn_diff.is_empty() {
-            let diff_bytes = serialize_entries(&hot.turn_diff, &self.interner)?;
+        // Store patch diffs if non-empty (PatchDiff, not post-apply values).
+        if !hot.turn_patches.is_empty() {
+            let diff_bytes = serialize_patch_diffs(&hot.turn_patches, &self.interner)?;
             let diff_hash = self.store.put(diff_bytes).await;
             self.tree.nodes[idx].diff_hash = Some(diff_hash);
+        }
+
+        // Store sequence diffs if non-empty (separate blob, separate path).
+        if !hot.turn_sequence_diffs.is_empty() {
+            let seq_diff_bytes = serialize_seq_diffs(&hot.turn_sequence_diffs, &self.interner)?;
+            let seq_diff_hash = self.store.put(seq_diff_bytes).await;
+            self.tree.nodes[idx].seq_diff_hash = Some(seq_diff_hash);
         }
 
         // Snapshot only at interval boundaries.
@@ -425,7 +587,8 @@ impl<S: BlobStore> BlobStoreJournal<S> {
         self.hot = Some(HotNode {
             idx: target_idx,
             state,
-            turn_diff: FxHashMap::default(),
+            turn_patches: FxHashMap::default(),
+            turn_sequence_diffs: FxHashMap::default(),
         });
         Ok(())
     }
@@ -442,6 +605,7 @@ impl<S: BlobStore> BlobStoreJournal<S> {
                     depth: n.depth,
                     snapshot_hash: n.snapshot_hash.map(|h| *h.as_bytes()),
                     diff_hash: n.diff_hash.map(|h| *h.as_bytes()),
+                    seq_diff_hash: n.seq_diff_hash.map(|h| *h.as_bytes()),
                 })
                 .collect(),
             tombstones: self.tree.tombstones.iter().map(|u| u.to_string()).collect(),
@@ -475,6 +639,7 @@ impl<S: BlobStore> BlobStoreJournal<S> {
                         depth: sn.depth,
                         snapshot_hash: sn.snapshot_hash.map(BlobHash::from_bytes),
                         diff_hash: sn.diff_hash.map(BlobHash::from_bytes),
+                        seq_diff_hash: sn.seq_diff_hash.map(BlobHash::from_bytes),
                     });
                 }
 
@@ -602,14 +767,76 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
         hot.state.get(key).cloned()
     }
 
-    fn apply(&mut self, key: &str, diff: StorageOps) {
+    fn record_patch(&mut self, key: &str, diff: PatchDiff, ty: Ty) {
         let hot = self.journal.hot.as_mut().unwrap();
         debug_assert_eq!(hot.idx, self.idx);
         debug_assert!(
             self.journal.tree.nodes[self.idx].children.is_empty(),
-            "apply on non-leaf"
+            "record_patch on non-leaf"
         );
-        apply_diff(&mut hot.state, &mut hot.turn_diff, key, diff);
+        // Guard: Sequence keys must use record_sequence_diff.
+        if let Some(existing) = hot.state.get(key) {
+            assert!(
+                !matches!(existing.value(), Value::Lazy(LazyValue::Sequence(_))),
+                "record_patch called on Sequence key {key:?} — use record_sequence_diff instead"
+            );
+        }
+        // Apply to state for in-memory reads.
+        let existing = hot.state.get(key);
+        let new_val = diff.clone().apply(existing, ty.clone());
+        let key_owned = key.to_string();
+        hot.state.insert(key_owned.clone(), new_val);
+        // Store diff itself, not post-apply value.
+        hot.turn_patches.insert(key_owned, (diff, ty));
+    }
+
+    fn record_sequence_diff(
+        &mut self,
+        key: &str,
+        working: TrackedDeque<Value>,
+        ty: Ty,
+    ) -> TrackedDeque<Value> {
+        let hot = self.journal.hot.as_mut().unwrap();
+        debug_assert_eq!(hot.idx, self.idx);
+        debug_assert!(
+            self.journal.tree.nodes[self.idx].children.is_empty(),
+            "record_sequence_diff on non-leaf"
+        );
+
+        // Guard: non-Sequence keys must use record_patch.
+        let existing = hot.state.get(key);
+        if let Some(tv) = existing {
+            assert!(
+                matches!(tv.value(), Value::Lazy(LazyValue::Sequence(_))),
+                "record_sequence_diff called on non-Sequence key {key:?} — use record_patch instead"
+            );
+        }
+
+        // First turn: no existing sequence.
+        if existing.is_none() {
+            let items = working.into_vec();
+            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: items.clone() };
+            let new_deque = TrackedDeque::from_vec(items);
+            let sc = SequenceChain::from_stored(new_deque.clone());
+            let stored = TypedValue::new(Value::sequence(sc), ty);
+            let key_owned = key.to_string();
+            hot.state.insert(key_owned.clone(), stored);
+            hot.turn_sequence_diffs.insert(key_owned, diff);
+            return new_deque;
+        }
+
+        // Subsequent turn: into_diff verifies checksum, extracts diff.
+        let existing_tv = existing.unwrap();
+        let sc = existing_tv.value().expect_ref::<SequenceChain>("record_sequence_diff");
+        let origin = sc.origin();
+        let (squashed, diff) = working.into_diff(origin);
+
+        let new_sc = SequenceChain::from_stored(squashed.clone());
+        let stored = TypedValue::new(Value::sequence(new_sc), ty);
+        let key_owned = key.to_string();
+        hot.state.insert(key_owned.clone(), stored);
+        hot.turn_sequence_diffs.insert(key_owned, diff);
+        squashed
     }
 
     async fn next(self) -> Result<Self, JournalError> {
@@ -634,6 +861,7 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
             depth,
             snapshot_hash: None,
             diff_hash: None,
+            seq_diff_hash: None,
         });
         journal.tree.nodes[idx].children.push(new_idx);
         journal.tree.uuid_to_idx.insert(new_uuid, new_idx);
@@ -642,7 +870,8 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
         journal.hot = Some(HotNode {
             idx: new_idx,
             state: parent_state,
-            turn_diff: FxHashMap::default(),
+            turn_patches: FxHashMap::default(),
+            turn_sequence_diffs: FxHashMap::default(),
         });
 
         Ok(BlobEntryMut {
@@ -676,6 +905,7 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
             depth,
             snapshot_hash: None,
             diff_hash: None,
+            seq_diff_hash: None,
         });
         journal.tree.nodes[parent_idx].children.push(new_idx);
         journal.tree.uuid_to_idx.insert(new_uuid, new_idx);
@@ -684,7 +914,8 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
         journal.hot = Some(HotNode {
             idx: new_idx,
             state: parent_state,
-            turn_diff: FxHashMap::default(),
+            turn_patches: FxHashMap::default(),
+            turn_sequence_diffs: FxHashMap::default(),
         });
 
         Ok(BlobEntryMut {
@@ -716,6 +947,7 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
                 journal.tree.tombstones.insert(uuid);
                 journal.tree.nodes[idx].snapshot_hash = None;
                 journal.tree.nodes[idx].diff_hash = None;
+                journal.tree.nodes[idx].seq_diff_hash = None;
             }
             Prune::Subtree => {
                 let mut stack = vec![idx];
@@ -736,6 +968,7 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
                     journal.tree.tombstones.insert(uuid);
                     journal.tree.nodes[node_idx].snapshot_hash = None;
                     journal.tree.nodes[node_idx].diff_hash = None;
+                    journal.tree.nodes[node_idx].seq_diff_hash = None;
                     journal.tree.nodes[node_idx].children.clear();
                 }
             }
@@ -773,13 +1006,17 @@ impl<'a, S: BlobStore> EntryMut<'a> for BlobEntryMut<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use acvus_interpreter::{LazyValue, PureValue, TypedValue};
-    use acvus_mir::ty::Ty;
-    use acvus_utils::{OwnedDequeDiff, TrackedDeque};
+    use acvus_interpreter::{LazyValue, PureValue, SequenceChain, TypedValue};
+    use acvus_mir::ty::{Effect, Origin, Ty};
+    use acvus_utils::TrackedDeque;
 
     use super::*;
     use crate::blob::MemBlobStore;
     use crate::storage::PatchDiff;
+
+    fn seq_ty() -> Ty {
+        Ty::Sequence(Box::new(Ty::Int), Origin::Concrete(0), Effect::Pure)
+    }
 
     /// Tests use interval=1 to match TreeJournal behavior (snapshot every turn).
     async fn new_journal() -> (BlobStoreJournal<MemBlobStore>, Uuid) {
@@ -792,7 +1029,7 @@ mod tests {
     async fn apply_and_get() {
         let (mut j, root) = new_journal().await;
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("hello")), ty: Ty::error() });
+        e.record_patch("x", PatchDiff::set(TypedValue::string("hello")), Ty::error());
         assert!(matches!(
             e.get("x").unwrap().value(),
             Value::Pure(PureValue::String(v)) if v == "hello"
@@ -806,47 +1043,27 @@ mod tests {
         let (mut j, root) =
             BlobStoreJournal::new(MemBlobStore::new(), interner.clone()).await.unwrap();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply(
-            "x",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("first")), ty: Ty::error() },
-        );
-        e.apply(
-            "x",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
-                Value::object(FxHashMap::from_iter([(
-                    interner.intern("v"),
-                    Value::int(2),
-                )])),
-                Ty::error(),
-            )), ty: Ty::error() },
-        );
+        e.record_patch("x", PatchDiff::set(TypedValue::string("first")), Ty::error());
+        e.record_patch("x", PatchDiff::set(TypedValue::new(
+            Value::object(FxHashMap::from_iter([(
+                interner.intern("v"),
+                Value::int(2),
+            )])),
+            Ty::error(),
+        )), Ty::error());
         assert!(matches!(e.get("x").unwrap().value(), Value::Lazy(LazyValue::Object(_))));
     }
 
     #[tokio::test]
-    async fn deque_stores_squashed() {
+    async fn sequence_stores_as_sequence() {
         let (mut j, root) = new_journal().await;
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
-        let diff = acvus_utils::OwnedDequeDiff {
-            consumed: 0,
-            removed_back: 0,
-            pushed: vec![TypedValue::int(1), TypedValue::int(2)],
-        };
-        e.apply(
-            "q",
-            StorageOps::Sequence {
-                squashed: squashed.clone(),
-                diff,
-                ty: Ty::error(),
-            },
-        );
+        let deque = TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]);
+        e.record_sequence_diff("q", deque, seq_ty());
         let val = e.get("q").unwrap();
-        let Value::Lazy(LazyValue::Deque(d)) = val.value() else {
-            panic!("expected Deque");
-        };
-        let expected: Vec<Value> = squashed.into_vec().into_iter().map(|tv| tv.value().clone()).collect();
-        assert_eq!(d.as_slice(), &expected[..]);
+        let sc = val.value().expect_ref::<SequenceChain>("sequence_stores_as_sequence");
+        let expected = vec![Value::int(1), Value::int(2)];
+        assert_eq!(sc.origin().as_slice(), &expected[..]);
     }
 
     #[tokio::test]
@@ -858,21 +1075,18 @@ mod tests {
         let a = interner.intern("a");
         let b = interner.intern("b");
         let c = interner.intern("c");
-        e.apply(
-            "obj",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
-                Value::object(FxHashMap::from_iter([
-                    (a, Value::int(1)),
-                    (b, Value::int(2)),
-                ])),
-                Ty::error(),
-            )), ty: Ty::error() },
-        );
+        e.record_patch("obj", PatchDiff::set(TypedValue::new(
+            Value::object(FxHashMap::from_iter([
+                (a, Value::int(1)),
+                (b, Value::int(2)),
+            ])),
+            Ty::error(),
+        )), Ty::error());
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100))), (c, PatchDiff::Set(Value::int(3)))]),
             removals: vec![b],
         };
-        e.apply("obj", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("obj", diff, Ty::error());
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")
@@ -911,8 +1125,8 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
-            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
+            e.record_patch("y", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         let n2;
@@ -923,7 +1137,7 @@ mod tests {
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
             assert!(matches!(e.get("y").unwrap().value(), Value::Pure(PureValue::Int(2))));
             // Modifying child doesn't affect parent.
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         }
 
@@ -947,13 +1161,13 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         // Fork from n2 → sibling of n2 (child of n1).
@@ -978,7 +1192,7 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         j.entry_mut(n2).await.unwrap().prune(Prune::Leaf);
@@ -1022,7 +1236,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         let n2;
@@ -1043,7 +1257,7 @@ mod tests {
         // Modifying one child doesn't affect the other.
         {
             let mut e = j.entry_mut(n2).await.unwrap();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
         }
         assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
@@ -1057,14 +1271,14 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // x=1 from parent.
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
             // Override.
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
         }
     }
@@ -1079,7 +1293,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(42)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(42)), Ty::error());
         }
 
         // next() persists n1's snapshot.
@@ -1105,14 +1319,14 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("y", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         // Switch back to n1 — triggers hot swap.
@@ -1170,7 +1384,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(42)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(42)), Ty::error());
         }
         let n2;
         {
@@ -1219,12 +1433,12 @@ mod tests {
             {
                 let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
                 n1 = e.uuid();
-                e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(10)), ty: Ty::error() });
+                e.record_patch("x", PatchDiff::set(TypedValue::int(10)), Ty::error());
             }
             {
                 let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
                 n2 = e.uuid();
-                e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(20)), ty: Ty::error() });
+                e.record_patch("y", PatchDiff::set(TypedValue::int(20)), Ty::error());
             }
 
             j.flush_tree().await.unwrap();
@@ -1255,9 +1469,10 @@ mod tests {
         for i in 0..50 {
             let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
             cursor = e.uuid();
-            e.apply(
+            e.record_patch(
                 &format!("k{i}"),
-                StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                PatchDiff::set(TypedValue::int(i as i64)),
+                Ty::error(),
             );
         }
 
@@ -1278,7 +1493,7 @@ mod tests {
     async fn as_ref_returns_current_state() {
         let (mut j, root) = new_journal().await;
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(7)), ty: Ty::error() });
+        e.record_patch("x", PatchDiff::set(TypedValue::int(7)), Ty::error());
         let r = e.as_ref();
         assert!(matches!(r.get("x").unwrap().value(), Value::Pure(PureValue::Int(7))));
         assert_eq!(r.depth(), 1);
@@ -1293,8 +1508,8 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("a", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
-            e.apply("b", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("a", PatchDiff::set(TypedValue::int(1)), Ty::error());
+            e.record_patch("b", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         let entries = j.entry(n1).await.unwrap().entries();
@@ -1313,13 +1528,13 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("y", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         // Switch to n1 to mutate.
@@ -1356,9 +1571,10 @@ mod tests {
             let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
             cursor = e.uuid();
             uuids.push(cursor);
-            e.apply(
+            e.record_patch(
                 &format!("k{i}"),
-                StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                PatchDiff::set(TypedValue::int(i as i64)),
+                Ty::error(),
             );
         }
         // Force persist of last node.
@@ -1400,9 +1616,10 @@ mod tests {
         for i in 1..=7 {
             let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
             cursor = e.uuid();
-            e.apply(
+            e.record_patch(
                 &format!("k{i}"),
-                StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                PatchDiff::set(TypedValue::int(i as i64)),
+                Ty::error(),
             );
         }
 
@@ -1430,9 +1647,10 @@ mod tests {
         for i in 1..=3 {
             let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
             cursor = e.uuid();
-            e.apply(
+            e.record_patch(
                 &format!("k{i}"),
-                StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                PatchDiff::set(TypedValue::int(i as i64)),
+                Ty::error(),
             );
         }
 
@@ -1454,9 +1672,10 @@ mod tests {
         for i in 1..=200 {
             let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
             cursor = e.uuid();
-            e.apply(
+            e.record_patch(
                 &format!("k{i}"),
-                StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                PatchDiff::set(TypedValue::int(i as i64)),
+                Ty::error(),
             );
         }
 
@@ -1497,9 +1716,10 @@ mod tests {
                 let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
                 cursor = e.uuid();
                 // Each turn adds a distinct key — snapshot grows, diff stays small.
-                e.apply(
+                e.record_patch(
                     &format!("k{i}"),
-                    StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(i as i64)), ty: Ty::error() },
+                    PatchDiff::set(TypedValue::int(i as i64)),
+                    Ty::error(),
                 );
             }
             j.persist_hot_node().await.unwrap();
@@ -1518,14 +1738,9 @@ mod tests {
         );
     }
 
-    /// Extract sequence items from a value (handles both Deque and List,
-    /// since BlobStore serialization may convert Deque → List).
     fn get_seq_items(val: &TypedValue) -> Vec<Value> {
-        match val.value() {
-            Value::Lazy(LazyValue::Deque(d)) => d.as_slice().to_vec(),
-            Value::Lazy(LazyValue::List(items)) => items.clone(),
-            other => panic!("expected Deque or List, got {other:?}"),
-        }
+        let sc = val.value().expect_ref::<SequenceChain>("get_seq_items");
+        sc.origin().as_slice().to_vec()
     }
 
     // =========================================================================
@@ -1542,9 +1757,7 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             // Turn 1: seq = [1, 2]
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(1), TypedValue::int(2)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
         }
 
         let n2;
@@ -1552,9 +1765,10 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Turn 2: seq = [1, 2, 3] (appended 3)
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(3)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let mut working = e.get("seq").unwrap().value().expect_ref::<SequenceChain>("n2 seq").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(3));
+            e.record_sequence_diff("seq", working, seq_ty());
         }
 
         let n3;
@@ -1562,9 +1776,11 @@ mod tests {
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             // Turn 3: seq = [2, 3, 4] (consumed 1, appended 4)
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(2), TypedValue::int(3), TypedValue::int(4)]);
-            let diff = OwnedDequeDiff { consumed: 1, removed_back: 0, pushed: vec![TypedValue::int(4)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let mut working = e.get("seq").unwrap().value().expect_ref::<SequenceChain>("n3 seq").origin().clone();
+            working.checkpoint();
+            working.consume(1);
+            working.push(Value::int(4));
+            e.record_sequence_diff("seq", working, seq_ty());
         }
 
         // Force persist by advancing
@@ -1597,9 +1813,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(1)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(1)]), seq_ty());
         }
 
         // Branch A: append 100
@@ -1607,9 +1821,10 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             ba = e.uuid();
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(100)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(100)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let mut working = e.get("seq").unwrap().value().expect_ref::<SequenceChain>("ba seq").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(100));
+            e.record_sequence_diff("seq", working, seq_ty());
         }
 
         // Branch B: append 200
@@ -1617,9 +1832,10 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             bb = e.uuid();
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(200)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(200)] };
-            e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let mut working = e.get("seq").unwrap().value().expect_ref::<SequenceChain>("bb seq").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(200));
+            e.record_sequence_diff("seq", working, seq_ty());
         }
 
         // Force persist
@@ -1667,7 +1883,7 @@ mod tests {
             n1 = e.uuid();
             // Turn 1: {a: 1, b: 2}
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(1)), (b, Value::int(2))]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("state", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
 
         let n2;
@@ -1675,10 +1891,10 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Turn 2: a = 10 (b unchanged)
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("state", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         let n3;
@@ -1686,10 +1902,10 @@ mod tests {
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             // Turn 3: add c = 3, remove b
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("state", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(3)))]),
                 removals: vec![b],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         // Force persist
@@ -1743,7 +1959,7 @@ mod tests {
                 (x, Value::int(1)),
                 (inner, Value::object(FxHashMap::from_iter([(y, Value::int(10))]))),
             ]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("state", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
 
         let n2;
@@ -1751,13 +1967,13 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // inner.y = 99 (nested Rec)
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("state", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(inner, PatchDiff::Rec {
                     updates: FxHashMap::from_iter([(y, PatchDiff::Set(Value::int(99)))]),
                     removals: vec![],
                 })]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         // Force persist
@@ -1792,7 +2008,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("val", StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("hello")), ty: Ty::error() });
+            e.record_patch("val", PatchDiff::set(TypedValue::string("hello")), Ty::error());
         }
 
         let n2;
@@ -1800,7 +2016,7 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // 문자열 → 숫자로 타입 자체를 교체
-            e.apply("val", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(42)), ty: Ty::error() });
+            e.record_patch("val", PatchDiff::set(TypedValue::int(42)), Ty::error());
         }
 
         // Force persist
@@ -1832,27 +2048,27 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("s", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
 
         let ba;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             ba = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         let bb;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             bb = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         // Force persist
@@ -1895,14 +2111,13 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             // counter: 숫자 (Set)
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::error() });
+            e.record_patch("counter", PatchDiff::set(TypedValue::int(0)), Ty::error());
             // log: 시퀀스
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(10)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(10)] };
-            e.apply("log", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let deque = TrackedDeque::from_vec(vec![Value::int(10)]);
+            e.record_sequence_diff("log", deque, seq_ty());
             // config: 오브젝트 (Rec)
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(100))]));
-            e.apply("config", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("config", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
 
         let n2;
@@ -1910,16 +2125,18 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // counter = 1
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("counter", PatchDiff::set(TypedValue::int(1)), Ty::error());
             // log append 20
-            let squashed = TrackedDeque::from_vec(vec![TypedValue::int(10), TypedValue::int(20)]);
-            let diff = OwnedDequeDiff { consumed: 0, removed_back: 0, pushed: vec![TypedValue::int(20)] };
-            e.apply("log", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+            let val = e.get("log").unwrap();
+            let mut working = val.value().expect_ref::<SequenceChain>("n2 log").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(20));
+            e.record_sequence_diff("log", working, seq_ty());
             // config.a = 200
-            e.apply("config", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("config", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
 
         // Force persist
@@ -1975,7 +2192,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), ty: Ty::error() });
+            e.record_patch("state", PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), Ty::error());
         }
 
         let n2;
@@ -1983,7 +2200,7 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
-            e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
+            e.record_patch("state", diff, Ty::error());
         }
 
         // Force persist
@@ -2026,5 +2243,896 @@ mod tests {
         let new_int = Value::int(42);
         let cross = PatchDiff::compute(&old_str, &new_int);
         assert!(matches!(cross, Some(PatchDiff::Set(Value::Pure(PureValue::Int(42))))));
+    }
+
+    // =========================================================================
+    // SpyBlobStore — tracks put sizes for diff-only storage verification
+    // =========================================================================
+
+    /// BlobStore wrapper that records every put's byte length.
+    /// Used to verify that Sequence diffs store only the diff, not the full state.
+    struct SpyBlobStore {
+        inner: MemBlobStore,
+        /// (hash, byte_len) for every put call, in order.
+        put_log: Vec<(BlobHash, usize)>,
+    }
+
+    impl SpyBlobStore {
+        fn new() -> Self {
+            Self { inner: MemBlobStore::new(), put_log: Vec::new() }
+        }
+
+        /// Returns the byte sizes of all blobs put (excluding tree metadata).
+        fn put_sizes(&self) -> &[(BlobHash, usize)] {
+            &self.put_log
+        }
+
+        /// Find the size of a specific blob by hash.
+        fn size_of(&self, hash: &BlobHash) -> Option<usize> {
+            self.put_log.iter().find(|(h, _)| h == hash).map(|(_, s)| *s)
+        }
+    }
+
+    impl BlobStore for SpyBlobStore {
+        async fn put(&mut self, data: Vec<u8>) -> BlobHash {
+            let len = data.len();
+            let hash = self.inner.put(data).await;
+            self.put_log.push((hash, len));
+            hash
+        }
+
+        async fn get(&self, hash: &BlobHash) -> Option<Vec<u8>> {
+            self.inner.get(hash).await
+        }
+
+        async fn remove(&mut self, hash: &BlobHash) {
+            self.inner.remove(hash).await;
+        }
+
+        async fn ref_get(&self, name: &str) -> Option<BlobHash> {
+            self.inner.ref_get(name).await
+        }
+
+        async fn ref_cas(
+            &mut self,
+            name: &str,
+            expected: Option<BlobHash>,
+            new: BlobHash,
+        ) -> Result<(), Option<BlobHash>> {
+            self.inner.ref_cas(name, expected, new).await
+        }
+
+        async fn ref_remove(&mut self, name: &str) {
+            self.inner.ref_remove(name).await;
+        }
+
+        async fn batch_put(&mut self, blobs: Vec<Vec<u8>>) -> Vec<BlobHash> {
+            let mut hashes = Vec::with_capacity(blobs.len());
+            for data in blobs {
+                hashes.push(self.put(data).await);
+            }
+            hashes
+        }
+
+        async fn batch_get(&self, hashes: &[BlobHash]) -> Vec<Option<Vec<u8>>> {
+            self.inner.batch_get(hashes).await
+        }
+
+        async fn batch_remove(&mut self, hashes: Vec<BlobHash>) {
+            self.inner.batch_remove(hashes).await;
+        }
+    }
+
+    // =========================================================================
+    // Blackbox tests — Sequence diff-only storage verification
+    // =========================================================================
+    //
+    // These tests are the PRIMARY defense against Sequence storage regressions.
+    //
+    // Design principle: treat the journal as a black box. We feed operations
+    // in, flush to blob store, reopen from scratch, and assert on final values.
+    // The SpyBlobStore additionally tracks blob sizes so we can verify that
+    // diff blobs contain only the diff — not the full accumulated state.
+    //
+    // Why these tests matter:
+    // - Sequence persistence stores diffs (OwnedDequeDiff), not full state.
+    // - If full state leaks into the diff blob, storage grows O(n²) over turns.
+    // - If the diff chain is applied incorrectly on restore, values are wrong.
+    // - These tests catch BOTH failure modes: size-based AND value-based.
+    //
+    // Test categories:
+    // A. SIZE TESTS — "diff blob must be small when the change is small"
+    //    Fail if full state leaks into the diff blob.
+    // B. ROUNDTRIP TESTS — "flush → reopen → values must be exact"
+    //    Fail if diff chain reconstruction is broken.
+    // C. COMBINED — both size and value checks in one scenario.
+    //
+    // =========================================================================
+
+    // ── A. Size tests ────────────────────────────────────────────────────
+
+    /// A1. Append 1 item to a 1000-item sequence.
+    ///
+    /// The diff blob should contain only the 1 pushed item + metadata.
+    /// If the full 1001-item state leaks in, the diff blob will be ≈ snapshot size.
+    ///
+    /// Regression: serialize_entries was storing ConcreteValue::Sequence (full items)
+    /// in the diff blob instead of just the OwnedDequeDiff.
+    #[tokio::test]
+    async fn size_append_one_to_large_sequence() {
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), Interner::new(), 1,
+        ).await.unwrap();
+
+        // Turn 1: initial 1000-item sequence.
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            let items: Vec<Value> = (0..1000).map(|i| Value::int(i)).collect();
+            let deque = TrackedDeque::from_vec(items);
+            e.record_sequence_diff("big", deque, seq_ty());
+        }
+
+        // Turn 2: append 1 item.
+        let n2;
+        {
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            n2 = e.uuid();
+            let val = e.get("big").unwrap();
+            let mut working = val.value().expect_ref::<SequenceChain>("n2 big").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(9999));
+            e.record_sequence_diff("big", working, seq_ty());
+        }
+
+        // Persist n2 by advancing.
+        { j.entry_mut(n2).await.unwrap().next().await.unwrap(); }
+
+        let n2_idx = j.tree.uuid_to_idx[&n2];
+        let n2_seq_diff_hash = j.tree.nodes[n2_idx].seq_diff_hash
+            .expect("n2 should have a seq_diff blob");
+        // n2 must NOT have a patch diff blob (only sequence changed).
+        assert!(j.tree.nodes[n2_idx].diff_hash.is_none(),
+            "n2 should NOT have a patch diff blob — only sequence was changed");
+        let n1_idx = j.tree.uuid_to_idx[&n1];
+        let n1_snap_hash = j.tree.nodes[n1_idx].snapshot_hash
+            .expect("n1 should have a snapshot (interval=1)");
+
+        let n2_seq_diff_size = j.store.size_of(&n2_seq_diff_hash).unwrap();
+        let n1_snap_size = j.store.size_of(&n1_snap_hash).unwrap();
+
+        assert!(
+            n2_seq_diff_size < n1_snap_size / 5,
+            "seq diff blob ({n2_seq_diff_size} bytes) should be much smaller than \
+             snapshot ({n1_snap_size} bytes) — full state may have leaked into diff"
+        );
+    }
+
+    /// A2. Consume from front of a large sequence (no push).
+    ///
+    /// The diff is {consumed: 1, pushed: []} — essentially zero payload.
+    /// If full state leaks, diff ≈ snapshot.
+    #[tokio::test]
+    async fn size_consume_only_from_large_sequence() {
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), Interner::new(), 1,
+        ).await.unwrap();
+
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            let items: Vec<Value> = (0..500).map(|i| Value::int(i)).collect();
+            let deque = TrackedDeque::from_vec(items);
+            e.record_sequence_diff("q", deque, seq_ty());
+        }
+
+        // Consume 1 item, push nothing.
+        let n2;
+        {
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            n2 = e.uuid();
+            let val = e.get("q").unwrap();
+            let mut working = val.value().expect_ref::<SequenceChain>("n2").origin().clone();
+            working.checkpoint();
+            working.consume(1);
+            e.record_sequence_diff("q", working, seq_ty());
+        }
+
+        { j.entry_mut(n2).await.unwrap().next().await.unwrap(); }
+
+        let n2_idx = j.tree.uuid_to_idx[&n2];
+        let n2_seq_diff_hash = j.tree.nodes[n2_idx].seq_diff_hash
+            .expect("n2 should have a seq_diff blob");
+        assert!(j.tree.nodes[n2_idx].diff_hash.is_none(),
+            "n2 should NOT have a patch diff blob");
+        let n1_idx = j.tree.uuid_to_idx[&n1];
+        let n1_snap_hash = j.tree.nodes[n1_idx].snapshot_hash.unwrap();
+
+        let n2_seq_diff_size = j.store.size_of(&n2_seq_diff_hash).unwrap();
+        let n1_snap_size = j.store.size_of(&n1_snap_hash).unwrap();
+
+        // A consume-only diff has zero pushed items — must be tiny.
+        assert!(
+            n2_seq_diff_size < n1_snap_size / 10,
+            "consume-only diff ({n2_seq_diff_size} bytes) should be negligible vs \
+             snapshot ({n1_snap_size} bytes)"
+        );
+    }
+
+    /// A3. Multiple turns of small diffs on a large sequence.
+    ///
+    /// Every turn's diff blob should be small, not growing with accumulated state.
+    /// Catches the case where diff blob size is O(turn * n) instead of O(diff).
+    #[tokio::test]
+    async fn size_diff_stays_small_across_many_turns() {
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), Interner::new(), 1,
+        ).await.unwrap();
+
+        // Turn 1: seed with 500 items.
+        let mut cursor;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            cursor = e.uuid();
+            let items: Vec<Value> = (0..500).map(|i| Value::int(i)).collect();
+            let deque = TrackedDeque::from_vec(items);
+            e.record_sequence_diff("q", deque, seq_ty());
+        }
+
+        // Turns 2–11: each turn appends 1 item.
+        let mut diff_hashes = Vec::new();
+        for i in 500..510 {
+            let prev = cursor;
+            let mut e = j.entry_mut(prev).await.unwrap().next().await.unwrap();
+            cursor = e.uuid();
+            let val = e.get("q").unwrap();
+            let mut working = val.value().expect_ref::<SequenceChain>("turn").origin().clone();
+            working.checkpoint();
+            working.push(Value::int(i));
+            e.record_sequence_diff("q", working, seq_ty());
+            drop(e);
+
+            // Persist by advancing.
+            let e2 = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
+            let next = e2.uuid();
+            drop(e2);
+
+            let idx = j.tree.uuid_to_idx[&cursor];
+            if let Some(dh) = j.tree.nodes[idx].seq_diff_hash {
+                diff_hashes.push(dh);
+            }
+            cursor = next;
+        }
+
+        // All diff blobs should be small (each adds just 1 item).
+        // The snapshot keeps growing, but diff blobs should NOT.
+        // Read initial snapshot size now (after it's been persisted by the first next() call).
+        let initial_idx = j.tree.uuid_to_idx.values()
+            .find(|&&idx| j.tree.nodes[idx].depth == 1)
+            .copied().unwrap();
+        let initial_snap_size = j.tree.nodes[initial_idx].snapshot_hash
+            .and_then(|h| j.store.size_of(&h))
+            .expect("initial node should have been persisted with a snapshot");
+
+        for (i, dh) in diff_hashes.iter().enumerate() {
+            let diff_size = j.store.size_of(dh).unwrap();
+            assert!(
+                diff_size < initial_snap_size / 5,
+                "turn {}: diff blob ({diff_size} bytes) should be much smaller than \
+                 initial snapshot ({initial_snap_size} bytes) — diff may be accumulating state",
+                i + 2,
+            );
+        }
+    }
+
+    /// A4. Consume + push on a large sequence — diff reflects only the delta.
+    ///
+    /// consume 5, push 2 on a 500-item seq → diff payload = 2 items + metadata.
+    #[tokio::test]
+    async fn size_consume_and_push_on_large_sequence() {
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), Interner::new(), 1,
+        ).await.unwrap();
+
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            let items: Vec<Value> = (0..500).map(|i| Value::int(i)).collect();
+            let deque = TrackedDeque::from_vec(items);
+            e.record_sequence_diff("q", deque, seq_ty());
+        }
+
+        let n2;
+        {
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            n2 = e.uuid();
+            let val = e.get("q").unwrap();
+            let mut working = val.value().expect_ref::<SequenceChain>("n2").origin().clone();
+            working.checkpoint();
+            // Consume 5 from front, push 2 new items.
+            working.consume(5);
+            working.push(Value::int(8888));
+            working.push(Value::int(9999));
+            e.record_sequence_diff("q", working, seq_ty());
+        }
+
+        { j.entry_mut(n2).await.unwrap().next().await.unwrap(); }
+
+        let n2_idx = j.tree.uuid_to_idx[&n2];
+        let n2_seq_diff_hash = j.tree.nodes[n2_idx].seq_diff_hash.unwrap();
+        assert!(j.tree.nodes[n2_idx].diff_hash.is_none(),
+            "n2 should NOT have a patch diff blob");
+        let n1_idx = j.tree.uuid_to_idx[&n1];
+        let n1_snap_hash = j.tree.nodes[n1_idx].snapshot_hash.unwrap();
+
+        let n2_seq_diff_size = j.store.size_of(&n2_seq_diff_hash).unwrap();
+        let n1_snap_size = j.store.size_of(&n1_snap_hash).unwrap();
+
+        assert!(
+            n2_seq_diff_size < n1_snap_size / 5,
+            "consume+push diff ({n2_seq_diff_size} bytes) should be much smaller than \
+             snapshot ({n1_snap_size} bytes)"
+        );
+    }
+
+    // ── A'. Size tests — Patch diff blob ────────────────────────────────
+    //
+    // PatchDiff::Rec patches a subset of fields. The diff blob should
+    // contain only the changed fields, not the entire object.
+    // If the full post-apply value leaks into the diff blob, size explodes.
+
+    /// A'1. Large object (100 fields) + Rec patch on 1 field.
+    ///
+    /// diff blob should be much smaller than the full 100-field snapshot.
+    /// Currently expected to FAIL: turn_patches stores full post-apply value.
+    #[tokio::test]
+    async fn size_patch_rec_one_field_of_large_object() {
+        let interner = Interner::new();
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), interner.clone(), 1,
+        ).await.unwrap();
+
+        // Build a 100-field object.
+        let fields: FxHashMap<_, _> = (0..100)
+            .map(|i| (interner.intern(&format!("f{i}")), Value::int(i)))
+            .collect();
+        let target_field = interner.intern("f50");
+
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            e.record_patch("obj", PatchDiff::set(TypedValue::new(Value::object(fields), Ty::error())), Ty::error());
+        }
+
+        // Rec patch: change only f50 = 9999.
+        let n2;
+        {
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            n2 = e.uuid();
+            e.record_patch("obj", PatchDiff::Rec {
+                updates: FxHashMap::from_iter([(target_field, PatchDiff::Set(Value::int(9999)))]),
+                removals: vec![],
+            }, Ty::error());
+        }
+
+        // Persist.
+        { j.entry_mut(n2).await.unwrap().next().await.unwrap(); }
+
+        let n2_idx = j.tree.uuid_to_idx[&n2];
+        let n2_diff_hash = j.tree.nodes[n2_idx].diff_hash
+            .expect("n2 should have a patch diff blob");
+        let n1_idx = j.tree.uuid_to_idx[&n1];
+        let n1_snap_hash = j.tree.nodes[n1_idx].snapshot_hash.unwrap();
+
+        let n2_diff_size = j.store.size_of(&n2_diff_hash).unwrap();
+        let n1_snap_size = j.store.size_of(&n1_snap_hash).unwrap();
+
+        assert!(
+            n2_diff_size < n1_snap_size / 5,
+            "Rec patch diff ({n2_diff_size} bytes) should be much smaller than \
+             100-field snapshot ({n1_snap_size} bytes) — full object may have leaked"
+        );
+    }
+
+    /// A'2. Nested object: patch only a deep inner field.
+    ///
+    /// outer = {a: {b: {c: 1, d: 2, ...(50 fields)}, e: ...}, f: ...(50 fields)}
+    /// Patch: outer.a.b.c = 999
+    /// diff blob should contain only the nested Rec path, not the entire tree.
+    #[tokio::test]
+    async fn size_patch_rec_nested_deep_field() {
+        let interner = Interner::new();
+        let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+            SpyBlobStore::new(), interner.clone(), 1,
+        ).await.unwrap();
+
+        let a = interner.intern("a");
+        let b = interner.intern("b");
+        let c = interner.intern("c");
+
+        // Build a wide+deep object.
+        let inner_fields: FxHashMap<_, _> = (0..50)
+            .map(|i| (interner.intern(&format!("i{i}")), Value::int(i)))
+            .collect();
+        let mut inner = inner_fields;
+        inner.insert(c, Value::int(0));
+
+        let outer_fields: FxHashMap<_, _> = (0..50)
+            .map(|i| (interner.intern(&format!("o{i}")), Value::int(i)))
+            .collect();
+        let mut outer = outer_fields;
+        outer.insert(a, Value::object(FxHashMap::from_iter([(b, Value::object(inner))])));
+
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            e.record_patch("obj", PatchDiff::set(TypedValue::new(Value::object(outer), Ty::error())), Ty::error());
+        }
+
+        // Nested Rec: only change a.b.c = 999.
+        let n2;
+        {
+            let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            n2 = e.uuid();
+            e.record_patch("obj", PatchDiff::Rec {
+                updates: FxHashMap::from_iter([(a, PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(b, PatchDiff::Rec {
+                        updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(999)))]),
+                        removals: vec![],
+                    })]),
+                    removals: vec![],
+                })]),
+                removals: vec![],
+            }, Ty::error());
+        }
+
+        { j.entry_mut(n2).await.unwrap().next().await.unwrap(); }
+
+        let n2_idx = j.tree.uuid_to_idx[&n2];
+        let n2_diff_hash = j.tree.nodes[n2_idx].diff_hash.unwrap();
+        let n1_idx = j.tree.uuid_to_idx[&n1];
+        let n1_snap_hash = j.tree.nodes[n1_idx].snapshot_hash.unwrap();
+
+        let n2_diff_size = j.store.size_of(&n2_diff_hash).unwrap();
+        let n1_snap_size = j.store.size_of(&n1_snap_hash).unwrap();
+
+        assert!(
+            n2_diff_size < n1_snap_size / 3,
+            "nested Rec diff ({n2_diff_size} bytes) should be much smaller than \
+             full object snapshot ({n1_snap_size} bytes) — full tree may have leaked"
+        );
+    }
+
+    // ── B. Roundtrip tests — flush → reopen → values exact ──────────────
+
+    /// B1. Multi-turn: push, consume, push → flush → reopen.
+    ///
+    /// Each turn's historical state must be reconstructed exactly from
+    /// the snapshot + diff chain. Tests the core restore path.
+    #[tokio::test]
+    async fn roundtrip_multi_turn_consume_and_push() {
+        let interner = Interner::new();
+
+        let n1;
+        let n2;
+        let n3;
+        let store;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 1,
+            ).await.unwrap();
+
+            // Turn 1: [1, 2, 3]
+            {
+                let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+                n1 = e.uuid();
+                let deque = TrackedDeque::from_vec(vec![Value::int(1), Value::int(2), Value::int(3)]);
+                e.record_sequence_diff("seq", deque, seq_ty());
+            }
+            // Turn 2: consume 1, push 4 → [2, 3, 4]
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                n2 = e.uuid();
+                let val = e.get("seq").unwrap();
+                let mut working = val.value().expect_ref::<SequenceChain>("t2").origin().clone();
+                working.checkpoint();
+                working.consume(1);
+                working.push(Value::int(4));
+                e.record_sequence_diff("seq", working, seq_ty());
+            }
+            // Turn 3: push 5, 6 → [2, 3, 4, 5, 6]
+            {
+                let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
+                n3 = e.uuid();
+                let val = e.get("seq").unwrap();
+                let mut working = val.value().expect_ref::<SequenceChain>("t3").origin().clone();
+                working.checkpoint();
+                working.push(Value::int(5));
+                working.push(Value::int(6));
+                e.record_sequence_diff("seq", working, seq_ty());
+            }
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        let j2 = BlobStoreJournal::open(store, interner).await.unwrap().unwrap();
+
+        assert_eq!(get_seq_items(&j2.entry(n1).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(1), Value::int(2), Value::int(3)]);
+        assert_eq!(get_seq_items(&j2.entry(n2).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(2), Value::int(3), Value::int(4)]);
+        assert_eq!(get_seq_items(&j2.entry(n3).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(2), Value::int(3), Value::int(4), Value::int(5), Value::int(6)]);
+    }
+
+    /// B2. Fork: two branches diverge from same parent → flush → reopen.
+    ///
+    /// Each branch must see its own changes, not the other's.
+    /// Parent must be unchanged.
+    #[tokio::test]
+    async fn roundtrip_fork_independent_branches() {
+        let interner = Interner::new();
+
+        let n1;
+        let branch_a;
+        let branch_b;
+        let store;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 1,
+            ).await.unwrap();
+
+            {
+                let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+                n1 = e.uuid();
+                let deque = TrackedDeque::from_vec(vec![Value::int(1)]);
+                e.record_sequence_diff("seq", deque, seq_ty());
+            }
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                branch_a = e.uuid();
+                let val = e.get("seq").unwrap();
+                let mut working = val.value().expect_ref::<SequenceChain>("ba").origin().clone();
+                working.checkpoint();
+                working.push(Value::int(100));
+                e.record_sequence_diff("seq", working, seq_ty());
+            }
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                branch_b = e.uuid();
+                let val = e.get("seq").unwrap();
+                let mut working = val.value().expect_ref::<SequenceChain>("bb").origin().clone();
+                working.checkpoint();
+                working.push(Value::int(200));
+                e.record_sequence_diff("seq", working, seq_ty());
+            }
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        let j2 = BlobStoreJournal::open(store, interner).await.unwrap().unwrap();
+
+        assert_eq!(get_seq_items(&j2.entry(n1).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(1)]);
+        assert_eq!(get_seq_items(&j2.entry(branch_a).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(1), Value::int(100)]);
+        assert_eq!(get_seq_items(&j2.entry(branch_b).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(1), Value::int(200)]);
+    }
+
+    /// B3. Mixed types: Sequence + Patch + Object coexist → flush → reopen.
+    ///
+    /// Verifies that Sequence diff storage doesn't corrupt or interfere with
+    /// Patch-based storage for other keys in the same node.
+    #[tokio::test]
+    async fn roundtrip_mixed_types_coexist() {
+        let interner = Interner::new();
+        let a = interner.intern("a");
+
+        let n1;
+        let n2;
+        let store;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 1,
+            ).await.unwrap();
+
+            {
+                let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+                n1 = e.uuid();
+                e.record_patch("counter", PatchDiff::set(TypedValue::int(0)), Ty::error());
+                let deque = TrackedDeque::from_vec(vec![Value::int(10)]);
+                e.record_sequence_diff("seq", deque, seq_ty());
+                let obj = Value::object(FxHashMap::from_iter([(a, Value::int(1))]));
+                e.record_patch("obj", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
+            }
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                n2 = e.uuid();
+                e.record_patch("counter", PatchDiff::set(TypedValue::int(1)), Ty::error());
+                let val = e.get("seq").unwrap();
+                let mut working = val.value().expect_ref::<SequenceChain>("t2 seq").origin().clone();
+                working.checkpoint();
+                working.push(Value::int(20));
+                e.record_sequence_diff("seq", working, seq_ty());
+                e.record_patch("obj", PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(99)))]),
+                    removals: vec![],
+                }, Ty::error());
+            }
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        let j2 = BlobStoreJournal::open(store, interner.clone()).await.unwrap().unwrap();
+
+        // Turn 2
+        {
+            let e = j2.entry(n2).await.unwrap();
+            assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert_eq!(get_seq_items(&e.get("seq").unwrap()), vec![Value::int(10), Value::int(20)]);
+            let obj = e.get("obj").unwrap();
+            let Value::Lazy(LazyValue::Object(f)) = obj.value() else { panic!() };
+            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(99))));
+        }
+        // Turn 1 (history preserved)
+        {
+            let e = j2.entry(n1).await.unwrap();
+            assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(0))));
+            assert_eq!(get_seq_items(&e.get("seq").unwrap()), vec![Value::int(10)]);
+            let obj = e.get("obj").unwrap();
+            let Value::Lazy(LazyValue::Object(f)) = obj.value() else { panic!() };
+            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(1))));
+        }
+    }
+
+    /// B4. Snapshot interval > 1: restore requires walking diff chain.
+    ///
+    /// interval=4, 10 turns of push. Nodes at depth 1,2,3,5,6,7,9,10 have
+    /// no snapshot — they MUST be reconstructed from the nearest snapshot
+    /// ancestor + diff chain. If diff storage is broken, this fails.
+    #[tokio::test]
+    async fn roundtrip_across_snapshot_interval() {
+        let interner = Interner::new();
+
+        let mut uuids = Vec::new();
+        let store;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 4,
+            ).await.unwrap();
+
+            let mut cursor = root;
+            for i in 1..=10 {
+                let mut e = j.entry_mut(cursor).await.unwrap().next().await.unwrap();
+                cursor = e.uuid();
+                uuids.push(cursor);
+                if i == 1 {
+                    e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(i)]), seq_ty());
+                } else {
+                    let val = e.get("seq").unwrap();
+                    let mut working = val.value()
+                        .expect_ref::<SequenceChain>("interval").origin().clone();
+                    working.checkpoint();
+                    working.push(Value::int(i));
+                    e.record_sequence_diff("seq", working, seq_ty());
+                }
+            }
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        let j2 = BlobStoreJournal::open_with_snapshot_interval(store, interner, 4)
+            .await.unwrap().unwrap();
+
+        // Every turn's accumulated state must be exact.
+        for (turn, uuid) in uuids.iter().enumerate() {
+            let expected: Vec<Value> = (1..=(turn as i64 + 1)).map(|i| Value::int(i)).collect();
+            let e = j2.entry(*uuid).await.unwrap();
+            assert_eq!(
+                get_seq_items(&e.get("seq").unwrap()), expected,
+                "turn {} (depth {}) has wrong seq items", turn + 1, turn + 1,
+            );
+        }
+    }
+
+    /// B5. Consume + removed_back together → flush → reopen.
+    ///
+    /// Tests that both front-consume and back-removal are correctly persisted
+    /// and restored through the diff chain.
+    #[tokio::test]
+    async fn roundtrip_consume_and_remove_back() {
+        let interner = Interner::new();
+
+        let n1;
+        let n2;
+        let store;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 1,
+            ).await.unwrap();
+
+            // Turn 1: [1, 2, 3, 4, 5]
+            {
+                let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+                n1 = e.uuid();
+                let items: Vec<Value> = (1..=5).map(|i| Value::int(i)).collect();
+                e.record_sequence_diff("seq", TrackedDeque::from_vec(items), seq_ty());
+            }
+            // Turn 2: consume 2 from front, remove 1 from back, push 10
+            // [1,2,3,4,5] → consume 2 → [3,4,5] → remove_back 1 → [3,4] → push 10 → [3,4,10]
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                n2 = e.uuid();
+                let mut working = e.get("seq").unwrap().value()
+                    .expect_ref::<SequenceChain>("t2").origin().clone();
+                working.checkpoint();
+                working.consume(2);
+                working.pop();
+                working.push(Value::int(10));
+                e.record_sequence_diff("seq", working, seq_ty());
+            }
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        let j2 = BlobStoreJournal::open(store, interner).await.unwrap().unwrap();
+
+        assert_eq!(get_seq_items(&j2.entry(n1).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(1), Value::int(2), Value::int(3), Value::int(4), Value::int(5)]);
+        assert_eq!(get_seq_items(&j2.entry(n2).await.unwrap().get("seq").unwrap()),
+            vec![Value::int(3), Value::int(4), Value::int(10)]);
+    }
+
+    // ── C. Combined: size + roundtrip in one scenario ───────────────────
+
+    /// C1. Large sequence, multiple diverse diffs, flush+reopen, check both
+    /// blob sizes AND restored values.
+    ///
+    /// This is the most comprehensive single test. If this passes with correct
+    /// sizes AND correct values, the diff-only storage pipeline is working.
+    #[tokio::test]
+    async fn combined_large_sequence_diverse_diffs() {
+        let interner = Interner::new();
+
+        let n1; // [0..500]
+        let n2; // consume 10, push [900,901] → [10..500, 900, 901]
+        let n3; // consume 5, remove_back 2 → [15..500]
+        let store;
+        let n1_snap_size;
+        let n2_diff_size;
+        let n3_diff_size;
+        {
+            let (mut j, root) = BlobStoreJournal::with_snapshot_interval(
+                SpyBlobStore::new(), interner.clone(), 1,
+            ).await.unwrap();
+
+            // Turn 1: 500 items.
+            {
+                let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+                n1 = e.uuid();
+                let items: Vec<Value> = (0..500).map(|i| Value::int(i)).collect();
+                e.record_sequence_diff("q", TrackedDeque::from_vec(items), seq_ty());
+            }
+            // Turn 2: consume 10, push 2.
+            {
+                let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+                n2 = e.uuid();
+                let mut working = e.get("q").unwrap().value()
+                    .expect_ref::<SequenceChain>("t2").origin().clone();
+                working.checkpoint();
+                working.consume(10);
+                working.push(Value::int(900));
+                working.push(Value::int(901));
+                e.record_sequence_diff("q", working, seq_ty());
+            }
+            // Turn 3: consume 5, remove_back 2, no push.
+            {
+                let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
+                n3 = e.uuid();
+                let mut working = e.get("q").unwrap().value()
+                    .expect_ref::<SequenceChain>("t3").origin().clone();
+                working.checkpoint();
+                working.consume(5);
+                working.pop();
+                working.pop();
+                e.record_sequence_diff("q", working, seq_ty());
+            }
+
+            // Persist all.
+            { j.entry_mut(n3).await.unwrap().next().await.unwrap(); }
+
+            // Capture sizes.
+            let n1_idx = j.tree.uuid_to_idx[&n1];
+            n1_snap_size = j.store.size_of(&j.tree.nodes[n1_idx].snapshot_hash.unwrap()).unwrap();
+            let n2_idx = j.tree.uuid_to_idx[&n2];
+            n2_diff_size = j.store.size_of(&j.tree.nodes[n2_idx].seq_diff_hash.unwrap()).unwrap();
+            let n3_idx = j.tree.uuid_to_idx[&n3];
+            n3_diff_size = j.store.size_of(&j.tree.nodes[n3_idx].seq_diff_hash.unwrap()).unwrap();
+
+            j.flush_tree().await.unwrap();
+            store = j.store.inner;
+        }
+
+        // Size checks.
+        assert!(
+            n2_diff_size < n1_snap_size / 5,
+            "t2 diff ({n2_diff_size}B) too large vs snapshot ({n1_snap_size}B)"
+        );
+        assert!(
+            n3_diff_size < n1_snap_size / 10,
+            "t3 diff ({n3_diff_size}B) too large vs snapshot ({n1_snap_size}B) — no pushed items"
+        );
+
+        // Value checks after reopen.
+        let j2 = BlobStoreJournal::open(store, interner).await.unwrap().unwrap();
+
+        // Turn 1: [0..500]
+        {
+            let expected: Vec<Value> = (0..500).map(|i| Value::int(i)).collect();
+            assert_eq!(get_seq_items(&j2.entry(n1).await.unwrap().get("q").unwrap()), expected);
+        }
+        // Turn 2: [10..500, 900, 901]
+        {
+            let mut expected: Vec<Value> = (10..500).map(|i| Value::int(i)).collect();
+            expected.push(Value::int(900));
+            expected.push(Value::int(901));
+            assert_eq!(get_seq_items(&j2.entry(n2).await.unwrap().get("q").unwrap()), expected);
+        }
+        // Turn 3: [15..500] (consumed 5 more from front, removed 2 from back: 901 and 900)
+        {
+            let expected: Vec<Value> = (15..500).map(|i| Value::int(i)).collect();
+            assert_eq!(get_seq_items(&j2.entry(n3).await.unwrap().get("q").unwrap()), expected);
+        }
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "checksum mismatch")]
+    async fn sequence_checksum_mismatch_panics() {
+        let (mut j, root) = new_journal().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        let deque = TrackedDeque::from_vec(vec![Value::int(1)]);
+        e.record_sequence_diff("q", deque, seq_ty());
+        // Fake deque with different checksum
+        let mut fake = TrackedDeque::from_vec(vec![Value::int(1)]);
+        fake.checkpoint();
+        fake.push(Value::int(99));
+        e.record_sequence_diff("q", fake, seq_ty());
+    }
+
+    // ── Soundness: cross-type guard ─────────────────────────────────
+
+    /// record_patch on a Sequence key must panic.
+    #[tokio::test]
+    #[should_panic(expected = "record_patch called on Sequence key")]
+    async fn record_patch_on_sequence_key_panics() {
+        let (mut j, root) = new_journal().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        let deque = TrackedDeque::from_vec(vec![Value::int(1)]);
+        e.record_sequence_diff("q", deque, seq_ty());
+        // This must panic — "q" is a Sequence key.
+        e.record_patch("q", PatchDiff::set(TypedValue::int(999)), Ty::error());
+    }
+
+    /// record_sequence_diff on a Patch key must panic.
+    #[tokio::test]
+    #[should_panic(expected = "record_sequence_diff called on non-Sequence key")]
+    async fn record_sequence_diff_on_patch_key_panics() {
+        let (mut j, root) = new_journal().await;
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
+        // This must panic — "x" is a Patch key.
+        let deque = TrackedDeque::from_vec(vec![Value::int(99)]);
+        e.record_sequence_diff("x", deque, seq_ty());
     }
 }

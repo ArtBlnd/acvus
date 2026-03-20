@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use acvus_interpreter::{LazyValue, TypedValue, Value};
+use acvus_interpreter::{LazyValue, SequenceChain, TypedValue, Value};
 use acvus_mir::ty::Ty;
-use acvus_utils::{Astr, OwnedDequeDiff, TrackedDeque};
+use acvus_utils::{Astr, TrackedDeque};
 use rustc_hash::FxHashMap;
 use uuid::Uuid;
 
@@ -38,28 +38,6 @@ impl std::fmt::Display for JournalError {
 }
 
 impl std::error::Error for JournalError {}
-
-/// Storage operation — a complete instruction for what to store and at what type.
-///
-/// Every variant carries `ty: Ty` — the output type of the stored value.
-/// Storage preserves this type so that loaded values have correct types.
-#[derive(Debug, Clone)]
-pub enum StorageOps {
-    /// Sequence mode: squashed TrackedDeque + diff from origin.
-    /// Produced by Resolver after collect_seq + into_diff.
-    Sequence {
-        squashed: TrackedDeque<TypedValue>,
-        diff: OwnedDequeDiff<TypedValue>,
-        ty: Ty,
-    },
-    /// Recursive value patch. Works for any value type:
-    /// - `Set`: atomic replacement
-    /// - `Rec`: recursive key-value diff
-    Patch {
-        diff: PatchDiff,
-        ty: Ty,
-    },
-}
 
 /// Recursive value diff. Works for any Value type.
 ///
@@ -202,7 +180,13 @@ pub trait EntryMut<'a>: Sized {
         Self: 'x;
 
     fn get(&self, key: &str) -> Option<TypedValue>;
-    fn apply(&mut self, key: &str, patch: StorageOps);
+    fn record_patch(&mut self, key: &str, diff: PatchDiff, ty: Ty);
+    fn record_sequence_diff(
+        &mut self,
+        key: &str,
+        working: TrackedDeque<Value>,
+        ty: Ty,
+    ) -> TrackedDeque<Value>;
     async fn next(self) -> Result<Self, JournalError>;
     async fn fork(self) -> Result<Self, JournalError>;
     fn prune(self, mode: Prune);
@@ -579,34 +563,72 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         node.accumulated.get(key).cloned()
     }
 
-    fn apply(&mut self, key: &str, patch: StorageOps) {
+    fn record_patch(&mut self, key: &str, diff: PatchDiff, ty: Ty) {
         let idx = self.idx;
         debug_assert!(
             self.inner.nodes[idx].children.is_empty(),
-            "apply on non-leaf"
+            "record_patch on non-leaf"
+        );
+        // Guard: Sequence keys must use record_sequence_diff.
+        if let Some(existing) = self.get(key) {
+            assert!(
+                !matches!(existing.value(), Value::Lazy(LazyValue::Sequence(_))),
+                "record_patch called on Sequence key {key:?} — use record_sequence_diff instead"
+            );
+        }
+        let existing = self.get(key);
+        let new_val = diff.apply(existing.as_ref(), ty);
+        self.inner.nodes[idx]
+            .turn_diff
+            .insert(key.to_string(), new_val);
+    }
+
+    fn record_sequence_diff(
+        &mut self,
+        key: &str,
+        working: TrackedDeque<Value>,
+        ty: Ty,
+    ) -> TrackedDeque<Value> {
+        let idx = self.idx;
+        debug_assert!(
+            self.inner.nodes[idx].children.is_empty(),
+            "record_sequence_diff on non-leaf"
         );
 
-        match patch {
-            StorageOps::Sequence { squashed, ty, .. } => {
-                let value_deque = TrackedDeque::from_vec(
-                    squashed.into_vec().into_iter().map(|tv| tv.into_inner()).collect(),
-                );
-                let stored = TypedValue::new(
-                    Value::Lazy(LazyValue::Deque(value_deque)),
-                    ty,
-                );
-                self.inner.nodes[idx]
-                    .turn_diff
-                    .insert(key.to_string(), stored);
-            }
-            StorageOps::Patch { diff, ty } => {
-                let existing = self.get(key);
-                let new_val = diff.apply(existing.as_ref(), ty);
-                self.inner.nodes[idx]
-                    .turn_diff
-                    .insert(key.to_string(), new_val);
-            }
+        // Guard: non-Sequence keys must use record_patch.
+        let existing = self.get(key);
+        if let Some(ref tv) = existing {
+            assert!(
+                matches!(tv.value(), Value::Lazy(LazyValue::Sequence(_))),
+                "record_sequence_diff called on non-Sequence key {key:?} — use record_patch instead"
+            );
         }
+
+        // First turn: no existing sequence → all items are "pushed".
+        if existing.is_none() {
+            let items = working.into_vec();
+            let new_deque = TrackedDeque::from_vec(items);
+            let sc = SequenceChain::from_stored(new_deque.clone());
+            let stored = TypedValue::new(Value::sequence(sc), ty);
+            self.inner.nodes[idx]
+                .turn_diff
+                .insert(key.to_string(), stored);
+            return new_deque;
+        }
+
+        // Subsequent turn: into_diff verifies checksum, extracts diff.
+        let existing_tv = existing.unwrap();
+        let sc = existing_tv.value().expect_ref::<SequenceChain>("record_sequence_diff");
+        let origin = sc.origin();
+        let (squashed, _diff) = working.into_diff(origin);
+
+        // Update state with squashed result.
+        let new_sc = SequenceChain::from_stored(squashed.clone());
+        let stored = TypedValue::new(Value::sequence(new_sc), ty);
+        self.inner.nodes[idx]
+            .turn_diff
+            .insert(key.to_string(), stored);
+        squashed
     }
 
     async fn next(self) -> Result<Self, JournalError> {
@@ -730,13 +752,33 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use acvus_interpreter::{LazyValue, PureValue, TypedValue, Value};
-    use acvus_mir::ty::Ty;
-    use acvus_utils::Interner;
+    use acvus_interpreter::{LazyValue, PureValue, SequenceChain, TypedValue, Value};
+    use acvus_mir::ty::{Effect, Origin, Ty};
+    use acvus_utils::{Interner, TrackedDeque};
 
     use super::*;
+
+    /// Collect a SequenceChain into a Vec<Value> via async collect.
+    async fn collect_seq(sc: SequenceChain) -> Vec<Value> {
+        let mut co = acvus_utils::coroutine(move |handle| async move {
+            let deque = sc.collect(&handle).await.expect("collect failed");
+            handle.yield_val(TypedValue::new(
+                Value::deque(deque),
+                Ty::error(),
+            )).await;
+            Ok::<(), acvus_interpreter::RuntimeError>(())
+        });
+        let (mut co, stepped) = co.step().await;
+        match stepped {
+            acvus_utils::Stepped::Emit(tv) => {
+                let Value::Lazy(LazyValue::Deque(d)) = tv.into_inner() else {
+                    panic!("expected Deque from collect");
+                };
+                d.into_vec()
+            }
+            _ => panic!("expected Emit from collect coroutine"),
+        }
+    }
 
     // --- Basic get/apply tests ---
 
@@ -744,7 +786,7 @@ mod tests {
     async fn apply_and_get() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("hello".to_string())), ty: Ty::error() });
+        e.record_patch("x", PatchDiff::set(TypedValue::string("hello".to_string())), Ty::error());
         assert!(matches!(
             e.get("x").unwrap().value(),
             Value::Pure(PureValue::String(v)) if v == "hello"
@@ -757,65 +799,63 @@ mod tests {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply(
+        e.record_patch("x", PatchDiff::set(TypedValue::string("first")), Ty::error());
+        e.record_patch(
             "x",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::string("first")), ty: Ty::error() },
-        );
-        e.apply(
-            "x",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
+            PatchDiff::set(TypedValue::new(
                 Value::object(FxHashMap::from_iter([(
                     interner.intern("v"),
                     Value::int(2),
                 )])),
                 Ty::error(),
-            )), ty: Ty::error() },
+            )),
+            Ty::error(),
         );
         assert!(matches!(e.get("x").unwrap().value(), Value::Lazy(LazyValue::Object(_))));
     }
 
-    #[tokio::test]
-    async fn deque_stores_squashed() {
-        let (mut j, root) = TreeJournal::new();
-        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
-        let diff = OwnedDequeDiff {
-            consumed: 0,
-            removed_back: 0,
-            pushed: vec![TypedValue::int(1), TypedValue::int(2)],
-        };
-        e.apply(
-            "q",
-            StorageOps::Sequence {
-                squashed,
-                diff,
-                ty: Ty::error(),
-            },
-        );
-        let val = e.get("q").unwrap();
-        let Value::Lazy(LazyValue::Deque(d)) = val.value() else {
-            panic!("expected Deque");
-        };
-        assert_eq!(d.as_slice(), &[Value::int(1), Value::int(2)]);
+    fn seq_ty() -> Ty {
+        Ty::Sequence(Box::new(Ty::Int), Origin::Concrete(0), Effect::Pure)
     }
 
     #[tokio::test]
-    async fn deque_checksum_preserved() {
+    async fn sequence_stored_as_sequence_value() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1)]);
-        let diff = OwnedDequeDiff {
-            consumed: 0,
-            removed_back: 0,
-            pushed: vec![TypedValue::int(1)],
-        };
-        e.apply("q", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+        e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
         let val = e.get("q").unwrap();
-        let Value::Lazy(LazyValue::Deque(stored)) = val.value() else {
-            panic!("expected Deque")
-        };
-        // After conversion through apply, checksum is regenerated (not preserved).
-        assert_eq!(stored.as_slice(), &[Value::int(1)]);
+        let sc = val.value().expect_ref::<SequenceChain>("expected Sequence");
+        assert_eq!(sc.origin().as_slice(), &[Value::int(1), Value::int(2)]);
+        assert!(matches!(val.ty(), Ty::Sequence(..)));
+    }
+
+    #[tokio::test]
+    async fn sequence_roundtrip_preserves_items() {
+        let (mut j, root) = TreeJournal::new();
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1)]), seq_ty());
+        let val = e.get("q").unwrap();
+        let sc = val.value().expect_ref::<SequenceChain>("expected Sequence");
+        assert_eq!(sc.origin().as_slice(), &[Value::int(1)]);
+    }
+
+    #[tokio::test]
+    async fn sequence_survives_next_turn() {
+        // Sequence stored in turn N must be loadable as Sequence in turn N+1
+        let (mut j, root) = TreeJournal::new();
+        let n1;
+        {
+            let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+            n1 = e.uuid();
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]), seq_ty());
+        }
+        // Next turn — value should be in accumulated as Sequence
+        {
+            let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
+            let val = e.get("q").unwrap();
+            let sc = val.value().expect_ref::<SequenceChain>("expected Sequence after next");
+            assert_eq!(sc.origin().as_slice(), &[Value::int(10), Value::int(20)]);
+        }
     }
 
     #[tokio::test]
@@ -826,21 +866,22 @@ mod tests {
         let a = interner.intern("a");
         let b = interner.intern("b");
         let c = interner.intern("c");
-        e.apply(
+        e.record_patch(
             "obj",
-            StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
+            PatchDiff::set(TypedValue::new(
                 Value::object(FxHashMap::from_iter([
                     (a, Value::int(1)),
                     (b, Value::int(2)),
                 ])),
                 Ty::error(),
-            )), ty: Ty::error() },
+            )),
+            Ty::error(),
         );
         let diff = PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100))), (c, PatchDiff::Set(Value::int(3)))]),
             removals: vec![b],
         };
-        e.apply("obj", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("obj", diff, Ty::error());
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")
@@ -860,7 +901,7 @@ mod tests {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
             removals: vec![],
         };
-        e.apply("obj", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("obj", diff, Ty::error());
         let val = e.get("obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
             panic!("expected Object")
@@ -900,8 +941,8 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
-            e.apply("y", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
+            e.record_patch("y", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         let n2;
@@ -913,7 +954,7 @@ mod tests {
             assert!(matches!(e.get("y").unwrap().value(), Value::Pure(PureValue::Int(2))));
 
             // Modifying n2 doesn't affect n1
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         }
 
@@ -937,14 +978,14 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
         }
 
         // Fork from n2 — creates sibling of n2 (child of n1)
@@ -970,7 +1011,7 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         j.entry_mut(n2).await.unwrap().prune(Prune::Leaf);
@@ -1014,7 +1055,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         let n2;
@@ -1035,7 +1076,7 @@ mod tests {
         // Modifying one doesn't affect the other
         {
             let mut e = j.entry_mut(n2).await.unwrap();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(99)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
         }
         assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
         assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
@@ -1049,7 +1090,7 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
 
         {
@@ -1057,7 +1098,7 @@ mod tests {
             // x=1 is in accumulated
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
             // Now override in turn_diff
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
         }
     }
@@ -1351,9 +1392,9 @@ mod tests {
     async fn snapshot_overwrites_entirely() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+        e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
-        e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+        e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
         assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
     }
 
@@ -1364,11 +1405,11 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
         }
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            e.apply("x", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
+            e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
             assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
         }
         // Going back to n1 → should see value 1, not 2
@@ -1382,10 +1423,10 @@ mod tests {
     async fn snapshot_string_value() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.apply("msg", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(
+        e.record_patch("msg", PatchDiff::set(TypedValue::new(
             Value::string("hello".to_string()),
             Ty::String,
-        )), ty: Ty::error() });
+        )), Ty::error());
         match e.get("msg").unwrap().value() {
             Value::Pure(PureValue::String(s)) => assert_eq!(s, "hello"),
             other => panic!("expected String, got {:?}", other),
@@ -1397,18 +1438,13 @@ mod tests {
     // =========================================================================
 
     #[tokio::test]
-    async fn sequence_stores_deque() {
+    async fn sequence_stores_as_sequence() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        let squashed = TrackedDeque::from_vec(vec![TypedValue::int(1), TypedValue::int(2)]);
-        let diff = OwnedDequeDiff {
-            consumed: 0,
-            removed_back: 0,
-            pushed: vec![TypedValue::int(1), TypedValue::int(2)],
-        };
-        e.apply("seq", StorageOps::Sequence { squashed, diff, ty: Ty::error() });
+        e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
         let val = e.get("seq").unwrap();
-        assert!(matches!(val.value(), Value::Lazy(LazyValue::Deque(_))));
+        assert!(matches!(val.value(), Value::Lazy(LazyValue::Sequence(_))));
+        assert!(matches!(val.ty(), Ty::Sequence(..)));
     }
 
     // =========================================================================
@@ -1429,7 +1465,7 @@ mod tests {
             (a, Value::int(1)),
             (inner_key, Value::object(FxHashMap::from_iter([(b, Value::int(10))]))),
         ]));
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
+        e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
 
         // Patch: inner.b = 99 (recursive)
         let diff = PatchDiff::Rec {
@@ -1439,7 +1475,7 @@ mod tests {
             })]),
             removals: vec![],
         };
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("state", diff, Ty::error());
 
         let val = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!("expected Object") };
@@ -1465,7 +1501,7 @@ mod tests {
                 (a, Value::int(1)),
                 (b, Value::int(2)),
             ]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
+            e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
         }
 
         let n2;
@@ -1477,7 +1513,7 @@ mod tests {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
                 removals: vec![],
             };
-            e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
+            e.record_patch("state", diff, Ty::error());
         }
 
         // At n2: a=10, b=2
@@ -1512,19 +1548,19 @@ mod tests {
             (a, Value::int(1)),
             (b, Value::int(2)),
         ]));
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(initial, Ty::error())), ty: Ty::error() });
+        e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
 
         // First patch: update a
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+        e.record_patch("state", PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
             removals: vec![],
-        }, ty: Ty::error() });
+        }, Ty::error());
 
         // Second patch: add c, remove b
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+        e.record_patch("state", PatchDiff::Rec {
             updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(3)))]),
             removals: vec![b],
-        }, ty: Ty::error() });
+        }, Ty::error());
 
         let val = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
@@ -1540,10 +1576,10 @@ mod tests {
         let a = interner.intern("a");
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
-        e.apply("new_obj", StorageOps::Patch { diff: PatchDiff::Rec {
+        e.record_patch("new_obj", PatchDiff::Rec {
             updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
             removals: vec![],
-        }, ty: Ty::error() });
+        }, Ty::error());
 
         let val = e.get("new_obj").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
@@ -1570,10 +1606,10 @@ mod tests {
             // c removed
         ]));
 
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), ty: Ty::error() });
+        e.record_patch("state", PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), Ty::error());
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("state", diff, Ty::error());
 
         let result = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
@@ -1604,12 +1640,12 @@ mod tests {
             ]))),
         ]));
 
-        e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), ty: Ty::error() });
+        e.record_patch("state", PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), Ty::error());
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
         // The diff should be Rec, not Set for the whole object
         assert!(matches!(&diff, PatchDiff::Rec { updates, .. } if matches!(updates.get(&a), Some(PatchDiff::Rec { .. }))));
-        e.apply("state", StorageOps::Patch { diff, ty: Ty::error() });
+        e.record_patch("state", diff, Ty::error());
 
         let result = e.get("state").unwrap();
         let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
@@ -1622,32 +1658,12 @@ mod tests {
     // Sequence — diff-only storage, history accumulation, undo
     // =========================================================================
 
-    fn seq_patch(items: Vec<TypedValue>) -> StorageOps {
-        let squashed = TrackedDeque::from_vec(items.clone());
-        let diff = OwnedDequeDiff {
-            consumed: 0,
-            removed_back: 0,
-            pushed: items,
-        };
-        StorageOps::Sequence { squashed, diff, ty: Ty::error() }
-    }
 
-    fn seq_patch_with_diff(
-        squashed_items: Vec<TypedValue>,
-        consumed: usize,
-        removed_back: usize,
-        pushed: Vec<TypedValue>,
-    ) -> StorageOps {
-        let squashed = TrackedDeque::from_vec(squashed_items);
-        let diff = OwnedDequeDiff { consumed, removed_back, pushed };
-        StorageOps::Sequence { squashed, diff, ty: Ty::error() }
-    }
-
-    fn get_deque_values(val: &TypedValue) -> Vec<Value> {
-        let Value::Lazy(LazyValue::Deque(d)) = val.value() else {
-            panic!("expected Deque");
+    async fn get_seq_values(val: TypedValue) -> Vec<Value> {
+        let Value::Lazy(LazyValue::Sequence(sc)) = val.into_inner() else {
+            panic!("expected Sequence");
         };
-        d.as_slice().to_vec()
+        collect_seq(sc).await
     }
 
     fn get_obj_fields(val: &TypedValue) -> FxHashMap<Astr, Value> {
@@ -1665,25 +1681,25 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             // Initial: [1, 2]
-            e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2)]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
         }
         {
+            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            // Append 3: squashed=[1,2,3], diff={pushed=[3]}
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)],
-                0, 0,
-                vec![TypedValue::int(3)],
-            ));
+            // Append 3
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(3));
+            e.record_sequence_diff("q", working, seq_ty());
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(1), Value::int(2), Value::int(3)]);
         }
         // Go back to n1: should see [1, 2]
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(1), Value::int(2)]);
         }
     }
@@ -1695,25 +1711,25 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2), Value::int(3)]), seq_ty());
         }
         {
+            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            // Consumed 1 from front: squashed=[2,3], diff={consumed=1}
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(2), TypedValue::int(3)],
-                1, 0,
-                vec![],
-            ));
+            // Consumed 1 from front
+            let mut working = sc;
+            working.checkpoint();
+            working.consume(1);
+            e.record_sequence_diff("q", working, seq_ty());
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(2), Value::int(3)]);
         }
         // Go back to n1: should see [1, 2, 3]
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(1), Value::int(2), Value::int(3)]);
         }
     }
@@ -1725,24 +1741,25 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("q", seq_patch(vec![TypedValue::int(10), TypedValue::int(20)]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]), seq_ty());
         }
         {
+            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            // Consume 1 + append 30: squashed=[20,30], diff={consumed=1, pushed=[30]}
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(20), TypedValue::int(30)],
-                1, 0,
-                vec![TypedValue::int(30)],
-            ));
+            // Consume 1 + append 30
+            let mut working = sc;
+            working.checkpoint();
+            working.consume(1);
+            working.push(Value::int(30));
+            e.record_sequence_diff("q", working, seq_ty());
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(20), Value::int(30)]);
         }
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            let vals = get_deque_values(&val);
+            let vals = get_seq_values(val).await;
             assert_eq!(vals, vec![Value::int(10), Value::int(20)]);
         }
     }
@@ -1754,43 +1771,45 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("q", seq_patch(vec![TypedValue::int(1)]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1)]), seq_ty());
         }
         let n2;
         {
+            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2)],
-                0, 0, vec![TypedValue::int(2)],
-            ));
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(2));
+            e.record_sequence_diff("q", working, seq_ty());
         }
         let n3;
         {
+            let sc = j.entry(n2).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(3)],
-                0, 0, vec![TypedValue::int(3)],
-            ));
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(3));
+            e.record_sequence_diff("q", working, seq_ty());
         }
         // n3: [1, 2, 3]
         {
             let e = j.entry(n3).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(3)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(3)]);
         }
         // n2: [1, 2]
         {
             let e = j.entry(n2).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
         }
         // n1: [1]
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1)]);
         }
     }
 
@@ -1801,21 +1820,22 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("q", seq_patch(vec![]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![]), seq_ty());
         }
         {
+            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1)],
-                0, 0, vec![TypedValue::int(1)],
-            ));
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(1));
+            e.record_sequence_diff("q", working, seq_ty());
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1)]);
         }
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), Vec::<Value>::new());
+            assert_eq!(get_seq_values(val).await, Vec::<Value>::new());
         }
     }
 
@@ -1826,44 +1846,49 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("q", seq_patch(vec![TypedValue::int(1), TypedValue::int(2)]));
+            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
+        }
+        let origin;
+        {
+            let e = j.entry(n1).await.unwrap();
+            origin = e.get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
         }
         // Fork: two children from n1
         let branch_a;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             branch_a = e.uuid();
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(100)],
-                0, 0, vec![TypedValue::int(100)],
-            ));
+            let mut working = origin.clone();
+            working.checkpoint();
+            working.push(Value::int(100));
+            e.record_sequence_diff("q", working, seq_ty());
         }
         let branch_b;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             branch_b = e.uuid();
-            e.apply("q", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2), TypedValue::int(200)],
-                0, 0, vec![TypedValue::int(200)],
-            ));
+            let mut working = origin.clone();
+            working.checkpoint();
+            working.push(Value::int(200));
+            e.record_sequence_diff("q", working, seq_ty());
         }
         // branch_a: [1, 2, 100]
         {
             let e = j.entry(branch_a).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(100)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(100)]);
         }
         // branch_b: [1, 2, 200]
         {
             let e = j.entry(branch_b).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2), Value::int(200)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(200)]);
         }
         // n1: still [1, 2]
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
         }
     }
 
@@ -1880,27 +1905,28 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::error() });
-            e.apply("log", seq_patch(vec![TypedValue::int(1)]));
+            e.record_patch("counter", PatchDiff::set(TypedValue::int(0)), Ty::error());
+            e.record_sequence_diff("log", TrackedDeque::from_vec(vec![Value::int(1)]), seq_ty());
         }
         {
+            let sc = j.entry(n1).await.unwrap().get("log").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
-            e.apply("counter", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
-            e.apply("log", seq_patch_with_diff(
-                vec![TypedValue::int(1), TypedValue::int(2)],
-                0, 0, vec![TypedValue::int(2)],
-            ));
+            e.record_patch("counter", PatchDiff::set(TypedValue::int(1)), Ty::error());
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(2));
+            e.record_sequence_diff("log", working, seq_ty());
             // counter=1, log=[1,2]
             assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(1))));
             let val = e.get("log").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1), Value::int(2)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
         }
         // Back to n1: counter=0, log=[1]
         {
             let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(0))));
             let val = e.get("log").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(1)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(1)]);
         }
     }
 
@@ -1914,23 +1940,24 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let state = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(state, Ty::error())), ty: Ty::error() });
-            e.apply("log", seq_patch(vec![]));
+            e.record_patch("state", PatchDiff::set(TypedValue::new(state, Ty::error())), Ty::error());
+            e.record_sequence_diff("log", TrackedDeque::from_vec(vec![]), seq_ty());
         }
         let n2;
         {
+            let sc = j.entry(n1).await.unwrap().get("log").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Patch state.a = 1
-            e.apply("state", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("state", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
             // Append to log
-            e.apply("log", seq_patch_with_diff(
-                vec![TypedValue::int(100)],
-                0, 0, vec![TypedValue::int(100)],
-            ));
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(100));
+            e.record_sequence_diff("log", working, seq_ty());
         }
         // n2: state.a=1, log=[100]
         {
@@ -1939,7 +1966,7 @@ mod tests {
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
             let val = e.get("log").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(100)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(100)]);
         }
         // n1: state.a=0, log=[]
         {
@@ -1948,7 +1975,7 @@ mod tests {
             let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
             assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(0))));
             let val = e.get("log").unwrap();
-            assert_eq!(get_deque_values(&val), Vec::<Value>::new());
+            assert_eq!(get_seq_values(val).await, Vec::<Value>::new());
         }
     }
 
@@ -1961,45 +1988,47 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(0)), ty: Ty::error() });
-            e.apply("seq", seq_patch(vec![TypedValue::int(10)]));
+            e.record_patch("snap", PatchDiff::set(TypedValue::int(0)), Ty::error());
+            e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(10)]), seq_ty());
             let obj = Value::object(FxHashMap::from_iter([(x, Value::int(100))]));
-            e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("patch_obj", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
         let n2;
         {
+            let sc = j.entry(n1).await.unwrap().get("seq").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(1)), ty: Ty::error() });
-            e.apply("seq", seq_patch_with_diff(
-                vec![TypedValue::int(10), TypedValue::int(20)],
-                0, 0, vec![TypedValue::int(20)],
-            ));
-            e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("snap", PatchDiff::set(TypedValue::int(1)), Ty::error());
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(20));
+            e.record_sequence_diff("seq", working, seq_ty());
+            e.record_patch("patch_obj", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         let n3;
         {
+            let sc = j.entry(n2).await.unwrap().get("seq").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
-            e.apply("snap", StorageOps::Patch { diff: PatchDiff::set(TypedValue::int(2)), ty: Ty::error() });
-            e.apply("seq", seq_patch_with_diff(
-                vec![TypedValue::int(10), TypedValue::int(20), TypedValue::int(30)],
-                0, 0, vec![TypedValue::int(30)],
-            ));
-            e.apply("patch_obj", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("snap", PatchDiff::set(TypedValue::int(2)), Ty::error());
+            let mut working = sc;
+            working.checkpoint();
+            working.push(Value::int(30));
+            e.record_sequence_diff("seq", working, seq_ty());
+            e.record_patch("patch_obj", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(300)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         // n3: snap=2, seq=[10,20,30], patch_obj.x=300
         {
             let e = j.entry(n3).await.unwrap();
             assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(2))));
             let val = e.get("seq").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(10), Value::int(20), Value::int(30)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(10), Value::int(20), Value::int(30)]);
             let val = e.get("patch_obj").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&x), Some(&Value::Pure(PureValue::Int(300))));
@@ -2009,7 +2038,7 @@ mod tests {
             let e = j.entry(n1).await.unwrap();
             assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(0))));
             let val = e.get("seq").unwrap();
-            assert_eq!(get_deque_values(&val), vec![Value::int(10)]);
+            assert_eq!(get_seq_values(val).await, vec![Value::int(10)]);
             let val = e.get("patch_obj").unwrap();
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&x), Some(&Value::Pure(PureValue::Int(100))));
@@ -2032,25 +2061,25 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0)), (b, Value::int(0))]));
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("s", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         let n3;
         {
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(2)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         // n3: a=1, b=2
         {
@@ -2089,25 +2118,25 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::set(TypedValue::new(obj, Ty::error())), ty: Ty::error() });
+            e.record_patch("s", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
         }
         let ba;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             ba = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         let bb;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             bb = e.uuid();
-            e.apply("s", StorageOps::Patch { diff: PatchDiff::Rec {
+            e.record_patch("s", PatchDiff::Rec {
                 updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
                 removals: vec![],
-            }, ty: Ty::error() });
+            }, Ty::error());
         }
         // ba.a=100, bb.a=200, n1.a=0
         {
@@ -2128,5 +2157,47 @@ mod tests {
             let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
             assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(0))));
         }
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "checksum mismatch")]
+    async fn sequence_checksum_mismatch_panics() {
+        let (mut j, root) = TreeJournal::new();
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        // Initial sequence
+        let deque = TrackedDeque::from_vec(vec![Value::int(1)]);
+        e.record_sequence_diff("q", deque, seq_ty());
+        // Create a FAKE deque with different checksum (not cloned from origin)
+        let mut fake = TrackedDeque::from_vec(vec![Value::int(1)]);
+        fake.checkpoint();
+        fake.push(Value::int(99));
+        // This should panic because fake's checksum doesn't match stored origin
+        e.record_sequence_diff("q", fake, seq_ty());
+    }
+
+    // ── Soundness: cross-type guard ─────────────────────────────────
+
+    /// record_patch on a Sequence key must panic.
+    #[tokio::test]
+    #[should_panic(expected = "record_patch called on Sequence key")]
+    async fn record_patch_on_sequence_key_panics() {
+        let (mut j, root) = TreeJournal::new();
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        let deque = TrackedDeque::from_vec(vec![Value::int(1)]);
+        e.record_sequence_diff("q", deque, seq_ty());
+        // This must panic — "q" is a Sequence key.
+        e.record_patch("q", PatchDiff::set(TypedValue::int(999)), Ty::error());
+    }
+
+    /// record_sequence_diff on a Patch key must panic.
+    #[tokio::test]
+    #[should_panic(expected = "record_sequence_diff called on non-Sequence key")]
+    async fn record_sequence_diff_on_patch_key_panics() {
+        let (mut j, root) = TreeJournal::new();
+        let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
+        e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
+        // This must panic — "x" is a Patch key.
+        let deque = TrackedDeque::from_vec(vec![Value::int(99)]);
+        e.record_sequence_diff("x", deque, seq_ty());
     }
 }

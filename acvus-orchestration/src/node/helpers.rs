@@ -172,31 +172,46 @@ pub async fn expand_iterator_in_coroutine(
 ) -> Result<Vec<Message>, RuntimeError> {
     let evaluated = eval_script_in_coroutine(interner, &expr.module, local, handle).await?;
 
-    let deque_vec;
-    let all_items = match evaluated.value() {
-        Value::Lazy(LazyValue::List(items)) => items.as_slice(),
-        Value::Lazy(LazyValue::Deque(deque)) => {
-            deque_vec = deque.as_slice();
-            deque_vec
+    // Collect items from the evaluated value — supports Iterator, List, Deque.
+    let all_items = match evaluated.into_inner() {
+        Value::Lazy(LazyValue::Iterator(ih)) => {
+            let mut items = Vec::new();
+            let empty_module = acvus_mir::ir::MirModule::default();
+            let mut interp = Interpreter::new(interner, empty_module);
+            let mut current = Some(ih);
+            while let Some(iter) = current.take() {
+                let result;
+                (interp, result) = Interpreter::exec_next(interp, iter, handle).await?;
+                match result {
+                    Some((item, rest)) => {
+                        items.push(item);
+                        current = Some(rest);
+                    }
+                    None => break,
+                }
+            }
+            items
         }
+        Value::Lazy(LazyValue::List(items)) => items,
+        Value::Lazy(LazyValue::Deque(deque)) => deque.into_vec(),
         other => {
             return Err(RuntimeError::unexpected_type(
                 "expand_iterator",
-                &[ValueKind::List, ValueKind::Deque],
+                &[ValueKind::Iterator, ValueKind::List, ValueKind::Deque],
                 other.kind(),
             ));
         }
     };
 
-    let items: &[Value] = if let Some(s) = slice {
+    let items: Vec<&Value> = if let Some(s) = slice {
         let len = all_items.len();
         match s.as_slice() {
-            [start] => &all_items[resolve_index(*start, len)..],
-            [start, end] => &all_items[resolve_index(*start, len)..resolve_index(*end, len)],
-            _ => all_items,
+            [start] => all_items[resolve_index(*start, len)..].iter().collect(),
+            [start, end] => all_items[resolve_index(*start, len)..resolve_index(*end, len)].iter().collect(),
+            _ => all_items.iter().collect(),
         }
     } else {
-        all_items
+        all_items.iter().collect()
     };
 
     let role_str = role_override.map(|r| interner.resolve(r).to_string());

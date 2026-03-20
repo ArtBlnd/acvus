@@ -12,6 +12,7 @@ mod session;
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 fn init() {
     console_error_panic_hook::set_once();
+    tracing_wasm::set_as_global_default();
 }
 
 use acvus_mir::ir::{InstKind};
@@ -235,6 +236,13 @@ fn jcv_to_ty(interner: &Interner, v: &JsConcreteValue) -> Ty {
                 payload.as_ref().map(|p| Box::new(jcv_to_ty(interner, p))),
             );
             Ty::Enum { name: interner.intern(tag), variants }
+        }
+        JsConcreteValue::Sequence { items } => {
+            let elem_ty = items
+                .first()
+                .map(|i| jcv_to_ty(interner, i))
+                .unwrap_or_else(Ty::error);
+            Ty::Sequence(Box::new(elem_ty), acvus_mir::ty::Origin::Concrete(0), acvus_mir::ty::Effect::Pure)
         }
     }
 }

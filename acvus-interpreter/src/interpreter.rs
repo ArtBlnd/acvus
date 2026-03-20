@@ -511,6 +511,7 @@ impl Interpreter {
                 // -- type coercion --
                 InstKind::Cast { dst, src, kind } => {
                     let value = frame.take_owned(*src);
+                    tracing::debug!(cast = ?kind, src_ty = ?val_types[src], value_kind = ?value.kind(), "exec_cast");
                     let result = exec_cast(*kind, value, &val_types[src]);
                     frame.set_new(*dst, result);
                 }
@@ -868,7 +869,7 @@ fn exec_cast(kind: CastKind, value: Value, src_ty: &Ty) -> Value {
         CastKind::SequenceToIterator => {
             let effect = match src_ty {
                 Ty::Sequence(_, _, e) => *e,
-                _ => Effect::Pure,
+                _ => panic!("Cast SequenceToIterator: expected Sequence type, got {src_ty:?}"),
             };
             let sc = value.expect::<SequenceChain>("Cast SequenceToIterator");
             Value::iterator(sc.into_iter_handle(effect))

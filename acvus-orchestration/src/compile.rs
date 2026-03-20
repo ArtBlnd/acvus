@@ -675,10 +675,16 @@ fn resolve_node_locals(
             };
 
             // Coerce Deque<T, O> → Sequence<T, O, Pure> for @self
-            let self_hint = match init_ty {
-                Ty::Deque(inner, origin) => Ty::Sequence(inner, origin, Effect::Pure),
+            let self_hint = match &init_ty {
+                Ty::Deque(inner, origin) => Ty::Sequence(inner.clone(), *origin, Effect::Pure),
                 _ => init_ty.clone(),
             };
+
+            tracing::debug!(
+                init_ty = %init_ty.display(interner),
+                self_hint = %self_hint.display(interner),
+                "resolve_node_locals pass1→pass2"
+            );
 
             // Pass 2: compile bind with @self = Sequence<T, O, Pure> — same subst!
             // bind result must be compatible with self_hint (Sequence<T, O, E>).
@@ -695,6 +701,11 @@ fn resolve_node_locals(
                 Ok((_, ty)) => ty,
                 Err(_) => Ty::error(),
             };
+
+            tracing::debug!(
+                resolved_self = %resolved_self.display(interner),
+                "resolve_node_locals bind result"
+            );
 
             resolved_self
         }
@@ -894,6 +905,13 @@ pub fn compute_external_context_env(
         } else {
             locals.raw_ty.clone()
         };
+        tracing::debug!(
+            node = %interner.resolve(spec.name),
+            self_ty = %locals.self_ty.display(interner),
+            raw_ty = %locals.raw_ty.display(interner),
+            name_ty = %name_ty.display(interner),
+            "resolve_node_locals result"
+        );
         stored_types.push(name_ty);
         node_locals.insert(spec.name, locals);
     }

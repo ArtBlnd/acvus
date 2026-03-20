@@ -20,7 +20,7 @@ fn node_initial_value(node: &CompiledNode) -> Option<&CompiledScript> {
     node.strategy.initial_value.as_ref()
 }
 use crate::node::Node;
-use crate::storage::{EntryMut, EntryRef, PatchDiff, StorageOps};
+use crate::storage::{EntryMut, EntryRef, PatchDiff};
 
 // ---------------------------------------------------------------------------
 // ResolveState — bundled mutable context
@@ -65,24 +65,37 @@ impl<E> ResolveState<E> {
 }
 
 impl<'j, E: EntryMut<'j>> ResolveState<E> {
-    /// Persist a value to storage. This is the **single entry point**
-    /// for all storage writes.
-    ///
-    /// The type checker guarantees that persistent nodes have storable
-    /// output types at compile time. This debug_assert is defense-in-depth.
-    pub fn persist(&mut self, key: &str, diff: StorageOps) {
-        self.entry.apply(key, diff);
+    /// Persist a patch to storage.
+    pub fn persist_patch(&mut self, key: &str, diff: PatchDiff, ty: Ty) {
+        self.entry.record_patch(key, diff, ty);
     }
 
-    /// Persist a value to storage, re-load the canonical stored form, and cache it.
-    ///
-    /// This is the **single entry point** for the persist → re-load → cache pattern.
-    /// Re-loading from storage is necessary because storage may transform the value
-    /// (e.g. Sequence → Deque conversion in `StorageOps::Sequence`).
-    pub fn persist_and_cache(&mut self, name: Astr, key: &str, diff: StorageOps) -> TypedValue {
-        self.entry.apply(key, diff);
+    /// Persist a patch and cache the stored form.
+    pub fn persist_patch_and_cache(&mut self, name: Astr, key: &str, diff: PatchDiff, ty: Ty) -> TypedValue {
+        self.entry.record_patch(key, diff, ty);
         let stored = self.entry.get(key)
-            .expect("value must be in storage after persist");
+            .expect("value must be in storage after persist_patch");
+        self.turn_context.insert(name, stored.clone());
+        stored
+    }
+
+    /// Persist a sequence diff. Consumes the working TrackedDeque,
+    /// returns the new deque with evolved checksum.
+    pub fn persist_sequence_diff(&mut self, key: &str, working: TrackedDeque<Value>, ty: Ty) {
+        self.entry.record_sequence_diff(key, working, ty);
+    }
+
+    /// Persist a sequence diff and cache the stored form.
+    pub fn persist_sequence_diff_and_cache(
+        &mut self,
+        name: Astr,
+        key: &str,
+        working: TrackedDeque<Value>,
+        ty: Ty,
+    ) -> TypedValue {
+        let _new_deque = self.entry.record_sequence_diff(key, working, ty);
+        let stored = self.entry.get(key)
+            .expect("value must be in storage after persist_sequence_diff");
         self.turn_context.insert(name, stored.clone());
         stored
     }
@@ -189,8 +202,8 @@ enum Phase {
     InitialValue { node_id: NodeId },
     /// Assert evaluated → if passed, finalize; if failed, retry or error.
     Assert { node_id: NodeId, value: TypedValue },
-    /// Sequence collect completed → compute diff, persist, propagate.
-    PersistSequence { node_id: NodeId, origin: TrackedDeque<Value> },
+    /// Sequence collect completed → persist via record_sequence_diff, propagate.
+    PersistSequence { node_id: NodeId },
 }
 
 enum PendingRequest {
@@ -259,10 +272,6 @@ pub struct LoopState<'a> {
     /// Node body execution is skipped entirely.
     initial_value_only: bool,
     root: RootProgress,
-    /// TrackedDeque origin checkpoints for bind nodes (Sequence mode).
-    /// Stored when bind node's @self is loaded at spawn time.
-    /// Consumed by CollectSequence after bind finishes.
-    bind_origins: FxHashMap<NodeId, TrackedDeque<Value>>,
 }
 
 impl<'a> LoopState<'a> {
@@ -284,7 +293,6 @@ impl<'a> LoopState<'a> {
                 last_emit: None,
                 finalize_value: None,
             },
-            bind_origins: FxHashMap::default(),
         }
     }
 
@@ -919,28 +927,22 @@ where
 
         match &node.role {
             NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
-                let origin = lp.bind_origins.remove(&node_id).expect(
-                    "bind node for Sequence must have origin from prepare"
-                );
                 let collect_coroutine = collect_sequence_coroutine(value.clone());
                 Ok(NextStep::Eval {
                     _node_id: node_id,
                     source: EvalSource::Coroutine(collect_coroutine),
                     local: FxHashMap::default(),
-                    then: Phase::PersistSequence { node_id, origin },
+                    then: Phase::PersistSequence { node_id },
                 })
             }
             NodeRole::Persistent { mode: PersistMode::Patch, .. } => {
                 let old_value = state.load(node.name, node_name_str);
-                let patch = old_value
+                let diff = old_value
                     .as_ref()
-                    .and_then(|old| PatchDiff::compute(old.value(), value.value()));
+                    .and_then(|old| PatchDiff::compute(old.value(), value.value()))
+                    .unwrap_or_else(|| PatchDiff::set(value.clone()));
                 let ty = node.output_ty.clone();
-                let ops = match patch {
-                    Some(diff) => StorageOps::Patch { diff, ty },
-                    None => StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty },
-                };
-                let stored = state.persist_and_cache(node.name, node_name_str, ops);
+                let stored = state.persist_patch_and_cache(node.name, node_name_str, diff, ty);
                 Ok(NextStep::Propagate { node_id, value: stored })
             }
             _ => {
@@ -971,8 +973,8 @@ where
             Phase::Assert { node_id, value: original_value } => {
                 self.on_assert(node_id, value, original_value, local, lp, state)
             }
-            Phase::PersistSequence { node_id, origin } => {
-                self.on_persist_sequence(node_id, value, origin, lp, state)
+            Phase::PersistSequence { node_id } => {
+                self.on_persist_sequence(node_id, value, lp, state)
             }
         }
     }
@@ -1117,7 +1119,6 @@ where
         &self,
         node_id: NodeId,
         value: TypedValue,
-        origin: TrackedDeque<Value>,
         _lp: &mut LoopState<'_>,
         state: &mut ResolveState<E>,
     ) -> Result<NextStep, ResolveError>
@@ -1129,22 +1130,12 @@ where
         let ty = node.output_ty.clone();
 
         let working_deque = extract_deque(&value, "PersistSequence result");
-        let elem_ty = sequence_elem_ty(&ty);
 
-        let (squashed, diff) = working_deque.into_diff(&origin);
-        let squashed_typed = wrap_deque_items(squashed, elem_ty);
-        let diff_typed = acvus_utils::OwnedDequeDiff {
-            consumed: diff.consumed,
-            removed_back: diff.removed_back,
-            pushed: diff.pushed.into_iter()
-                .map(|v| TypedValue::new(v, elem_ty.clone()))
-                .collect(),
-        };
-
-        let stored_value = state.persist_and_cache(
+        let stored_value = state.persist_sequence_diff_and_cache(
             node.name,
             node_name_str,
-            StorageOps::Sequence { squashed: squashed_typed, diff: diff_typed, ty },
+            working_deque,
+            ty,
         );
 
         info!(node = %node_name_str, "sequence collect + persist complete");
@@ -1591,7 +1582,6 @@ where
             let self_val = match &node.role {
                 NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
                     let deque = extract_deque(&prev, "sequence mode @self");
-                    lp.bind_origins.insert(bind_id, deque.clone());
                     let mut working = deque;
                     working.checkpoint();
                     let sc = acvus_interpreter::SequenceChain::new(working);
@@ -1684,23 +1674,16 @@ where
         let ty = node.output_ty.clone();
         match &node.role {
             NodeRole::Persistent { mode: PersistMode::Sequence, .. } => {
-                // Convert value to TrackedDeque for Sequence storage
+                // Initial persist: extract deque and let storage handle it.
                 let items = extract_deque(value, "Sequence persistency initial value");
-                let elem_ty = sequence_elem_ty(&ty);
-                let squashed = wrap_deque_items(items, elem_ty);
-                let diff = acvus_utils::OwnedDequeDiff {
-                    consumed: 0,
-                    removed_back: 0,
-                    pushed: squashed.as_slice().to_vec(),
-                };
-                state.persist(name_str, StorageOps::Sequence { squashed, diff, ty });
+                state.persist_sequence_diff(name_str, items, ty);
             }
             NodeRole::Persistent { mode: PersistMode::Patch, .. } => {
-                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+                state.persist_patch(name_str, PatchDiff::set(value.clone()), ty);
             }
             _ => {
                 // Standalone with initial_value: persist as Patch
-                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+                state.persist_patch(name_str, PatchDiff::set(value.clone()), ty);
             }
         }
     }
@@ -1768,7 +1751,7 @@ where
             Resolved::Persist(value) => {
                 debug!(name = %name_str, kind = "persist", "external resolver returned");
                 let ty = value.ty().clone();
-                state.persist(name_str, StorageOps::Patch { diff: PatchDiff::set(value.clone()), ty });
+                state.persist_patch(name_str, PatchDiff::set(value.clone()), ty);
                 Ok(value)
             }
         }
@@ -1945,9 +1928,8 @@ where
 fn extract_deque(value: &TypedValue, context: &str) -> TrackedDeque<Value> {
     match value.value() {
         Value::Lazy(LazyValue::Deque(d)) => d.clone(),
-        Value::Lazy(LazyValue::List(items)) => TrackedDeque::from_vec(items.clone()),
         Value::Lazy(LazyValue::Sequence(sc)) => sc.origin().clone(),
-        other => panic!("{context}: expected Deque, List, or Sequence, got {other:?}"),
+        other => panic!("{context}: expected Deque or Sequence, got {other:?}"),
     }
 }
 
@@ -1957,15 +1939,6 @@ fn sequence_elem_ty(ty: &Ty) -> &Ty {
         Ty::Sequence(elem, ..) => elem,
         other => unreachable!("expected Sequence type, got {other:?}"),
     }
-}
-
-/// Wrap raw `Value` items into `TypedValue` items with the given element type.
-fn wrap_deque_items(items: TrackedDeque<Value>, elem_ty: &Ty) -> TrackedDeque<TypedValue> {
-    TrackedDeque::from_vec(
-        items.into_vec().into_iter()
-            .map(|v| TypedValue::new(v, elem_ty.clone()))
-            .collect()
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2060,7 +2033,7 @@ fn collect_sequence_coroutine(seq_value: TypedValue) -> Coroutine<TypedValue, Ru
 
         let deque = sc.collect(&handle).await?;
         // Collected Deque — CollectSequence handler extracts the TrackedDeque
-        // for into_diff, then persists via StorageOps::Sequence.
+        // The result is passed to record_sequence_diff.
         // Use Deque type derived from the Sequence's element type + origin.
         let deque_ty = match &ty {
             Ty::Sequence(elem, origin, _effect) => Ty::Deque(elem.clone(), *origin),

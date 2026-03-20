@@ -175,6 +175,7 @@ pub enum JsConcreteValue {
     Tuple { items: Vec<JsConcreteValue> },
     Byte { v: u8 },
     Variant { tag: std::string::String, payload: Option<Box<JsConcreteValue>> },
+    Sequence { items: Vec<JsConcreteValue> },
 }
 
 impl From<acvus_interpreter::ConcreteValue> for JsConcreteValue {
@@ -200,6 +201,9 @@ impl From<acvus_interpreter::ConcreteValue> for JsConcreteValue {
             CV::Variant { tag, payload } => Self::Variant {
                 tag,
                 payload: payload.map(|p| Box::new((*p).into())),
+            },
+            CV::Sequence { items } => Self::Sequence {
+                items: items.into_iter().map(Into::into).collect(),
             },
         }
     }
@@ -228,6 +232,9 @@ impl From<JsConcreteValue> for acvus_interpreter::ConcreteValue {
             JCV::Variant { tag, payload } => Self::Variant {
                 tag,
                 payload: payload.map(|p| Box::new((*p).into())),
+            },
+            JCV::Sequence { items } => Self::Sequence {
+                items: items.into_iter().map(Into::into).collect(),
             },
         }
     }
