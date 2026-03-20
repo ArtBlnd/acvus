@@ -90,6 +90,9 @@ pub enum MirErrorKind {
         inst_index: usize,
         message: String,
     },
+
+    // Graph engine errors
+    ParseError(String),
 }
 
 impl MirError {
@@ -229,6 +232,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 message,
             } => {
                 write!(f, "[{scope}] inst #{inst_index}: {message}")
+            }
+            MirErrorKind::ParseError(msg) => {
+                write!(f, "parse error: {msg}")
             }
         }
     }

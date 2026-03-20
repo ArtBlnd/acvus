@@ -6,6 +6,7 @@ mod dag;
 mod dsl;
 mod error;
 pub mod http;
+pub mod lower;
 pub(crate) mod spec;
 mod message;
 pub mod node;

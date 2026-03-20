@@ -1,10 +1,12 @@
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Ty, TySubst};
+use acvus_mir::{typecheck_template, check_completeness, lower_checked_template};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 /// Parse a template and compile to MIR, returning the printed IR.
+/// Uses the layered API: typecheck → check_completeness → lower.
 pub fn compile_to_ir(
     interner: &Interner,
     source: &str,
@@ -12,15 +14,22 @@ pub fn compile_to_ir(
 ) -> Result<String, String> {
     let reg = ContextTypeRegistry::all_system(context.clone());
     let template = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e}"))?;
-    let (module, _hints) = acvus_mir::compile(interner, &template, &reg)
-    .map_err(|errors| {
-        errors
-            .iter()
-            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    let mut subst = TySubst::new();
+    let unchecked = typecheck_template(interner, &template, &reg, &mut subst)
+        .map_err(|errors| format_errors(&errors, interner))?;
+    let checked = check_completeness(unchecked, &subst)
+        .map_err(|errors| format_errors(&errors, interner))?;
+    let (module, _hints) = lower_checked_template(interner, &template, checked)
+        .map_err(|errors| format_errors(&errors, interner))?;
     Ok(dump_with(interner, &module))
+}
+
+fn format_errors(errors: &[acvus_mir::error::MirError], interner: &Interner) -> String {
+    errors
+        .iter()
+        .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Shorthand: compile with empty context.

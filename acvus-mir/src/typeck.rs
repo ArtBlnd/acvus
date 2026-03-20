@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use acvus_ast::{
     BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
@@ -21,6 +23,65 @@ pub type BuiltinMap = FxHashMap<Span, BuiltinId>;
 /// Maps expression spans to the coercion needed at that point.
 /// Produced by the type checker, consumed by the lowerer.
 pub type CoercionMap = Vec<(Span, CastKind)>;
+
+// ── TypeResolution: boundary between TypeChecker and Lowerer ──────────
+
+/// Marker: unresolved type variables may remain (SCC unit, not yet complete).
+#[derive(Debug)]
+pub struct Unchecked;
+
+/// Marker: no unresolved type variables (completeness verified).
+#[derive(Debug)]
+pub struct Checked;
+
+/// Result of type checking a single script or template.
+///
+/// `S = Unchecked`: produced by `typecheck_script` / `typecheck_template`.
+///   May contain unresolved type variables — other units in the same SCC
+///   may resolve them before `check_completeness` is called.
+///
+/// `S = Checked`: produced by `check_completeness`. All type variables resolved.
+///   Only `Checked` resolutions can be lowered to MIR.
+#[derive(Debug)]
+pub struct TypeResolution<S = Checked> {
+    pub type_map: TypeMap,
+    pub builtin_map: BuiltinMap,
+    pub coercion_map: CoercionMap,
+    pub tail_ty: Ty,
+    _marker: PhantomData<S>,
+}
+
+impl<S> TypeResolution<S> {
+    fn new(type_map: TypeMap, builtin_map: BuiltinMap, coercion_map: CoercionMap, tail_ty: Ty) -> Self {
+        Self { type_map, builtin_map, coercion_map, tail_ty, _marker: PhantomData }
+    }
+}
+
+/// Check completeness: verify no unresolved type variables remain,
+/// re-resolve the type_map with the final TySubst state, and promote
+/// to `Checked`.
+///
+/// Call this after all units in an SCC have been typechecked, so that
+/// cross-unit type variable bindings are reflected.
+pub fn check_completeness(
+    resolution: TypeResolution<Unchecked>,
+    subst: &TySubst,
+) -> Result<TypeResolution<Checked>, Vec<MirError>> {
+    let tail_ty = subst.resolve(&resolution.tail_ty);
+    if contains_var(&tail_ty) {
+        return Err(vec![MirError {
+            kind: MirErrorKind::AmbiguousType { resolved_ty: tail_ty },
+            span: Span::ZERO,
+        }]);
+    }
+    // Re-resolve type_map: other units in the SCC may have resolved
+    // type variables that were unresolved when this unit was typechecked.
+    let type_map = resolution.type_map
+        .into_iter()
+        .map(|(span, ty)| (span, subst.resolve(&ty)))
+        .collect();
+    Ok(TypeResolution::new(type_map, resolution.builtin_map, resolution.coercion_map, tail_ty))
+}
 
 struct LambdaScope {
     depth: usize,
@@ -195,6 +256,81 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .map(|(span, ty)| (*span, self.subst.resolve(ty)))
             .collect();
         Ok((resolved, self.builtin_map, self.coercion_map, resolved_tail))
+    }
+
+    /// Type check a script without the unresolved var check.
+    /// Returns `TypeResolution<Unchecked>` — suitable for SCC units where
+    /// other units may resolve remaining type variables.
+    ///
+    /// Call `check_completeness` after all SCC units are typechecked.
+    pub fn check_script_to_resolution(
+        mut self,
+        script: &acvus_ast::Script,
+        expected_tail: Option<&Ty>,
+    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+        for stmt in &script.stmts {
+            match stmt {
+                acvus_ast::Stmt::Bind { name, expr, span } => {
+                    let ty = self.check_expr(false, expr);
+                    self.define_var(*name, ty.clone());
+                    self.record(*span, ty);
+                }
+                acvus_ast::Stmt::Expr(expr) => {
+                    self.check_expr(false, expr);
+                }
+            }
+        }
+        let tail_ty = match &script.tail {
+            Some(expr) => self.check_expr(false, expr),
+            None => Ty::Unit,
+        };
+        if let Some(expected) = expected_tail {
+            let tail_span = script
+                .tail
+                .as_ref()
+                .map(|e| e.span())
+                .unwrap_or(acvus_ast::Span::ZERO);
+            if self.unify_covariant(&tail_ty, expected, tail_span).is_err() {
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: self.subst.resolve(expected),
+                        got: self.subst.resolve(&tail_ty),
+                    },
+                    tail_span,
+                );
+            }
+        }
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+        // Resolve type_map with current subst state.
+        // Note: type variables from other SCC units may still be unresolved.
+        // check_completeness will re-resolve after the full SCC is done.
+        let resolved_tail = self.subst.resolve(&tail_ty);
+        let resolved: TypeMap = self
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .collect();
+        Ok(TypeResolution::new(resolved, self.builtin_map, self.coercion_map, resolved_tail))
+    }
+
+    /// Type check a template without the unresolved var check.
+    /// Returns `TypeResolution<Unchecked>`.
+    pub fn check_template_to_resolution(
+        mut self,
+        template: &Template,
+    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+        self.check_nodes(&template.body);
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+        let resolved: TypeMap = self
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .collect();
+        Ok(TypeResolution::new(resolved, self.builtin_map, self.coercion_map, Ty::Unit))
     }
 
     /// Like `check_template`, but always returns a (partial) TypeMap and collects errors separately.
@@ -1576,7 +1712,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     }
 }
 
-fn contains_var(ty: &Ty) -> bool {
+pub(crate) fn contains_var(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
         Ty::Infer(_) | Ty::Error(_) => false,

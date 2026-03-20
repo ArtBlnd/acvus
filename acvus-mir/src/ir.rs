@@ -380,3 +380,23 @@ pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, Arc<ClosureBody>>,
 }
+
+impl MirModule {
+    /// Extract all context keys (ContextLoad names) referenced by this module.
+    pub fn extract_context_keys(&self) -> rustc_hash::FxHashSet<Astr> {
+        let mut keys = rustc_hash::FxHashSet::default();
+        for inst in &self.main.insts {
+            if let InstKind::ContextLoad { name, .. } = &inst.kind {
+                keys.insert(*name);
+            }
+        }
+        for closure in self.closures.values() {
+            for inst in &closure.body.insts {
+                if let InstKind::ContextLoad { name, .. } = &inst.kind {
+                    keys.insert(*name);
+                }
+            }
+        }
+        keys
+    }
+}

@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod builtins;
 pub mod context_registry;
 pub mod error;
+pub mod graph;
 pub mod hints;
 pub mod ir;
 pub mod lower;
@@ -15,6 +16,7 @@ pub mod validate;
 pub mod variant;
 
 pub use pass::AnalysisPass;
+pub use typeck::{TypeResolution, Unchecked, Checked, check_completeness};
 
 use acvus_ast::{Script, Template};
 use acvus_utils::Interner;
@@ -90,6 +92,71 @@ pub fn compile_script_with_hint_subst(
     }
     Ok((module, hints, tail_ty))
 }
+
+// ── New layered API ──────────────────────────────────────────────────
+//
+// Layer 1: typecheck only → TypeResolution<Unchecked>
+// Bridge:  check_completeness → TypeResolution<Checked>
+// Layer 2: lower → MirModule
+//
+// These replace the monolithic compile_* functions above.
+
+/// Layer 1: Type check a script. Returns TypeResolution<Unchecked>.
+/// Unresolved type variables are allowed — call check_completeness after
+/// all SCC units are typechecked.
+pub fn typecheck_script(
+    interner: &Interner,
+    script: &Script,
+    registry: &ContextTypeRegistry,
+    expected_tail: Option<&Ty>,
+    subst: &mut TySubst,
+) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+    let checker = TypeChecker::new(interner, registry.merged(), subst);
+    checker.check_script_to_resolution(script, expected_tail)
+}
+
+/// Layer 1: Type check a template. Returns TypeResolution<Unchecked>.
+pub fn typecheck_template(
+    interner: &Interner,
+    template: &Template,
+    registry: &ContextTypeRegistry,
+    subst: &mut TySubst,
+) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+    let checker = TypeChecker::new(interner, registry.merged(), subst);
+    checker.check_template_to_resolution(template)
+}
+
+/// Layer 2: Lower a checked script to MIR. Only accepts TypeResolution<Checked>.
+pub fn lower_checked_script(
+    interner: &Interner,
+    script: &Script,
+    resolution: TypeResolution<Checked>,
+) -> Result<(MirModule, HintTable), Vec<MirError>> {
+    let lowerer = Lowerer::new(interner, resolution.type_map, resolution.builtin_map, resolution.coercion_map);
+    let (module, hints) = lowerer.lower_script(script);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
+    Ok((module, hints))
+}
+
+/// Layer 2: Lower a checked template to MIR. Only accepts TypeResolution<Checked>.
+pub fn lower_checked_template(
+    interner: &Interner,
+    template: &Template,
+    resolution: TypeResolution<Checked>,
+) -> Result<(MirModule, HintTable), Vec<MirError>> {
+    let lowerer = Lowerer::new(interner, resolution.type_map, resolution.builtin_map, resolution.coercion_map);
+    let (module, hints) = lowerer.lower_template(template);
+    let validation_errors = validate::validate(&module);
+    if !validation_errors.is_empty() {
+        return Err(validation_errors.into_iter().map(|e| e.into_mir_error()).collect());
+    }
+    Ok((module, hints))
+}
+
+// ── Legacy API (to be removed in Step 6) ────────────────────────────
 
 /// Compile a template in analysis mode: unknown `@context` refs get fresh
 /// type variables instead of errors, enabling partial type inference.
@@ -191,7 +258,10 @@ mod tests {
         registry: &ContextTypeRegistry,
     ) -> Result<(MirModule, HintTable), Vec<MirError>> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        compile(interner, &template, registry)
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_template(interner, &template, registry, &mut subst)?;
+        let checked = check_completeness(unchecked, &subst)?;
+        lower_checked_template(interner, &template, checked)
     }
 
     fn empty_registry() -> ContextTypeRegistry {
@@ -407,14 +477,29 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn compile_script_src(
+        interner: &Interner,
+        script: &acvus_ast::Script,
+        registry: &ContextTypeRegistry,
+    ) -> Result<(MirModule, HintTable, Ty), Vec<MirError>> {
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(interner, script, registry, None, &mut subst)?;
+        let checked = check_completeness(unchecked, &subst)?;
+        let tail_ty = checked.tail_ty.clone();
+        let (module, hints) = lower_checked_script(interner, script, checked)?;
+        Ok((module, hints, tail_ty))
+    }
+
     fn compile_script_test(source: &str) -> MirModule {
         let i = Interner::new();
         let script = acvus_ast::parse_script(&i, source).unwrap();
         let registry = ContextTypeRegistry::all_system(
             FxHashMap::from_iter([(i.intern("data"), Ty::String)]),
         );
-        let (module, _, _) = compile_script(&i, &script, &registry)
-            .unwrap();
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(&i, &script, &registry, None, &mut subst).unwrap();
+        let checked = check_completeness(unchecked, &subst).unwrap();
+        let (module, _) = lower_checked_script(&i, &script, checked).unwrap();
         module
     }
 
@@ -519,7 +604,7 @@ mod tests {
     fn script_extern_fn_call_ok() {
         let (i, reg) = extern_fn_context();
         let script = acvus_ast::parse_script(&i, "@mapper(1)").unwrap();
-        let result = compile_script(&i, &script, &reg);
+        let result = compile_script_src(&i, &script, &reg);
         assert!(result.is_ok(), "script extern fn call should work: {result:?}");
     }
 
@@ -528,7 +613,7 @@ mod tests {
     fn script_bare_extern_fn_ok() {
         let (i, reg) = extern_fn_context();
         let script = acvus_ast::parse_script(&i, "@mapper").unwrap();
-        let result = compile_script(&i, &script, &reg);
+        let result = compile_script_src(&i, &script, &reg);
         assert!(result.is_ok(), "script bare extern fn should succeed (Lazy tier): {result:?}");
     }
 
@@ -551,7 +636,89 @@ mod tests {
         ]);
         let reg = ContextTypeRegistry::all_system(ctx);
         let script = acvus_ast::parse_script(&i, "@items | @mapper").unwrap();
-        let result = compile_script(&i, &script, &reg);
+        let result = compile_script_src(&i, &script, &reg);
         assert!(result.is_ok(), "script pipe extern fn should work: {result:?}");
+    }
+
+    // ── Layered API tests ───────────────────────────────────────────
+
+    #[test]
+    fn layer_typecheck_produces_unchecked() {
+        let i = Interner::new();
+        let reg = empty_registry();
+        let script = acvus_ast::parse_script(&i, "1 + 2").unwrap();
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(&i, &script, &reg, None, &mut subst);
+        assert!(unchecked.is_ok());
+        let unchecked = unchecked.unwrap();
+        assert_eq!(unchecked.tail_ty, Ty::Int);
+    }
+
+    #[test]
+    fn layer_check_completeness_promotes() {
+        let i = Interner::new();
+        let reg = empty_registry();
+        let script = acvus_ast::parse_script(&i, "1 + 2").unwrap();
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(&i, &script, &reg, None, &mut subst).unwrap();
+        let checked = check_completeness(unchecked, &subst);
+        assert!(checked.is_ok());
+    }
+
+    #[test]
+    fn layer_lower_checked_succeeds() {
+        let i = Interner::new();
+        let reg = empty_registry();
+        let script = acvus_ast::parse_script(&i, "1 + 2").unwrap();
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(&i, &script, &reg, None, &mut subst).unwrap();
+        let checked = check_completeness(unchecked, &subst).unwrap();
+        let result = lower_checked_script(&i, &script, checked);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn layer_shared_subst_resolves_across_units() {
+        // SCC scenario: two scripts share a TySubst.
+        // Script 1: `[]` — element type unknown (Unchecked has unresolved var)
+        // Script 2: `@data` — resolves to String
+        // After both typecheck, the shared subst has enough info.
+        let i = Interner::new();
+        let reg = ContextTypeRegistry::all_system(
+            FxHashMap::from_iter([(i.intern("data"), Ty::String)]),
+        );
+        let mut subst = TySubst::new();
+
+        // Script 1: `[]` with hint = List<Var> (element type unknown)
+        let hint_elem = subst.fresh_var();
+        let hint = Ty::List(Box::new(hint_elem.clone()));
+        let script1 = acvus_ast::parse_script(&i, "[]").unwrap();
+        let unchecked1 = typecheck_script(&i, &script1, &reg, Some(&hint), &mut subst).unwrap();
+
+        // At this point, element type is unresolved.
+        assert!(
+            crate::typeck::contains_var(&subst.resolve(&unchecked1.tail_ty)),
+            "element type should be unresolved after script 1 alone"
+        );
+
+        // Script 2: `@data` — resolves hint_elem to String via unification
+        let script2 = acvus_ast::parse_script(&i, "@data").unwrap();
+        let _unchecked2 = typecheck_script(&i, &script2, &reg, Some(&hint_elem), &mut subst).unwrap();
+
+        // Now check_completeness on script 1 should succeed — var resolved by script 2.
+        let checked1 = check_completeness(unchecked1, &subst);
+        assert!(checked1.is_ok(), "should resolve after shared subst: {checked1:?}");
+    }
+
+    #[test]
+    fn layer_unresolved_var_rejected_by_completeness() {
+        // `[]` without any hint → element type unresolved → check_completeness fails.
+        let i = Interner::new();
+        let reg = empty_registry();
+        let script = acvus_ast::parse_script(&i, "[]").unwrap();
+        let mut subst = TySubst::new();
+        let unchecked = typecheck_script(&i, &script, &reg, None, &mut subst).unwrap();
+        let checked = check_completeness(unchecked, &subst);
+        assert!(checked.is_err(), "unresolved var should be rejected");
     }
 }

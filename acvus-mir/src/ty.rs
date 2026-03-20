@@ -197,6 +197,20 @@ impl Ty {
         matches!(self, Ty::Error(_))
     }
 
+    /// Extract the element type from a collection type.
+    /// Returns `None` if this is not a collection.
+    /// Single source of truth for "what is a collection's element type"
+    /// (principle 6-A: one fact, one place).
+    pub fn elem_of(&self) -> Option<&Ty> {
+        match self {
+            Ty::List(elem)
+            | Ty::Deque(elem, _)
+            | Ty::Iterator(elem, _)
+            | Ty::Sequence(elem, _, _) => Some(elem),
+            _ => None,
+        }
+    }
+
     /// Returns true if this type can be represented as a `PureValue` at runtime.
     /// Non-pure types (Fn, Opaque) can only be used in restricted contexts (e.g. call-only).
     #[deprecated(note = "use purity() or is_pureable()")]
