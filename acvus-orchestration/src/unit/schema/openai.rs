@@ -67,21 +67,21 @@ pub struct RequestToolCallFunction {
     pub arguments: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Tool {
     #[serde(rename = "type")]
     pub tool_type: String,
     pub function: FunctionDecl,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct FunctionDecl {
     pub name: String,
     pub description: String,
     pub parameters: FunctionParams,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct FunctionParams {
     #[serde(rename = "type")]
     pub schema_type: String,

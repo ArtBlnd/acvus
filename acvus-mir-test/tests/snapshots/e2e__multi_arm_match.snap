@@ -3,31 +3,46 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "admin"
-  T1 = "user"
-  T2 = "guest"
+  T0 = ""
+  T1 = "admin"
+  T2 = "user"
+  T3 = "guest"
 
 === main ===
-     0 │   r0 = context_load @role
-     1 │ L2:
-     2 │   r1 = test r0 == "admin"
-     3 │   jump_if r1 then L4 else L3
-     4 │ L4:
-     6 │   yield T0
-     7 │   jump L0
-     8 │ L3:
-     9 │   r3 = test r0 == "user"
-    10 │   jump_if r3 then L5 else L1
-    11 │ L5:
-    13 │   yield T1
-    14 │   jump L0
-    15 │ L1:
-    17 │   yield T2
-    18 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @role
+     2 │   r2 = context_load r1
+     3 │ L2:
+     4 │   r3 = test r2 == "admin"
+     5 │   jump_if r3 then L4 else L3
+     6 │ L4:
+     9 │   r6 = T0 + T1
+    10 │   jump L0(r6)
+    11 │ L3:
+    12 │   r7 = test r2 == "user"
+    13 │   jump_if r7 then L5 else L1
+    14 │ L5:
+    17 │   r10 = T0 + T2
+    18 │   jump L0(r10)
+    19 │ L1:
+    22 │   r13 = T0 + T3
+    23 │   jump L0(r13)
+    24 │ L0(r14: String):  ; merge_of L2
+    25 │   r15 = T0 + r14
+    26 │   return r15
 
-    ; r0 (@role) : String
-    ; r1 (v1) : Bool
+    ; r0 (v0) : String
+    ; r1 (@role) : String
     ; r2 (v2) : String
     ; r3 (v3) : Bool
     ; r4 (v4) : String
     ; r5 (v5) : String
+    ; r6 (v6) : String
+    ; r7 (v7) : Bool
+    ; r8 (v8) : String
+    ; r9 (v9) : String
+    ; r10 (v10) : String
+    ; r11 (v11) : String
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : String
+    ; r15 (v15) : String

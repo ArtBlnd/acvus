@@ -65,7 +65,6 @@ enum ExecutionModeDef {
     #[default]
     Always,
     OncePerTurn,
-    IfModified,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -213,17 +212,6 @@ pub fn resolve_node(
     let execution = match def.strategy.execution.mode {
         ExecutionModeDef::Always => Execution::Always,
         ExecutionModeDef::OncePerTurn => Execution::OncePerTurn,
-        ExecutionModeDef::IfModified => {
-            let key = resolve_template(
-                base_dir,
-                def.strategy.execution.key.as_deref(),
-                def.strategy.execution.inline_key.as_deref(),
-            )
-            .map_err(|e| format!("node '{}': if-modified execution: {e}", def.name))?;
-            Execution::IfModified {
-                key: interner.intern(&key),
-            }
-        }
     };
 
     let max_tokens = MaxTokens {

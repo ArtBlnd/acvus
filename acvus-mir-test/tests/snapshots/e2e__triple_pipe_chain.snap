@@ -2,33 +2,44 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @items
-     1 │   r1 = call iter(r0)
-     2 │   r2 = closure L0 []
-     3 │   r3 = call filter(r1, r2)
-     4 │   r4 = closure L1 []
-     5 │   r5 = call map(r3, r4)
-     6 │   r6 = closure L2 []
-     7 │   r7 = call map(r5, r6)
-     8 │   r8 = call collect(r7)
-     9 │   r9 = call len(r8)
-    10 │   r10 = call to_string(r9)
-    11 │   yield r10
+=== literals ===
+  T0 = ""
 
-    ; r0 (@items) : List<Int>
-    ; r1 (iter(...)) : Iterator<Int>
-    ; r2 (v2) : Fn(Int) -> Bool
-    ; r3 (filter(...)) : Iterator<Int>
-    ; r4 (v4) : Fn(Int) -> Int
-    ; r5 (map(...)) : Iterator<Int>
+=== main ===
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = poison
+     4 │   r4 = closure L0 []
+     5 │   r5 = poison
+     6 │   r6 = closure L1 []
+     7 │   r7 = poison
+     8 │   r8 = closure L2 []
+     9 │   r9 = poison
+    10 │   r10 = poison
+    12 │   r12 = T0 + T0
+    13 │   r13 = poison
+    14 │   r14 = poison
+    15 │   r15 = r12 + r14
+    16 │   return r15
+
+    ; r0 (v0) : String
+    ; r1 (@items) : List<Int>
+    ; r2 (v2) : List<Int>
+    ; r3 (iter(...)) : Iterator<Int>
+    ; r4 (v4) : Fn(Int) -> Bool
+    ; r5 (filter(...)) : Iterator<Int>
     ; r6 (v6) : Fn(Int) -> Int
     ; r7 (map(...)) : Iterator<Int>
-    ; r8 (collect(...)) : List<Int>
-    ; r9 (len(...)) : Int
-    ; r10 (to_string(...)) : String
+    ; r8 (v8) : Fn(Int) -> Int
+    ; r9 (map(...)) : Iterator<Int>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (v11) : String
+    ; r12 (v12) : String
+    ; r13 (len(...)) : Int
+    ; r14 (to_string(...)) : String
+    ; r15 (v15) : String
 
-=== closure L0 (i) ===
+=== closure L0 (ValueId(0)) ===
      1 │   r2 = r0 != 0 (r1)
      2 │   return r2
 
@@ -36,7 +47,7 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (v2) : Bool
 
-=== closure L1 (i) ===
+=== closure L1 (ValueId(0)) ===
      1 │   r2 = r0 + 1 (r1)
      2 │   return r2
 
@@ -44,7 +55,7 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (v2) : Int
 
-=== closure L2 (i) ===
+=== closure L2 (ValueId(0)) ===
      1 │   r2 = r0 * 2 (r1)
      2 │   return r2
 

@@ -2,11 +2,24 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     1 │   r1 = extern_call get_user(1 (r0))
-     2 │   r2 = r1.name
-     3 │   yield r2
+=== literals ===
+  T0 = ""
 
-    ; r0 (v0) : Int
-    ; r1 (get_user(...)) : {age: Int, name: String}
-    ; r2 (name) : String
+=== main ===
+     2 │   r3 = context_project @get_user
+     3 │   r4 = context_load r3
+     4 │   r2 = call r4(1 (r1))
+     6 │   r6 = T0 + T0
+     7 │   r7 = r2.name
+     8 │   r8 = r6 + r7
+     9 │   return r8
+
+    ; r0 (v0) : String
+    ; r1 (v1) : Int
+    ; r2 (<closure>(...)) : {age: Int, name: String}
+    ; r3 (@get_user) : Fn(Int) -> {age: Int, name: String}
+    ; r4 (v4) : Fn(Int) -> {age: Int, name: String}
+    ; r5 (v5) : String
+    ; r6 (v6) : String
+    ; r7 (name) : String
+    ; r8 (v8) : String

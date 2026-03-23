@@ -63,7 +63,13 @@ pub(crate) fn try_extract_known(
         return None;
     }
     let script = acvus_ast::parse_script(interner, source).ok()?;
-    let (module, _, _) = acvus_mir::compile_script_analysis(interner, &script, registry).ok()?;
+    let mut subst = acvus_mir::ty::TySubst::new();
+    let checker = acvus_mir::typeck::TypeChecker::new(interner, registry.merged(), &mut subst)
+        .with_analysis_mode();
+    let (type_map, builtin_map, coercion_map, _tail) =
+        checker.check_script_with_hint(&script, None).ok()?;
+    let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(registry.merged()));
+    let (module, _hints) = lowerer.lower_script(&script);
     // Look for a Const or MakeVariant instruction in the main body
     for inst in &module.main.insts {
         match &inst.kind {
@@ -128,15 +134,23 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                     }.into_ts()?.js_value());
                 }
             };
-            match acvus_mir::compile_analysis(&interner, &ast, &full_reg) {
-                Ok((module, _)) => module,
-                Err(errs) => {
-                    return Ok(EvaluateResult {
-                        ok: false,
-                        errors: EngineError::from_mir_errors(&errs, &interner),
-                        value: None,
-                    }.into_ts()?.js_value());
-                }
+            {
+                let mut subst = acvus_mir::ty::TySubst::new();
+                let checker = acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
+                    .with_analysis_mode();
+                let (type_map, builtin_map, coercion_map) = match checker.check_template(&ast) {
+                    Ok(r) => r,
+                    Err(errs) => {
+                        return Ok(EvaluateResult {
+                            ok: false,
+                            errors: EngineError::from_mir_errors(&errs, &interner),
+                            value: None,
+                        }.into_ts()?.js_value());
+                    }
+                };
+                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(full_reg.merged()));
+                let (module, _) = lowerer.lower_template(&ast);
+                module
             }
         }
         Mode::Script => {
@@ -150,26 +164,37 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                     }.into_ts()?.js_value());
                 }
             };
-            match acvus_mir::compile_script_analysis(&interner, &script, &full_reg) {
-                Ok((module, _, _)) => module,
-                Err(errs) => {
-                    return Ok(EvaluateResult {
-                        ok: false,
-                        errors: EngineError::from_mir_errors(&errs, &interner),
-                        value: None,
-                    }.into_ts()?.js_value());
-                }
+            {
+                let mut subst = acvus_mir::ty::TySubst::new();
+                let checker = acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
+                    .with_analysis_mode();
+                let (type_map, builtin_map, coercion_map, _tail) = match checker.check_script_with_hint(&script, None) {
+                    Ok(r) => r,
+                    Err(errs) => {
+                        return Ok(EvaluateResult {
+                            ok: false,
+                            errors: EngineError::from_mir_errors(&errs, &interner),
+                            value: None,
+                        }.into_ts()?.js_value());
+                    }
+                };
+                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(full_reg.merged()));
+                let (module, _) = lowerer.lower_script(&script);
+                module
             }
         }
     };
 
-    // Build context values
-    let ctx: FxHashMap<Astr, acvus_interpreter::TypedValue> = options.context
+    // Build context values — use the same merged context types used for compilation.
+    let name_to_id = acvus_mir::build_name_to_id(full_reg.merged());
+    let ctx: FxHashMap<acvus_mir::graph::Id, acvus_interpreter::TypedValue> = options.context
         .into_iter()
-        .map(|(k, v)| {
+        .filter_map(|(k, v)| {
             let ty = jcv_to_ty(&interner, &v);
             let cv: acvus_interpreter::ConcreteValue = v.into();
-            (interner.intern(&k), acvus_interpreter::TypedValue::from_concrete(&cv, &interner, ty))
+            let astr = interner.intern(&k);
+            let id = name_to_id.get(&astr).copied()?;
+            Some((id, acvus_interpreter::TypedValue::from_concrete(&cv, &interner, ty)))
         })
         .collect();
 

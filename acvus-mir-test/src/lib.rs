@@ -1,44 +1,72 @@
-use acvus_mir::context_registry::ContextTypeRegistry;
+use acvus_mir::graph::{extract, resolve, lower as graph_lower};
+use acvus_mir::graph::*;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::{Ty, TySubst};
-use acvus_mir::{typecheck_template, check_completeness, lower_checked_template};
-use acvus_utils::{Astr, Interner};
+use acvus_mir::ty::{Param, Ty};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
-/// Parse a template and compile to MIR, returning the printed IR.
-/// Uses the layered API: typecheck → check_completeness → lower.
+/// Parse a template and compile to MIR via the graph pipeline, returning the printed IR.
 pub fn compile_to_ir(
     interner: &Interner,
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
-    let reg = ContextTypeRegistry::all_system(context.clone());
-    let template = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e}"))?;
-    let mut subst = TySubst::new();
-    let unchecked = typecheck_template(interner, &template, &reg, &mut subst)
-        .map_err(|errors| format_errors(&errors, interner))?;
-    let checked = check_completeness(unchecked, &subst)
-        .map_err(|errors| format_errors(&errors, interner))?;
-    let (module, _hints) = lower_checked_template(interner, &template, checked)
-        .map_err(|errors| format_errors(&errors, interner))?;
-    Ok(dump_with(interner, &module))
+    compile_to_ir_with(interner, source, context, &[])
 }
 
-fn format_errors(errors: &[acvus_mir::error::MirError], interner: &Interner) -> String {
-    errors
-        .iter()
-        .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Compile a template with both contexts and extern functions.
+pub fn compile_to_ir_with(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    extern_fns: &[Function],
+) -> Result<String, String> {
+    let ctx: Vec<(&str, Ty)> = context.iter()
+        .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
+        .collect();
+    let contexts: Vec<Context> = ctx.iter().map(|(name, ty)| Context {
+        id: ContextId::alloc(),
+        name: interner.intern(name),
+        constraint: Constraint::Exact(ty.clone()),
+    }).collect();
+    let mut functions = vec![Function {
+        id: FunctionId::alloc(),
+        name: interner.intern("test"),
+        kind: FnKind::Local(SourceCode {
+            name: interner.intern("test"),
+            source: interner.intern(source),
+            kind: SourceKind::Template,
+        }),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+        },
+    }];
+    functions.extend_from_slice(extern_fns);
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+    };
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(interner, &graph, &ext);
+    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    if result.has_errors() {
+        let errs: Vec<String> = result.errors.iter()
+            .flat_map(|e| e.errors.iter())
+            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
+            .collect();
+        return Err(errs.join("\n"));
+    }
+    let uid = graph.functions[0].id;
+    let module = result.module(uid)
+        .ok_or_else(|| "no module produced".to_string())?;
+    Ok(dump_with(interner, module))
 }
 
 /// Shorthand: compile with empty context.
 pub fn compile_simple(interner: &Interner, source: &str) -> Result<String, String> {
-    compile_to_ir(
-        interner,
-        source,
-        &FxHashMap::default(),
-    )
+    compile_to_ir(interner, source, &FxHashMap::default())
 }
 
 /// Common context types for tests.
@@ -65,4 +93,50 @@ pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
 
 pub fn items_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))])
+}
+
+/// Compile a **script** source via the graph pipeline and return printed IR.
+pub fn compile_script_ir(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+) -> Result<String, String> {
+    let contexts: Vec<Context> = context.iter()
+        .map(|(name, ty)| Context {
+            id: ContextId::alloc(),
+            name: *name,
+            constraint: Constraint::Exact(ty.clone()),
+        })
+        .collect();
+    let graph = CompilationGraph {
+        functions: Freeze::new(vec![Function {
+            id: FunctionId::alloc(),
+            name: interner.intern("test"),
+            kind: FnKind::Local(SourceCode {
+                name: interner.intern("test"),
+                source: interner.intern(source),
+                kind: SourceKind::Script,
+            }),
+            constraint: FnConstraint {
+                signature: None,
+                output: Constraint::Inferred,
+            },
+        }]),
+        contexts: Freeze::new(contexts),
+    };
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(interner, &graph, &ext);
+    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    if result.has_errors() {
+        let errs: Vec<String> = result.errors.iter()
+            .flat_map(|e| e.errors.iter())
+            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
+            .collect();
+        return Err(errs.join("\n"));
+    }
+    let uid = graph.functions[0].id;
+    let module = result.module(uid)
+        .ok_or_else(|| "no module produced".to_string())?;
+    Ok(dump_with(interner, module))
 }

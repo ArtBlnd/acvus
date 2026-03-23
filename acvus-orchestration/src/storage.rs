@@ -70,26 +70,23 @@ impl PatchDiff {
     /// Keyed values produce `Rec` diffs; all other values produce `Set`.
     pub fn compute(old: &Value, new: &Value) -> Option<Self> {
         match (old, new) {
-            (
-                Value::Lazy(LazyValue::Object(old_f)),
-                Value::Lazy(LazyValue::Object(new_f)),
-            ) => {
+            (Value::Lazy(LazyValue::Object(old_f)), Value::Lazy(LazyValue::Object(new_f))) => {
                 let mut updates = FxHashMap::default();
                 let mut removals = Vec::new();
 
                 for (key, new_val) in new_f {
                     match old_f.get(key) {
                         Some(old_val) if old_val == new_val => {}
-                        Some(old_val) => {
-                            match Self::compute(old_val, new_val) {
-                                Some(nested) => { updates.insert(*key, nested); }
-                                None => {
-                                    if old_val != new_val {
-                                        updates.insert(*key, PatchDiff::Set(new_val.clone()));
-                                    }
+                        Some(old_val) => match Self::compute(old_val, new_val) {
+                            Some(nested) => {
+                                updates.insert(*key, nested);
+                            }
+                            None => {
+                                if old_val != new_val {
+                                    updates.insert(*key, PatchDiff::Set(new_val.clone()));
                                 }
                             }
-                        }
+                        },
                         None => {
                             updates.insert(*key, PatchDiff::Set(new_val.clone()));
                         }
@@ -109,7 +106,11 @@ impl PatchDiff {
                 }
             }
             _ => {
-                if old == new { None } else { Some(PatchDiff::Set(new.clone())) }
+                if old == new {
+                    None
+                } else {
+                    Some(PatchDiff::Set(new.clone()))
+                }
             }
         }
     }
@@ -133,10 +134,8 @@ impl PatchDiff {
             PatchDiff::Set(v) => v,
             PatchDiff::Rec { updates, removals } => {
                 let mut fields = existing
-                    .and_then(|v| match v {
-                        Value::Lazy(LazyValue::Object(f)) => Some(f.clone()),
-                        _ => None,
-                    })
+                    .and_then(|v| v.try_expect_ref::<FxHashMap<Astr, Value>>())
+                    .cloned()
                     .unwrap_or_default();
                 for (k, diff) in updates {
                     let old = fields.get(&k).cloned();
@@ -393,10 +392,7 @@ impl TreeJournal {
         }
 
         Self {
-            inner: TreeJournalInner {
-                nodes,
-                uuid_to_idx,
-            },
+            inner: TreeJournalInner { nodes, uuid_to_idx },
         }
     }
 }
@@ -446,7 +442,10 @@ impl TreeJournal {
                     .iter()
                     .filter_map(|&child_idx| {
                         let child = &inner.nodes[child_idx];
-                        inner.uuid_to_idx.contains_key(&child.uuid).then_some(child.uuid)
+                        inner
+                            .uuid_to_idx
+                            .contains_key(&child.uuid)
+                            .then_some(child.uuid)
                     })
                     .collect();
                 if children.len() > 1 {
@@ -481,8 +480,14 @@ impl TreeJournal {
 }
 
 impl Journal for TreeJournal {
-    type Ref<'a> = TreeEntryRef<'a> where Self: 'a;
-    type Mut<'a> = TreeEntryMut<'a> where Self: 'a;
+    type Ref<'a>
+        = TreeEntryRef<'a>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = TreeEntryMut<'a>
+    where
+        Self: 'a;
 
     async fn entry(&self, id: Uuid) -> Result<TreeEntryRef<'_>, JournalError> {
         let idx = self.inner.uuid_to_idx[&id];
@@ -502,7 +507,9 @@ impl Journal for TreeJournal {
 
     fn parent_of(&self, id: Uuid) -> Option<Uuid> {
         let idx = self.inner.uuid_to_idx[&id];
-        self.inner.nodes[idx].parent.map(|pidx| self.inner.nodes[pidx].uuid)
+        self.inner.nodes[idx]
+            .parent
+            .map(|pidx| self.inner.nodes[pidx].uuid)
     }
 
     fn contains(&self, id: Uuid) -> bool {
@@ -553,7 +560,10 @@ impl<'a> EntryRef<'a> for TreeEntryRef<'a> {
 }
 
 impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
-    type Ref<'x> = TreeEntryRef<'x> where 'a: 'x;
+    type Ref<'x>
+        = TreeEntryRef<'x>
+    where
+        'a: 'x;
 
     fn get(&self, key: &str) -> Option<TypedValue> {
         let node = &self.inner.nodes[self.idx];
@@ -618,7 +628,9 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
 
         // Subsequent turn: into_diff verifies checksum, extracts diff.
         let existing_tv = existing.unwrap();
-        let sc = existing_tv.value().expect_ref::<SequenceChain>("record_sequence_diff");
+        let sc = existing_tv
+            .value()
+            .expect_ref::<SequenceChain>("record_sequence_diff");
         let origin = sc.origin();
         let (squashed, _diff) = working.into_diff(origin);
 
@@ -656,15 +668,16 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         inner.nodes[parent_idx].children.push(new_idx);
         inner.uuid_to_idx.insert(new_uuid, new_idx);
 
-        Ok(TreeEntryMut { inner, idx: new_idx })
+        Ok(TreeEntryMut {
+            inner,
+            idx: new_idx,
+        })
     }
 
     async fn fork(self) -> Result<Self, JournalError> {
         let sibling_idx = self.idx;
         let inner = self.inner;
-        let parent_idx = inner.nodes[sibling_idx]
-            .parent
-            .expect("cannot fork root");
+        let parent_idx = inner.nodes[sibling_idx].parent.expect("cannot fork root");
 
         let parent_node = &inner.nodes[parent_idx];
         let mut merged = (*parent_node.accumulated).clone();
@@ -687,7 +700,10 @@ impl<'a> EntryMut<'a> for TreeEntryMut<'a> {
         inner.nodes[parent_idx].children.push(new_idx);
         inner.uuid_to_idx.insert(new_uuid, new_idx);
 
-        Ok(TreeEntryMut { inner, idx: new_idx })
+        Ok(TreeEntryMut {
+            inner,
+            idx: new_idx,
+        })
     }
 
     fn prune(self, mode: Prune) {
@@ -762,18 +778,17 @@ mod tests {
     async fn collect_seq(sc: SequenceChain) -> Vec<Value> {
         let mut co = acvus_utils::coroutine(move |handle| async move {
             let deque = sc.collect(&handle).await.expect("collect failed");
-            handle.yield_val(TypedValue::new(
-                Value::deque(deque),
-                Ty::error(),
-            )).await;
+            handle
+                .yield_val(TypedValue::new(Value::deque(deque), Ty::error()))
+                .await;
             Ok::<(), acvus_interpreter::RuntimeError>(())
         });
         let (mut co, stepped) = co.step().await;
         match stepped {
             acvus_utils::Stepped::Emit(tv) => {
-                let Value::Lazy(LazyValue::Deque(d)) = tv.into_inner() else {
-                    panic!("expected Deque from collect");
-                };
+                let d = tv
+                    .into_inner()
+                    .expect::<TrackedDeque<Value>>("expected Deque from collect");
                 d.into_vec()
             }
             _ => panic!("expected Emit from collect coroutine"),
@@ -786,11 +801,18 @@ mod tests {
     async fn apply_and_get() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.record_patch("x", PatchDiff::set(TypedValue::string("hello".to_string())), Ty::error());
-        assert!(matches!(
-            e.get("x").unwrap().value(),
-            Value::Pure(PureValue::String(v)) if v == "hello"
-        ));
+        e.record_patch(
+            "x",
+            PatchDiff::set(TypedValue::string("hello".to_string())),
+            Ty::error(),
+        );
+        assert_eq!(
+            e.get("x")
+                .unwrap()
+                .value()
+                .expect_ref::<str>("expected String"),
+            "hello"
+        );
         assert!(e.get("y").is_none());
     }
 
@@ -799,7 +821,11 @@ mod tests {
         let interner = Interner::new();
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.record_patch("x", PatchDiff::set(TypedValue::string("first")), Ty::error());
+        e.record_patch(
+            "x",
+            PatchDiff::set(TypedValue::string("first")),
+            Ty::error(),
+        );
         e.record_patch(
             "x",
             PatchDiff::set(TypedValue::new(
@@ -811,7 +837,10 @@ mod tests {
             )),
             Ty::error(),
         );
-        assert!(matches!(e.get("x").unwrap().value(), Value::Lazy(LazyValue::Object(_))));
+        assert!(matches!(
+            e.get("x").unwrap().value(),
+            Value::Lazy(LazyValue::Object(_))
+        ));
     }
 
     fn seq_ty() -> Ty {
@@ -822,7 +851,11 @@ mod tests {
     async fn sequence_stored_as_sequence_value() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
+        e.record_sequence_diff(
+            "q",
+            TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]),
+            seq_ty(),
+        );
         let val = e.get("q").unwrap();
         let sc = val.value().expect_ref::<SequenceChain>("expected Sequence");
         assert_eq!(sc.origin().as_slice(), &[Value::int(1), Value::int(2)]);
@@ -847,13 +880,19 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]), seq_ty());
+            e.record_sequence_diff(
+                "q",
+                TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]),
+                seq_ty(),
+            );
         }
         // Next turn — value should be in accumulated as Sequence
         {
             let e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             let val = e.get("q").unwrap();
-            let sc = val.value().expect_ref::<SequenceChain>("expected Sequence after next");
+            let sc = val
+                .value()
+                .expect_ref::<SequenceChain>("expected Sequence after next");
             assert_eq!(sc.origin().as_slice(), &[Value::int(10), Value::int(20)]);
         }
     }
@@ -878,17 +917,20 @@ mod tests {
             Ty::error(),
         );
         let diff = PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100))), (c, PatchDiff::Set(Value::int(3)))]),
+            updates: FxHashMap::from_iter([
+                (a, PatchDiff::Set(Value::int(100))),
+                (c, PatchDiff::Set(Value::int(3))),
+            ]),
             removals: vec![b],
         };
         e.record_patch("obj", diff, Ty::error());
         let val = e.get("obj").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
-            panic!("expected Object")
-        };
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(100))));
+        let fields = val
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        assert_eq!(fields.get(&a), Some(&Value::int(100)));
         assert_eq!(fields.get(&b), None);
-        assert_eq!(fields.get(&c), Some(&Value::Pure(PureValue::Int(3))));
+        assert_eq!(fields.get(&c), Some(&Value::int(3)));
     }
 
     #[tokio::test]
@@ -903,10 +945,10 @@ mod tests {
         };
         e.record_patch("obj", diff, Ty::error());
         let val = e.get("obj").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = val.value() else {
-            panic!("expected Object")
-        };
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(42))));
+        let fields = val
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        assert_eq!(fields.get(&a), Some(&Value::int(42)));
     }
 
     // --- Tree structure tests ---
@@ -950,23 +992,38 @@ mod tests {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // n2 should see parent's values via accumulated
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
-            assert!(matches!(e.get("y").unwrap().value(), Value::Pure(PureValue::Int(2))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
+            assert!(matches!(
+                e.get("y").unwrap().value(),
+                Value::Pure(PureValue::Int(2))
+            ));
 
             // Modifying n2 doesn't affect n1
             e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(99))
+            ));
         }
 
         // n1 still has original value
         {
             let e = j.entry(n1).await.unwrap();
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
         }
         // n2 has the override
         {
             let e = j.entry(n2).await.unwrap();
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(99))
+            ));
         }
     }
 
@@ -993,7 +1050,10 @@ mod tests {
             let e = j.entry_mut(n2).await.unwrap().fork().await.unwrap();
             assert_eq!(e.depth(), 2);
             // Sees n1's accumulated (x=1), not n2's turn_diff (x=2)
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
         }
     }
 
@@ -1070,16 +1130,28 @@ mod tests {
         }
 
         // Both see parent's data
-        assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
-        assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(
+            j.entry(n2).await.unwrap().get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(1))
+        ));
+        assert!(matches!(
+            j.entry(n3).await.unwrap().get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(1))
+        ));
 
         // Modifying one doesn't affect the other
         {
             let mut e = j.entry_mut(n2).await.unwrap();
             e.record_patch("x", PatchDiff::set(TypedValue::int(99)), Ty::error());
         }
-        assert!(matches!(j.entry(n2).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(99))));
-        assert!(matches!(j.entry(n3).await.unwrap().get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(
+            j.entry(n2).await.unwrap().get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(99))
+        ));
+        assert!(matches!(
+            j.entry(n3).await.unwrap().get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(1))
+        ));
     }
 
     #[tokio::test]
@@ -1096,10 +1168,16 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // x=1 is in accumulated
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
             // Now override in turn_diff
             e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(2))
+            ));
         }
     }
 
@@ -1108,7 +1186,12 @@ mod tests {
     // =========================================================================
 
     fn obj_i(interner: &Interner, fields: &[(&str, Value)]) -> Value {
-        Value::object(fields.iter().map(|(k, v)| (interner.intern(k), v.clone())).collect())
+        Value::object(
+            fields
+                .iter()
+                .map(|(k, v)| (interner.intern(k), v.clone()))
+                .collect(),
+        )
     }
 
     #[test]
@@ -1125,8 +1208,17 @@ mod tests {
         let new = obj_i(&i, &[("a", Value::int(2))]);
         let diff = PatchDiff::compute(&old, &new).expect("should have diff");
         let a = i.intern("a");
-        let PatchDiff::Rec { ref updates, ref removals } = diff else { panic!("expected Rec") };
-        assert!(matches!(updates.get(&a), Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))));
+        let PatchDiff::Rec {
+            ref updates,
+            ref removals,
+        } = diff
+        else {
+            panic!("expected Rec")
+        };
+        assert!(matches!(
+            updates.get(&a),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))
+        ));
         assert!(removals.is_empty());
     }
 
@@ -1137,8 +1229,17 @@ mod tests {
         let new = obj_i(&i, &[("a", Value::int(1)), ("b", Value::int(2))]);
         let diff = PatchDiff::compute(&old, &new).expect("should have diff");
         let b = i.intern("b");
-        let PatchDiff::Rec { ref updates, ref removals } = diff else { panic!("expected Rec") };
-        assert!(matches!(updates.get(&b), Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))));
+        let PatchDiff::Rec {
+            ref updates,
+            ref removals,
+        } = diff
+        else {
+            panic!("expected Rec")
+        };
+        assert!(matches!(
+            updates.get(&b),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))
+        ));
         assert!(removals.is_empty());
     }
 
@@ -1149,7 +1250,13 @@ mod tests {
         let new = obj_i(&i, &[("a", Value::int(1))]);
         let diff = PatchDiff::compute(&old, &new).expect("should have diff");
         let b = i.intern("b");
-        let PatchDiff::Rec { ref updates, ref removals } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec {
+            ref updates,
+            ref removals,
+        } = diff
+        else {
+            panic!("expected Rec")
+        };
         assert!(updates.is_empty());
         assert!(removals.contains(&b));
     }
@@ -1157,49 +1264,85 @@ mod tests {
     #[test]
     fn compute_nested_object_recursive() {
         let i = Interner::new();
-        let old = obj_i(&i, &[
-            ("x", Value::int(1)),
-            ("nested", obj_i(&i, &[("a", Value::int(10)), ("b", Value::int(20))])),
-        ]);
-        let new = obj_i(&i, &[
-            ("x", Value::int(1)),
-            ("nested", obj_i(&i, &[("a", Value::int(10)), ("b", Value::int(99))])),
-        ]);
+        let old = obj_i(
+            &i,
+            &[
+                ("x", Value::int(1)),
+                (
+                    "nested",
+                    obj_i(&i, &[("a", Value::int(10)), ("b", Value::int(20))]),
+                ),
+            ],
+        );
+        let new = obj_i(
+            &i,
+            &[
+                ("x", Value::int(1)),
+                (
+                    "nested",
+                    obj_i(&i, &[("a", Value::int(10)), ("b", Value::int(99))]),
+                ),
+            ],
+        );
         let diff = PatchDiff::compute(&old, &new).expect("should have diff");
         let nested = i.intern("nested");
-        let PatchDiff::Rec { ref updates, .. } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec { ref updates, .. } = diff else {
+            panic!("expected Rec")
+        };
         // x is identical → not in updates
         assert!(!updates.contains_key(&i.intern("x")));
         // nested should be Rec, not Set
         let nested_diff = updates.get(&nested).expect("missing nested");
-        let PatchDiff::Rec { updates: inner_updates, .. } = nested_diff else { panic!("expected Rec") };
+        let PatchDiff::Rec {
+            updates: inner_updates,
+            ..
+        } = nested_diff
+        else {
+            panic!("expected Rec")
+        };
         let b = i.intern("b");
-        assert!(matches!(inner_updates.get(&b), Some(PatchDiff::Set(Value::Pure(PureValue::Int(99))))));
+        assert!(matches!(
+            inner_updates.get(&b),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(99))))
+        ));
         assert!(!inner_updates.contains_key(&i.intern("a"))); // a unchanged
     }
 
     #[test]
     fn compute_deeply_nested_3_levels() {
         let i = Interner::new();
-        let old = obj_i(&i, &[
-            ("l1", obj_i(&i, &[
-                ("l2", obj_i(&i, &[("l3", Value::int(1))])),
-            ])),
-        ]);
-        let new = obj_i(&i, &[
-            ("l1", obj_i(&i, &[
-                ("l2", obj_i(&i, &[("l3", Value::int(2))])),
-            ])),
-        ]);
+        let old = obj_i(
+            &i,
+            &[(
+                "l1",
+                obj_i(&i, &[("l2", obj_i(&i, &[("l3", Value::int(1))]))]),
+            )],
+        );
+        let new = obj_i(
+            &i,
+            &[(
+                "l1",
+                obj_i(&i, &[("l2", obj_i(&i, &[("l3", Value::int(2))]))]),
+            )],
+        );
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
         // l1 → Rec → l2 → Rec → l3 → Set(2)
         let l1 = i.intern("l1");
         let l2 = i.intern("l2");
         let l3 = i.intern("l3");
-        let PatchDiff::Rec { updates, .. } = &diff else { panic!("expected Rec") };
-        let PatchDiff::Rec { updates: u1, .. } = updates.get(&l1).unwrap() else { panic!("l1 not Rec") };
-        let PatchDiff::Rec { updates: u2, .. } = u1.get(&l2).unwrap() else { panic!("l2 not Rec") };
-        assert!(matches!(u2.get(&l3), Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))));
+        let PatchDiff::Rec { updates, .. } = &diff else {
+            panic!("expected Rec")
+        };
+        let PatchDiff::Rec { updates: u1, .. } = updates.get(&l1).unwrap() else {
+            panic!("l1 not Rec")
+        };
+        let PatchDiff::Rec { updates: u2, .. } = u1.get(&l2).unwrap() else {
+            panic!("l2 not Rec")
+        };
+        assert!(matches!(
+            u2.get(&l3),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))
+        ));
     }
 
     #[test]
@@ -1207,7 +1350,10 @@ mod tests {
         // Non-Object different values return Some(PatchDiff::Set(...))
         let old = Value::int(1);
         let new = Value::int(2);
-        assert!(matches!(PatchDiff::compute(&old, &new), Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))));
+        assert!(matches!(
+            PatchDiff::compute(&old, &new),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(2))))
+        ));
     }
 
     #[test]
@@ -1225,8 +1371,13 @@ mod tests {
         let new = obj_i(&i, &[("x", Value::int(42))]);
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
         let x = i.intern("x");
-        let PatchDiff::Rec { ref updates, .. } = diff else { panic!("expected Rec") };
-        assert!(matches!(updates.get(&x), Some(PatchDiff::Set(Value::Pure(PureValue::Int(42))))));
+        let PatchDiff::Rec { ref updates, .. } = diff else {
+            panic!("expected Rec")
+        };
+        assert!(matches!(
+            updates.get(&x),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(42))))
+        ));
     }
 
     #[test]
@@ -1236,7 +1387,9 @@ mod tests {
         let new = obj_i(&i, &[("x", obj_i(&i, &[("a", Value::int(2))]))]);
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
         let x = i.intern("x");
-        let PatchDiff::Rec { ref updates, .. } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec { ref updates, .. } = diff else {
+            panic!("expected Rec")
+        };
         // Int → Object: can't recurse, must be Set
         match updates.get(&x) {
             Some(PatchDiff::Set(Value::Lazy(LazyValue::Object(_)))) => {}
@@ -1257,7 +1410,9 @@ mod tests {
         let old = obj_i(&i, &[]);
         let new = obj_i(&i, &[("a", Value::int(1))]);
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
-        let PatchDiff::Rec { ref updates, .. } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec { ref updates, .. } = diff else {
+            panic!("expected Rec")
+        };
         assert_eq!(updates.len(), 1);
     }
 
@@ -1267,7 +1422,13 @@ mod tests {
         let old = obj_i(&i, &[("a", Value::int(1))]);
         let new = obj_i(&i, &[]);
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
-        let PatchDiff::Rec { ref updates, ref removals } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec {
+            ref updates,
+            ref removals,
+        } = diff
+        else {
+            panic!("expected Rec")
+        };
         assert!(updates.is_empty());
         assert_eq!(removals.len(), 1);
     }
@@ -1279,7 +1440,9 @@ mod tests {
         let new = obj_i(&i, &[("name", Value::string("bob".to_string()))]);
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
         let name = i.intern("name");
-        let PatchDiff::Rec { ref updates, .. } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec { ref updates, .. } = diff else {
+            panic!("expected Rec")
+        };
         match updates.get(&name) {
             Some(PatchDiff::Set(Value::Pure(PureValue::String(s)))) => assert_eq!(s, "bob"),
             other => panic!("expected Set(String), got {:?}", other),
@@ -1289,18 +1452,44 @@ mod tests {
     #[test]
     fn compute_mixed_add_remove_update() {
         let i = Interner::new();
-        let old = obj_i(&i, &[("a", Value::int(1)), ("b", Value::int(2)), ("c", Value::int(3))]);
-        let new = obj_i(&i, &[("a", Value::int(1)), ("b", Value::int(99)), ("d", Value::int(4))]);
+        let old = obj_i(
+            &i,
+            &[
+                ("a", Value::int(1)),
+                ("b", Value::int(2)),
+                ("c", Value::int(3)),
+            ],
+        );
+        let new = obj_i(
+            &i,
+            &[
+                ("a", Value::int(1)),
+                ("b", Value::int(99)),
+                ("d", Value::int(4)),
+            ],
+        );
         let diff = PatchDiff::compute(&old, &new).expect("should diff");
-        let PatchDiff::Rec { ref updates, ref removals } = diff else { panic!("expected Rec") };
+        let PatchDiff::Rec {
+            ref updates,
+            ref removals,
+        } = diff
+        else {
+            panic!("expected Rec")
+        };
         // a: unchanged
         assert!(!updates.contains_key(&i.intern("a")));
         // b: updated
-        assert!(matches!(updates.get(&i.intern("b")), Some(PatchDiff::Set(Value::Pure(PureValue::Int(99))))));
+        assert!(matches!(
+            updates.get(&i.intern("b")),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(99))))
+        ));
         // c: removed
         assert!(removals.contains(&i.intern("c")));
         // d: added
-        assert!(matches!(updates.get(&i.intern("d")), Some(PatchDiff::Set(Value::Pure(PureValue::Int(4))))));
+        assert!(matches!(
+            updates.get(&i.intern("d")),
+            Some(PatchDiff::Set(Value::Pure(PureValue::Int(4))))
+        ));
     }
 
     // =========================================================================
@@ -1319,7 +1508,7 @@ mod tests {
         };
         let result = diff.apply(Some(&existing), Ty::error());
         let result_fields = get_obj_fields(&result);
-        assert_eq!(result_fields.get(&a), Some(&Value::Pure(PureValue::Int(2))));
+        assert_eq!(result_fields.get(&a), Some(&Value::int(2)));
     }
 
     #[test]
@@ -1328,25 +1517,32 @@ mod tests {
         let a = i.intern("a");
         let b = i.intern("b");
         let nested_key = i.intern("nested");
-        let fields = FxHashMap::from_iter([
-            (nested_key, Value::object(FxHashMap::from_iter([
+        let fields = FxHashMap::from_iter([(
+            nested_key,
+            Value::object(FxHashMap::from_iter([
                 (a, Value::int(1)),
                 (b, Value::int(2)),
-            ]))),
-        ]);
+            ])),
+        )]);
         let existing = TypedValue::new(Value::object(fields), Ty::error());
         let diff = PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(nested_key, PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(99)))]),
-                removals: vec![],
-            })]),
+            updates: FxHashMap::from_iter([(
+                nested_key,
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(99)))]),
+                    removals: vec![],
+                },
+            )]),
             removals: vec![],
         };
         let result = diff.apply(Some(&existing), Ty::error());
         let result_fields = get_obj_fields(&result);
-        let Value::Lazy(LazyValue::Object(inner)) = result_fields.get(&nested_key).unwrap() else { panic!() };
-        assert_eq!(inner.get(&a), Some(&Value::Pure(PureValue::Int(1)))); // unchanged
-        assert_eq!(inner.get(&b), Some(&Value::Pure(PureValue::Int(99)))); // updated
+        let inner = result_fields
+            .get(&nested_key)
+            .unwrap()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected nested Object");
+        assert_eq!(inner.get(&a), Some(&Value::int(1))); // unchanged
+        assert_eq!(inner.get(&b), Some(&Value::int(99))); // updated
     }
 
     #[test]
@@ -1372,16 +1568,22 @@ mod tests {
         let x = i.intern("x");
         let a = i.intern("a");
         let diff = PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(x, PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
-                removals: vec![],
-            })]),
+            updates: FxHashMap::from_iter([(
+                x,
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
+                    removals: vec![],
+                },
+            )]),
             removals: vec![],
         };
         let result = diff.apply(None, Ty::error());
         let result_fields = get_obj_fields(&result);
-        let Value::Lazy(LazyValue::Object(inner)) = result_fields.get(&x).unwrap() else { panic!() };
-        assert_eq!(inner.get(&a), Some(&Value::Pure(PureValue::Int(1))));
+        let inner = result_fields
+            .get(&x)
+            .unwrap()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected nested Object");
+        assert_eq!(inner.get(&a), Some(&Value::int(1)));
     }
 
     // =========================================================================
@@ -1393,9 +1595,15 @@ mod tests {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
         e.record_patch("x", PatchDiff::set(TypedValue::int(1)), Ty::error());
-        assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+        assert!(matches!(
+            e.get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(1))
+        ));
         e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
-        assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
+        assert!(matches!(
+            e.get("x").unwrap().value(),
+            Value::Pure(PureValue::Int(2))
+        ));
     }
 
     #[tokio::test]
@@ -1410,12 +1618,18 @@ mod tests {
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             e.record_patch("x", PatchDiff::set(TypedValue::int(2)), Ty::error());
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(2))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(2))
+            ));
         }
         // Going back to n1 → should see value 1, not 2
         {
             let e = j.entry(n1).await.unwrap();
-            assert!(matches!(e.get("x").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(
+                e.get("x").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
         }
     }
 
@@ -1423,14 +1637,17 @@ mod tests {
     async fn snapshot_string_value() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.record_patch("msg", PatchDiff::set(TypedValue::new(
-            Value::string("hello".to_string()),
-            Ty::String,
-        )), Ty::error());
-        match e.get("msg").unwrap().value() {
-            Value::Pure(PureValue::String(s)) => assert_eq!(s, "hello"),
-            other => panic!("expected String, got {:?}", other),
-        }
+        e.record_patch(
+            "msg",
+            PatchDiff::set(TypedValue::new(
+                Value::string("hello".to_string()),
+                Ty::String,
+            )),
+            Ty::error(),
+        );
+        let msg = e.get("msg").clone().unwrap();
+        let s = msg.value().expect_ref::<str>("expected String");
+        assert_eq!(s, "hello");
     }
 
     // =========================================================================
@@ -1441,7 +1658,11 @@ mod tests {
     async fn sequence_stores_as_sequence() {
         let (mut j, root) = TreeJournal::new();
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
-        e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
+        e.record_sequence_diff(
+            "seq",
+            TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]),
+            seq_ty(),
+        );
         let val = e.get("seq").unwrap();
         assert!(matches!(val.value(), Value::Lazy(LazyValue::Sequence(_))));
         assert!(matches!(val.ty(), Ty::Sequence(..)));
@@ -1463,27 +1684,42 @@ mod tests {
         // Initial: {a: 1, inner: {b: 10}}
         let initial = Value::object(FxHashMap::from_iter([
             (a, Value::int(1)),
-            (inner_key, Value::object(FxHashMap::from_iter([(b, Value::int(10))]))),
+            (
+                inner_key,
+                Value::object(FxHashMap::from_iter([(b, Value::int(10))])),
+            ),
         ]));
-        e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::set(TypedValue::new(initial, Ty::error())),
+            Ty::error(),
+        );
 
         // Patch: inner.b = 99 (recursive)
         let diff = PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(inner_key, PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(99)))]),
-                removals: vec![],
-            })]),
+            updates: FxHashMap::from_iter([(
+                inner_key,
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(99)))]),
+                    removals: vec![],
+                },
+            )]),
             removals: vec![],
         };
         e.record_patch("state", diff, Ty::error());
 
         let val = e.get("state").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!("expected Object") };
+        let fields = val
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
         // a unchanged
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
+        assert_eq!(fields.get(&a), Some(&Value::int(1)));
         // inner.b = 99
-        let Value::Lazy(LazyValue::Object(inner)) = fields.get(&inner_key).unwrap() else { panic!("expected inner Object") };
-        assert_eq!(inner.get(&b), Some(&Value::Pure(PureValue::Int(99))));
+        let inner = fields
+            .get(&inner_key)
+            .unwrap()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected inner Object");
+        assert_eq!(inner.get(&b), Some(&Value::int(99)));
     }
 
     #[tokio::test]
@@ -1501,7 +1737,11 @@ mod tests {
                 (a, Value::int(1)),
                 (b, Value::int(2)),
             ]));
-            e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
+            e.record_patch(
+                "state",
+                PatchDiff::set(TypedValue::new(initial, Ty::error())),
+                Ty::error(),
+            );
         }
 
         let n2;
@@ -1520,18 +1760,22 @@ mod tests {
         {
             let e = j.entry(n2).await.unwrap();
             let val = e.get("state").unwrap();
-            let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-            assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(10))));
-            assert_eq!(fields.get(&b), Some(&Value::Pure(PureValue::Int(2))));
+            let fields = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(fields.get(&a), Some(&Value::int(10)));
+            assert_eq!(fields.get(&b), Some(&Value::int(2)));
         }
 
         // At n1: a=1, b=2 (history preserved!)
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("state").unwrap();
-            let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-            assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
-            assert_eq!(fields.get(&b), Some(&Value::Pure(PureValue::Int(2))));
+            let fields = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(fields.get(&a), Some(&Value::int(1)));
+            assert_eq!(fields.get(&b), Some(&Value::int(2)));
         }
     }
 
@@ -1548,25 +1792,39 @@ mod tests {
             (a, Value::int(1)),
             (b, Value::int(2)),
         ]));
-        e.record_patch("state", PatchDiff::set(TypedValue::new(initial, Ty::error())), Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::set(TypedValue::new(initial, Ty::error())),
+            Ty::error(),
+        );
 
         // First patch: update a
-        e.record_patch("state", PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
-            removals: vec![],
-        }, Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::Rec {
+                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(10)))]),
+                removals: vec![],
+            },
+            Ty::error(),
+        );
 
         // Second patch: add c, remove b
-        e.record_patch("state", PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(3)))]),
-            removals: vec![b],
-        }, Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::Rec {
+                updates: FxHashMap::from_iter([(c, PatchDiff::Set(Value::int(3)))]),
+                removals: vec![b],
+            },
+            Ty::error(),
+        );
 
         let val = e.get("state").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(10))));
+        let fields = val
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        assert_eq!(fields.get(&a), Some(&Value::int(10)));
         assert_eq!(fields.get(&b), None);
-        assert_eq!(fields.get(&c), Some(&Value::Pure(PureValue::Int(3))));
+        assert_eq!(fields.get(&c), Some(&Value::int(3)));
     }
 
     #[tokio::test]
@@ -1576,14 +1834,20 @@ mod tests {
         let a = interner.intern("a");
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
-        e.record_patch("new_obj", PatchDiff::Rec {
-            updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
-            removals: vec![],
-        }, Ty::error());
+        e.record_patch(
+            "new_obj",
+            PatchDiff::Rec {
+                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(42)))]),
+                removals: vec![],
+            },
+            Ty::error(),
+        );
 
         let val = e.get("new_obj").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(42))));
+        let fields = val
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        assert_eq!(fields.get(&a), Some(&Value::int(42)));
     }
 
     #[tokio::test]
@@ -1601,20 +1865,26 @@ mod tests {
             (c, Value::int(3)),
         ]));
         let new_val = Value::object(FxHashMap::from_iter([
-            (a, Value::int(1)),    // unchanged
-            (b, Value::int(99)),   // changed
-            // c removed
+            (a, Value::int(1)), // unchanged
+            (b, Value::int(99)), // changed
+                                // c removed
         ]));
 
-        e.record_patch("state", PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())),
+            Ty::error(),
+        );
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
         e.record_patch("state", diff, Ty::error());
 
         let result = e.get("state").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
-        assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
-        assert_eq!(fields.get(&b), Some(&Value::Pure(PureValue::Int(99))));
+        let fields = result
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        assert_eq!(fields.get(&a), Some(&Value::int(1)));
+        assert_eq!(fields.get(&b), Some(&Value::int(99)));
         assert_eq!(fields.get(&c), None);
     }
 
@@ -1627,50 +1897,61 @@ mod tests {
         let y = interner.intern("y");
         let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
 
-        let old_val = Value::object(FxHashMap::from_iter([
-            (a, Value::object(FxHashMap::from_iter([
+        let old_val = Value::object(FxHashMap::from_iter([(
+            a,
+            Value::object(FxHashMap::from_iter([
                 (x, Value::int(1)),
                 (y, Value::int(2)),
-            ]))),
-        ]));
-        let new_val = Value::object(FxHashMap::from_iter([
-            (a, Value::object(FxHashMap::from_iter([
-                (x, Value::int(1)),   // unchanged
-                (y, Value::int(99)),  // changed
-            ]))),
-        ]));
+            ])),
+        )]));
+        let new_val = Value::object(FxHashMap::from_iter([(
+            a,
+            Value::object(FxHashMap::from_iter([
+                (x, Value::int(1)),  // unchanged
+                (y, Value::int(99)), // changed
+            ])),
+        )]));
 
-        e.record_patch("state", PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())), Ty::error());
+        e.record_patch(
+            "state",
+            PatchDiff::set(TypedValue::new(old_val.clone(), Ty::error())),
+            Ty::error(),
+        );
 
         let diff = PatchDiff::compute(&old_val, &new_val).expect("should have diff");
         // The diff should be Rec, not Set for the whole object
-        assert!(matches!(&diff, PatchDiff::Rec { updates, .. } if matches!(updates.get(&a), Some(PatchDiff::Rec { .. }))));
+        assert!(
+            matches!(&diff, PatchDiff::Rec { updates, .. } if matches!(updates.get(&a), Some(PatchDiff::Rec { .. })))
+        );
         e.record_patch("state", diff, Ty::error());
 
         let result = e.get("state").unwrap();
-        let Value::Lazy(LazyValue::Object(fields)) = result.value() else { panic!() };
-        let Value::Lazy(LazyValue::Object(inner)) = fields.get(&a).unwrap() else { panic!() };
-        assert_eq!(inner.get(&x), Some(&Value::Pure(PureValue::Int(1))));
-        assert_eq!(inner.get(&y), Some(&Value::Pure(PureValue::Int(99))));
+        let fields = result
+            .value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+        let inner = fields
+            .get(&a)
+            .unwrap()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected nested Object");
+        assert_eq!(inner.get(&x), Some(&Value::int(1)));
+        assert_eq!(inner.get(&y), Some(&Value::int(99)));
     }
 
     // =========================================================================
     // Sequence — diff-only storage, history accumulation, undo
     // =========================================================================
 
-
     async fn get_seq_values(val: TypedValue) -> Vec<Value> {
-        let Value::Lazy(LazyValue::Sequence(sc)) = val.into_inner() else {
-            panic!("expected Sequence");
-        };
+        let sc = val
+            .into_inner()
+            .expect::<SequenceChain>("expected Sequence");
         collect_seq(sc).await
     }
 
     fn get_obj_fields(val: &TypedValue) -> FxHashMap<Astr, Value> {
-        let Value::Lazy(LazyValue::Object(f)) = val.value() else {
-            panic!("expected Object");
-        };
-        f.clone()
+        val.value()
+            .expect_ref::<FxHashMap<Astr, Value>>("expected Object")
+            .clone()
     }
 
     #[tokio::test]
@@ -1681,10 +1962,23 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             // Initial: [1, 2]
-            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
+            e.record_sequence_diff(
+                "q",
+                TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]),
+                seq_ty(),
+            );
         }
         {
-            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Append 3
             let mut working = sc;
@@ -1711,10 +2005,23 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2), Value::int(3)]), seq_ty());
+            e.record_sequence_diff(
+                "q",
+                TrackedDeque::from_vec(vec![Value::int(1), Value::int(2), Value::int(3)]),
+                seq_ty(),
+            );
         }
         {
-            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Consumed 1 from front
             let mut working = sc;
@@ -1741,10 +2048,23 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]), seq_ty());
+            e.record_sequence_diff(
+                "q",
+                TrackedDeque::from_vec(vec![Value::int(10), Value::int(20)]),
+                seq_ty(),
+            );
         }
         {
-            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             // Consume 1 + append 30
             let mut working = sc;
@@ -1775,7 +2095,16 @@ mod tests {
         }
         let n2;
         {
-            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             let mut working = sc;
@@ -1785,7 +2114,16 @@ mod tests {
         }
         let n3;
         {
-            let sc = j.entry(n2).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n2)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             let mut working = sc;
@@ -1797,13 +2135,19 @@ mod tests {
         {
             let e = j.entry(n3).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(3)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2), Value::int(3)]
+            );
         }
         // n2: [1, 2]
         {
             let e = j.entry(n2).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2)]
+            );
         }
         // n1: [1]
         {
@@ -1823,7 +2167,16 @@ mod tests {
             e.record_sequence_diff("q", TrackedDeque::from_vec(vec![]), seq_ty());
         }
         {
-            let sc = j.entry(n1).await.unwrap().get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             let mut working = sc;
             working.checkpoint();
@@ -1846,12 +2199,22 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            e.record_sequence_diff("q", TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]), seq_ty());
+            e.record_sequence_diff(
+                "q",
+                TrackedDeque::from_vec(vec![Value::int(1), Value::int(2)]),
+                seq_ty(),
+            );
         }
         let origin;
         {
             let e = j.entry(n1).await.unwrap();
-            origin = e.get("q").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            origin = e
+                .get("q")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
         }
         // Fork: two children from n1
         let branch_a;
@@ -1876,19 +2239,28 @@ mod tests {
         {
             let e = j.entry(branch_a).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(100)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2), Value::int(100)]
+            );
         }
         // branch_b: [1, 2, 200]
         {
             let e = j.entry(branch_b).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2), Value::int(200)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2), Value::int(200)]
+            );
         }
         // n1: still [1, 2]
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("q").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2)]
+            );
         }
     }
 
@@ -1909,7 +2281,16 @@ mod tests {
             e.record_sequence_diff("log", TrackedDeque::from_vec(vec![Value::int(1)]), seq_ty());
         }
         {
-            let sc = j.entry(n1).await.unwrap().get("log").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("log")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             e.record_patch("counter", PatchDiff::set(TypedValue::int(1)), Ty::error());
             let mut working = sc;
@@ -1917,14 +2298,23 @@ mod tests {
             working.push(Value::int(2));
             e.record_sequence_diff("log", working, seq_ty());
             // counter=1, log=[1,2]
-            assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(1))));
+            assert!(matches!(
+                e.get("counter").unwrap().value(),
+                Value::Pure(PureValue::Int(1))
+            ));
             let val = e.get("log").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(1), Value::int(2)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(1), Value::int(2)]
+            );
         }
         // Back to n1: counter=0, log=[1]
         {
             let e = j.entry(n1).await.unwrap();
-            assert!(matches!(e.get("counter").unwrap().value(), Value::Pure(PureValue::Int(0))));
+            assert!(matches!(
+                e.get("counter").unwrap().value(),
+                Value::Pure(PureValue::Int(0))
+            ));
             let val = e.get("log").unwrap();
             assert_eq!(get_seq_values(val).await, vec![Value::int(1)]);
         }
@@ -1940,19 +2330,36 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let state = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.record_patch("state", PatchDiff::set(TypedValue::new(state, Ty::error())), Ty::error());
+            e.record_patch(
+                "state",
+                PatchDiff::set(TypedValue::new(state, Ty::error())),
+                Ty::error(),
+            );
             e.record_sequence_diff("log", TrackedDeque::from_vec(vec![]), seq_ty());
         }
         let n2;
         {
-            let sc = j.entry(n1).await.unwrap().get("log").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("log")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             // Patch state.a = 1
-            e.record_patch("state", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "state",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
             // Append to log
             let mut working = sc;
             working.checkpoint();
@@ -1963,8 +2370,10 @@ mod tests {
         {
             let e = j.entry(n2).await.unwrap();
             let val = e.get("state").unwrap();
-            let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-            assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(1))));
+            let fields = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(fields.get(&a), Some(&Value::int(1)));
             let val = e.get("log").unwrap();
             assert_eq!(get_seq_values(val).await, vec![Value::int(100)]);
         }
@@ -1972,8 +2381,10 @@ mod tests {
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("state").unwrap();
-            let Value::Lazy(LazyValue::Object(fields)) = val.value() else { panic!() };
-            assert_eq!(fields.get(&a), Some(&Value::Pure(PureValue::Int(0))));
+            let fields = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(fields.get(&a), Some(&Value::int(0)));
             let val = e.get("log").unwrap();
             assert_eq!(get_seq_values(val).await, Vec::<Value>::new());
         }
@@ -1989,13 +2400,30 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             e.record_patch("snap", PatchDiff::set(TypedValue::int(0)), Ty::error());
-            e.record_sequence_diff("seq", TrackedDeque::from_vec(vec![Value::int(10)]), seq_ty());
+            e.record_sequence_diff(
+                "seq",
+                TrackedDeque::from_vec(vec![Value::int(10)]),
+                seq_ty(),
+            );
             let obj = Value::object(FxHashMap::from_iter([(x, Value::int(100))]));
-            e.record_patch("patch_obj", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
+            e.record_patch(
+                "patch_obj",
+                PatchDiff::set(TypedValue::new(obj, Ty::error())),
+                Ty::error(),
+            );
         }
         let n2;
         {
-            let sc = j.entry(n1).await.unwrap().get("seq").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n1)
+                .await
+                .unwrap()
+                .get("seq")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
             e.record_patch("snap", PatchDiff::set(TypedValue::int(1)), Ty::error());
@@ -2003,14 +2431,27 @@ mod tests {
             working.checkpoint();
             working.push(Value::int(20));
             e.record_sequence_diff("seq", working, seq_ty());
-            e.record_patch("patch_obj", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(200)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "patch_obj",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(200)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         let n3;
         {
-            let sc = j.entry(n2).await.unwrap().get("seq").unwrap().value().expect_ref::<SequenceChain>("test").origin().clone();
+            let sc = j
+                .entry(n2)
+                .await
+                .unwrap()
+                .get("seq")
+                .unwrap()
+                .value()
+                .expect_ref::<SequenceChain>("test")
+                .origin()
+                .clone();
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
             e.record_patch("snap", PatchDiff::set(TypedValue::int(2)), Ty::error());
@@ -2018,30 +2459,53 @@ mod tests {
             working.checkpoint();
             working.push(Value::int(30));
             e.record_sequence_diff("seq", working, seq_ty());
-            e.record_patch("patch_obj", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(300)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "patch_obj",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(x, PatchDiff::Set(Value::int(300)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         // n3: snap=2, seq=[10,20,30], patch_obj.x=300
         {
             let e = j.entry(n3).await.unwrap();
-            assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(2))));
+            assert_eq!(
+                e.get("snap")
+                    .unwrap()
+                    .value()
+                    .expect_ref::<i64>("expected Int"),
+                &2
+            );
             let val = e.get("seq").unwrap();
-            assert_eq!(get_seq_values(val).await, vec![Value::int(10), Value::int(20), Value::int(30)]);
+            assert_eq!(
+                get_seq_values(val).await,
+                vec![Value::int(10), Value::int(20), Value::int(30)]
+            );
             let val = e.get("patch_obj").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&x), Some(&Value::Pure(PureValue::Int(300))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&x), Some(&Value::int(300)));
         }
         // n1: snap=0, seq=[10], patch_obj.x=100
         {
             let e = j.entry(n1).await.unwrap();
-            assert!(matches!(e.get("snap").unwrap().value(), Value::Pure(PureValue::Int(0))));
+            assert_eq!(
+                e.get("snap")
+                    .unwrap()
+                    .value()
+                    .expect_ref::<i64>("expected Int"),
+                &0
+            );
             let val = e.get("seq").unwrap();
             assert_eq!(get_seq_values(val).await, vec![Value::int(10)]);
             let val = e.get("patch_obj").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&x), Some(&Value::Pure(PureValue::Int(100))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&x), Some(&Value::int(100)));
         }
     }
 
@@ -2060,50 +2524,71 @@ mod tests {
         {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
-            let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0)), (b, Value::int(0))]));
-            e.record_patch("s", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
+            let obj = Value::object(FxHashMap::from_iter([
+                (a, Value::int(0)),
+                (b, Value::int(0)),
+            ]));
+            e.record_patch(
+                "s",
+                PatchDiff::set(TypedValue::new(obj, Ty::error())),
+                Ty::error(),
+            );
         }
         let n2;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             n2 = e.uuid();
-            e.record_patch("s", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "s",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(1)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         let n3;
         {
             let mut e = j.entry_mut(n2).await.unwrap().next().await.unwrap();
             n3 = e.uuid();
-            e.record_patch("s", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(2)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "s",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(b, PatchDiff::Set(Value::int(2)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         // n3: a=1, b=2
         {
             let e = j.entry(n3).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(1))));
-            assert_eq!(f.get(&b), Some(&Value::Pure(PureValue::Int(2))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(1)));
+            assert_eq!(f.get(&b), Some(&Value::int(2)));
         }
         // n2: a=1, b=0
         {
             let e = j.entry(n2).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(1))));
-            assert_eq!(f.get(&b), Some(&Value::Pure(PureValue::Int(0))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(1)));
+            assert_eq!(f.get(&b), Some(&Value::int(0)));
         }
         // n1: a=0, b=0
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(0))));
-            assert_eq!(f.get(&b), Some(&Value::Pure(PureValue::Int(0))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(0)));
+            assert_eq!(f.get(&b), Some(&Value::int(0)));
         }
     }
 
@@ -2118,44 +2603,62 @@ mod tests {
             let mut e = j.entry_mut(root).await.unwrap().next().await.unwrap();
             n1 = e.uuid();
             let obj = Value::object(FxHashMap::from_iter([(a, Value::int(0))]));
-            e.record_patch("s", PatchDiff::set(TypedValue::new(obj, Ty::error())), Ty::error());
+            e.record_patch(
+                "s",
+                PatchDiff::set(TypedValue::new(obj, Ty::error())),
+                Ty::error(),
+            );
         }
         let ba;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             ba = e.uuid();
-            e.record_patch("s", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "s",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(100)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         let bb;
         {
             let mut e = j.entry_mut(n1).await.unwrap().next().await.unwrap();
             bb = e.uuid();
-            e.record_patch("s", PatchDiff::Rec {
-                updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
-                removals: vec![],
-            }, Ty::error());
+            e.record_patch(
+                "s",
+                PatchDiff::Rec {
+                    updates: FxHashMap::from_iter([(a, PatchDiff::Set(Value::int(200)))]),
+                    removals: vec![],
+                },
+                Ty::error(),
+            );
         }
         // ba.a=100, bb.a=200, n1.a=0
         {
             let e = j.entry(ba).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(100))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(100)));
         }
         {
             let e = j.entry(bb).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(200))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(200)));
         }
         {
             let e = j.entry(n1).await.unwrap();
             let val = e.get("s").unwrap();
-            let Value::Lazy(LazyValue::Object(f)) = val.value() else { panic!() };
-            assert_eq!(f.get(&a), Some(&Value::Pure(PureValue::Int(0))));
+            let f = val
+                .value()
+                .expect_ref::<FxHashMap<Astr, Value>>("expected Object");
+            assert_eq!(f.get(&a), Some(&Value::int(0)));
         }
     }
 

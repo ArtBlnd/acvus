@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 
-use acvus_ast::Literal;
+use crate::graph::ContextId;
 use crate::ir::{InstKind, Label, MirModule, ValueId};
+use acvus_ast::Literal;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -15,17 +16,17 @@ use crate::analysis::value_transfer::ValueDomainTransfer;
 #[derive(Debug, Clone, Default)]
 pub struct ContextKeyPartition {
     /// Keys on unconditionally reachable paths -- fetch upfront.
-    pub eager: FxHashSet<Astr>,
+    pub eager: FxHashSet<ContextId>,
     /// Keys behind unknown branch conditions -- resolve lazily via coroutine.
-    pub lazy: FxHashSet<Astr>,
+    pub lazy: FxHashSet<ContextId>,
     /// Known keys that appear on reachable (non-dead) paths.
     /// These are excluded from eager/lazy (already resolved for orchestration)
     /// but tracked separately for UI discovery.
-    pub reachable_known: FxHashSet<Astr>,
+    pub reachable_known: FxHashSet<ContextId>,
     /// Keys in dead (pruned) branches -- not needed at runtime, but the
     /// typechecker still sees these references and needs their types injected.
     /// Callers should include these in type injection but NOT in unresolved params.
-    pub pruned: FxHashSet<Astr>,
+    pub pruned: FxHashSet<ContextId>,
 }
 
 /// A known context value for branch pruning.
@@ -51,9 +52,9 @@ pub enum KnownValue {
 /// already in `known`.
 pub fn reachable_context_keys(
     module: &MirModule,
-    known: &FxHashMap<Astr, KnownValue>,
+    known: &FxHashMap<ContextId, KnownValue>,
     val_def: &ValDefMap,
-) -> FxHashSet<Astr> {
+) -> FxHashSet<ContextId> {
     let p = partition_context_keys(module, known, val_def);
     let mut all = p.eager;
     all.extend(p.lazy);
@@ -69,7 +70,7 @@ pub fn reachable_context_keys(
 ///   -- resolve on-demand via coroutine.
 pub fn partition_context_keys(
     module: &MirModule,
-    known: &FxHashMap<Astr, KnownValue>,
+    known: &FxHashMap<ContextId, KnownValue>,
     val_def: &ValDefMap,
 ) -> ContextKeyPartition {
     let mut partition = ContextKeyPartition::default();
@@ -84,12 +85,12 @@ pub fn partition_context_keys(
 
     // Closures: conservatively treat all context loads as lazy
     for closure in module.closures.values() {
-        for inst in &closure.body.insts {
-            if let InstKind::ContextLoad { name, .. } = &inst.kind {
-                if known.contains_key(name) {
-                    partition.reachable_known.insert(*name);
+        for inst in &closure.insts {
+            if let InstKind::ContextProject { id, .. } = &inst.kind {
+                if known.contains_key(id) {
+                    partition.reachable_known.insert(*id);
                 } else {
-                    partition.lazy.insert(*name);
+                    partition.lazy.insert(*id);
                 }
             }
         }
@@ -113,7 +114,7 @@ enum Reach {
 fn partition_from_body(
     insts: &[crate::ir::Inst],
     val_types: &FxHashMap<ValueId, crate::ty::Ty>,
-    known: &FxHashMap<Astr, KnownValue>,
+    known: &FxHashMap<ContextId, KnownValue>,
     _val_def: &ValDefMap,
     partition: &mut ContextKeyPartition,
 ) {
@@ -136,18 +137,18 @@ fn partition_from_body(
     for (i, block) in cfg.blocks.iter().enumerate() {
         let block_reach = reach[i];
         for &inst_idx in &block.inst_indices {
-            if let InstKind::ContextLoad { name, .. } = &insts[inst_idx].kind {
+            if let InstKind::ContextProject { id, .. } = &insts[inst_idx].kind {
                 match block_reach {
                     Reach::Unreachable => {
-                        partition.pruned.insert(*name);
+                        partition.pruned.insert(*id);
                     }
                     _ => {
-                        if known.contains_key(name) {
-                            partition.reachable_known.insert(*name);
+                        if known.contains_key(id) {
+                            partition.reachable_known.insert(*id);
                         } else {
                             match block_reach {
-                                Reach::Definite => partition.eager.insert(*name),
-                                Reach::Conditional => partition.lazy.insert(*name),
+                                Reach::Definite => partition.eager.insert(*id),
+                                Reach::Conditional => partition.lazy.insert(*id),
                                 Reach::Unreachable => unreachable!(),
                             };
                         }
@@ -186,13 +187,7 @@ fn compute_reach(
 
         match &block.terminator {
             crate::analysis::cfg::Terminator::Jump { target, .. } => {
-                enqueue_reach(
-                    *target,
-                    block_reach,
-                    cfg,
-                    &mut reach,
-                    &mut queue,
-                );
+                enqueue_reach(*target, block_reach, cfg, &mut reach, &mut queue);
             }
             crate::analysis::cfg::Terminator::JumpIf {
                 cond,
@@ -203,38 +198,14 @@ fn compute_reach(
                 let cond_val = dataflow.block_exit[idx].get(*cond);
                 match cond_val.as_definite_bool() {
                     Some(true) => {
-                        enqueue_reach(
-                            *then_label,
-                            block_reach,
-                            cfg,
-                            &mut reach,
-                            &mut queue,
-                        );
+                        enqueue_reach(*then_label, block_reach, cfg, &mut reach, &mut queue);
                     }
                     Some(false) => {
-                        enqueue_reach(
-                            *else_label,
-                            block_reach,
-                            cfg,
-                            &mut reach,
-                            &mut queue,
-                        );
+                        enqueue_reach(*else_label, block_reach, cfg, &mut reach, &mut queue);
                     }
                     None => {
-                        enqueue_reach(
-                            *then_label,
-                            Reach::Conditional,
-                            cfg,
-                            &mut reach,
-                            &mut queue,
-                        );
-                        enqueue_reach(
-                            *else_label,
-                            Reach::Conditional,
-                            cfg,
-                            &mut reach,
-                            &mut queue,
-                        );
+                        enqueue_reach(*then_label, Reach::Conditional, cfg, &mut reach, &mut queue);
+                        enqueue_reach(*else_label, Reach::Conditional, cfg, &mut reach, &mut queue);
                     }
                 }
             }
@@ -274,18 +245,21 @@ fn enqueue_reach(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::{Literal, RangeKind, Span};
+    use crate::graph::ContextId;
     use crate::ir::{DebugInfo, Inst, MirBody};
     use crate::ty::Ty;
-    use acvus_utils::Interner;
+    use acvus_ast::{Literal, RangeKind, Span};
+    use acvus_utils::{Interner, LocalFactory};
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
             main: MirBody {
                 insts,
                 val_types: FxHashMap::default(),
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: DebugInfo::new(),
-                val_count: 0,
+                val_factory: LocalFactory::new(),
                 label_count: 0,
             },
             closures: FxHashMap::default(),
@@ -300,66 +274,87 @@ mod tests {
     }
 
     fn build_val_def(module: &MirModule) -> ValDefMap {
-        use crate::pass::AnalysisPass;
         use crate::analysis::val_def::ValDefMapAnalysis;
+        use crate::pass::AnalysisPass;
         ValDefMapAnalysis.run(module, ())
     }
 
     /// No branches -- all context loads are needed.
     #[test]
     fn no_branches_all_needed() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("user"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(1),
-                name: i.intern("role"),
+            inst(InstKind::ContextProject {
+                dst: v1,
+                id: id1,
+                ty: Ty::error(),
             }),
         ]);
         let val_def = build_val_def(&module);
         let needed = reachable_context_keys(&module, &FxHashMap::default(), &val_def);
-        assert_eq!(needed, FxHashSet::from_iter([i.intern("user"), i.intern("role")]));
+        assert_eq!(needed, FxHashSet::from_iter([id0, id1]));
     }
 
     /// Known context key is excluded from needed set.
     #[test]
     fn known_key_excluded() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("user"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(1),
-                name: i.intern("role"),
+            inst(InstKind::ContextProject {
+                dst: v1,
+                id: id1,
+                ty: Ty::error(),
             }),
         ]);
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("user"), KnownValue::Literal(Literal::String("alice".into())))]);
+        let known =
+            FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("alice".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
-        assert_eq!(needed, FxHashSet::from_iter([i.intern("role")]));
+        assert_eq!(needed, FxHashSet::from_iter([id1]));
     }
 
     /// Match on known context value -- dead branch pruned.
     #[test]
     fn branch_then_taken() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("mode"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 value: Literal::String("search".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(1),
                 then_args: vec![],
                 else_label: Label(2),
@@ -370,48 +365,59 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("query"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(2))),
+            inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(3),
-                name: i.intern("fallback"),
+            inst(InstKind::ContextProject {
+                dst: v3,
+                id: id2,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(3))),
+            inst(InstKind::Return(v3)),
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("mode"), KnownValue::Literal(Literal::String("search".into())))]);
+        let known =
+            FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("search".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains(&i.intern("query")));
-        assert!(!needed.contains(&i.intern("fallback")));
-        assert!(!needed.contains(&i.intern("mode"))); // already known
+        assert!(needed.contains(&id1));
+        assert!(!needed.contains(&id2));
+        assert!(!needed.contains(&id0)); // already known
     }
 
     /// Match on known context value -- else branch taken.
     #[test]
     fn branch_else_taken() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("mode"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 value: Literal::String("search".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(1),
                 then_args: vec![],
                 else_label: Label(2),
@@ -422,47 +428,58 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("query"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(2))),
+            inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(3),
-                name: i.intern("fallback"),
+            inst(InstKind::ContextProject {
+                dst: v3,
+                id: id2,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(3))),
+            inst(InstKind::Return(v3)),
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("mode"), KnownValue::Literal(Literal::String("other".into())))]);
+        let known =
+            FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("other".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(!needed.contains(&i.intern("query")));
-        assert!(needed.contains(&i.intern("fallback")));
+        assert!(!needed.contains(&id1));
+        assert!(needed.contains(&id2));
     }
 
     /// Unknown condition -- both branches are live (conservative).
     #[test]
     fn unknown_condition_both_live() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("mode"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 value: Literal::String("search".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(1),
                 then_args: vec![],
                 else_label: Label(2),
@@ -473,48 +490,58 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("query"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(2))),
+            inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(3),
-                name: i.intern("fallback"),
+            inst(InstKind::ContextProject {
+                dst: v3,
+                id: id2,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(3))),
+            inst(InstKind::Return(v3)),
         ]);
 
         let val_def = build_val_def(&module);
         // mode is NOT known -> can't evaluate condition
         let needed = reachable_context_keys(&module, &FxHashMap::default(), &val_def);
 
-        assert!(needed.contains(&i.intern("mode")));
-        assert!(needed.contains(&i.intern("query")));
-        assert!(needed.contains(&i.intern("fallback")));
+        assert!(needed.contains(&id0));
+        assert!(needed.contains(&id1));
+        assert!(needed.contains(&id2));
     }
 
     /// Nested match -- chained dead branch elimination.
     #[test]
     fn nested_match_known_condition() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("role"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 value: Literal::String("admin".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(3),
                 then_args: vec![],
                 else_label: Label(1),
@@ -525,9 +552,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("level"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -538,9 +566,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(3),
-                name: i.intern("guest_data"),
+            inst(InstKind::ContextProject {
+                dst: v3,
+                id: id2,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -554,31 +583,40 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("role"), KnownValue::Literal(Literal::String("admin".into())))]);
+        let known =
+            FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("admin".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains(&i.intern("level")));
-        assert!(!needed.contains(&i.intern("guest_data")));
+        assert!(needed.contains(&id1));
+        assert!(!needed.contains(&id2));
     }
 
     /// Range test with known value.
     #[test]
     fn range_condition_evaluated() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("level"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestRange {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 start: 1,
                 end: 10,
                 kind: RangeKind::Exclusive,
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(1),
                 then_args: vec![],
                 else_label: Label(2),
@@ -589,47 +627,60 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("low_data"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(2))),
+            inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(3),
-                name: i.intern("high_data"),
+            inst(InstKind::ContextProject {
+                dst: v3,
+                id: id2,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(3))),
+            inst(InstKind::Return(v3)),
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("level"), KnownValue::Literal(Literal::Int(5)))]);
+        let known = FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::Int(5)))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(needed.contains(&i.intern("low_data")));
-        assert!(!needed.contains(&i.intern("high_data")));
+        assert!(needed.contains(&id1));
+        assert!(!needed.contains(&id2));
     }
 
     /// Multi-arm match -- chained tests, middle arm matched.
     #[test]
     fn multi_arm_match_middle() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("role"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(1),
-                src: ValueId(0),
+                dst: v1,
+                src: v0,
                 value: Literal::String("admin".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(1),
+                cond: v1,
                 then_label: Label(10),
                 then_args: vec![],
                 else_label: Label(20),
@@ -640,9 +691,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(2),
-                name: i.intern("admin_data"),
+            inst(InstKind::ContextProject {
+                dst: v2,
+                id: id1,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -654,12 +706,12 @@ mod tests {
                 merge_of: None,
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(3),
-                src: ValueId(0),
+                dst: v3,
+                src: v0,
                 value: Literal::String("user".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(3),
+                cond: v3,
                 then_label: Label(30),
                 then_args: vec![],
                 else_label: Label(40),
@@ -670,9 +722,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(4),
-                name: i.intern("user_data"),
+            inst(InstKind::ContextProject {
+                dst: v4,
+                id: id2,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -683,9 +736,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(5),
-                name: i.intern("default_data"),
+            inst(InstKind::ContextProject {
+                dst: v5,
+                id: id3,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -699,24 +753,24 @@ mod tests {
         ]);
 
         let val_def = build_val_def(&module);
-        let known = FxHashMap::from_iter([(i.intern("role"), KnownValue::Literal(Literal::String("user".into())))]);
+        let known =
+            FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("user".into())))]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(!needed.contains(&i.intern("admin_data")));
-        assert!(needed.contains(&i.intern("user_data")));
-        assert!(!needed.contains(&i.intern("default_data")));
+        assert!(!needed.contains(&id1));
+        assert!(needed.contains(&id2));
+        assert!(!needed.contains(&id3));
     }
 
-    fn make_module_with_types(
-        insts: Vec<Inst>,
-        val_types: FxHashMap<ValueId, Ty>,
-    ) -> MirModule {
+    fn make_module_with_types(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
         MirModule {
             main: MirBody {
                 insts,
                 val_types,
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: DebugInfo::new(),
-                val_count: 0,
+                val_factory: LocalFactory::new(),
                 label_count: 0,
             },
             closures: FxHashMap::default(),
@@ -732,34 +786,41 @@ mod tests {
         let b = i.intern("B");
         let d = i.intern("D"); // not in enum
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("MyEnum"),
-                variants: FxHashMap::from_iter([
-                    (a, None),
-                    (b, None),
-                    (i.intern("C"), None),
-                ]),
+                variants: FxHashMap::from_iter([(a, None), (b, None), (i.intern("C"), None)]),
             },
         );
 
         let module = make_module_with_types(
             vec![
                 // %0 = ContextLoad "val"
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("val"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 // %1 = TestVariant(%0, "D")  -- D not in {A,B,C} -> always false
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: d,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -771,10 +832,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("dead_data"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -785,10 +847,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(3),
-                    name: i.intern("live_data"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v3,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -805,9 +868,9 @@ mod tests {
         let val_def = build_val_def(&module);
         let needed = reachable_context_keys(&module, &FxHashMap::default(), &val_def);
 
-        assert!(needed.contains(&i.intern("val")));
-        assert!(needed.contains(&i.intern("live_data")));
-        assert!(!needed.contains(&i.intern("dead_data")));
+        assert!(needed.contains(&id0));
+        assert!(needed.contains(&id2));
+        assert!(!needed.contains(&id1));
     }
 
     /// Single-variant enum: TestVariant for that variant is always true.
@@ -816,9 +879,19 @@ mod tests {
         let i = Interner::new();
         let only = i.intern("Only");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("Wrapper"),
                 variants: FxHashMap::from_iter([(only, None)]),
@@ -827,17 +900,18 @@ mod tests {
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("w"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: only,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(1),
                     then_args: vec![],
                     else_label: Label(2),
@@ -848,21 +922,23 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("then_data"),
-                    }),
-                inst(InstKind::Return(ValueId(2))),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::Return(v2)),
                 inst(InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(3),
-                    name: i.intern("else_data"),
-                    }),
-                inst(InstKind::Return(ValueId(3))),
+                inst(InstKind::ContextProject {
+                    dst: v3,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::Return(v3)),
             ],
             val_types,
         );
@@ -871,10 +947,10 @@ mod tests {
         let p = partition_context_keys(&module, &FxHashMap::default(), &val_def);
 
         // then_data is eager (single variant -> always matches)
-        assert!(p.eager.contains(&i.intern("then_data")));
+        assert!(p.eager.contains(&id1));
         // else_data is unreachable
-        assert!(!p.eager.contains(&i.intern("else_data")));
-        assert!(!p.lazy.contains(&i.intern("else_data")));
+        assert!(!p.eager.contains(&id2));
+        assert!(!p.lazy.contains(&id2));
     }
 
     /// Multi-arm enum variant match with type pruning.
@@ -887,33 +963,43 @@ mod tests {
         let b = i.intern("B");
         let c = i.intern("C");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("ABC"),
-                variants: FxHashMap::from_iter([
-                    (a, None),
-                    (b, None),
-                    (c, None),
-                ]),
+                variants: FxHashMap::from_iter([(a, None), (b, None), (c, None)]),
             },
         );
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("src"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 // TestVariant A
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: a,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -925,10 +1011,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("data_a"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -940,12 +1027,12 @@ mod tests {
                     merge_of: None,
                 }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(3),
-                    src: ValueId(0),
+                    dst: v3,
+                    src: v0,
                     tag: b,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(3),
+                    cond: v3,
                     then_label: Label(30),
                     then_args: vec![],
                     else_label: Label(40),
@@ -957,10 +1044,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(4),
-                    name: i.intern("data_b"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v4,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -971,10 +1059,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(5),
-                    name: i.intern("data_c"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v5,
+                    id: id3,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -992,11 +1081,11 @@ mod tests {
         let p = partition_context_keys(&module, &FxHashMap::default(), &val_def);
 
         // src is eager (before any branch)
-        assert!(p.eager.contains(&i.intern("src")));
+        assert!(p.eager.contains(&id0));
         // All arms are conditional (variant test can't be resolved without known value)
-        assert!(p.lazy.contains(&i.intern("data_a")));
-        assert!(p.lazy.contains(&i.intern("data_b")));
-        assert!(p.lazy.contains(&i.intern("data_c")));
+        assert!(p.lazy.contains(&id1));
+        assert!(p.lazy.contains(&id2));
+        assert!(p.lazy.contains(&id3));
     }
 
     /// Multi-arm enum variant match with type pruning.
@@ -1009,32 +1098,43 @@ mod tests {
         let b = i.intern("B");
         let c = i.intern("C"); // not in enum
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("AB"),
-                variants: FxHashMap::from_iter([
-                    (a, None),
-                    (b, None),
-                ]),
+                variants: FxHashMap::from_iter([(a, None), (b, None)]),
             },
         );
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("src"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 // Test A
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: a,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -1046,10 +1146,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("data_a"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1061,12 +1162,12 @@ mod tests {
                     merge_of: None,
                 }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(3),
-                    src: ValueId(0),
+                    dst: v3,
+                    src: v0,
                     tag: c,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(3),
+                    cond: v3,
                     then_label: Label(30),
                     then_args: vec![],
                     else_label: Label(40),
@@ -1078,10 +1179,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(4),
-                    name: i.intern("data_c"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v4,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1092,10 +1194,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(5),
-                    name: i.intern("data_fallback"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v5,
+                    id: id3,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1113,17 +1216,17 @@ mod tests {
         let p = partition_context_keys(&module, &FxHashMap::default(), &val_def);
 
         // src is eager
-        assert!(p.eager.contains(&i.intern("src")));
+        assert!(p.eager.contains(&id0));
         // A arm: conditional (we don't know if it's A or B)
-        assert!(p.lazy.contains(&i.intern("data_a")));
+        assert!(p.lazy.contains(&id1));
         // C arm: dead (C not in enum type)
-        assert!(!p.eager.contains(&i.intern("data_c")));
-        assert!(!p.lazy.contains(&i.intern("data_c")));
+        assert!(!p.eager.contains(&id2));
+        assert!(!p.lazy.contains(&id2));
         // fallback: reached when A fails -> conditional, AND when C fails -> definite from Label(20)
         // Label(20) itself is conditional (reached from else of A test).
         // TestVariant(C) is Some(false), so only else_label(40) is enqueued with Label(20)'s reach.
         // Label(20) is Conditional -> Label(40) inherits Conditional.
-        assert!(p.lazy.contains(&i.intern("data_fallback")));
+        assert!(p.lazy.contains(&id3));
     }
 
     /// Partition: eager vs lazy with enum variant type pruning.
@@ -1135,9 +1238,21 @@ mod tests {
         let a = i.intern("A");
         let b = i.intern("B");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id10 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v_pre = vf.next();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("AB"),
                 variants: FxHashMap::from_iter([(a, None), (b, None)]),
@@ -1148,21 +1263,23 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // Eager load before any branch
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(10),
-                    name: i.intern("pre"),
-                    }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("src"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v_pre,
+                    id: id10,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: a,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -1173,21 +1290,23 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("a_data"),
-                    }),
-                inst(InstKind::Return(ValueId(2))),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::Return(v2)),
                 inst(InstKind::BlockLabel {
                     label: Label(20),
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(3),
-                    name: i.intern("b_data"),
-                    }),
-                inst(InstKind::Return(ValueId(3))),
+                inst(InstKind::ContextProject {
+                    dst: v3,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::Return(v3)),
             ],
             val_types,
         );
@@ -1196,13 +1315,13 @@ mod tests {
         let p = partition_context_keys(&module, &FxHashMap::default(), &val_def);
 
         // pre and src are eager (before branch)
-        assert!(p.eager.contains(&i.intern("pre")));
-        assert!(p.eager.contains(&i.intern("src")));
+        assert!(p.eager.contains(&id10));
+        assert!(p.eager.contains(&id0));
         // Both arms are conditional (can't resolve TestVariant without known value)
-        assert!(p.lazy.contains(&i.intern("a_data")));
-        assert!(p.lazy.contains(&i.intern("b_data")));
-        assert!(!p.eager.contains(&i.intern("a_data")));
-        assert!(!p.eager.contains(&i.intern("b_data")));
+        assert!(p.lazy.contains(&id1));
+        assert!(p.lazy.contains(&id2));
+        assert!(!p.eager.contains(&id1));
+        assert!(!p.eager.contains(&id2));
     }
 
     /// Match merge point upgrades reachability to Definite.
@@ -1212,9 +1331,21 @@ mod tests {
         let a = i.intern("A");
         let b = i.intern("B");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("AB"),
                 variants: FxHashMap::from_iter([(a, None), (b, None)]),
@@ -1224,10 +1355,11 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // Entry: load scrutinee then jump to first test
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("scrutinee"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(1),
                     args: vec![],
@@ -1239,12 +1371,12 @@ mod tests {
                     merge_of: None,
                 }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: a,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -1256,10 +1388,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("arm_data"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1270,10 +1403,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(3),
-                    name: i.intern("other_arm"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v3,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1284,11 +1418,12 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(1)),
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(4),
-                    name: i.intern("post_match"),
-                    }),
-                inst(InstKind::Return(ValueId(4))),
+                inst(InstKind::ContextProject {
+                    dst: v4,
+                    id: id3,
+                    ty: Ty::error(),
+                }),
+                inst(InstKind::Return(v4)),
             ],
             val_types,
         );
@@ -1299,16 +1434,16 @@ mod tests {
         // "post_match" should be eager (Definite) because the merge point
         // inherits reachability from the first test block (Label(1) = Definite).
         assert!(
-            p.eager.contains(&i.intern("post_match")),
+            p.eager.contains(&id3),
             "post_match should be eager, got lazy={}, eager={}",
-            p.lazy.contains(&i.intern("post_match")),
-            p.eager.contains(&i.intern("post_match")),
+            p.lazy.contains(&id3),
+            p.eager.contains(&id3),
         );
-        assert!(!p.lazy.contains(&i.intern("post_match")));
+        assert!(!p.lazy.contains(&id3));
 
         // arm_data and other_arm are behind unknown branches -> lazy
-        assert!(p.lazy.contains(&i.intern("arm_data")));
-        assert!(p.lazy.contains(&i.intern("other_arm")));
+        assert!(p.lazy.contains(&id1));
+        assert!(p.lazy.contains(&id2));
     }
 
     /// When the scrutinee block is itself Conditional (behind an unknown branch),
@@ -1319,9 +1454,24 @@ mod tests {
         let a = i.intern("A");
         let b = i.intern("B");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+        let id4 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v10 = vf.next();
+        let v11 = vf.next();
+        let v12 = vf.next();
+        let v13 = vf.next();
+        let v14 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(10),
+            v10,
             Ty::Enum {
                 name: i.intern("AB"),
                 variants: FxHashMap::from_iter([(a, None), (b, None)]),
@@ -1331,17 +1481,18 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // Entry: unknown branch -> the match is only conditionally reachable
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("flag"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::TestLiteral {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     value: Literal::String("yes".into()),
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(1), // goes to the match
                     then_args: vec![],
                     else_label: Label(50), // skips the match entirely
@@ -1353,17 +1504,18 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(10),
-                    name: i.intern("scrutinee"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v10,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::TestVariant {
-                    dst: ValueId(11),
-                    src: ValueId(10),
+                    dst: v11,
+                    src: v10,
                     tag: a,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(11),
+                    cond: v11,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -1375,10 +1527,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(12),
-                    name: i.intern("arm_a"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v12,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1389,10 +1542,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(13),
-                    name: i.intern("arm_b"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v13,
+                    id: id3,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1403,10 +1557,11 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(1)),
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(14),
-                    name: i.intern("post_match"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v14,
+                    id: id4,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(50),
                     args: vec![],
@@ -1417,7 +1572,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::Return(ValueId(0))),
+                inst(InstKind::Return(v0)),
             ],
             val_types,
         );
@@ -1429,15 +1584,15 @@ mod tests {
         // The merge point Label(99) inherits Conditional from Label(1).
         // Therefore "post_match" should be lazy (Conditional), not eager.
         assert!(
-            p.lazy.contains(&i.intern("post_match")),
+            p.lazy.contains(&id4),
             "post_match should be lazy (conditional), got eager={}, lazy={}",
-            p.eager.contains(&i.intern("post_match")),
-            p.lazy.contains(&i.intern("post_match")),
+            p.eager.contains(&id4),
+            p.lazy.contains(&id4),
         );
-        assert!(!p.eager.contains(&i.intern("post_match")));
+        assert!(!p.eager.contains(&id4));
 
         // scrutinee is also lazy (behind unknown branch)
-        assert!(p.lazy.contains(&i.intern("scrutinee")));
+        assert!(p.lazy.contains(&id1));
     }
 
     /// Known variant value prunes dead match arms.
@@ -1447,33 +1602,43 @@ mod tests {
         let ooc = i.intern("OOC");
         let normal = i.intern("Normal");
 
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+
         let mut val_types = FxHashMap::default();
         val_types.insert(
-            ValueId(0),
+            v0,
             Ty::Enum {
                 name: i.intern("Output"),
-                variants: FxHashMap::from_iter([
-                    (ooc, None),
-                    (normal, None),
-                ]),
+                variants: FxHashMap::from_iter([(ooc, None), (normal, None)]),
             },
         );
 
         let module = make_module_with_types(
             vec![
                 // %0 = ContextLoad "Output"
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(0),
-                    name: i.intern("Output"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v0,
+                    id: id0,
+                    ty: Ty::error(),
+                }),
                 // Test Normal
                 inst(InstKind::TestVariant {
-                    dst: ValueId(1),
-                    src: ValueId(0),
+                    dst: v1,
+                    src: v0,
                     tag: normal,
                 }),
                 inst(InstKind::JumpIf {
-                    cond: ValueId(1),
+                    cond: v1,
                     then_label: Label(10),
                     then_args: vec![],
                     else_label: Label(20),
@@ -1485,10 +1650,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(2),
-                    name: i.intern("normal_data"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v2,
+                    id: id1,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1499,10 +1665,11 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(3),
-                    name: i.intern("ooc_data"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v3,
+                    id: id2,
+                    ty: Ty::error(),
+                }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1513,10 +1680,11 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(10)),
                 }),
-                inst(InstKind::ContextLoad {
-                    dst: ValueId(4),
-                    name: i.intern("post_match"),
-                    }),
+                inst(InstKind::ContextProject {
+                    dst: v4,
+                    id: id3,
+                    ty: Ty::error(),
+                }),
             ],
             val_types,
         );
@@ -1524,20 +1692,23 @@ mod tests {
         let val_def = build_val_def(&module);
         // Output is known to be OOC -> Normal arm should be pruned
         let known = FxHashMap::from_iter([(
-            i.intern("Output"),
-            KnownValue::Variant { tag: ooc, payload: None },
+            id0,
+            KnownValue::Variant {
+                tag: ooc,
+                payload: None,
+            },
         )]);
         let p = partition_context_keys(&module, &known, &val_def);
 
         // Output is known -> goes to reachable_known
-        assert!(p.reachable_known.contains(&i.intern("Output")));
+        assert!(p.reachable_known.contains(&id0));
         // Normal arm is dead (TestVariant Normal on OOC value -> false)
-        assert!(!p.eager.contains(&i.intern("normal_data")));
-        assert!(!p.lazy.contains(&i.intern("normal_data")));
+        assert!(!p.eager.contains(&id1));
+        assert!(!p.lazy.contains(&id1));
         // OOC arm is live and definite (TestVariant Normal is false -> else branch is definite)
-        assert!(p.eager.contains(&i.intern("ooc_data")));
+        assert!(p.eager.contains(&id2));
         // post_match is eager (merge_of restores definite)
-        assert!(p.eager.contains(&i.intern("post_match")));
+        assert!(p.eager.contains(&id3));
     }
 
     /// Tuple destructuring: context values packed into a tuple, then extracted
@@ -1546,35 +1717,51 @@ mod tests {
     /// known context value.
     #[test]
     fn tuple_destructure_multi_arm() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+        let id4 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
+        let v10 = vf.next();
+        let v11 = vf.next();
+        let v12 = vf.next();
         let module = make_module(vec![
             // Pack two known context values into a tuple
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("role"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(1),
-                name: i.intern("level"),
+            inst(InstKind::ContextProject {
+                dst: v1,
+                id: id1,
+                ty: Ty::error(),
             }),
             inst(InstKind::MakeTuple {
-                dst: ValueId(2),
-                elements: vec![ValueId(0), ValueId(1)],
+                dst: v2,
+                elements: vec![v0, v1],
             }),
             // Extract first element and match on it
             inst(InstKind::TupleIndex {
-                dst: ValueId(3),
-                tuple: ValueId(2),
+                dst: v3,
+                tuple: v2,
                 index: 0,
             }),
             // Test "admin"
             inst(InstKind::TestLiteral {
-                dst: ValueId(4),
-                src: ValueId(3),
+                dst: v4,
+                src: v3,
                 value: Literal::String("admin".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(4),
+                cond: v4,
                 then_label: Label(10),
                 then_args: vec![],
                 else_label: Label(20),
@@ -1586,9 +1773,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(10),
-                name: i.intern("admin_data"),
+            inst(InstKind::ContextProject {
+                dst: v10,
+                id: id2,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -1601,12 +1789,12 @@ mod tests {
                 merge_of: None,
             }),
             inst(InstKind::TestLiteral {
-                dst: ValueId(5),
-                src: ValueId(3),
+                dst: v5,
+                src: v3,
                 value: Literal::String("user".into()),
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(5),
+                cond: v5,
                 then_label: Label(30),
                 then_args: vec![],
                 else_label: Label(40),
@@ -1618,9 +1806,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(11),
-                name: i.intern("user_data"),
+            inst(InstKind::ContextProject {
+                dst: v11,
+                id: id3,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -1632,9 +1821,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(12),
-                name: i.intern("default_data"),
+            inst(InstKind::ContextProject {
+                dst: v12,
+                id: id4,
+                ty: Ty::error(),
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -1649,52 +1839,65 @@ mod tests {
 
         let val_def = build_val_def(&module);
         let known = FxHashMap::from_iter([
-            (i.intern("role"), KnownValue::Literal(Literal::String("user".into()))),
-            (i.intern("level"), KnownValue::Literal(Literal::Int(5))),
+            (id0, KnownValue::Literal(Literal::String("user".into()))),
+            (id1, KnownValue::Literal(Literal::Int(5))),
         ]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
         // admin_data is dead (role != "admin")
-        assert!(!needed.contains(&i.intern("admin_data")));
+        assert!(!needed.contains(&id2));
         // user_data is live (role = "user")
-        assert!(needed.contains(&i.intern("user_data")));
+        assert!(needed.contains(&id3));
         // default_data is dead (role = "user", matched above)
-        assert!(!needed.contains(&i.intern("default_data")));
+        assert!(!needed.contains(&id4));
     }
 
     /// Tuple destructuring with second element: TupleIndex(_, 1) extracts the
     /// second context value and uses it for range testing.
     #[test]
     fn tuple_destructure_second_element_range() {
-        let i = Interner::new();
+        let id0 = ContextId::alloc();
+        let id1 = ContextId::alloc();
+        let id2 = ContextId::alloc();
+        let id3 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
+        let v6 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextLoad {
-                dst: ValueId(0),
-                name: i.intern("name"),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(1),
-                name: i.intern("score"),
+            inst(InstKind::ContextProject {
+                dst: v1,
+                id: id1,
+                ty: Ty::error(),
             }),
             inst(InstKind::MakeTuple {
-                dst: ValueId(2),
-                elements: vec![ValueId(0), ValueId(1)],
+                dst: v2,
+                elements: vec![v0, v1],
             }),
             // Extract second element (score)
             inst(InstKind::TupleIndex {
-                dst: ValueId(3),
-                tuple: ValueId(2),
+                dst: v3,
+                tuple: v2,
                 index: 1,
             }),
             inst(InstKind::TestRange {
-                dst: ValueId(4),
-                src: ValueId(3),
+                dst: v4,
+                src: v3,
                 start: 0,
                 end: 50,
                 kind: RangeKind::Exclusive,
             }),
             inst(InstKind::JumpIf {
-                cond: ValueId(4),
+                cond: v4,
                 then_label: Label(1),
                 then_args: vec![],
                 else_label: Label(2),
@@ -1706,32 +1909,34 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(5),
-                name: i.intern("low_data"),
+            inst(InstKind::ContextProject {
+                dst: v5,
+                id: id2,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(5))),
+            inst(InstKind::Return(v5)),
             // high arm -> live
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextLoad {
-                dst: ValueId(6),
-                name: i.intern("high_data"),
+            inst(InstKind::ContextProject {
+                dst: v6,
+                id: id3,
+                ty: Ty::error(),
             }),
-            inst(InstKind::Return(ValueId(6))),
+            inst(InstKind::Return(v6)),
         ]);
 
         let val_def = build_val_def(&module);
         let known = FxHashMap::from_iter([
-            (i.intern("name"), KnownValue::Literal(Literal::String("alice".into()))),
-            (i.intern("score"), KnownValue::Literal(Literal::Int(80))),
+            (id0, KnownValue::Literal(Literal::String("alice".into()))),
+            (id1, KnownValue::Literal(Literal::Int(80))),
         ]);
         let needed = reachable_context_keys(&module, &known, &val_def);
 
-        assert!(!needed.contains(&i.intern("low_data")));
-        assert!(needed.contains(&i.intern("high_data")));
+        assert!(!needed.contains(&id2));
+        assert!(needed.contains(&id3));
     }
 }

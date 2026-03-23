@@ -2,12 +2,23 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @f
-     1 │   r1 = call to_int(r0)
-     2 │   r2 = call to_string(r1)
-     3 │   yield r2
+=== literals ===
+  T0 = ""
 
-    ; r0 (@f) : Float
-    ; r1 (to_int(...)) : Int
-    ; r2 (to_string(...)) : String
+=== main ===
+     1 │   r1 = context_project @f
+     2 │   r2 = context_load r1
+     3 │   r3 = poison
+     5 │   r5 = T0 + T0
+     6 │   r6 = poison
+     7 │   r7 = r5 + r6
+     8 │   return r7
+
+    ; r0 (v0) : String
+    ; r1 (@f) : Float
+    ; r2 (v2) : Float
+    ; r3 (to_int(...)) : Int
+    ; r4 (v4) : String
+    ; r5 (v5) : String
+    ; r6 (to_string(...)) : String
+    ; r7 (v7) : String

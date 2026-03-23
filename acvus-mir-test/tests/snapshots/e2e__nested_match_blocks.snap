@@ -3,35 +3,61 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "low"
-  T1 = "high"
-  T2 = "guest"
+  T0 = ""
+  T1 = "low"
+  T2 = "high"
+  T3 = "guest"
 
 === main ===
-     0 │   r0 = context_load @role
-     1 │ L2:
-     2 │   r1 = test r0 == "admin"
-     3 │   jump_if r1 then L3 else L1
-     4 │ L3:
-     5 │   r2 = context_load @level
-     6 │ L6:
-     7 │   r3 = test r2 in 1..10
-     8 │   jump_if r3 then L7 else L5
-     9 │ L7:
-    11 │   yield T0
-    12 │   jump L4
-    13 │ L5:
-    15 │   yield T1
-    16 │ L4:  ; merge_of L6
-    17 │   jump L0
-    18 │ L1:
-    20 │   yield T2
-    21 │ L0:  ; merge_of L2
+     0 │   r21 = context_project @level
+     1 │   r22 = context_load r21
+     3 │   r1 = context_project @role
+     4 │   r2 = context_load r1
+     5 │ L2:
+     6 │   r3 = test r2 == "admin"
+     7 │   jump_if r3 then L3 else L1
+     8 │ L3:
+    10 │   r5 = context_project @level
+    11 │   r6 = context_load r5
+    12 │ L6:
+    13 │   r7 = test r6 in 1..10
+    14 │   jump_if r7 then L7 else L5
+    15 │ L7:
+    18 │   r10 = T0 + T1
+    19 │   jump L4(r10)
+    20 │ L5:
+    23 │   r13 = T0 + T2
+    24 │   jump L4(r13)
+    25 │ L4(r14: String):  ; merge_of L6
+    26 │   r15 = T0 + r14
+    27 │   jump L0(r15)
+    28 │ L1:
+    31 │   r18 = T0 + T3
+    32 │   jump L0(r18)
+    33 │ L0(r19: String):  ; merge_of L2
+    34 │   r20 = T0 + r19
+    35 │   return r20
 
-    ; r0 (@role) : String
-    ; r1 (v1) : Bool
-    ; r2 (@level) : Int
+    ; r0 (v0) : String
+    ; r1 (@role) : String
+    ; r2 (v2) : String
     ; r3 (v3) : Bool
     ; r4 (v4) : String
-    ; r5 (v5) : String
-    ; r6 (v6) : String
+    ; r5 (@level) : Int
+    ; r6 (v6) : Int
+    ; r7 (v7) : Bool
+    ; r8 (v8) : String
+    ; r9 (v9) : String
+    ; r10 (v10) : String
+    ; r11 (v11) : String
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : String
+    ; r15 (v15) : String
+    ; r16 (v16) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : Int
+    ; r22 (v22) : Int

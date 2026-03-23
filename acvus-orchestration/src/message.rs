@@ -18,9 +18,7 @@ pub enum Message {
 /// Provider-specific extras attached to a tool call.
 #[derive(Debug, Clone)]
 pub enum ToolCallExtras {
-    Gemini {
-        thought_signature: Option<String>,
-    },
+    Gemini { thought_signature: Option<String> },
 }
 
 /// A tool call requested by the model.

@@ -6,15 +6,15 @@
 //! [`ValidationError`] instead of panicking.
 //!
 //! Design:
-//! - `Ty::Error` / `Ty::Var` unify with anything (analysis mode may leave
+//! - `Ty::Error` / `Ty::Param` unify with anything (analysis mode may leave
 //!   them unresolved).
 //! - `Cast` is the *only* instruction allowed to change a value's type.
 //! - Generic variance is invariant: inner types must match recursively.
 
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ty::{Effect, Origin, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
-use crate::builtins;
-use crate::ir::{InstKind, Label, MirBody, MirModule, ValueId};
-use crate::ty::{Effect, Origin, Polarity, Ty, TySubst};
+use acvus_utils::LocalIdOps;
 use rustc_hash::FxHashMap;
 
 // ---------------------------------------------------------------------------
@@ -72,14 +72,14 @@ pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
     for (label, closure) in &module.closures {
         let name = format!("closure({:?})", label);
         let mut ctx = CheckCtx::new(name);
-        ctx.check_body(&closure.body, &mut errors);
+        ctx.check_body(closure, &mut errors);
     }
 
     errors
 }
 
 // ---------------------------------------------------------------------------
-// Structural type equality (invariant, with Error/Var escape)
+// Structural type equality (invariant, with Error/Param escape)
 // ---------------------------------------------------------------------------
 
 /// Returns `true` if two origins match.  `Origin::Var` (unresolved) matches anything.
@@ -91,12 +91,12 @@ fn origins_match(a: &Origin, b: &Origin) -> bool {
 }
 
 /// Returns `true` if `a` and `b` are structurally equal under invariant
-/// variance.  `Ty::Error` and `Ty::Var` match anything (poison / unresolved).
+/// variance.  `Ty::Error` and `Ty::Param` match anything (poison / unresolved).
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         // Poison / unresolved — accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        (Ty::Var(_), _) | (_, Ty::Var(_)) => true,
+        (Ty::Param { .. }, _) | (_, Ty::Param { .. }) => true,
 
         // Primitives
         (Ty::Int, Ty::Int) => true,
@@ -126,13 +126,22 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
 
         // Functions
         (
-            Ty::Fn { params: p1, ret: r1, kind: k1, effect: e1, .. },
-            Ty::Fn { params: p2, ret: r2, kind: k2, effect: e2, .. },
+            Ty::Fn {
+                params: p1,
+                ret: r1,
+                effect: e1,
+                ..
+            },
+            Ty::Fn {
+                params: p2,
+                ret: r2,
+                effect: e2,
+                ..
+            },
         ) => {
-            k1 == k2
-                && effects_match(e1, e2)
+            effects_match(e1, e2)
                 && p1.len() == p2.len()
-                && p1.iter().zip(p2).all(|(a, b)| types_match(a, b))
+                && p1.iter().zip(p2).all(|(a, b)| types_match(&a.ty, &b.ty))
                 && types_match(r1, r2)
         }
 
@@ -142,22 +151,18 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         // Opaque — same name
         (Ty::Opaque(a), Ty::Opaque(b)) => a == b,
 
-        // Infer should never appear post-lowering, but treat like Var
-        (Ty::Infer(_), _) | (_, Ty::Infer(_)) => true,
-
         _ => false,
     }
 }
 
-/// Effect matching for validation: Var matches anything (like Ty::Var),
+/// Effect matching for validation: Var matches anything (like Ty::Param),
 /// and Pure ≤ Effectful (subtyping).
 fn effects_match(a: &Effect, b: &Effect) -> bool {
     match (a, b) {
         (Effect::Var(_), _) | (_, Effect::Var(_)) => true,
-        (Effect::Pure, Effect::Pure) | (Effect::Effectful, Effect::Effectful) => true,
-        // Pure ≤ Effectful: a Pure actual is acceptable where Effectful is expected.
-        (Effect::Pure, Effect::Effectful) | (Effect::Effectful, Effect::Pure) => true,
-        // No other concrete mismatch exists for the two-element lattice.
+        // Both resolved — any resolved effects match in the two-element lattice
+        // (Pure ≤ Effectful subtyping).
+        (Effect::Resolved(_), Effect::Resolved(_)) => true,
     }
 }
 
@@ -241,7 +246,14 @@ impl CheckCtx {
         }
 
         for (pc, inst) in body.insts.iter().enumerate() {
-            self.check_inst(pc, inst.span, &inst.kind, &body.val_types, &body.insts, errors);
+            self.check_inst(
+                pc,
+                inst.span,
+                &inst.kind,
+                &body.val_types,
+                &body.insts,
+                errors,
+            );
         }
     }
 
@@ -262,7 +274,9 @@ impl CheckCtx {
                     scope: self.scope_name.clone(),
                     inst_index: pc,
                     span,
-                    kind: ValidationErrorKind::MissingType { value_id: id.0 },
+                    kind: ValidationErrorKind::MissingType {
+                        value_id: id.to_raw() as u32,
+                    },
                 });
                 None
             }
@@ -352,11 +366,16 @@ impl CheckCtx {
                     for (i, elem) in elements.iter().enumerate() {
                         let elem_ty = ty!(*elem);
                         self.assert_match(
-                            pc, span, "MakeDeque", &format!("element[{i}]"),
-                            inner, elem_ty, errors,
+                            pc,
+                            span,
+                            "MakeDeque",
+                            &format!("element[{i}]"),
+                            inner,
+                            elem_ty,
+                            errors,
                         );
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Var(_)) {
+                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -377,12 +396,17 @@ impl CheckCtx {
                         if let Some(expected_field_ty) = field_tys.get(key) {
                             let val_ty = ty!(*val);
                             self.assert_match(
-                                pc, span, "MakeObject", "field",
-                                expected_field_ty, val_ty, errors,
+                                pc,
+                                span,
+                                "MakeObject",
+                                "field",
+                                expected_field_ty,
+                                val_ty,
+                                errors,
                             );
                         }
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Var(_)) {
+                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -396,7 +420,9 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::MakeRange { dst, start, end, .. } => {
+            InstKind::MakeRange {
+                dst, start, end, ..
+            } => {
                 let start_ty = ty!(*start);
                 let end_ty = ty!(*end);
                 let dst_ty = ty!(*dst);
@@ -423,12 +449,17 @@ impl CheckCtx {
                         for (i, (elem, expected)) in elements.iter().zip(elem_tys).enumerate() {
                             let elem_ty = ty!(*elem);
                             self.assert_match(
-                                pc, span, "MakeTuple", &format!("element[{i}]"),
-                                expected, elem_ty, errors,
+                                pc,
+                                span,
+                                "MakeTuple",
+                                &format!("element[{i}]"),
+                                expected,
+                                elem_ty,
+                                errors,
                             );
                         }
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Var(_)) {
+                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -444,7 +475,10 @@ impl CheckCtx {
 
             InstKind::MakeClosure { dst, captures, .. } => {
                 let dst_ty = ty!(*dst);
-                if let Ty::Fn { captures: cap_tys, .. } = dst_ty {
+                if let Ty::Fn {
+                    captures: cap_tys, ..
+                } = dst_ty
+                {
                     if cap_tys.len() != captures.len() {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
@@ -460,8 +494,13 @@ impl CheckCtx {
                         for (i, (cap, expected)) in captures.iter().zip(cap_tys).enumerate() {
                             let cap_ty = ty!(*cap);
                             self.assert_match(
-                                pc, span, "MakeClosure", &format!("capture[{i}]"),
-                                expected, cap_ty, errors,
+                                pc,
+                                span,
+                                "MakeClosure",
+                                &format!("capture[{i}]"),
+                                expected,
+                                cap_ty,
+                                errors,
                             );
                         }
                     }
@@ -477,8 +516,13 @@ impl CheckCtx {
                             (Some(expected), Some(val)) => {
                                 let val_ty = ty!(*val);
                                 self.assert_match(
-                                    pc, span, "MakeVariant", "payload",
-                                    expected, val_ty, errors,
+                                    pc,
+                                    span,
+                                    "MakeVariant",
+                                    "payload",
+                                    expected,
+                                    val_ty,
+                                    errors,
                                 );
                             }
                             (None, None) => {}
@@ -514,25 +558,59 @@ impl CheckCtx {
                     if let Some(val) = payload {
                         let val_ty = ty!(*val);
                         self.assert_match(
-                            pc, span, "MakeVariant", "Option payload",
-                            inner, val_ty, errors,
+                            pc,
+                            span,
+                            "MakeVariant",
+                            "Option payload",
+                            inner,
+                            val_ty,
+                            errors,
                         );
                     }
                 }
             }
 
             // === BinOp ===
-            InstKind::BinOp { dst, op, left, right } => {
+            InstKind::BinOp {
+                dst,
+                op,
+                left,
+                right,
+            } => {
                 let left_ty = ty!(*left);
                 let right_ty = ty!(*right);
                 let dst_ty = ty!(*dst);
 
                 if binop_is_logical(*op) {
-                    self.assert_match(pc, span, "BinOp(logical)", "left", &Ty::Bool, left_ty, errors);
-                    self.assert_match(pc, span, "BinOp(logical)", "right", &Ty::Bool, right_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp(logical)",
+                        "left",
+                        &Ty::Bool,
+                        left_ty,
+                        errors,
+                    );
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp(logical)",
+                        "right",
+                        &Ty::Bool,
+                        right_ty,
+                        errors,
+                    );
                     self.assert_match(pc, span, "BinOp(logical)", "dst", &Ty::Bool, dst_ty, errors);
                 } else if binop_returns_bool(*op) {
-                    self.assert_match(pc, span, "BinOp(cmp)", "left ≡ right", left_ty, right_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp(cmp)",
+                        "left ≡ right",
+                        left_ty,
+                        right_ty,
+                        errors,
+                    );
                     self.assert_match(pc, span, "BinOp(cmp)", "dst", &Ty::Bool, dst_ty, errors);
                 } else {
                     self.assert_match(pc, span, "BinOp", "left ≡ right", left_ty, right_ty, errors);
@@ -546,11 +624,35 @@ impl CheckCtx {
                 let dst_ty = ty!(*dst);
                 match op {
                     UnaryOp::Not => {
-                        self.assert_match(pc, span, "UnaryOp(Not)", "operand", &Ty::Bool, operand_ty, errors);
-                        self.assert_match(pc, span, "UnaryOp(Not)", "dst", &Ty::Bool, dst_ty, errors);
+                        self.assert_match(
+                            pc,
+                            span,
+                            "UnaryOp(Not)",
+                            "operand",
+                            &Ty::Bool,
+                            operand_ty,
+                            errors,
+                        );
+                        self.assert_match(
+                            pc,
+                            span,
+                            "UnaryOp(Not)",
+                            "dst",
+                            &Ty::Bool,
+                            dst_ty,
+                            errors,
+                        );
                     }
                     UnaryOp::Neg => {
-                        self.assert_match(pc, span, "UnaryOp(Neg)", "operand ≡ dst", operand_ty, dst_ty, errors);
+                        self.assert_match(
+                            pc,
+                            span,
+                            "UnaryOp(Neg)",
+                            "operand ≡ dst",
+                            operand_ty,
+                            dst_ty,
+                            errors,
+                        );
                     }
                 }
             }
@@ -560,7 +662,7 @@ impl CheckCtx {
                 let obj_ty = ty!(*object);
                 // Try direct type first, then unwrap one container level
                 // (lowerer may record List/Deque type for pattern-match iteration)
-                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Var(_)) {
+                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
                     obj_ty
                 } else {
                     unwrap_element_ty(obj_ty)
@@ -570,7 +672,7 @@ impl CheckCtx {
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "FieldGet", "dst", field_ty, dst_ty, errors);
                     }
-                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Var(_)) {
+                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -586,7 +688,7 @@ impl CheckCtx {
 
             InstKind::ObjectGet { dst, object, key } => {
                 let obj_ty = ty!(*object);
-                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Var(_)) {
+                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
                     obj_ty
                 } else {
                     unwrap_element_ty(obj_ty)
@@ -596,7 +698,7 @@ impl CheckCtx {
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "ObjectGet", "dst", field_ty, dst_ty, errors);
                     }
-                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Var(_)) {
+                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -628,7 +730,7 @@ impl CheckCtx {
                             },
                         });
                     }
-                } else if !tup_ty.is_error() && !matches!(tup_ty, Ty::Var(_)) {
+                } else if !tup_ty.is_error() && !matches!(tup_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -647,7 +749,7 @@ impl CheckCtx {
                 if let Some(inner) = as_list_inner(list_ty) {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ListIndex", "dst", inner, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Var(_)) {
+                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -668,7 +770,7 @@ impl CheckCtx {
                 if let Some(inner) = as_list_inner(list_ty) {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ListGet", "dst", inner, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Var(_)) {
+                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -687,7 +789,7 @@ impl CheckCtx {
                 let dst_ty = ty!(*dst);
                 if as_list_inner(list_ty).is_some() {
                     self.assert_match(pc, span, "ListSlice", "dst ≡ list", list_ty, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Var(_)) {
+                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -709,7 +811,10 @@ impl CheckCtx {
 
             InstKind::TestListLen { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                if !matches!(src_ty, Ty::List(_) | Ty::Deque(_, _) | Ty::Error(_) | Ty::Var(_)) {
+                if !matches!(
+                    src_ty,
+                    Ty::List(_) | Ty::Deque(_, _) | Ty::Error(_) | Ty::Param { .. }
+                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -727,12 +832,12 @@ impl CheckCtx {
 
             InstKind::TestObjectKey { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Var(_)) {
+                let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
                     src_ty
                 } else {
                     unwrap_element_ty(src_ty)
                 };
-                if !matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Var(_)) {
+                if !matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -757,7 +862,10 @@ impl CheckCtx {
 
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                if !matches!(src_ty, Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_) | Ty::Var(_)) {
+                if !matches!(
+                    src_ty,
+                    Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_) | Ty::Param { .. }
+                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -783,7 +891,7 @@ impl CheckCtx {
                     Ty::Enum { .. } => {
                         // Enum unwrap: dst type comes from val_types, trust typechecker
                     }
-                    Ty::Error(_) | Ty::Var(_) => {}
+                    Ty::Error(_) | Ty::Param { .. } => {}
                     _ => {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
@@ -800,16 +908,17 @@ impl CheckCtx {
             }
 
             // === IterStep ===
-            InstKind::IterStep { dst, src } => {
-                let src_ty = ty!(*src);
+            InstKind::IterStep { dst, iter_src, iter_dst, .. } => {
+                let src_ty = ty!(*iter_src);
                 if let Ty::Iterator(elem, effect) = src_ty {
-                    let expected_dst = Ty::Option(Box::new(Ty::Tuple(vec![
-                        *elem.clone(),
-                        Ty::Iterator(elem.clone(), *effect),
-                    ])));
+                    // dst gets the element type
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "IterStep", "dst", &expected_dst, dst_ty, errors);
-                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Var(_)) {
+                    self.assert_match(pc, span, "IterStep", "dst", &*elem, dst_ty, errors);
+                    // iter_dst gets the same iterator type
+                    let iter_dst_ty = ty!(*iter_dst);
+                    let expected_iter = Ty::Iterator(elem.clone(), effect.clone());
+                    self.assert_match(pc, span, "IterStep", "iter_dst", &expected_iter, iter_dst_ty, errors);
+                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -824,87 +933,131 @@ impl CheckCtx {
             }
 
             // === Calls ===
-            InstKind::BuiltinCall { dst, builtin, args } => {
-                let entry = builtins::registry().get(*builtin);
-                let mut subst = TySubst::new();
-                let (param_tys, ret_ty) = (entry.signature)(&mut subst);
+            InstKind::LoadFunction { dst, .. } => {
+                let _ = self.ty_of(*dst, vt, span, pc, errors);
+            }
 
-                if args.len() != param_tys.len() {
+            InstKind::FunctionCall { dst, callee, args } => {
+                match callee {
+                    Callee::Direct(_) => {
+                        // Direct graph function — cannot verify signature at MIR level
+                        let _ = self.ty_of(*dst, vt, span, pc, errors);
+                    }
+                    Callee::Indirect(closure) => {
+                        let closure_ty = ty!(*closure);
+                        if let Ty::Fn { params, ret, .. } = closure_ty {
+                            if args.len() != params.len() {
+                                errors.push(ValidationError {
+                                    scope: self.scope_name.clone(),
+                                    inst_index: pc,
+                                    span,
+                                    kind: ValidationErrorKind::ArityMismatch {
+                                        inst_name: "FunctionCall(Indirect)".to_string(),
+                                        expected: params.len(),
+                                        got: args.len(),
+                                    },
+                                });
+                            } else {
+                                for (i, (arg, param)) in args.iter().zip(params).enumerate() {
+                                    let arg_ty = ty!(*arg);
+                                    self.assert_match(
+                                        pc,
+                                        span,
+                                        "FunctionCall(Indirect)",
+                                        &format!("arg[{i}]"),
+                                        &param.ty,
+                                        arg_ty,
+                                        errors,
+                                    );
+                                }
+                            }
+                            let dst_ty = ty!(*dst);
+                            self.assert_match(pc, span, "FunctionCall(Indirect)", "return", ret, dst_ty, errors);
+                        }
+                        // Fn type might be Error/Var — skip
+                    }
+                }
+            }
+
+            // === Spawn / Eval ===
+            InstKind::Spawn { dst, callee, args, .. } => {
+                match callee {
+                    Callee::Direct(_) => {
+                        // Direct graph function — cannot verify signature at MIR level
+                        let dst_ty = ty!(*dst);
+                        if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_) | Ty::Param { .. }) {
+                            errors.push(ValidationError {
+                                scope: self.scope_name.clone(),
+                                inst_index: pc,
+                                span,
+                                kind: ValidationErrorKind::InvalidConstructor {
+                                    inst_name: "Spawn".to_string(),
+                                    expected_constructor: "Handle".to_string(),
+                                    actual: dst_ty.clone(),
+                                },
+                            });
+                        }
+                    }
+                    Callee::Indirect(closure) => {
+                        let closure_ty = ty!(*closure);
+                        if let Ty::Fn { params, ret, effect, .. } = closure_ty {
+                            if args.len() != params.len() {
+                                errors.push(ValidationError {
+                                    scope: self.scope_name.clone(),
+                                    inst_index: pc,
+                                    span,
+                                    kind: ValidationErrorKind::ArityMismatch {
+                                        inst_name: "Spawn(Indirect)".to_string(),
+                                        expected: params.len(),
+                                        got: args.len(),
+                                    },
+                                });
+                            } else {
+                                for (i, (arg, param)) in args.iter().zip(params).enumerate() {
+                                    let arg_ty = ty!(*arg);
+                                    self.assert_match(
+                                        pc,
+                                        span,
+                                        "Spawn(Indirect)",
+                                        &format!("arg[{i}]"),
+                                        &param.ty,
+                                        arg_ty,
+                                        errors,
+                                    );
+                                }
+                            }
+                            let expected_dst = Ty::Handle(Box::new(ret.as_ref().clone()), effect.clone());
+                            let dst_ty = ty!(*dst);
+                            self.assert_match(pc, span, "Spawn(Indirect)", "dst", &expected_dst, dst_ty, errors);
+                        }
+                        // Fn type might be Error/Var — skip
+                    }
+                }
+            }
+
+            InstKind::Eval { dst, src, .. } => {
+                let src_ty = ty!(*src);
+                if let Ty::Handle(inner, _) = src_ty {
+                    let dst_ty = ty!(*dst);
+                    self.assert_match(pc, span, "Eval", "dst", inner, dst_ty, errors);
+                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
-                        kind: ValidationErrorKind::ArityMismatch {
-                            inst_name: format!("BuiltinCall({})", entry.name),
-                            expected: param_tys.len(),
-                            got: args.len(),
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "Eval".to_string(),
+                            expected_constructor: "Handle".to_string(),
+                            actual: src_ty.clone(),
                         },
                     });
-                    return;
                 }
-
-                // Unify each arg with param to bind Vars.
-                // Covariant: actual ≤ expected (e.g. Pure fn is accepted where Effectful is expected).
-                for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
-                    let actual = ty!(*arg);
-                    if subst.unify(actual, param_ty, Polarity::Covariant).is_err() {
-                        errors.push(ValidationError {
-                            scope: self.scope_name.clone(),
-                            inst_index: pc,
-                            span,
-                            kind: ValidationErrorKind::TypeMismatch {
-                                inst_name: format!("BuiltinCall({})", entry.name),
-                                desc: format!("arg[{i}]"),
-                                expected: param_ty.clone(),
-                                actual: actual.clone(),
-                            },
-                        });
-                    }
-                }
-
-                // Check resolved return type against dst
-                let resolved_ret = subst.resolve(&ret_ty);
-                let dst_ty = ty!(*dst);
-                self.assert_match(
-                    pc, span, &format!("BuiltinCall({})", entry.name), "return",
-                    &resolved_ret, dst_ty, errors,
-                );
-            }
-
-            InstKind::ClosureCall { dst, closure, args } => {
-                let closure_ty = ty!(*closure);
-                if let Ty::Fn { params, ret, .. } = closure_ty {
-                    if args.len() != params.len() {
-                        errors.push(ValidationError {
-                            scope: self.scope_name.clone(),
-                            inst_index: pc,
-                            span,
-                            kind: ValidationErrorKind::ArityMismatch {
-                                inst_name: "ClosureCall".to_string(),
-                                expected: params.len(),
-                                got: args.len(),
-                            },
-                        });
-                    } else {
-                        for (i, (arg, param_ty)) in args.iter().zip(params).enumerate() {
-                            let arg_ty = ty!(*arg);
-                            self.assert_match(
-                                pc, span, "ClosureCall", &format!("arg[{i}]"),
-                                param_ty, arg_ty, errors,
-                            );
-                        }
-                    }
-                    let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "ClosureCall", "return", ret, dst_ty, errors);
-                }
-                // Fn type might be Error/Var — skip
-            }
-
-            InstKind::ExternCall { .. } => {
-                // External — cannot verify signature
             }
 
             // === Context / Variables ===
+            InstKind::ContextProject { dst, .. } => {
+                let _ = self.ty_of(*dst, vt, span, pc, errors);
+            }
             InstKind::ContextLoad { dst, .. } => {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
             }
@@ -914,10 +1067,8 @@ impl CheckCtx {
             InstKind::VarStore { src, .. } => {
                 let _ = self.ty_of(*src, vt, span, pc, errors);
             }
-
-            // === Output ===
-            InstKind::Yield(v) => {
-                let _ = self.ty_of(*v, vt, span, pc, errors);
+            InstKind::ContextStore { value, .. } => {
+                let _ = self.ty_of(*value, vt, span, pc, errors);
             }
 
             // === Control flow ===
@@ -939,15 +1090,26 @@ impl CheckCtx {
                             let param_ty = ty!(*param);
                             let arg_ty = ty!(*arg);
                             self.assert_match(
-                                pc, span, "Jump", &format!("arg[{i}]"),
-                                param_ty, arg_ty, errors,
+                                pc,
+                                span,
+                                "Jump",
+                                &format!("arg[{i}]"),
+                                param_ty,
+                                arg_ty,
+                                errors,
                             );
                         }
                     }
                 }
             }
 
-            InstKind::JumpIf { cond, then_label, then_args, else_label, else_args } => {
+            InstKind::JumpIf {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+            } => {
                 let cond_ty = ty!(*cond);
                 self.assert_match(pc, span, "JumpIf", "cond", &Ty::Bool, cond_ty, errors);
 
@@ -968,8 +1130,13 @@ impl CheckCtx {
                             let param_ty = ty!(*param);
                             let arg_ty = ty!(*arg);
                             self.assert_match(
-                                pc, span, "JumpIf(then)", &format!("arg[{i}]"),
-                                param_ty, arg_ty, errors,
+                                pc,
+                                span,
+                                "JumpIf(then)",
+                                &format!("arg[{i}]"),
+                                param_ty,
+                                arg_ty,
+                                errors,
                             );
                         }
                     }
@@ -992,8 +1159,13 @@ impl CheckCtx {
                             let param_ty = ty!(*param);
                             let arg_ty = ty!(*arg);
                             self.assert_match(
-                                pc, span, "JumpIf(else)", &format!("arg[{i}]"),
-                                param_ty, arg_ty, errors,
+                                pc,
+                                span,
+                                "JumpIf(else)",
+                                &format!("arg[{i}]"),
+                                param_ty,
+                                arg_ty,
+                                errors,
                             );
                         }
                     }
@@ -1012,6 +1184,7 @@ mod tests {
     use super::*;
     use crate::ir::{CastKind, DebugInfo, Inst, MirBody, MirModule};
     use acvus_ast::Literal;
+    use acvus_utils::LocalFactory;
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -1026,8 +1199,10 @@ mod tests {
             main: MirBody {
                 insts,
                 val_types,
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: DebugInfo::new(),
-                val_count: 100,
+                val_factory: LocalFactory::new(),
                 label_count: 10,
             },
             closures: FxHashMap::default(),
@@ -1036,10 +1211,15 @@ mod tests {
 
     #[test]
     fn const_type_matches() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::Int);
+        vt.insert(v0, Ty::Int);
         let module = make_module(
-            vec![inst(InstKind::Const { dst: ValueId(0), value: Literal::Int(42) })],
+            vec![inst(InstKind::Const {
+                dst: v0,
+                value: Literal::Int(42),
+            })],
             vt,
         );
         let errors = check_types(&module);
@@ -1048,10 +1228,15 @@ mod tests {
 
     #[test]
     fn const_type_mismatch() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::String); // wrong: Literal::Int should be Int
+        vt.insert(v0, Ty::String); // wrong: Literal::Int should be Int
         let module = make_module(
-            vec![inst(InstKind::Const { dst: ValueId(0), value: Literal::Int(42) })],
+            vec![inst(InstKind::Const {
+                dst: v0,
+                value: Literal::Int(42),
+            })],
             vt,
         );
         let errors = check_types(&module);
@@ -1061,11 +1246,18 @@ mod tests {
     #[test]
     fn cast_skipped() {
         // Cast should not produce type errors even though src != dst type
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::List(Box::new(Ty::Int)));
-        vt.insert(ValueId(1), Ty::Iterator(Box::new(Ty::Int), Effect::Pure));
+        vt.insert(v0, Ty::List(Box::new(Ty::Int)));
+        vt.insert(v1, Ty::Iterator(Box::new(Ty::Int), Effect::pure()));
         let module = make_module(
-            vec![inst(InstKind::Cast { dst: ValueId(1), src: ValueId(0), kind: CastKind::ListToIterator })],
+            vec![inst(InstKind::Cast {
+                dst: v1,
+                src: v0,
+                kind: CastKind::ListToIterator,
+            })],
             vt,
         );
         let errors = check_types(&module);
@@ -1074,12 +1266,21 @@ mod tests {
 
     #[test]
     fn binop_type_mismatch() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::Int);
-        vt.insert(ValueId(1), Ty::String); // mismatch
-        vt.insert(ValueId(2), Ty::Int);
+        vt.insert(v0, Ty::Int);
+        vt.insert(v1, Ty::String); // mismatch
+        vt.insert(v2, Ty::Int);
         let module = make_module(
-            vec![inst(InstKind::BinOp { dst: ValueId(2), op: acvus_ast::BinOp::Add, left: ValueId(0), right: ValueId(1) })],
+            vec![inst(InstKind::BinOp {
+                dst: v2,
+                op: acvus_ast::BinOp::Add,
+                left: v0,
+                right: v1,
+            })],
             vt,
         );
         let errors = check_types(&module);
@@ -1088,11 +1289,17 @@ mod tests {
 
     #[test]
     fn make_tuple_arity_mismatch() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::Int);
-        vt.insert(ValueId(1), Ty::Tuple(vec![Ty::Int, Ty::String])); // expects 2 elements
+        vt.insert(v0, Ty::Int);
+        vt.insert(v1, Ty::Tuple(vec![Ty::Int, Ty::String])); // expects 2 elements
         let module = make_module(
-            vec![inst(InstKind::MakeTuple { dst: ValueId(1), elements: vec![ValueId(0)] })], // only 1
+            vec![inst(InstKind::MakeTuple {
+                dst: v1,
+                elements: vec![v0],
+            })], // only 1
             vt,
         );
         let errors = check_types(&module);
@@ -1102,17 +1309,30 @@ mod tests {
     #[test]
     fn jump_args_type_match() {
         // BlockLabel with param, Jump with matching arg type
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(ValueId(0), Ty::Int);
-        vt.insert(ValueId(1), Ty::Int);
+        vt.insert(v0, Ty::Int);
+        vt.insert(v1, Ty::Int);
         let module = make_module(
             vec![
-                inst(InstKind::BlockLabel { label: Label(0), params: vec![ValueId(1)], merge_of: None }),
-                inst(InstKind::Jump { label: Label(0), args: vec![ValueId(0)] }),
+                inst(InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![v1],
+                    merge_of: None,
+                }),
+                inst(InstKind::Jump {
+                    label: Label(0),
+                    args: vec![v0],
+                }),
             ],
             vt,
         );
         let errors = check_types(&module);
-        assert!(errors.is_empty(), "matching jump arg types should pass: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "matching jump arg types should pass: {errors:?}"
+        );
     }
 }

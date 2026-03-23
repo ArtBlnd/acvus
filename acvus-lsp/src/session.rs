@@ -2,7 +2,8 @@ use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistr
 use acvus_mir::ir::{InstKind, MirModule};
 use acvus_mir::ty::{Ty, TySubst};
 use acvus_mir::analysis::reachable_context::KnownValue;
-use acvus_orchestration::{ContextScope, Execution, NodeSpec, Persistency};
+use acvus_orchestration::{ContextScope, NodeSpec, Persistency};
+use acvus_mir::graph::Id;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -37,7 +38,6 @@ pub enum NodeField {
     InitialValue,
     Bind,
     Assert,
-    IfModifiedKey,
     ExprSource,
     Message(usize),
     IteratorExpr(usize),
@@ -107,7 +107,6 @@ pub struct NodeErrors {
     pub env: Vec<LspError>,
     pub initial_value: Vec<LspError>,
     pub bind: Vec<LspError>,
-    pub if_modified_key: Vec<LspError>,
     pub assert: Vec<LspError>,
     pub messages: FxHashMap<usize, Vec<LspError>>,
     pub expr_source: Vec<LspError>,
@@ -118,7 +117,6 @@ impl NodeErrors {
         self.env.is_empty()
             && self.initial_value.is_empty()
             && self.bind.is_empty()
-            && self.if_modified_key.is_empty()
             && self.assert.is_empty()
             && self.messages.is_empty()
             && self.expr_source.is_empty()
@@ -246,7 +244,7 @@ pub struct LspSession {
     initial_system_keys: FxHashMap<Astr, Ty>,
 
     // Node-level state (from rebuild_nodes)
-    node_env: Option<acvus_orchestration::ExternalContextEnv>,
+    rebuild_context_types: FxHashMap<Astr, Ty>,
     specs: Vec<NodeSpec>,
     rebuild_cache: Option<RebuildCache>,
 
@@ -270,7 +268,7 @@ impl LspSession {
             interner,
             documents: FxHashMap::default(),
             next_doc_id: 0,
-            node_env: None,
+            rebuild_context_types: FxHashMap::default(),
             initial_system_keys: initial_system,
             specs: Vec::new(),
             rebuild_cache: None,
@@ -377,7 +375,6 @@ impl LspSession {
         self.inference_errors.insert((node_name, NodeField::InitialValue), errors.initial_value.clone());
         self.inference_errors.insert((node_name, NodeField::Bind), errors.bind.clone());
         self.inference_errors.insert((node_name, NodeField::Assert), errors.assert.clone());
-        self.inference_errors.insert((node_name, NodeField::IfModifiedKey), errors.if_modified_key.clone());
         self.inference_errors.insert((node_name, NodeField::ExprSource), errors.expr_source.clone());
         for (idx, msg_errors) in &errors.messages {
             self.inference_errors.insert((node_name, NodeField::Message(*idx)), msg_errors.clone());
@@ -470,10 +467,8 @@ impl LspSession {
             if self.initial_system_keys.contains_key(&k.name) {
                 return false;
             }
-            if let Some(ref env) = self.node_env {
-                if env.registry.system().contains_key(&k.name) {
-                    return false;
-                }
+            if self.rebuild_context_types.contains_key(&k.name) {
+                return false;
             }
             true
         });
@@ -540,62 +535,91 @@ impl LspSession {
             }
         }
 
-        // 1. Compute external context env
-        let env = match acvus_orchestration::compute_external_context_env(
-            &self.interner,
-            &specs,
-            registry,
-        ) {
-            Ok(env) => env,
-            Err(errs) => {
-                return RebuildResult {
-                    env_errors: from_orch_errors(&errs, &self.interner),
-                    context_types: FxHashMap::default(),
-                    node_locals: FxHashMap::default(),
-                    node_errors: FxHashMap::default(),
-                };
-            }
-        };
+        // Phased API: lower → resolve.
+        // Graph engine handles all type resolution and error collection.
+        let (graph, node_metas) = acvus_orchestration::lower::lower(&self.interner, &specs, &registry);
+        let resolved = graph.resolve(&self.interner);
 
-        // context_types: visible = system + user
-        let context_types: FxHashMap<Astr, Ty> = env.registry.visible();
+        // Extract context_types: node visible types + registry types.
+        let mut context_types: FxHashMap<Astr, Ty> = registry.visible();
+        context_types.insert(self.interner.intern("turn_index"), Ty::Int);
 
-        // node_locals
-        let node_locals: FxHashMap<Astr, NodeLocals> = env
-            .node_locals
-            .iter()
-            .map(|(name, locals)| {
-                (
-                    *name,
-                    NodeLocals {
-                        raw_ty: locals.raw_ty.clone(),
-                        self_ty: locals.self_ty.clone(),
-                    },
-                )
-            })
-            .collect();
+        let key_raw = self.interner.intern("raw");
+        let key_self = self.interner.intern("self");
 
-        // 2. Per-node, per-field typecheck
-        let full_reg = env.registry.to_full();
-        let mut node_errors: FxHashMap<Astr, NodeErrors> = FxHashMap::default();
+        // Extract node_locals + context_types from resolved graph.
+        // NodeMeta.name_to_id maps context names ("raw", "self") to context Ids,
+        // which are looked up in resolved.resolved_types.
+        let mut node_locals: FxHashMap<Astr, NodeLocals> = FxHashMap::default();
+        for (spec_idx, spec) in specs.iter().enumerate() {
+            let meta = &node_metas[spec_idx];
 
-        for spec in &specs {
-            let Some(locals) = env.node_locals.get(&spec.name) else {
-                continue;
+            let raw_ty = meta.name_to_id.get(&key_raw)
+                .and_then(|id| resolved.resolved_types.get(id))
+                .cloned()
+                .unwrap_or_else(Ty::error);
+
+            let self_ty = meta.name_to_id.get(&key_self)
+                .and_then(|id| resolved.resolved_types.get(id))
+                .cloned()
+                .unwrap_or_else(|| raw_ty.clone());
+
+            let visible_ty = if spec.is_function {
+                wrap_fn_ty_lsp(spec, raw_ty.clone())
+            } else if spec.strategy.initial_value.is_some() {
+                self_ty.clone()
+            } else {
+                raw_ty.clone()
             };
-            let errors = typecheck_node(&self.interner, spec, locals, &full_reg);
+            context_types.insert(spec.name, visible_ty);
+            node_locals.insert(spec.name, NodeLocals { raw_ty, self_ty });
+        }
 
-            // Store inference results for bound documents
-            self.store_node_inference(spec.name, &errors);
-
-            if !errors.is_empty() {
-                node_errors.insert(spec.name, errors);
+        // Build unit_id → node index map from graph scopes.
+        // Each node's entrypoint_id lives in exactly one scope; all units in
+        // that scope belong to that node.
+        let entrypoint_to_node: FxHashMap<Id, usize> = node_metas.iter()
+            .enumerate()
+            .map(|(i, m)| (m.entrypoint_id, i))
+            .collect();
+        let mut unit_to_node: FxHashMap<Id, usize> = FxHashMap::default();
+        for scope in &graph.scopes {
+            // Find which node owns this scope via entrypoint membership.
+            let owner = scope.units.iter()
+                .find_map(|uid| entrypoint_to_node.get(uid).copied());
+            if let Some(node_idx) = owner {
+                for uid in &scope.units {
+                    unit_to_node.insert(*uid, node_idx);
+                }
             }
         }
 
-        // Store state
+        // Extract per-node errors from graph engine's per-unit errors.
+        // Without per-field unit mapping, all errors are attributed to expr_source.
+        let mut node_errors: FxHashMap<Astr, NodeErrors> = FxHashMap::default();
+        for ge in &resolved.errors {
+            let lsp_errors = from_mir_errors(&ge.errors, &self.interner);
+            if lsp_errors.is_empty() { continue; }
+
+            if let Some(&node_idx) = unit_to_node.get(&ge.unit) {
+                let spec = &specs[node_idx];
+                let errors = node_errors.entry(spec.name).or_default();
+                errors.expr_source.extend(lsp_errors);
+            }
+        }
+
+        // Remove empty entries.
+        node_errors.retain(|_, e| !e.is_empty());
+
+        // Store inference results for bound documents.
+        for spec in &specs {
+            let errors = node_errors.get(&spec.name).cloned().unwrap_or_default();
+            self.store_node_inference(spec.name, &errors);
+        }
+
+        // Store state.
+        self.rebuild_context_types = context_types.clone();
         self.specs = specs;
-        self.node_env = Some(env);
 
         let result = RebuildResult {
             env_errors: vec![],
@@ -642,13 +666,12 @@ fn check_script_with_subst(
             }];
         }
     };
-    match acvus_mir::compile_script_with_hint_subst(
-        interner,
-        &script,
-        registry,
-        expected_tail,
-        subst,
-    ) {
+    let result = acvus_mir::typecheck_script(interner, &script, registry, expected_tail, subst)
+        .and_then(|uc| acvus_mir::check_completeness(uc, subst))
+        .and_then(|ch| acvus_mir::lower_checked_script(
+            interner, &script, ch, acvus_mir::build_name_to_id(registry.merged()),
+        ));
+    match result {
         Ok(_) => vec![],
         Err(errs) => from_mir_errors(&errs, interner),
     }
@@ -669,7 +692,11 @@ fn check_template(
             }];
         }
     };
-    match acvus_mir::compile(interner, &ast, registry) {
+    let mut subst = acvus_mir::ty::TySubst::new();
+    let result = acvus_mir::typecheck_template(interner, &ast, registry, &mut subst)
+        .and_then(|uc| acvus_mir::check_completeness(uc, &subst))
+        .and_then(|ch| acvus_mir::lower_checked_template(interner, &ast, ch, acvus_mir::build_name_to_id(registry.merged())));
+    match result {
         Ok(_) => vec![],
         Err(errs) => from_mir_errors(&errs, interner),
     }
@@ -690,8 +717,12 @@ fn discover_context_keys(
                 Ok(a) => a,
                 Err(_) => return vec![],
             };
-            let (module, _hints, _errs) =
-                acvus_mir::compile_analysis_partial(interner, &ast, registry);
+            let mut subst = acvus_mir::ty::TySubst::new();
+            let checker = acvus_mir::typeck::TypeChecker::new(interner, registry.merged(), &mut subst)
+                .with_analysis_mode();
+            let (type_map, builtin_map, coercion_map, _errs) = checker.check_template_partial(&ast);
+            let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(registry.merged()));
+            let (module, _hints) = lowerer.lower_template(&ast);
             module
         }
         ScriptMode::Script => {
@@ -699,10 +730,12 @@ fn discover_context_keys(
                 Ok(s) => s,
                 Err(_) => return vec![],
             };
-            let (module, _hints, _tail, _errs) =
-                acvus_mir::compile_script_analysis_with_tail_partial(
-                    interner, &script, registry, None,
-                );
+            let mut subst = acvus_mir::ty::TySubst::new();
+            let checker = acvus_mir::typeck::TypeChecker::new(interner, registry.merged(), &mut subst)
+                .with_analysis_mode();
+            let (type_map, builtin_map, coercion_map, _tail, _errs) = checker.check_script_with_hint_partial(&script, None);
+            let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(registry.merged()));
+            let (module, _hints) = lowerer.lower_script(&script);
             module
         }
     };
@@ -718,65 +751,86 @@ fn discover_context_keys(
 
 /// Extract context keys from a compiled MIR module using reachable context analysis.
 fn extract_context_keys(
-    interner: &Interner,
+    _interner: &Interner,
     module: &MirModule,
     known: &FxHashMap<Astr, KnownValue>,
 ) -> Vec<ContextKeyInfo> {
-    use acvus_mir::ir::ValueId;
     use acvus_mir::analysis::reachable_context::partition_context_keys;
     use acvus_mir::analysis::val_def::ValDefMapAnalysis;
-    use acvus_mir::AnalysisPass;
+    use acvus_mir::graph::ContextId;
+    use acvus_mir::pass::AnalysisPass;
+    use acvus_mir::ir::ValOrigin;
 
-    let val_def = ValDefMapAnalysis.run(module, ());
-    let partition = partition_context_keys(module, known, &val_def);
-
-    let mut type_map = FxHashMap::<Astr, Ty>::default();
-    let mut collect_types = |insts: &[acvus_mir::ir::Inst],
-                             val_types: &FxHashMap<ValueId, Ty>| {
-        for inst in insts {
-            if let InstKind::ContextLoad { dst, name, .. } = &inst.kind {
-                type_map
-                    .entry(*name)
-                    .or_insert_with(|| val_types.get(dst).cloned().unwrap_or_else(Ty::error));
+    // Build ContextId<->Astr mappings from ContextLoad instructions + debug info.
+    let mut id_to_name: FxHashMap<ContextId, Astr> = FxHashMap::default();
+    let mut name_to_id: FxHashMap<Astr, ContextId> = FxHashMap::default();
+    for inst in &module.main.insts {
+        if let InstKind::ContextLoad { dst, id } = &inst.kind {
+            if let Some(ValOrigin::Context(name)) = module.main.debug.val_origins.get(dst) {
+                id_to_name.insert(*id, *name);
+                name_to_id.insert(*name, *id);
             }
         }
-    };
-    collect_types(&module.main.insts, &module.main.val_types);
-    for body in module.closures.values() {
-        collect_types(&body.body.insts, &body.body.val_types);
     }
 
-    let mut seen = FxHashSet::<Astr>::default();
+    // Convert known (Astr -> KnownValue) to (ContextId -> KnownValue).
+    let known_by_id: FxHashMap<ContextId, KnownValue> = known
+        .iter()
+        .filter_map(|(name, val)| name_to_id.get(name).map(|id| (*id, val.clone())))
+        .collect();
+
+    let val_def = ValDefMapAnalysis.run(module, ());
+    let partition = partition_context_keys(module, &known_by_id, &val_def);
+
+    // Collect ContextId -> type from module val_types.
+    let mut id_to_ty: FxHashMap<ContextId, Ty> = FxHashMap::default();
+    for inst in &module.main.insts {
+        if let InstKind::ContextLoad { dst, id } = &inst.kind {
+            if let Some(ty) = module.main.val_types.get(dst) {
+                id_to_ty.entry(*id).or_insert_with(|| ty.clone());
+            }
+        }
+    }
+
     let mut keys = Vec::new();
 
-    for name in &partition.eager {
-        if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
-            keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Eager });
+    for ctx_id in &partition.eager {
+        if let Some(&name) = id_to_name.get(ctx_id) {
+            keys.push(ContextKeyInfo {
+                name,
+                ty: id_to_ty.get(ctx_id).cloned().unwrap_or(Ty::error()),
+                status: ContextKeyStatus::Eager,
+            });
         }
     }
-    for name in &partition.lazy {
-        if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
-            keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Lazy });
+    for ctx_id in &partition.lazy {
+        if let Some(&name) = id_to_name.get(ctx_id) {
+            keys.push(ContextKeyInfo {
+                name,
+                ty: id_to_ty.get(ctx_id).cloned().unwrap_or(Ty::error()),
+                status: ContextKeyStatus::Lazy,
+            });
         }
     }
-    for name in &partition.reachable_known {
-        if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
-            keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Eager });
+    for ctx_id in &partition.reachable_known {
+        if let Some(&name) = id_to_name.get(ctx_id) {
+            keys.push(ContextKeyInfo {
+                name,
+                ty: id_to_ty.get(ctx_id).cloned().unwrap_or(Ty::error()),
+                status: ContextKeyStatus::Eager,
+            });
         }
     }
-    for name in &partition.pruned {
-        if seen.insert(*name) {
-            let ty = type_map.get(name).cloned().unwrap_or_else(Ty::error);
-            keys.push(ContextKeyInfo { name: *name, ty, status: ContextKeyStatus::Pruned });
+    for ctx_id in &partition.pruned {
+        if let Some(&name) = id_to_name.get(ctx_id) {
+            keys.push(ContextKeyInfo {
+                name,
+                ty: id_to_ty.get(ctx_id).cloned().unwrap_or(Ty::error()),
+                status: ContextKeyStatus::Pruned,
+            });
         }
     }
 
-    keys.sort_by(|a, b| {
-        interner.resolve(a.name).cmp(interner.resolve(b.name))
-    });
     keys
 }
 
@@ -860,15 +914,6 @@ fn typecheck_node(
                     check_script(interner, interner.resolve(init_src), &init_reg, hint);
             }
         }
-    }
-
-    // if_modified key
-    if let Execution::IfModified { key } = &spec.strategy.execution {
-        let no_self_reg = spec
-            .build_node_context(interner, full_reg, ContextScope::InitialValue, locals_ref)
-            .expect("InitialValue scope should not conflict");
-        errors.if_modified_key =
-            check_script(interner, interner.resolve(*key), &no_self_reg, None);
     }
 
     // bind script (Sequence/Patch)
@@ -1010,8 +1055,11 @@ fn infer_tail_type(
     scope: &ContextTypeRegistry,
 ) -> Option<Ty> {
     let script = acvus_ast::parse_script(interner, source).ok()?;
-    let (_module, _hints, tail_ty, _errs) =
-        acvus_mir::compile_script_analysis_with_tail_partial(interner, &script, scope, None);
+    let mut subst = acvus_mir::ty::TySubst::new();
+    let checker = acvus_mir::typeck::TypeChecker::new(interner, scope.merged(), &mut subst)
+        .with_analysis_mode();
+    let (_type_map, _builtin_map, _coercion_map, tail_ty, _errs) =
+        checker.check_script_with_hint_partial(&script, None);
     // Resolve through substitution — if still Var/Infer, return None
     match &tail_ty {
         Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => None,
@@ -1123,6 +1171,21 @@ fn keyword_completions(prefix: &str) -> Vec<CompletionItem> {
 // Error conversion helpers
 // ---------------------------------------------------------------------------
 
+fn wrap_fn_ty_lsp(spec: &NodeSpec, ty: Ty) -> Ty {
+    if spec.is_function {
+        let params: Vec<Ty> = spec.fn_params.iter().map(|p| p.ty.clone()).collect();
+        Ty::Fn {
+            params,
+            ret: Box::new(ty),
+            kind: acvus_mir::ty::FnKind::Extern,
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::Pure,
+        }
+    } else {
+        ty
+    }
+}
+
 fn from_mir_errors(errs: &[acvus_mir::error::MirError], interner: &Interner) -> Vec<LspError> {
     errs.iter()
         .map(|e| LspError {
@@ -1162,10 +1225,15 @@ fn hash_known(known: &FxHashMap<Astr, KnownValue>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use acvus_mir::ty::Ty;
     use acvus_orchestration::{
         Execution, ExpressionSpec, NodeKind, NodeSpec, Persistency, PlainSpec, Strategy,
     };
+
+    fn noop_fetch() -> Arc<acvus_orchestration::http::NoopFetch> {
+        Arc::new(acvus_orchestration::http::NoopFetch)
+    }
 
     fn make_session() -> LspSession {
         LspSession::new()
@@ -1552,7 +1620,7 @@ mod tests {
             "history",
             "\"msg\"",
             "[]",
-            "@self | append(@raw)",
+            "@self | chain([@raw])",
         );
         let result = session.rebuild_nodes(vec![node], empty_partial_registry());
         assert!(result.env_errors.is_empty());
@@ -2207,7 +2275,13 @@ mod tests {
             Ok(s) => s,
             Err(_) => return false,
         };
-        acvus_mir::compile_script_with_hint(interner, &script, registry, None).is_ok()
+        let mut subst = acvus_mir::ty::TySubst::new();
+        acvus_mir::typecheck_script(interner, &script, registry, None, &mut subst)
+            .and_then(|uc| acvus_mir::check_completeness(uc, &subst))
+            .and_then(|ch| acvus_mir::lower_checked_script(
+                interner, &script, ch, acvus_mir::build_name_to_id(registry.merged()),
+            ))
+            .is_ok()
     }
 
     #[test]
@@ -2268,6 +2342,7 @@ mod tests {
             session.interner(),
             &[node],
             empty_partial_registry(),
+            noop_fetch(),
         );
         let compile_ok = compile_result.is_ok();
 
@@ -2298,6 +2373,7 @@ mod tests {
             session.interner(),
             &[node],
             empty_partial_registry(),
+            noop_fetch(),
         );
         let compile_ok = compile_result.is_ok();
         assert_eq!(
@@ -2361,7 +2437,7 @@ mod tests {
         let calc = session.interner.intern("calc");
         let lsp_ok = lsp_result.node_errors.get(&calc).map_or(true, |e| e.expr_source.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: valid expr node");
         assert!(lsp_ok);
@@ -2375,7 +2451,7 @@ mod tests {
         let bad = session.interner.intern("bad");
         let lsp_ok = lsp_result.node_errors.get(&bad).map_or(true, |e| e.expr_source.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: expr type error");
         assert!(!lsp_ok);
@@ -2389,7 +2465,7 @@ mod tests {
         let c = session.interner.intern("c");
         let lsp_ok = lsp_result.node_errors.get(&c).map_or(true, |e| e.initial_value.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: valid initial_value");
         assert!(lsp_ok);
@@ -2416,7 +2492,7 @@ mod tests {
         let g = session.interner.intern("g");
         let lsp_ok = lsp_result.node_errors.get(&g).map_or(true, |e| e.assert.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: assert bool");
         assert!(lsp_ok);
@@ -2443,7 +2519,7 @@ mod tests {
         let g = session.interner.intern("g");
         let lsp_ok = lsp_result.node_errors.get(&g).map_or(true, |e| e.assert.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: assert non-bool");
         assert!(!lsp_ok);
@@ -2457,7 +2533,7 @@ mod tests {
         let lsp_result = session.rebuild_nodes(vec![a.clone(), b.clone()], empty_partial_registry());
         let lsp_ok = lsp_result.env_errors.is_empty() && lsp_result.node_errors.is_empty();
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[a, b], empty_partial_registry(),
+            session.interner(), &[a, b], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: node dependency order");
         assert!(lsp_ok);
@@ -2471,7 +2547,7 @@ mod tests {
         let st = session.interner.intern("st");
         let lsp_ok = lsp_result.node_errors.get(&st).map_or(true, |e| e.bind.is_empty());
         let compile_ok = acvus_orchestration::compile_nodes(
-            session.interner(), &[node], empty_partial_registry(),
+            session.interner(), &[node], empty_partial_registry(), noop_fetch(),
         ).is_ok();
         assert_eq!(lsp_ok, compile_ok, "parity: patch bind");
         assert!(lsp_ok);

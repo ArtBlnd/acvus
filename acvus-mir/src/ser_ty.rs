@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use acvus_utils::Interner;
 use serde::{Deserialize, Serialize};
 
-use crate::ty::{Effect, FnKind, Origin, Ty, TyVar};
+use crate::ty::{Effect, Origin, Ty};
 
 /// Serializable mirror of [`Ty`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -27,27 +27,54 @@ pub enum SerTy {
     Unit,
     Range,
     Byte,
-    Infer,
     Error,
-    List { elem: Box<SerTy> },
-    Object { fields: BTreeMap<std::string::String, SerTy> },
-    Tuple { elems: Vec<SerTy> },
+    /// Type parameter. Should not appear in persisted data; deserializes to Ty::error().
+    Param {
+        id: u32,
+    },
+    /// Legacy variant kept for backward-compatible deserialization only.
+    Infer,
+    /// Legacy variant kept for backward-compatible deserialization only.
+    Var {
+        id: u32,
+    },
+    List {
+        elem: Box<SerTy>,
+    },
+    Object {
+        fields: BTreeMap<std::string::String, SerTy>,
+    },
+    Tuple {
+        elems: Vec<SerTy>,
+    },
     Fn {
         params: Vec<SerTy>,
         ret: Box<SerTy>,
-        fn_kind: FnKind,
         effect: Effect,
     },
-    Opaque { name: std::string::String },
-    Option { inner: Box<SerTy> },
+    Opaque {
+        name: std::string::String,
+    },
+    Option {
+        inner: Box<SerTy>,
+    },
     Enum {
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
     },
-    Iterator { elem: Box<SerTy>, effect: Effect },
-    Sequence { elem: Box<SerTy>, origin: Origin, effect: Effect },
-    Deque { elem: Box<SerTy>, origin: Origin },
-    Var { id: u32 },
+    Iterator {
+        elem: Box<SerTy>,
+        effect: Effect,
+    },
+    Sequence {
+        elem: Box<SerTy>,
+        origin: Origin,
+        effect: Effect,
+    },
+    Deque {
+        elem: Box<SerTy>,
+        origin: Origin,
+    },
 }
 
 impl Ty {
@@ -61,9 +88,10 @@ impl Ty {
             Ty::Unit => SerTy::Unit,
             Ty::Range => SerTy::Range,
             Ty::Byte => SerTy::Byte,
-            Ty::Infer(_) => SerTy::Infer,
             Ty::Error(_) => SerTy::Error,
-            Ty::List(elem) => SerTy::List { elem: Box::new(elem.to_ser(interner)) },
+            Ty::List(elem) => SerTy::List {
+                elem: Box::new(elem.to_ser(interner)),
+            },
             Ty::Object(fields) => SerTy::Object {
                 fields: fields
                     .iter()
@@ -73,14 +101,20 @@ impl Ty {
             Ty::Tuple(elems) => SerTy::Tuple {
                 elems: elems.iter().map(|e| e.to_ser(interner)).collect(),
             },
-            Ty::Fn { params, ret, kind, effect, .. } => SerTy::Fn {
-                params: params.iter().map(|p| p.to_ser(interner)).collect(),
+            Ty::Fn {
+                params,
+                ret,
+                effect,
+                ..
+            } => SerTy::Fn {
+                params: params.iter().map(|p| p.ty.to_ser(interner)).collect(),
                 ret: Box::new(ret.to_ser(interner)),
-                fn_kind: *kind,
-                effect: *effect,
+                effect: effect.clone(),
             },
             Ty::Opaque(name) => SerTy::Opaque { name: name.clone() },
-            Ty::Option(inner) => SerTy::Option { inner: Box::new(inner.to_ser(interner)) },
+            Ty::Option(inner) => SerTy::Option {
+                inner: Box::new(inner.to_ser(interner)),
+            },
             Ty::Enum { name, variants } => SerTy::Enum {
                 name: interner.resolve(*name).to_string(),
                 variants: variants
@@ -95,18 +129,19 @@ impl Ty {
             },
             Ty::Iterator(elem, effect) => SerTy::Iterator {
                 elem: Box::new(elem.to_ser(interner)),
-                effect: *effect,
+                effect: effect.clone(),
             },
             Ty::Sequence(elem, origin, effect) => SerTy::Sequence {
                 elem: Box::new(elem.to_ser(interner)),
                 origin: *origin,
-                effect: *effect,
+                effect: effect.clone(),
             },
             Ty::Deque(elem, origin) => SerTy::Deque {
                 elem: Box::new(elem.to_ser(interner)),
                 origin: *origin,
             },
-            Ty::Var(TyVar(id)) => SerTy::Var { id: *id },
+            Ty::Handle(..) => todo!("Handle serialization not yet implemented"),
+            Ty::Param { token: p, .. } => SerTy::Param { id: p.id() },
         }
     }
 }
@@ -122,8 +157,10 @@ impl SerTy {
             SerTy::Unit => Ty::Unit,
             SerTy::Range => Ty::Range,
             SerTy::Byte => Ty::Byte,
-            SerTy::Infer => Ty::infer(),
             SerTy::Error => Ty::error(),
+            // Param / Infer / Var should never appear in persisted data.
+            // Recover gracefully with poison type.
+            SerTy::Param { .. } | SerTy::Infer | SerTy::Var { .. } => Ty::error(),
             SerTy::List { elem } => Ty::List(Box::new(elem.to_ty(interner))),
             SerTy::Object { fields } => Ty::Object(
                 fields
@@ -132,12 +169,15 @@ impl SerTy {
                     .collect(),
             ),
             SerTy::Tuple { elems } => Ty::Tuple(elems.iter().map(|e| e.to_ty(interner)).collect()),
-            SerTy::Fn { params, ret, fn_kind, effect } => Ty::Fn {
-                params: params.iter().map(|p| p.to_ty(interner)).collect(),
+            SerTy::Fn {
+                params,
+                ret,
+                effect,
+            } => Ty::Fn {
+                params: params.iter().map(|p| crate::ty::Param::new(interner.intern("_"), p.to_ty(interner))).collect(),
                 ret: Box::new(ret.to_ty(interner)),
-                kind: *fn_kind,
                 captures: vec![],
-                effect: *effect,
+                effect: effect.clone(),
             },
             SerTy::Opaque { name } => Ty::Opaque(name.clone()),
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
@@ -153,12 +193,15 @@ impl SerTy {
                     })
                     .collect(),
             },
-            SerTy::Iterator { elem, effect } => Ty::Iterator(Box::new(elem.to_ty(interner)), *effect),
-            SerTy::Sequence { elem, origin, effect } => {
-                Ty::Sequence(Box::new(elem.to_ty(interner)), *origin, *effect)
+            SerTy::Iterator { elem, effect } => {
+                Ty::Iterator(Box::new(elem.to_ty(interner)), effect.clone())
             }
+            SerTy::Sequence {
+                elem,
+                origin,
+                effect,
+            } => Ty::Sequence(Box::new(elem.to_ty(interner)), *origin, effect.clone()),
             SerTy::Deque { elem, origin } => Ty::Deque(Box::new(elem.to_ty(interner)), *origin),
-            SerTy::Var { id } => Ty::Var(TyVar(*id)),
         }
     }
 }

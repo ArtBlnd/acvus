@@ -2,52 +2,77 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @data
-     1 │ L2:
-     3 │   r2 = r0.0
-     5 │   r4 = true (r1) && true (r3)
-     6 │   r5 = r0.1
-     8 │   r7 = r4 && true (r6)
-     9 │   jump_if r7 then L3 else L1
-    10 │ L3:
-    11 │   r8 = r0.0
-    12 │   r9 = r0.1
-    13 │   yield r8
-    14 │   r10 = cast ListToIterator r9
-    15 │   jump L4(r10)
-    16 │ L4(r11: Iterator<Int>):
-    17 │   r12 = iter_step r11
-    18 │   r13 = test r12 is None
-    19 │   jump_if r13 then L5 else L7
-    20 │ L7:
-    21 │   r14 = unwrap r12
-    22 │   r15 = r14.0
-    23 │   r16 = r14.1
-    24 │   r17 = call to_string(r15)
-    25 │   yield r17
-    26 │   jump L4(r16)
-    27 │ L5:
-    28 │ L6:
-    29 │   jump L0
-    30 │ L1:
-    31 │ L0:  ; merge_of L2
+=== literals ===
+  T0 = ""
 
-    ; r0 (@data) : (String, List<Int>)
-    ; r1 (v1) : Bool
-    ; r2 (v2) : String
+=== main ===
+     1 │   r1 = context_project @data
+     2 │   r2 = context_load r1
+     3 │ L2:
+     5 │   r4 = r2.0
+     7 │   r6 = true (r3) && true (r5)
+     8 │   r7 = r2.1
+    10 │   r9 = r6 && true (r8)
+    11 │   jump_if r9 then L3 else L1
+    12 │ L3:
+    13 │   r10 = r2.0
+    14 │   r11 = r2.1
+    16 │   r13 = T0 + r10
+    17 │   r14 = cast ListToIterator r11
+    19 │   jump L4(r14, T0)
+    20 │ L4(r16: Iterator<Int>, r17: String):
+    21 │   r18 = iter_step r16
+    22 │   r19 = test r18 is None
+    23 │   jump_if r19 then L5(r17) else L7
+    24 │ L7:
+    25 │   r20 = unwrap r18
+    26 │   r21 = r20.0
+    27 │   r22 = r20.1
+    29 │   r24 = poison
+    30 │   r25 = T0 + r24
+    31 │   r26 = r17 + r25
+    32 │   jump L4(r22, r26)
+    33 │ L5(r27: String):
+    34 │   jump L6(r27)
+    35 │ L6(r28: String):
+    36 │   r29 = r13 + r28
+    37 │   jump L0(r29)
+    38 │ L1:
+    40 │   jump L0(T0)
+    41 │ L0(r31: String):  ; merge_of L2
+    42 │   r32 = T0 + r31
+    43 │   return r32
+
+    ; r0 (v0) : String
+    ; r1 (@data) : (String, List<Int>)
+    ; r2 (v2) : (String, List<Int>)
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v5) : List<Int>
+    ; r4 (v4) : String
+    ; r5 (v5) : Bool
     ; r6 (v6) : Bool
-    ; r7 (v7) : Bool
-    ; r8 (label) : String
-    ; r9 (items) : List<Int>
-    ; r10 (v10) : Iterator<Int>
-    ; r11 (v11) : Iterator<Int>
-    ; r12 (v12) : Option<(Int, Iterator<Int>)>
-    ; r13 (v13) : Bool
-    ; r14 (v14) : (Int, Iterator<Int>)
-    ; r15 (x) : Int
+    ; r7 (v7) : List<Int>
+    ; r8 (v8) : Bool
+    ; r9 (v9) : Bool
+    ; r10 (label) : String
+    ; r11 (items) : List<Int>
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : Iterator<Int>
+    ; r15 (v15) : String
     ; r16 (v16) : Iterator<Int>
-    ; r17 (to_string(...)) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : Option<(Int, Iterator<Int>)>
+    ; r19 (v19) : Bool
+    ; r20 (v20) : (Int, Iterator<Int>)
+    ; r21 (x) : Int
+    ; r22 (v22) : Iterator<Int>
+    ; r23 (v23) : String
+    ; r24 (to_string(...)) : String
+    ; r25 (v25) : String
+    ; r26 (v26) : String
+    ; r27 (v27) : String
+    ; r28 (v28) : String
+    ; r29 (v29) : String
+    ; r30 (v30) : String
+    ; r31 (v31) : String
+    ; r32 (v32) : String

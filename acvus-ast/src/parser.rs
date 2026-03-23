@@ -996,6 +996,36 @@ mod tests {
         }
     }
 
+    // ── ContextStore ──────────────────────────────────────────────
+
+    #[test]
+    fn script_context_store() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "@count = @count + 1; @count").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "count"));
+        assert!(s.tail.is_some());
+    }
+
+    #[test]
+    fn script_context_store_no_tail() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "@x = 42;").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "x"));
+        assert!(s.tail.is_none());
+    }
+
+    #[test]
+    fn script_mixed_bind_and_context_store() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "tmp = @x + 1; @x = tmp; @x").unwrap();
+        assert_eq!(s.stmts.len(), 2);
+        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "tmp"));
+        assert!(matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "x"));
+        assert!(s.tail.is_some());
+    }
+
     // ── Variant (Option) ────────────────────────────────────────────
 
     #[test]

@@ -75,8 +75,6 @@ pub struct NodeErrors {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bind: Vec<error::EngineError>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub if_modified_key: Vec<error::EngineError>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub assert: Vec<error::EngineError>,
     #[serde(skip_serializing_if = "FxHashMap::is_empty")]
     pub messages: FxHashMap<String, Vec<error::EngineError>>,
@@ -89,7 +87,6 @@ impl NodeErrors {
         self.env.is_empty()
             && self.initial_value.is_empty()
             && self.bind.is_empty()
-            && self.if_modified_key.is_empty()
             && self.assert.is_empty()
             && self.messages.is_empty()
             && self.expr_source.is_empty()

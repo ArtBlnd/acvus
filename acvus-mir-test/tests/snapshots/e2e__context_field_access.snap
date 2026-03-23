@@ -2,10 +2,18 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @user
-     1 │   r1 = r0.name
-     2 │   yield r1
+=== literals ===
+  T0 = ""
 
-    ; r0 (@user) : {age: Int, email: String, name: String}
-    ; r1 (name) : String
+=== main ===
+     1 │   r1 = context_project @user
+     2 │   r2 = r1.name
+     3 │   r3 = context_load r2
+     4 │   r4 = T0 + r3
+     5 │   return r4
+
+    ; r0 (v0) : String
+    ; r1 (@user) : {age: Int, email: String, name: String}
+    ; r2 (name) : String
+    ; r3 (v3) : String
+    ; r4 (v4) : String

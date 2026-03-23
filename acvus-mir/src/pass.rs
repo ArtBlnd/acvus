@@ -286,7 +286,6 @@ mod tests {
         MirModule {
             main: MirBody::new(),
             closures: FxHashMap::default(),
-
         }
     }
 

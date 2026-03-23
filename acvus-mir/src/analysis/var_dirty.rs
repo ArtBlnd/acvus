@@ -1,12 +1,10 @@
-
-
 use crate::hints::InstIdx;
 use crate::ir::{InstKind, MirModule, ValueId};
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::pass::AnalysisPass;
 use crate::analysis::val_def::ValDefMap;
+use crate::pass::AnalysisPass;
 
 /// Whether all fields are dirty or a specific set is known.
 #[derive(Debug, Clone, PartialEq)]
@@ -139,17 +137,22 @@ fn traces_to_var_load(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        graph::FunctionId,
+        ir::{Callee, DebugInfo, Inst, MirBody},
+    };
     use acvus_ast::Span;
-    use crate::ir::{DebugInfo, Inst, MirBody};
-    use acvus_utils::Interner;
+    use acvus_utils::{Interner, LocalFactory};
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
             main: MirBody {
                 insts,
                 val_types: FxHashMap::default(),
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: DebugInfo::new(),
-                val_count: 0,
+                val_factory: LocalFactory::new(),
                 label_count: 0,
             },
             closures: FxHashMap::default(),
@@ -164,8 +167,8 @@ mod tests {
     }
 
     fn build_val_def(module: &MirModule) -> ValDefMap {
-        use crate::pass::AnalysisPass;
         use crate::analysis::val_def::ValDefMapAnalysis;
+        use crate::pass::AnalysisPass;
         ValDefMapAnalysis.run(module, ())
     }
 
@@ -173,14 +176,16 @@ mod tests {
     #[test]
     fn scalar_store_is_all_dirty() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let module = make_module(vec![
             inst(InstKind::Const {
-                dst: ValueId(0),
+                dst: v0,
                 value: acvus_ast::Literal::Int(42),
             }),
             inst(InstKind::VarStore {
                 name: i.intern("x"),
-                src: ValueId(0),
+                src: v0,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -193,36 +198,38 @@ mod tests {
     #[test]
     fn full_passthrough_all_clean() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
             // v0 = VarLoad("user")
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("user"),
             }),
             // v1 = FieldGet(v0, "name")
             inst(InstKind::FieldGet {
-                dst: ValueId(1),
-                object: ValueId(0),
+                dst: v1,
+                object: v0,
                 field: i.intern("name"),
             }),
             // v2 = FieldGet(v0, "age")
             inst(InstKind::FieldGet {
-                dst: ValueId(2),
-                object: ValueId(0),
+                dst: v2,
+                object: v0,
                 field: i.intern("age"),
             }),
             // v3 = MakeObject { name: v1, age: v2 }
             inst(InstKind::MakeObject {
-                dst: ValueId(3),
-                fields: vec![
-                    (i.intern("name"), ValueId(1)),
-                    (i.intern("age"), ValueId(2)),
-                ],
+                dst: v3,
+                fields: vec![(i.intern("name"), v1), (i.intern("age"), v2)],
             }),
             // VarStore("user", v3)
             inst(InstKind::VarStore {
                 name: i.intern("user"),
-                src: ValueId(3),
+                src: v3,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -243,35 +250,37 @@ mod tests {
     #[test]
     fn partial_modification_mixed() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
             // v0 = VarLoad("user")
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("user"),
             }),
             // v1 = FieldGet(v0, "name")  -- passthrough
             inst(InstKind::FieldGet {
-                dst: ValueId(1),
-                object: ValueId(0),
+                dst: v1,
+                object: v0,
                 field: i.intern("name"),
             }),
             // v2 = Const("new_email")  -- new value
             inst(InstKind::Const {
-                dst: ValueId(2),
+                dst: v2,
                 value: acvus_ast::Literal::String("new@email.com".into()),
             }),
             // v3 = MakeObject { name: v1, email: v2 }
             inst(InstKind::MakeObject {
-                dst: ValueId(3),
-                fields: vec![
-                    (i.intern("name"), ValueId(1)),
-                    (i.intern("email"), ValueId(2)),
-                ],
+                dst: v3,
+                fields: vec![(i.intern("name"), v1), (i.intern("email"), v2)],
             }),
             // VarStore("user", v3)
             inst(InstKind::VarStore {
                 name: i.intern("user"),
-                src: ValueId(3),
+                src: v3,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -292,27 +301,31 @@ mod tests {
     #[test]
     fn field_from_different_variable_is_dirty() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let module = make_module(vec![
             // v0 = VarLoad("other")
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("other"),
             }),
             // v1 = FieldGet(v0, "name")  -- from "other", not "user"
             inst(InstKind::FieldGet {
-                dst: ValueId(1),
-                object: ValueId(0),
+                dst: v1,
+                object: v0,
                 field: i.intern("name"),
             }),
             // v2 = MakeObject { name: v1 }
             inst(InstKind::MakeObject {
-                dst: ValueId(2),
-                fields: vec![(i.intern("name"), ValueId(1))],
+                dst: v2,
+                fields: vec![(i.intern("name"), v1)],
             }),
             // VarStore("user", v2)
             inst(InstKind::VarStore {
                 name: i.intern("user"),
-                src: ValueId(2),
+                src: v2,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -331,17 +344,19 @@ mod tests {
     #[test]
     fn non_make_object_src_is_all_dirty() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let module = make_module(vec![
-            // v0 = ExternCall("make_user", [])
-            inst(InstKind::ExternCall {
-                dst: ValueId(0),
-                name: i.intern("make_user"),
+            // v0 = FunctionCall("make_user", [])
+            inst(InstKind::FunctionCall {
+                dst: v0,
+                callee: Callee::Direct(FunctionId::alloc()),
                 args: vec![],
             }),
             // VarStore("user", v0)
             inst(InstKind::VarStore {
                 name: i.intern("user"),
-                src: ValueId(0),
+                src: v0,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -353,23 +368,27 @@ mod tests {
     #[test]
     fn object_get_is_clean() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let module = make_module(vec![
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("cfg"),
             }),
             inst(InstKind::ObjectGet {
-                dst: ValueId(1),
-                object: ValueId(0),
+                dst: v1,
+                object: v0,
                 key: i.intern("mode"),
             }),
             inst(InstKind::MakeObject {
-                dst: ValueId(2),
-                fields: vec![(i.intern("mode"), ValueId(1))],
+                dst: v2,
+                fields: vec![(i.intern("mode"), v1)],
             }),
             inst(InstKind::VarStore {
                 name: i.intern("cfg"),
-                src: ValueId(2),
+                src: v2,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -388,24 +407,28 @@ mod tests {
     #[test]
     fn block_label_param_is_dirty() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let module = make_module(vec![
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("data"),
             }),
             // v1 comes from a block param (phi node) -- could be anything
             inst(InstKind::BlockLabel {
                 label: crate::ir::Label(0),
-                params: vec![ValueId(1)],
+                params: vec![v1],
                 merge_of: None,
             }),
             inst(InstKind::MakeObject {
-                dst: ValueId(2),
-                fields: vec![(i.intern("value"), ValueId(1))],
+                dst: v2,
+                fields: vec![(i.intern("value"), v1)],
             }),
             inst(InstKind::VarStore {
                 name: i.intern("data"),
-                src: ValueId(2),
+                src: v2,
             }),
         ]);
         let val_def = build_val_def(&module);
@@ -424,28 +447,33 @@ mod tests {
     #[test]
     fn call_result_is_dirty() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let module = make_module(vec![
             inst(InstKind::VarLoad {
-                dst: ValueId(0),
+                dst: v0,
                 name: i.intern("user"),
             }),
             inst(InstKind::FieldGet {
-                dst: ValueId(1),
-                object: ValueId(0),
+                dst: v1,
+                object: v0,
                 field: i.intern("name"),
             }),
-            inst(InstKind::ExternCall {
-                dst: ValueId(2),
-                name: i.intern("transform"),
-                args: vec![ValueId(1)],
+            inst(InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(FunctionId::alloc()),
+                args: vec![v1],
             }),
             inst(InstKind::MakeObject {
-                dst: ValueId(3),
-                fields: vec![(i.intern("name"), ValueId(2))],
+                dst: v3,
+                fields: vec![(i.intern("name"), v2)],
             }),
             inst(InstKind::VarStore {
                 name: i.intern("user"),
-                src: ValueId(3),
+                src: v3,
             }),
         ]);
         let val_def = build_val_def(&module);

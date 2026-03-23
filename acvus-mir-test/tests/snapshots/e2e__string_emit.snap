@@ -3,9 +3,13 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "hello"
+  T0 = ""
+  T1 = "hello"
 
 === main ===
-     1 │   yield T0
+     2 │   r2 = T0 + T1
+     3 │   return r2
 
     ; r0 (v0) : String
+    ; r1 (v1) : String
+    ; r2 (v2) : String

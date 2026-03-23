@@ -2,25 +2,36 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ""
+
 === main ===
-     0 │   r0 = context_load @users
-     1 │   r1 = call iter(r0)
-     2 │   r2 = closure L0 []
-     3 │   r3 = call map(r1, r2)
-     4 │   r4 = call collect(r3)
-     5 │   r5 = call len(r4)
-     6 │   r6 = call to_string(r5)
-     7 │   yield r6
+     1 │   r1 = context_project @users
+     2 │   r2 = context_load r1
+     3 │   r3 = poison
+     4 │   r4 = closure L0 []
+     5 │   r5 = poison
+     6 │   r6 = poison
+     8 │   r8 = T0 + T0
+     9 │   r9 = poison
+    10 │   r10 = poison
+    11 │   r11 = r8 + r10
+    12 │   return r11
 
-    ; r0 (@users) : List<{age: Int, name: String}>
-    ; r1 (iter(...)) : Iterator<{age: Int, name: String}>
-    ; r2 (v2) : Fn({age: Int, name: String}) -> (String, Int)
-    ; r3 (map(...)) : Iterator<(String, Int)>
-    ; r4 (collect(...)) : List<(String, Int)>
-    ; r5 (len(...)) : Int
-    ; r6 (to_string(...)) : String
+    ; r0 (v0) : String
+    ; r1 (@users) : List<{age: Int, name: String}>
+    ; r2 (v2) : List<{age: Int, name: String}>
+    ; r3 (iter(...)) : Iterator<{age: Int, name: String}>
+    ; r4 (v4) : Fn({age: Int, name: String}) -> (String, Int)
+    ; r5 (map(...)) : Iterator<(String, Int)>
+    ; r6 (collect(...)) : List<(String, Int)>
+    ; r7 (v7) : String
+    ; r8 (v8) : String
+    ; r9 (len(...)) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v11) : String
 
-=== closure L0 (u) ===
+=== closure L0 (ValueId(0)) ===
      0 │   r1 = r0.name
      1 │   r2 = r0.age
      2 │   r3 = tuple (r1, r2)

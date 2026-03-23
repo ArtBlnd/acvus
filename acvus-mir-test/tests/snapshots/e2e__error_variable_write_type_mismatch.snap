@@ -2,4 +2,4 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-[0..22] context `@count` is read-only and cannot be assigned
+no module produced

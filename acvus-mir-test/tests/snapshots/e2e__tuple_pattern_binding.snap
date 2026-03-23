@@ -2,29 +2,43 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @pair
-     1 │ L2:
-     3 │   r2 = r0.0
-     5 │   r4 = true (r1) && true (r3)
-     6 │   r5 = r0.1
-     8 │   r7 = r4 && true (r6)
-     9 │   jump_if r7 then L3 else L1
-    10 │ L3:
-    11 │   r8 = r0.0
-    12 │   r9 = r0.1
-    13 │   yield r8
-    14 │   jump L0
-    15 │ L1:
-    16 │ L0:  ; merge_of L2
+=== literals ===
+  T0 = ""
 
-    ; r0 (@pair) : (String, Int)
-    ; r1 (v1) : Bool
-    ; r2 (v2) : String
+=== main ===
+     1 │   r1 = context_project @pair
+     2 │   r2 = context_load r1
+     3 │ L2:
+     5 │   r4 = r2.0
+     7 │   r6 = true (r3) && true (r5)
+     8 │   r7 = r2.1
+    10 │   r9 = r6 && true (r8)
+    11 │   jump_if r9 then L3 else L1
+    12 │ L3:
+    13 │   r10 = r2.0
+    14 │   r11 = r2.1
+    16 │   r13 = T0 + r10
+    17 │   jump L0(r13)
+    18 │ L1:
+    20 │   jump L0(T0)
+    21 │ L0(r15: String):  ; merge_of L2
+    22 │   r16 = T0 + r15
+    23 │   return r16
+
+    ; r0 (v0) : String
+    ; r1 (@pair) : (String, Int)
+    ; r2 (v2) : (String, Int)
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v5) : Int
+    ; r4 (v4) : String
+    ; r5 (v5) : Bool
     ; r6 (v6) : Bool
-    ; r7 (v7) : Bool
-    ; r8 (name) : String
-    ; r9 (age) : Int
+    ; r7 (v7) : Int
+    ; r8 (v8) : Bool
+    ; r9 (v9) : Bool
+    ; r10 (name) : String
+    ; r11 (age) : Int
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : String
+    ; r15 (v15) : String
+    ; r16 (v16) : String

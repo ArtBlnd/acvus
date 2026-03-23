@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
 use acvus_ast::Literal;
-use crate::ir::{InstKind, MirBody, MirModule, ValueId};
 use rustc_hash::FxHashMap;
 
 /// Hashable key for Literal values.
@@ -37,7 +37,7 @@ pub fn dedup(mut module: MirModule) -> MirModule {
     module.main = dedup_body(module.main);
     for closure in module.closures.values_mut() {
         let c = Arc::make_mut(closure);
-        c.body = dedup_body(std::mem::take(&mut c.body));
+        *c = dedup_body(std::mem::take(c));
     }
     module
 }
@@ -117,12 +117,21 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         | InstKind::Nop
         | InstKind::Poison { .. } => {}
 
-        InstKind::ContextLoad { .. } => {}
+        // ContextProject has no ValueId uses (id is a ContextId, not a ValueId).
+        InstKind::ContextProject { .. } => {}
 
         // Single use
-        InstKind::Yield(v) | InstKind::Return(v) => remap_val(v, remap),
+        InstKind::Return(v) => remap_val(v, remap),
+
+        // ContextLoad: src is a use (projection ValueId).
+        InstKind::ContextLoad { src, .. } => remap_val(src, remap),
 
         InstKind::VarStore { src, .. } => remap_val(src, remap),
+        // ContextStore: dst is a projection use, value is a value use.
+        InstKind::ContextStore { dst, value, .. } => {
+            remap_val(dst, remap);
+            remap_val(value, remap);
+        }
 
         InstKind::UnaryOp { operand, .. } => remap_val(operand, remap),
 
@@ -161,7 +170,10 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         }
 
         // Vec uses
-        InstKind::BuiltinCall { args, .. } | InstKind::ExternCall { args, .. } => {
+        InstKind::FunctionCall { callee, args, .. } => {
+            if let Callee::Indirect(val) = callee {
+                remap_val(val, remap);
+            }
             remap_vec(args, remap);
         }
 
@@ -179,9 +191,8 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_vec(captures, remap);
         }
 
-        InstKind::ClosureCall { closure, args, .. } => {
-            remap_val(closure, remap);
-            remap_vec(args, remap);
+        InstKind::LoadFunction { .. } => {
+            // No values to remap (id is a FunctionId, not a ValueId)
         }
 
         InstKind::Jump { args, .. } => {
@@ -211,15 +222,28 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::Cast { src, .. } => remap_val(src, remap),
 
-        InstKind::IterStep { src, .. } => remap_val(src, remap),
+        InstKind::IterStep { iter_src, done_args, .. } => {
+            remap_val(iter_src, remap);
+            remap_vec(done_args, remap);
+        }
+
+        InstKind::Spawn { callee, args, .. } => {
+            if let Callee::Indirect(val) = callee {
+                remap_val(val, remap);
+            }
+            remap_vec(args, remap);
+        }
+
+        InstKind::Eval { src, .. } => remap_val(src, remap),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::Span;
     use crate::ir::{DebugInfo, Inst, MirBody};
+    use acvus_ast::Span;
+    use acvus_utils::LocalFactory;
 
     fn span() -> Span {
         Span::ZERO
@@ -229,43 +253,50 @@ mod tests {
         MirBody {
             insts,
             val_types: FxHashMap::default(),
+            param_regs: Vec::new(),
+            capture_regs: Vec::new(),
             debug: DebugInfo::new(),
-            val_count: 100,
+            val_factory: LocalFactory::new(),
             label_count: 0,
         }
     }
 
     #[test]
     fn dedup_removes_duplicate_int_consts() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
         let body = make_body(vec![
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(0),
+                    dst: v0,
                     value: Literal::Int(42),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(1),
+                    dst: v1,
                     value: Literal::Int(42),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(2),
+                    dst: v2,
                     value: Literal::Int(42),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::BinOp {
-                    dst: ValueId(3),
+                    dst: v3,
                     op: acvus_ast::BinOp::Add,
-                    left: ValueId(1),
-                    right: ValueId(2),
+                    left: v1,
+                    right: v2,
                 },
             },
         ]);
@@ -275,11 +306,11 @@ mod tests {
         // Only 1 Const + 1 BinOp
         assert_eq!(result.insts.len(), 2);
 
-        // BinOp uses should be remapped to canonical ValueId(0)
+        // BinOp uses should be remapped to canonical v0
         match &result.insts[1].kind {
             InstKind::BinOp { left, right, .. } => {
-                assert_eq!(*left, ValueId(0));
-                assert_eq!(*right, ValueId(0));
+                assert_eq!(*left, v0);
+                assert_eq!(*right, v0);
             }
             other => panic!("expected BinOp, got {other:?}"),
         }
@@ -287,28 +318,32 @@ mod tests {
 
     #[test]
     fn dedup_keeps_distinct_values() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let body = make_body(vec![
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(0),
+                    dst: v0,
                     value: Literal::Int(1),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(1),
+                    dst: v1,
                     value: Literal::Int(2),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::BinOp {
-                    dst: ValueId(2),
+                    dst: v2,
                     op: acvus_ast::BinOp::Add,
-                    left: ValueId(0),
-                    right: ValueId(1),
+                    left: v0,
+                    right: v1,
                 },
             },
         ]);
@@ -319,17 +354,19 @@ mod tests {
 
     #[test]
     fn dedup_no_change_when_no_duplicates() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let body = make_body(vec![
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(0),
+                    dst: v0,
                     value: Literal::Int(1),
                 },
             },
             Inst {
                 span: span(),
-                kind: InstKind::Yield(ValueId(0)),
+                kind: InstKind::Return(v0),
             },
         ]);
 
@@ -339,71 +376,78 @@ mod tests {
 
     #[test]
     fn dedup_string_consts() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let body = make_body(vec![
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(0),
+                    dst: v0,
                     value: Literal::String("hello".into()),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(1),
+                    dst: v1,
                     value: Literal::String("hello".into()),
                 },
             },
             Inst {
                 span: span(),
-                kind: InstKind::Yield(ValueId(1)),
+                kind: InstKind::Return(v1),
             },
         ]);
 
         let result = dedup_body(body);
         assert_eq!(result.insts.len(), 2);
         match &result.insts[1].kind {
-            InstKind::Yield(v) => assert_eq!(*v, ValueId(0)),
-            other => panic!("expected Yield, got {other:?}"),
+            InstKind::Return(v) => assert_eq!(*v, v0),
+            other => panic!("expected Return, got {other:?}"),
         }
     }
 
     #[test]
     fn dedup_hoists_canonical_to_top() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let body = make_body(vec![
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(0),
+                    dst: v0,
                     value: Literal::Int(1),
                 },
             },
             Inst {
                 span: span(),
-                kind: InstKind::Yield(ValueId(0)),
+                kind: InstKind::Return(v0),
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(1),
+                    dst: v1,
                     value: Literal::Int(256),
                 },
             },
             Inst {
                 span: span(),
                 kind: InstKind::Const {
-                    dst: ValueId(2),
+                    dst: v2,
                     value: Literal::Int(256),
                 },
             },
             Inst {
                 span: span(),
-                kind: InstKind::Yield(ValueId(2)),
+                kind: InstKind::Return(v2),
             },
         ]);
 
         let result = dedup_body(body);
-        // 2 canonical Consts hoisted, then 2 Yields
+        // 2 canonical Consts hoisted, then 2 Returns
         assert_eq!(result.insts.len(), 4);
         assert!(matches!(result.insts[0].kind, InstKind::Const { .. }));
         assert!(matches!(result.insts[1].kind, InstKind::Const { .. }));

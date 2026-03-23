@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
+use acvus_mir::graph::ContextId;
 use acvus_utils::YieldHandle;
 
 use crate::error::RuntimeError;
@@ -31,7 +32,7 @@ pub trait ExecCtx: Sized {
     fn exec_next<'a>(
         self,
         ih: IterHandle,
-        handle: &'a YieldHandle<TypedValue>,
+        handle: &'a YieldHandle<TypedValue, ContextId>,
     ) -> BoxFuture<'a, Result<(Self, Option<(Value, IterHandle)>), RuntimeError>>;
 
     /// Invoke a closure with the given arguments.
@@ -39,7 +40,7 @@ pub trait ExecCtx: Sized {
         self,
         f: FnValue,
         args: Vec<Arc<Value>>,
-        handle: &'a YieldHandle<TypedValue>,
+        handle: &'a YieldHandle<TypedValue, ContextId>,
     ) -> BoxFuture<'a, Result<(Self, Value), RuntimeError>>;
 }
 
@@ -51,7 +52,7 @@ pub trait ExecCtx: Sized {
 pub async fn collect_vec<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     ih: IterHandle,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Vec<Value>), RuntimeError> {
     let mut items = Vec::new();
     let mut current = ih;

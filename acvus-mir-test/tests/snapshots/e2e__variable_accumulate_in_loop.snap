@@ -2,39 +2,63 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     1 │   var_store $sum = 0 (r0)
-     2 │   r1 = context_load @items
-     3 │   r2 = cast ListToIterator r1
-     4 │   jump L0(r2)
-     5 │ L0(r3: Iterator<Int>):
-     6 │   r4 = iter_step r3
-     7 │   r5 = test r4 is None
-     8 │   jump_if r5 then L1 else L3
-     9 │ L3:
-    10 │   r6 = unwrap r4
-    11 │   r7 = r6.0
-    12 │   r8 = r6.1
-    13 │   r9 = var_load $sum
-    14 │   r10 = r9 + r7
-    15 │   var_store $sum = r10
-    16 │   jump L0(r8)
-    17 │ L1:
-    18 │ L2:
-    19 │   r11 = var_load $sum
-    20 │   r12 = call to_string(r11)
-    21 │   yield r12
+=== literals ===
+  T0 = ""
 
-    ; r0 (v0) : Int
-    ; r1 (@items) : List<Int>
-    ; r2 (v2) : Iterator<Int>
-    ; r3 (v3) : Iterator<Int>
-    ; r4 (v4) : Option<(Int, Iterator<Int>)>
-    ; r5 (v5) : Bool
-    ; r6 (v6) : (Int, Iterator<Int>)
-    ; r7 (x) : Int
+=== main ===
+     2 │   var_store $sum = 0 (r1)
+     4 │   r3 = T0 + T0
+     5 │   r4 = context_project @items
+     6 │   r5 = context_load r4
+     7 │   r6 = cast ListToIterator r5
+     9 │   jump L0(r6, T0)
+    10 │ L0(r8: Iterator<Int>, r9: String):
+    11 │   r10 = iter_step r8
+    12 │   r11 = test r10 is None
+    13 │   jump_if r11 then L1(r9) else L3
+    14 │ L3:
+    15 │   r12 = unwrap r10
+    16 │   r13 = r12.0
+    17 │   r14 = r12.1
+    19 │   r16 = var_load $sum
+    20 │   r17 = r16 + r13
+    21 │   var_store $sum = r17
+    23 │   r19 = T0 + T0
+    24 │   r20 = r9 + r19
+    25 │   jump L0(r14, r20)
+    26 │ L1(r21: String):
+    27 │   jump L2(r21)
+    28 │ L2(r22: String):
+    29 │   r23 = r3 + r22
+    30 │   r24 = var_load $sum
+    31 │   r25 = poison
+    32 │   r26 = r23 + r25
+    33 │   return r26
+
+    ; r0 (v0) : String
+    ; r1 (v1) : Int
+    ; r2 (v2) : String
+    ; r3 (v3) : String
+    ; r4 (@items) : List<Int>
+    ; r5 (v5) : List<Int>
+    ; r6 (v6) : Iterator<Int>
+    ; r7 (v7) : String
     ; r8 (v8) : Iterator<Int>
-    ; r9 ($sum) : Int
-    ; r10 (v10) : Int
-    ; r11 ($sum) : Int
-    ; r12 (to_string(...)) : String
+    ; r9 (v9) : String
+    ; r10 (v10) : Option<(Int, Iterator<Int>)>
+    ; r11 (v11) : Bool
+    ; r12 (v12) : (Int, Iterator<Int>)
+    ; r13 (x) : Int
+    ; r14 (v14) : Iterator<Int>
+    ; r15 (v15) : String
+    ; r16 ($sum) : Int
+    ; r17 (v17) : Int
+    ; r18 (v18) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : String
+    ; r22 (v22) : String
+    ; r23 (v23) : String
+    ; r24 ($sum) : Int
+    ; r25 (to_string(...)) : String
+    ; r26 (v26) : String

@@ -3,37 +3,50 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "empty"
+  T0 = ""
+  T1 = "empty"
 
 === main ===
-     0 │   r0 = context_load @users
-     1 │ L2:
-     2 │   r1 = test len(r0) >= 1
-     3 │   jump_if r1 then L3 else L4
-     4 │ L3:
-     5 │   r2 = r0[0]
-     7 │   r4 = r1 && true (r3)
-     8 │   jump L5(r4)
-     9 │ L4:
-    11 │   jump L5(false (r6))
-    12 │ L5(r5: Bool):
-    13 │   jump_if r5 then L6 else L1
-    14 │ L6:
-    15 │   r7 = r0[0]
-    16 │   r8 = r7.name
-    17 │   yield r8
-    18 │   jump L0
-    19 │ L1:
-    21 │   yield T0
-    22 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @users
+     2 │   r2 = context_load r1
+     3 │ L2:
+     4 │   r3 = test len(r2) >= 1
+     5 │   jump_if r3 then L3 else L4
+     6 │ L3:
+     7 │   r4 = r2[0]
+     9 │   r6 = r3 && true (r5)
+    10 │   jump L5(r6)
+    11 │ L4:
+    13 │   jump L5(false (r8))
+    14 │ L5(r7: Bool):
+    15 │   jump_if r7 then L6 else L1
+    16 │ L6:
+    17 │   r9 = r2[0]
+    19 │   r11 = r9.name
+    20 │   r12 = T0 + r11
+    21 │   jump L0(r12)
+    22 │ L1:
+    25 │   r15 = T0 + T1
+    26 │   jump L0(r15)
+    27 │ L0(r16: String):  ; merge_of L2
+    28 │   r17 = T0 + r16
+    29 │   return r17
 
-    ; r0 (@users) : List<{name: String}>
-    ; r1 (v1) : Bool
-    ; r2 (v2) : {name: String}
+    ; r0 (v0) : String
+    ; r1 (@users) : List<{name: String}>
+    ; r2 (v2) : List<{name: String}>
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
+    ; r4 (v4) : {name: String}
     ; r5 (v5) : Bool
     ; r6 (v6) : Bool
-    ; r7 (first) : {name: String}
-    ; r8 (name) : String
-    ; r9 (v9) : String
+    ; r7 (v7) : Bool
+    ; r8 (v8) : Bool
+    ; r9 (first) : {name: String}
+    ; r10 (v10) : String
+    ; r11 (name) : String
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : String
+    ; r15 (v15) : String
+    ; r16 (v16) : String
+    ; r17 (v17) : String

@@ -203,8 +203,6 @@ pub(crate) enum ExecutionConfig {
     Always,
     #[serde(rename = "once-per-turn")]
     OncePerTurn,
-    #[serde(rename = "if-modified")]
-    IfModified { key: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +369,6 @@ pub(crate) fn convert_node(
     let execution = match &cfg.strategy.execution {
         ExecutionConfig::Always => Execution::Always,
         ExecutionConfig::OncePerTurn => Execution::OncePerTurn,
-        ExecutionConfig::IfModified { key } => Execution::IfModified {
-            key: interner.intern(key),
-        },
     };
 
     let persistency = match &cfg.strategy.persistency {

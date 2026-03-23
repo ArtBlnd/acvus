@@ -14,6 +14,7 @@ pub struct Script {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Bind { name: Astr, expr: Expr, span: Span },
+    ContextStore { name: Astr, expr: Expr, span: Span },
     Expr(Expr),
 }
 
@@ -365,4 +366,145 @@ pub enum Literal {
     Bool(bool),
     Byte(u8),
     List(Vec<Literal>),
+}
+
+// ── AST walk: context reference extraction ──────────────────────────
+
+/// Extract all `@name` context references from a Script AST.
+pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<Astr> {
+    let mut refs = rustc_hash::FxHashSet::default();
+    for stmt in &script.stmts {
+        match stmt {
+            Stmt::Bind { expr, .. } => walk_expr(expr, &mut refs),
+            Stmt::ContextStore { name, expr, .. } => {
+                refs.insert(*name);
+                walk_expr(expr, &mut refs);
+            }
+            Stmt::Expr(expr) => walk_expr(expr, &mut refs),
+        }
+    }
+    if let Some(tail) = &script.tail {
+        walk_expr(tail, &mut refs);
+    }
+    refs
+}
+
+/// Extract all `@name` context references from a Template AST.
+pub fn extract_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<Astr> {
+    let mut refs = rustc_hash::FxHashSet::default();
+    walk_nodes(&template.body, &mut refs);
+    refs
+}
+
+fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<Astr>) {
+    for node in nodes {
+        match node {
+            Node::Text { .. } | Node::Comment { .. } => {}
+            Node::InlineExpr { expr, .. } => walk_expr(expr, refs),
+            Node::MatchBlock(mb) => {
+                walk_expr(&mb.source, refs);
+                for arm in &mb.arms {
+                    walk_pattern(&arm.pattern, refs);
+                    walk_nodes(&arm.body, refs);
+                }
+                if let Some(ca) = &mb.catch_all {
+                    walk_nodes(&ca.body, refs);
+                }
+            }
+            Node::IterBlock(ib) => {
+                walk_expr(&ib.source, refs);
+                walk_nodes(&ib.body, refs);
+                if let Some(ca) = &ib.catch_all {
+                    walk_nodes(&ca.body, refs);
+                }
+            }
+        }
+    }
+}
+
+fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<Astr>) {
+    match pattern {
+        Pattern::Binding { name, ref_kind, .. } => {
+            match ref_kind {
+                RefKind::Context => { refs.insert(*name); }
+                RefKind::Variable | RefKind::Value => {}
+            }
+        }
+        Pattern::Literal { .. } => {}
+        Pattern::List { head, tail, .. } => {
+            for p in head { walk_pattern(p, refs); }
+            for p in tail { walk_pattern(p, refs); }
+        }
+        Pattern::Range { start, end, .. } => {
+            walk_pattern(start, refs);
+            walk_pattern(end, refs);
+        }
+        Pattern::Object { fields, .. } => {
+            for f in fields {
+                walk_pattern(&f.pattern, refs);
+            }
+        }
+        Pattern::Tuple { elements, .. } => {
+            for e in elements {
+                match e {
+                    TuplePatternElem::Pattern(p) => walk_pattern(p, refs),
+                    TuplePatternElem::Wildcard(_) => {}
+                }
+            }
+        }
+        Pattern::Variant { payload, .. } => {
+            if let Some(p) = payload { walk_pattern(p, refs); }
+        }
+    }
+}
+
+fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<Astr>) {
+    match expr {
+        Expr::Ident { name, ref_kind: RefKind::Context, .. } => {
+            refs.insert(*name);
+        }
+        Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}
+        Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. }
+        | Expr::Range { start: left, end: right, .. } => {
+            walk_expr(left, refs);
+            walk_expr(right, refs);
+        }
+        Expr::UnaryOp { operand, .. } | Expr::Paren { inner: operand, .. } => {
+            walk_expr(operand, refs);
+        }
+        Expr::FieldAccess { object, .. } => walk_expr(object, refs),
+        Expr::FuncCall { func, args, .. } => {
+            walk_expr(func, refs);
+            for arg in args { walk_expr(arg, refs); }
+        }
+        Expr::Lambda { body, .. } => walk_expr(body, refs),
+        Expr::List { head, tail, .. } => {
+            for e in head { walk_expr(e, refs); }
+            for e in tail { walk_expr(e, refs); }
+        }
+        Expr::Group { elements, .. } => {
+            for e in elements { walk_expr(e, refs); }
+        }
+        Expr::Object { fields, .. } => {
+            for f in fields { walk_expr(&f.value, refs); }
+        }
+        Expr::Tuple { elements, .. } => {
+            for e in elements {
+                if let TupleElem::Expr(expr) = e { walk_expr(expr, refs); }
+            }
+        }
+        Expr::Block { stmts, tail, .. } => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Bind { expr, .. } => walk_expr(expr, refs),
+                    Stmt::ContextStore { name, expr, .. } => {
+                        refs.insert(*name);
+                        walk_expr(expr, refs);
+                    }
+                    Stmt::Expr(expr) => walk_expr(expr, refs),
+                }
+            }
+            walk_expr(tail, refs);
+        }
+    }
 }

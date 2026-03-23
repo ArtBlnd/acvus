@@ -2,24 +2,36 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ""
+
 === main ===
-     0 │   r0 = context_load @items
-     1 │   r1 = cast ListToIterator r0
-     2 │   r2 = closure L0 []
-     3 │   r3 = call any(r1, r2)
-     4 │   r4 = call to_string(r3)
-     5 │   yield r4
+     0 │   r7 = context_project @items
+     1 │   r8 = context_load r7
+     3 │   r1 = context_project @items
+     4 │   r2 = cast ListToIterator r1
+     5 │   r3 = closure L0 []
+     6 │   r4 = poison
+     7 │   r5 = poison
+     8 │   r6 = T0 + r5
+     9 │   return r6
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : Iterator<Int>
-    ; r2 (v2) : Fn(Int) -> Bool
-    ; r3 (any(...)) : Bool
-    ; r4 (to_string(...)) : String
+    ; r0 (v0) : String
+    ; r1 (@items) : List<Int>
+    ; r2 (v2) : Iterator<Int>
+    ; r3 (v3) : Fn(Int) -> Bool
+    ; r4 (any(...)) : Bool
+    ; r5 (to_string(...)) : String
+    ; r6 (v6) : String
+    ; r7 (v7) : List<Int>
+    ; r8 (v8) : List<Int>
 
-=== closure L0 (x) ===
-     1 │   r2 = r0 > 10 (r1)
-     2 │   return r2
+=== closure L0 (ValueId(0)) ===
+     1 │   r2 = context_load 10 (r1)
+     2 │   r3 = r0 > r2
+     3 │   return r3
 
     ; r0 (v0) : Int
     ; r1 (v1) : Int
-    ; r2 (v2) : Bool
+    ; r2 (v2) : Int
+    ; r3 (v3) : Bool

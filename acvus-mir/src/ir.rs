@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
+use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
-use crate::builtins::BuiltinId;
+use crate::graph::{ContextId, FunctionId, VersionId};
 use crate::ty::{Effect, Ty};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ValueId(pub u32);
+acvus_utils::declare_local_id!(pub ValueId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub u32);
@@ -58,39 +59,57 @@ impl CastKind {
     pub fn result_ty(&self, src_ty: &Ty) -> Ty {
         match (self, src_ty) {
             (CastKind::DequeToList, Ty::Deque(elem, _)) => Ty::List(elem.clone()),
-            (CastKind::ListToIterator, Ty::List(elem)) => {
-                Ty::Iterator(elem.clone(), Effect::Pure)
-            }
+            (CastKind::ListToIterator, Ty::List(elem)) => Ty::Iterator(elem.clone(), Effect::pure()),
             (CastKind::DequeToIterator, Ty::Deque(elem, _)) => {
-                Ty::Iterator(elem.clone(), Effect::Pure)
+                Ty::Iterator(elem.clone(), Effect::pure())
             }
             (CastKind::DequeToSequence, Ty::Deque(elem, o)) => {
-                Ty::Sequence(elem.clone(), *o, Effect::Pure)
+                Ty::Sequence(elem.clone(), *o, Effect::pure())
             }
             (CastKind::SequenceToIterator, Ty::Sequence(elem, _, e)) => {
-                Ty::Iterator(elem.clone(), *e)
+                Ty::Iterator(elem.clone(), e.clone())
             }
-            (CastKind::RangeToIterator, Ty::Range) => {
-                Ty::Iterator(Box::new(Ty::Int), Effect::Pure)
-            }
+            (CastKind::RangeToIterator, Ty::Range) => Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
             _ => panic!("CastKind::result_ty: {self:?} incompatible with {src_ty:?}"),
         }
     }
 }
 
+/// Target of a function call.
+#[derive(Debug, Clone)]
+pub enum Callee {
+    /// Compile-time known function. Enables pre-fetch and inlining.
+    Direct(FunctionId),
+    /// Runtime-determined callable (closure, variable holding a function).
+    Indirect(ValueId),
+}
+
 #[derive(Debug, Clone)]
 pub enum InstKind {
-    // Output
-    Yield(ValueId),
-
     // Constants / variables
     Const {
         dst: ValueId,
         value: Literal,
     },
+    /// Create a projection handle to a context. This is a Ref (path),
+    /// not a value — use ContextLoad to materialize the value (copy).
+    /// `ty` is the context's root type (like alloca's type in LLVM).
+    ContextProject {
+        dst: ValueId,
+        id: ContextId,
+        ty: Ty,
+    },
+    /// Materialize a projection into a value (copy). Severs the store connection.
+    /// `src` must be a projection (from ContextProject or FieldAccess on a projection).
     ContextLoad {
         dst: ValueId,
-        name: Astr,
+        src: ValueId,
+    },
+    /// Write a value through a projection.
+    /// `dst` must be a projection (from ContextProject or FieldAccess on a projection).
+    ContextStore {
+        dst: ValueId,
+        value: ValueId,
     },
     VarLoad {
         dst: ValueId,
@@ -119,16 +138,36 @@ pub enum InstKind {
         field: Astr,
     },
 
-    // Calls
-    BuiltinCall {
+    // Functions
+    /// Load a graph-level function into a value (for passing as argument, storing, etc.)
+    LoadFunction {
         dst: ValueId,
-        builtin: BuiltinId,
+        id: FunctionId,
+    },
+    /// Unified function call. Callee can be a direct graph function or an indirect value.
+    /// Semantically equivalent to Spawn + Eval (synchronous call = spawn then immediately eval).
+    FunctionCall {
+        dst: ValueId,
+        callee: Callee,
         args: Vec<ValueId>,
     },
-    ExternCall {
+    /// Spawn a deferred computation. Creates a Handle<T, E> without executing.
+    /// Pure instruction — no side effects. The actual execution happens at Eval.
+    /// `dst` receives a Handle whose type carries the callee's return type and effect.
+    /// `context_uses` binds context SSA values that the callee will read from.
+    Spawn {
         dst: ValueId,
-        name: Astr,
+        callee: Callee,
         args: Vec<ValueId>,
+        context_uses: Vec<(ContextId, ValueId)>,
+    },
+    /// Evaluate (force) a Handle, consuming it. This is where effects actually occur.
+    /// `src` must be a Handle<T, E>. `dst` receives T. Effect E happens here.
+    /// `context_defs` captures new SSA values for contexts the callee wrote.
+    Eval {
+        dst: ValueId,
+        src: ValueId,
+        context_defs: Vec<(ContextId, ValueId)>,
     },
 
     // Composite constructors
@@ -208,25 +247,18 @@ pub enum InstKind {
         body: Label,
         captures: Vec<ValueId>,
     },
-    ClosureCall {
-        dst: ValueId,
-        closure: ValueId,
-        args: Vec<ValueId>,
-    },
 
-    /// Pull one element from an Iterator.
+    /// Pull one element from an iterator (SSA-clean).
     ///
-    /// `src` must be an `Iterator<T, E>` value.
-    /// `dst` receives `Option<(T, Iterator<T, E>)>`:
-    /// - `Some((item, rest))` if an element is available
-    /// - `None` if exhausted
-    ///
-    /// This is the language-level iteration primitive. The user-facing `next()`
-    /// builtin delegates to `ExecCtx::exec_next`, which is the same underlying
-    /// operation, but for-loops use this instruction directly — no builtin dependency.
+    /// Consumes `iter_src`, produces element in `dst` and rest iterator in `iter_dst`.
+    /// If exhausted, jumps to `done` with `done_args`. Replaces the old
+    /// IterStep + TestVariant + JumpIf + UnwrapVariant + TupleIndex chain.
     IterStep {
         dst: ValueId,
-        src: ValueId,
+        iter_src: ValueId,
+        iter_dst: ValueId,
+        done: Label,
+        done_args: Vec<ValueId>,
     },
 
     // Variant (tagged union)
@@ -345,8 +377,10 @@ impl DebugInfo {
 pub struct MirBody {
     pub insts: Vec<Inst>,
     pub val_types: FxHashMap<ValueId, Ty>,
+    pub param_regs: Vec<ValueId>,
+    pub capture_regs: Vec<ValueId>,
     pub debug: DebugInfo,
-    pub val_count: u32,
+    pub val_factory: LocalFactory<ValueId>,
     pub label_count: u32,
 }
 
@@ -361,39 +395,34 @@ impl MirBody {
         Self {
             insts: Vec::new(),
             val_types: FxHashMap::default(),
+            param_regs: Vec::new(),
+            capture_regs: Vec::new(),
             debug: DebugInfo::new(),
-            val_count: 0,
+            val_factory: LocalFactory::new(),
             label_count: 0,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ClosureBody {
-    pub capture_names: Vec<Astr>,
-    pub param_names: Vec<Astr>,
-    pub body: MirBody,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct MirModule {
     pub main: MirBody,
-    pub closures: FxHashMap<Label, Arc<ClosureBody>>,
+    pub closures: FxHashMap<Label, Arc<MirBody>>,
 }
 
 impl MirModule {
-    /// Extract all context keys (ContextLoad names) referenced by this module.
-    pub fn extract_context_keys(&self) -> rustc_hash::FxHashSet<Astr> {
-        let mut keys = rustc_hash::FxHashSet::default();
+    /// Extract all context keys (ContextProject ids) referenced by this module.
+    pub fn extract_context_keys(&self) -> FxHashSet<ContextId> {
+        let mut keys = FxHashSet::default();
         for inst in &self.main.insts {
-            if let InstKind::ContextLoad { name, .. } = &inst.kind {
-                keys.insert(*name);
+            if let InstKind::ContextProject { id, .. } = &inst.kind {
+                keys.insert(*id);
             }
         }
         for closure in self.closures.values() {
-            for inst in &closure.body.insts {
-                if let InstKind::ContextLoad { name, .. } = &inst.kind {
-                    keys.insert(*name);
+            for inst in &closure.insts {
+                if let InstKind::ContextProject { id, .. } = &inst.kind {
+                    keys.insert(*id);
                 }
             }
         }

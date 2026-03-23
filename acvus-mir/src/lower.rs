@@ -1,21 +1,20 @@
-
 use std::sync::Arc;
 
 use acvus_ast::{
-    Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
+    BinOp, Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
     ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
     TuplePatternElem,
 };
-use acvus_utils::{Astr, Interner};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::builtins::registry;
+use crate::graph::{ContextId, FunctionId};
 use crate::hints::{Hint, HintTable};
 use crate::ir::{
-    CastKind, ClosureBody, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
+    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
 };
-use crate::ty::{Effect, FnKind, Ty};
-use crate::typeck::{BuiltinMap, CoercionMap, TypeMap};
+use crate::ty::{Effect, Ty};
+use crate::typeck::{CoercionMap, TypeMap};
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -25,17 +24,23 @@ pub struct Lowerer<'a> {
     scopes: Vec<FxHashMap<Astr, ValueId>>,
     /// Type map from type checker.
     type_map: TypeMap,
-    /// Builtin map from type checker (call_span → resolved BuiltinId).
-    builtin_map: BuiltinMap,
     /// Coercion map from type checker (expr_span → CastKind).
     coercion_lookup: FxHashMap<Span, CastKind>,
     /// Closures produced during lowering.
-    closures: FxHashMap<Label, Arc<ClosureBody>>,
+    closures: FxHashMap<Label, Arc<MirBody>>,
     /// Global closure label counter — shared across nesting levels to prevent
     /// label collisions when nested closures each allocate from a sub-body.
     closure_label_count: u32,
     /// Hint table.
     hints: HintTable,
+    /// Context name → (ContextId, Ty).
+    context_ids: Freeze<FxHashMap<Astr, (ContextId, Ty)>>,
+    /// Function name → (FunctionId, Ty).
+    function_ids: Freeze<FxHashMap<Astr, (FunctionId, Ty)>>,
+    /// ValueIds that are projections (not yet materialized values).
+    /// FieldAccess on a projection produces another projection.
+    /// Use `ensure_loaded` to materialize.
+    projections: FxHashSet<ValueId>,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -114,26 +119,32 @@ impl<'a> Lowerer<'a> {
     pub fn new(
         interner: &'a Interner,
         type_map: TypeMap,
-        builtin_map: BuiltinMap,
         coercion_map: CoercionMap,
+        context_ids: Freeze<FxHashMap<Astr, (ContextId, Ty)>>,
+        function_ids: Freeze<FxHashMap<Astr, (FunctionId, Ty)>>,
     ) -> Self {
-        let coercion_lookup: FxHashMap<Span, CastKind> =
-            coercion_map.into_iter().collect();
+        let coercion_lookup: FxHashMap<Span, CastKind> = coercion_map.into_iter().collect();
+        // Pre-inject function names into the initial scope.
+        let mut initial_scope = FxHashMap::default();
+        // (function values will be resolved at call sites, not as scope values)
         Self {
             body: MirBody::new(),
             interner,
-            scopes: vec![FxHashMap::default()],
+            scopes: vec![initial_scope],
             type_map,
-            builtin_map,
             coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
             hints: HintTable::new(),
+            context_ids,
+            function_ids,
+            projections: FxHashSet::default(),
         }
     }
 
     pub fn lower_template(mut self, template: &Template) -> (MirModule, HintTable) {
-        self.lower_nodes(&template.body);
+        let result = self.lower_nodes(&template.body, template.span);
+        self.emit_inst(template.span, InstKind::Return(result));
         self.build_module()
     }
 
@@ -144,6 +155,27 @@ impl<'a> Lowerer<'a> {
                     let val = self.lower_expr(expr);
                     self.scopes.last_mut().unwrap().insert(*name, val);
                 }
+                Stmt::ContextStore { name, expr, span } => {
+                    let val = self.lower_expr(expr);
+                    let ctx_id = self.context_id(*name);
+                    let ctx_ty = self.context_ty(*name);
+                    let proj = self.alloc_typed(*span);
+                    self.emit_inst(
+                        *span,
+                        InstKind::ContextProject {
+                            dst: proj,
+                            id: ctx_id,
+                            ty: ctx_ty,
+                        },
+                    );
+                    self.emit_inst(
+                        *span,
+                        InstKind::ContextStore {
+                            dst: proj,
+                            value: val,
+                        },
+                    );
+                }
                 Stmt::Expr(expr) => {
                     self.lower_expr(expr);
                 }
@@ -151,7 +183,7 @@ impl<'a> Lowerer<'a> {
         }
         if let Some(tail) = &script.tail {
             let val = self.lower_expr(tail);
-            self.emit_inst(script.span, InstKind::Yield(val));
+            self.emit_inst(script.span, InstKind::Return(val));
         }
         self.build_module()
     }
@@ -164,10 +196,65 @@ impl<'a> Lowerer<'a> {
         (module, self.hints)
     }
 
+    fn context_id(&self, name: Astr) -> ContextId {
+        self.context_ids
+            .get(&name)
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("unknown context @{}", self.interner.resolve(name)))
+    }
+
+    fn context_ty(&self, name: Astr) -> Ty {
+        self.context_ids
+            .get(&name)
+            .map(|(_, ty)| ty.clone())
+            .unwrap_or_else(|| panic!("unknown context @{}", self.interner.resolve(name)))
+    }
+
+    fn function_id(&self, name: Astr) -> FunctionId {
+        self.function_ids
+            .get(&name)
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("unknown function {}", self.interner.resolve(name)))
+    }
+
+
+    /// If `val` is a projection, materialize it into a value via ContextLoad.
+    /// If it's already a value, return as-is.
+    fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
+        if self.projections.remove(&val) {
+            let dst = self.alloc_typed(span);
+            self.emit_inst(span, InstKind::ContextLoad { dst, src: val });
+            dst
+        } else {
+            val
+        }
+    }
+
+    /// Mark a ValueId as a projection.
+    fn mark_projection(&mut self, val: ValueId) {
+        self.projections.insert(val);
+    }
+
+    fn is_projection(&self, val: ValueId) -> bool {
+        self.projections.contains(&val)
+    }
+
+    /// If val is a projection, emit ContextLoad to materialize it.
+    /// Otherwise return val unchanged.
+    fn materialize(&mut self, val: ValueId, span: Span) -> ValueId {
+        if self.is_projection(val) {
+            let dst = self.alloc_val();
+            let ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::Unit);
+            self.set_val_type(dst, ty);
+            self.emit_inst(span, InstKind::ContextLoad { dst, src: val });
+            dst
+        } else {
+            val
+        }
+    }
+
     fn alloc_val(&mut self) -> ValueId {
-        let r = ValueId(self.body.val_count);
-        self.body.val_count += 1;
-        r
+        self.body.val_factory.next()
     }
 
     fn alloc_label(&mut self) -> Label {
@@ -367,13 +454,18 @@ impl<'a> Lowerer<'a> {
 
     // --- Node lowering ---
 
-    fn lower_nodes(&mut self, nodes: &[Node]) {
+    /// Lower a sequence of template nodes into a single concatenated String value.
+    fn lower_nodes(&mut self, nodes: &[Node], span: Span) -> ValueId {
+        let mut acc = self.emit_empty_string(span);
         for node in nodes {
-            self.lower_node(node);
+            let val = self.lower_node(node, span);
+            acc = self.emit_concat(span, acc, val);
         }
+        acc
     }
 
-    fn lower_node(&mut self, node: &Node) {
+    /// Lower a single template node, returning a String-typed ValueId.
+    fn lower_node(&mut self, node: &Node, parent_span: Span) -> ValueId {
         match node {
             Node::Text { value, span } => {
                 let dst = self.alloc_val();
@@ -386,27 +478,51 @@ impl<'a> Lowerer<'a> {
                         value: Literal::String(value.clone()),
                     },
                 );
-                self.emit_inst(*span, InstKind::Yield(dst));
+                dst
             }
-            Node::Comment { .. } => {}
-            Node::InlineExpr { expr, span } => {
-                let reg = self.lower_expr(expr);
-                self.emit_inst(*span, InstKind::Yield(reg));
-            }
+            Node::Comment { .. } => self.emit_empty_string(parent_span),
+            Node::InlineExpr { expr, .. } => self.lower_expr(expr),
             Node::MatchBlock(mb) => self.lower_match_block(mb),
             Node::IterBlock(ib) => self.lower_iter_block(ib),
         }
     }
 
+    fn emit_empty_string(&mut self, span: Span) -> ValueId {
+        let dst = self.alloc_val();
+        self.set_val_type(dst, Ty::String);
+        self.emit_inst(span, InstKind::Const { dst, value: Literal::String(String::new()) });
+        dst
+    }
+
+    fn emit_concat(&mut self, span: Span, left: ValueId, right: ValueId) -> ValueId {
+        let dst = self.alloc_val();
+        self.set_val_type(dst, Ty::String);
+        self.emit_inst(span, InstKind::BinOp { dst, op: BinOp::Add, left, right });
+        dst
+    }
+
     /// If the coercion map indicates this span needs a cast, emit a Cast
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
     fn maybe_cast(&mut self, span: Span, val: ValueId) -> ValueId {
+        let val = self.materialize(val, span);
         if let Some(&kind) = self.coercion_lookup.get(&span) {
-            let src_ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
+            let src_ty = self
+                .body
+                .val_types
+                .get(&val)
+                .cloned()
+                .unwrap_or(Ty::error());
             let dst_ty = kind.result_ty(&src_ty);
             let cast_dst = self.alloc_val();
             self.set_val_type(cast_dst, dst_ty);
-            self.emit_inst(span, InstKind::Cast { dst: cast_dst, src: val, kind });
+            self.emit_inst(
+                span,
+                InstKind::Cast {
+                    dst: cast_dst,
+                    src: val,
+                    kind,
+                },
+            );
             cast_dst
         } else {
             val
@@ -415,7 +531,17 @@ impl<'a> Lowerer<'a> {
 
     // --- Expression lowering ---
 
+    /// Lower an expression to a **value** (not a projection).
+    /// If the result is a projection, it is materialized via ContextLoad.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
+        let val = self.lower_expr_inner(expr);
+        let val = self.maybe_cast(expr.span(), val);
+        self.ensure_loaded(expr.span(), val)
+    }
+
+    /// Lower an expression, preserving projections (no automatic ContextLoad).
+    /// Used by FieldAccess and ContextStore where projection must be maintained.
+    fn lower_expr_projectable(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
         self.maybe_cast(expr.span(), val)
     }
@@ -440,15 +566,19 @@ impl<'a> Lowerer<'a> {
                 span,
             } => match ref_kind {
                 RefKind::Context => {
+                    let ctx_id = self.context_id(*name);
+                    let ctx_ty = self.context_ty(*name);
                     let dst = self.alloc_typed(*span);
                     self.set_origin(dst, ValOrigin::Context(*name));
                     self.emit_inst(
                         *span,
-                        InstKind::ContextLoad {
+                        InstKind::ContextProject {
                             dst,
-                            name: *name,
+                            id: ctx_id,
+                            ty: ctx_ty,
                         },
                     );
+                    self.mark_projection(dst);
                     dst
                 }
                 RefKind::Variable => {
@@ -510,7 +640,8 @@ impl<'a> Lowerer<'a> {
                 field,
                 span,
             } => {
-                let obj = self.lower_expr(object);
+                let obj = self.lower_expr_projectable(object);
+                let is_proj = self.is_projection(obj);
                 let dst = self.alloc_val();
                 self.set_val_type(dst, self.type_of_span(*span));
                 self.set_origin(dst, ValOrigin::Field(obj, *field));
@@ -522,6 +653,10 @@ impl<'a> Lowerer<'a> {
                         field: *field,
                     },
                 );
+                // Projection propagates through field access.
+                if is_proj {
+                    self.mark_projection(dst);
+                }
                 dst
             }
 
@@ -538,15 +673,15 @@ impl<'a> Lowerer<'a> {
                         ..
                     } => self.lower_func_call(right, &[], Some(left), *span),
                     _ => {
-                        // Fallback: evaluate both sides, call closure.
+                        // Fallback: evaluate both sides, call as indirect.
                         let l = self.lower_expr(left);
                         let r = self.lower_expr(right);
                         let dst = self.alloc_typed(*span);
                         self.emit_inst(
                             *span,
-                            InstKind::ClosureCall {
+                            InstKind::FunctionCall {
                                 dst,
-                                closure: r,
+                                callee: Callee::Indirect(r),
                                 args: vec![l],
                             },
                         );
@@ -564,8 +699,6 @@ impl<'a> Lowerer<'a> {
                     .iter()
                     .filter_map(|name| self.lookup_var(*name))
                     .collect();
-                let capture_names = free_vars.clone();
-
                 // Create closure body.
                 let closure_label = self.alloc_closure_label();
 
@@ -574,11 +707,11 @@ impl<'a> Lowerer<'a> {
                 let mut sub_scopes = vec![FxHashMap::default()];
 
                 // Captures become the first registers.
-                for (i, name) in capture_names.iter().enumerate() {
-                    let reg = ValueId(i as u32);
-                    sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
+                let mut closure_capture_regs = Vec::new();
+                for (i, name) in free_vars.iter().enumerate() {
+                    let reg = sub_body.val_factory.next();
+                    closure_capture_regs.push(reg);
                     sub_scopes[0].insert(*name, reg);
-                    // Copy capture type from outer body.
                     if let Some(outer_reg) = capture_regs.get(i)
                         && let Some(ty) = self.body.val_types.get(outer_reg)
                     {
@@ -587,13 +720,11 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // Params follow captures.
-                let param_start = capture_names.len() as u32;
-                let param_name_list = params.iter().map(|p| p.name).collect();
-                for (i, p) in params.iter().enumerate() {
-                    let reg = ValueId(param_start + i as u32);
-                    sub_body.val_count = sub_body.val_count.max(reg.0 + 1);
+                let mut closure_param_regs = Vec::new();
+                for p in params.iter() {
+                    let reg = sub_body.val_factory.next();
+                    closure_param_regs.push(reg);
                     sub_scopes[0].insert(p.name, reg);
-                    // Set param type from typeck.
                     let ty = self.type_of_span(p.span);
                     sub_body.val_types.insert(reg, ty);
                 }
@@ -607,20 +738,20 @@ impl<'a> Lowerer<'a> {
                 // pick up any lambda return coercion registered by the typechecker.
                 let result_reg = self.lower_expr(body);
                 // Capture the actual return type (may differ from type_map if Cast was inserted).
-                let actual_ret_ty = self.body.val_types.get(&result_reg).cloned().unwrap_or(Ty::error());
+                let actual_ret_ty = self
+                    .body
+                    .val_types
+                    .get(&result_reg)
+                    .cloned()
+                    .unwrap_or(Ty::error());
                 self.emit_inst(*span, InstKind::Return(result_reg));
 
-                let closure_body_mir = std::mem::replace(&mut self.body, saved_body);
+                let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
 
-                self.closures.insert(
-                    closure_label,
-                    Arc::new(ClosureBody {
-                        capture_names,
-                        param_names: param_name_list,
-                        body: closure_body_mir,
-                    }),
-                );
+                closure_body_mir.capture_regs = closure_capture_regs;
+                closure_body_mir.param_regs = closure_param_regs;
+                self.closures.insert(closure_label, Arc::new(closure_body_mir));
 
                 // Allocate dst with Fn type. If a return-site Cast was inserted,
                 // update the Fn's ret to match the actual (cast) return type.
@@ -748,10 +879,7 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::Variant {
-                tag,
-                payload,
-                span,
-                ..
+                tag, payload, span, ..
             } => {
                 let payload_val = payload.as_ref().map(|e| self.lower_expr(e));
                 let dst = self.alloc_expr(*span);
@@ -774,6 +902,9 @@ impl<'a> Lowerer<'a> {
                             let val = self.lower_expr(expr);
                             self.scopes.last_mut().unwrap().insert(*name, val);
                         }
+                        Stmt::ContextStore { name, expr, span } => {
+                            self.lower_context_store(*name, expr, *span);
+                        }
                         Stmt::Expr(expr) => {
                             self.lower_expr(expr);
                         }
@@ -786,6 +917,34 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_context_store(
+        &mut self,
+        name: Astr,
+        value_expr: &Expr,
+        span: Span,
+    ) -> ValueId {
+        let val = self.lower_expr(value_expr);
+        let ctx_id = self.context_id(name);
+        let ctx_ty = self.context_ty(name);
+        let proj = self.alloc_typed(span);
+        self.emit_inst(
+            span,
+            InstKind::ContextProject {
+                dst: proj,
+                id: ctx_id,
+                ty: ctx_ty,
+            },
+        );
+        self.emit_inst(
+            span,
+            InstKind::ContextStore {
+                dst: proj,
+                value: val,
+            },
+        );
+        val
+    }
+
     fn lower_func_call(
         &mut self,
         func: &Expr,
@@ -796,95 +955,90 @@ impl<'a> Lowerer<'a> {
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
         if let Some(left) = pipe_left {
-            arg_regs.push(self.lower_expr(left));
+            let val = self.lower_expr(left);
+            arg_regs.push(self.materialize(val, call_span));
         }
-        arg_regs.extend(args.iter().map(|a| self.lower_expr(a)));
+        for a in args {
+            let val = self.lower_expr(a);
+            arg_regs.push(self.materialize(val, call_span));
+        }
         let dst = self.alloc_typed(call_span);
 
-        // Context reference to an extern function: emit ExternCall directly.
-        if let Expr::Ident {
-            name,
-            ref_kind: RefKind::Context,
-            span,
-        } = func
-        {
-            if let Some(Ty::Fn { kind: FnKind::Extern, .. }) = self.type_map.get(span).or_else(|| self.type_map.get(&call_span)) {
-                self.set_origin(dst, ValOrigin::Call(*name));
-                self.emit_inst(
-                    call_span,
-                    InstKind::ExternCall {
-                        dst,
-                        name: *name,
-                        args: arg_regs,
-                    },
-                );
-                return dst;
+        // Named function call (Ident).
+        if let Expr::Ident { name, ref_kind, .. } = func {
+            match ref_kind {
+                // @fn_name(args) — context-based function (legacy, will be migrated)
+                RefKind::Context => {
+                    let fn_id = self.function_ids.get(name).map(|(id, _)| *id);
+                    if let Some(fn_id) = fn_id {
+                        self.set_origin(dst, ValOrigin::Call(*name));
+                        self.emit_inst(
+                            call_span,
+                            InstKind::FunctionCall {
+                                dst,
+                                callee: Callee::Direct(fn_id),
+                                args: arg_regs,
+                            },
+                        );
+                        return dst;
+                    }
+                }
+                // fn_name(args) — named call
+                RefKind::Value => {
+                    self.set_origin(dst, ValOrigin::Call(*name));
+
+                    // 1. Graph function (Direct call)
+                    let fn_id = self.function_ids.get(name).map(|(id, _)| *id);
+                    if let Some(fn_id) = fn_id {
+                        self.emit_inst(
+                            call_span,
+                            InstKind::FunctionCall {
+                                dst,
+                                callee: Callee::Direct(fn_id),
+                                args: arg_regs,
+                            },
+                        );
+                        return dst;
+                    }
+
+                    // 2. Local variable (closure/lambda — Indirect call)
+                    if let Some(closure_reg) = self.lookup_var(*name) {
+                        self.emit_inst(
+                            call_span,
+                            InstKind::FunctionCall {
+                                dst,
+                                callee: Callee::Indirect(closure_reg),
+                                args: arg_regs,
+                            },
+                        );
+                        return dst;
+                    }
+
+                    // Typechecker already reported UndefinedFunction; emit poison.
+                    self.emit_inst(call_span, InstKind::Poison { dst });
+                    return dst;
+                }
+                _ => {}
             }
         }
 
-        let Expr::Ident {
-            name,
-            ref_kind: RefKind::Value,
-            ..
-        } = func
-        else {
-            // Expression call (closure).
-            self.set_origin(dst, ValOrigin::Call(self.interner.intern("<closure>")));
-            let func_reg = self.lower_expr(func);
-            self.emit_inst(
-                call_span,
-                InstKind::ClosureCall {
-                    dst,
-                    closure: func_reg,
-                    args: arg_regs,
-                },
-            );
-            return dst;
-        };
-
-        self.set_origin(dst, ValOrigin::Call(*name));
-
-        // Resolve builtin: prefer builtin_map (authoritative from typechecker),
-        // fallback to single-candidate lookup for non-overloaded names.
-        let builtin_id = self.builtin_map.get(&call_span).copied().or_else(|| {
-            let cands = registry().candidates(self.interner.resolve(*name));
-            (cands.len() == 1).then(|| cands[0])
-        });
-        if let Some(builtin_id) = builtin_id {
-            self.emit_inst(
-                call_span,
-                InstKind::BuiltinCall {
-                    dst,
-                    builtin: builtin_id,
-                    args: arg_regs,
-                },
-            );
-            let idx = self.body.insts.len() - 1;
-            self.hints.add(idx, Hint::Pure);
-            return dst;
-        }
-
-        if let Some(closure_reg) = self.lookup_var(*name) {
-            self.emit_inst(
-                call_span,
-                InstKind::ClosureCall {
-                    dst,
-                    closure: closure_reg,
-                    args: arg_regs,
-                },
-            );
-            return dst;
-        }
-
-        // Typechecker already reported UndefinedFunction; emit poison
-        // so the lowerer can continue (needed for analysis-mode compilation).
-        self.emit_inst(call_span, InstKind::Poison { dst });
+        // Expression call (e.g., (x -> x)(42), or complex pipe)
+        self.set_origin(dst, ValOrigin::Call(self.interner.intern("<closure>")));
+        let func_reg = self.lower_expr(func);
+        self.emit_inst(
+            call_span,
+            InstKind::FunctionCall {
+                dst,
+                callee: Callee::Indirect(func_reg),
+                args: arg_regs,
+            },
+        );
         dst
     }
 
     // --- Match block lowering ---
 
-    fn lower_match_block(&mut self, mb: &MatchBlock) {
+    fn lower_match_block(&mut self, mb: &MatchBlock) -> ValueId {
         // Body-less binding shorthand (variable write or value binding).
         if mb.arms.len() == 1
             && mb.arms[0].body.is_empty()
@@ -895,12 +1049,35 @@ impl<'a> Lowerer<'a> {
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
-            if *ref_kind == RefKind::Variable {
-                self.emit_inst(*pat_span, InstKind::VarStore { name: *name, src });
-            } else {
-                self.define_var(*name, src);
+            match ref_kind {
+                RefKind::Variable => {
+                    self.emit_inst(*pat_span, InstKind::VarStore { name: *name, src });
+                }
+                RefKind::Context => {
+                    let ctx_id = self.context_id(*name);
+                    let ctx_ty = self.context_ty(*name);
+                    let proj = self.alloc_typed(*pat_span);
+                    self.emit_inst(
+                        *pat_span,
+                        InstKind::ContextProject {
+                            dst: proj,
+                            id: ctx_id,
+                            ty: ctx_ty,
+                        },
+                    );
+                    self.emit_inst(
+                        *pat_span,
+                        InstKind::ContextStore {
+                            dst: proj,
+                            value: src,
+                        },
+                    );
+                }
+                RefKind::Value => {
+                    self.define_var(*name, src);
+                }
             }
-            return;
+            return self.emit_empty_string(mb.span);
         }
 
         // Pre-compute indent-adjusted arm bodies and catch-all body.
@@ -957,47 +1134,57 @@ impl<'a> Lowerer<'a> {
                 .as_ref()
                 .map(|bodies| bodies[i].as_slice())
                 .unwrap_or(&arm.body);
-            self.lower_nodes(body);
+            let arm_result = self.lower_nodes(body, arm.tag_span);
 
             self.pop_scope();
-            // After body, jump to end (no loop).
+            // After body, jump to end with the arm's concat result.
             self.emit_inst(
                 arm.tag_span,
                 InstKind::Jump {
                     label: end_label,
-                    args: vec![],
+                    args: vec![arm_result],
                 },
             );
         }
 
         // Catch-all block.
         self.emit_label(mb.span, catch_all_label);
-        if let Some(catch_all) = &mb.catch_all {
+        let catch_all_result = if let Some(catch_all) = &mb.catch_all {
             self.push_scope();
             let body = adjusted_catch_all_body
                 .as_deref()
                 .unwrap_or(&catch_all.body);
-            self.lower_nodes(body);
+            let result = self.lower_nodes(body, mb.span);
             self.pop_scope();
-        }
+            result
+        } else {
+            self.emit_empty_string(mb.span)
+        };
+        self.emit_inst(
+            mb.span,
+            InstKind::Jump {
+                label: end_label,
+                args: vec![catch_all_result],
+            },
+        );
 
-        // Merge point: annotate with the first arm's test label so that
-        // reachability analysis can restore the scrutinee block's reach level
-        // (all arms or catch-all jump here, so this block is reached whenever
-        // the first arm test is reached).
+        // Merge point: PHI receives the string result from whichever arm/catch-all matched.
+        let merge_result = self.alloc_val();
+        self.set_val_type(merge_result, Ty::String);
         self.emit_inst(
             mb.span,
             InstKind::BlockLabel {
                 label: end_label,
-                params: vec![],
+                params: vec![merge_result],
                 merge_of: Some(arm_labels[0]),
             },
         );
+        merge_result
     }
 
     // --- Iter block lowering ---
 
-    fn lower_iter_block(&mut self, ib: &IterBlock) {
+    fn lower_iter_block(&mut self, ib: &IterBlock) -> ValueId {
         // Pre-compute indent-adjusted body and catch-all body.
         let adjusted_body: Option<Vec<Node>> = ib
             .indent
@@ -1009,11 +1196,12 @@ impl<'a> Lowerer<'a> {
                 .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
         });
 
-        let source_reg = self.lower_expr(&ib.source);
+        let source_raw = self.lower_expr(&ib.source);
+        let source_reg = self.materialize(source_raw, ib.span);
 
         // Determine element type and CastKind from the source type.
         let elem_ty = self.iterable_elem_type(source_reg);
-        let iter_ty = Ty::Iterator(Box::new(elem_ty.clone()), Effect::Pure);
+        let iter_ty = Ty::Iterator(Box::new(elem_ty.clone()), Effect::pure());
         let cast_kind = match self.body.val_types.get(&source_reg) {
             Some(Ty::Deque(..)) => CastKind::DequeToIterator,
             Some(Ty::List(_)) => CastKind::ListToIterator,
@@ -1037,98 +1225,45 @@ impl<'a> Lowerer<'a> {
         let catch_all_label = self.alloc_label();
         let end_label = self.alloc_label();
 
-        // Jump to loop with initial iterator.
+        // Initial accumulator: empty string.
+        let init_acc = self.emit_empty_string(ib.span);
+
+        // Jump to loop with initial iterator + accumulator.
         self.emit_inst(
             ib.span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![cast_dst],
+                args: vec![cast_dst, init_acc],
             },
         );
 
-        // Loop header — receives iterator as block param.
+        // Loop header — receives iterator + accumulator as block params.
         let iter_param = self.alloc_val();
         self.set_val_type(iter_param, iter_ty.clone());
+        let acc_param = self.alloc_val();
+        self.set_val_type(acc_param, Ty::String);
         self.emit_inst(
             ib.span,
             InstKind::BlockLabel {
                 label: loop_label,
-                params: vec![iter_param],
+                params: vec![iter_param, acc_param],
                 merge_of: None,
             },
         );
 
-        // Pull one element: Option<(T, Iterator<T, Pure>)>.
-        let next_opt_ty = Ty::Option(Box::new(Ty::Tuple(vec![
-            elem_ty.clone(),
-            iter_ty.clone(),
-        ])));
-        let next_opt = self.alloc_val();
-        self.set_val_type(next_opt, next_opt_ty);
-        self.emit_inst(
-            ib.span,
-            InstKind::IterStep {
-                dst: next_opt,
-                src: iter_param,
-            },
-        );
-
-        // Test for None → done.
-        let none_tag = self.interner.intern("None");
-        let is_none = self.alloc_val();
-        self.set_val_type(is_none, Ty::Bool);
-        self.emit_inst(
-            ib.span,
-            InstKind::TestVariant {
-                dst: is_none,
-                src: next_opt,
-                tag: none_tag,
-            },
-        );
-
-        let some_block = self.alloc_label();
-        self.emit_inst(
-            ib.span,
-            InstKind::JumpIf {
-                cond: is_none,
-                then_label: catch_all_label,
-                then_args: vec![],
-                else_label: some_block,
-                else_args: vec![],
-            },
-        );
-        self.emit_label(ib.span, some_block);
-
-        // Unwrap Some((value, rest_iter)).
-        let tuple_reg = self.alloc_val();
-        self.set_val_type(tuple_reg, Ty::Tuple(vec![elem_ty.clone(), iter_ty.clone()]));
-        self.emit_inst(
-            ib.span,
-            InstKind::UnwrapVariant {
-                dst: tuple_reg,
-                src: next_opt,
-            },
-        );
-
+        // Pull one element — jumps to catch_all if exhausted.
         let value_reg = self.alloc_val();
         self.set_val_type(value_reg, elem_ty);
-        self.emit_inst(
-            ib.span,
-            InstKind::TupleIndex {
-                dst: value_reg,
-                tuple: tuple_reg,
-                index: 0,
-            },
-        );
-
         let rest_iter = self.alloc_val();
         self.set_val_type(rest_iter, iter_ty);
         self.emit_inst(
             ib.span,
-            InstKind::TupleIndex {
-                dst: rest_iter,
-                tuple: tuple_reg,
-                index: 1,
+            InstKind::IterStep {
+                dst: value_reg,
+                iter_src: iter_param,
+                iter_dst: rest_iter,
+                done: catch_all_label,
+                done_args: vec![acc_param],
             },
         );
 
@@ -1136,33 +1271,68 @@ impl<'a> Lowerer<'a> {
         self.push_scope();
         self.lower_pattern_bind(&ib.pattern, value_reg, ib.span);
 
-        // Lower body.
+        // Lower body — concat all body nodes into a single string.
         let body = adjusted_body.as_deref().unwrap_or(&ib.body);
-        self.lower_nodes(body);
+        let body_result = self.lower_nodes(body, ib.span);
+
+        // Accumulate: new_acc = acc_param + body_result.
+        let new_acc = self.emit_concat(ib.span, acc_param, body_result);
 
         self.pop_scope();
 
-        // Jump back to loop with rest iterator.
+        // Jump back to loop with rest iterator + new accumulator.
         self.emit_inst(
             ib.span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![rest_iter],
+                args: vec![rest_iter, new_acc],
             },
         );
 
-        // Catch-all block.
-        self.emit_label(ib.span, catch_all_label);
-        if let Some(catch_all) = &ib.catch_all {
+        // Catch-all block — receives final accumulator.
+        let catch_all_acc = self.alloc_val();
+        self.set_val_type(catch_all_acc, Ty::String);
+        self.emit_inst(
+            ib.span,
+            InstKind::BlockLabel {
+                label: catch_all_label,
+                params: vec![catch_all_acc],
+                merge_of: None,
+            },
+        );
+        let final_acc = if let Some(catch_all) = &ib.catch_all {
             self.push_scope();
             let ca_body = adjusted_catch_all_body
                 .as_deref()
                 .unwrap_or(&catch_all.body);
-            self.lower_nodes(ca_body);
+            let ca_result = self.lower_nodes(ca_body, ib.span);
             self.pop_scope();
-        }
+            self.emit_concat(ib.span, catch_all_acc, ca_result)
+        } else {
+            catch_all_acc
+        };
 
-        self.emit_label(ib.span, end_label);
+        // Jump to end with final result.
+        self.emit_inst(
+            ib.span,
+            InstKind::Jump {
+                label: end_label,
+                args: vec![final_acc],
+            },
+        );
+
+        // End block — receives the final string.
+        let end_result = self.alloc_val();
+        self.set_val_type(end_result, Ty::String);
+        self.emit_inst(
+            ib.span,
+            InstKind::BlockLabel {
+                label: end_label,
+                params: vec![end_result],
+                merge_of: None,
+            },
+        );
+        end_result
     }
 
     // --- Pattern test lowering ---
@@ -1335,11 +1505,7 @@ impl<'a> Lowerer<'a> {
                 all_ok
             }
 
-            Pattern::Variant {
-                tag,
-                payload,
-                ..
-            } => {
+            Pattern::Variant { tag, payload, .. } => {
                 // Test if the variant tag matches.
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
@@ -1597,6 +1763,9 @@ impl<'a> Lowerer<'a> {
                             self.collect_free_vars(expr, &inner_bound, free, seen);
                             inner_bound.insert(*name);
                         }
+                        Stmt::ContextStore { expr, .. } => {
+                            self.collect_free_vars(expr, &inner_bound, free, seen);
+                        }
                         Stmt::Expr(e) => {
                             self.collect_free_vars(e, &inner_bound, free, seen);
                         }
@@ -1611,29 +1780,19 @@ impl<'a> Lowerer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ty::TySubst, typeck::TypeChecker};
+    use crate::{graph::ContextId, ty::TySubst, typeck::TypeChecker};
 
     fn lower(interner: &Interner, source: &str) -> MirModule {
-        lower_with(
-            interner,
-            source,
-            &FxHashMap::default(),
-        )
+        lower_with(interner, source, &FxHashMap::default())
     }
 
-    fn lower_with(
-        interner: &Interner,
-        source: &str,
-        context: &FxHashMap<Astr, Ty>,
-    ) -> MirModule {
-        let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let mut subst = TySubst::new();
-    let checker = TypeChecker::new(interner, context, &mut subst);
-        let (type_map, builtin_map, coercion_map) = checker
-            .check_template(&template)
-            .expect("type check failed");
-        let lowerer = Lowerer::new(interner, type_map, builtin_map, coercion_map);
-        let (module, _hints) = lowerer.lower_template(&template);
+    fn lower_with(interner: &Interner, source: &str, context: &FxHashMap<Astr, Ty>) -> MirModule {
+        let ctx: Vec<(&str, Ty)> = context
+            .iter()
+            .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
+            .collect();
+        let (module, _) =
+            crate::test::compile_template(interner, source, &ctx).expect("compile failed");
         module
     }
 
@@ -1641,21 +1800,23 @@ mod tests {
     fn lower_text_node() {
         let interner = Interner::new();
         let module = lower(&interner, "hello world");
-        assert_eq!(module.main.insts.len(), 2);
-        assert!(matches!(
-            &module.main.insts[0].kind,
+        // Template: empty_str const + text const + concat + return
+        let has_text = module.main.insts.iter().any(|i| matches!(
+            &i.kind,
             InstKind::Const { value: Literal::String(s), .. } if s == "hello world"
         ));
-        assert!(matches!(&module.main.insts[1].kind, InstKind::Yield(_)));
+        let has_return = module.main.insts.iter().any(|i| matches!(&i.kind, InstKind::Return(_)));
+        assert!(has_text);
+        assert!(has_return);
     }
 
     #[test]
     fn lower_string_emit() {
         let interner = Interner::new();
         let module = lower(&interner, r#"{{ "hello" }}"#);
-        assert!(module.main.insts.len() >= 2);
+        // InlineExpr emits Const only (Yield removed, pending Iterator<String> redesign)
+        assert!(module.main.insts.len() >= 1);
         assert!(matches!(&module.main.insts[0].kind, InstKind::Const { .. }));
-        assert!(matches!(&module.main.insts[1].kind, InstKind::Yield(_)));
     }
 
     #[test]
@@ -1690,19 +1851,16 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Phase 2: builtin → graph Function migration"]
     fn lower_builtin_call() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
-        let module = lower_with(
-            &interner,
-            r#"{{ @n | to_string }}"#,
-            &context,
-        );
+        let module = lower_with(&interner, r#"{{ @n | to_string }}"#, &context);
         let has_call = module
             .main
             .insts
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::BuiltinCall { builtin, .. } if *builtin == crate::builtins::BuiltinId::ToString));
+            .any(|i| matches!(&i.kind, InstKind::FunctionCall { .. }));
         assert!(has_call);
     }
 

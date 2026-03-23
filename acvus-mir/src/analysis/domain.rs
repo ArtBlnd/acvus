@@ -100,9 +100,7 @@ impl SemiLattice for AbstractValue {
 
 fn join_finite_sets(a: &FiniteSet, b: &FiniteSet) -> AbstractValue {
     match (a, b) {
-        (FiniteSet::Intervals(ai), FiniteSet::Intervals(bi)) => {
-            join_intervals(ai, bi)
-        }
+        (FiniteSet::Intervals(ai), FiniteSet::Intervals(bi)) => join_intervals(ai, bi),
         (FiniteSet::Bools(ab), FiniteSet::Bools(bb)) => {
             let mut merged: SmallVec<[bool; 2]> = ab.clone();
             for &v in bb {
@@ -125,9 +123,7 @@ fn join_finite_sets(a: &FiniteSet, b: &FiniteSet) -> AbstractValue {
             }
             AbstractValue::Finite(FiniteSet::Strings(merged))
         }
-        (FiniteSet::Variants(av), FiniteSet::Variants(bv)) => {
-            join_variants(av, bv)
-        }
+        (FiniteSet::Variants(av), FiniteSet::Variants(bv)) => join_variants(av, bv),
         (FiniteSet::Literals(al), FiniteSet::Literals(bl)) => {
             let mut merged: SmallVec<[Literal; 4]> = al.clone();
             for v in bl {
@@ -243,28 +239,18 @@ impl BooleanDomain for AbstractValue {
 impl AbstractValue {
     pub fn from_literal(lit: &Literal) -> Self {
         match lit {
-            Literal::Int(v) => {
-                AbstractValue::Finite(FiniteSet::Intervals(SmallVec::from_elem(
-                    Interval::point(*v),
-                    1,
-                )))
-            }
-            Literal::Bool(b) => {
-                AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(*b, 1)))
-            }
+            Literal::Int(v) => AbstractValue::Finite(FiniteSet::Intervals(SmallVec::from_elem(
+                Interval::point(*v),
+                1,
+            ))),
+            Literal::Bool(b) => AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(*b, 1))),
             Literal::Float(_) | Literal::Byte(_) | Literal::List(_) => {
-                AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(
-                    lit.clone(),
-                    1,
-                )))
+                AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(lit.clone(), 1)))
             }
             Literal::String(_) => {
                 // String literals in Literal use String, not Astr.
                 // We store them in the Literals variant.
-                AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(
-                    lit.clone(),
-                    1,
-                )))
+                AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(lit.clone(), 1)))
             }
         }
     }
@@ -313,9 +299,7 @@ impl AbstractValue {
             AbstractValue::Finite(fs) => match (fs, lit) {
                 (FiniteSet::Intervals(ivs), Literal::Int(v)) => {
                     let any_match = ivs.iter().any(|iv| iv.contains(*v));
-                    let all_match = ivs.len() == 1
-                        && ivs[0].lo == *v
-                        && ivs[0].hi == *v;
+                    let all_match = ivs.len() == 1 && ivs[0].lo == *v && ivs[0].hi == *v;
                     if all_match {
                         bool_single(true)
                     } else if !any_match {
@@ -355,21 +339,14 @@ impl AbstractValue {
         }
     }
 
-    pub fn test_range(
-        &self,
-        start: i64,
-        end: i64,
-        kind: acvus_ast::RangeKind,
-    ) -> AbstractValue {
+    pub fn test_range(&self, start: i64, end: i64, kind: acvus_ast::RangeKind) -> AbstractValue {
         match self {
             AbstractValue::Bottom => AbstractValue::Bottom,
             AbstractValue::Top => bool_top(),
             AbstractValue::Finite(FiniteSet::Intervals(ivs)) => {
                 let (range_lo, range_hi) = effective_range(start, end, kind);
                 let any_in = ivs.iter().any(|iv| iv.hi >= range_lo && iv.lo <= range_hi);
-                let all_in = ivs
-                    .iter()
-                    .all(|iv| iv.lo >= range_lo && iv.hi <= range_hi);
+                let all_in = ivs.iter().all(|iv| iv.lo >= range_lo && iv.hi <= range_hi);
                 if all_in && !ivs.is_empty() {
                     bool_single(true)
                 } else if !any_in {
@@ -514,13 +491,19 @@ mod tests {
     #[test]
     fn test_literal_exact_match() {
         let v = AbstractValue::from_literal(&Literal::Int(5));
-        assert_eq!(v.test_literal(&Literal::Int(5)).as_definite_bool(), Some(true));
+        assert_eq!(
+            v.test_literal(&Literal::Int(5)).as_definite_bool(),
+            Some(true)
+        );
     }
 
     #[test]
     fn test_literal_no_match() {
         let v = AbstractValue::from_literal(&Literal::Int(3));
-        assert_eq!(v.test_literal(&Literal::Int(5)).as_definite_bool(), Some(false));
+        assert_eq!(
+            v.test_literal(&Literal::Int(5)).as_definite_bool(),
+            Some(false)
+        );
     }
 
     #[test]
@@ -556,8 +539,7 @@ mod tests {
     #[test]
     fn bool_and_short_circuit() {
         assert_eq!(
-            abstract_and(&bool_single(false), &AbstractValue::Top)
-                .as_definite_bool(),
+            abstract_and(&bool_single(false), &AbstractValue::Top).as_definite_bool(),
             Some(false)
         );
     }
@@ -565,14 +547,16 @@ mod tests {
     #[test]
     fn bool_or_short_circuit() {
         assert_eq!(
-            abstract_or(&bool_single(true), &AbstractValue::Top)
-                .as_definite_bool(),
+            abstract_or(&bool_single(true), &AbstractValue::Top).as_definite_bool(),
             Some(true)
         );
     }
 
     #[test]
     fn bool_not_true() {
-        assert_eq!(abstract_not(&bool_single(true)).as_definite_bool(), Some(false));
+        assert_eq!(
+            abstract_not(&bool_single(true)).as_definite_bool(),
+            Some(false)
+        );
     }
 }

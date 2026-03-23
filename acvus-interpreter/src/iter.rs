@@ -5,317 +5,114 @@ use acvus_utils::TrackedDeque;
 
 use crate::value::{FnValue, Value};
 
-// =========================================================================
-// IterChain / IterOp — flat chain representation for drive_chain
-// =========================================================================
+// ── IterOp — lazy pipeline operation ─────────────────────────────────
 
-/// Flat representation of a lazy iterator pipeline.
-#[derive(Clone)]
-pub struct IterChain {
-    pub source: Arc<[Value]>,
-    pub ops: Vec<IterOp>,
-}
-
-/// A single lazy operation in the pipeline.
+/// A single lazy operation in an iterator pipeline.
 #[derive(Clone)]
 pub enum IterOp {
     Map(FnValue),
     Filter(FnValue),
     Take(usize),
     Skip(usize),
-    /// Concatenate another chain's elements after the current ones.
-    Chain(IterChain),
-    /// Flatten nested lists: each `Value::List(inner)` is inlined.
+    Chain(Vec<Value>),
     Flatten,
-    /// Map then flatten: call closure, then inline any `Value::List`.
     FlatMap(FnValue),
 }
 
-// =========================================================================
-// SequenceChain — lazy Deque with origin tracking
-// =========================================================================
+// ── PureInit — source + ops before collection ────────────────────────
 
-/// A lazy sequence of operations on a [`TrackedDeque`].
-///
-/// Represents a Deque that has been loaded from storage (with checkpoint set)
-/// and has pending structural operations. The origin TrackedDeque's checksum
-/// is preserved through all operations — when collected, the result can be
-/// diffed against the storage origin via [`TrackedDeque::into_diff`].
-///
-/// ## Invariant
-///
-/// `origin` must have a checkpoint set. All structural ops (take, skip, chain)
-/// are applied lazily. On collect, they are executed against `origin`,
-/// producing a TrackedDeque in the same checksum lineage.
-///
-/// ## Allowed ops
-///
-/// Only structural operations are allowed — these do not transform individual
-/// elements, so the TrackedDeque's diff tracking remains valid:
-/// - `Take(n)`: keep only the first `n` elements
-/// - `Skip(n)`: consume `n` elements from the front
-/// - `Chain(IterHandle)`: extend with elements from a lazy iterator
-///
-/// Element-transforming operations (map, filter) break the origin relationship
-/// and must go through Iterator (Sequence → Iterator coercion).
+/// Data needed to collect a pure iterator. Consumed on first exec_next.
 #[derive(Clone)]
-pub struct SequenceChain {
-    origin: TrackedDeque<Value>,
-    ops: Vec<SequenceOp>,
+pub struct PureInit {
+    pub source: Vec<Value>,
+    pub ops: Vec<IterOp>,
 }
 
-/// A structural operation on a Sequence.
-#[derive(Clone)]
-pub enum SequenceOp {
-    /// Keep only the first `n` elements.
-    Take(usize),
-    /// Consume `n` elements from the front.
-    Skip(usize),
-    /// Extend with elements from a lazy iterator.
-    /// Requires runtime to execute (IterHandle may contain closures).
-    Chain(IterHandle),
-}
+// ── IterHandle ───────────────────────────────────────────────────────
 
-impl SequenceChain {
-    /// Create a new SequenceChain from a TrackedDeque.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts that the deque has a checkpoint set.
-    pub fn new(origin: TrackedDeque<Value>) -> Self {
-        debug_assert!(
-            origin.is_dirty() || true, // checkpoint must exist — is_dirty only works after checkpoint
-            "SequenceChain: origin must have checkpoint set"
-        );
-        Self {
-            origin,
-            ops: Vec::new(),
-        }
-    }
-
-    /// Create from a storage-loaded TrackedDeque: clone + checkpoint.
-    pub fn from_stored(stored: TrackedDeque<Value>) -> Self {
-        let mut working = stored;
-        working.checkpoint();
-        Self::new(working)
-    }
-
-    /// Create an empty sequence (first turn, no stored value).
-    pub fn empty() -> Self {
-        let mut deque = TrackedDeque::new();
-        deque.checkpoint();
-        Self::new(deque)
-    }
-
-    // -- lazy builders --------------------------------------------------------
-
-    pub fn take(mut self, n: usize) -> Self {
-        self.ops.push(SequenceOp::Take(n));
-        self
-    }
-
-    pub fn skip(mut self, n: usize) -> Self {
-        self.ops.push(SequenceOp::Skip(n));
-        self
-    }
-
-    pub fn chain(mut self, iter: IterHandle) -> Self {
-        self.ops.push(SequenceOp::Chain(iter));
-        self
-    }
-
-    // -- access ---------------------------------------------------------------
-
-    /// Borrow the origin TrackedDeque.
-    pub fn origin(&self) -> &TrackedDeque<Value> {
-        &self.origin
-    }
-
-    /// Borrow the pending ops.
-    pub fn ops(&self) -> &[SequenceOp] {
-        &self.ops
-    }
-
-    /// Convert to an IterHandle (Sequence → Iterator coercion).
-    ///
-    /// The origin's items become the source, and SequenceOps are translated
-    /// to IterOps. The result is still lazy — nothing is executed.
-    pub fn into_iter_handle(self, effect: Effect) -> IterHandle {
-        let source: Vec<Value> = self.origin.into_vec();
-        let ops: Vec<IterOp> = self
-            .ops
-            .into_iter()
-            .map(|op| match op {
-                SequenceOp::Take(n) => IterOp::Take(n),
-                SequenceOp::Skip(n) => IterOp::Skip(n),
-                SequenceOp::Chain(iter) => IterOp::Chain(iter.snapshot_chain()),
-            })
-            .collect();
-        IterHandle::new(source, ops, effect)
-    }
-
-    /// Consume and return the origin TrackedDeque (for direct Deque access
-    /// when no ops have been applied).
-    ///
-    /// # Panics
-    ///
-    /// Panics if there are pending ops.
-    pub fn into_origin(self) -> TrackedDeque<Value> {
-        assert!(
-            self.ops.is_empty(),
-            "into_origin called with {} pending ops",
-            self.ops.len()
-        );
-        self.origin
-    }
-
-    /// Whether this sequence has pending lazy ops.
-    pub fn has_ops(&self) -> bool {
-        !self.ops.is_empty()
-    }
-
-    /// Collect by applying all ops to the origin TrackedDeque.
-    ///
-    /// Preserves checksum lineage — the result can be diffed against
-    /// a clone of the origin via `TrackedDeque::into_diff`.
-    ///
-    /// Chain ops require async exec_next, so this takes a handle.
-    pub async fn collect(
-        self,
-        handle: &acvus_utils::YieldHandle<crate::TypedValue>,
-    ) -> Result<TrackedDeque<Value>, crate::error::RuntimeError> {
-        let mut deque = self.origin;
-
-        for op in self.ops {
-            match op {
-                SequenceOp::Take(n) => {
-                    // Keep only first n items
-                    let len = deque.len();
-                    if n < len {
-                        for _ in 0..(len - n) {
-                            deque.pop();
-                        }
-                    }
-                }
-                SequenceOp::Skip(n) => {
-                    deque.consume(n.min(deque.len()));
-                }
-                SequenceOp::Chain(ih) => {
-                    // Pull items from IterHandle via exec_next
-                    let empty_module = acvus_mir::ir::MirModule {
-                        main: acvus_mir::ir::MirBody::default(),
-                        closures: Default::default(),
-                    };
-                    let mut interp = crate::Interpreter::new(
-                        &acvus_utils::Interner::new(),
-                        empty_module,
-                    );
-                    let mut current = ih;
-                    loop {
-                        let result;
-                        (interp, result) =
-                            crate::Interpreter::exec_next(interp, current, handle).await?;
-                        match result {
-                            Some((item, rest)) => {
-                                deque.push(item);
-                                current = rest;
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(deque)
-    }
-
-    /// The origin's checksum — for verification against storage.
-    pub fn origin_checksum(&self) -> u64 {
-        self.origin.checksum()
-    }
-}
-
-impl std::fmt::Debug for SequenceChain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "SequenceChain(len={}, ops={}, checksum={:#x})",
-            self.origin.len(),
-            self.ops.len(),
-            self.origin.checksum()
-        )
-    }
-}
-
-impl PartialEq for SequenceChain {
-    fn eq(&self, _other: &Self) -> bool {
-        false
-    }
-}
-
-// =========================================================================
-// IterHandle — thunk-based lazy iterator
-// =========================================================================
-
-/// Internal state of a lazy iterator.
+/// A lazy iterator handle. Two fundamentally different execution paths
+/// based on effect.
 ///
-/// Transitions: `Suspended` → `Evaluated` (on `next`, Pure only) or read-and-discard (Effectful).
-/// `Chain` allows composing two iterators sequentially.
-#[derive(Clone)]
-pub enum IterRepr {
-    /// Not yet executed. Holds source data + pipeline ops.
+/// ## Pure (OnceLock pattern)
+///
+/// First `exec_next` collects all elements through the ops pipeline,
+/// stores them in a shared `Arc<[Value]>`. Subsequent calls just index.
+/// No mutex after initialization. Clone = Arc::clone + fresh index.
+///
+/// ## Effectful (lazy pull)
+///
+/// Each `exec_next` pulls one element, applying ops lazily.
+/// Clone = deep copy (independent execution).
+pub enum IterHandle {
+    /// Pure iterator — collect once, index after.
+    Pure {
+        /// Shared collected items. `None` = not yet collected.
+        items: Arc<Mutex<Option<Arc<[Value]>>>>,
+        /// Source data + ops for collection (consumed on first access).
+        init: Arc<Mutex<Option<PureInit>>>,
+        /// Current read position (per-clone).
+        index: usize,
+    },
+    /// Effectful iterator — lazy pull, no memo, no sync.
+    /// Move-only: sole owner guaranteed by SSA.
+    Effectful {
+        state: EffectfulState,
+        effect: Effect,
+    },
+}
+
+/// State for effectful (lazy) iteration.
+pub enum EffectfulState {
     Suspended {
         source: Vec<Value>,
-        ops: Vec<IterOp>,
+        /// Element-level ops only (Map, Filter, Flatten, FlatMap).
+        elem_ops: Vec<IterOp>,
         offset: usize,
+        /// Remaining elements to take (None = unlimited).
+        take_remaining: Option<usize>,
     },
-    /// One element has been computed (Pure memo).
-    /// `head` is the result, `tail` is the rest of the iterator.
-    Evaluated {
-        head: Value,
-        tail: IterHandle,
-    },
-    /// Two iterators in sequence — exhaust `first`, then `second`.
-    Chain {
-        first: IterHandle,
-        second: IterHandle,
-    },
-    /// An op applied on top of another iterator.
-    Wrapped {
-        inner: IterHandle,
-        op: IterOp,
-    },
-    /// No more elements.
     Done,
 }
 
-/// A lazy iterator handle.
-///
-/// ## Clone semantics
-///
-/// - **Pure** (`Effect::Pure`): `Arc` is shared — clones see the same memo.
-/// - **Effectful**: state is deep-copied — each clone runs independently.
-pub struct IterHandle {
-    state: Arc<Mutex<IterRepr>>,
-    effect: Effect,
-}
-
 impl IterHandle {
-    /// Create a new iterator from source data + ops pipeline.
+    /// Create from source + ops.
     pub fn new(source: Vec<Value>, ops: Vec<IterOp>, effect: Effect) -> Self {
-        Self::suspended(source, ops, 0, effect)
-    }
+        if effect.is_pure() {
+            Self::Pure {
+                items: Arc::new(Mutex::new(None)),
+                init: Arc::new(Mutex::new(Some(PureInit { source, ops }))),
+                index: 0,
+            }
+        } else {
+            // Split ops into iterator-level (applied to source) and element-level.
+            let mut src = source;
+            let mut elem_ops = Vec::new();
+            let mut take_remaining: Option<usize> = None;
+            let mut skip = 0usize;
 
-    /// Create with explicit offset.
-    pub fn suspended(source: Vec<Value>, ops: Vec<IterOp>, offset: usize, effect: Effect) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(IterRepr::Suspended {
-                source,
-                ops,
-                offset,
-            })),
-            effect,
+            for op in ops {
+                match op {
+                    IterOp::Skip(n) => skip += n,
+                    IterOp::Take(n) => {
+                        take_remaining = Some(match take_remaining {
+                            Some(prev) => prev.min(n),
+                            None => n,
+                        });
+                    }
+                    IterOp::Chain(extra) => src.extend(extra),
+                    other => elem_ops.push(other),
+                }
+            }
+
+            Self::Effectful {
+                state: EffectfulState::Suspended {
+                    source: src,
+                    elem_ops,
+                    offset: skip,
+                    take_remaining,
+                },
+                effect,
+            }
         }
     }
 
@@ -324,171 +121,273 @@ impl IterHandle {
         Self::new(items, Vec::new(), effect)
     }
 
-    /// Create from an IterChain.
-    pub fn from_chain(chain: IterChain, effect: Effect) -> Self {
-        Self::new(chain.source.to_vec(), chain.ops, effect)
-    }
-
     /// Create a done (empty) iterator.
     pub fn done(effect: Effect) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(IterRepr::Done)),
-            effect,
-        }
-    }
-
-    /// Chain two iterators: exhaust self, then other.
-    pub fn chain(self, other: IterHandle) -> Self {
-        // LUB: if either is Effectful, the chain is Effectful.
-        let effect = match (self.effect, other.effect) {
-            (Effect::Pure, Effect::Pure) => Effect::Pure,
-            _ => Effect::Effectful,
-        };
-        Self {
-            state: Arc::new(Mutex::new(IterRepr::Chain {
-                first: self,
-                second: other,
-            })),
-            effect,
-        }
-    }
-
-    // -- lazy chain builders (push IterOp, return new IterHandle) -------------
-
-    pub fn map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Map(f))
-    }
-
-    pub fn filter(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Filter(f))
-    }
-
-    pub fn take(self, n: usize) -> Self {
-        self.push_op(IterOp::Take(n))
-    }
-
-    pub fn skip(self, n: usize) -> Self {
-        self.push_op(IterOp::Skip(n))
-    }
-
-    pub fn flatten(self) -> Self {
-        self.push_op(IterOp::Flatten)
-    }
-
-    pub fn flat_map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::FlatMap(f))
-    }
-
-    /// Push an IterOp onto the pipeline.
-    ///
-    /// - Suspended: appends op to ops list (fast path).
-    /// - Other states: wraps in a Wrapped variant (op applied on top).
-    fn push_op(self, op: IterOp) -> Self {
-        let mut state = self.state.lock().unwrap();
-        match &mut *state {
-            IterRepr::Suspended { source, ops, offset } => {
-                let cur_offset = *offset;
-                let mut new_ops = std::mem::take(ops);
-                new_ops.push(op);
-                let new_source = std::mem::take(source);
-                drop(state);
-                Self::suspended(new_source, new_ops, cur_offset, self.effect)
+        if effect.is_pure() {
+            Self::Pure {
+                items: Arc::new(Mutex::new(Some(Arc::from(Vec::<Value>::new())))),
+                init: Arc::new(Mutex::new(None)),
+                index: 0,
             }
-            _ => {
-                let effect = self.effect;
-                drop(state);
-                Self {
-                    state: Arc::new(Mutex::new(IterRepr::Wrapped {
-                        inner: self,
-                        op,
-                    })),
-                    effect,
+        } else {
+            Self::Effectful {
+                state: EffectfulState::Done,
+                effect,
+            }
+        }
+    }
+
+    pub fn effect(&self) -> &Effect {
+        match self {
+            Self::Pure { .. } => {
+                // Pure iterator's effect is always pure — use a static ref.
+                static PURE: std::sync::OnceLock<Effect> = std::sync::OnceLock::new();
+                PURE.get_or_init(Effect::pure)
+            }
+            Self::Effectful { effect, .. } => effect,
+        }
+    }
+
+    // ── Pure: access collected items ─────────────────────────────
+
+    /// For pure iterators: get or initialize the collected items.
+    /// Returns the shared Arc. If not yet collected, returns None
+    /// (caller must collect via interpreter and call `set_collected`).
+    pub fn get_collected(&self) -> Option<Arc<[Value]>> {
+        match self {
+            Self::Pure { items, .. } => {
+                items.lock().unwrap().clone()
+            }
+            _ => panic!("get_collected on effectful iterator"),
+        }
+    }
+
+    /// Take the init data for collection (consumed once).
+    pub fn take_init(&self) -> Option<PureInit> {
+        match self {
+            Self::Pure { init, .. } => init.lock().unwrap().take(),
+            _ => panic!("take_init on effectful iterator"),
+        }
+    }
+
+    /// Store collected items after first exec_next.
+    pub fn set_collected(&self, collected: Arc<[Value]>) {
+        match self {
+            Self::Pure { items, .. } => {
+                *items.lock().unwrap() = Some(collected);
+            }
+            _ => panic!("set_collected on effectful iterator"),
+        }
+    }
+
+    /// Current index (pure only).
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Pure { index, .. } => *index,
+            _ => panic!("index on effectful iterator"),
+        }
+    }
+
+    /// Create a clone with advanced index (pure only).
+    pub fn with_next_index(&self) -> Self {
+        match self {
+            Self::Pure { items, init, index } => Self::Pure {
+                items: Arc::clone(items),
+                init: Arc::clone(init),
+                index: index + 1,
+            },
+            _ => panic!("with_next_index on effectful iterator"),
+        }
+    }
+
+    // ── Lazy builders (push ops) ─────────────────────────────────
+
+    pub fn map(self, f: FnValue) -> Self { self.push_op(IterOp::Map(f)) }
+    pub fn filter(self, f: FnValue) -> Self { self.push_op(IterOp::Filter(f)) }
+    pub fn take(self, n: usize) -> Self { self.push_op(IterOp::Take(n)) }
+    pub fn skip(self, n: usize) -> Self { self.push_op(IterOp::Skip(n)) }
+    pub fn flatten(self) -> Self { self.push_op(IterOp::Flatten) }
+    pub fn flat_map(self, f: FnValue) -> Self { self.push_op(IterOp::FlatMap(f)) }
+
+    pub fn chain(self, other: IterHandle) -> Self {
+        // For chain, we need to collect the other iter's source.
+        // For now, just push a Chain op with the other's source.
+        match other {
+            IterHandle::Pure { init, items, .. } => {
+                // If already collected, use those items.
+                if let Some(collected) = items.lock().unwrap().as_ref() {
+                    self.push_op(IterOp::Chain(collected.to_vec()))
+                } else if let Some(pure_init) = init.lock().unwrap().as_ref() {
+                    // Not yet collected — take source (no ops support for now).
+                    self.push_op(IterOp::Chain(pure_init.source.clone()))
+                } else {
+                    self.push_op(IterOp::Chain(Vec::new()))
                 }
             }
-        }
-    }
-
-    // -- snapshot / compatibility with drive_chain ----------------------------
-
-    /// Snapshot the current pipeline as an IterChain (for drive_chain compatibility).
-    ///
-    /// Only works for Suspended state. Panics on other states.
-    pub fn snapshot_chain(&self) -> IterChain {
-        let state = self.state.lock().unwrap();
-        match &*state {
-            IterRepr::Suspended { source, ops, .. } => IterChain {
-                source: source.clone().into(),
-                ops: ops.clone(),
-            },
-            _ => panic!("snapshot_chain: only works on Suspended IterHandle"),
-        }
-    }
-
-    /// Extract source + ops + offset for drive_chain compatibility.
-    ///
-    /// Returns `Some((source, ops, offset))` if Suspended, `None` otherwise.
-    pub fn into_chain_parts(self) -> Option<(Vec<Value>, Vec<IterOp>, usize)> {
-        let state = self.state.lock().unwrap();
-        match &*state {
-            IterRepr::Suspended { source, ops, offset } => {
-                Some((source.clone(), ops.clone(), *offset))
+            IterHandle::Effectful { .. } => {
+                panic!("chain: cannot chain effectful iterator as source")
             }
-            _ => None,
         }
     }
 
-    /// Get the current state (cloned).
-    pub fn get_state(&self) -> IterRepr {
-        self.state.lock().unwrap().clone()
+    fn push_op(self, op: IterOp) -> Self {
+        match self {
+            Self::Pure { init, items, index } => {
+                let mut guard = init.lock().unwrap();
+                if let Some(pinit) = guard.as_mut() {
+                    pinit.ops.push(op);
+                    drop(guard);
+                    Self::Pure { init, items, index }
+                } else {
+                    // Already collected — need to re-wrap.
+                    // Create new init from collected items.
+                    let collected = items.lock().unwrap().clone().unwrap_or_default();
+                    drop(guard);
+                    Self::Pure {
+                        items: Arc::new(Mutex::new(None)),
+                        init: Arc::new(Mutex::new(Some(PureInit {
+                            source: collected.to_vec(),
+                            ops: vec![op],
+                        }))),
+                        index,
+                    }
+                }
+            }
+            Self::Effectful { mut state, effect } => {
+                if let EffectfulState::Suspended { source, elem_ops, offset, take_remaining } = &mut state {
+                    match op {
+                        IterOp::Skip(n) => *offset += n,
+                        IterOp::Take(n) => {
+                            *take_remaining = Some(take_remaining.map_or(n, |prev| prev.min(n)));
+                        }
+                        IterOp::Chain(extra) => source.extend(extra),
+                        other => elem_ops.push(other),
+                    }
+                }
+                Self::Effectful { state, effect }
+            }
+        }
     }
-
-    /// Set the state (for Pure memo after evaluation).
-    pub fn set_state(&self, repr: IterRepr) {
-        *self.state.lock().unwrap() = repr;
-    }
-
-    /// The effect of this iterator.
-    pub fn effect(&self) -> Effect {
-        self.effect
-    }
-
 }
 
 impl Clone for IterHandle {
     fn clone(&self) -> Self {
-        match self.effect {
-            // Pure: share the Arc — clones see the same memo.
-            Effect::Pure => Self {
-                state: Arc::clone(&self.state),
-                effect: self.effect,
+        match self {
+            Self::Pure { items, init, index } => Self::Pure {
+                items: Arc::clone(items),
+                init: Arc::clone(init),
+                index: *index,
             },
-            // Effectful: deep copy — each clone runs independently.
-            _ => Self {
-                state: Arc::new(Mutex::new(self.state.lock().unwrap().clone())),
-                effect: self.effect,
-            },
+            Self::Effectful { .. } => {
+                panic!("clone: effectful Iterator is move-only")
+            }
         }
     }
 }
 
 impl std::fmt::Debug for IterHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock().unwrap();
-        match &*state {
-            IterRepr::Suspended { source, ops, offset } => {
-                write!(f, "IterHandle::Suspended(len={}, ops={}, offset={})", source.len(), ops.len(), offset)
+        match self {
+            Self::Pure { items, index, .. } => {
+                let collected = items.lock().unwrap().is_some();
+                write!(f, "Iter::Pure(idx={index}, collected={collected})")
             }
-            IterRepr::Evaluated { .. } => write!(f, "IterHandle::Evaluated"),
-            IterRepr::Chain { .. } => write!(f, "IterHandle::Chain"),
-            IterRepr::Wrapped { .. } => write!(f, "IterHandle::Wrapped"),
-            IterRepr::Done => write!(f, "IterHandle::Done"),
+            Self::Effectful { state, .. } => {
+                match state {
+                    EffectfulState::Suspended { source, elem_ops, offset, .. } => {
+                        write!(f, "Iter::Effectful(len={}, ops={}, off={})", source.len(), elem_ops.len(), offset)
+                    }
+                    EffectfulState::Done => write!(f, "Iter::Effectful(done)"),
+                }
+            }
         }
     }
 }
 
 impl PartialEq for IterHandle {
-    fn eq(&self, _other: &Self) -> bool {
-        false
+    fn eq(&self, _other: &Self) -> bool { false }
+}
+
+// ── SequenceChain ────────────────────────────────────────────────────
+
+/// Lazy sequence over a [`TrackedDeque`] with origin tracking.
+///
+/// Only structural operations (take, skip, chain) are allowed — element
+/// transforms must go through Iterator coercion.
+#[derive(Clone)]
+pub struct SequenceChain {
+    origin: TrackedDeque<Value>,
+    ops: Vec<SequenceOp>,
+    effect: Effect,
+}
+
+#[derive(Clone)]
+pub enum SequenceOp {
+    Take(usize),
+    Skip(usize),
+    Chain(IterHandle),
+}
+
+impl SequenceChain {
+    pub fn new(origin: TrackedDeque<Value>, effect: Effect) -> Self {
+        debug_assert!(origin.is_dirty() || true, "origin must have checkpoint");
+        Self { origin, ops: Vec::new(), effect }
+    }
+
+    pub fn from_stored(stored: TrackedDeque<Value>, effect: Effect) -> Self {
+        let mut working = stored;
+        working.checkpoint();
+        Self::new(working, effect)
+    }
+
+    pub fn empty(effect: Effect) -> Self {
+        let mut deque = TrackedDeque::new();
+        deque.checkpoint();
+        Self::new(deque, effect)
+    }
+
+    pub fn take(mut self, n: usize) -> Self { self.ops.push(SequenceOp::Take(n)); self }
+    pub fn skip(mut self, n: usize) -> Self { self.ops.push(SequenceOp::Skip(n)); self }
+    pub fn chain(mut self, iter: IterHandle) -> Self { self.ops.push(SequenceOp::Chain(iter)); self }
+
+    pub fn origin(&self) -> &TrackedDeque<Value> { &self.origin }
+    pub fn ops(&self) -> &[SequenceOp] { &self.ops }
+    pub fn effect(&self) -> &Effect { &self.effect }
+    pub fn has_ops(&self) -> bool { !self.ops.is_empty() }
+    pub fn origin_checksum(&self) -> u64 { self.origin.checksum() }
+
+    pub fn into_origin(self) -> TrackedDeque<Value> {
+        assert!(self.ops.is_empty(), "into_origin with {} pending ops", self.ops.len());
+        self.origin
+    }
+
+    /// Convert to Iterator (breaks origin relationship).
+    pub fn into_iter_handle(self) -> IterHandle {
+        let effect = self.effect.clone();
+        let source = self.origin.into_vec();
+        let ops: Vec<IterOp> = self.ops.into_iter().map(|op| match op {
+            SequenceOp::Take(n) => IterOp::Take(n),
+            SequenceOp::Skip(n) => IterOp::Skip(n),
+            SequenceOp::Chain(ih) => {
+                // Collect the chained iterator's items.
+                if let Some(collected) = ih.get_collected() {
+                    IterOp::Chain(collected.to_vec())
+                } else {
+                    IterOp::Chain(Vec::new())
+                }
+            }
+        }).collect();
+        IterHandle::new(source, ops, effect)
     }
 }
 
+impl std::fmt::Debug for SequenceChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Seq(len={}, ops={}, cksum={:#x})",
+            self.origin.len(), self.ops.len(), self.origin.checksum())
+    }
+}
+
+impl PartialEq for SequenceChain {
+    fn eq(&self, _other: &Self) -> bool { false }
+}

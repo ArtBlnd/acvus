@@ -2,50 +2,78 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @matrix
-     1 │   r1 = cast ListToIterator r0
-     2 │   jump L0(r1)
-     3 │ L0(r2: Iterator<List<Int>>):
-     4 │   r3 = iter_step r2
-     5 │   r4 = test r3 is None
-     6 │   jump_if r4 then L1 else L3
-     7 │ L3:
-     8 │   r5 = unwrap r3
-     9 │   r6 = r5.0
-    10 │   r7 = r5.1
-    11 │   r8 = cast ListToIterator r6
-    12 │   jump L4(r8)
-    13 │ L4(r9: Iterator<Int>):
-    14 │   r10 = iter_step r9
-    15 │   r11 = test r10 is None
-    16 │   jump_if r11 then L5 else L7
-    17 │ L7:
-    18 │   r12 = unwrap r10
-    19 │   r13 = r12.0
-    20 │   r14 = r12.1
-    21 │   r15 = call to_string(r13)
-    22 │   yield r15
-    23 │   jump L4(r14)
-    24 │ L5:
-    25 │ L6:
-    26 │   jump L0(r7)
-    27 │ L1:
-    28 │ L2:
+=== literals ===
+  T0 = ""
 
-    ; r0 (@matrix) : List<List<Int>>
-    ; r1 (v1) : Iterator<List<Int>>
-    ; r2 (v2) : Iterator<List<Int>>
-    ; r3 (v3) : Option<(List<Int>, Iterator<List<Int>>)>
-    ; r4 (v4) : Bool
-    ; r5 (v5) : (List<Int>, Iterator<List<Int>>)
-    ; r6 (row) : List<Int>
-    ; r7 (v7) : Iterator<List<Int>>
-    ; r8 (v8) : Iterator<Int>
-    ; r9 (v9) : Iterator<Int>
-    ; r10 (v10) : Option<(Int, Iterator<Int>)>
-    ; r11 (v11) : Bool
-    ; r12 (v12) : (Int, Iterator<Int>)
-    ; r13 (x) : Int
-    ; r14 (v14) : Iterator<Int>
-    ; r15 (to_string(...)) : String
+=== main ===
+     1 │   r1 = context_project @matrix
+     2 │   r2 = context_load r1
+     3 │   r3 = cast ListToIterator r2
+     5 │   jump L0(r3, T0)
+     6 │ L0(r5: Iterator<List<Int>>, r6: String):
+     7 │   r7 = iter_step r5
+     8 │   r8 = test r7 is None
+     9 │   jump_if r8 then L1(r6) else L3
+    10 │ L3:
+    11 │   r9 = unwrap r7
+    12 │   r10 = r9.0
+    13 │   r11 = r9.1
+    15 │   r13 = cast ListToIterator r10
+    17 │   jump L4(r13, T0)
+    18 │ L4(r15: Iterator<Int>, r16: String):
+    19 │   r17 = iter_step r15
+    20 │   r18 = test r17 is None
+    21 │   jump_if r18 then L5(r16) else L7
+    22 │ L7:
+    23 │   r19 = unwrap r17
+    24 │   r20 = r19.0
+    25 │   r21 = r19.1
+    27 │   r23 = poison
+    28 │   r24 = T0 + r23
+    29 │   r25 = r16 + r24
+    30 │   jump L4(r21, r25)
+    31 │ L5(r26: String):
+    32 │   jump L6(r26)
+    33 │ L6(r27: String):
+    34 │   r28 = T0 + r27
+    35 │   r29 = r6 + r28
+    36 │   jump L0(r11, r29)
+    37 │ L1(r30: String):
+    38 │   jump L2(r30)
+    39 │ L2(r31: String):
+    40 │   r32 = T0 + r31
+    41 │   return r32
+
+    ; r0 (v0) : String
+    ; r1 (@matrix) : List<List<Int>>
+    ; r2 (v2) : List<List<Int>>
+    ; r3 (v3) : Iterator<List<Int>>
+    ; r4 (v4) : String
+    ; r5 (v5) : Iterator<List<Int>>
+    ; r6 (v6) : String
+    ; r7 (v7) : Option<(List<Int>, Iterator<List<Int>>)>
+    ; r8 (v8) : Bool
+    ; r9 (v9) : (List<Int>, Iterator<List<Int>>)
+    ; r10 (row) : List<Int>
+    ; r11 (v11) : Iterator<List<Int>>
+    ; r12 (v12) : String
+    ; r13 (v13) : Iterator<Int>
+    ; r14 (v14) : String
+    ; r15 (v15) : Iterator<Int>
+    ; r16 (v16) : String
+    ; r17 (v17) : Option<(Int, Iterator<Int>)>
+    ; r18 (v18) : Bool
+    ; r19 (v19) : (Int, Iterator<Int>)
+    ; r20 (x) : Int
+    ; r21 (v21) : Iterator<Int>
+    ; r22 (v22) : String
+    ; r23 (to_string(...)) : String
+    ; r24 (v24) : String
+    ; r25 (v25) : String
+    ; r26 (v26) : String
+    ; r27 (v27) : String
+    ; r28 (v28) : String
+    ; r29 (v29) : String
+    ; r30 (v30) : String
+    ; r31 (v31) : String
+    ; r32 (v32) : String

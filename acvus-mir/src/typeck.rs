@@ -5,20 +5,15 @@ use acvus_ast::{
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::builtins::{BuiltinId, registry};
 use crate::error::{MirError, MirErrorKind};
 use crate::ir::CastKind;
-use crate::ty::{Effect, FnKind, Polarity, Purity, Ty, TySubst};
+use crate::ty::{Effect, Param, Polarity, Purity, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
 
 /// Maps each AST Span to its inferred type.
 pub type TypeMap = FxHashMap<Span, Ty>;
-
-/// Maps each builtin-call Span to the resolved BuiltinId.
-/// Produced by the type checker, consumed by the lowerer.
-pub type BuiltinMap = FxHashMap<Span, BuiltinId>;
 
 /// Maps expression spans to the coercion needed at that point.
 /// Produced by the type checker, consumed by the lowerer.
@@ -27,11 +22,11 @@ pub type CoercionMap = Vec<(Span, CastKind)>;
 // ── TypeResolution: boundary between TypeChecker and Lowerer ──────────
 
 /// Marker: unresolved type variables may remain (SCC unit, not yet complete).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Unchecked;
 
 /// Marker: no unresolved type variables (completeness verified).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Checked;
 
 /// Result of type checking a single script or template.
@@ -42,18 +37,44 @@ pub struct Checked;
 ///
 /// `S = Checked`: produced by `check_completeness`. All type variables resolved.
 ///   Only `Checked` resolutions can be lowered to MIR.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeResolution<S = Checked> {
     pub type_map: TypeMap,
-    pub builtin_map: BuiltinMap,
     pub coercion_map: CoercionMap,
     pub tail_ty: Ty,
+    /// Effect of the function body (Pure or Effectful).
+    /// Determined by whether the body reads/writes contexts or calls effectful functions.
+    pub body_effect: Effect,
+    /// Context names directly read by this function body (shallow — no transitive).
+    pub body_reads: FxHashSet<Astr>,
+    /// Context names directly written by this function body (shallow — no transitive).
+    pub body_writes: FxHashSet<Astr>,
+    /// Free parameters inferred during analysis-mode typecheck.
+    /// Empty in non-analysis mode.
+    pub inferred_params: Vec<(Astr, Ty)>,
     _marker: PhantomData<S>,
 }
 
 impl<S> TypeResolution<S> {
-    fn new(type_map: TypeMap, builtin_map: BuiltinMap, coercion_map: CoercionMap, tail_ty: Ty) -> Self {
-        Self { type_map, builtin_map, coercion_map, tail_ty, _marker: PhantomData }
+    fn new(
+        type_map: TypeMap,
+        coercion_map: CoercionMap,
+        tail_ty: Ty,
+        body_effect: Effect,
+        body_reads: FxHashSet<Astr>,
+        body_writes: FxHashSet<Astr>,
+        inferred_params: Vec<(Astr, Ty)>,
+    ) -> Self {
+        Self {
+            type_map,
+            coercion_map,
+            tail_ty,
+            body_effect,
+            body_reads,
+            body_writes,
+            inferred_params,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -70,17 +91,28 @@ pub fn check_completeness(
     let tail_ty = subst.resolve(&resolution.tail_ty);
     if contains_var(&tail_ty) {
         return Err(vec![MirError {
-            kind: MirErrorKind::AmbiguousType { resolved_ty: tail_ty },
+            kind: MirErrorKind::AmbiguousType {
+                resolved_ty: tail_ty,
+            },
             span: Span::ZERO,
         }]);
     }
     // Re-resolve type_map: other units in the SCC may have resolved
     // type variables that were unresolved when this unit was typechecked.
-    let type_map = resolution.type_map
+    let type_map = resolution
+        .type_map
         .into_iter()
         .map(|(span, ty)| (span, subst.resolve(&ty)))
         .collect();
-    Ok(TypeResolution::new(type_map, resolution.builtin_map, resolution.coercion_map, tail_ty))
+    Ok(TypeResolution::new(
+        type_map,
+        resolution.coercion_map,
+        tail_ty,
+        resolution.body_effect,
+        resolution.body_reads,
+        resolution.body_writes,
+        resolution.inferred_params,
+    ))
 }
 
 struct LambdaScope {
@@ -92,20 +124,18 @@ struct LambdaScope {
 pub struct TypeChecker<'a, 's> {
     /// Interner for string interning.
     interner: &'a Interner,
-    /// Context variable types (`@name`, externally declared).
-    context_types: &'a FxHashMap<Astr, Ty>,
+    /// Unified type environment: contexts + functions.
+    env: &'a TypeEnv,
     /// Stack of scopes: each scope maps variable names to types.
     scopes: Vec<FxHashMap<Astr, Ty>>,
     /// Variable types (`$name`, inferred at first assignment).
     variable_types: FxHashMap<Astr, Ty>,
     /// Unification state (borrowed — may be shared across compilations).
     subst: &'s mut TySubst,
-    /// Cached fresh Vars for `Ty::Infer` context entries.
+    /// Cached fresh Params for `Ty::Param` context entries.
     infer_vars: FxHashMap<Astr, Ty>,
     /// Accumulated type map.
     type_map: TypeMap,
-    /// Accumulated builtin resolutions (call_span → BuiltinId).
-    builtin_map: BuiltinMap,
     /// Accumulated coercion records (span → CastKind).
     coercion_map: CoercionMap,
     /// Accumulated errors.
@@ -121,29 +151,60 @@ pub struct TypeChecker<'a, 's> {
     /// correct span (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
     lambda_body_spans: FxHashMap<Span, Span>,
+    /// Top-level body effect. Tracks whether the function body performs
+    /// effectful operations (context read/write, effectful callee invocation).
+    /// Starts as Pure; set to Effectful when any effectful operation is encountered.
+    body_effect: Effect,
+    /// Context names directly read by this function body (shallow).
+    body_reads: FxHashSet<Astr>,
+    /// Context names directly written by this function body (shallow).
+    body_writes: FxHashSet<Astr>,
+    /// In analysis mode: free parameters discovered during typecheck.
+    /// These are `RefKind::Value` identifiers that were undefined — treated as
+    /// implicit function parameters. Ordered by first occurrence.
+    inferred_params: Vec<(Astr, Ty)>,
+    /// Declared parameter types from Signature, consumed in order as
+    /// free params are discovered during analysis mode.
+    declared_param_types: Vec<Ty>,
+    /// Next index into declared_param_types.
+    next_declared_param: usize,
 }
 
 impl<'a, 's> TypeChecker<'a, 's> {
     pub fn new(
         interner: &'a Interner,
-        context_types: &'a FxHashMap<Astr, Ty>,
+        env: &'a TypeEnv,
         subst: &'s mut TySubst,
     ) -> Self {
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
-            context_types,
+            env,
             variable_types: FxHashMap::default(),
             subst,
             infer_vars: FxHashMap::default(),
             type_map: TypeMap::default(),
-            builtin_map: BuiltinMap::default(),
             coercion_map: CoercionMap::default(),
             errors: Vec::new(),
             analysis_mode: false,
             lambda_stack: Vec::new(),
             lambda_body_spans: FxHashMap::default(),
+            body_effect: Effect::pure(),
+            body_reads: FxHashSet::default(),
+            body_writes: FxHashSet::default(),
+            inferred_params: Vec::new(),
+            declared_param_types: Vec::new(),
+            next_declared_param: 0,
         }
+    }
+
+    /// Pre-bind function parameters as local variables.
+    /// Called before typecheck to inject parameter names+types from Signature.
+    pub fn with_params(mut self, params: &[Param]) -> Self {
+        for param in params {
+            self.define_var(param.name, param.ty.clone());
+        }
+        self
     }
 
     /// Enable analysis mode: unknown `@context` refs produce fresh type
@@ -151,6 +212,118 @@ impl<'a, 's> TypeChecker<'a, 's> {
     pub fn with_analysis_mode(mut self) -> Self {
         self.analysis_mode = true;
         self
+    }
+
+    /// Provide declared parameter types from Signature.
+    /// In analysis mode, these are consumed in order as free params are discovered.
+    pub fn with_declared_param_types(mut self, types: Vec<Ty>) -> Self {
+        self.declared_param_types = types;
+        self
+    }
+
+    /// Type check a template. Consumes self, returns TypeResolution<Unchecked>.
+    /// Template tail type is always String (templates emit text).
+    pub fn check_template(
+        mut self,
+        template: &Template,
+    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+        self.check_nodes(&template.body);
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+        let resolved: TypeMap = self
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .collect();
+        Ok(TypeResolution::new(
+            resolved,
+            self.coercion_map,
+            Ty::String,
+            self.body_effect,
+            self.body_reads,
+            self.body_writes,
+            self.inferred_params,
+        ))
+    }
+
+    /// Type check a script. Consumes self, returns TypeResolution<Unchecked>.
+    /// `expected_tail`: if provided, the script's tail expression is unified with this type.
+    pub fn check_script(
+        mut self,
+        script: &acvus_ast::Script,
+        expected_tail: Option<&Ty>,
+    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
+        for stmt in &script.stmts {
+            match stmt {
+                acvus_ast::Stmt::Bind { name, expr, span } => {
+                    let ty = self.check_expr(false, expr);
+                    self.define_var(*name, ty.clone());
+                    self.record(*span, ty);
+                }
+                acvus_ast::Stmt::ContextStore { name, expr, span } => {
+                    let ty = self.check_expr(false, expr);
+                    // Writing external state is effectful.
+                    self.body_writes.insert(*name);
+                    self.propagate_call_effect(Effect::io());
+                    // Unify with the declared context type.
+                    let ctx_ty = self
+                        .env.contexts
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| self.subst.fresh_param());
+                    if self.subst.unify(&ty, &ctx_ty, Polarity::Invariant).is_err() {
+                        self.error(
+                            MirErrorKind::UnificationFailure {
+                                expected: ctx_ty,
+                                got: ty.clone(),
+                            },
+                            *span,
+                        );
+                    }
+                    self.record(*span, ty);
+                }
+                acvus_ast::Stmt::Expr(expr) => {
+                    self.check_expr(false, expr);
+                }
+            }
+        }
+        let tail_ty = if let Some(tail) = &script.tail {
+            let ty = self.check_expr(false, tail);
+            if let Some(expected) = expected_tail {
+                if self.unify_covariant(&ty, expected, tail.span()).is_err() {
+                    let resolved = self.subst.resolve(&ty);
+                    let expected_resolved = self.subst.resolve(expected);
+                    self.error(
+                        MirErrorKind::UnificationFailure {
+                            expected: expected_resolved,
+                            got: resolved,
+                        },
+                        tail.span(),
+                    );
+                }
+            }
+            ty
+        } else {
+            Ty::Unit
+        };
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+        let resolved: TypeMap = self
+            .type_map
+            .iter()
+            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .collect();
+        Ok(TypeResolution::new(
+            resolved,
+            self.coercion_map,
+            tail_ty,
+            self.body_effect,
+            self.body_reads,
+            self.body_writes,
+            self.inferred_params,
+        ))
     }
 
     /// Unify `value_ty` with `expected_ty` in covariant position, recording
@@ -171,230 +344,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
         }
         result
-    }
-
-    pub fn check_template(
-        mut self,
-        template: &Template,
-    ) -> Result<(TypeMap, BuiltinMap, CoercionMap), Vec<MirError>> {
-        self.check_nodes(&template.body);
-        if !self.errors.is_empty() {
-            return Err(self.errors);
-        }
-        // Resolve all types in the type map.
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        Ok((resolved, self.builtin_map, self.coercion_map))
-    }
-
-    pub fn check_script(
-        self,
-        script: &acvus_ast::Script,
-    ) -> Result<(TypeMap, BuiltinMap, CoercionMap, Ty), Vec<MirError>> {
-        self.check_script_with_hint(script, None)
-    }
-
-    pub fn check_script_with_hint(
-        mut self,
-        script: &acvus_ast::Script,
-        expected_tail: Option<&Ty>,
-    ) -> Result<(TypeMap, BuiltinMap, CoercionMap, Ty), Vec<MirError>> {
-        for stmt in &script.stmts {
-            match stmt {
-                acvus_ast::Stmt::Bind { name, expr, span } => {
-                    let ty = self.check_expr(false,expr);
-                    self.define_var(*name, ty.clone());
-                    self.record(*span, ty);
-                }
-                acvus_ast::Stmt::Expr(expr) => {
-                    self.check_expr(false,expr);
-                }
-            }
-        }
-        let tail_ty = match &script.tail {
-            Some(expr) => self.check_expr(false,expr),
-            None => Ty::Unit,
-        };
-        // Unify tail with expected type hint (if provided) to resolve ambiguous literals
-        if let Some(expected) = expected_tail {
-            let tail_span = script
-                .tail
-                .as_ref()
-                .map(|e| e.span())
-                .unwrap_or(acvus_ast::Span::ZERO);
-            if self.unify_covariant(&tail_ty, expected, tail_span).is_err() {
-                self.error(
-                    MirErrorKind::UnificationFailure {
-                        expected: self.subst.resolve(expected),
-                        got: self.subst.resolve(&tail_ty),
-                    },
-                    tail_span,
-                );
-            }
-        }
-        if !self.errors.is_empty() {
-            return Err(self.errors);
-        }
-        let resolved_tail = self.subst.resolve(&tail_ty);
-        // Check for unresolved type variables (e.g. `[]` without hint).
-        // In analysis mode, unresolved vars are expected and allowed.
-        if !self.analysis_mode && contains_var(&resolved_tail) {
-            let span = script
-                .tail
-                .as_ref()
-                .map(|e| e.span())
-                .unwrap_or(acvus_ast::Span::ZERO);
-            self.error(MirErrorKind::AmbiguousType { resolved_ty: resolved_tail.clone() }, span);
-            return Err(self.errors);
-        }
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        Ok((resolved, self.builtin_map, self.coercion_map, resolved_tail))
-    }
-
-    /// Type check a script without the unresolved var check.
-    /// Returns `TypeResolution<Unchecked>` — suitable for SCC units where
-    /// other units may resolve remaining type variables.
-    ///
-    /// Call `check_completeness` after all SCC units are typechecked.
-    pub fn check_script_to_resolution(
-        mut self,
-        script: &acvus_ast::Script,
-        expected_tail: Option<&Ty>,
-    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
-        for stmt in &script.stmts {
-            match stmt {
-                acvus_ast::Stmt::Bind { name, expr, span } => {
-                    let ty = self.check_expr(false, expr);
-                    self.define_var(*name, ty.clone());
-                    self.record(*span, ty);
-                }
-                acvus_ast::Stmt::Expr(expr) => {
-                    self.check_expr(false, expr);
-                }
-            }
-        }
-        let tail_ty = match &script.tail {
-            Some(expr) => self.check_expr(false, expr),
-            None => Ty::Unit,
-        };
-        if let Some(expected) = expected_tail {
-            let tail_span = script
-                .tail
-                .as_ref()
-                .map(|e| e.span())
-                .unwrap_or(acvus_ast::Span::ZERO);
-            if self.unify_covariant(&tail_ty, expected, tail_span).is_err() {
-                self.error(
-                    MirErrorKind::UnificationFailure {
-                        expected: self.subst.resolve(expected),
-                        got: self.subst.resolve(&tail_ty),
-                    },
-                    tail_span,
-                );
-            }
-        }
-        if !self.errors.is_empty() {
-            return Err(self.errors);
-        }
-        // Resolve type_map with current subst state.
-        // Note: type variables from other SCC units may still be unresolved.
-        // check_completeness will re-resolve after the full SCC is done.
-        let resolved_tail = self.subst.resolve(&tail_ty);
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        Ok(TypeResolution::new(resolved, self.builtin_map, self.coercion_map, resolved_tail))
-    }
-
-    /// Type check a template without the unresolved var check.
-    /// Returns `TypeResolution<Unchecked>`.
-    pub fn check_template_to_resolution(
-        mut self,
-        template: &Template,
-    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
-        self.check_nodes(&template.body);
-        if !self.errors.is_empty() {
-            return Err(self.errors);
-        }
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        Ok(TypeResolution::new(resolved, self.builtin_map, self.coercion_map, Ty::Unit))
-    }
-
-    /// Like `check_template`, but always returns a (partial) TypeMap and collects errors separately.
-    /// Used by analysis-mode compilation so that context-key discovery works even when
-    /// the template contains type errors.
-    pub fn check_template_partial(
-        mut self,
-        template: &Template,
-    ) -> (TypeMap, BuiltinMap, CoercionMap, Vec<MirError>) {
-        self.check_nodes(&template.body);
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        (resolved, self.builtin_map, self.coercion_map, self.errors)
-    }
-
-    /// Like `check_script_with_hint`, but always returns a (partial) TypeMap and collects errors separately.
-    pub fn check_script_with_hint_partial(
-        mut self,
-        script: &acvus_ast::Script,
-        expected_tail: Option<&Ty>,
-    ) -> (TypeMap, BuiltinMap, CoercionMap, Ty, Vec<MirError>) {
-        for stmt in &script.stmts {
-            match stmt {
-                acvus_ast::Stmt::Bind { name, expr, span } => {
-                    let ty = self.check_expr(false,expr);
-                    self.define_var(*name, ty.clone());
-                    self.record(*span, ty);
-                }
-                acvus_ast::Stmt::Expr(expr) => {
-                    self.check_expr(false,expr);
-                }
-            }
-        }
-        let tail_ty = match &script.tail {
-            Some(expr) => self.check_expr(false,expr),
-            None => Ty::Unit,
-        };
-        if let Some(expected) = expected_tail {
-            let tail_span = script
-                .tail
-                .as_ref()
-                .map(|e| e.span())
-                .unwrap_or(Span::ZERO);
-            if self.unify_covariant(&tail_ty, expected, tail_span).is_err() {
-                // Record the error but don't fail — we still want the partial results.
-                self.error(
-                    MirErrorKind::UnificationFailure {
-                        expected: self.subst.resolve(expected),
-                        got: self.subst.resolve(&tail_ty),
-                    },
-                    tail_span,
-                );
-            }
-        }
-        let resolved: TypeMap = self
-            .type_map
-            .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
-            .collect();
-        let resolved_tail = self.subst.resolve(&tail_ty);
-        (resolved, self.builtin_map, self.coercion_map, resolved_tail, self.errors)
     }
 
     fn push_scope(&mut self) {
@@ -445,16 +394,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     /// Resolve a context variable (`@name`) to its type.
     fn resolve_context_type(&mut self, name: Astr, span: Span) -> Ty {
-        let use_infer_var = match self.context_types.get(&name) {
-            Some(Ty::Infer(_)) => true,
-            Some(ty) => return ty.clone(),
-            None => self.analysis_mode,
-        };
-        if use_infer_var {
+        if let Some(ty) = self.env.contexts.get(&name) {
+            return ty.clone();
+        }
+        if self.analysis_mode {
             return self
                 .infer_vars
                 .entry(name)
-                .or_insert_with(|| self.subst.fresh_var())
+                .or_insert_with(|| self.subst.fresh_param())
                 .clone();
         }
         self.error(
@@ -542,11 +489,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
         match node {
             Node::Text { .. } | Node::Comment { .. } => {}
             Node::InlineExpr { expr, span } => {
-                let ty = self.check_expr(false,expr);
+                let ty = self.check_expr(false, expr);
                 let resolved = self.subst.resolve(&ty);
                 match &resolved {
                     Ty::String | Ty::Error(_) => {}
-                    Ty::Var(_) => {
+                    Ty::Param { .. } => {
                         if self.unify_covariant(&ty, &Ty::String, *span).is_err() {
                             self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
                         }
@@ -562,7 +509,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     fn check_match_block(&mut self, mb: &MatchBlock) {
         // Body-less variable binding: define in current scope (no push/pop).
         if self.is_bodyless_var_binding(mb) {
-            let source_ty = self.check_expr(false,&mb.source);
+            let source_ty = self.check_expr(false, &mb.source);
             if matches!(&mb.arms[0].pattern, Pattern::Variant { .. }) {
                 self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
             } else {
@@ -572,7 +519,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             return;
         }
 
-        let source_ty = self.check_expr(false,&mb.source);
+        let source_ty = self.check_expr(false, &mb.source);
         let resolved_source = self.subst.resolve(&source_ty);
 
         for arm in &mb.arms {
@@ -585,9 +532,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
             // Object patterns are NOT included because they go through the
             // iteration path (pattern_match_type extracts element types).
             let pattern_source = match &arm.pattern {
-                Pattern::Variant { .. }
-                | Pattern::Tuple { .. }
-                | Pattern::List { .. } => source_ty.clone(),
+                Pattern::Variant { .. } | Pattern::Tuple { .. } | Pattern::List { .. } => {
+                    source_ty.clone()
+                }
                 _ => match_ty,
             };
 
@@ -605,7 +552,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     }
 
     fn check_iter_block(&mut self, ib: &IterBlock) {
-        let source_ty = self.check_expr(false,&ib.source);
+        let source_ty = self.check_expr(false, &ib.source);
         let resolved = self.subst.resolve(&source_ty);
 
         let elem_ty = match &resolved {
@@ -640,7 +587,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             && matches!(&mb.arms[0].pattern, Pattern::Binding { .. })
     }
 
-
     /// Determine what type a pattern matches against given the source type.
     /// List patterns match the source directly (destructuring).
     /// Other patterns match against the iterated element type.
@@ -672,7 +618,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Literal::Byte(_) => Ty::Byte,
                     Literal::List(elems) => {
                         if elems.is_empty() {
-                            let elem = self.subst.fresh_var();
+                            let elem = self.subst.fresh_param();
                             let origin = self.subst.fresh_concrete_origin();
                             Ty::Deque(Box::new(elem), origin)
                         } else {
@@ -705,7 +651,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let ty = match ref_kind {
                     RefKind::Context => {
                         let ty = self.resolve_context_type(*name, *span);
-                        if !allow_non_pure && ty.purity() == Purity::Unpure && !ty.is_error() {
+                        // Reading external state is effectful.
+                        self.body_reads.insert(*name);
+                        self.propagate_call_effect(Effect::io());
+                        if !allow_non_pure && ty.purity() == Purity::Unpure && !ty.is_error() && !ty.is_param() {
                             self.error(
                                 MirErrorKind::NonPureContextLoad {
                                     name: self.interner.resolve(*name).to_string(),
@@ -734,13 +683,29 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     RefKind::Value => match self.lookup_var(*name) {
                         Some(ty) => ty,
                         None => {
-                            self.error(
-                                MirErrorKind::UndefinedVariable(
-                                    self.interner.resolve(*name).to_string(),
-                                ),
-                                *span,
-                            );
-                            Ty::error()
+                            if self.analysis_mode {
+                                // In analysis mode, undefined values are implicit
+                                // function parameters. Use declared type from Signature
+                                // if available, otherwise fresh Param.
+                                let ty = if self.next_declared_param < self.declared_param_types.len() {
+                                    let t = self.declared_param_types[self.next_declared_param].clone();
+                                    self.next_declared_param += 1;
+                                    t
+                                } else {
+                                    self.subst.fresh_param()
+                                };
+                                self.define_var(*name, ty.clone());
+                                self.inferred_params.push((*name, ty.clone()));
+                                ty
+                            } else {
+                                self.error(
+                                    MirErrorKind::UndefinedVariable(
+                                        self.interner.resolve(*name).to_string(),
+                                    ),
+                                    *span,
+                                );
+                                Ty::error()
+                            }
                         }
                     },
                 };
@@ -753,8 +718,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 right,
                 span,
             } => {
-                let lt = self.check_expr(false,left);
-                let rt = self.check_expr(false,right);
+                let lt = self.check_expr(false, left);
+                let rt = self.check_expr(false, right);
                 let lt = self.subst.resolve(&lt);
                 let rt = self.subst.resolve(&rt);
 
@@ -789,7 +754,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         }
                         let rl = self.subst.resolve(&lt);
                         match &rl {
-                            Ty::Int | Ty::Float | Ty::Var(_) => rl,
+                            Ty::Int | Ty::Float | Ty::Param { .. } => rl,
                             Ty::String if *op == BinOp::Add => Ty::String,
                             _ => {
                                 self.binop_error(op_str(*op), rl, self.subst.resolve(&rt), *span);
@@ -831,7 +796,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         let ok = self.subst.unify(&lt, &rt, Polarity::Invariant).is_ok()
-                            && matches!(self.subst.resolve(&lt), Ty::Int | Ty::Float | Ty::Var(_));
+                            && matches!(self.subst.resolve(&lt), Ty::Int | Ty::Float | Ty::Param { .. });
                         if !ok {
                             self.binop_error(
                                 op_str(*op),
@@ -847,7 +812,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
 
             Expr::UnaryOp { op, operand, span } => {
-                let ot = self.check_expr(false,operand);
+                let ot = self.check_expr(false, operand);
                 let ot = self.subst.resolve(&ot);
 
                 // Early guard: if operand is Error, suppress cascading errors.
@@ -863,7 +828,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     acvus_ast::UnaryOp::Neg => match &ot {
                         Ty::Int => Ty::Int,
                         Ty::Float => Ty::Float,
-                        Ty::Var(_) => ot.clone(),
+                        Ty::Param { .. } => ot.clone(),
                         _ => {
                             self.binop_error("-", ot, Ty::error(), *span);
                             Ty::error()
@@ -872,7 +837,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     acvus_ast::UnaryOp::Not => {
                         match &ot {
                             Ty::Bool => {}
-                            Ty::Var(_) => {
+                            Ty::Param { .. } => {
                                 let _ = self.unify_covariant(&ot, &Ty::Bool, *span);
                             }
                             _ => self.binop_error("!", ot, Ty::error(), *span),
@@ -888,7 +853,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 field,
                 span,
             } => {
-                let ot_raw = self.check_expr(false,object);
+                let ot_raw = self.check_expr(false, object);
                 let ot = self.subst.resolve(&ot_raw);
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
@@ -898,7 +863,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         fields[&field_key].clone()
                     }
                     Ty::Object(fields) => {
-                        let Some(leaf_var) = self.subst.find_leaf_var(&ot_raw) else {
+                        let Some(leaf_var) = self.subst.find_leaf_param(&ot_raw) else {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: ot.clone(),
@@ -908,17 +873,21 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             );
                             return Ty::error();
                         };
-                        let fresh = self.subst.fresh_var();
+                        let fresh = self.subst.fresh_param();
                         let mut new_fields = fields.clone();
                         new_fields.insert(field_key, fresh.clone());
                         self.subst.rebind(leaf_var, Ty::Object(new_fields));
                         fresh
                     }
-                    Ty::Var(_) => {
-                        let fresh = self.subst.fresh_var();
+                    Ty::Param { .. } => {
+                        let fresh = self.subst.fresh_param();
                         let partial_obj =
                             Ty::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
-                        if self.subst.unify(&ot_raw, &partial_obj, Polarity::Invariant).is_err() {
+                        if self
+                            .subst
+                            .unify(&ot_raw, &partial_obj, Polarity::Invariant)
+                            .is_err()
+                        {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: ot,
@@ -961,8 +930,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         ..
                     } => self.check_func_call(right, &[], pipe_left, *span),
                     _ => {
-                        let lt = self.check_expr(false,left);
-                        let rt = self.check_expr(false,right);
+                        let lt = self.check_expr(false, left);
+                        let rt = self.check_expr(false, right);
                         self.check_callable(&rt, &[], &Some(lt), Some(left.span()), *span)
                     }
                 };
@@ -973,17 +942,17 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.push_scope();
                 let mut param_types = Vec::new();
                 for p in params {
-                    let pt = self.subst.fresh_var();
+                    let pt = self.subst.fresh_param();
                     self.define_var(p.name, pt.clone());
                     self.record(p.span, pt.clone());
-                    param_types.push(pt);
+                    param_types.push(Param::new(p.name, pt));
                 }
 
                 // Push lambda scope for capture tracking.
                 self.lambda_stack.push(LambdaScope {
                     depth: self.scopes.len() - 1,
                     captures: Vec::new(),
-                    effect: Effect::Pure,
+                    effect: Effect::pure(),
                 });
 
                 let ret = self.check_expr(false, body);
@@ -991,7 +960,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 // Pop this lambda's scope.
                 let ls = self.lambda_stack.pop().unwrap();
                 let effect = ls.effect;
-                let capture_types: Vec<Ty> = ls.captures
+                let capture_types: Vec<Ty> = ls
+                    .captures
                     .into_iter()
                     .map(|t| self.subst.resolve(&t))
                     .collect();
@@ -1004,7 +974,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let ty = Ty::Fn {
                     params: param_types,
                     ret: Box::new(ret),
-                    kind: FnKind::Lambda,
                     captures: capture_types,
                     effect,
                 };
@@ -1012,7 +981,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
 
             Expr::Paren { inner, span } => {
-                let ty = self.check_expr(false,inner);
+                let ty = self.check_expr(false, inner);
                 self.record_ret(*span, ty)
             }
 
@@ -1026,19 +995,19 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 if all_elems.is_empty() && rest.is_none() {
                     // Empty list `[]` — element type unknown, use fresh var.
                     // If no hint resolves it, we report the error after resolve.
-                    let elem = self.subst.fresh_var();
+                    let elem = self.subst.fresh_param();
                     let origin = self.subst.fresh_concrete_origin();
                     let ty = Ty::Deque(Box::new(elem), origin);
                     return self.record_ret(*span, ty);
                 }
 
                 let elem_ty = match all_elems.first() {
-                    Some(first) => self.check_expr(false,first),
-                    None => self.subst.fresh_var(), // Only `..` with no elements: fresh var.
+                    Some(first) => self.check_expr(false, first),
+                    None => self.subst.fresh_param(), // Only `..` with no elements: fresh var.
                 };
 
                 for elem in all_elems.iter().skip(1) {
-                    let et = self.check_expr(false,elem);
+                    let et = self.check_expr(false, elem);
                     if self.unify_covariant(&et, &elem_ty, *span).is_err() {
                         self.error(
                             MirErrorKind::HeterogeneousList {
@@ -1058,7 +1027,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Expr::Object { fields, span } => {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
-                    let ft = self.check_expr(false,value);
+                    let ft = self.check_expr(false, value);
                     field_types.insert(*key, ft);
                 }
                 let ty = Ty::Object(field_types);
@@ -1071,8 +1040,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 kind: _,
                 span,
             } => {
-                let st = self.check_expr(false,start);
-                let et = self.check_expr(false,end);
+                let st = self.check_expr(false, start);
+                let et = self.check_expr(false, end);
                 let st = self.subst.resolve(&st);
                 let et = self.subst.resolve(&et);
                 if !matches!(&st, Ty::Int | Ty::Error(_)) {
@@ -1088,8 +1057,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let elem_types: Vec<Ty> = elements
                     .iter()
                     .map(|elem| match elem {
-                        TupleElem::Expr(e) => self.check_expr(false,e),
-                        TupleElem::Wildcard(_) => self.subst.fresh_var(),
+                        TupleElem::Expr(e) => self.check_expr(false, e),
+                        TupleElem::Wildcard(_) => self.subst.fresh_param(),
                     })
                     .collect();
                 let ty = Ty::Tuple(elem_types);
@@ -1103,9 +1072,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     return Ty::Unit;
                 };
                 for e in &elements[..elements.len() - 1] {
-                    self.check_expr(false,e);
+                    self.check_expr(false, e);
                 }
-                let ty = self.check_expr(false,last);
+                let ty = self.check_expr(false, last);
                 self.record_ret(*span, ty)
             }
 
@@ -1131,8 +1100,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                 );
                                 return Ty::error();
                             };
-                            let inner_ty = self.check_expr(false,inner_expr);
-                            if self.unify_covariant(&type_params[*idx], &inner_ty, *span).is_err() {
+                            let inner_ty = self.check_expr(false, inner_expr);
+                            if self
+                                .unify_covariant(&type_params[*idx], &inner_ty, *span)
+                                .is_err()
+                            {
                                 self.error(
                                     MirErrorKind::UnificationFailure {
                                         expected: self.subst.resolve(&type_params[*idx]),
@@ -1164,7 +1136,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 let payload_ty = match payload {
                     Some(expr) => {
-                        let ty = self.check_expr(false,expr);
+                        let ty = self.check_expr(false, expr);
                         Some(Box::new(ty))
                     }
                     None => None,
@@ -1184,16 +1156,21 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 for stmt in stmts {
                     match stmt {
                         acvus_ast::Stmt::Bind { name, expr, span } => {
-                            let ty = self.check_expr(false,expr);
+                            let ty = self.check_expr(false, expr);
+                            self.define_var(*name, ty.clone());
+                            self.record(*span, ty);
+                        }
+                        acvus_ast::Stmt::ContextStore { name, expr, span } => {
+                            let ty = self.check_expr(false, expr);
                             self.define_var(*name, ty.clone());
                             self.record(*span, ty);
                         }
                         acvus_ast::Stmt::Expr(expr) => {
-                            self.check_expr(false,expr);
+                            self.check_expr(false, expr);
                         }
                     }
                 }
-                let ty = self.check_expr(false,tail);
+                let ty = self.check_expr(false, tail);
                 self.pop_scope();
                 self.record_ret(*span, ty)
             }
@@ -1208,7 +1185,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         call_span: Span,
     ) -> Ty {
         // Collect argument types, prepending pipe_left if present.
-        let pipe_ty = pipe_left.map(|e| self.check_expr(false,e));
+        let pipe_ty = pipe_left.map(|e| self.check_expr(false, e));
 
         // Try to resolve as a named function (builtin or extern).
         let Expr::Ident {
@@ -1225,13 +1202,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
             return self.check_callable(&resolved, args, &pipe_ty, pipe_left_span, call_span);
         };
 
-        // Check builtins first.
+        // Check named functions (builtins, externs, user-defined).
         let name_str = self.interner.resolve(*name);
-        let candidates = registry().candidates(name_str);
-        if !candidates.is_empty() {
-            // Evaluate argument types eagerly (needed for overload resolution).
-            // Collect actual arg spans so coercions are registered on the
-            // correct expression, not on the call site.
+        if let Some(fn_sig) = self.env.functions.get(name) {
             let arg_types: Vec<Ty> = pipe_ty
                 .iter()
                 .cloned()
@@ -1243,74 +1216,23 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 .chain(args.iter().map(|a| a.span()))
                 .collect();
 
-            if candidates.len() == 1 {
-                // Fast path: single candidate, no overload resolution needed.
-                let entry = registry().get(candidates[0]);
-                let (param_tys, ret_ty) = (entry.signature)(&mut self.subst);
-                if !self.check_args(name_str, &arg_types, &arg_spans, &param_tys, call_span) {
+            let fn_ty = self.subst.instantiate(fn_sig);
+            match &fn_ty {
+                Ty::Fn { params: param_tys, ret, effect, .. } => {
+                    self.propagate_call_effect(effect.clone());
+                    let tys: Vec<Ty> = param_tys.iter().map(|p| p.ty.clone()).collect();
+                    if !self.check_args(name_str, &arg_types, &arg_spans, &tys, call_span) {
+                        return Ty::error();
+                    }
+                    return self.subst.resolve(ret);
+                }
+                _ => {
+                    self.error(MirErrorKind::UndefinedFunction(
+                        name_str.to_string(),
+                    ), call_span);
                     return Ty::error();
                 }
-                if let Some(check) = entry.constraint {
-                    let resolved_args: Vec<Ty> =
-                        arg_types.iter().map(|t| self.subst.resolve(t)).collect();
-                    if let Some(msg) = check(&resolved_args, self.interner) {
-                        self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
-                    }
-                }
-                self.builtin_map.insert(call_span, candidates[0]);
-                return self.subst.resolve(&ret_ty);
             }
-
-            // Multiple candidates: try each with snapshot/rollback.
-            for &cand_id in candidates {
-                let snap = self.subst.snapshot();
-                let coercion_snap = self.coercion_map.len();
-                let entry = registry().get(cand_id);
-                let (param_tys, ret_ty) = (entry.signature)(&mut self.subst);
-
-                if arg_types.len() != param_tys.len() {
-                    self.subst.rollback(snap);
-                    self.coercion_map.truncate(coercion_snap);
-                    continue;
-                }
-
-                let mut ok = true;
-                for (i, (arg, param)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
-                    let span = arg_spans.get(i).copied().unwrap_or(call_span);
-                    if self.unify_covariant(arg, param, span).is_err() {
-                        ok = false;
-                        break;
-                    }
-                }
-
-                if ok {
-                    // Check constraint if present.
-                    if let Some(check) = entry.constraint {
-                        let resolved_args: Vec<Ty> =
-                            arg_types.iter().map(|t| self.subst.resolve(t)).collect();
-                        if let Some(msg) = check(&resolved_args, self.interner) {
-                            self.error(MirErrorKind::BuiltinConstraint(msg), call_span);
-                        }
-                    }
-                    self.builtin_map.insert(call_span, cand_id);
-                    return self.subst.resolve(&ret_ty);
-                }
-
-                self.subst.rollback(snap);
-                self.coercion_map.truncate(coercion_snap);
-            }
-
-            // No candidate matched.
-            let resolved_args: Vec<Ty> =
-                arg_types.iter().map(|t| self.subst.resolve(t)).collect();
-            self.error(
-                MirErrorKind::NoMatchingOverload {
-                    name: name_str.to_string(),
-                    arg_tys: resolved_args,
-                },
-                call_span,
-            );
-            return Ty::error();
         }
 
         // Check local variable with function type.
@@ -1327,6 +1249,20 @@ impl<'a, 's> TypeChecker<'a, 's> {
         return Ty::error();
     }
 
+    /// Propagate a callee's effect to the enclosing scope.
+    /// If inside a lambda, propagates to the lambda scope.
+    /// Otherwise, propagates to the top-level body_effect.
+    fn propagate_call_effect(&mut self, effect: Effect) {
+        let resolved = self.subst.resolve_effect(&effect);
+        if resolved.is_effectful() {
+            if let Some(ls) = self.lambda_stack.last_mut() {
+                ls.effect = Effect::io();
+            } else {
+                self.body_effect = Effect::io();
+            }
+        }
+    }
+
     fn check_callable(
         &mut self,
         func_ty: &Ty,
@@ -1337,10 +1273,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
     ) -> Ty {
         // Early exit for non-callable types.
         match func_ty {
-            Ty::Fn { .. } | Ty::Var(_) => {}
+            Ty::Fn { .. } | Ty::Param { .. } => {}
             Ty::Error(_) => {
                 for a in args {
-                    self.check_expr(false,a);
+                    self.check_expr(false, a);
                 }
                 return Ty::error();
             }
@@ -1356,7 +1292,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let arg_types: Vec<Ty> = pipe_ty
             .iter()
             .cloned()
-            .chain(args.iter().map(|a| self.check_expr(false,a)))
+            .chain(args.iter().map(|a| self.check_expr(false, a)))
             .collect();
         let arg_spans: Vec<Span> = pipe_left_span
             .iter()
@@ -1365,27 +1301,28 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .collect();
 
         match func_ty {
-            Ty::Fn { params, ret, effect, .. } => {
-                // Propagate effect to enclosing lambda
-                let resolved_effect = self.subst.resolve_effect(*effect);
-                if resolved_effect == Effect::Effectful {
-                    if let Some(ls) = self.lambda_stack.last_mut() {
-                        ls.effect = Effect::Effectful;
-                    }
-                }
-                if !self.check_args("<closure>", &arg_types, &arg_spans, params, call_span) {
+            Ty::Fn {
+                params,
+                ret,
+                effect,
+                ..
+            } => {
+                // Propagate effect to enclosing scope (lambda or top-level body).
+                self.propagate_call_effect(effect.clone());
+                let tys: Vec<Ty> = params.iter().map(|p| p.ty.clone()).collect();
+                if !self.check_args("<closure>", &arg_types, &arg_spans, &tys, call_span) {
                     return Ty::error();
                 }
                 self.subst.resolve(ret)
             }
-            Ty::Var(_) => {
-                let ret = self.subst.fresh_var();
+            Ty::Param { .. } => {
+                let ret = self.subst.fresh_param();
+                let dummy = self.interner.intern("_");
                 let fn_ty = Ty::Fn {
-                    params: arg_types,
+                    params: arg_types.into_iter().map(|ty| Param::new(dummy, ty)).collect(),
                     ret: Box::new(ret.clone()),
-                    kind: FnKind::Lambda,
                     captures: vec![],
-                    effect: Effect::Pure,
+                    effect: Effect::pure(),
                 };
                 if self.unify_covariant(func_ty, &fn_ty, call_span).is_err() {
                     self.error(
@@ -1409,17 +1346,36 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span: _,
             } => match ref_kind {
                 RefKind::Context => {
-                    self.error(
-                        MirErrorKind::ContextWriteAttempt(self.interner.resolve(*name).to_string()),
-                        span,
-                    );
+                    // Context write allowed — mutability will be enforced later.
+                    let ctx_ty = self
+                        .env.contexts
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| self.subst.fresh_param());
+                    if self
+                        .subst
+                        .unify(&source_resolved, &ctx_ty, Polarity::Invariant)
+                        .is_err()
+                    {
+                        self.error(
+                            MirErrorKind::PatternTypeMismatch {
+                                pattern_ty: ctx_ty,
+                                source_ty: source_resolved,
+                            },
+                            span,
+                        );
+                    }
                 }
                 RefKind::Variable => {
                     let Some(existing_ty) = self.variable_types.get(name).cloned() else {
                         self.variable_types.insert(*name, source_resolved);
                         return;
                     };
-                    if self.subst.unify(&source_resolved, &existing_ty, Polarity::Invariant).is_err() {
+                    if self
+                        .subst
+                        .unify(&source_resolved, &existing_ty, Polarity::Invariant)
+                        .is_err()
+                    {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
                                 pattern_ty: existing_ty,
@@ -1436,7 +1392,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value);
-                if self.unify_covariant(&source_resolved, &pat_ty, span).is_err() {
+                if self
+                    .unify_covariant(&source_resolved, &pat_ty, span)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: pat_ty,
@@ -1454,7 +1413,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let elem_ty = match shallow {
                     Ty::List(ref inner) | Ty::Deque(ref inner, _) => (**inner).clone(),
                     _ => {
-                        let var = self.subst.fresh_var();
+                        let var = self.subst.fresh_param();
                         let origin = self.subst.fresh_concrete_origin();
                         let list_ty = Ty::Deque(Box::new(var.clone()), origin);
                         if self.unify_covariant(source_ty, &list_ty, span).is_err() {
@@ -1483,7 +1442,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 } else {
                     let field_vars: FxHashMap<Astr, Ty> = fields
                         .iter()
-                        .map(|f| (f.key, self.subst.fresh_var()))
+                        .map(|f| (f.key, self.subst.fresh_param()))
                         .collect();
                     let obj_ty = Ty::Object(field_vars.clone());
                     if self.unify_covariant(source_ty, &obj_ty, span).is_err() {
@@ -1521,7 +1480,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 ..
             } => {
                 // Range pattern matches Int source.
-                if self.unify_covariant(&source_resolved, &Ty::Int, span).is_err() {
+                if self
+                    .unify_covariant(&source_resolved, &Ty::Int, span)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: Ty::Int,
@@ -1542,12 +1504,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 // find_leaf_var.
                 let shallow = self.subst.shallow_resolve(source_ty);
                 let elem_tys = match shallow {
-                    Ty::Tuple(ref existing) if existing.len() == elements.len() => {
-                        existing.clone()
-                    }
+                    Ty::Tuple(ref existing) if existing.len() == elements.len() => existing.clone(),
                     _ => {
                         let vars: Vec<Ty> =
-                            elements.iter().map(|_| self.subst.fresh_var()).collect();
+                            elements.iter().map(|_| self.subst.fresh_param()).collect();
                         let tuple_ty = Ty::Tuple(vars.clone());
                         if self.unify_covariant(source_ty, &tuple_ty, span).is_err() {
                             self.error(
@@ -1580,10 +1540,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 if let Some((_enum_name, type_params, variant_payload)) =
                     self.resolve_builtin_variant(ast_enum_name, *tag)
                 {
-                    let enum_ty = Ty::Option(Box::new(
-                        self.subst.resolve(&type_params[0]),
-                    ));
-                    if self.unify_covariant(&source_resolved, &enum_ty, span).is_err() {
+                    let enum_ty = Ty::Option(Box::new(self.subst.resolve(&type_params[0])));
+                    if self
+                        .unify_covariant(&source_resolved, &enum_ty, span)
+                        .is_err()
+                    {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
                                 pattern_ty: enum_ty,
@@ -1617,7 +1578,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 // Build Ty::Enum with this single variant.
                 let payload_ty = if payload.is_some() {
-                    Some(Box::new(self.subst.fresh_var()))
+                    Some(Box::new(self.subst.fresh_param()))
                 } else {
                     None
                 };
@@ -1674,7 +1635,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             _ => return None,
         };
 
-        let type_params = vec![self.subst.fresh_var()];
+        let type_params = vec![self.subst.fresh_param()];
         Some((option_name, type_params, payload))
     }
 
@@ -1706,7 +1667,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.error(MirErrorKind::RangeBoundsNotInt { actual: ty }, span);
             }
             _ => {
-                self.error(MirErrorKind::RangeBoundsNotInt { actual: Ty::error() }, span);
+                self.error(
+                    MirErrorKind::RangeBoundsNotInt {
+                        actual: Ty::error(),
+                    },
+                    span,
+                );
             }
         }
     }
@@ -1714,14 +1680,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
 pub(crate) fn contains_var(ty: &Ty) -> bool {
     match ty {
-        Ty::Var(_) => true,
-        Ty::Infer(_) | Ty::Error(_) => false,
+        Ty::Param { .. } => true,
+        Ty::Error(_) => false,
         Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => false,
         Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => contains_var(inner),
-        Ty::Iterator(inner, _) | Ty::Sequence(inner, _, _) => contains_var(inner),
+        Ty::Iterator(inner, _) | Ty::Sequence(inner, _, _) | Ty::Handle(inner, _) => contains_var(inner),
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
-        Ty::Fn { params, ret, .. } => params.iter().any(contains_var) || contains_var(ret),
+        Ty::Fn { params, ret, .. } => params.iter().any(|p| contains_var(&p.ty)) || contains_var(ret),
         Ty::Enum { variants, .. } => variants
             .values()
             .any(|p| p.as_ref().map_or(false, |ty| contains_var(ty))),
@@ -1755,7 +1721,11 @@ fn op_str(op: BinOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::parse;
+
+    /// Test helper: create a `Param` with name "_".
+    fn p(i: &Interner, ty: Ty) -> Param {
+        Param::new(i.intern("_"), ty)
+    }
 
     fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
         let interner = Interner::new();
@@ -1767,10 +1737,16 @@ mod tests {
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
     ) -> Result<TypeMap, Vec<MirError>> {
-        let template = parse(interner, source).expect("parse failed");
+        let template = acvus_ast::parse(interner, source)
+            .expect("parse failed");
         let mut subst = TySubst::new();
-    let checker = TypeChecker::new(interner, context, &mut subst);
-        checker.check_template(&template).map(|(tm, _bm, _cm)| tm)
+        let env = crate::ty::TypeEnv {
+            contexts: context.clone(),
+            functions: crate::builtins::builtin_fn_types(interner),
+        };
+        let checker = TypeChecker::new(interner, &env, &mut subst);
+        let resolution = checker.check_template(&template)?;
+        Ok(resolution.type_map)
     }
 
     #[test]
@@ -1845,10 +1821,9 @@ mod tests {
         let context = FxHashMap::from_iter([(
             i.intern("fetch_user"),
             Ty::Fn {
-                params: vec![Ty::Int],
+                params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
-                effect: Effect::Pure,
+                effect: Effect::pure(),
                 captures: vec![],
             },
         )]);
@@ -1910,7 +1885,8 @@ mod tests {
     fn lambda_type_check() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src = "{{ x = @items | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
+        let src =
+            "{{ x = @items | filter(x -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
         let result = check_with_interner(src, &context, &i);
         assert!(result.is_ok());
     }
@@ -1967,13 +1943,15 @@ mod tests {
 
     fn extern_fn_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
         FxHashMap::from_iter([
-            (interner.intern("my_fn"), Ty::Fn {
-                params: vec![Ty::String],
-                ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
-                effect: Effect::Pure,
-                captures: vec![],
-            }),
+            (
+                interner.intern("my_fn"),
+                Ty::Fn {
+                    params: vec![p(interner, Ty::String)],
+                    ret: Box::new(Ty::String),
+                    effect: Effect::pure(),
+                    captures: vec![],
+                },
+            ),
             (interner.intern("name"), Ty::String),
         ])
     }
@@ -1994,7 +1972,10 @@ mod tests {
         let ctx = extern_fn_context(&i);
         let src = "{{ f = @my_fn }}{{_}}{{/}}";
         let result = check_with_interner(src, &ctx, &i);
-        assert!(result.is_ok(), "bare reference to extern fn should be allowed (Lazy tier): {result:?}");
+        assert!(
+            result.is_ok(),
+            "bare reference to extern fn should be allowed (Lazy tier): {result:?}"
+        );
     }
 
     #[test]
@@ -2010,15 +1991,15 @@ mod tests {
     fn extern_fn_pipe_with_args_ok() {
         // "hello" | @my_fn — pipe with additional args.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("my_fn"), Ty::Fn {
-                params: vec![Ty::String, Ty::Int],
+        let ctx = FxHashMap::from_iter([(
+            i.intern("my_fn"),
+            Ty::Fn {
+                params: vec![p(&i, Ty::String), p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
-                effect: Effect::Pure,
+                effect: Effect::pure(),
                 captures: vec![],
-            }),
-        ]);
+            },
+        )]);
         let src = r#"{{ "hello" | @my_fn(42) }}"#;
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2038,9 +2019,7 @@ mod tests {
     fn lazy_list_context_load_ok() {
         // @items : List<Int> — Lazy tier, allowed in non-call position.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
-        ]);
+        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ x = @items }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2049,9 +2028,10 @@ mod tests {
     fn lazy_iterator_context_load_ok() {
         // @it : Iterator<Int> — Lazy tier, allowed in non-call position.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("it"), Ty::Iterator(Box::new(Ty::Int), Effect::Pure)),
-        ]);
+        let ctx = FxHashMap::from_iter([(
+            i.intern("it"),
+            Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+        )]);
         let src = "{{ x = @it }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2062,9 +2042,10 @@ mod tests {
         let i = Interner::new();
         let mut subst = TySubst::new();
         let o = subst.fresh_concrete_origin();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("seq"), Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure)),
-        ]);
+        let ctx = FxHashMap::from_iter([(
+            i.intern("seq"),
+            Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()),
+        )]);
         let src = "{{ x = @seq }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2073,9 +2054,7 @@ mod tests {
     fn lazy_option_context_load_ok() {
         // @opt : Option<Int> — Lazy tier, allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("opt"), Ty::Option(Box::new(Ty::Int))),
-        ]);
+        let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ x = @opt }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2084,9 +2063,7 @@ mod tests {
     fn lazy_tuple_context_load_ok() {
         // @pair : (Int, String) — Lazy tier, allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String])),
-        ]);
+        let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String]))]);
         let src = "{{ x = @pair }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2095,11 +2072,10 @@ mod tests {
     fn lazy_object_context_load_ok() {
         // @obj : {x: Int} — Lazy tier, allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("obj"), Ty::Object(FxHashMap::from_iter([
-                (i.intern("x"), Ty::Int),
-            ]))),
-        ]);
+        let ctx = FxHashMap::from_iter([(
+            i.intern("obj"),
+            Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)])),
+        )]);
         let src = "{{ x = @obj }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2108,15 +2084,15 @@ mod tests {
     fn lazy_fn_context_load_and_call_ok() {
         // f = @callback; f(42) — store Fn in variable, then call.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("callback"), Ty::Fn {
-                params: vec![Ty::Int],
+        let ctx = FxHashMap::from_iter([(
+            i.intern("callback"),
+            Ty::Fn {
+                params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
-                effect: Effect::Pure,
+                effect: Effect::pure(),
                 captures: vec![],
-            }),
-        ]);
+            },
+        )]);
         let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2125,15 +2101,15 @@ mod tests {
     fn lazy_list_of_fn_context_load_ok() {
         // @fns : List<Fn(Int)->Int> — Lazy tier (List is Lazy), allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("fns"), Ty::List(Box::new(Ty::Fn {
-                params: vec![Ty::Int],
+        let ctx = FxHashMap::from_iter([(
+            i.intern("fns"),
+            Ty::List(Box::new(Ty::Fn {
+                params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::Int),
-                kind: FnKind::Lambda,
-                effect: Effect::Pure,
+                effect: Effect::pure(),
                 captures: vec![],
-            }))),
-        ]);
+            })),
+        )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }
@@ -2144,14 +2120,16 @@ mod tests {
     fn unpure_opaque_context_load_rejected() {
         // @conn : Opaque("Connection") — Unpure tier, rejected in non-call position.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("conn"), Ty::Opaque("Connection".into())),
-        ]);
+        let ctx = FxHashMap::from_iter([(i.intern("conn"), Ty::Opaque("Connection".into()))]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
         let result = check_with_interner(src, &ctx, &i);
         assert!(result.is_err(), "Opaque context load should be rejected");
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(&e.kind, MirErrorKind::NonPureContextLoad { .. })));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(&e.kind, MirErrorKind::NonPureContextLoad { .. }))
+        );
     }
 
     #[test]
@@ -2161,13 +2139,15 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), Ty::Opaque("Connection".into())),
-            (i.intern("handler"), Ty::Fn {
-                params: vec![Ty::Opaque("Connection".into())],
-                ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
-                effect: Effect::Pure,
-                captures: vec![],
-            }),
+            (
+                i.intern("handler"),
+                Ty::Fn {
+                    params: vec![p(&i, Ty::Opaque("Connection".into()))],
+                    ret: Box::new(Ty::String),
+                    effect: Effect::pure(),
+                    captures: vec![],
+                },
+            ),
         ]);
         let src = "{{ @handler(@conn) }}";
         let result = check_with_interner(src, &ctx, &i);
@@ -2211,9 +2191,7 @@ mod tests {
     fn lambda_no_capture_local_params() {
         // Lambda params are local, not captures.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
-        ]);
+        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ @items | map(x -> x + 1) | collect | len | to_string }}";
         assert!(check_with_interner(src, &ctx, &i).is_ok());
     }

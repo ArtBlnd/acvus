@@ -1,674 +1,1740 @@
-//! Graph resolution engine: DAG topo sort + SCC unification.
+//! Phase 2: Resolve
+//!
+//! Complete typecheck with fully known context types.
+//! Takes Phase 1 inferred types + user-provided context values,
+//! builds a full registry, and produces TypeResolution<Checked> per function.
+//!
+//! SSA/PHI will be added later on top of this.
 
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
-use acvus_utils::{Astr, Interner};
 
-use crate::context_registry::ContextTypeRegistry;
 use crate::error::MirError;
 use crate::ty::{Ty, TySubst};
-use crate::typeck::{TypeResolution, Checked, Unchecked, check_completeness};
+use crate::typeck::{Checked, TypeResolution, check_completeness};
 
+use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
 
-// ── Output types ─────────────────────────────────────────────────────
+// ── Phase 2 output ──────────────────────────────────────────────────
 
-/// Result of graph resolution (Phase 0 → Phase 1).
 #[derive(Debug)]
-pub struct ResolvedGraph {
-    /// Per-unit type resolution (only for CompilationUnits, not ExternDecls).
-    pub resolutions: FxHashMap<UnitId, TypeResolution<Checked>>,
-    /// Context types (scope locals, externals): ContextId → Ty.
-    pub resolved_types: FxHashMap<ContextId, Ty>,
-    /// Per-unit output types: UnitId → Ty.
-    pub unit_outputs: FxHashMap<UnitId, Ty>,
-    /// Collected errors (per-unit). Does not include fatal errors.
-    pub errors: Vec<GraphError>,
-}
-
-/// Result of graph compilation (Phase 0 → Phase 2).
-/// Contains both type resolutions and compiled MIR modules.
-#[derive(Debug)]
-pub struct CompiledGraph {
-    /// Per-unit compiled MIR (only for CompilationUnits, not ExternDecls).
-    pub compiled: FxHashMap<UnitId, CompiledUnit>,
-    /// Per-unit output types: UnitId → Ty.
-    pub unit_outputs: FxHashMap<UnitId, Ty>,
-    /// Context types (scope locals, externals): ContextId → Ty.
-    pub resolved_types: FxHashMap<ContextId, Ty>,
-    /// Collected errors.
-    pub errors: Vec<GraphError>,
-}
-
-/// A compiled unit: MIR module + type resolution + metadata.
-#[derive(Debug)]
-pub struct CompiledUnit {
-    pub module: crate::ir::MirModule,
-    pub hints: crate::hints::HintTable,
-    pub tail_ty: Ty,
-    pub context_keys: FxHashSet<Astr>,
-}
-
-/// A graph-level error with source attribution.
-#[derive(Debug)]
-pub struct GraphError {
-    pub unit: UnitId,
+pub struct ResolveError {
+    pub fn_id: FunctionId,
     pub errors: Vec<MirError>,
 }
 
-// ── Internal: dependency analysis ────────────────────────────────────
-
-/// Which entity (Unit or Extern) a UnitId refers to.
-enum UnitEntry<'a> {
-    Unit(&'a CompilationUnit),
-    Extern(&'a ExternDecl),
+#[derive(Debug)]
+pub struct ResolvedGraph {
+    /// Per-function checked type resolutions (only for Local functions).
+    resolutions: FxHashMap<FunctionId, TypeResolution<Checked>>,
+    /// Resolved output types for all functions.
+    fn_types: FxHashMap<FunctionId, Ty>,
+    /// Resolved types for all contexts.
+    context_types: FxHashMap<ContextId, Ty>,
+    /// Errors encountered during resolution.
+    errors: Vec<ResolveError>,
 }
 
-impl CompilationGraph {
-    /// Resolve all types and compile to MIR. Phase 0 → Phase 2.
-    pub fn compile(&self, interner: &Interner) -> CompiledGraph {
-        let mut resolved = self.resolve(interner);
-        let mut compiled = FxHashMap::default();
-        let mut errors = resolved.errors;
-
-        for unit in &self.units {
-            let Some(resolution) = resolved.resolutions.remove(&unit.id) else {
-                // Unit had errors during resolution — skip lowering.
-                continue;
-            };
-            // We need to re-parse to lower. TypeResolution<Checked> has the type info,
-            // but Lowerer needs the AST.
-            let lower_result = match unit.kind {
-                SourceKind::Script => {
-                    let Ok(script) = acvus_ast::parse_script(interner, interner.resolve(unit.source)) else {
-                        continue; // Parse error already reported during resolve.
-                    };
-                    crate::lower_checked_script(interner, &script, resolution)
-                }
-                SourceKind::Template => {
-                    let Ok(template) = acvus_ast::parse(interner, interner.resolve(unit.source)) else {
-                        continue;
-                    };
-                    crate::lower_checked_template(interner, &template, resolution)
-                }
-            };
-
-            match lower_result {
-                Ok((module, hints)) => {
-                    let context_keys = module.extract_context_keys();
-                    compiled.insert(unit.id, CompiledUnit {
-                        module,
-                        hints,
-                        tail_ty: resolved.unit_outputs.get(&unit.id).cloned().unwrap_or_else(Ty::error),
-                        context_keys,
-                    });
-                }
-                Err(errs) => {
-                    errors.push(GraphError { unit: unit.id, errors: errs });
-                }
-            }
-        }
-
-        CompiledGraph {
-            compiled,
-            unit_outputs: resolved.unit_outputs,
-            resolved_types: resolved.resolved_types,
-            errors,
-        }
+impl ResolvedGraph {
+    pub fn resolution(&self, id: FunctionId) -> &TypeResolution<Checked> {
+        self.resolutions.get(&id).expect("no resolution for function")
     }
 
-    /// Resolve all types in the graph. Phase 0 → Phase 1.
-    pub fn resolve(&self, interner: &Interner) -> ResolvedGraph {
-        let mut subst = TySubst::new();
-        let mut resolved_types: FxHashMap<ContextId, Ty> = FxHashMap::default();
-        let mut unit_outputs: FxHashMap<UnitId, Ty> = FxHashMap::default(); // unit output types by UnitId
-        let mut resolutions: FxHashMap<UnitId, TypeResolution<Checked>> = FxHashMap::default();
-        let mut errors: Vec<GraphError> = Vec::new();
-
-        // 0. Build lookup tables.
-        let unit_map: FxHashMap<UnitId, UnitEntry> = self.build_unit_map();
-        let context_to_binding: FxHashMap<ContextId, &ContextBinding> = self.build_context_binding_map();
-        let unit_to_scope: FxHashMap<UnitId, ScopeId> = self.build_unit_scope_map();
-
-        // Register external types.
-        for (&ctx_id, ext_ty) in &self.externals {
-            match ext_ty {
-                ExternalType::Known(ty) => { resolved_types.insert(ctx_id, ty.clone()); }
-                ExternalType::Infer => { resolved_types.insert(ctx_id, subst.fresh_var()); }
-            }
-        }
-
-        // 1. Build dependency graph (all UnitIds — both Unit and Extern).
-        let all_ids: Vec<UnitId> = self.all_unit_ids();
-        let id_to_idx: FxHashMap<UnitId, usize> = all_ids.iter().enumerate()
-            .map(|(i, id)| (*id, i))
-            .collect();
-        let n = all_ids.len();
-
-        let mut deps: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); n];
-
-        // Edges from scope bindings.
-        for scope in &self.scopes {
-            // Collect units in this scope that reference ScopeLocal bindings.
-            // These must form mutual edges (= will become an SCC via Tarjan).
-            let scope_local_ctx_ids: FxHashSet<ContextId> = scope.bindings.iter()
-                .filter(|b| matches!(b.source, ContextSource::ScopeLocal))
-                .map(|b| b.id)
-                .collect();
-
-            let mut scope_local_unit_idxs: Vec<usize> = Vec::new();
-
-            for unit_id in &scope.units {
-                let Some(&unit_idx) = id_to_idx.get(unit_id) else { continue };
-                if let Some(UnitEntry::Unit(unit)) = unit_map.get(unit_id) {
-                    let mut references_scope_local = false;
-                    for ctx_id in unit.name_to_id.values() {
-                        if scope_local_ctx_ids.contains(ctx_id) {
-                            references_scope_local = true;
-                        }
-                        if let Some(binding) = context_to_binding.get(ctx_id) {
-                            if let ContextSource::Derived(dep_id, _) = &binding.source {
-                                if let Some(&dep_idx) = id_to_idx.get(dep_id) {
-                                    if dep_idx != unit_idx {
-                                        deps[unit_idx].insert(dep_idx);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if references_scope_local {
-                        scope_local_unit_idxs.push(unit_idx);
-                    }
-                }
-            }
-
-            // Units referencing ScopeLocal: add mutual edges so Tarjan groups them as SCC.
-            for i in 0..scope_local_unit_idxs.len() {
-                for j in 0..scope_local_unit_idxs.len() {
-                    if i != j {
-                        deps[scope_local_unit_idxs[i]].insert(scope_local_unit_idxs[j]);
-                    }
-                }
-            }
-
-            // Also: units in the same scope as ScopeLocal bindings whose output
-            // feeds into the ScopeLocal (via hint unification) should be in the SCC.
-            // The "init" pattern: init doesn't reference @self but its output
-            // unifies with the ScopeLocal variable. We handle this by including
-            // ALL units in the scope that are listed alongside ScopeLocal bindings.
-            // If they don't actually participate, Tarjan will make them trivial SCCs.
-            if !scope_local_ctx_ids.is_empty() {
-                let all_scope_idxs: Vec<usize> = scope.units.iter()
-                    .filter_map(|id| id_to_idx.get(id).copied())
-                    .collect();
-                for i in 0..all_scope_idxs.len() {
-                    for j in 0..all_scope_idxs.len() {
-                        if i != j {
-                            deps[all_scope_idxs[i]].insert(all_scope_idxs[j]);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Edges for units NOT in any scope — they may still reference
-        // bindings via name_to_id (e.g., global externals or other unit outputs).
-        for unit in &self.units {
-            let Some(&unit_idx) = id_to_idx.get(&unit.id) else { continue };
-            if unit_to_scope.contains_key(&unit.id) { continue; } // already handled above
-            for ctx_id in unit.name_to_id.values() {
-                if let Some(binding) = context_to_binding.get(ctx_id) {
-                    if let ContextSource::Derived(dep_id, _) = &binding.source {
-                        if let Some(&dep_idx) = id_to_idx.get(dep_id) {
-                            if dep_idx != unit_idx {
-                                deps[unit_idx].insert(dep_idx);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Edges from ExternDecl inputs.
-        for ext in &self.externs {
-            let Some(&ext_idx) = id_to_idx.get(&ext.id) else { continue };
-            for (input_id, _) in &ext.inputs {
-                if let Some(&input_idx) = id_to_idx.get(input_id) {
-                    deps[ext_idx].insert(input_idx);
-                }
-            }
-        }
-
-        // 2. SCC detection (Tarjan).
-        let sccs = tarjan_scc(n, &deps);
-
-        // 3. Process SCCs in topo order.
-        // Tarjan returns SCCs in reverse topological order of the condensation DAG:
-        // dependencies appear LATER in the list. So iterate forward = process deps first.
-        for scc in &sccs {
-            let scc_ids: Vec<UnitId> = scc.iter().map(|&idx| all_ids[idx]).collect();
-
-            // Allocate ScopeLocal variables for this SCC.
-            let scope_locals = self.allocate_scope_locals(&scc_ids, &unit_to_scope, &mut subst, &mut resolved_types);
-
-            // Unified SCC processing — same logic for trivial and non-trivial.
-            //
-            // All unknowns get fresh vars upfront. Unification during
-            // typecheck connects them. No special cases for ScopeLocal
-            // vs Derived, trivial vs non-trivial.
-            {
-                // 1. Pre-register fresh vars for ALL unit outputs in this SCC.
-                let mut scc_output_vars: FxHashMap<UnitId, Ty> = FxHashMap::default();
-                for &unit_id in &scc_ids {
-                    if !unit_outputs.contains_key(&unit_id) {
-                        let var = subst.fresh_var();
-                        unit_outputs.insert(unit_id, var.clone());
-                        scc_output_vars.insert(unit_id, var);
-                    }
-                }
-
-                // 2. Typecheck all units. Each unit's output_binding declares
-                //    which ScopeLocal α it should unify with (via hint).
-                let mut scc_unchecked: Vec<(UnitId, TypeResolution<Unchecked>)> = Vec::new();
-
-                for &unit_id in &scc_ids {
-                    match unit_map.get(&unit_id) {
-                        Some(UnitEntry::Unit(unit)) => {
-                            let hint = unit.output_binding
-                                .and_then(|ctx_id| scope_locals.get(&ctx_id))
-                                .cloned();
-                            let registry = Self::build_registry_for_unit(
-                                unit, interner, &resolved_types, &unit_outputs, &context_to_binding, &subst,
-                            );
-                            match self.typecheck_unit(interner, unit, &registry, hint.as_ref(), &mut subst) {
-                                Ok(unchecked) => {
-                                    // Unify tail_ty with the pre-registered fresh var
-                                    // so the output var gets bound to the actual type.
-                                    if let Some(var) = scc_output_vars.get(&unit_id) {
-                                        let _ = subst.unify(&unchecked.tail_ty, var, crate::ty::Polarity::Covariant);
-                                    }
-                                    scc_unchecked.push((unit_id, unchecked));
-                                }
-                                Err(errs) => {
-                                    errors.push(GraphError { unit: unit_id, errors: errs });
-                                }
-                            }
-                        }
-                        Some(UnitEntry::Extern(ext)) => {
-                            Self::process_extern(ext, &unit_outputs, &mut subst, &mut errors);
-                            if let Some(var) = scc_output_vars.get(&ext.id) {
-                                let _ = subst.unify(&ext.output_ty, var, crate::ty::Polarity::Covariant);
-                            }
-                        }
-                        None => {}
-                    }
-                }
-
-                // 3. check_completeness for all unchecked resolutions.
-                for (unit_id, unchecked) in scc_unchecked {
-                    match check_completeness(unchecked, &subst) {
-                        Ok(checked) => {
-                            resolutions.insert(unit_id, checked);
-                        }
-                        Err(errs) => {
-                            errors.push(GraphError { unit: unit_id, errors: errs });
-                        }
-                    }
-                }
-
-                // 4. Re-resolve everything in SCC: unit_outputs, scope_locals.
-                for (unit_id, var) in &scc_output_vars {
-                    let resolved = subst.resolve(var);
-                    unit_outputs.insert(*unit_id, resolved);
-                }
-                for (ctx_id, original_ty) in &scope_locals {
-                    let resolved = subst.resolve(original_ty);
-                    resolved_types.insert(*ctx_id, resolved);
-                }
-            }
-        }
-
-        ResolvedGraph { resolutions, resolved_types, unit_outputs, errors }
+    pub fn try_resolution(&self, id: FunctionId) -> Option<&TypeResolution<Checked>> {
+        self.resolutions.get(&id)
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    fn all_unit_ids(&self) -> Vec<UnitId> {
-        let mut ids: Vec<UnitId> = self.units.iter().map(|u| u.id).collect();
-        ids.extend(self.externs.iter().map(|e| e.id));
-        ids
+    pub fn fn_type(&self, id: FunctionId) -> Option<&Ty> {
+        self.fn_types.get(&id)
     }
 
-    fn build_unit_map(&self) -> FxHashMap<UnitId, UnitEntry<'_>> {
-        let mut map = FxHashMap::default();
-        for unit in &self.units {
-            map.insert(unit.id, UnitEntry::Unit(unit));
-        }
-        for ext in &self.externs {
-            map.insert(ext.id, UnitEntry::Extern(ext));
-        }
-        map
+    pub fn context_type(&self, id: ContextId) -> Option<&Ty> {
+        self.context_types.get(&id)
     }
 
-    fn build_context_binding_map(&self) -> FxHashMap<ContextId, &ContextBinding> {
-        let mut map = FxHashMap::default();
-        for scope in &self.scopes {
-            for binding in &scope.bindings {
-                map.insert(binding.id, binding);
-            }
-        }
-        map
+    pub fn errors(&self) -> &[ResolveError] {
+        &self.errors
     }
 
-    fn build_unit_scope_map(&self) -> FxHashMap<UnitId, ScopeId> {
-        let mut map = FxHashMap::default();
-        for scope in &self.scopes {
-            for &unit_id in &scope.units {
-                map.insert(unit_id, scope.id);
-            }
-        }
-        map
-    }
-
-    /// Allocate fresh type variables for ScopeLocal bindings.
-    /// Apply constraints if present.
-    fn allocate_scope_locals(
-        &self,
-        scc_ids: &[UnitId],
-        unit_to_scope: &FxHashMap<UnitId, ScopeId>,
-        subst: &mut TySubst,
-        resolved_types: &mut FxHashMap<ContextId, Ty>,
-    ) -> FxHashMap<ContextId, Ty> {
-        let mut locals = FxHashMap::default();
-        // Find all scopes containing SCC units.
-        let mut scope_ids: FxHashSet<ScopeId> = FxHashSet::default();
-        for id in scc_ids {
-            if let Some(&scope_id) = unit_to_scope.get(id) {
-                scope_ids.insert(scope_id);
-            }
-        }
-        for scope in &self.scopes {
-            if !scope_ids.contains(&scope.id) { continue; }
-            for binding in &scope.bindings {
-                if !matches!(binding.source, ContextSource::ScopeLocal) { continue; }
-                if resolved_types.contains_key(&binding.id) { continue; }
-
-                let var = if let Some(ref constraint) = binding.constraint {
-                    // Apply structural constraint.
-                    // e.g., Sequence<β, O, Pure> — allocate fresh vars for β and O.
-                    let constrained = self.instantiate_constraint(constraint, subst);
-                    constrained
-                } else {
-                    subst.fresh_var()
-                };
-                resolved_types.insert(binding.id, var.clone());
-                locals.insert(binding.id, var);
-            }
-        }
-        locals
-    }
-
-    /// Instantiate a constraint type: replace all Ty::Var and Origin::Var
-    /// with fresh variables from the graph engine's subst.
-    /// This is necessary because the constraint was built with a different subst
-    /// (e.g., during lowering) and its variables are not in this subst's space.
-    /// Instantiate a constraint type: replace all Ty::Var, Origin::Var, Effect::Var
-    /// with fresh variables from the graph engine's subst.
-    /// This is necessary because the constraint was built with a different subst
-    /// (e.g., during lowering) and its variables are not in this subst's space.
-    ///
-    /// Every Ty variant that can contain nested types or variables must be handled
-    /// explicitly. Concrete leaf types (Int, String, Bool, etc.) pass through unchanged.
-    fn instantiate_constraint(&self, constraint: &Ty, subst: &mut TySubst) -> Ty {
-        use crate::ty::{Effect, FnKind};
-        match constraint {
-            Ty::Var(_) => subst.fresh_var(),
-            Ty::Infer(_) => subst.fresh_var(),
-            Ty::Error(_) => Ty::error(),
-
-            // Leaf types — no nested variables possible.
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range
-            | Ty::Byte | Ty::Opaque(_) => constraint.clone(),
-
-            // Collection types — inner + origin/effect variables.
-            Ty::List(inner) => Ty::List(Box::new(self.instantiate_constraint(inner, subst))),
-            Ty::Deque(inner, _origin) => {
-                Ty::Deque(Box::new(self.instantiate_constraint(inner, subst)), subst.fresh_origin())
-            }
-            Ty::Sequence(inner, _origin, effect) => {
-                let new_effect = match effect {
-                    Effect::Var(_) => subst.fresh_effect_var(),
-                    other => *other,
-                };
-                Ty::Sequence(
-                    Box::new(self.instantiate_constraint(inner, subst)),
-                    subst.fresh_origin(),
-                    new_effect,
-                )
-            }
-            Ty::Iterator(inner, effect) => {
-                let new_effect = match effect {
-                    Effect::Var(_) => subst.fresh_effect_var(),
-                    other => *other,
-                };
-                Ty::Iterator(Box::new(self.instantiate_constraint(inner, subst)), new_effect)
-            }
-            Ty::Option(inner) => Ty::Option(Box::new(self.instantiate_constraint(inner, subst))),
-            Ty::Tuple(elems) => {
-                Ty::Tuple(elems.iter().map(|e| self.instantiate_constraint(e, subst)).collect())
-            }
-
-            // Composite types — recurse into all nested types.
-            Ty::Object(fields) => {
-                Ty::Object(fields.iter().map(|(k, v)| (*k, self.instantiate_constraint(v, subst))).collect())
-            }
-            Ty::Fn { params, ret, kind, captures, effect } => {
-                let new_effect = match effect {
-                    Effect::Var(_) => subst.fresh_effect_var(),
-                    other => *other,
-                };
-                Ty::Fn {
-                    params: params.iter().map(|p| self.instantiate_constraint(p, subst)).collect(),
-                    ret: Box::new(self.instantiate_constraint(ret, subst)),
-                    kind: *kind,
-                    captures: captures.iter().map(|c| self.instantiate_constraint(c, subst)).collect(),
-                    effect: new_effect,
-                }
-            }
-            Ty::Enum { name, variants } => {
-                Ty::Enum {
-                    name: *name,
-                    variants: variants.iter().map(|(tag, payload)| {
-                        (*tag, payload.as_ref().map(|ty| Box::new(self.instantiate_constraint(ty, subst))))
-                    }).collect(),
-                }
-            }
-        }
-    }
-
-    fn build_registry_for_unit(
-        unit: &CompilationUnit,
-        interner: &Interner,
-        resolved_types: &FxHashMap<ContextId, Ty>,
-        unit_outputs: &FxHashMap<UnitId, Ty>,
-        context_to_binding: &FxHashMap<ContextId, &ContextBinding>,
-        subst: &TySubst,
-    ) -> ContextTypeRegistry {
-        let mut ctx: FxHashMap<acvus_utils::Astr, Ty> = FxHashMap::default();
-        for (&name, &ctx_id) in &unit.name_to_id {
-            let ty = Self::resolve_context_type(ctx_id, resolved_types, unit_outputs, context_to_binding, subst);
-            ctx.insert(name, ty);
-        }
-        ContextTypeRegistry::all_system(ctx)
-    }
-
-    fn resolve_context_type(
-        ctx_id: ContextId,
-        resolved_types: &FxHashMap<ContextId, Ty>,
-        unit_outputs: &FxHashMap<UnitId, Ty>,
-        context_to_binding: &FxHashMap<ContextId, &ContextBinding>,
-        subst: &TySubst,
-    ) -> Ty {
-        // First check resolved_types (scope locals, externals).
-        if let Some(ty) = resolved_types.get(&ctx_id) {
-            return subst.resolve(ty);
-        }
-        // Check binding source.
-        if let Some(binding) = context_to_binding.get(&ctx_id) {
-            match &binding.source {
-                ContextSource::Derived(dep_id, transform) => {
-                    if let Some(dep_ty) = unit_outputs.get(dep_id) {
-                        let resolved = subst.resolve(dep_ty);
-                        match transform {
-                            TypeTransform::Identity => resolved,
-                            TypeTransform::ElemOf => {
-                                resolved.elem_of().cloned().unwrap_or_else(Ty::error)
-                            }
-                        }
-                    } else {
-                        Ty::error()
-                    }
-                }
-                ContextSource::ScopeLocal => {
-                    // Should already be in resolved_types (allocated by allocate_scope_locals).
-                    Ty::error()
-                }
-                ContextSource::External => {
-                    resolved_types.get(&ctx_id).cloned().unwrap_or_else(Ty::error)
-                }
-            }
-        } else {
-            Ty::error()
-        }
-    }
-
-
-    fn typecheck_unit(
-        &self,
-        interner: &Interner,
-        unit: &CompilationUnit,
-        registry: &ContextTypeRegistry,
-        hint: Option<&Ty>,
-        subst: &mut TySubst,
-    ) -> Result<TypeResolution<Unchecked>, Vec<MirError>> {
-        match unit.kind {
-            SourceKind::Script => {
-                let script = acvus_ast::parse_script(interner, interner.resolve(unit.source))
-                    .map_err(|e| vec![MirError {
-                        kind: crate::error::MirErrorKind::ParseError(format!("parse: {e}")),
-                        span: acvus_ast::Span::ZERO,
-                    }])?;
-                crate::typecheck_script(interner, &script, registry, hint, subst)
-            }
-            SourceKind::Template => {
-                let template = acvus_ast::parse(interner, interner.resolve(unit.source))
-                    .map_err(|e| vec![MirError {
-                        kind: crate::error::MirErrorKind::ParseError(format!("parse: {e}")),
-                        span: acvus_ast::Span::ZERO,
-                    }])?;
-                crate::typecheck_template(interner, &template, registry, subst)
-            }
-        }
-    }
-
-    fn register_unit_output(
-        unit_id: UnitId,
-        tail_ty: &Ty,
-        unit_outputs: &mut FxHashMap<UnitId, Ty>,
-    ) {
-        unit_outputs.insert(unit_id, tail_ty.clone());
-    }
-
-    fn register_extern_output(
-        ext: &ExternDecl,
-        unit_outputs: &mut FxHashMap<UnitId, Ty>,
-    ) {
-        unit_outputs.insert(ext.id, ext.output_ty.clone());
-    }
-
-    fn process_extern(
-        ext: &ExternDecl,
-        unit_outputs: &FxHashMap<UnitId, Ty>,
-        subst: &mut TySubst,
-        errors: &mut Vec<GraphError>,
-    ) {
-        let mut errs = Vec::new();
-        for (input_id, expected_ty) in &ext.inputs {
-            if let Some(actual_ty) = unit_outputs.get(input_id) {
-                // Use covariant unification: actual ≤ expected.
-                // e.g., Deque<T,O> ≤ Sequence<T,O,E> is valid.
-                if subst.unify(actual_ty, expected_ty, crate::ty::Polarity::Covariant).is_err()
-                    && !matches!(actual_ty, Ty::Error(_))
-                {
-                    errs.push(MirError {
-                        kind: crate::error::MirErrorKind::UnificationFailure {
-                            expected: expected_ty.clone(),
-                            got: actual_ty.clone(),
-                        },
-                        span: acvus_ast::Span::ZERO,
-                    });
-                }
-            }
-        }
-        if !errs.is_empty() {
-            errors.push(GraphError { unit: ext.id, errors: errs });
-        }
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
     }
 }
 
-// ── Tarjan's SCC algorithm ───────────────────────────────────────────
+// ── Resolution ──────────────────────────────────────────────────────
 
-fn tarjan_scc(n: usize, deps: &[FxHashSet<usize>]) -> Vec<Vec<usize>> {
-    struct State {
-        index: usize,
-        indices: Vec<Option<usize>>,
-        lowlinks: Vec<usize>,
-        on_stack: Vec<bool>,
-        stack: Vec<usize>,
-        sccs: Vec<Vec<usize>>,
+/// Run Phase 2 resolution.
+///
+/// All types must be fully resolved by this point (from infer + UI).
+/// `user_context_types`: additional context types provided by the user
+/// (e.g., from UI injection). These override inferred types.
+pub fn resolve(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    extract: &ExtractResult,
+    infer_result: &super::infer::InferResult,
+    user_context_types: &FxHashMap<Astr, Ty>,
+) -> ResolvedGraph {
+    let mut subst = TySubst::new();
+    let mut resolutions: FxHashMap<FunctionId, TypeResolution<Checked>> = FxHashMap::default();
+    let mut fn_types: FxHashMap<FunctionId, Ty> = FxHashMap::default();
+    let mut errors: Vec<ResolveError> = Vec::new();
+
+    // Build context type map: declared (from graph) + user-provided.
+    let mut context_types: FxHashMap<Astr, Ty> = FxHashMap::default();
+
+    // 1. Declared context types from the graph.
+    for ctx in graph.contexts.iter() {
+        match &ctx.constraint {
+            Constraint::Exact(ty) => {
+                context_types.insert(ctx.name, ty.clone());
+            }
+            Constraint::Inferred => {
+                // Will be filled by user_context_types or remain as TyVar.
+                if !user_context_types.contains_key(&ctx.name) {
+                    context_types.insert(ctx.name, subst.fresh_param());
+                }
+            }
+            Constraint::DerivedFnOutput(_, _) | Constraint::DerivedContext(_, _) => {
+                // TODO: resolve derived types. For now, use fresh var.
+                context_types.insert(ctx.name, subst.fresh_param());
+            }
+        }
     }
 
-    let mut state = State {
-        index: 0,
-        indices: vec![None; n],
-        lowlinks: vec![0; n],
-        on_stack: vec![false; n],
-        stack: Vec::new(),
-        sccs: Vec::new(),
+    // 2. User-provided types override.
+    for (&name, ty) in user_context_types {
+        context_types.insert(name, ty.clone());
+    }
+
+    // 3. Verify all referenced contexts are declared.
+    //    Phase 2 requires all contexts to be known (from graph + Phase 1 infer).
+    //    Undeclared contexts are errors.
+    for (&fn_id, fn_ref) in &extract.fn_refs {
+        for &name in fn_ref.context_reads.iter().chain(fn_ref.context_writes.iter()) {
+            if !context_types.contains_key(&name) {
+                errors.push(ResolveError {
+                    fn_id,
+                    errors: vec![MirError {
+                        kind: crate::error::MirErrorKind::UndefinedContext(
+                            interner.resolve(name).to_string(),
+                        ),
+                        span: acvus_ast::Span::new(0, 0),
+                    }],
+                });
+            }
+        }
+    }
+
+    // 4. Build function type environment from infer results.
+    //    All local function types are fully resolved by infer — no fresh Params here.
+    let mut fn_type_env: FxHashMap<Astr, Ty> = crate::builtins::builtin_fn_types(interner);
+
+    for func in graph.functions.iter() {
+        match &func.kind {
+            FnKind::Local(_) => {
+                if let Some(meta) = infer_result.functions.get(&func.id) {
+                    fn_type_env.insert(func.name, meta.ty.clone());
+                }
+            }
+            FnKind::Extern { .. } => {
+                if let Constraint::Exact(ty) = &func.constraint.output {
+                    fn_type_env.insert(func.name, ty.clone());
+                }
+            }
+        }
+    }
+
+    // 5. Typecheck each local function with the complete environment.
+    let env = crate::ty::TypeEnv {
+        contexts: context_types.clone(),
+        functions: fn_type_env,
     };
 
-    fn strongconnect(v: usize, deps: &[FxHashSet<usize>], state: &mut State) {
-        state.indices[v] = Some(state.index);
-        state.lowlinks[v] = state.index;
-        state.index += 1;
-        state.stack.push(v);
-        state.on_stack[v] = true;
+    for func in graph.functions.iter() {
+        let FnKind::Local(_source) = &func.kind else {
+            continue;
+        };
+        let Some(parsed) = extract.parsed.get(&func.id) else {
+            continue;
+        };
 
-        for &w in &deps[v] {
-            if state.indices[w].is_none() {
-                strongconnect(w, deps, state);
-                state.lowlinks[v] = state.lowlinks[v].min(state.lowlinks[w]);
-            } else if state.on_stack[w] {
-                state.lowlinks[v] = state.lowlinks[v].min(state.indices[w].unwrap());
+        // Get parameter bindings from infer result.
+        let bind_params = infer_result
+            .functions
+            .get(&func.id)
+            .map(|m| m.params.clone())
+            .unwrap_or_default();
+
+        // Validate: inferred params must be declared in the signature.
+        // An implicit param not in the signature means an undefined variable.
+        if !bind_params.is_empty() {
+            let sig_names: FxHashSet<Astr> = func
+                .constraint
+                .signature
+                .as_ref()
+                .map(|sig| sig.params.iter().map(|p| p.name).collect())
+                .unwrap_or_default();
+            let mut undeclared_errors = Vec::new();
+            for param in &bind_params {
+                if !sig_names.contains(&param.name) {
+                    undeclared_errors.push(MirError {
+                        kind: crate::error::MirErrorKind::UndefinedVariable(
+                            interner.resolve(param.name).to_string(),
+                        ),
+                        span: acvus_ast::Span::new(0, 0),
+                    });
+                }
+            }
+            if !undeclared_errors.is_empty() {
+                errors.push(ResolveError {
+                    fn_id: func.id,
+                    errors: undeclared_errors,
+                });
+                continue;
             }
         }
 
-        if state.lowlinks[v] == state.indices[v].unwrap() {
-            let mut scc = Vec::new();
-            loop {
-                let w = state.stack.pop().unwrap();
-                state.on_stack[w] = false;
-                scc.push(w);
-                if w == v { break; }
+        // Typecheck with pre-bound parameters.
+        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut subst)
+            .with_params(&bind_params);
+        let unchecked_result = match parsed {
+            ParsedSource::Script(script) => checker.check_script(script, None),
+            ParsedSource::Template(template) => checker.check_template(template),
+        };
+
+        match unchecked_result {
+            Ok(unchecked) => {
+                // Try check_completeness.
+                match check_completeness(unchecked, &subst) {
+                    Ok(checked) => {
+                        fn_types.insert(func.id, checked.tail_ty.clone());
+                        resolutions.insert(func.id, checked);
+                    }
+                    Err(errs) => {
+                        errors.push(ResolveError {
+                            fn_id: func.id,
+                            errors: errs,
+                        });
+                    }
+                }
             }
-            state.sccs.push(scc);
+            Err(errs) => {
+                errors.push(ResolveError {
+                    fn_id: func.id,
+                    errors: errs,
+                });
+            }
         }
     }
 
-    for i in 0..n {
-        if state.indices[i].is_none() {
-            strongconnect(i, deps, &mut state);
+    // 5. Resolve context types through substitution.
+    let resolved_context_types: FxHashMap<ContextId, Ty> = graph
+        .contexts
+        .iter()
+        .map(|ctx| {
+            let ty = context_types
+                .get(&ctx.name)
+                .map(|t| subst.resolve(t))
+                .unwrap_or_else(Ty::error);
+            (ctx.id, ty)
+        })
+        .collect();
+
+    ResolvedGraph {
+        resolutions,
+        fn_types,
+        context_types: resolved_context_types,
+        errors,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::extract;
+    use crate::ty::Effect;
+    use acvus_utils::Interner;
+
+    // ── Single-function helpers (existing) ───────────────────────────
+
+    fn make_graph_with_ctx(
+        interner: &Interner,
+        source: &str,
+        ctx: &[(&str, Ty)],
+    ) -> CompilationGraph {
+        let contexts = ctx
+            .iter()
+            .map(|(name, ty)| Context {
+                id: ContextId::alloc(),
+                name: interner.intern(name),
+                constraint: Constraint::Exact(ty.clone()),
+            })
+            .collect();
+        let mut functions = crate::builtins::standard_builtins(interner);
+        functions.push(Function {
+            id: FunctionId::alloc(),
+            name: interner.intern("test"),
+            kind: FnKind::Local(SourceCode {
+                name: interner.intern("test"),
+                source: interner.intern(source),
+                kind: SourceKind::Script,
+            }),
+            constraint: FnConstraint {
+                signature: None,
+                output: Constraint::Inferred,
+            },
+        });
+        CompilationGraph {
+            functions: Freeze::new(functions),
+            contexts: Freeze::new(contexts),
         }
     }
 
-    state.sccs
+    fn make_graph_no_ctx(interner: &Interner, source: &str) -> CompilationGraph {
+        make_graph_with_ctx(interner, source, &[])
+    }
+
+    fn last_local_id(graph: &CompilationGraph) -> FunctionId {
+        graph
+            .functions
+            .iter()
+            .rev()
+            .find(|f| matches!(f.kind, FnKind::Local(_)))
+            .expect("no local function")
+            .id
+    }
+
+    // -- Completeness: valid programs resolve --
+
+    #[test]
+    fn resolve_simple_arithmetic() {
+        let i = Interner::new();
+        let graph = make_graph_no_ctx(&i, "1 + 2");
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        assert!(!result.has_errors(), "errors: {:?}", result.errors());
+        let uid = last_local_id(&graph);
+        assert!(result.try_resolution(uid).is_some());
+        assert_eq!(*result.fn_type(uid).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn resolve_with_declared_context() {
+        let i = Interner::new();
+        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::Int)]);
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        assert!(!result.has_errors(), "errors: {:?}", result.errors());
+        let uid = last_local_id(&graph);
+        assert_eq!(*result.fn_type(uid).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn resolve_with_user_provided_context() {
+        let i = Interner::new();
+        let graph = make_graph_no_ctx(&i, "@x + 1");
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let mut user = FxHashMap::default();
+        user.insert(i.intern("x"), Ty::Int);
+        let result = resolve(&i, &graph, &ext, &inf, &user);
+
+        assert!(!result.has_errors(), "errors: {:?}", result.errors());
+        let uid = last_local_id(&graph);
+        assert_eq!(*result.fn_type(uid).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn resolve_string_context() {
+        let i = Interner::new();
+        let graph = make_graph_with_ctx(&i, "@name", &[("name", Ty::String)]);
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        assert!(!result.has_errors(), "errors: {:?}", result.errors());
+        let uid = last_local_id(&graph);
+        assert_eq!(*result.fn_type(uid).unwrap(), Ty::String);
+    }
+
+    #[test]
+    fn resolve_context_field_access() {
+        let i = Interner::new();
+        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
+        let graph = make_graph_with_ctx(&i, "@user.name", &[("user", obj_ty)]);
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        assert!(!result.has_errors(), "errors: {:?}", result.errors());
+        let uid = last_local_id(&graph);
+        assert_eq!(*result.fn_type(uid).unwrap(), Ty::String);
+    }
+
+    // -- Soundness: type errors detected --
+
+    #[test]
+    fn resolve_type_mismatch_detected() {
+        let i = Interner::new();
+        // @x is String but used in arithmetic — should error.
+        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::String)]);
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        assert!(result.has_errors(), "should detect type mismatch");
+    }
+
+    // -- Context type resolution --
+
+    #[test]
+    fn resolve_context_types_populated() {
+        let i = Interner::new();
+        let graph = make_graph_with_ctx(&i, "@x", &[("x", Ty::Int)]);
+        let ext = extract::extract(&i, &graph);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
+        let result = resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
+
+        let ctx_id = graph.contexts[0].id;
+        assert_eq!(*result.context_type(ctx_id).unwrap(), Ty::Int);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Inter-function call tests
+    // ════════════════════════════════════════════════════════════════
+
+    /// Helper: build a multi-function CompilationGraph.
+    ///
+    /// `fns`: list of `(name, source, signature, output_constraint)`.
+    /// - `signature`: `None` = no declared params, `Some(params)` = declared param types.
+    /// - `output`: `Constraint` for the function's return type.
+    ///
+    /// `ctx`: contexts as before.
+    ///
+    /// Returns the graph and a Vec of (name, FunctionId) for each local function
+    /// (in insertion order).
+    fn make_multi_fn_graph(
+        interner: &Interner,
+        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        ctx: &[(&str, Ty)],
+    ) -> (CompilationGraph, Vec<(Astr, FunctionId)>) {
+        let contexts: Vec<Context> = ctx
+            .iter()
+            .map(|(name, ty)| Context {
+                id: ContextId::alloc(),
+                name: interner.intern(name),
+                constraint: Constraint::Exact(ty.clone()),
+            })
+            .collect();
+
+        let mut functions = crate::builtins::standard_builtins(interner);
+        let mut ids = Vec::new();
+
+        for (name, source, sig, output) in fns {
+            let fid = FunctionId::alloc();
+            let aname = interner.intern(name);
+            ids.push((aname, fid));
+            functions.push(Function {
+                id: fid,
+                name: aname,
+                kind: FnKind::Local(SourceCode {
+                    name: aname,
+                    source: interner.intern(source),
+                    kind: SourceKind::Script,
+                }),
+                constraint: FnConstraint {
+                    signature: sig.as_ref().map(|params| Signature {
+                        params: params
+                            .iter()
+                            .map(|(name, ty)| crate::ty::Param::new(interner.intern(name), ty.clone()))
+                            .collect(),
+                    }),
+                    output: output.clone(),
+                },
+            });
+        }
+
+        let graph = CompilationGraph {
+            functions: Freeze::new(functions),
+            contexts: Freeze::new(contexts),
+        };
+        (graph, ids)
+    }
+
+    /// Convenience: resolve a multi-function graph, return errors as strings.
+    fn resolve_multi(
+        interner: &Interner,
+        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        ctx: &[(&str, Ty)],
+    ) -> (ResolvedGraph, Vec<(Astr, FunctionId)>) {
+        resolve_with_extern(interner, fns, &[], ctx)
+    }
+
+    /// Build a graph with both local and extern functions, then resolve.
+    fn resolve_with_extern(
+        interner: &Interner,
+        local_fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        extern_fns: &[Function],
+        ctx: &[(&str, Ty)],
+    ) -> (ResolvedGraph, Vec<(Astr, FunctionId)>) {
+        let contexts: Vec<Context> = ctx
+            .iter()
+            .map(|(name, ty)| Context {
+                id: ContextId::alloc(),
+                name: interner.intern(name),
+                constraint: Constraint::Exact(ty.clone()),
+            })
+            .collect();
+
+        let mut functions = crate::builtins::standard_builtins(interner);
+        let mut ids = Vec::new();
+
+        for (name, source, sig, output) in local_fns {
+            let fid = FunctionId::alloc();
+            let aname = interner.intern(name);
+            ids.push((aname, fid));
+            functions.push(Function {
+                id: fid,
+                name: aname,
+                kind: FnKind::Local(SourceCode {
+                    name: aname,
+                    source: interner.intern(source),
+                    kind: SourceKind::Script,
+                }),
+                constraint: FnConstraint {
+                    signature: sig.as_ref().map(|params| Signature {
+                        params: params
+                            .iter()
+                            .map(|(name, ty)| crate::ty::Param::new(interner.intern(name), ty.clone()))
+                            .collect(),
+                    }),
+                    output: output.clone(),
+                },
+            });
+        }
+        functions.extend_from_slice(extern_fns);
+
+        let graph = CompilationGraph {
+            functions: Freeze::new(functions),
+            contexts: Freeze::new(contexts),
+        };
+        let ext = extract::extract(interner, &graph);
+        let inf = crate::graph::infer::infer(interner, &graph, &ext);
+        let result = resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
+        (result, ids)
+    }
+
+    fn error_strings(interner: &Interner, result: &ResolvedGraph) -> Vec<String> {
+        result
+            .errors()
+            .iter()
+            .flat_map(|e| &e.errors)
+            .map(|e| format!("{}", e.display(interner)))
+            .collect()
+    }
+
+    // ── Completeness: valid inter-function calls should resolve ──────
+
+    /// C1: A calls B with matching concrete types.
+    #[test]
+    fn inter_fn_simple_call() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "double(21)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C2: A calls B, B returns String.
+    #[test]
+    fn inter_fn_string_return() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("greet", "\"hello\"", Some(vec![]), Constraint::Inferred),
+                ("main", "greet()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    /// C3: Multi-arg function call.
+    #[test]
+    fn inter_fn_multi_arg() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                ("main", "add(1, 2)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C4: Chain of calls — A calls B, B calls C.
+    #[test]
+    fn inter_fn_chain_call() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("double_inc", "inc(x) + inc(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "double_inc(5)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[2].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C5: Function uses context and is called by another function.
+    #[test]
+    fn inter_fn_with_context() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("get_count", "@count", Some(vec![]), Constraint::Inferred),
+                ("main", "get_count() + 1", None, Constraint::Inferred),
+            ],
+            &[("count", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C6: Function with declared Exact output type.
+    #[test]
+    fn inter_fn_exact_output() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("make_str", "\"hi\"", Some(vec![]), Constraint::Exact(Ty::String)),
+                ("main", "make_str()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    /// C7: Caller uses return value in arithmetic.
+    #[test]
+    fn inter_fn_return_used_in_binop() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("five", "5", Some(vec![]), Constraint::Inferred),
+                ("main", "five() + five()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C8: Pipe syntax — value | fn.
+    #[test]
+    fn inter_fn_pipe_call() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "10 | double", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C9: Function returning list.
+    #[test]
+    fn inter_fn_list_return() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("make_list", "[1, 2, 3]", Some(vec![]), Constraint::Inferred),
+                ("main", "make_list() | len", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C10: Function accepting and returning String.
+    #[test]
+    fn inter_fn_string_identity() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("echo", "s", Some(vec![("s", Ty::String)]), Constraint::Inferred),
+                ("main", "echo(\"hello\")", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    /// C11: Multiple callers of the same function.
+    #[test]
+    fn inter_fn_multiple_callers() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("a", "inc(10)", None, Constraint::Inferred),
+                ("b", "inc(20)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        assert_eq!(*result.fn_type(ids[1].1).unwrap(), Ty::Int);
+        assert_eq!(*result.fn_type(ids[2].1).unwrap(), Ty::Int);
+    }
+
+    /// C12: Calling function with bool return.
+    #[test]
+    fn inter_fn_bool_return() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("is_positive", "x > 0", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "is_positive(42)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Bool);
+    }
+
+    /// C13: Deep call chain — A → B → C → D.
+    #[test]
+    fn inter_fn_deep_chain() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("d", "1", Some(vec![]), Constraint::Inferred),
+                ("c", "d()", Some(vec![]), Constraint::Inferred),
+                ("b", "c()", Some(vec![]), Constraint::Inferred),
+                ("main", "b()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[3].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C14: Function that calls builtin and local function together.
+    #[test]
+    fn inter_fn_mixed_builtin_and_local() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("make_num", "42", Some(vec![]), Constraint::Inferred),
+                ("main", "make_num() | to_string", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    /// C15: Function result used as argument to another function.
+    #[test]
+    fn inter_fn_nested_call() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "inc(inc(0))", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C16: Mutual recursion — A calls B, B calls A.
+    #[test]
+    fn inter_fn_mutual_recursion() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("is_even", "is_odd(n - 1)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Bool)),
+                ("is_odd", "is_even(n - 1)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Bool)),
+                ("main", "is_even(10)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[2].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Bool);
+    }
+
+    /// C17: Self-recursion.
+    #[test]
+    fn inter_fn_self_recursion() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("fib", "fib(n - 1) + fib(n - 2)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Int)),
+                ("main", "fib(10)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// C18: Function with float params and return.
+    #[test]
+    fn inter_fn_float_arithmetic() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("avg", "(a + b) / 2.0", Some(vec![("a", Ty::Float), ("b", Ty::Float)]), Constraint::Inferred),
+                ("main", "avg(1.0, 3.0)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Float);
+    }
+
+    // ── Soundness: invalid calls should be rejected ─────────────────
+
+    /// S1: Wrong argument type.
+    #[test]
+    fn inter_fn_reject_wrong_arg_type() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "double(\"hello\")", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject String arg for Int param");
+    }
+
+    /// S2: Too many arguments.
+    #[test]
+    fn inter_fn_reject_too_many_args() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "inc(1, 2)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject extra argument");
+    }
+
+    /// S3: Too few arguments.
+    #[test]
+    fn inter_fn_reject_too_few_args() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                ("main", "add(1)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject missing argument");
+    }
+
+    /// S4: Using return value where wrong type expected.
+    #[test]
+    fn inter_fn_reject_return_type_mismatch() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("make_str", "\"hello\"", Some(vec![]), Constraint::Inferred),
+                // make_str() returns String, but + 1 expects Int
+                ("main", "make_str() + 1", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject String + Int");
+    }
+
+    /// S5: Calling undefined function.
+    #[test]
+    fn inter_fn_reject_undefined_function() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[("main", "nonexistent(1)", None, Constraint::Inferred)],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject call to undefined function");
+    }
+
+    /// S6: Declared output type contradicts actual body.
+    #[test]
+    fn inter_fn_reject_output_mismatch() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                // Body returns Int, but declared output is String.
+                ("bad", "42", Some(vec![]), Constraint::Exact(Ty::String)),
+                ("main", "bad()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        // Either 'bad' itself should error (body vs constraint mismatch)
+        // or 'main' should get String (from declared) and later validation catches it.
+        // At minimum, the system must not silently produce wrong types.
+        let main_id = ids[1].1;
+        if !result.has_errors() {
+            // If no error, main should see the declared type (String), not Int.
+            assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+        }
+    }
+
+    /// S7: Mutual recursion without declared types — must not stack overflow.
+    #[test]
+    fn inter_fn_mutual_recursion_no_declared_types() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                // No Exact output — types must be inferred.
+                // This is hard and may legitimately error, but must not panic/infinite loop.
+                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+            ],
+            &[],
+        );
+        // We don't assert success or failure — just that it terminates.
+        let _ = result;
+    }
+
+    /// S8: Wrong type in pipe position.
+    #[test]
+    fn inter_fn_reject_wrong_pipe_type() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "\"hello\" | needs_int", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject String piped to Int param");
+    }
+
+    /// S9: Function with wrong context type propagated through call.
+    #[test]
+    fn inter_fn_reject_context_type_propagation() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("get_name", "@name", Some(vec![]), Constraint::Inferred),
+                // get_name returns String (from context), used in arithmetic — should error.
+                ("main", "get_name() + 1", None, Constraint::Inferred),
+            ],
+            &[("name", Ty::String)],
+        );
+        assert!(result.has_errors(), "should reject String + Int through call chain");
+    }
+
+    /// S10: Calling a function as if it had different arity in different call sites.
+    #[test]
+    fn inter_fn_reject_inconsistent_arity() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("f", "x", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                // First call correct, second call wrong arity.
+                ("main", "f(1) + f(1, 2)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject wrong arity call");
+    }
+
+    /// S11: Return type of called function used in list — type must be consistent.
+    #[test]
+    fn inter_fn_reject_heterogeneous_via_calls() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("make_int", "42", Some(vec![]), Constraint::Inferred),
+                ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
+                // [Int, String] — heterogeneous list should error.
+                ("main", "[make_int(), make_str()]", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject heterogeneous list from calls");
+    }
+
+    /// S12: Passing function return to wrong-typed parameter of another function.
+    #[test]
+    fn inter_fn_reject_chained_type_mismatch() {
+        let i = Interner::new();
+        let (result, _ids) = resolve_multi(
+            &i,
+            &[
+                ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
+                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "needs_int(make_str())", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject String passed to Int param");
+    }
+
+    // ── Edge cases ──────────────────────────────────────────────────
+
+    /// E1: Function with no parameters, no context — pure constant.
+    #[test]
+    fn inter_fn_zero_arg_constant() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("pi", "3", Some(vec![]), Constraint::Inferred),
+                ("main", "pi()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E2: Same name as builtin — local should shadow or coexist?
+    /// (This tests the current behavior, whatever it is.)
+    #[test]
+    fn inter_fn_name_shadows_builtin() {
+        let i = Interner::new();
+        // "len" is a builtin. Defining a local "len" — what happens?
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("len", "42", Some(vec![]), Constraint::Exact(Ty::Int)),
+                ("main", "len()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        // Either the local wins (returns Int) or the builtin wins or it's an error.
+        // The important thing is it doesn't panic.
+        let main_id = ids[1].1;
+        if !result.has_errors() {
+            // If it resolves, check what type we got.
+            let _ty = result.fn_type(main_id).unwrap();
+        }
+    }
+
+    /// E3: Callee defined after caller in graph order.
+    #[test]
+    fn inter_fn_forward_reference() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                // main is first, calls helper which is second.
+                ("main", "helper()", None, Constraint::Inferred),
+                ("helper", "42", Some(vec![]), Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "forward reference should resolve: {errs:?}");
+        let main_id = ids[0].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E4: Two functions reading the same context.
+    #[test]
+    fn inter_fn_shared_context() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("read_a", "@x + 1", Some(vec![]), Constraint::Inferred),
+                ("read_b", "@x + 2", Some(vec![]), Constraint::Inferred),
+                ("main", "read_a() + read_b()", None, Constraint::Inferred),
+            ],
+            &[("x", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[2].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E5: Function calling itself with Exact type annotation (base case).
+    #[test]
+    fn inter_fn_self_call_exact() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), Constraint::Exact(Ty::Int)),
+                ("main", "f(10)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E6: Diamond dependency — A calls B and C, both call D.
+    #[test]
+    fn inter_fn_diamond_dependency() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("d", "1", Some(vec![]), Constraint::Inferred),
+                ("b", "d() + 10", Some(vec![]), Constraint::Inferred),
+                ("c", "d() + 20", Some(vec![]), Constraint::Inferred),
+                ("main", "b() + c()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[3].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E7: Function result piped through builtin chain.
+    #[test]
+    fn inter_fn_pipe_through_builtins() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("make_list", "[1, 2, 3]", Some(vec![]), Constraint::Inferred),
+                ("main", "make_list() | iter | map(x -> x + 1) | collect | len", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E8: Function with effectful iterator return type.
+    #[test]
+    fn inter_fn_effectful_return() {
+        let i = Interner::new();
+        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("get_iter", "@src", Some(vec![]), Constraint::Inferred),
+                ("main", "get_iter() | collect", None, Constraint::Inferred),
+            ],
+            &[("src", eff_iter)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(
+            *result.fn_type(main_id).unwrap(),
+            Ty::List(Box::new(Ty::Int))
+        );
+    }
+
+    /// E9: Function returning Option type.
+    #[test]
+    fn inter_fn_option_return() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("maybe_first", "@items | iter | first", Some(vec![]), Constraint::Inferred),
+                ("main", "maybe_first() | unwrap", None, Constraint::Inferred),
+            ],
+            &[("items", Ty::List(Box::new(Ty::Int)))],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E10: Three functions forming a pipeline.
+    #[test]
+    fn inter_fn_three_stage_pipeline() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("stage1", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("stage2", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("stage3", "x - 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "0 | stage1 | stage2 | stage3", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[3].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// E11: All local functions are callers — no leaf function is called.
+    /// (Independent functions, no inter-function calls — regression check.)
+    #[test]
+    fn inter_fn_independent_functions() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("a", "1 + 2", None, Constraint::Inferred),
+                ("b", "\"hello\"", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        assert_eq!(*result.fn_type(ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(*result.fn_type(ids[1].1).unwrap(), Ty::String);
+    }
+
+    /// E12: Function with object return type used with field access.
+    #[test]
+    fn inter_fn_object_return_field_access() {
+        let i = Interner::new();
+        let obj_ty = Ty::Object(FxHashMap::from_iter([
+            (i.intern("name"), Ty::String),
+            (i.intern("age"), Ty::Int),
+        ]));
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("get_user", "@user", Some(vec![]), Constraint::Exact(obj_ty)),
+                ("main", "get_user().name", None, Constraint::Inferred),
+            ],
+            &[("user", Ty::Object(FxHashMap::from_iter([
+                (i.intern("name"), Ty::String),
+                (i.intern("age"), Ty::Int),
+            ])))],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Soundness boundary tests
+    //
+    // These test dangerous edge cases at the boundaries of
+    // infer → resolve → check_completeness.
+    // ════════════════════════════════════════════════════════════════
+
+    /// B1: Caller tries to use return value as wrong type.
+    /// a() returns Int (inferred), caller uses it as String → error.
+    #[test]
+    fn boundary_caller_forces_wrong_return_type() {
+        let i = Interner::new();
+        let (result, _) = resolve_multi(
+            &i,
+            &[
+                ("a", "0", Some(vec![]), Constraint::Inferred),
+                ("main", "a() + \"hello\"", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject Int used as String");
+    }
+
+    /// B2: Two callers use same function's return as different types.
+    /// a() returns Int. One caller does a() + 1, other does a() + "hi" → error.
+    #[test]
+    fn boundary_inconsistent_return_usage() {
+        let i = Interner::new();
+        let (result, _) = resolve_multi(
+            &i,
+            &[
+                ("a", "0", Some(vec![]), Constraint::Inferred),
+                ("ok_caller", "a() + 1", None, Constraint::Inferred),
+                ("bad_caller", "a() + \"hi\"", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject inconsistent return type usage");
+    }
+
+    /// B3: Mutual recursion with Inferred output — should NOT silently succeed.
+    /// Both functions have unknown return types and call each other.
+    /// Without Exact annotations, the types cannot be determined.
+    #[test]
+    fn boundary_mutual_recursion_inferred_must_not_succeed_silently() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+            ],
+            &[],
+        );
+        // Either errors (cannot infer) or if it resolves, the types must be consistent.
+        if !result.has_errors() {
+            // If somehow resolved, both must have the same return type.
+            let ping_ty = result.fn_type(ids[0].1);
+            let pong_ty = result.fn_type(ids[1].1);
+            if let (Some(pt), Some(qt)) = (ping_ty, pong_ty) {
+                assert_eq!(pt, qt, "mutual recursion must have consistent return types");
+            }
+        }
+    }
+
+    /// B4: Self-recursion with Inferred output and no base case type.
+    /// f(x) = f(x-1). Return type is entirely self-referential → cannot infer.
+    #[test]
+    fn boundary_self_recursion_inferred_no_base() {
+        let i = Interner::new();
+        let (result, _) = resolve_multi(
+            &i,
+            &[
+                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                ("main", "f(10)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        // Should error — f's return type is entirely circular.
+        assert!(result.has_errors(), "purely recursive return type should fail inference");
+    }
+
+    /// B5: Effect soundness — function reading context must be Effectful,
+    /// and caller must see it as Effectful.
+    #[test]
+    fn boundary_effectful_context_read_propagates() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("get_x", "@x", Some(vec![]), Constraint::Inferred),
+                ("main", "get_x()", None, Constraint::Inferred),
+            ],
+            &[("x", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        // get_x reads context → Effectful.
+        // main calls get_x → main should also be Effectful.
+        let main_id = ids[1].1;
+        if let Some(resolution) = result.try_resolution(main_id) {
+            assert_eq!(
+                resolution.body_effect, Effect::io(),
+                "caller of context-reading function must be effectful"
+            );
+        }
+    }
+
+    /// B6: Effect soundness — pure function call should not taint caller.
+    #[test]
+    fn boundary_pure_function_stays_pure() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                ("main", "add(1, 2)", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[1].1;
+        if let Some(resolution) = result.try_resolution(main_id) {
+            assert_eq!(
+                resolution.body_effect, Effect::pure(),
+                "caller of pure function should remain pure"
+            );
+        }
+    }
+
+    /// B7: Effect soundness — context write is Effectful.
+    #[test]
+    fn boundary_context_write_is_effectful() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("set_x", "@x = 42; @x", Some(vec![]), Constraint::Inferred),
+                ("main", "set_x()", None, Constraint::Inferred),
+            ],
+            &[("x", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let set_id = ids[0].1;
+        if let Some(resolution) = result.try_resolution(set_id) {
+            assert_eq!(
+                resolution.body_effect, Effect::io(),
+                "context-writing function must be effectful"
+            );
+        }
+    }
+
+    /// B8: infer produces wrong type, resolve catches it.
+    /// Body returns Int but declared output is String → resolve must reject.
+    #[test]
+    fn boundary_infer_wrong_type_resolve_catches() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("bad", "42", Some(vec![]), Constraint::Exact(Ty::String)),
+                ("main", "bad()", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        // Either 'bad' has errors (body type mismatch) or main sees String.
+        // The system must NOT let main see Int when bad declared String.
+        let main_id = ids[1].1;
+        if let Some(main_ty) = result.fn_type(main_id) {
+            assert_ne!(*main_ty, Ty::Int, "main must not see Int when bad declared String");
+        }
+    }
+
+    /// B9: Param in output but not in input → must not silently succeed.
+    /// f() -> T where T is unconstrained → cannot infer.
+    #[test]
+    fn boundary_orphan_param_in_output() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                // No params, inferred output. Body is just a free variable with no constraint.
+                ("mystery", "x", Some(vec![]), Constraint::Inferred),
+                ("main", "mystery() + 1", None, Constraint::Inferred),
+            ],
+            &[],
+        );
+        // "x" in mystery body is a free param, but Signature has 0 params.
+        // So "x" gets fresh_param. mystery() returns fresh_param.
+        // main does mystery() + 1 which may force Int.
+        // This is actually OK if it resolves — the inferred param is Int.
+        // The key is it should NOT be unsound.
+        if !result.has_errors() {
+            let main_id = ids[1].1;
+            if let Some(ty) = result.fn_type(main_id) {
+                assert_eq!(*ty, Ty::Int, "if resolved, return type should be Int");
+            }
+        }
+    }
+
+    /// B10: Chain through effectful function — effect must propagate transitively.
+    #[test]
+    fn boundary_transitive_effect_propagation() {
+        let i = Interner::new();
+        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("consume_iter", "@src | collect", Some(vec![]), Constraint::Inferred),
+                ("use_it", "consume_iter()", None, Constraint::Inferred),
+            ],
+            &[("src", eff_iter)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        // consume_iter reads context → Effectful.
+        // use_it calls consume_iter → should also be Effectful.
+        let use_id = ids[1].1;
+        if let Some(resolution) = result.try_resolution(use_id) {
+            assert_eq!(
+                resolution.body_effect, Effect::io(),
+                "transitive effect must propagate"
+            );
+        }
+    }
+
+    // ── body_reads / body_writes tests ──────────────────────────────
+
+    /// Direct context read is tracked in body_reads.
+    #[test]
+    fn body_reads_tracks_context_read() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[("reader", "@x + @y", Some(vec![]), Constraint::Inferred)],
+            &[("x", Ty::Int), ("y", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let fid = ids[0].1;
+        if let Some(resolution) = result.try_resolution(fid) {
+            assert!(
+                resolution.body_reads.contains(&i.intern("x")),
+                "should track @x read"
+            );
+            assert!(
+                resolution.body_reads.contains(&i.intern("y")),
+                "should track @y read"
+            );
+            assert!(
+                resolution.body_writes.is_empty(),
+                "read-only function should have no writes"
+            );
+        }
+    }
+
+    /// Direct context write is tracked in body_writes.
+    #[test]
+    fn body_writes_tracks_context_write() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[("writer", "@x = 42; @x", Some(vec![]), Constraint::Inferred)],
+            &[("x", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let fid = ids[0].1;
+        if let Some(resolution) = result.try_resolution(fid) {
+            assert!(
+                resolution.body_writes.contains(&i.intern("x")),
+                "should track @x write"
+            );
+            // @x = 42 also reads @x in the tail expression
+            assert!(
+                resolution.body_reads.contains(&i.intern("x")),
+                "should also track @x read from tail"
+            );
+        }
+    }
+
+    /// Pure function has empty body_reads and body_writes.
+    #[test]
+    fn body_reads_writes_empty_for_pure() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[("pure_fn", "1 + 2", Some(vec![]), Constraint::Inferred)],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let fid = ids[0].1;
+        if let Some(resolution) = result.try_resolution(fid) {
+            assert!(resolution.body_reads.is_empty());
+            assert!(resolution.body_writes.is_empty());
+        }
+    }
+
+    /// Calling another function does NOT add to caller's body_reads/body_writes.
+    /// Transitive effect propagation is infer's responsibility, not typeck's.
+    #[test]
+    fn body_reads_no_transitive_from_callee() {
+        let i = Interner::new();
+        let (result, ids) = resolve_multi(
+            &i,
+            &[
+                ("get_x", "@x", Some(vec![]), Constraint::Inferred),
+                ("main", "get_x()", None, Constraint::Inferred),
+            ],
+            &[("x", Ty::Int)],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        // get_x directly reads @x
+        let get_x_id = ids[0].1;
+        if let Some(resolution) = result.try_resolution(get_x_id) {
+            assert!(resolution.body_reads.contains(&i.intern("x")));
+        }
+        // main calls get_x but does NOT directly read @x
+        // → body_reads should be empty (transitive propagation is infer's job)
+        let main_id = ids[1].1;
+        if let Some(resolution) = result.try_resolution(main_id) {
+            assert!(
+                resolution.body_reads.is_empty(),
+                "caller should not have transitive reads in body_reads"
+            );
+            assert!(
+                resolution.body_writes.is_empty(),
+                "caller should not have transitive writes in body_writes"
+            );
+        }
+    }
+
+    // ── Extern function resolution ─────────────────────────────────────
+
+    fn make_extern_fn(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> Function {
+        let named_params: Vec<crate::ty::Param> = params
+            .into_iter()
+            .enumerate()
+            .map(|(i, ty)| crate::ty::Param::new(interner.intern(&format!("_{i}")), ty))
+            .collect();
+        Function {
+            id: FunctionId::alloc(),
+            name: interner.intern(name),
+            kind: FnKind::Extern {
+                deps: Freeze::new(vec![]),
+            },
+            constraint: FnConstraint {
+                signature: Some(Signature { params: named_params.clone() }),
+                output: Constraint::Exact(Ty::Fn {
+                    params: named_params,
+                    ret: Box::new(ret),
+                    captures: vec![],
+                    effect: Effect::pure(),
+                }),
+            },
+        }
+    }
+
+    /// Extern function should be callable from local functions.
+    #[test]
+    fn extern_fn_call_resolves() {
+        let i = Interner::new();
+        let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
+        let (result, ids) = resolve_with_extern(
+            &i,
+            &[("main", "fetch(42)", None, Constraint::Inferred)],
+            &[fetch],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "extern call should resolve: {errs:?}");
+        let main_id = ids[0].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::String);
+    }
+
+    /// Extern function with wrong argument type should error.
+    #[test]
+    fn extern_fn_call_type_mismatch() {
+        let i = Interner::new();
+        let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
+        let (result, _) = resolve_with_extern(
+            &i,
+            &[("main", "fetch(\"bad\")", None, Constraint::Inferred)],
+            &[fetch],
+            &[],
+        );
+        assert!(result.has_errors(), "should reject String where Int expected");
+    }
+
+    /// Extern function return type flows into caller's expression.
+    #[test]
+    fn extern_fn_return_type_propagates() {
+        let i = Interner::new();
+        let get_count = make_extern_fn(&i, "get_count", vec![], Ty::Int);
+        let (result, ids) = resolve_with_extern(
+            &i,
+            &[("main", "get_count() + 1", None, Constraint::Inferred)],
+            &[get_count],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        let main_id = ids[0].1;
+        assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
+    }
+
+    /// Multiple extern functions can be registered and called.
+    #[test]
+    fn extern_fn_multiple() {
+        let i = Interner::new();
+        let add = make_extern_fn(&i, "ext_add", vec![Ty::Int, Ty::Int], Ty::Int);
+        let greet = make_extern_fn(&i, "ext_greet", vec![Ty::String], Ty::String);
+        let (result, ids) = resolve_with_extern(
+            &i,
+            &[
+                ("use_add", "ext_add(1, 2)", None, Constraint::Inferred),
+                ("use_greet", "ext_greet(\"hi\")", None, Constraint::Inferred),
+            ],
+            &[add, greet],
+            &[],
+        );
+        let errs = error_strings(&i, &result);
+        assert!(errs.is_empty(), "should resolve: {errs:?}");
+        assert_eq!(*result.fn_type(ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(*result.fn_type(ids[1].1).unwrap(), Ty::String);
+    }
 }

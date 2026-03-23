@@ -3,15 +3,23 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ", "
+  T0 = ""
+  T1 = ", "
 
 === main ===
-     0 │   r0 = context_load @names
-     1 │   r1 = cast ListToIterator r0
-     3 │   r3 = call join(r1, T0)
-     4 │   yield r3
+     0 │   r6 = context_project @names
+     1 │   r7 = context_load r6
+     3 │   r1 = context_project @names
+     4 │   r2 = cast ListToIterator r1
+     6 │   r4 = poison
+     7 │   r5 = T0 + r4
+     8 │   return r5
 
-    ; r0 (@names) : List<String>
-    ; r1 (v1) : Iterator<String>
-    ; r2 (v2) : String
-    ; r3 (join(...)) : String
+    ; r0 (v0) : String
+    ; r1 (@names) : List<String>
+    ; r2 (v2) : Iterator<String>
+    ; r3 (v3) : String
+    ; r4 (join(...)) : String
+    ; r5 (v5) : String
+    ; r6 (v6) : List<String>
+    ; r7 (v7) : List<String>

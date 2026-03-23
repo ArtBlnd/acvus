@@ -1,163 +1,122 @@
-//! Type definitions for the compilation graph.
+//! Type definitions for the new compilation graph.
+//!
+//! Key differences from `graph::types`:
+//! - Entity split into Function (executable) and Context (loadable).
+//! - FnConstraint bundles signature + output.
+//! - No membership — PHI/SSA handles type unification.
+//! - Function has name instead of name_to_id — graph owns the name→id mapping.
 
-use rustc_hash::FxHashMap;
 use acvus_utils::Astr;
+use acvus_utils::Freeze;
 
 use crate::ty::Ty;
 
-// ── Identifiers ──────────────────────────────────────────────────────
+// ── Identifiers ─────────────────────────────────────────────────────
 
-/// Global unique identifier for a context variable.
-/// Assigned by lowering. MIR only sees the Id, never the name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContextId(pub u32);
+acvus_utils::declare_id!(pub ContextId);
+acvus_utils::declare_id!(pub FunctionId);
+acvus_utils::declare_id!(pub VersionId);
+acvus_utils::declare_id!(pub ScopeId);
+acvus_utils::declare_id!(pub NamespaceId);
 
-/// Global unique identifier for a compilation unit or extern declaration.
-/// Assigned by lowering. Shared ID space between Unit and Extern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UnitId(pub u32);
+// ── Source ───────────────────────────────────────────────────────────
 
-/// Identifier for a scope within the compilation graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ScopeId(pub u32);
-
-/// Identifier for a namespace in the hierarchy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NamespaceId(pub u32);
-
-// ── Compilation units ────────────────────────────────────────────────
-
-/// Source kind: script (expression) or template (text with interpolation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,
     Template,
 }
 
-/// A compilation unit — has source, gets compiled, produces a Coroutine at runtime.
 #[derive(Debug, Clone)]
-pub struct CompilationUnit {
-    pub id: UnitId,
+pub struct SourceCode {
+    pub name: Astr,
     pub source: Astr,
     pub kind: SourceKind,
-    /// AST @name → ContextId mapping for this unit's namespace.
-    pub name_to_id: FxHashMap<Astr, ContextId>,
-    /// If this unit's output should unify with a ScopeLocal variable,
-    /// this is that variable's ContextId. Lowering declares this.
-    /// e.g., init → @self, bind → @self.
-    pub output_binding: Option<ContextId>,
 }
 
-/// An extern declaration — no source, declared input/output types.
-/// Runtime provides the value (e.g., LLM API call).
-/// Produces a Coroutine at runtime, just like a Unit.
+// ── Constraint ───────────────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
-pub struct ExternDecl {
-    pub id: UnitId,
-    /// Units this extern consumes, with expected types.
-    /// Used to validate that consumed unit output types match expectations.
-    /// (e.g., assert unit → Bool, message unit → String)
-    pub inputs: Vec<(UnitId, Ty)>,
-    /// The type this extern produces.
-    pub output_ty: Ty,
+pub enum Constraint {
+    /// Type inferred from source.
+    Inferred,
+    /// Exact declared type.
+    Exact(Ty),
+    /// Type derived from a function's output type.
+    DerivedFnOutput(FunctionId, TypeTransform),
+    /// Type derived from a context's type.
+    DerivedContext(ContextId, TypeTransform),
 }
 
-// ── Scopes and bindings ──────────────────────────────────────────────
-
-/// A scope groups units that share a namespace.
-/// The graph engine discovers SCCs within scopes.
-#[derive(Debug, Clone)]
-pub struct Scope {
-    pub id: ScopeId,
-    pub units: Vec<UnitId>,
-    pub bindings: Vec<ContextBinding>,
-}
-
-/// A binding: ContextId → where does the type come from + optional constraint.
-#[derive(Debug, Clone)]
-pub struct ContextBinding {
-    pub id: ContextId,
-    pub source: ContextSource,
-    /// Structural constraint on this binding (e.g., Sequence<β, O, Pure>).
-    /// Applied before SCC unification. Without it, types may widen to
-    /// the lattice top (e.g., Iterator instead of Sequence).
-    pub constraint: Option<Ty>,
-}
-
-/// Where a context variable's type comes from.
-#[derive(Debug, Clone)]
-pub enum ContextSource {
-    /// From another unit/extern's output, with optional type transform.
-    Derived(UnitId, TypeTransform),
-    /// Shared within this scope — graph engine determines SCC membership.
-    ScopeLocal,
-    /// Dynamic external — runtime provides the value. Always unknown for reachability.
-    External,
-}
-
-/// Type transform applied to a unit's output type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeTransform {
-    /// No transform — use the output type as-is.
     Identity,
-    /// Extract element type from a collection. Delegates to Ty::elem_of().
     ElemOf,
 }
 
-// ── External types ───────────────────────────────────────────────────
+// ── Function ────────────────────────────────────────────────────────
 
-/// Type of an external (dynamic) context variable.
+/// A callable signature: named, typed parameters.
 #[derive(Debug, Clone)]
-pub enum ExternalType {
-    /// User specified the type explicitly.
-    Known(Ty),
-    /// Type unknown — analysis pass may infer it.
-    Infer,
+pub struct Signature {
+    pub params: Vec<crate::ty::Param>,
 }
 
-// ── Namespace ────────────────────────────────────────────────────────
-
-/// A namespace in the hierarchy. Names are resolved within namespaces.
+/// Output + optional call signature.
 #[derive(Debug, Clone)]
-pub struct Namespace {
-    pub id: NamespaceId,
-    pub parent: Option<NamespaceId>,
-    pub path: Astr,
+pub struct FnConstraint {
+    /// Parameter types.
+    pub signature: Option<Signature>,
+    /// Output type constraint.
+    pub output: Constraint,
 }
 
-/// Maps ContextId → (NamespaceId, Name) for display/error purposes.
+/// Declared dependency of an extern function.
+/// The compiler trusts these hints for effect analysis and scheduling.
+/// Violation at runtime (accessing undeclared dependencies) is a soundness
+/// violation and must panic.
 #[derive(Debug, Clone)]
-pub struct ContextIdTable {
-    entries: Vec<(NamespaceId, Astr)>,
+pub enum DependencyHint {
+    /// Depends on another function's output.
+    Function(FunctionId, Ty),
+    /// Reads a context value.
+    ContextRead(ContextId, Ty),
+    /// Writes a context value.
+    ContextWrite(ContextId, Ty),
 }
 
-impl ContextIdTable {
-    pub fn new() -> Self {
-        Self { entries: Vec::new() }
-    }
-
-    pub fn insert(&mut self, id: ContextId, namespace: NamespaceId, name: Astr) {
-        let idx = id.0 as usize;
-        if idx >= self.entries.len() {
-            self.entries.resize(idx + 1, (NamespaceId(0), name));
-        }
-        self.entries[idx] = (namespace, name);
-    }
-
-    pub fn get(&self, id: ContextId) -> Option<(NamespaceId, Astr)> {
-        self.entries.get(id.0 as usize).copied()
-    }
+#[derive(Debug, Clone)]
+pub enum FnKind {
+    /// Has source code. Graph engine typechecks and compiles.
+    Local(SourceCode),
+    /// Black box. Runtime provides the value.
+    /// `deps` declares dependencies for effect analysis. Undeclared access = panic.
+    Extern { deps: Freeze<Vec<DependencyHint>> },
 }
 
-// ── Compilation graph ────────────────────────────────────────────────
+/// An executable entity in the graph.
+#[derive(Debug, Clone)]
+pub struct Function {
+    pub id: FunctionId,
+    pub name: Astr,
+    pub kind: FnKind,
+    pub constraint: FnConstraint,
+}
 
-/// The full compilation graph — input to the graph engine.
-/// Produced by lowering. Contains no orchestration concepts.
+// ── Context ──────────────────────────────────────────────────────────
+
+/// A loadable value in the graph. Injected externally or derived from a function.
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub id: ContextId,
+    pub name: Astr,
+    pub constraint: Constraint,
+}
+
+// ── Compilation graph ───────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub struct CompilationGraph {
-    pub units: Vec<CompilationUnit>,
-    pub externs: Vec<ExternDecl>,
-    pub scopes: Vec<Scope>,
-    pub externals: FxHashMap<ContextId, ExternalType>,
-    pub id_table: ContextIdTable,
+    pub functions: Freeze<Vec<Function>>,
+    pub contexts: Freeze<Vec<Context>>,
 }

@@ -2,9 +2,18 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     1 │   r1 = extern_call fetch_user(1 (r0))
-     2 │   yield r1
+=== literals ===
+  T0 = ""
 
-    ; r0 (v0) : Int
-    ; r1 (fetch_user(...)) : String
+=== main ===
+     2 │   r2 = call #2238(1 (r1))
+     4 │   r4 = T0 + T0
+     5 │   r5 = r4 + r2
+     6 │   return r5
+
+    ; r0 (v0) : String
+    ; r1 (v1) : Int
+    ; r2 (fetch_user(...)) : String
+    ; r3 (v3) : String
+    ; r4 (v4) : String
+    ; r5 (v5) : String

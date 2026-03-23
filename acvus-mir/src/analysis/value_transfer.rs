@@ -1,39 +1,38 @@
-use acvus_ast::{BinOp, UnaryOp};
+use crate::graph::ContextId;
 use crate::ir::{InstKind, ValueId};
 use crate::ty::Ty;
-use acvus_utils::Astr;
+use acvus_ast::{BinOp, UnaryOp};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::dataflow::{DataflowState, TransferFunction};
-use crate::analysis::domain::{
-    AbstractValue, FiniteSet, abstract_and, abstract_not, abstract_or,
-};
+use crate::analysis::domain::{AbstractValue, FiniteSet, abstract_and, abstract_not, abstract_or};
 use crate::analysis::reachable_context::KnownValue;
 use smallvec::SmallVec;
 
 pub struct ValueDomainTransfer<'a> {
     pub val_types: &'a FxHashMap<ValueId, Ty>,
-    pub known_context: &'a FxHashMap<Astr, KnownValue>,
+    pub known_context: &'a FxHashMap<ContextId, KnownValue>,
 }
 
 impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
-    fn transfer_inst(
-        &self,
-        inst: &crate::ir::Inst,
-        state: &mut DataflowState<AbstractValue>,
-    ) {
+    fn transfer_inst(&self, inst: &crate::ir::Inst, state: &mut DataflowState<AbstractValue>) {
         match &inst.kind {
             InstKind::Const { dst, value } => {
                 state.set(*dst, AbstractValue::from_literal(value));
             }
 
-            InstKind::ContextLoad { dst, name } => {
-                let val = if let Some(kv) = self.known_context.get(name) {
+            InstKind::ContextProject { dst, id, .. } => {
+                let val = if let Some(kv) = self.known_context.get(id) {
                     AbstractValue::from_known_value(kv)
                 } else {
                     AbstractValue::Top
                 };
                 state.set(*dst, val);
+            }
+
+            InstKind::ContextLoad { dst, src } => {
+                // Copy the abstract value from the projection source.
+                state.set(*dst, state.get(*src));
             }
 
             InstKind::TestLiteral { dst, src, value } => {
@@ -60,18 +59,18 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
                             if !variants.contains_key(tag) {
                                 state.set(
                                     *dst,
-                                    AbstractValue::Finite(FiniteSet::Bools(
-                                        SmallVec::from_elem(false, 1),
-                                    )),
+                                    AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(
+                                        false, 1,
+                                    ))),
                                 );
                                 return;
                             }
                             if variants.len() == 1 {
                                 state.set(
                                     *dst,
-                                    AbstractValue::Finite(FiniteSet::Bools(
-                                        SmallVec::from_elem(true, 1),
-                                    )),
+                                    AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(
+                                        true, 1,
+                                    ))),
                                 );
                                 return;
                             }
@@ -128,8 +127,7 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             }
 
             InstKind::MakeTuple { dst, elements } => {
-                let elems: Vec<AbstractValue> =
-                    elements.iter().map(|e| state.get(*e)).collect();
+                let elems: Vec<AbstractValue> = elements.iter().map(|e| state.get(*e)).collect();
                 state.set(*dst, AbstractValue::tuple(elems));
             }
 
@@ -142,9 +140,8 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             InstKind::VarLoad { dst, .. }
             | InstKind::FieldGet { dst, .. }
             | InstKind::ObjectGet { dst, .. }
-            | InstKind::BuiltinCall { dst, .. }
-            | InstKind::ExternCall { dst, .. }
-            | InstKind::ClosureCall { dst, .. }
+            | InstKind::FunctionCall { dst, .. }
+            | InstKind::LoadFunction { dst, .. }
             | InstKind::MakeDeque { dst, .. }
             | InstKind::MakeObject { dst, .. }
             | InstKind::MakeRange { dst, .. }
@@ -156,9 +153,15 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             | InstKind::TestListLen { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
             | InstKind::Cast { dst, .. }
-            | InstKind::IterStep { dst, .. }
+            | InstKind::Spawn { dst, .. }
+            | InstKind::Eval { dst, .. }
             | InstKind::Poison { dst } => {
                 state.set(*dst, AbstractValue::Top);
+            }
+
+            InstKind::IterStep { dst, iter_dst, .. } => {
+                state.set(*dst, AbstractValue::Top);
+                state.set(*iter_dst, AbstractValue::Top);
             }
 
             InstKind::BinOp { dst, .. } => {
@@ -172,8 +175,8 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             }
 
             // Instructions that don't produce values
-            InstKind::Yield(_)
-            | InstKind::VarStore { .. }
+            InstKind::VarStore { .. }
+            | InstKind::ContextStore { .. }
             | InstKind::Return(_)
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }

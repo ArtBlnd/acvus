@@ -2,8 +2,19 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @name
-     1 │   yield r0
+=== literals ===
+  T0 = ""
 
-    ; r0 (@name) : String
+=== main ===
+     1 │   r1 = context_project @name
+     2 │   r2 = context_load r1
+     4 │   r4 = T0 + T0
+     5 │   r5 = r4 + r2
+     6 │   return r5
+
+    ; r0 (v0) : String
+    ; r1 (@name) : String
+    ; r2 (v2) : String
+    ; r3 (v3) : String
+    ; r4 (v4) : String
+    ; r5 (v5) : String

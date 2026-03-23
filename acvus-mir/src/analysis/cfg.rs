@@ -138,6 +138,18 @@ impl Cfg {
         }
     }
 
+    /// Build a predecessors map from the CFG.
+    pub fn predecessors(&self) -> FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>> {
+        let mut preds: FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>> = FxHashMap::default();
+        for i in 0..self.blocks.len() {
+            let idx = BlockIdx(i);
+            for succ in self.successors(idx) {
+                preds.entry(succ).or_default().push(idx);
+            }
+        }
+        preds
+    }
+
     pub fn successors(&self, idx: BlockIdx) -> SmallVec<[BlockIdx; 2]> {
         let block = &self.blocks[idx.0];
         let mut succs = SmallVec::new();

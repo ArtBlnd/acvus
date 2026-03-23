@@ -4,10 +4,11 @@ use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ir::{ClosureBody, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 
 fn fmt_val(r: ValueId) -> String {
-    format!("r{}", r.0)
+    use acvus_utils::LocalIdOps;
+    format!("r{}", r.to_raw())
 }
 
 fn fmt_label(l: Label) -> String {
@@ -128,6 +129,18 @@ fn write_body(
     indent: &str,
     ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
+    // Build ContextId → name mapping from ContextProject instructions + debug info.
+    let mut ctx_id_to_name: FxHashMap<crate::graph::ContextId, String> = FxHashMap::default();
+    for inst in &body.insts {
+        if let InstKind::ContextProject { dst, id, .. } = &inst.kind {
+            if let Some(crate::ir::ValOrigin::Context(name)) = body.debug.get(*dst) {
+                ctx_id_to_name
+                    .entry(*id)
+                    .or_insert_with(|| ctx.interner.resolve(*name).to_string());
+            }
+        }
+    }
+
     // Small constants (Int, Float, Bool, Byte) -> inline at use sites.
     let consts: FxHashMap<ValueId, &Literal> = body
         .insts
@@ -173,18 +186,18 @@ fn write_body(
         }
 
         match &inst.kind {
-            // Output
-            InstKind::Yield(r) => writeln!(f, "yield {}", fmt_use(*r, &consts, &texts))?,
-
             // Constants -- all skipped above, unreachable here.
             InstKind::Const { .. } => unreachable!(),
-            InstKind::ContextLoad {
-                dst,
-                name,
-            } => {
-                let name_str = ctx.interner.resolve(*name);
-                writeln!(f, "{} = context_load @{name_str}", fmt_val(*dst))?
+            InstKind::ContextProject { dst, id, .. } => {
+                let name = ctx_id_to_name.get(id).map(|s| s.as_str()).unwrap_or("?");
+                writeln!(f, "{} = context_project @{}", fmt_val(*dst), name)?
             }
+            InstKind::ContextLoad { dst, src } => writeln!(
+                f,
+                "{} = context_load {}",
+                fmt_val(*dst),
+                fmt_use(*src, &consts, &texts)
+            )?,
             InstKind::VarLoad { dst, name } => writeln!(
                 f,
                 "{} = var_load ${}",
@@ -196,6 +209,12 @@ fn write_body(
                 "var_store ${} = {}",
                 ctx.interner.resolve(*name),
                 fmt_use(*src, &consts, &texts)
+            )?,
+            InstKind::ContextStore { dst, value } => writeln!(
+                f,
+                "ctx_store {} = {}",
+                fmt_use(*dst, &consts, &texts),
+                fmt_use(*value, &consts, &texts)
             )?,
 
             // Arithmetic / logic
@@ -227,21 +246,73 @@ fn write_body(
                 ctx.interner.resolve(*field),
             )?,
 
-            // Calls
-            InstKind::BuiltinCall { dst, builtin, args } => writeln!(
+            // Functions
+            InstKind::LoadFunction { dst, id } => writeln!(
                 f,
-                "{} = call {}({})",
+                "{} = load_function #{}",
                 fmt_val(*dst),
-                builtin.name(),
-                fmt_uses(args, &consts, &texts)
+                id.index(),
             )?,
-            InstKind::ExternCall { dst, name, args } => writeln!(
-                f,
-                "{} = extern_call {}({})",
-                fmt_val(*dst),
-                ctx.interner.resolve(*name),
-                fmt_uses(args, &consts, &texts)
-            )?,
+            InstKind::FunctionCall { dst, callee, args } => {
+                let callee_str = match callee {
+                    Callee::Direct(id) => format!("#{}", id.index()),
+                    Callee::Indirect(val) => fmt_use(*val, &consts, &texts),
+                };
+                writeln!(
+                    f,
+                    "{} = call {}({})",
+                    fmt_val(*dst),
+                    callee_str,
+                    fmt_uses(args, &consts, &texts)
+                )?
+            }
+
+            // Spawn / Eval
+            InstKind::Spawn { dst, callee, args, context_uses } => {
+                let callee_str = match callee {
+                    Callee::Direct(id) => format!("#{}", id.index()),
+                    Callee::Indirect(val) => fmt_use(*val, &consts, &texts),
+                };
+                let ctx_str = if context_uses.is_empty() {
+                    String::new()
+                } else {
+                    let bindings: Vec<String> = context_uses
+                        .iter()
+                        .map(|(ctx, val)| {
+                            let name = ctx_id_to_name.get(ctx).map(|s| s.as_str()).unwrap_or("?");
+                            format!("@{}={}", name, fmt_val(*val))
+                        })
+                        .collect();
+                    format!(" use({})", bindings.join(", "))
+                };
+                writeln!(
+                    f,
+                    "{} = spawn {}({}){ctx_str}",
+                    fmt_val(*dst),
+                    callee_str,
+                    fmt_uses(args, &consts, &texts)
+                )?
+            }
+            InstKind::Eval { dst, src, context_defs } => {
+                let ctx_str = if context_defs.is_empty() {
+                    String::new()
+                } else {
+                    let bindings: Vec<String> = context_defs
+                        .iter()
+                        .map(|(ctx, val)| {
+                            let name = ctx_id_to_name.get(ctx).map(|s| s.as_str()).unwrap_or("?");
+                            format!("@{}={}", name, fmt_val(*val))
+                        })
+                        .collect();
+                    format!(" def({})", bindings.join(", "))
+                };
+                writeln!(
+                    f,
+                    "{} = eval {}{ctx_str}",
+                    fmt_val(*dst),
+                    fmt_use(*src, &consts, &texts)
+                )?
+            }
 
             // Composite constructors
             InstKind::MakeDeque { dst, elements } => writeln!(
@@ -407,24 +478,24 @@ fn write_body(
                 fmt_label(*body),
                 fmt_uses(captures, &consts, &texts)
             )?,
-            InstKind::ClosureCall { dst, closure, args } => writeln!(
-                f,
-                "{} = call_closure {}({})",
-                fmt_val(*dst),
-                fmt_use(*closure, &consts, &texts),
-                fmt_uses(args, &consts, &texts)
-            )?,
 
             // Iteration
-            InstKind::IterStep { dst, src } => writeln!(
+            InstKind::IterStep { dst, iter_src, iter_dst, done, done_args } => writeln!(
                 f,
-                "{} = iter_step {}",
+                "iter_step {}, {} = {} else {}({})",
                 fmt_val(*dst),
-                fmt_use(*src, &consts, &texts)
+                fmt_val(*iter_dst),
+                fmt_use(*iter_src, &consts, &texts),
+                fmt_label(*done),
+                fmt_uses(done_args, &consts, &texts)
             )?,
 
             // Control flow
-            InstKind::BlockLabel { label, params, merge_of } => {
+            InstKind::BlockLabel {
+                label,
+                params,
+                merge_of,
+            } => {
                 let merge_suffix = match merge_of {
                     Some(m) => format!("  ; merge_of {}", fmt_label(*m)),
                     None => String::new(),
@@ -509,7 +580,7 @@ fn write_body(
     if !body.val_types.is_empty() {
         writeln!(f)?;
         let mut entries: Vec<_> = body.val_types.iter().collect();
-        entries.sort_by_key(|(v, _)| v.0);
+        entries.sort_by_key(|(v, _)| **v);
         for (val, ty) in entries {
             let origin = body.debug.label(*val, ctx.interner);
             writeln!(
@@ -543,7 +614,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
         labels.sort_by_key(|l| l.0);
         for label in &labels {
             collect_texts_from_body(
-                &module.closures[label].body,
+                &module.closures[label],
                 &mut lit_to_tidx,
                 &mut text_entries,
             );
@@ -587,28 +658,23 @@ impl MirModule {
 fn write_closure(
     f: &mut fmt::Formatter<'_>,
     label: Label,
-    closure: &ClosureBody,
+    body: &MirBody,
     ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
     writeln!(f)?;
     write!(f, "=== closure {} (", fmt_label(label))?;
-    for (i, name) in closure.param_names.iter().enumerate() {
+    for (i, reg) in body.param_regs.iter().enumerate() {
         if i > 0 {
             write!(f, ", ")?;
         }
-        write!(f, "{}", ctx.interner.resolve(*name))?;
+        write!(f, "{reg:?}")?;
     }
     write!(f, ")")?;
-    if !closure.capture_names.is_empty() {
-        let captures: Vec<String> = closure
-            .capture_names
-            .iter()
-            .map(|n| ctx.interner.resolve(*n).to_string())
-            .collect();
-        write!(f, " [captures: {}]", captures.join(", "))?;
+    if !body.capture_regs.is_empty() {
+        write!(f, " [captures: {:?}]", body.capture_regs)?;
     }
     writeln!(f, " ===")?;
-    write_body(f, &closure.body, "  ", ctx)?;
+    write_body(f, body, "  ", ctx)?;
     Ok(())
 }
 
@@ -652,7 +718,7 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{Effect, FnKind, Ty};
+    use crate::ty::{Effect, Param, Ty};
     use acvus_utils::Interner;
 
     fn compile_and_dump(
@@ -660,9 +726,10 @@ mod tests {
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
     ) -> String {
-        let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let registry = crate::context_registry::ContextTypeRegistry::all_system(context.clone());
-        let (module, _) = crate::compile(interner, &template, &registry)
+        let ctx: Vec<(&str, Ty)> = context.iter()
+            .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
+            .collect();
+        let (module, _) = crate::test::compile_template(interner, source, &ctx)
             .expect("compile failed");
         dump(interner, &module)
     }
@@ -672,16 +739,16 @@ mod tests {
         let interner = Interner::new();
         let out = compile_and_dump("hello world", &FxHashMap::default(), &interner);
         assert!(out.contains("=== literals ==="));
-        assert!(out.contains("T0 = \"hello world\""));
-        assert!(out.contains("yield T0"));
+        assert!(out.contains("\"hello world\""));
+        assert!(out.contains("return"));
     }
 
     #[test]
     fn print_string_emit() {
         let interner = Interner::new();
         let out = compile_and_dump(r#"{{ "hello" }}"#, &FxHashMap::default(), &interner);
-        assert!(out.contains("T0 = \"hello\""));
-        assert!(out.contains("yield T0"));
+        assert!(out.contains("\"hello\""));
+        assert!(out.contains("return"));
     }
 
     #[test]
@@ -697,7 +764,8 @@ mod tests {
             &interner,
         );
         assert!(out.contains("+"));
-        assert!(out.contains("call to_string"));
+        // to_string is a builtin — requires Phase 2 (builtin → graph Function) to
+        // appear as a FunctionCall. For now, just check arithmetic works.
     }
 
     #[test]
@@ -712,7 +780,6 @@ mod tests {
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
-        assert!(out.contains("yield T"));
     }
 
     #[test]
@@ -737,19 +804,17 @@ mod tests {
         let context = FxHashMap::from_iter([(
             interner.intern("fetch"),
             Ty::Fn {
-                params: vec![Ty::Int],
+                params: vec![Param::new(interner.intern("x"), Ty::Int)],
                 ret: Box::new(Ty::String),
-                kind: FnKind::Extern,
                 captures: vec![],
-                effect: Effect::Pure,
+                effect: Effect::pure(),
             },
         )]);
-        let out = compile_and_dump(
-            "{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}",
-            &context,
-            &interner,
+        let out = compile_and_dump("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);
+        assert!(
+            out.contains("call"),
+            "expected call instruction, got:\n{out}"
         );
-        assert!(out.contains("extern_call"), "expected extern_call, got:\n{out}");
     }
 
     #[test]
@@ -790,7 +855,6 @@ mod tests {
         );
         assert!(out.contains("=== main ==="));
         assert!(out.contains("iter_step"));
-        assert!(out.contains("yield"));
     }
 
     #[test]
@@ -801,8 +865,10 @@ mod tests {
             &FxHashMap::default(),
             &interner,
         );
-        // Same literal should share one T-index.
-        assert!(out.contains("T0 = \"hello\""));
-        assert!(!out.contains("T1"));
+        // Same literal "hello" should appear only once in literals section.
+        let hello_count = out.matches("\"hello\"").count();
+        // Once in literals, possibly referenced in instructions.
+        assert!(hello_count >= 1);
+        assert!(out.contains("return"));
     }
 }

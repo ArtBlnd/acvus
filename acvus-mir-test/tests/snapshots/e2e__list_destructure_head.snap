@@ -3,44 +3,57 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "empty"
+  T0 = ""
+  T1 = "empty"
 
 === main ===
-     0 │   r0 = context_load @items
-     1 │ L2:
-     2 │   r1 = test len(r0) >= 2
-     3 │   jump_if r1 then L3 else L4
-     4 │ L3:
-     5 │   r2 = r0[0]
-     7 │   r4 = r1 && true (r3)
-     8 │   r5 = r0[1]
-    10 │   r7 = r4 && true (r6)
-    11 │   jump L5(r7)
-    12 │ L4:
-    14 │   jump L5(false (r9))
-    15 │ L5(r8: Bool):
-    16 │   jump_if r8 then L6 else L1
-    17 │ L6:
-    18 │   r10 = r0[0]
-    19 │   r11 = r0[1]
-    20 │   r12 = call to_string(r10)
-    21 │   yield r12
-    22 │   jump L0
-    23 │ L1:
-    25 │   yield T0
-    26 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │ L2:
+     4 │   r3 = test len(r2) >= 2
+     5 │   jump_if r3 then L3 else L4
+     6 │ L3:
+     7 │   r4 = r2[0]
+     9 │   r6 = r3 && true (r5)
+    10 │   r7 = r2[1]
+    12 │   r9 = r6 && true (r8)
+    13 │   jump L5(r9)
+    14 │ L4:
+    16 │   jump L5(false (r11))
+    17 │ L5(r10: Bool):
+    18 │   jump_if r10 then L6 else L1
+    19 │ L6:
+    20 │   r12 = r2[0]
+    21 │   r13 = r2[1]
+    23 │   r15 = poison
+    24 │   r16 = T0 + r15
+    25 │   jump L0(r16)
+    26 │ L1:
+    29 │   r19 = T0 + T1
+    30 │   jump L0(r19)
+    31 │ L0(r20: String):  ; merge_of L2
+    32 │   r21 = T0 + r20
+    33 │   return r21
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : Bool
-    ; r2 (v2) : Int
+    ; r0 (v0) : String
+    ; r1 (@items) : List<Int>
+    ; r2 (v2) : List<Int>
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v5) : Int
+    ; r4 (v4) : Int
+    ; r5 (v5) : Bool
     ; r6 (v6) : Bool
-    ; r7 (v7) : Bool
+    ; r7 (v7) : Int
     ; r8 (v8) : Bool
     ; r9 (v9) : Bool
-    ; r10 (a) : Int
-    ; r11 (b) : Int
-    ; r12 (to_string(...)) : String
-    ; r13 (v13) : String
+    ; r10 (v10) : Bool
+    ; r11 (v11) : Bool
+    ; r12 (a) : Int
+    ; r13 (b) : Int
+    ; r14 (v14) : String
+    ; r15 (to_string(...)) : String
+    ; r16 (v16) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : String

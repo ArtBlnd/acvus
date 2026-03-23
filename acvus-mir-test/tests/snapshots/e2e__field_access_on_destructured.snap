@@ -2,24 +2,38 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @pair
-     1 │ L2:
-     3 │   r2 = r0.0
-     5 │   r4 = true (r1) && true (r3)
-     6 │   jump_if r4 then L3 else L1
-     7 │ L3:
-     8 │   r5 = r0.0
-     9 │   r6 = r5.name
-    10 │   yield r6
-    11 │   jump L0
-    12 │ L1:
-    13 │ L0:  ; merge_of L2
+=== literals ===
+  T0 = ""
 
-    ; r0 (@pair) : ({name: String}, Int)
-    ; r1 (v1) : Bool
-    ; r2 (v2) : {name: String}
+=== main ===
+     1 │   r1 = context_project @pair
+     2 │   r2 = context_load r1
+     3 │ L2:
+     5 │   r4 = r2.0
+     7 │   r6 = true (r3) && true (r5)
+     8 │   jump_if r6 then L3 else L1
+     9 │ L3:
+    10 │   r7 = r2.0
+    12 │   r9 = r7.name
+    13 │   r10 = T0 + r9
+    14 │   jump L0(r10)
+    15 │ L1:
+    17 │   jump L0(T0)
+    18 │ L0(r12: String):  ; merge_of L2
+    19 │   r13 = T0 + r12
+    20 │   return r13
+
+    ; r0 (v0) : String
+    ; r1 (@pair) : ({name: String}, Int)
+    ; r2 (v2) : ({name: String}, Int)
     ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (obj) : {name: String}
-    ; r6 (name) : String
+    ; r4 (v4) : {name: String}
+    ; r5 (v5) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (obj) : {name: String}
+    ; r8 (v8) : String
+    ; r9 (name) : String
+    ; r10 (v10) : String
+    ; r11 (v11) : String
+    ; r12 (v12) : String
+    ; r13 (v13) : String

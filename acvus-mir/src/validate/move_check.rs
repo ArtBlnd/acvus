@@ -6,7 +6,7 @@
 //! use-after-move violations.
 //!
 //! Design:
-//! - `Ty::Error` / `Ty::Var` / `Effect::Var` → skip (analysis mode).
+//! - `Ty::Error` / `Ty::Param` / `Effect::Var` → skip (analysis mode).
 //! - `Fn` with move-only captures → FnOnce (transitive).
 //! - Join at merge points: `Alive ⊔ Moved = Moved` (conservative).
 //! - $variables: tracked by name. `VarStore` revives, `VarLoad` of move-only consumes.
@@ -14,12 +14,12 @@
 use std::collections::VecDeque;
 
 use acvus_ast::Span;
-use rustc_hash::{FxHashMap, FxHashSet};
-use acvus_utils::Astr;
+use acvus_utils::{Astr, LocalIdOps};
+use rustc_hash::FxHashMap;
 
-use crate::analysis::cfg::{BasicBlock, BlockIdx, Cfg, Terminator};
-use crate::ir::{Inst, InstKind, Label, MirBody, MirModule, ValueId};
-use crate::ty::{Effect, Ty};
+use crate::analysis::cfg::{BlockIdx, Cfg, Terminator};
+use crate::ir::{Callee, Inst, InstKind, MirBody, MirModule, ValueId};
+use crate::ty::Ty;
 
 use super::type_check::{ValidationError, ValidationErrorKind};
 
@@ -34,18 +34,25 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         // Primitives — always Copy
-        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
-        | Ty::Range | Ty::Byte => Some(false),
+        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => {
+            Some(false)
+        }
 
         // Containers — depends on effect
-        Ty::Iterator(_, Effect::Effectful) => Some(true),
-        Ty::Iterator(_, Effect::Pure) => Some(false),
-        Ty::Sequence(_, _, Effect::Effectful) => Some(true),
-        Ty::Sequence(_, _, Effect::Pure) => Some(false),
+        Ty::Iterator(_, e) if e.is_effectful() => Some(true),
+        Ty::Iterator(_, e) if e.is_pure() => Some(false),
+        Ty::Sequence(_, _, e) if e.is_effectful() => Some(true),
+        Ty::Sequence(_, _, e) if e.is_pure() => Some(false),
 
         // Unresolved effect — skip
-        Ty::Iterator(_, Effect::Var(_)) => None,
-        Ty::Sequence(_, _, Effect::Var(_)) => None,
+        Ty::Iterator(_, e) if e.is_var() => None,
+        Ty::Sequence(_, _, e) if e.is_var() => None,
+
+        // Catch-all for Iterator/Sequence (should not happen with well-formed types)
+        Ty::Iterator(_, _) | Ty::Sequence(_, _, _) => None,
+
+        // Handle — always move-only (deferred computation, must be consumed exactly once)
+        Ty::Handle(..) => Some(true),
 
         // Opaque — always move-only (unknown internals)
         Ty::Opaque(_) => Some(true),
@@ -100,7 +107,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         }
 
         // Unknown — skip
-        Ty::Var(_) | Ty::Error(_) | Ty::Infer(_) => None,
+        Ty::Param { .. } | Ty::Error(_) => None,
     }
 }
 
@@ -113,7 +120,9 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
 enum Liveness {
     Alive,
     /// Moved at instruction index `at`.
-    Moved { at: usize },
+    Moved {
+        at: usize,
+    },
 }
 
 impl Liveness {
@@ -190,7 +199,7 @@ pub fn check_moves(module: &MirModule) -> Vec<ValidationError> {
     check_body("main", &module.main, &mut errors);
     for (label, closure) in &module.closures {
         let scope = format!("closure({:?})", label);
-        check_body(&scope, &closure.body, &mut errors);
+        check_body(&scope, closure, &mut errors);
     }
     errors
 }
@@ -247,7 +256,13 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
-            Terminator::JumpIf { cond: _, then_label, then_args, else_label, else_args } => {
+            Terminator::JumpIf {
+                cond: _,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+            } => {
                 for (label, args) in [(then_label, then_args), (else_label, else_args)] {
                     if let Some(&target_idx) = cfg.label_to_block.get(label) {
                         propagate_args(
@@ -312,8 +327,12 @@ fn try_consume_value(
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
 ) -> bool {
-    let Some(ty) = val_types.get(&id) else { return false };
-    let Some(true) = is_move_only(ty) else { return false };
+    let Some(ty) = val_types.get(&id) else {
+        return false;
+    };
+    let Some(true) = is_move_only(ty) else {
+        return false;
+    };
 
     // Check if already moved
     if let Some(Liveness::Moved { at }) = state.get_value(id) {
@@ -322,7 +341,7 @@ fn try_consume_value(
             inst_index: inst_idx,
             span,
             kind: ValidationErrorKind::UseAfterMove {
-                value_id: id.0,
+                value_id: id.to_raw() as u32,
                 moved_at: at,
                 ty: ty.clone(),
             },
@@ -348,7 +367,13 @@ fn process_inst(
 
     match &inst.kind {
         // === No operands / define only ===
-        InstKind::Const { dst, .. } | InstKind::ContextLoad { dst, .. } | InstKind::Poison { dst } => {
+        InstKind::Const { dst, .. }
+        | InstKind::ContextProject { dst, .. }
+        | InstKind::Poison { dst } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+        InstKind::ContextLoad { dst, src } => {
+            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::BlockLabel { params, .. } => {
@@ -369,7 +394,7 @@ fn process_inst(
                             inst_index: inst_idx,
                             span,
                             kind: ValidationErrorKind::UseAfterMove {
-                                value_id: dst.0,
+                                value_id: dst.to_raw() as u32,
                                 moved_at: at,
                                 ty: ty.clone(),
                             },
@@ -391,11 +416,12 @@ fn process_inst(
             // Variable is now alive with new value
             state.set_var(*name, Liveness::Alive);
         }
+        InstKind::ContextStore { dst, value, .. } => {
+            try_consume_value(scope, inst_idx, span, *dst, val_types, state, errors);
+            try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
+        }
 
         // === Consuming operations (move operands) ===
-        InstKind::Yield(v) => {
-            try_consume_value(scope, inst_idx, span, *v, val_types, state, errors);
-        }
         InstKind::Return(v) => {
             try_consume_value(scope, inst_idx, span, *v, val_types, state, errors);
         }
@@ -403,26 +429,21 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::IterStep { dst, src } => {
-            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
+        InstKind::IterStep { dst, iter_src, iter_dst, .. } => {
+            try_consume_value(scope, inst_idx, span, *iter_src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
+            state.set_value(*iter_dst, Liveness::Alive);
         }
 
-        // Calls — all args are consumed
-        InstKind::BuiltinCall { dst, args, .. } => {
-            for arg in args {
-                try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
-            }
+        // Functions
+        InstKind::LoadFunction { dst, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ExternCall { dst, args, .. } => {
-            for arg in args {
-                try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
+        // Calls — all args are consumed; indirect callee is also consumed
+        InstKind::FunctionCall { dst, callee, args } => {
+            if let Callee::Indirect(closure) = callee {
+                try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
             }
-            state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::ClosureCall { dst, closure, args } => {
-            try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
             for arg in args {
                 try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
             }
@@ -448,7 +469,9 @@ fn process_inst(
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::MakeRange { dst, start, end, .. } => {
+        InstKind::MakeRange {
+            dst, start, end, ..
+        } => {
             // start and end are always Int (Pure) — no move check needed
             state.set_value(*dst, Liveness::Alive);
             let _ = (start, end);
@@ -480,7 +503,11 @@ fn process_inst(
         InstKind::ListIndex { dst, list: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ListGet { dst, list: _, index: _ } => {
+        InstKind::ListGet {
+            dst,
+            list: _,
+            index: _,
+        } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::ListSlice { dst, list: _, .. } => {
@@ -508,10 +535,33 @@ fn process_inst(
         }
 
         // Arithmetic — operands are always pure scalars, no move
-        InstKind::BinOp { dst, left: _, right: _, .. } => {
+        InstKind::BinOp {
+            dst,
+            left: _,
+            right: _,
+            ..
+        } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::UnaryOp { dst, operand: _, .. } => {
+        InstKind::UnaryOp {
+            dst, operand: _, ..
+        } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+
+        // Spawn — consumes args (and indirect callee), defines dst
+        InstKind::Spawn { dst, callee, args, .. } => {
+            if let Callee::Indirect(closure) = callee {
+                try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
+            }
+            for arg in args {
+                try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
+            }
+            state.set_value(*dst, Liveness::Alive);
+        }
+        // Eval — consumes Handle (move-only), defines dst
+        InstKind::Eval { dst, src, .. } => {
+            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
 
@@ -527,9 +577,16 @@ fn process_inst(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{DebugInfo, Inst, MirBody, MirModule};
-    use crate::ty::Effect;
-    use acvus_utils::Interner;
+    use crate::graph::FunctionId;
+    use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule};
+    use crate::ty::{Effect, Param};
+    use acvus_utils::{Interner, LocalFactory};
+
+    /// Create a dummy Param for tests where parameter name is irrelevant.
+    fn param(ty: Ty) -> Param {
+        let interner = Interner::new();
+        Param::new(interner.intern("_"), ty)
+    }
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -544,8 +601,10 @@ mod tests {
             main: MirBody {
                 insts,
                 val_types,
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: DebugInfo::new(),
-                val_count: 100,
+                val_factory: LocalFactory::new(),
                 label_count: 10,
             },
             closures: FxHashMap::default(),
@@ -556,17 +615,26 @@ mod tests {
 
     #[test]
     fn pure_iterator_is_copy() {
-        assert_eq!(is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::Pure)), Some(false));
+        assert_eq!(
+            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::pure())),
+            Some(false)
+        );
     }
 
     #[test]
     fn effectful_iterator_is_move() {
-        assert_eq!(is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::Effectful)), Some(true));
+        assert_eq!(
+            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::io())),
+            Some(true)
+        );
     }
 
     #[test]
     fn effect_var_is_unknown() {
-        assert_eq!(is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::Var(0))), None);
+        assert_eq!(
+            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::Var(0))),
+            None
+        );
     }
 
     #[test]
@@ -586,7 +654,7 @@ mod tests {
     fn tuple_with_effectful_is_move() {
         let ty = Ty::Tuple(vec![
             Ty::Int,
-            Ty::Iterator(Box::new(Ty::Int), Effect::Effectful),
+            Ty::Iterator(Box::new(Ty::Int), Effect::io()),
         ]);
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -594,11 +662,10 @@ mod tests {
     #[test]
     fn fn_with_effectful_capture_is_move() {
         let ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: crate::ty::FnKind::Lambda,
-            captures: vec![Ty::Iterator(Box::new(Ty::Int), Effect::Effectful)],
-            effect: Effect::Pure,
+            captures: vec![Ty::Iterator(Box::new(Ty::Int), Effect::io())],
+            effect: Effect::pure(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -606,11 +673,10 @@ mod tests {
     #[test]
     fn fn_with_pure_captures_is_copy() {
         let ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: crate::ty::FnKind::Lambda,
             captures: vec![Ty::Int, Ty::String],
-            effect: Effect::Effectful, // effect of the fn doesn't matter, only captures
+            effect: Effect::io(), // effect of the fn doesn't matter, only captures
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }
@@ -619,23 +685,27 @@ mod tests {
 
     #[test]
     fn no_error_for_pure_iterator_reuse() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         // v0 = Pure Iterator, used twice → OK
         let mut val_types = FxHashMap::default();
-        val_types.insert(ValueId(0), Ty::Iterator(Box::new(Ty::Int), Effect::Pure));
-        val_types.insert(ValueId(1), Ty::List(Box::new(Ty::Int)));
-        val_types.insert(ValueId(2), Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::pure()));
+        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v2, Ty::List(Box::new(Ty::Int)));
 
         let module = make_module(
             vec![
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(1),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(0)],
+                inst(InstKind::FunctionCall {
+                    dst: v1,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v0],
                 }),
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(2),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(0)],
+                inst(InstKind::FunctionCall {
+                    dst: v2,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v0],
                 }),
             ],
             val_types,
@@ -647,48 +717,60 @@ mod tests {
 
     #[test]
     fn error_for_effectful_iterator_reuse() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         // v0 = Effectful Iterator, used twice → ERROR
         let mut val_types = FxHashMap::default();
-        val_types.insert(ValueId(0), Ty::Iterator(Box::new(Ty::Int), Effect::Effectful));
-        val_types.insert(ValueId(1), Ty::List(Box::new(Ty::Int)));
-        val_types.insert(ValueId(2), Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::io()));
+        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v2, Ty::List(Box::new(Ty::Int)));
 
         let module = make_module(
             vec![
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(1),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(0)],
+                inst(InstKind::FunctionCall {
+                    dst: v1,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v0],
                 }),
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(2),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(0)],
+                inst(InstKind::FunctionCall {
+                    dst: v2,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v0],
                 }),
             ],
             val_types,
         );
 
         let errors = check_moves(&module);
-        assert_eq!(errors.len(), 1, "effectful iterator reuse should be rejected");
-        assert!(matches!(errors[0].kind, ValidationErrorKind::UseAfterMove { .. }));
+        assert_eq!(
+            errors.len(),
+            1,
+            "effectful iterator reuse should be rejected"
+        );
+        assert!(matches!(
+            errors[0].kind,
+            ValidationErrorKind::UseAfterMove { .. }
+        ));
     }
 
     #[test]
     fn no_error_for_single_use_effectful() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         // v0 = Effectful Iterator, used once → OK
         let mut val_types = FxHashMap::default();
-        val_types.insert(ValueId(0), Ty::Iterator(Box::new(Ty::Int), Effect::Effectful));
-        val_types.insert(ValueId(1), Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::io()));
+        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
 
         let module = make_module(
-            vec![
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(1),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(0)],
-                }),
-            ],
+            vec![inst(InstKind::FunctionCall {
+                dst: v1,
+                callee: Callee::Direct(FunctionId::alloc()),
+                args: vec![v0],
+            })],
             val_types,
         );
 
@@ -698,15 +780,22 @@ mod tests {
 
     #[test]
     fn var_reassign_revives() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
+        let v5 = vf.next();
         // $a = effectful iter (v0), VarLoad (v1) → moved, $a = new iter (v2) → alive, VarLoad (v3) → OK
         let mut val_types = FxHashMap::default();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        val_types.insert(ValueId(0), eff_iter.clone());
-        val_types.insert(ValueId(1), eff_iter.clone());
-        val_types.insert(ValueId(2), eff_iter.clone());
-        val_types.insert(ValueId(3), eff_iter.clone());
-        val_types.insert(ValueId(4), Ty::List(Box::new(Ty::Int)));
-        val_types.insert(ValueId(5), Ty::List(Box::new(Ty::Int)));
+        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        val_types.insert(v0, eff_iter.clone());
+        val_types.insert(v1, eff_iter.clone());
+        val_types.insert(v2, eff_iter.clone());
+        val_types.insert(v3, eff_iter.clone());
+        val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v5, Ty::List(Box::new(Ty::Int)));
 
         let interner = Interner::new();
         let a = interner.intern("a");
@@ -714,62 +803,71 @@ mod tests {
         let module = make_module(
             vec![
                 // $a = v0 (effectful)
-                inst(InstKind::VarStore { name: a, src: ValueId(0) }),
+                inst(InstKind::VarStore { name: a, src: v0 }),
                 // v1 = $a → moves $a
-                inst(InstKind::VarLoad { dst: ValueId(1), name: a }),
+                inst(InstKind::VarLoad { dst: v1, name: a }),
                 // use v1
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(4),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(1)],
+                inst(InstKind::FunctionCall {
+                    dst: v4,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v1],
                 }),
                 // $a = v2 (new value) → revives $a
-                inst(InstKind::VarStore { name: a, src: ValueId(2) }),
+                inst(InstKind::VarStore { name: a, src: v2 }),
                 // v3 = $a → OK (new value)
-                inst(InstKind::VarLoad { dst: ValueId(3), name: a }),
+                inst(InstKind::VarLoad { dst: v3, name: a }),
                 // use v3
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(5),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(3)],
+                inst(InstKind::FunctionCall {
+                    dst: v5,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v3],
                 }),
             ],
             val_types,
         );
 
         let errors = check_moves(&module);
-        assert!(errors.is_empty(), "reassigned variable should be alive: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "reassigned variable should be alive: {errors:?}"
+        );
     }
 
     #[test]
     fn var_use_after_move() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
+        let v3 = vf.next();
+        let v4 = vf.next();
         // $a = effectful, VarLoad → moved, VarLoad again → ERROR
         let mut val_types = FxHashMap::default();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        val_types.insert(ValueId(0), eff_iter.clone());
-        val_types.insert(ValueId(1), eff_iter.clone());
-        val_types.insert(ValueId(2), eff_iter.clone());
-        val_types.insert(ValueId(3), Ty::List(Box::new(Ty::Int)));
-        val_types.insert(ValueId(4), Ty::List(Box::new(Ty::Int)));
+        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        val_types.insert(v0, eff_iter.clone());
+        val_types.insert(v1, eff_iter.clone());
+        val_types.insert(v2, eff_iter.clone());
+        val_types.insert(v3, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
 
         let interner = Interner::new();
         let a = interner.intern("a");
 
         let module = make_module(
             vec![
-                inst(InstKind::VarStore { name: a, src: ValueId(0) }),
-                inst(InstKind::VarLoad { dst: ValueId(1), name: a }),
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(3),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(1)],
+                inst(InstKind::VarStore { name: a, src: v0 }),
+                inst(InstKind::VarLoad { dst: v1, name: a }),
+                inst(InstKind::FunctionCall {
+                    dst: v3,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v1],
                 }),
                 // Second load — $a already moved
-                inst(InstKind::VarLoad { dst: ValueId(2), name: a }),
-                inst(InstKind::BuiltinCall {
-                    dst: ValueId(4),
-                    builtin: crate::builtins::BuiltinId::Collect,
-                    args: vec![ValueId(2)],
+                inst(InstKind::VarLoad { dst: v2, name: a }),
+                inst(InstKind::FunctionCall {
+                    dst: v4,
+                    callee: Callee::Direct(FunctionId::alloc()),
+                    args: vec![v2],
                 }),
             ],
             val_types,
@@ -780,23 +878,22 @@ mod tests {
     }
 
     #[test]
-    fn ty_var_skipped() {
-        // v0 = Ty::Var, used twice → no error (analysis mode)
+    fn ty_param_skipped() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        // v0 = Ty::Param, used twice → no error (analysis mode)
+        let mut subst = crate::ty::TySubst::new();
+        let param_ty = subst.fresh_param();
         let mut val_types = FxHashMap::default();
-        val_types.insert(ValueId(0), Ty::Var(crate::ty::TyVar(0)));
-        val_types.insert(ValueId(1), Ty::Unit);
-        val_types.insert(ValueId(2), Ty::Unit);
+        val_types.insert(v0, param_ty);
 
         let module = make_module(
-            vec![
-                inst(InstKind::Yield(ValueId(0))),
-                inst(InstKind::Yield(ValueId(0))),
-            ],
+            vec![inst(InstKind::Return(v0)), inst(InstKind::Return(v0))],
             val_types,
         );
 
         let errors = check_moves(&module);
-        assert!(errors.is_empty(), "Ty::Var should be skipped");
+        assert!(errors.is_empty(), "Ty::Param should be skipped");
     }
 
     // =====================================================================
@@ -807,54 +904,34 @@ mod tests {
     // =====================================================================
 
     mod e2e {
-        use crate::context_registry::ContextTypeRegistry;
-        use crate::error::MirErrorKind;
-        use crate::ty::{Effect, FnKind, Ty};
+        use crate::ty::{Effect, Param, Ty};
         use acvus_utils::Interner;
-        use rustc_hash::FxHashMap;
+
+        fn param(ty: Ty) -> Param {
+            let interner = Interner::new();
+            Param::new(interner.intern("_"), ty)
+        }
 
         fn eff_iter_ty() -> Ty {
-            Ty::Iterator(Box::new(Ty::Int), Effect::Effectful)
+            Ty::Iterator(Box::new(Ty::Int), Effect::io())
         }
 
         fn pure_iter_ty() -> Ty {
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure)
+            Ty::Iterator(Box::new(Ty::Int), Effect::pure())
         }
 
         fn compile_script(source: &str, ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
-            let i = Interner::new();
-            let context: FxHashMap<_, _> = ctx
-                .iter()
-                .map(|(name, ty)| (i.intern(name), ty.clone()))
-                .collect();
-            let reg = ContextTypeRegistry::all_system(context);
-            let script = acvus_ast::parse_script(&i, source)
-                .map_err(|e| vec![format!("parse error: {e}")])?;
-            crate::compile_script(&i, &script, &reg)
+            let interner = Interner::new();
+            crate::test::compile_script(&interner, source, ctx)
                 .map(|_| ())
-                .map_err(|errs| {
-                    errs.iter()
-                        .map(|e| format!("{:?}", e.kind))
-                        .collect()
-                })
+                .map_err(|errs| errs.iter().map(|e| format!("{}", e.display(&interner))).collect())
         }
 
-        fn compile_template(source: &str, ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
-            let i = Interner::new();
-            let context: FxHashMap<_, _> = ctx
-                .iter()
-                .map(|(name, ty)| (i.intern(name), ty.clone()))
-                .collect();
-            let reg = ContextTypeRegistry::all_system(context);
-            let template = acvus_ast::parse(&i, source)
-                .map_err(|e| vec![format!("parse error: {e}")])?;
-            crate::compile(&i, &template, &reg)
+        fn compile_template(source: &str, _ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
+            let interner = Interner::new();
+            crate::test::compile_template(&interner, source, _ctx)
                 .map(|_| ())
-                .map_err(|errs| {
-                    errs.iter()
-                        .map(|e| format!("{:?}", e.kind))
-                        .collect()
-                })
+                .map_err(|errs| errs.iter().map(|e| format!("{}", e.display(&interner))).collect())
         }
 
         fn has_use_after_move(errors: &[String]) -> bool {
@@ -881,7 +958,10 @@ mod tests {
                 "{{ $a = @src }}{{ $a | collect | len | to_string }}{{ $a | collect | len | to_string }}",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "should reject $var double load of effectful");
+            assert!(
+                result.is_err(),
+                "should reject $var double load of effectful"
+            );
             assert!(has_use_after_move(&result.unwrap_err()));
         }
 
@@ -905,17 +985,20 @@ mod tests {
                 "x = @src; a = x | collect; b = x | collect; a",
                 &[("src", pure_iter_ty())],
             );
-            assert!(result.is_ok(), "pure iterator should be reusable: {result:?}");
+            assert!(
+                result.is_ok(),
+                "pure iterator should be reusable: {result:?}"
+            );
         }
 
         /// C2: effectful iterator used once
         #[test]
         fn accept_effectful_single_use() {
-            let result = compile_script(
-                "x = @src; x | collect",
-                &[("src", eff_iter_ty())],
+            let result = compile_script("x = @src; x | collect", &[("src", eff_iter_ty())]);
+            assert!(
+                result.is_ok(),
+                "single use of effectful should be allowed: {result:?}"
             );
-            assert!(result.is_ok(), "single use of effectful should be allowed: {result:?}");
         }
 
         /// C3: effectful iter collected → list is pure, reusable
@@ -925,7 +1008,10 @@ mod tests {
                 "list = @src | collect; a = list | len; b = list | len; a + b",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_ok(), "collected list should be reusable: {result:?}");
+            assert!(
+                result.is_ok(),
+                "collected list should be reusable: {result:?}"
+            );
         }
 
         /// C4: $var reassignment revives
@@ -935,16 +1021,17 @@ mod tests {
                 "{{ $a = @src }}{{ $a | collect | len | to_string }}{{ $a = @src2 }}{{ $a | collect | len | to_string }}",
                 &[("src", eff_iter_ty()), ("src2", eff_iter_ty())],
             );
-            assert!(result.is_ok(), "reassigned $var should be alive: {result:?}");
+            assert!(
+                result.is_ok(),
+                "reassigned $var should be alive: {result:?}"
+            );
         }
 
         /// C5: pure values are always copyable
         #[test]
         fn accept_pure_values_copy() {
-            let result = compile_script(
-                "x = @val; a = x + 1; b = x + 2; a + b",
-                &[("val", Ty::Int)],
-            );
+            let result =
+                compile_script("x = @val; a = x + 1; b = x + 2; a + b", &[("val", Ty::Int)]);
             assert!(result.is_ok());
         }
 
@@ -955,57 +1042,39 @@ mod tests {
                 "@src | filter(x -> x > 0) | map(x -> x * 2) | collect",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_ok(), "linear pipe chain should be allowed: {result:?}");
+            assert!(
+                result.is_ok(),
+                "linear pipe chain should be allowed: {result:?}"
+            );
         }
 
         /// C7: effectful function (no move-only captures) can be called multiple times
         #[test]
         fn accept_effectful_fn_multiple_calls() {
             let fn_ty = Ty::Fn {
-                params: vec![Ty::Int],
+                params: vec![param(Ty::Int)],
                 ret: Box::new(Ty::Int),
-                kind: FnKind::Extern,
                 captures: vec![],
-                effect: Effect::Effectful,
+                effect: Effect::io(),
             };
-            let result = compile_script(
-                "a = @f(1); b = @f(2); a + b",
-                &[("f", fn_ty)],
+            let result = compile_script("a = @f(1); b = @f(2); a + b", &[("f", fn_ty)]);
+            assert!(
+                result.is_ok(),
+                "effectful fn without move-only captures should be callable multiple times: {result:?}"
             );
-            assert!(result.is_ok(), "effectful fn without move-only captures should be callable multiple times: {result:?}");
-        }
-
-        // -- Edge cases --
-
-        /// E1: Ty::Error context → skip move check (no false positive)
-        #[test]
-        fn skip_error_type() {
-            // compile_analysis_partial allows Error types
-            let i = Interner::new();
-            let reg = ContextTypeRegistry::all_system(FxHashMap::default());
-            let template = acvus_ast::parse(&i, "{{ @unknown }}").unwrap();
-            // This should fail with undefined context, not move error
-            let result = crate::compile(&i, &template, &reg);
-            assert!(result.is_err());
-            // Should NOT contain use-after-move
-            let errors: Vec<String> = result
-                .unwrap_err()
-                .iter()
-                .map(|e| format!("{:?}", e.kind))
-                .collect();
-            assert!(!has_use_after_move(&errors));
         }
 
         /// E2: List containing effectful iterator (transitive move-only)
         #[test]
         fn reject_list_of_effectful_reuse() {
             let ty = Ty::List(Box::new(eff_iter_ty()));
-            let result = compile_script(
-                "x = @src; a = x | len; b = x | len; a + b",
-                &[("src", ty)],
-            );
+            let result =
+                compile_script("x = @src; a = x | len; b = x | len; a + b", &[("src", ty)]);
             // List<Iterator<Int, Effectful>> is move-only (transitive)
-            assert!(result.is_err(), "List containing effectful should be move-only");
+            assert!(
+                result.is_err(),
+                "List containing effectful should be move-only"
+            );
         }
 
         /// E3: Option containing effectful (transitive)
@@ -1032,7 +1101,10 @@ mod tests {
                 "{{ $a = @src }}{{ true = @flag }}{{ $a | collect | len | to_string }}{{_}}nothing{{/}}{{ $a | collect | len | to_string }}",
                 &[("flag", Ty::Bool), ("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "should reject use after move across branch: {result:?}");
+            assert!(
+                result.is_err(),
+                "should reject use after move across branch: {result:?}"
+            );
             assert!(has_use_after_move(&result.unwrap_err()));
         }
 
@@ -1043,7 +1115,10 @@ mod tests {
                 "{{ $a = @src }}{{ true = @flag }}{{ $a | collect | len | to_string }}{{_}}{{ $a | collect | len | to_string }}{{/}}{{ $a | collect | len | to_string }}",
                 &[("flag", Ty::Bool), ("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "should reject use after move in both branches: {result:?}");
+            assert!(
+                result.is_err(),
+                "should reject use after move in both branches: {result:?}"
+            );
         }
 
         /// B3: $var consumed in one branch only, no use after merge → OK
@@ -1053,7 +1128,10 @@ mod tests {
                 "{{ $a = @src }}{{ true = @flag }}{{ $a | collect | len | to_string }}{{_}}nothing{{/}}",
                 &[("flag", Ty::Bool), ("src", eff_iter_ty())],
             );
-            assert!(result.is_ok(), "move in branch without post-merge use should be OK: {result:?}");
+            assert!(
+                result.is_ok(),
+                "move in branch without post-merge use should be OK: {result:?}"
+            );
         }
 
         // -- Nested closure + move-only tests --
@@ -1069,7 +1147,10 @@ mod tests {
                 "x = @src; f = (z -> collect(x)); a = f(0); b = f(0); a",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "FnOnce called twice should be rejected: {result:?}");
+            assert!(
+                result.is_err(),
+                "FnOnce called twice should be rejected: {result:?}"
+            );
             assert!(has_use_after_move(&result.unwrap_err()));
         }
 
@@ -1080,7 +1161,10 @@ mod tests {
                 "x = @val; f = (a -> x + a); a = f(1); b = f(2); a + b",
                 &[("val", Ty::Int)],
             );
-            assert!(result.is_ok(), "Fn with pure captures should be callable multiple times: {result:?}");
+            assert!(
+                result.is_ok(),
+                "Fn with pure captures should be callable multiple times: {result:?}"
+            );
         }
 
         /// N3: Closure capturing effectful → used once → OK
@@ -1090,7 +1174,10 @@ mod tests {
                 "x = @src; f = (z -> collect(x)); f(0)",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_ok(), "FnOnce called once should be OK: {result:?}");
+            assert!(
+                result.is_ok(),
+                "FnOnce called once should be OK: {result:?}"
+            );
         }
 
         // -- Lambda return coercion tests --
@@ -1104,7 +1191,10 @@ mod tests {
                 "@items | flat_map(x -> [x, x * 2]) | collect",
                 &[("items", Ty::List(Box::new(Ty::Int)))],
             );
-            assert!(result.is_ok(), "lambda returning Deque where Iterator expected should compile: {result:?}");
+            assert!(
+                result.is_ok(),
+                "lambda returning Deque where Iterator expected should compile: {result:?}"
+            );
         }
 
         /// L2: Lambda returns Int (no coercion needed for map)
@@ -1114,7 +1204,10 @@ mod tests {
                 "@items | map(x -> x + 1) | collect",
                 &[("items", Ty::List(Box::new(Ty::Int)))],
             );
-            assert!(result.is_ok(), "lambda returning scalar should compile: {result:?}");
+            assert!(
+                result.is_ok(),
+                "lambda returning scalar should compile: {result:?}"
+            );
         }
 
         /// L3: Nested flat_map with Deque return at both levels
@@ -1124,22 +1217,31 @@ mod tests {
                 "@items | flat_map(x -> [x, x + 10]) | map(x -> x * 2) | collect",
                 &[("items", Ty::List(Box::new(Ty::Int)))],
             );
-            assert!(result.is_ok(), "nested flat_map + map with Deque return should compile: {result:?}");
+            assert!(
+                result.is_ok(),
+                "nested flat_map + map with Deque return should compile: {result:?}"
+            );
         }
 
-        // -- ClosureCall FnOnce tests --
+        // -- FunctionCall (Indirect) FnOnce tests --
 
         /// F1: FnOnce passed to map (HOF calls it multiple times) → should be OK
-        /// because at the MIR level, the fn is passed once to BuiltinCall.
+        /// because at the MIR level, the fn is passed once to FunctionCall.
         #[test]
         fn accept_fnonce_passed_to_map() {
             // f captures effectful, passed to map (single use of f at MIR level)
             let result = compile_script(
                 "x = @src; f = (z -> collect(x)); @items | map(f) | collect",
-                &[("src", eff_iter_ty()), ("items", Ty::List(Box::new(Ty::Int)))],
+                &[
+                    ("src", eff_iter_ty()),
+                    ("items", Ty::List(Box::new(Ty::Int))),
+                ],
             );
-            // This should compile — f is passed once to map (single BuiltinCall arg)
-            assert!(result.is_ok(), "FnOnce passed once to HOF should be OK: {result:?}");
+            // This should compile — f is passed once to map (single FunctionCall arg)
+            assert!(
+                result.is_ok(),
+                "FnOnce passed once to HOF should be OK: {result:?}"
+            );
         }
 
         /// F2: Lambda with @context in body (not capture) should be Fn, not FnOnce.
@@ -1152,7 +1254,10 @@ mod tests {
             );
             // @src is NOT captured — it's loaded fresh each call via ContextLoad.
             // So the lambda is Fn (not FnOnce), callable multiple times.
-            assert!(result.is_ok(), "Lambda with @context in body (not capture) should be Fn: {result:?}");
+            assert!(
+                result.is_ok(),
+                "Lambda with @context in body (not capture) should be Fn: {result:?}"
+            );
         }
 
         /// F3: Closure explicitly capturing a local move-only value, called twice → ERROR
@@ -1162,7 +1267,10 @@ mod tests {
                 "x = @src; f = (z -> collect(x)); a = f(0); b = f(0); a",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "FnOnce with local capture double call should be rejected: {result:?}");
+            assert!(
+                result.is_err(),
+                "FnOnce with local capture double call should be rejected: {result:?}"
+            );
         }
 
         /// Effectful without purify — still rejected (soundness baseline)
@@ -1172,7 +1280,10 @@ mod tests {
                 "x = @src; a = x | collect; b = x | collect; a",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "effectful without purify should still be rejected");
+            assert!(
+                result.is_err(),
+                "effectful without purify should still be rejected"
+            );
         }
 
         /// Effectful in $var — reuse rejected (soundness)
@@ -1182,7 +1293,10 @@ mod tests {
                 "{{ $a = @src }}{{ $a | collect | len | to_string }}{{ $a | collect | len | to_string }}",
                 &[("src", eff_iter_ty())],
             );
-            assert!(result.is_err(), "effectful $var without purify should be rejected");
+            assert!(
+                result.is_err(),
+                "effectful $var without purify should be rejected"
+            );
         }
     }
 }

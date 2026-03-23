@@ -3,40 +3,54 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "none"
+  T0 = ""
+  T1 = "none"
 
 === main ===
-     0 │   r0 = context_load @user
-     1 │ L2:
-     3 │   r2 = test has_key(r0, "name")
-     4 │   r3 = r0.name
-     6 │   r5 = true (r1) && true (r4)
-     7 │   r6 = test has_key(r0, "age")
-     8 │   r7 = r0.age
-    10 │   r9 = r5 && true (r8)
-    11 │   jump_if r9 then L3 else L1
-    12 │ L3:
-    13 │   r10 = r0.name
-    14 │   r11 = r0.age
-    15 │   yield r10
-    16 │   r12 = call to_string(r11)
-    17 │   yield r12
-    18 │   jump L0
-    19 │ L1:
-    21 │   yield T0
-    22 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @user
+     2 │   r2 = context_load r1
+     3 │ L2:
+     5 │   r4 = test has_key(r2, "name")
+     6 │   r5 = r2.name
+     8 │   r7 = true (r3) && true (r6)
+     9 │   r8 = test has_key(r2, "age")
+    10 │   r9 = r2.age
+    12 │   r11 = r7 && true (r10)
+    13 │   jump_if r11 then L3 else L1
+    14 │ L3:
+    15 │   r12 = r2.name
+    16 │   r13 = r2.age
+    18 │   r15 = T0 + r12
+    19 │   r16 = poison
+    20 │   r17 = r15 + r16
+    21 │   jump L0(r17)
+    22 │ L1:
+    25 │   r20 = T0 + T1
+    26 │   jump L0(r20)
+    27 │ L0(r21: String):  ; merge_of L2
+    28 │   r22 = T0 + r21
+    29 │   return r22
 
-    ; r0 (@user) : {age: Int, email: String, name: String}
-    ; r1 (v1) : Bool
-    ; r2 (v2) : Bool
-    ; r3 (v3) : String
+    ; r0 (v0) : String
+    ; r1 (@user) : {age: Int, email: String, name: String}
+    ; r2 (v2) : {age: Int, email: String, name: String}
+    ; r3 (v3) : Bool
     ; r4 (v4) : Bool
-    ; r5 (v5) : Bool
+    ; r5 (v5) : String
     ; r6 (v6) : Bool
-    ; r7 (v7) : Int
+    ; r7 (v7) : Bool
     ; r8 (v8) : Bool
-    ; r9 (v9) : Bool
-    ; r10 (name) : String
-    ; r11 (age) : Int
-    ; r12 (to_string(...)) : String
-    ; r13 (v13) : String
+    ; r9 (v9) : Int
+    ; r10 (v10) : Bool
+    ; r11 (v11) : Bool
+    ; r12 (name) : String
+    ; r13 (age) : Int
+    ; r14 (v14) : String
+    ; r15 (v15) : String
+    ; r16 (to_string(...)) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : String
+    ; r22 (v22) : String

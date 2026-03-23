@@ -3,22 +3,35 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "none"
-  T1 = "has value"
+  T0 = ""
+  T1 = "none"
+  T2 = "has value"
 
 === main ===
-     0 │   r0 = context_load @opt
-     1 │ L2:
-     2 │   r1 = test r0 is None
-     3 │   jump_if r1 then L3 else L1
-     4 │ L3:
-     6 │   yield T0
-     7 │   jump L0
-     8 │ L1:
-    10 │   yield T1
-    11 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @opt
+     2 │   r2 = context_load r1
+     3 │ L2:
+     4 │   r3 = test r2 is None
+     5 │   jump_if r3 then L3 else L1
+     6 │ L3:
+     9 │   r6 = T0 + T1
+    10 │   jump L0(r6)
+    11 │ L1:
+    14 │   r9 = T0 + T2
+    15 │   jump L0(r9)
+    16 │ L0(r10: String):  ; merge_of L2
+    17 │   r11 = T0 + r10
+    18 │   return r11
 
-    ; r0 (@opt) : Option<Int>
-    ; r1 (v1) : Bool
-    ; r2 (v2) : String
-    ; r3 (v3) : String
+    ; r0 (v0) : String
+    ; r1 (@opt) : Option<Int>
+    ; r2 (v2) : Option<Int>
+    ; r3 (v3) : Bool
+    ; r4 (v4) : String
+    ; r5 (v5) : String
+    ; r6 (v6) : String
+    ; r7 (v7) : String
+    ; r8 (v8) : String
+    ; r9 (v9) : String
+    ; r10 (v10) : String
+    ; r11 (v11) : String

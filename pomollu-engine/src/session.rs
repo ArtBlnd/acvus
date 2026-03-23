@@ -127,7 +127,7 @@ impl ChatSession {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| JsValue::from_str(&e))?;
 
-        // Compile
+        // Compile nodes (lower + compile in one step)
         let registry = build_registry(&interner, context_types).map_err(|e| {
             let key_name = interner.resolve(e.key);
             JsValue::from_str(&format!(
@@ -135,8 +135,23 @@ impl ChatSession {
                 e.tier_a, e.tier_b
             ))
         })?;
-        let env =
-            acvus_orchestration::compute_external_context_env(&interner, &specs, registry)
+
+        // Compute external context env for runtime type resolution.
+        let env = acvus_orchestration::compute_external_context_env(
+            &interner, &specs, registry.clone(),
+        ).map_err(|errs| {
+            let msg = errs
+                .iter()
+                .map(|e| e.display(&interner).to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            JsValue::from_str(&msg)
+        })?;
+        let compile_registry = env.registry.without_scoped();
+
+        let fetch = Arc::new(WebFetch);
+        let compiled =
+            acvus_orchestration::compile_nodes(&interner, &specs, registry, fetch)
                 .map_err(|errs| {
                     let msg = errs
                         .iter()
@@ -145,19 +160,6 @@ impl ChatSession {
                         .join("\n");
                     JsValue::from_str(&msg)
                 })?;
-        let compile_registry = env.registry.to_full();
-
-        let mut compiled =
-            acvus_orchestration::compile_nodes_with_env(&interner, &specs, env).map_err(
-                |errs| {
-                    let msg = errs
-                        .iter()
-                        .map(|e| e.display(&interner).to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    JsValue::from_str(&msg)
-                },
-            )?;
 
 
         // Open IDB store and journal
@@ -187,7 +189,6 @@ impl ChatSession {
 
         let engine = acvus_chat::ChatEngine::new(
             compiled,
-            WebFetch,
             journal,
             cursor,
             &cfg.entrypoint,

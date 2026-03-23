@@ -2,15 +2,25 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @items
-     1 │   r1 = cast ListToIterator r0
-     3 │   r3 = call contains(r1, 3 (r2))
-     4 │   r4 = call to_string(r3)
-     5 │   yield r4
+=== literals ===
+  T0 = ""
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : Iterator<Int>
-    ; r2 (v2) : Int
-    ; r3 (contains(...)) : Bool
-    ; r4 (to_string(...)) : String
+=== main ===
+     0 │   r7 = context_project @items
+     1 │   r8 = context_load r7
+     3 │   r1 = context_project @items
+     4 │   r2 = cast ListToIterator r1
+     6 │   r4 = poison
+     7 │   r5 = poison
+     8 │   r6 = T0 + r5
+     9 │   return r6
+
+    ; r0 (v0) : String
+    ; r1 (@items) : List<Int>
+    ; r2 (v2) : Iterator<Int>
+    ; r3 (v3) : Int
+    ; r4 (contains(...)) : Bool
+    ; r5 (to_string(...)) : String
+    ; r6 (v6) : String
+    ; r7 (v7) : List<Int>
+    ; r8 (v8) : List<Int>

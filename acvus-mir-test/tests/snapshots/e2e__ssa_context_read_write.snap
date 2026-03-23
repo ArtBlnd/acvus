@@ -1,0 +1,19 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 │   r0 = context_project @x
+     1 │   r1 = context_load r0
+     3 │   r3 = r1 + 1 (r2)
+     4 │   r4 = context_project @x
+     5 │   ctx_store r4 = r3
+     6 │   return r3
+
+    ; r0 (@x) : Int
+    ; r1 (v1) : Int
+    ; r2 (v2) : Int
+    ; r3 (v3) : Int
+    ; r4 (v4) : Int
+    ; r5 (@x) : Int
+    ; r6 (v6) : Int

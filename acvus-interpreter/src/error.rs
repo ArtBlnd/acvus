@@ -26,6 +26,7 @@ pub enum ValueKind {
     ExternFn,
     Iterator,
     Sequence,
+    Handle,
     Opaque,
 }
 
@@ -48,6 +49,7 @@ impl fmt::Display for ValueKind {
             ValueKind::ExternFn => write!(f, "ExternFn"),
             ValueKind::Iterator => write!(f, "Iterator"),
             ValueKind::Sequence => write!(f, "Sequence"),
+            ValueKind::Handle => write!(f, "Handle"),
             ValueKind::Opaque => write!(f, "Opaque"),
         }
     }

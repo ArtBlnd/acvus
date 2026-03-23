@@ -140,11 +140,11 @@ fn main() {
 
     // Compile.
     let reg = ContextTypeRegistry::all_system(context_types);
-    match acvus_mir::compile(
-        &interner,
-        &template,
-        &reg,
-    ) {
+    let mut subst = acvus_mir::ty::TySubst::new();
+    let result = acvus_mir::typecheck_template(&interner, &template, &reg, &mut subst)
+        .and_then(|uc| acvus_mir::check_completeness(uc, &subst))
+        .and_then(|ch| acvus_mir::lower_checked_template(&interner, &template, ch, acvus_mir::build_name_to_id(reg.merged())));
+    match result {
         Ok((module, _hints)) => {
             println!("{}", dump(&interner, &module));
         }

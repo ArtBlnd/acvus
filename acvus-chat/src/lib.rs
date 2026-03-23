@@ -6,9 +6,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 use acvus_interpreter::{RuntimeError, TypedValue, Value};
+use acvus_mir::graph::Id;
 use acvus_orchestration::{
-    CompiledNodeGraph, EntryMut, EntryRef, Fetch, Journal, LoopState, Node, NodeId,
-    ResolveState, Resolved, Resolver, build_dag, build_node_table,
+    EntryMut, EntryRef, Fetch, Journal, LoopState, NodeGraph,
+    ResolveState, Resolved, Resolver, build_dag,
 };
 use acvus_utils::{Astr, Interner};
 use uuid::Uuid;
@@ -24,21 +25,18 @@ use uuid::Uuid;
 struct EvalState {
     lp: LoopState<'static>,
     turn_context: FxHashMap<Astr, TypedValue>,
-    bind_cache: FxHashMap<Astr, Vec<(TypedValue, TypedValue)>>,
     cursor: Uuid,
     no_execute: bool,
     prev_cursor: Uuid,
 }
 
 pub struct ChatEngine<J> {
-    graph: CompiledNodeGraph,
-    node_table: Vec<Arc<dyn Node>>,
-    rdeps: Vec<FxHashSet<NodeId>>,
+    graph: NodeGraph,
     pub journal: J,
     pub cursor: Uuid,
-    bind_cache: FxHashMap<Astr, Vec<(TypedValue, TypedValue)>>,
-    entrypoint_id: NodeId,
+    entrypoint_id: Id,
     interner: Interner,
+    name_to_id: FxHashMap<Astr, Id>,
     eval_state: Option<EvalState>,
 }
 
@@ -46,25 +44,20 @@ impl<J> ChatEngine<J>
 where
     J: Journal,
 {
-    pub async fn new<F>(
-        graph: CompiledNodeGraph,
-        fetch: F,
+    pub async fn new(
+        graph: NodeGraph,
         journal: J,
         root: Uuid,
         entrypoint: &str,
         interner: &Interner,
-    ) -> Result<Self, ChatError>
-    where
-        F: Fetch + 'static,
-    {
+    ) -> Result<Self, ChatError> {
         let entrypoint_key = interner.intern(entrypoint);
-        let entrypoint_id = *graph
-            .name_to_primary
-            .get(&entrypoint_key)
+        let entrypoint_id = graph
+            .entrypoint(entrypoint_key)
             .ok_or_else(|| ChatError::EntrypointNotFound(entrypoint.to_string()))?;
 
-        // Validate: no dependency cycles + extract rdeps
-        let dag = build_dag(interner, &graph).map_err(|errs| {
+        // Validate: no dependency cycles
+        let _dag = build_dag(interner, &graph).map_err(|errs| {
             let msg = errs
                 .iter()
                 .map(|e| e.display(interner).to_string())
@@ -72,20 +65,16 @@ where
                 .join("; ");
             ChatError::CycleDetected(msg)
         })?;
-        let rdeps = dag.rdeps;
 
-        // Build node table — one match, uniform Arc<dyn Node> from here
-        let node_table = build_node_table(&graph.nodes, Arc::new(fetch), interner);
+        let name_to_id = graph.id_table().to_name_to_id();
 
         Ok(Self {
             graph,
-            node_table,
-            rdeps,
             journal,
             cursor: root,
-            bind_cache: FxHashMap::default(),
             entrypoint_id,
             interner: interner.clone(),
+            name_to_id,
             eval_state: None,
         })
     }
@@ -108,10 +97,9 @@ where
     {
         let interner = &self.interner;
         let node_key = interner.intern(node_name);
-        let node_id = *self
+        let node_id = self
             .graph
-            .name_to_primary
-            .get(&node_key)
+            .entrypoint(node_key)
             .ok_or_else(|| ChatError::EntrypointNotFound(node_name.to_string()))?;
 
         tracing::info!(node = %node_name, no_execute, "start_evaluate");
@@ -129,17 +117,16 @@ where
             let mut rs = ResolveState {
                 entry,
                 turn_context: FxHashMap::default(),
-                bind_cache: std::mem::take(&mut self.bind_cache),
             };
 
             {
                 let ctx = Resolver {
                     graph: &self.graph,
-                    node_table: &self.node_table,
                     extern_handler,
                     resolver,
                     interner,
-                    rdeps: &self.rdeps,
+                    rdeps: &[],
+                    name_to_id: &self.name_to_id,
                 };
 
                 ctx.populate_initial_values(&mut rs)
@@ -149,29 +136,28 @@ where
 
             // Set up the resolver loop — root node prepared but not yet driven.
             let mut lp = LoopState::new(no_execute);
-            let max_retries = self.graph.nodes[node_id.0].strategy.retry;
+            let max_retries = self.graph.meta(node_id).map_or(0, |m| m.retry);
             lp.retry_state.insert(node_id, (max_retries, 0, FxHashMap::default()));
             lp.remaining_roots.insert(node_id);
 
             {
                 let ctx = Resolver {
                     graph: &self.graph,
-                    node_table: &self.node_table,
                     extern_handler,
                     resolver,
                     interner,
-                    rdeps: &self.rdeps,
+                    rdeps: &[],
+                    name_to_id: &self.name_to_id,
                 };
                 ctx.start_prepare(node_id, FxHashMap::default(), true, &mut lp, &mut rs)
                     .map_err(|e| ChatError::Resolve(format!("[start_prepare] {e}")))?;
             }
 
-            // Save loop state — entry is dropped, turn_context/bind_cache move to EvalState.
+            // Save loop state — entry is dropped, turn_context moves to EvalState.
             let prev_cursor = self.cursor;
             self.eval_state = Some(EvalState {
                 lp,
                 turn_context: std::mem::take(&mut rs.turn_context),
-                bind_cache: std::mem::take(&mut rs.bind_cache),
                 cursor,
                 no_execute,
                 prev_cursor,
@@ -205,9 +191,7 @@ where
             eval_state,
             journal,
             graph,
-            node_table,
             interner,
-            rdeps,
             ..
         } = self;
 
@@ -221,16 +205,15 @@ where
         let mut rs = ResolveState {
             entry,
             turn_context: std::mem::take(&mut state.turn_context),
-            bind_cache: std::mem::take(&mut state.bind_cache),
         };
 
         let ctx = Resolver {
             graph,
-            node_table,
             extern_handler: extern_handler,
             resolver,
             interner,
-            rdeps,
+            rdeps: &[],
+            name_to_id: &self.name_to_id,
         };
 
         let result = ctx
@@ -238,14 +221,12 @@ where
             .await
             .map_err(|e| ChatError::Resolve(format!("{e}")))?;
 
-        // Save turn_context/bind_cache back for next call.
+        // Save turn_context back for next call.
         state.turn_context = std::mem::take(&mut rs.turn_context);
-        state.bind_cache = std::mem::take(&mut rs.bind_cache);
 
         if result.is_none() {
             // Root finished — clean up eval state.
-            let es = eval_state.take().unwrap();
-            self.bind_cache = es.bind_cache;
+            eval_state.take().unwrap();
         }
 
         Ok(result)
@@ -392,13 +373,44 @@ mod tests {
         }
     }
 
-    fn compile_test_nodes(interner: &Interner, specs: &[NodeSpec]) -> CompiledNodeGraph {
-        compile_nodes(
-            interner,
-            specs,
-            PartialContextTypeRegistry::default(),
-        )
-        .unwrap()
+    fn compile_test_nodes_with_fetch<F: Fetch + 'static>(
+        interner: &Interner,
+        specs: &[NodeSpec],
+        fetch: F,
+    ) -> NodeGraph {
+        phased_compile_with_fetch(interner, specs, PartialContextTypeRegistry::default(), fetch)
+    }
+
+    fn compile_test_nodes(interner: &Interner, specs: &[NodeSpec]) -> NodeGraph {
+        phased_compile(interner, specs, PartialContextTypeRegistry::default())
+    }
+
+    /// Compile node specs into a NodeGraph. Panics on error.
+    fn phased_compile(
+        interner: &Interner,
+        specs: &[NodeSpec],
+        registry: PartialContextTypeRegistry,
+    ) -> NodeGraph {
+        phased_compile_with_fetch(interner, specs, registry, acvus_orchestration::http::NoopFetch)
+    }
+
+    fn phased_compile_with_fetch<F: Fetch + 'static>(
+        interner: &Interner,
+        specs: &[NodeSpec],
+        registry: PartialContextTypeRegistry,
+        fetch: F,
+    ) -> NodeGraph {
+        try_phased_compile(interner, specs, registry, Arc::new(fetch)).unwrap()
+    }
+
+    /// Compile node specs into a NodeGraph. Returns Result.
+    fn try_phased_compile<F: Fetch + 'static>(
+        interner: &Interner,
+        specs: &[NodeSpec],
+        registry: PartialContextTypeRegistry,
+        fetch: Arc<F>,
+    ) -> Result<NodeGraph, Vec<acvus_orchestration::OrchError>> {
+        compile_nodes(interner, specs, registry, fetch)
     }
 
     #[tokio::test]
@@ -426,7 +438,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let result = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -461,7 +472,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let result = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "nonexistent",
@@ -496,7 +506,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -513,7 +522,8 @@ mod tests {
     #[tokio::test]
     async fn turn_llm_text_response() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(
+        let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
+        let nodes = compile_test_nodes_with_fetch(
             &interner,
             &[NodeSpec {
                 name: interner.intern("main"),
@@ -542,12 +552,11 @@ mod tests {
                 is_function: false,
                 fn_params: vec![],
             }],
+            mock,
         );
         let (journal, root) = TreeJournal::new();
-        let mock = MockFetch::new(vec![openai_text_response("hello from LLM")]);
         let mut engine = ChatEngine::new(
             nodes,
-            mock,
             journal,
             root,
             "main",
@@ -574,7 +583,11 @@ mod tests {
     #[tokio::test]
     async fn turn_tool_call_round_trip() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(
+        let mock = MockFetch::new(vec![
+            openai_tool_call_response(vec![("call_1", "my_tool", serde_json::json!({}))]),
+            openai_text_response("final answer"),
+        ]);
+        let nodes = compile_test_nodes_with_fetch(
             &interner,
             &[
                 NodeSpec {
@@ -624,15 +637,11 @@ mod tests {
                     fn_params: vec![],
                 },
             ],
+            mock,
         );
         let (journal, root) = TreeJournal::new();
-        let mock = MockFetch::new(vec![
-            openai_tool_call_response(vec![("call_1", "my_tool", serde_json::json!({}))]),
-            openai_text_response("final answer"),
-        ]);
         let mut engine = ChatEngine::new(
             nodes,
-            mock,
             journal,
             root,
             "main",
@@ -690,7 +699,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -752,7 +760,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -777,7 +784,7 @@ mod tests {
         // External resolver should be called only once for @input per turn.
         let mut ctx = FxHashMap::default();
         ctx.insert(interner.intern("input"), Ty::String);
-        let nodes = compile_nodes(
+        let nodes = phased_compile(
             &interner,
             &[NodeSpec {
                 name: interner.intern("main"),
@@ -797,11 +804,10 @@ mod tests {
             }],
             PartialContextTypeRegistry::user_only(ctx),
         )
-        .unwrap();
+        ;
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -834,7 +840,8 @@ mod tests {
     #[tokio::test]
     async fn llm_once_per_turn_persists() {
         let interner = Interner::new();
-        let nodes = compile_test_nodes(
+        let mock = MockFetch::new(vec![openai_text_response("hello")]);
+        let nodes = compile_test_nodes_with_fetch(
             &interner,
             &[NodeSpec {
                 name: interner.intern("main"),
@@ -863,11 +870,11 @@ mod tests {
                 is_function: false,
                 fn_params: vec![],
             }],
+            mock,
         );
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![openai_text_response("hello")]),
             journal,
             root,
             "main",
@@ -914,7 +921,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -980,15 +986,17 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(nodes.nodes.len(), 2);
-        assert!(nodes.nodes[0].is_function);
+        assert_eq!(nodes.iter_metas().count(), 2);
+        // Verify at least one node is a function
+        let double_id = nodes.entrypoint(interner.intern("double")).unwrap();
+        assert!(nodes.meta(double_id).unwrap().is_function);
     }
 
     /// Function node is NOT in context_types: @double should fail
     #[test]
     fn function_node_not_in_context() {
         let interner = Interner::new();
-        let result = compile_nodes(
+        let result = try_phased_compile(
             &interner,
             &[
                 NodeSpec {
@@ -997,7 +1005,7 @@ mod tests {
                         source: "@x * 2".into(),
                         output_ty: Some(Ty::Int),
                     }),
-    
+
                     strategy: Strategy {
                         execution: Execution::default(),
                         persistency: Persistency::default(),
@@ -1014,7 +1022,7 @@ mod tests {
                         // @double should be undefined — function nodes are not context
                         source: "{{@double}}".into(),
                     }),
-    
+
                     strategy: Strategy {
                         execution: Execution::default(),
                         persistency: Persistency::default(),
@@ -1027,6 +1035,7 @@ mod tests {
                 },
             ],
             PartialContextTypeRegistry::default(),
+            Arc::new(acvus_orchestration::http::NoopFetch),
         );
         // Should fail: @double is not a context key (it's a function)
         assert!(result.is_err());
@@ -1036,7 +1045,7 @@ mod tests {
     #[test]
     fn function_node_callable_from_other_nodes() {
         let interner = Interner::new();
-        let result = compile_nodes(
+        let result = try_phased_compile(
             &interner,
             &[
                 NodeSpec {
@@ -1075,8 +1084,9 @@ mod tests {
                 },
             ],
             PartialContextTypeRegistry::default(),
+            Arc::new(acvus_orchestration::http::NoopFetch),
         );
-        assert!(result.is_ok(), "function call should typecheck: {result:?}");
+        assert!(result.is_ok(), "function call should typecheck: {:?}", result.err());
     }
 
     /// Function node with global context: fn body references @globalCtx
@@ -1084,7 +1094,7 @@ mod tests {
     fn function_node_with_global_context() {
         let interner = Interner::new();
         let ctx = FxHashMap::from_iter([(interner.intern("offset"), Ty::Int)]);
-        let result = compile_nodes(
+        let result = try_phased_compile(
             &interner,
             &[
                 NodeSpec {
@@ -1123,8 +1133,9 @@ mod tests {
                 },
             ],
             PartialContextTypeRegistry::user_only(ctx),
+            Arc::new(acvus_orchestration::http::NoopFetch),
         );
-        assert!(result.is_ok(), "function with global context should compile: {result:?}");
+        assert!(result.is_ok(), "function with global context should compile: {:?}", result.err());
     }
 
     /// Full integration: Plain node calls function node, gets result
@@ -1172,7 +1183,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -1194,7 +1204,7 @@ mod tests {
         // reference @double as context. Since compile rejects @double in templates,
         // we test at the resolver level by injecting @double as a known context type
         // but marking the compiled node as is_function.
-        let nodes = compile_nodes(
+        let nodes = phased_compile(
             &interner,
             &[
                 NodeSpec {
@@ -1235,9 +1245,10 @@ mod tests {
             ],
             PartialContextTypeRegistry::default(),
         )
-        .unwrap();
+        ;
 
-        assert!(nodes.nodes[0].is_function);
+        let double_id = nodes.entrypoint(interner.intern("double")).unwrap();
+        assert!(nodes.meta(double_id).unwrap().is_function);
     }
 
     /// Multiple function calls in one template
@@ -1285,7 +1296,6 @@ mod tests {
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -1341,7 +1351,7 @@ mod tests {
             FxHashMap::default(),
         ).unwrap();
 
-        let nodes = acvus_orchestration::compile_nodes(
+        let nodes = phased_compile(
             &interner,
             &[
                 // Main node: calls @counter(), accumulates via Sequence
@@ -1365,11 +1375,10 @@ mod tests {
                 },
             ],
             registry,
-        ).unwrap();
+        );
         let (journal, root) = TreeJournal::new();
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",
@@ -1446,7 +1455,6 @@ mod tests {
 
         let mut engine = ChatEngine::new(
             nodes,
-            MockFetch::new(vec![]),
             journal,
             root,
             "main",

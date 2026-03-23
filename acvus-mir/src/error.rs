@@ -29,7 +29,9 @@ pub enum MirErrorKind {
         expected: Ty,
         got: Ty,
     },
-    AmbiguousType { resolved_ty: Ty },
+    AmbiguousType {
+        resolved_ty: Ty,
+    },
     UnificationFailure {
         expected: Ty,
         got: Ty,
@@ -55,21 +57,12 @@ pub enum MirErrorKind {
         actual: Ty,
     },
 
-    // Builtin constraint errors
-    BuiltinConstraint(String),
-
     // Deque origin errors
     OriginMismatch {
         expected: ty::Origin,
         got: ty::Origin,
     },
     DequeListCoercionForbidden,
-
-    // Overload resolution errors
-    NoMatchingOverload {
-        name: String,
-        arg_tys: Vec<Ty>,
-    },
 
     // Value errors
     NonPureContextLoad {
@@ -140,7 +133,11 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::AmbiguousType { resolved_ty } => {
-                write!(f, "cannot infer type: resolved to {} which contains unresolved type variables", resolved_ty.display(interner))
+                write!(
+                    f,
+                    "cannot infer type: resolved to {} which contains unresolved type variables",
+                    resolved_ty.display(interner)
+                )
             }
             MirErrorKind::UnificationFailure { expected, got } => {
                 write!(
@@ -197,24 +194,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     actual.display(interner)
                 )
             }
-            MirErrorKind::BuiltinConstraint(msg) => {
-                write!(f, "{msg}")
-            }
             MirErrorKind::OriginMismatch { expected, got } => {
                 write!(f, "deque origin mismatch: expected {expected}, got {got}")
             }
             MirErrorKind::DequeListCoercionForbidden => {
-                write!(f, "cannot convert List to Deque: only Deque → List coercion is allowed")
-            }
-            MirErrorKind::NoMatchingOverload { name, arg_tys } => {
-                write!(f, "no matching overload for `{name}` with arguments (")?;
-                for (i, ty) in arg_tys.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", ty.display(interner))?;
-                }
-                write!(f, ")")
+                write!(
+                    f,
+                    "cannot convert List to Deque: only Deque → List coercion is allowed"
+                )
             }
             MirErrorKind::ArityMismatch {
                 func,

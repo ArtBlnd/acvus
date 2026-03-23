@@ -1,413 +1,285 @@
-use std::sync::LazyLock;
-
-use acvus_utils::Interner;
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Effect, FnKind, Ty, TySubst};
+use acvus_utils::Freeze;
 
-/// Numeric identifier for a builtin function.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum BuiltinId {
-    Filter,
-    Map,
-    Pmap,
-    ToString,
-    ToFloat,
-    ToInt,
-    Find,
-    Reduce,
-    Fold,
-    Any,
-    All,
-    Len,
-    Reverse,
-    Flatten,
-    FlatMap,
-    Join,
-    CharToInt,
-    IntToChar,
-    Contains,
-    ContainsStr,
-    Substring,
-    LenStr,
-    ToBytes,
-    ToUtf8,
-    ToUtf8Lossy,
-    Trim,
-    TrimStart,
-    TrimEnd,
-    Upper,
-    Lower,
-    ReplaceStr,
-    SplitStr,
-    StartsWithStr,
-    EndsWithStr,
-    RepeatStr,
-    Unwrap,
-    First,
-    Last,
-    UnwrapOr,
-    Iter,
-    RevIter,
-    Collect,
-    Take,
-    Skip,
-    Chain,
-    // -- Deque ops (origin-preserving) --
-    Append,
-    Extend,
-    Consume,
-    // -- Sequence overloads (origin-preserving only: chain, take, skip) --
-    TakeSeq,
-    SkipSeq,
-    ChainSeq,
-    // -- Iterator next --
-    Next,
-    NextSeq,
+use crate::graph::types::{Constraint, FnConstraint, FnKind, Function, FunctionId, Signature};
+use crate::ty::{Effect, Param, ParamConstraint, Ty, TySubst};
+
+/// Shorthand: build a `Param` with a positional dummy name `_0`, `_1`, …
+fn p(interner: &Interner, idx: usize, ty: Ty) -> Param {
+    Param::new(interner.intern(&format!("_{idx}")), ty)
 }
 
-impl BuiltinId {
-    pub fn name(self) -> &'static str {
-        REGISTRY.get(self).name
-    }
-}
+/// Type alias for builtin signature generators.
+type SigFn = fn(&Interner, &mut TySubst) -> (Vec<Ty>, Ty);
 
 // ---------------------------------------------------------------------------
-// BuiltinEntry — data-driven replacement for the old unit-struct trait impls
+// Signature helpers (each is a `fn(&Interner, &mut TySubst) -> (Vec<Ty>, Ty)`)
 // ---------------------------------------------------------------------------
 
-/// Post-unification constraint on resolved arg types.
-/// Returns `Some(error_message)` if the constraint is violated.
-pub type BuiltinConstraint = fn(&[Ty], &Interner) -> Option<String>;
-
-pub struct BuiltinEntry {
-    pub id: BuiltinId,
-    pub name: &'static str,
-    pub signature: fn(&mut TySubst) -> (Vec<Ty>, Ty),
-    pub constraint: Option<BuiltinConstraint>,
-}
-
-// ---------------------------------------------------------------------------
-// BuiltinRegistry — central lookup, supports overloaded names
-// ---------------------------------------------------------------------------
-
-pub struct BuiltinRegistry {
-    entries: FxHashMap<BuiltinId, BuiltinEntry>,
-    by_name: FxHashMap<&'static str, Vec<BuiltinId>>,
-}
-
-impl BuiltinRegistry {
-    fn new() -> Self {
-        Self {
-            entries: FxHashMap::default(),
-            by_name: FxHashMap::default(),
-        }
-    }
-
-    fn add(
-        &mut self,
-        name: &'static str,
-        id: BuiltinId,
-        signature: fn(&mut TySubst) -> (Vec<Ty>, Ty),
-        constraint: Option<BuiltinConstraint>,
-    ) {
-        self.entries.insert(
-            id,
-            BuiltinEntry {
-                id,
-                name,
-                signature,
-                constraint,
-            },
-        );
-        self.by_name.entry(name).or_default().push(id);
-    }
-
-    /// Look up a single entry by ID.
-    pub fn get(&self, id: BuiltinId) -> &BuiltinEntry {
-        &self.entries[&id]
-    }
-
-    /// Return all candidate IDs for a given user-facing name.
-    /// Empty slice means "not a builtin".
-    pub fn candidates(&self, name: &str) -> &[BuiltinId] {
-        self.by_name.get(name).map_or(&[], |v| v.as_slice())
-    }
-
-    /// Check if a name is a known builtin (any overload).
-    pub fn is_builtin(&self, name: &str) -> bool {
-        self.by_name.contains_key(name)
-    }
-
-    /// Return an iterator over all unique builtin names.
-    pub fn all_names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.by_name.keys().copied()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Global registry (built once, read-only afterwards)
-// ---------------------------------------------------------------------------
-
-pub static REGISTRY: LazyLock<BuiltinRegistry> = LazyLock::new(build_registry);
-
-/// Access the global registry.
-pub fn registry() -> &'static BuiltinRegistry {
-    &REGISTRY
-}
-
-// ---------------------------------------------------------------------------
-// Constraints
-// ---------------------------------------------------------------------------
-
-fn is_scalar(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Byte)
-}
-
-fn require_scalar(args: &[Ty], interner: &Interner) -> Option<String> {
-    match &args[0] {
-        ty if is_scalar(ty) => None,
-        Ty::Var(_) | Ty::Error(_) => None,
-        ty => Some(format!(
-            "`to_string` requires a scalar type (Int, Float, Bool, String, Byte), got {}",
-            ty.display(interner),
-        )),
-    }
-}
-
-fn require_to_int(args: &[Ty], interner: &Interner) -> Option<String> {
-    match &args[0] {
-        Ty::Float | Ty::Byte => None,
-        Ty::Var(_) | Ty::Error(_) => None,
-        ty => Some(format!(
-            "`to_int` requires Float or Byte, got {}",
-            ty.display(interner),
-        )),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Signature helpers (each is a `fn(&mut TySubst) -> (Vec<Ty>, Ty)`)
-// ---------------------------------------------------------------------------
-
-fn sig_filter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+pub(crate) fn sig_filter(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Fn {
+                params: vec![p(interner, 0, t.clone())],
+                ret: Box::new(Ty::Bool),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         Ty::Iterator(Box::new(t), e),
     )
 }
 
-fn sig_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
+fn sig_map(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let u = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn { params: vec![t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Fn {
+                params: vec![p(interner, 0, t)],
+                ret: Box::new(u.clone()),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         Ty::Iterator(Box::new(u), e),
     )
 }
 
-fn sig_pmap(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_map(s)
+fn sig_pmap(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_map(interner, s)
 }
 
-fn sig_to_string(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_to_string(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param_constrained(ParamConstraint::scalar());
     (vec![t], Ty::String)
 }
 
-fn sig_to_float(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_to_float(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::Int], Ty::Float)
 }
 
-fn sig_to_int(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_to_int(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param_constrained(ParamConstraint::scalar());
     (vec![t], Ty::Int)
 }
 
-fn sig_find(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_find(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn { params: vec![t.clone()], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Fn {
+                params: vec![p(interner, 0, t.clone())],
+                ret: Box::new(Ty::Bool),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         t,
     )
 }
 
-fn sig_reduce(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_reduce(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn { params: vec![t.clone(), t.clone()], ret: Box::new(t.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Fn {
+                params: vec![p(interner, 0, t.clone()), p(interner, 1, t.clone())],
+                ret: Box::new(t.clone()),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         t,
     )
 }
 
-fn sig_fold(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
+fn sig_fold(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let u = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
             u.clone(),
-            Ty::Fn { params: vec![u.clone(), t], ret: Box::new(u.clone()), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Fn {
+                params: vec![p(interner, 0, u.clone()), p(interner, 1, t)],
+                ret: Box::new(u.clone()),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         u,
     )
 }
 
-fn sig_any(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_any(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
-            Ty::Fn { params: vec![t], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e },
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Fn {
+                params: vec![p(interner, 0, t)],
+                ret: Box::new(Ty::Bool),
+                captures: vec![],
+                effect: e.clone(),
+            },
         ],
         Ty::Bool,
     )
 }
 
-fn sig_all(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_any(s)
+fn sig_all(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_any(interner, s)
 }
 
-fn sig_len(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_len(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     (vec![Ty::List(Box::new(t))], Ty::Int)
 }
 
-fn sig_reverse(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_reverse(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     (vec![Ty::List(Box::new(t.clone()))], Ty::List(Box::new(t)))
 }
 
-fn sig_flatten_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_flatten_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))), e)],
+        vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))), e.clone())],
         Ty::Iterator(Box::new(t), e),
     )
 }
 
-fn sig_join_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_join_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(Ty::String), e), Ty::String], Ty::String)
+    (
+        vec![Ty::Iterator(Box::new(Ty::String), e.clone()), Ty::String],
+        Ty::String,
+    )
 }
 
-fn sig_char_to_int(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_char_to_int(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String], Ty::Int)
 }
 
-fn sig_int_to_char(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_int_to_char(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::Int], Ty::String)
 }
 
-fn sig_contains_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_contains_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e), t], Ty::Bool)
+    (vec![Ty::Iterator(Box::new(t.clone()), e.clone()), t], Ty::Bool)
 }
 
-fn sig_contains_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_contains_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::String], Ty::Bool)
 }
 
-fn sig_substring(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_substring(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::Int, Ty::Int], Ty::String)
 }
 
-fn sig_len_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_len_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String], Ty::Int)
 }
 
-fn sig_to_bytes(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_to_bytes(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String], Ty::bytes())
 }
 
-fn sig_to_utf8(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_to_utf8(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::bytes()], Ty::Option(Box::new(Ty::String)))
 }
 
-fn sig_to_utf8_lossy(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_to_utf8_lossy(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::bytes()], Ty::String)
 }
 
-fn sig_str_to_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_str_to_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String], Ty::String)
 }
 
-fn sig_replace_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_replace_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::String, Ty::String], Ty::String)
 }
 
-fn sig_split_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_split_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::String], Ty::List(Box::new(Ty::String)))
 }
 
-fn sig_str_str_to_bool(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_str_str_to_bool(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::String], Ty::Bool)
 }
 
-fn sig_repeat_str(_s: &mut TySubst) -> (Vec<Ty>, Ty) {
+fn sig_repeat_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
     (vec![Ty::String, Ty::Int], Ty::String)
 }
 
-fn sig_unwrap(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_unwrap(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     (vec![Ty::Option(Box::new(t.clone()))], t)
 }
 
-fn sig_next(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_next(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Iterator(Box::new(t.clone()), e)],
-        Ty::Option(Box::new(Ty::Tuple(vec![t.clone(), Ty::Iterator(Box::new(t), e)]))),
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone())],
+        Ty::Option(Box::new(Ty::Tuple(vec![
+            t.clone(),
+            Ty::Iterator(Box::new(t), e),
+        ]))),
     )
 }
 
-fn sig_next_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_next_seq(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let o = s.fresh_origin();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Sequence(Box::new(t.clone()), o, e)],
-        Ty::Option(Box::new(Ty::Tuple(vec![t.clone(), Ty::Sequence(Box::new(t), o, e)]))),
+        vec![Ty::Sequence(Box::new(t.clone()), o, e.clone())],
+        Ty::Option(Box::new(Ty::Tuple(vec![
+            t.clone(),
+            Ty::Sequence(Box::new(t), o, e),
+        ]))),
     )
 }
 
-fn sig_first_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_first_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e)], Ty::Option(Box::new(t)))
+    (
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone())],
+        Ty::Option(Box::new(t)),
+    )
 }
 
-fn sig_last_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_last_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e)], Ty::Option(Box::new(t)))
+    (
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone())],
+        Ty::Option(Box::new(t)),
+    )
 }
 
-fn sig_unwrap_or(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_unwrap_or(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     (vec![Ty::Option(Box::new(t.clone())), t.clone()], t)
 }
 
@@ -415,75 +287,98 @@ fn sig_unwrap_or(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 // Signature helpers — Deque ops (origin-preserving)
 // ---------------------------------------------------------------------------
 
-fn sig_append(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_append(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let o = s.fresh_origin();
-    (vec![Ty::Deque(Box::new(t.clone()), o), t.clone()], Ty::Deque(Box::new(t), o))
+    (
+        vec![Ty::Deque(Box::new(t.clone()), o), t.clone()],
+        Ty::Deque(Box::new(t), o),
+    )
 }
 
-fn sig_extend(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_extend(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Iterator(Box::new(t.clone()), e)], Ty::Deque(Box::new(t), o))
-}
-
-fn sig_consume(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    (vec![Ty::Deque(Box::new(t.clone()), o), Ty::Int], Ty::Deque(Box::new(t), o))
-}
-
-// (Iterator<T>, Fn(T) → Iterator<U>) → Iterator<U>
-fn sig_flat_map(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let u = s.fresh_var();
     let e = s.fresh_effect_var();
     (
         vec![
-            Ty::Iterator(Box::new(t.clone()), e),
+            Ty::Deque(Box::new(t.clone()), o),
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+        ],
+        Ty::Deque(Box::new(t), o),
+    )
+}
+
+fn sig_consume(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let o = s.fresh_origin();
+    (
+        vec![Ty::Deque(Box::new(t.clone()), o), Ty::Int],
+        Ty::Deque(Box::new(t), o),
+    )
+}
+
+// (Iterator<T>, Fn(T) → Iterator<U>) → Iterator<U>
+fn sig_flat_map(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let u = s.fresh_param();
+    let e = s.fresh_effect_var();
+    (
+        vec![
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
             Ty::Fn {
-                params: vec![t],
-                ret: Box::new(Ty::Iterator(Box::new(u.clone()), e)),
-                kind: FnKind::Lambda,
+                params: vec![p(interner, 0, t)],
+                ret: Box::new(Ty::Iterator(Box::new(u.clone()), e.clone())),
                 captures: vec![],
-                effect: e,
+                effect: e.clone(),
             },
         ],
         Ty::Iterator(Box::new(u), e),
     )
 }
 
-fn sig_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    (vec![Ty::List(Box::new(t.clone()))], Ty::Iterator(Box::new(t), Effect::Pure))
+fn sig_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    (
+        vec![Ty::List(Box::new(t.clone()))],
+        Ty::Iterator(Box::new(t), Effect::pure()),
+    )
 }
 
-fn sig_rev_iter(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_iter(s)
+fn sig_rev_iter(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_iter(interner, s)
 }
 
-fn sig_collect(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e)], Ty::List(Box::new(t)))
-}
-
-fn sig_take(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e), Ty::Int], Ty::Iterator(Box::new(t), e))
-}
-
-fn sig_skip(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_take(s)
-}
-
-fn sig_chain(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_collect(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Iterator(Box::new(t.clone()), e), Ty::Iterator(Box::new(t.clone()), e)],
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone())],
+        Ty::List(Box::new(t)),
+    )
+}
+
+fn sig_take(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let e = s.fresh_effect_var();
+    (
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone()), Ty::Int],
+        Ty::Iterator(Box::new(t), e),
+    )
+}
+
+fn sig_skip(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_take(interner, s)
+}
+
+fn sig_chain(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let e = s.fresh_effect_var();
+    (
+        vec![
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+        ],
         Ty::Iterator(Box::new(t), e),
     )
 }
@@ -494,119 +389,230 @@ fn sig_chain(s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 // Structural ops: same origin preserved
 
-fn sig_take_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
-    let o = s.fresh_origin();
-    let e = s.fresh_effect_var();
-    (vec![Ty::Sequence(Box::new(t.clone()), o, e), Ty::Int], Ty::Sequence(Box::new(t), o, e))
-}
-
-fn sig_skip_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    sig_take_seq(s)
-}
-
-// chain_seq: (Sequence<T, O, E>, Iterator<T, E>) → Sequence<T, O, E>
-// Second argument is Iterator (not Sequence) — chain appends from any source.
-fn sig_chain_seq(s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_var();
+fn sig_take_seq(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
     let o = s.fresh_origin();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Sequence(Box::new(t.clone()), o, e), Ty::Iterator(Box::new(t.clone()), e)],
+        vec![Ty::Sequence(Box::new(t.clone()), o, e.clone()), Ty::Int],
         Ty::Sequence(Box::new(t), o, e),
     )
 }
 
-// Transform ops: new origin
+fn sig_skip_seq(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    sig_take_seq(interner, s)
+}
 
-// Deleted Sequence overloads: MapSeq, PmapSeq, FilterSeq, FlattenSeq,
-// FlatMapSeq, FlatMapIterSeq, CollectSeq, RevSeq.
-//
-// Only chain, take, skip preserve Sequence<T, O, E> → Sequence<T, O, E>.
-// All other ops: Sequence coerces to Iterator via the type system.
+// chain_seq: (Sequence<T, O, E>, Iterator<T, E>) → Sequence<T, O, E>
+// Second argument is Iterator (not Sequence) — chain appends from any source.
+fn sig_chain_seq(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let o = s.fresh_origin();
+    let e = s.fresh_effect_var();
+    (
+        vec![
+            Ty::Sequence(Box::new(t.clone()), o, e.clone()),
+            Ty::Iterator(Box::new(t.clone()), e.clone()),
+        ],
+        Ty::Sequence(Box::new(t), o, e),
+    )
+}
 
 // ---------------------------------------------------------------------------
-// Registry construction
+// Graph Function generation
 // ---------------------------------------------------------------------------
 
-fn build_registry() -> BuiltinRegistry {
-    let mut r = BuiltinRegistry::new();
+/// Build a graph `Function` from a name and signature generator.
+fn make_builtin(
+    interner: &Interner,
+    name: &str,
+    sig_fn: SigFn,
+) -> Function {
+    let mut sig_subst = TySubst::new();
+    let (params, ret) = sig_fn(interner, &mut sig_subst);
+    let named_params: Vec<Param> = params
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty.clone()))
+        .collect();
+    Function {
+        id: FunctionId::alloc(),
+        name: interner.intern(name),
+        kind: FnKind::Extern {
+            deps: Freeze::new(vec![]),
+        },
+        constraint: FnConstraint {
+            signature: Some(Signature { params: named_params.clone() }),
+            output: Constraint::Exact(Ty::Fn {
+                params: named_params,
+                ret: Box::new(ret),
+                captures: vec![],
+                effect: Effect::pure(),
+            }),
+        },
+    }
+}
 
-    // -- Iterator HOFs --
-    // Sequence coerces to Iterator — no Sequence-specific overloads for these.
-    r.add("filter",      BuiltinId::Filter,       sig_filter,        None);
-    r.add("map",         BuiltinId::Map,          sig_map,           None);
-    r.add("pmap",        BuiltinId::Pmap,         sig_pmap,          None);
-    // find, reduce, fold, any, all — consumers, no Sequence overloads needed
-    // (Sequence coerces to Iterator via type system)
-    r.add("find",        BuiltinId::Find,         sig_find,          None);
-    r.add("reduce",      BuiltinId::Reduce,       sig_reduce,        None);
-    r.add("fold",        BuiltinId::Fold,         sig_fold,          None);
-    r.add("any",         BuiltinId::Any,          sig_any,           None);
-    r.add("all",         BuiltinId::All,          sig_all,           None);
+/// Generate all builtin functions as graph `Function` entries.
+///
+/// Each builtin gets a unique `FunctionId`. Polymorphic signatures contain
+/// `Ty::Param` tokens from a throwaway `TySubst` — callers must
+/// `instantiate()` before unification.
+pub fn standard_builtins(interner: &Interner) -> Vec<Function> {
+    vec![
+        // Iterator HOFs
+        make_builtin(interner, "filter", sig_filter),
+        make_builtin(interner, "map", sig_map),
+        make_builtin(interner, "pmap", sig_pmap),
+        make_builtin(interner, "find", sig_find),
+        make_builtin(interner, "reduce", sig_reduce),
+        make_builtin(interner, "fold", sig_fold),
+        make_builtin(interner, "any", sig_any),
+        make_builtin(interner, "all", sig_all),
+        // Conversions
+        make_builtin(interner, "to_string", sig_to_string),
+        make_builtin(interner, "to_float", sig_to_float),
+        make_builtin(interner, "to_int", sig_to_int),
+        make_builtin(interner, "char_to_int", sig_char_to_int),
+        make_builtin(interner, "int_to_char", sig_int_to_char),
+        // List ops
+        make_builtin(interner, "len", sig_len),
+        make_builtin(interner, "reverse", sig_reverse),
+        // flatten / flat_map
+        make_builtin(interner, "flatten", sig_flatten_iter),
+        make_builtin(interner, "flat_map", sig_flat_map),
+        // Deque ops
+        make_builtin(interner, "append", sig_append),
+        make_builtin(interner, "extend", sig_extend),
+        make_builtin(interner, "consume", sig_consume),
+        // join / contains / first / last
+        make_builtin(interner, "join", sig_join_iter),
+        make_builtin(interner, "contains", sig_contains_iter),
+        make_builtin(interner, "first", sig_first_iter),
+        make_builtin(interner, "last", sig_last_iter),
+        // String ops
+        make_builtin(interner, "contains_str", sig_contains_str),
+        make_builtin(interner, "substring", sig_substring),
+        make_builtin(interner, "len_str", sig_len_str),
+        make_builtin(interner, "to_bytes", sig_to_bytes),
+        make_builtin(interner, "to_utf8", sig_to_utf8),
+        make_builtin(interner, "to_utf8_lossy", sig_to_utf8_lossy),
+        make_builtin(interner, "trim", sig_str_to_str),
+        make_builtin(interner, "trim_start", sig_str_to_str),
+        make_builtin(interner, "trim_end", sig_str_to_str),
+        make_builtin(interner, "upper", sig_str_to_str),
+        make_builtin(interner, "lower", sig_str_to_str),
+        make_builtin(interner, "replace_str", sig_replace_str),
+        make_builtin(interner, "split_str", sig_split_str),
+        make_builtin(interner, "starts_with_str", sig_str_str_to_bool),
+        make_builtin(interner, "ends_with_str", sig_str_str_to_bool),
+        make_builtin(interner, "repeat_str", sig_repeat_str),
+        // Option ops
+        make_builtin(interner, "unwrap", sig_unwrap),
+        make_builtin(interner, "unwrap_or", sig_unwrap_or),
+        // Iterator/Sequence next
+        make_builtin(interner, "next_seq", sig_next_seq),
+        make_builtin(interner, "next", sig_next),
+        // Iterator constructors
+        make_builtin(interner, "iter", sig_iter),
+        make_builtin(interner, "rev_iter", sig_rev_iter),
+        make_builtin(interner, "collect", sig_collect),
+        // take/skip/chain (Sequence + Iterator variants)
+        make_builtin(interner, "take_seq", sig_take_seq),
+        make_builtin(interner, "take", sig_take),
+        make_builtin(interner, "skip_seq", sig_skip_seq),
+        make_builtin(interner, "skip", sig_skip),
+        make_builtin(interner, "chain_seq", sig_chain_seq),
+        make_builtin(interner, "chain", sig_chain),
+    ]
+}
 
-    // -- Conversions --
-    r.add("to_string",   BuiltinId::ToString,     sig_to_string,     Some(require_scalar));
-    r.add("to_float",    BuiltinId::ToFloat,      sig_to_float,      None);
-    r.add("to_int",      BuiltinId::ToInt,        sig_to_int,        Some(require_to_int));
-    r.add("char_to_int", BuiltinId::CharToInt,    sig_char_to_int,   None);
-    r.add("int_to_char", BuiltinId::IntToChar,    sig_int_to_char,   None);
+/// Build a name → Ty::Fn map from all builtins, for use in `TypeEnv.functions`.
+pub fn builtin_fn_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
+    let mut map: FxHashMap<Astr, Ty> = FxHashMap::default();
+    for func in standard_builtins(interner) {
+        if let Constraint::Exact(ty) = func.constraint.output {
+            assert!(
+                !map.contains_key(&func.name),
+                "duplicate builtin name: {}",
+                interner.resolve(func.name)
+            );
+            map.insert(func.name, ty);
+        }
+    }
+    map
+}
 
-    // -- List ops --
-    r.add("len",         BuiltinId::Len,          sig_len,           None);
-    r.add("reverse",     BuiltinId::Reverse,      sig_reverse,       None);
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
 
-    // -- flatten / flat_map (Iterator only — List coerces via Cast) --
-    r.add("flatten",     BuiltinId::Flatten,      sig_flatten_iter,  None);
-    r.add("flat_map",    BuiltinId::FlatMap,       sig_flat_map,      None);
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::ty::Polarity;
 
-    // -- Deque ops (origin-preserving) --
-    r.add("append",      BuiltinId::Append,       sig_append,        None);
-    r.add("extend",      BuiltinId::Extend,       sig_extend,        None);
-    r.add("consume",     BuiltinId::Consume,      sig_consume,       None);
+    /// Signature generator for a given builtin name.
+    fn sig(name: &str) -> Option<SigFn> {
+        match name {
+            "filter" => Some(sig_filter),
+            "map" => Some(sig_map),
+            "pmap" => Some(sig_pmap),
+            "find" => Some(sig_find),
+            "reduce" => Some(sig_reduce),
+            "fold" => Some(sig_fold),
+            "any" => Some(sig_any),
+            "all" => Some(sig_all),
+            "to_string" => Some(sig_to_string),
+            "to_float" => Some(sig_to_float),
+            "to_int" => Some(sig_to_int),
+            "char_to_int" => Some(sig_char_to_int),
+            "int_to_char" => Some(sig_int_to_char),
+            "len" => Some(sig_len),
+            "reverse" => Some(sig_reverse),
+            "flatten" => Some(sig_flatten_iter),
+            "flat_map" => Some(sig_flat_map),
+            "join" => Some(sig_join_iter),
+            "contains" => Some(sig_contains_iter),
+            "first" => Some(sig_first_iter),
+            "last" => Some(sig_last_iter),
+            "unwrap" => Some(sig_unwrap),
+            "unwrap_or" => Some(sig_unwrap_or),
+            "iter" => Some(sig_iter),
+            "rev_iter" => Some(sig_rev_iter),
+            "collect" => Some(sig_collect),
+            "next_seq" => Some(sig_next_seq),
+            "next" => Some(sig_next),
+            "take_seq" => Some(sig_take_seq),
+            "take" => Some(sig_take),
+            "skip_seq" => Some(sig_skip_seq),
+            "skip" => Some(sig_skip),
+            "chain_seq" => Some(sig_chain_seq),
+            "chain" => Some(sig_chain),
+            "append" => Some(sig_append),
+            "extend" => Some(sig_extend),
+            "consume" => Some(sig_consume),
+            _ => None,
+        }
+    }
 
-    // -- join / contains / first / last (Iterator only — List coerces via Cast) --
-    r.add("join",        BuiltinId::Join,         sig_join_iter,     None);
-    r.add("contains",    BuiltinId::Contains,     sig_contains_iter, None);
-    r.add("first",       BuiltinId::First,        sig_first_iter,    None);
-    r.add("last",        BuiltinId::Last,         sig_last_iter,     None);
-
-    // -- String ops --
-    r.add("contains_str",    BuiltinId::ContainsStr,    sig_contains_str,     None);
-    r.add("substring",       BuiltinId::Substring,      sig_substring,        None);
-    r.add("len_str",         BuiltinId::LenStr,         sig_len_str,          None);
-    r.add("to_bytes",        BuiltinId::ToBytes,        sig_to_bytes,         None);
-    r.add("to_utf8",         BuiltinId::ToUtf8,         sig_to_utf8,          None);
-    r.add("to_utf8_lossy",   BuiltinId::ToUtf8Lossy,    sig_to_utf8_lossy,    None);
-    r.add("trim",            BuiltinId::Trim,           sig_str_to_str,       None);
-    r.add("trim_start",      BuiltinId::TrimStart,      sig_str_to_str,       None);
-    r.add("trim_end",        BuiltinId::TrimEnd,        sig_str_to_str,       None);
-    r.add("upper",           BuiltinId::Upper,          sig_str_to_str,       None);
-    r.add("lower",           BuiltinId::Lower,          sig_str_to_str,       None);
-    r.add("replace_str",     BuiltinId::ReplaceStr,     sig_replace_str,      None);
-    r.add("split_str",       BuiltinId::SplitStr,       sig_split_str,        None);
-    r.add("starts_with_str", BuiltinId::StartsWithStr,  sig_str_str_to_bool,  None);
-    r.add("ends_with_str",   BuiltinId::EndsWithStr,    sig_str_str_to_bool,  None);
-    r.add("repeat_str",      BuiltinId::RepeatStr,      sig_repeat_str,       None);
-
-    // -- Option ops --
-    r.add("unwrap",    BuiltinId::Unwrap,    sig_unwrap,    None);
-    r.add("unwrap_or", BuiltinId::UnwrapOr,  sig_unwrap_or, None);
-
-    // -- Iterator/Sequence next --
-    r.add("next",      BuiltinId::NextSeq,   sig_next_seq,  None);
-    r.add("next",      BuiltinId::Next,       sig_next,      None);
-
-    // -- Iterator/Sequence constructors --
-    r.add("iter",      BuiltinId::Iter,      sig_iter,      None);
-    r.add("rev_iter",  BuiltinId::RevIter,   sig_rev_iter,  None);
-    r.add("collect",   BuiltinId::Collect,   sig_collect,   None);
-    r.add("take",      BuiltinId::TakeSeq,   sig_take_seq,  None);
-    r.add("take",      BuiltinId::Take,      sig_take,      None);
-    r.add("skip",      BuiltinId::SkipSeq,   sig_skip_seq,  None);
-    r.add("skip",      BuiltinId::Skip,      sig_skip,      None);
-    r.add("chain",     BuiltinId::ChainSeq,  sig_chain_seq, None);
-    r.add("chain",     BuiltinId::Chain,     sig_chain,     None);
-
-    r
+    /// Try builtin resolution for a given name with the given arg types.
+    pub fn try_builtin(
+        interner: &Interner,
+        s: &mut TySubst,
+        name: &str,
+        arg_types: &[Ty],
+    ) -> Result<Ty, ()> {
+        let sig_fn = sig(name).ok_or(())?;
+        let (params, ret) = sig_fn(interner, s);
+        if arg_types.len() != params.len() {
+            return Err(());
+        }
+        for (a, param_ty) in arg_types.iter().zip(params.iter()) {
+            if s.unify(a, param_ty, Polarity::Covariant).is_err() {
+                return Err(());
+            }
+        }
+        Ok(s.resolve(&ret))
+    }
 }

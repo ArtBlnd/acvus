@@ -99,7 +99,6 @@ impl LanguageSession {
             ("initialValue", _) => acvus_lsp::NodeField::InitialValue,
             ("bind", _) => acvus_lsp::NodeField::Bind,
             ("assert", _) => acvus_lsp::NodeField::Assert,
-            ("ifModifiedKey", _) => acvus_lsp::NodeField::IfModifiedKey,
             ("exprSource", _) => acvus_lsp::NodeField::ExprSource,
             ("message", Some(i)) => acvus_lsp::NodeField::Message(i),
             ("iteratorExpr", Some(i)) => acvus_lsp::NodeField::IteratorExpr(i),
@@ -403,7 +402,6 @@ fn convert_node_errors(src: &acvus_lsp::NodeErrors) -> NodeErrors {
         env: convert_lsp_errors(&src.env),
         initial_value: convert_lsp_errors(&src.initial_value),
         bind: convert_lsp_errors(&src.bind),
-        if_modified_key: convert_lsp_errors(&src.if_modified_key),
         assert: convert_lsp_errors(&src.assert),
         messages: src
             .messages

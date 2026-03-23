@@ -11,7 +11,7 @@ use acvus_mir::ty::Ty;
 use acvus_mir::context_registry::PartialContextTypeRegistry;
 use acvus_orchestration::{
     EntryRef, Execution, ExpressionSpec, Fetch, HttpRequest, Journal, NodeKind, NodeSpec,
-    Persistency, Resolved, Strategy, TreeJournal, compile_nodes, compile_script,
+    Persistency, Resolved, Strategy, TreeJournal, compile_script, OrchError, OrchErrorKind,
 };
 use acvus_utils::{Astr, Interner};
 use node::NodeDef;
@@ -242,13 +242,29 @@ async fn main() {
     // Merge expr node specs into node specs
     node_specs.extend(expr_node_specs);
 
-    let compiled_nodes = match compile_nodes(&interner, &node_specs, registry) {
-        Ok(nodes) => nodes,
-        Err(errors) => {
-            for e in &errors {
-                eprintln!("compile error: {}", e.display(&interner));
+    let compiled_nodes = if render_only {
+        let fetch = Arc::new(RenderOnlyFetch);
+        match acvus_orchestration::compile_nodes(&interner, &node_specs, registry, fetch) {
+            Ok(nodes) => nodes,
+            Err(errors) => {
+                for e in &errors {
+                    eprintln!("compile error: {}", e.display(&interner));
+                }
+                process::exit(1);
             }
-            process::exit(1);
+        }
+    } else {
+        let fetch = Arc::new(HttpFetch {
+            client: reqwest::Client::new(),
+        });
+        match acvus_orchestration::compile_nodes(&interner, &node_specs, registry, fetch) {
+            Ok(nodes) => nodes,
+            Err(errors) => {
+                for e in &errors {
+                    eprintln!("compile error: {}", e.display(&interner));
+                }
+                process::exit(1);
+            }
         }
     };
 
@@ -301,10 +317,8 @@ async fn main() {
     };
 
     if render_only {
-        let fetch = RenderOnlyFetch;
         let mut engine = ChatEngine::new(
             compiled_nodes,
-            fetch,
             journal,
             root,
             &spec.entrypoint,
@@ -327,12 +341,8 @@ async fn main() {
             }
         }
     } else {
-        let fetch = HttpFetch {
-            client: reqwest::Client::new(),
-        };
         let mut engine = ChatEngine::new(
             compiled_nodes,
-            fetch,
             journal,
             root,
             &spec.entrypoint,

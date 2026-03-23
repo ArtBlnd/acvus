@@ -1,18 +1,72 @@
+use std::collections::BTreeSet;
 use std::fmt;
 
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-/// Private token that prevents `Ty::Infer` from being constructed outside `acvus_mir`.
-///
-/// `Ty::Infer` is strictly for the type checker's internal use — it signals
-/// "create a fresh type variable here". Downstream crates must never use it
-/// as a "don't know / don't care" placeholder. Use the concrete type instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InferToken(());
+use crate::graph::types::ContextId;
 
-impl InferToken {
-    pub(crate) fn new() -> Self { Self(()) }
+/// A named, typed function parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: Astr,
+    pub ty: Ty,
+}
+
+impl Param {
+    pub fn new(name: Astr, ty: Ty) -> Self {
+        Self { name, ty }
+    }
+}
+
+/// Allowed-type set for a constrained type parameter.
+///
+/// Represents the exact set of concrete types a Param may unify with.
+/// When two constrained Params are unified, their sets are intersected.
+/// Empty intersection = immediate type error (no valid instantiation exists).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamConstraint(pub Vec<Ty>);
+
+impl ParamConstraint {
+    /// Does this concrete type satisfy the constraint?
+    pub fn allows(&self, ty: &Ty) -> bool {
+        self.0.contains(ty)
+    }
+
+    /// Intersect two constraint sets. Returns `None` if the result is empty
+    /// (no concrete type can satisfy both constraints simultaneously).
+    pub fn intersect(&self, other: &Self) -> Option<Self> {
+        let result: Vec<Ty> = self.0.iter().filter(|t| other.0.contains(t)).cloned().collect();
+        if result.is_empty() {
+            None
+        } else {
+            Some(Self(result))
+        }
+    }
+
+    /// Convenience constructors for builtin signatures.
+    pub fn scalar() -> Self {
+        Self(vec![Ty::Int, Ty::Float, Ty::String, Ty::Bool, Ty::Byte])
+    }
+
+    pub fn float_or_byte() -> Self {
+        Self(vec![Ty::Float, Ty::Byte])
+    }
+}
+
+/// Opaque token for `Ty::Param`. Only constructible via `TySubst::fresh_param()`.
+///
+/// This ensures type parameters (inference holes / generic slots) can only be
+/// created through the substitution table, preventing accidental fabrication
+/// of param ids that bypass the unification system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ParamToken(u32);
+
+impl ParamToken {
+    /// Numeric id for serialization / display.
+    pub fn id(self) -> u32 {
+        self.0
+    }
 }
 
 /// Token for `Ty::Error` construction.
@@ -33,7 +87,9 @@ impl InferToken {
 pub struct ErrorToken(());
 
 impl ErrorToken {
-    fn new() -> Self { Self(()) }
+    fn new() -> Self {
+        Self(())
+    }
 }
 
 /// Polarity for subtyping direction in unification.
@@ -73,36 +129,106 @@ pub enum Purity {
     Unpure,
 }
 
+/// Fine-grained effect information: which contexts are read/written,
+/// and whether opaque IO is involved.
+///
+/// Pure = all fields empty/false. No separate variant needed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+pub struct EffectSet {
+    pub reads: BTreeSet<ContextId>,
+    pub writes: BTreeSet<ContextId>,
+    pub io: bool,
+}
+
+impl EffectSet {
+    pub fn is_pure(&self) -> bool {
+        self.reads.is_empty() && self.writes.is_empty() && !self.io
+    }
+
+    /// Union of two effect sets: reads ∪ reads, writes ∪ writes, io || io.
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            reads: self.reads.union(&other.reads).copied().collect(),
+            writes: self.writes.union(&other.writes).copied().collect(),
+            io: self.io || other.io,
+        }
+    }
+}
+
+impl fmt::Display for EffectSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_pure() {
+            return write!(f, "Pure");
+        }
+        write!(f, "Effectful(")?;
+        let mut parts = Vec::new();
+        if !self.reads.is_empty() {
+            parts.push(format!("r={}", self.reads.len()));
+        }
+        if !self.writes.is_empty() {
+            parts.push(format!("w={}", self.writes.len()));
+        }
+        if self.io {
+            parts.push("io".to_string());
+        }
+        write!(f, "{})", parts.join(", "))
+    }
+}
+
 /// Effect classification for functions and lazy computations.
 ///
-/// Forms a lattice: `Pure < Effectful`. Unification is lattice join (max).
-/// `Var(u32)` is an effect variable for polymorphism in HOF signatures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// `Resolved(EffectSet)` contains concrete effect information.
+/// `Var(u32)` is an unresolved effect variable for polymorphism in HOF signatures.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Effect {
-    Pure,
-    Effectful,
+    Resolved(EffectSet),
     Var(u32),
+}
+
+impl Effect {
+    /// No side effects: reads nothing, writes nothing, no IO.
+    pub fn pure() -> Self {
+        Effect::Resolved(EffectSet::default())
+    }
+
+    /// Opaque IO effect (e.g. context access without known ContextId).
+    pub fn io() -> Self {
+        Effect::Resolved(EffectSet { io: true, ..EffectSet::default() })
+    }
+
+    pub fn is_pure(&self) -> bool {
+        matches!(self, Effect::Resolved(s) if s.is_pure())
+    }
+
+    pub fn is_var(&self) -> bool {
+        matches!(self, Effect::Var(_))
+    }
+
+    /// Returns true if this is a resolved, non-pure effect.
+    pub fn is_effectful(&self) -> bool {
+        matches!(self, Effect::Resolved(s) if !s.is_pure())
+    }
+
+    /// Union two resolved effects. If either is Var, returns None.
+    pub fn union(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Effect::Resolved(a), Effect::Resolved(b)) => {
+                Some(Effect::Resolved(a.union(b)))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Effect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Effect::Pure => write!(f, "Pure"),
-            Effect::Effectful => write!(f, "Effectful"),
+            Effect::Resolved(set) => write!(f, "{set}"),
             Effect::Var(id) => write!(f, "EffectVar({id})"),
         }
     }
 }
 
-/// Distinguishes lambda closures from extern function references.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FnKind {
-    Lambda,
-    Extern,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TyVar(pub u32);
 
 /// Origin identity for Deque types — prevents mixing deques from different sources.
 ///
@@ -137,9 +263,8 @@ pub enum Ty {
     Object(FxHashMap<Astr, Ty>),
     Tuple(Vec<Ty>),
     Fn {
-        params: Vec<Ty>,
+        params: Vec<Param>,
         ret: Box<Ty>,
-        kind: FnKind,
         captures: Vec<Ty>,
         effect: Effect,
     },
@@ -155,6 +280,10 @@ pub enum Ty {
         name: Astr,
         variants: FxHashMap<Astr, Option<Box<Ty>>>,
     },
+    /// Deferred computation handle. Created by `spawn`, consumed by `eval`.
+    /// Carries the spawned computation's return type and effect.
+    /// Always move-only (Effectful) — eval consumes the handle exactly once.
+    Handle(Box<Ty>, Effect),
     /// Lazy iterator over elements of type T, with effect classification.
     Iterator(Box<Ty>, Effect),
     /// Lazy sequence over elements of type T. Lazy version of Deque with origin identity and effect.
@@ -162,15 +291,19 @@ pub enum Ty {
     /// Deque type: tracked deque with origin identity.
     /// `Origin` prevents mixing deques from different sources.
     Deque(Box<Ty>, Origin),
-    /// Unification variable. Must not appear in final resolved types.
-    Var(TyVar),
-    /// Inferred type: signals the type checker to create a fresh Var internally.
-    /// Input-only -- must not appear in output types.
+    /// Type parameter: unification variable / generic slot.
     ///
-    /// Contains a private token so it can only be constructed via `Ty::infer()`
-    /// within the `acvus_mir` crate. This prevents misuse as a "any type" placeholder
-    /// in downstream crates.
-    Infer(InferToken),
+    /// Used for both inference holes (resolved during type checking) and
+    /// polymorphic signatures (preserved in graph-level function types).
+    /// Only constructible via `TySubst::fresh_param()` — the private
+    /// `ParamToken` constructor enforces this.
+    ///
+    /// `constraint`: allowed-type set. `None` = unconstrained.
+    /// When two constrained Params unify, their sets are intersected.
+    Param {
+        token: ParamToken,
+        constraint: Option<ParamConstraint>,
+    },
     /// Poison type: produced after a type error. Unifies with anything to suppress cascading errors.
     ///
     /// Contains a private token — only constructible via `Ty::error()` within `acvus_mir`.
@@ -179,22 +312,29 @@ pub enum Ty {
 }
 
 impl Ty {
-    /// Create an `Infer` type. Only callable within `acvus_mir`.
-    pub(crate) fn infer() -> Self {
-        Ty::Infer(InferToken::new())
-    }
-
     /// Create an `Error` (poison) type. See [`ErrorToken`] for permitted uses.
     pub fn error() -> Self {
         Ty::Error(ErrorToken::new())
     }
 
-    pub fn is_infer(&self) -> bool {
-        matches!(self, Ty::Infer(_))
+    pub fn is_param(&self) -> bool {
+        matches!(self, Ty::Param { .. })
     }
 
     pub fn is_error(&self) -> bool {
         matches!(self, Ty::Error(_))
+    }
+
+    /// Extract the effect carried by this type, if any.
+    /// Handle, Iterator, Sequence, and Fn types carry effects; other types are pure.
+    pub fn carried_effect(&self) -> Option<&Effect> {
+        match self {
+            Ty::Handle(_, effect) | Ty::Iterator(_, effect) | Ty::Sequence(_, _, effect) => {
+                Some(effect)
+            }
+            Ty::Fn { effect, .. } => Some(effect),
+            _ => None,
+        }
     }
 
     /// Extract the element type from a collection type.
@@ -216,31 +356,38 @@ impl Ty {
     #[deprecated(note = "use purity() or is_pureable()")]
     pub fn is_pure(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
-            | Ty::Range | Ty::Byte => true,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
             Ty::List(inner) => inner.is_pure(),
             Ty::Deque(inner, _) => inner.is_pure(),
             Ty::Option(inner) => inner.is_pure(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pure()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pure()),
-            Ty::Enum { variants, .. } => variants.values().all(|p| {
-                p.as_ref().map_or(true, |ty| ty.is_pure())
-            }),
-            Ty::Fn { .. } | Ty::Opaque(_) | Ty::Iterator(..) | Ty::Sequence(..) => false,
-            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
+            Ty::Enum { variants, .. } => variants
+                .values()
+                .all(|p| p.as_ref().map_or(true, |ty| ty.is_pure())),
+            Ty::Fn { .. } | Ty::Opaque(_) | Ty::Handle(..) | Ty::Iterator(..) | Ty::Sequence(..) => false,
+            Ty::Param { .. } | Ty::Error(_) => false,
         }
     }
 
     /// Returns the purity tier of this type (shallow — does not recurse into containers).
     pub fn purity(&self) -> Purity {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
-            | Ty::Range | Ty::Byte => Purity::Pure,
-            Ty::List(_) | Ty::Deque(..) | Ty::Object(_) | Ty::Tuple(_)
-            | Ty::Fn { .. } | Ty::Iterator(..) | Ty::Sequence(..)
-            | Ty::Option(_) | Ty::Enum { .. } => Purity::Lazy,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => {
+                Purity::Pure
+            }
+            Ty::List(_)
+            | Ty::Deque(..)
+            | Ty::Object(_)
+            | Ty::Tuple(_)
+            | Ty::Fn { .. }
+            | Ty::Handle(..)
+            | Ty::Iterator(..)
+            | Ty::Sequence(..)
+            | Ty::Option(_)
+            | Ty::Enum { .. } => Purity::Lazy,
             Ty::Opaque(_) => Purity::Unpure,
-            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => Purity::Pure,
+            Ty::Param { .. } | Ty::Error(_) => Purity::Unpure,
         }
     }
 
@@ -248,21 +395,20 @@ impl Ty {
     /// Transitively checks container contents — `List<Fn>` returns false.
     pub fn is_pureable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
-            | Ty::Range | Ty::Byte => true,
-            Ty::List(inner) | Ty::Iterator(inner, _) => inner.is_pureable(),
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
+            Ty::List(inner) | Ty::Iterator(inner, _) | Ty::Handle(inner, _) => inner.is_pureable(),
             Ty::Deque(inner, _) | Ty::Sequence(inner, ..) => inner.is_pureable(),
             Ty::Option(inner) => inner.is_pureable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
-            Ty::Enum { variants, .. } => variants.values().all(|p| {
-                p.as_ref().map_or(true, |ty| ty.is_pureable())
-            }),
+            Ty::Enum { variants, .. } => variants
+                .values()
+                .all(|p| p.as_ref().map_or(true, |ty| ty.is_pureable())),
             Ty::Fn { captures, ret, .. } => {
                 captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
             }
             Ty::Opaque(_) => false,
-            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
+            Ty::Param { .. } | Ty::Error(_) => false,
         }
     }
 
@@ -282,20 +428,19 @@ impl Ty {
     /// Recursively checks container contents: `List<Fn>` is not storable.
     pub fn is_storable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit
-            | Ty::Range | Ty::Byte => true,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
             Ty::List(inner) | Ty::Deque(inner, _) => inner.is_storable(),
             Ty::Option(inner) => inner.is_storable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_storable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_storable()),
-            Ty::Enum { variants, .. } => variants.values().all(|p| {
-                p.as_ref().map_or(true, |ty| ty.is_storable())
-            }),
+            Ty::Enum { variants, .. } => variants
+                .values()
+                .all(|p| p.as_ref().map_or(true, |ty| ty.is_storable())),
             Ty::Iterator(inner, effect) | Ty::Sequence(inner, _, effect) => {
-                *effect != Effect::Effectful && inner.is_storable()
+                effect.is_pure() && inner.is_storable()
             }
-            Ty::Fn { .. } | Ty::Opaque(_) => false,
-            Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => true,
+            Ty::Handle(..) | Ty::Fn { .. } | Ty::Opaque(_) => false,
+            Ty::Param { .. } | Ty::Error(_) => false,
         }
     }
 
@@ -351,36 +496,47 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ")")
             }
-            Ty::Fn { params, ret, kind, captures: _, effect } => {
-                let kind_str = match kind {
-                    FnKind::Lambda => "Fn",
-                    FnKind::Extern => "ExternFn",
-                };
-                let bang = if *effect == Effect::Effectful { "!" } else { "" };
-                write!(f, "{kind_str}{bang}(")?;
+            Ty::Fn {
+                params,
+                ret,
+                captures: _,
+                effect,
+            } => {
+                let bang = if effect.is_effectful() { "!" } else { "" };
+                write!(f, "Fn{bang}(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", p.display(self.interner))?;
+                    write!(f, "{}", p.ty.display(self.interner))?;
                 }
                 write!(f, ") -> {}", ret.display(self.interner))
             }
             Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
+            Ty::Handle(inner, effect) => {
+                let bang = if effect.is_effectful() { "!" } else { "" };
+                write!(f, "Handle{bang}<{}>", inner.display(self.interner))
+            }
             Ty::Iterator(inner, effect) => {
-                let bang = if *effect == Effect::Effectful { "!" } else { "" };
+                let bang = if effect.is_effectful() { "!" } else { "" };
                 write!(f, "Iterator{bang}<{}>", inner.display(self.interner))
             }
             Ty::Sequence(inner, origin, effect) => {
-                let bang = if *effect == Effect::Effectful { "!" } else { "" };
-                write!(f, "Sequence{bang}<{}, {}>", inner.display(self.interner), origin)
+                let bang = if effect.is_effectful() { "!" } else { "" };
+                write!(
+                    f,
+                    "Sequence{bang}<{}, {}>",
+                    inner.display(self.interner),
+                    origin
+                )
             }
-            Ty::Deque(inner, origin) => write!(f, "Deque<{}, {}>", inner.display(self.interner), origin),
+            Ty::Deque(inner, origin) => {
+                write!(f, "Deque<{}, {}>", inner.display(self.interner), origin)
+            }
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::Opaque(name) => write!(f, "{name}"),
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
-            Ty::Var(v) => write!(f, "?{}", v.0),
-            Ty::Infer(_) => write!(f, "<infer>"),
+            Ty::Param { token: t, .. } => write!(f, "?{}", t.0),
             Ty::Error(_) => write!(f, "<error>"),
         }
     }
@@ -394,20 +550,20 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
 
 /// Snapshot of `TySubst` state for rollback during overload resolution.
 pub struct TySubstSnapshot {
-    bindings: FxHashMap<TyVar, Ty>,
+    bindings: FxHashMap<ParamToken, Ty>,
     origin_bindings: FxHashMap<u32, Origin>,
     effect_bindings: FxHashMap<u32, Effect>,
-    next_var: u32,
+    next_param: u32,
     next_origin: u32,
     next_effect: u32,
 }
 
 /// Substitution table for type unification.
 pub struct TySubst {
-    bindings: FxHashMap<TyVar, Ty>,
+    bindings: FxHashMap<ParamToken, Ty>,
     origin_bindings: FxHashMap<u32, Origin>,
     effect_bindings: FxHashMap<u32, Effect>,
-    next_var: u32,
+    next_param: u32,
     next_origin: u32,
     next_effect: u32,
 }
@@ -424,7 +580,7 @@ impl TySubst {
             bindings: FxHashMap::default(),
             origin_bindings: FxHashMap::default(),
             effect_bindings: FxHashMap::default(),
-            next_var: 0,
+            next_param: 0,
             next_origin: 0,
             next_effect: 0,
         }
@@ -436,7 +592,7 @@ impl TySubst {
             bindings: self.bindings.clone(),
             origin_bindings: self.origin_bindings.clone(),
             effect_bindings: self.effect_bindings.clone(),
-            next_var: self.next_var,
+            next_param: self.next_param,
             next_origin: self.next_origin,
             next_effect: self.next_effect,
         }
@@ -447,7 +603,7 @@ impl TySubst {
         self.bindings = snap.bindings;
         self.origin_bindings = snap.origin_bindings;
         self.effect_bindings = snap.effect_bindings;
-        self.next_var = snap.next_var;
+        self.next_param = snap.next_param;
         self.next_origin = snap.next_origin;
         self.next_effect = snap.next_effect;
     }
@@ -468,11 +624,18 @@ impl TySubst {
         o
     }
 
-    /// Allocate a fresh type variable.
-    pub fn fresh_var(&mut self) -> Ty {
-        let v = TyVar(self.next_var);
-        self.next_var += 1;
-        Ty::Var(v)
+    /// Allocate a fresh type parameter (inference hole).
+    pub fn fresh_param(&mut self) -> Ty {
+        let token = ParamToken(self.next_param);
+        self.next_param += 1;
+        Ty::Param { token, constraint: None }
+    }
+
+    /// Allocate a fresh type parameter with a constraint (restricted inference hole).
+    pub fn fresh_param_constrained(&mut self, constraint: ParamConstraint) -> Ty {
+        let token = ParamToken(self.next_param);
+        self.next_param += 1;
+        Ty::Param { token, constraint: Some(constraint) }
     }
 
     /// Resolve an origin by following binding chains for Origin::Var.
@@ -496,11 +659,17 @@ impl TySubst {
         let b = self.resolve_origin(b);
         match (a, b) {
             (Origin::Concrete(x), Origin::Concrete(y)) => {
-                if x == y { Ok(()) } else { Err((a, b)) }
+                if x == y {
+                    Ok(())
+                } else {
+                    Err((a, b))
+                }
             }
             (Origin::Var(v), other) | (other, Origin::Var(v)) => {
                 if let Origin::Var(v2) = other {
-                    if v == v2 { return Ok(()); }
+                    if v == v2 {
+                        return Ok(());
+                    }
                 }
                 self.origin_bindings.insert(v, other);
                 Ok(())
@@ -515,42 +684,61 @@ impl TySubst {
         e
     }
 
+    /// Unify two effects with invariant polarity.
+    pub fn unify_effect(&mut self, a: &Effect, b: &Effect) -> Result<(), (Effect, Effect)> {
+        self.unify_effects(a, b, Polarity::Invariant)
+    }
+
     /// Resolve an effect by following binding chains for Effect::Var.
-    pub fn resolve_effect(&self, e: Effect) -> Effect {
+    pub fn resolve_effect(&self, e: &Effect) -> Effect {
         match e {
-            Effect::Var(id) => match self.effect_bindings.get(&id) {
-                Some(&bound) => self.resolve_effect(bound),
-                None => e,
+            Effect::Var(id) => match self.effect_bindings.get(id) {
+                Some(bound) => self.resolve_effect(bound),
+                None => e.clone(),
             },
-            concrete => concrete,
+            concrete => concrete.clone(),
         }
     }
 
-    /// Lattice join unification: max(a, b).
-    /// Pure + Pure = Pure, Effectful + _ = Effectful.
-    /// Var binds to concrete, or two Vars are unified.
-    ///
     /// Effect unification with subtyping: `Pure ≤ Effectful`.
+    ///
+    /// For resolved effects, unification computes the union of their effect sets.
+    /// Pure ≤ Effectful: a pure effect is a subeffect of any non-pure effect.
     ///
     /// - **Covariant** (`a ≤ b`): `Pure` flows into `Effectful` → OK.
     /// - **Contravariant** (`b ≤ a`): reversed direction.
-    /// - **Invariant**: must be exactly equal.
+    /// - **Invariant**: both sides contribute to the union.
     /// - **Var**: binds to concrete regardless of polarity.
-    fn unify_effects(&mut self, a: Effect, b: Effect, pol: Polarity) -> Result<(), (Effect, Effect)> {
+    fn unify_effects(
+        &mut self,
+        a: &Effect,
+        b: &Effect,
+        pol: Polarity,
+    ) -> Result<(), (Effect, Effect)> {
         let a = self.resolve_effect(a);
         let b = self.resolve_effect(b);
-        match (a, b) {
-            (Effect::Pure, Effect::Pure) | (Effect::Effectful, Effect::Effectful) => Ok(()),
-
-            // Pure ≤ Effectful (subeffect direction)
-            (Effect::Pure, Effect::Effectful) => match pol {
-                Polarity::Covariant => Ok(()),
-                Polarity::Contravariant | Polarity::Invariant => Err((a, b)),
-            },
-            (Effect::Effectful, Effect::Pure) => match pol {
-                Polarity::Contravariant => Ok(()),
-                Polarity::Covariant | Polarity::Invariant => Err((a, b)),
-            },
+        match (&a, &b) {
+            (Effect::Resolved(sa), Effect::Resolved(sb)) => {
+                match (sa.is_pure(), sb.is_pure()) {
+                    (true, true) => Ok(()),
+                    // Pure ≤ Effectful (subeffect direction)
+                    (true, false) => match pol {
+                        Polarity::Covariant => Ok(()),
+                        Polarity::Contravariant | Polarity::Invariant => {
+                            Err((a.clone(), b.clone()))
+                        }
+                    },
+                    (false, true) => match pol {
+                        Polarity::Contravariant => Ok(()),
+                        Polarity::Covariant | Polarity::Invariant => {
+                            Err((a.clone(), b.clone()))
+                        }
+                    },
+                    // Both effectful — invariant requires structural match,
+                    // but for now we accept (union is implicitly applied).
+                    (false, false) => Ok(()),
+                }
+            }
 
             (Effect::Var(v), other) | (other, Effect::Var(v)) => {
                 if let Effect::Var(v2) = other {
@@ -558,7 +746,7 @@ impl TySubst {
                         return Ok(());
                     }
                 }
-                self.effect_bindings.insert(v, other);
+                self.effect_bindings.insert(*v, other.clone());
                 Ok(())
             }
         }
@@ -566,26 +754,33 @@ impl TySubst {
 
     /// Find the leaf effect Var in a binding chain.
     /// Returns None if the effect is concrete (not a Var).
-    fn find_leaf_effect_var(&self, e: Effect) -> Option<u32> {
+    fn find_leaf_effect_var(&self, e: &Effect) -> Option<u32> {
         match e {
-            Effect::Var(id) => match self.effect_bindings.get(&id) {
-                Some(&bound) => match bound {
+            Effect::Var(id) => match self.effect_bindings.get(id) {
+                Some(bound) => match bound {
                     Effect::Var(_) => self.find_leaf_effect_var(bound),
-                    _ => Some(id),
+                    _ => Some(*id),
                 },
-                None => Some(id),
+                None => Some(*id),
             },
             _ => None,
         }
     }
 
-    /// Effect LUB: rebind effect vars to Effectful (the lattice top).
-    fn coerce_effects_to_effectful(&mut self, ea: Effect, eb: Effect) {
+    /// Effect LUB: rebind effect vars to the union of both effects.
+    /// Falls back to `io()` (lattice top) when union is not computable.
+    fn coerce_effects_to_effectful(&mut self, ea: &Effect, eb: &Effect) {
+        let resolved_a = self.resolve_effect(ea);
+        let resolved_b = self.resolve_effect(eb);
+        let merged = match (&resolved_a, &resolved_b) {
+            (Effect::Resolved(sa), Effect::Resolved(sb)) => Effect::Resolved(sa.union(sb)),
+            _ => Effect::io(),
+        };
         if let Some(v) = self.find_leaf_effect_var(ea) {
-            self.effect_bindings.insert(v, Effect::Effectful);
+            self.effect_bindings.insert(v, merged.clone());
         }
         if let Some(v) = self.find_leaf_effect_var(eb) {
-            self.effect_bindings.insert(v, Effect::Effectful);
+            self.effect_bindings.insert(v, merged);
         }
     }
 
@@ -617,46 +812,69 @@ impl TySubst {
                 self.unify(ia, ib, Polarity::Invariant).ok()?;
                 Some(Ty::List(Box::new(self.resolve(ia))))
             }
-            // Sequence: origin mismatch → Iterator; same origin + effect mismatch → Sequence{Effectful}
+            // Sequence: origin mismatch → Iterator; same origin + effect mismatch → union
             (Ty::Sequence(ia, oa, ea), Ty::Sequence(ib, ob, eb)) => {
                 self.unify(ia, ib, Polarity::Invariant).ok()?;
                 if self.unify_origins(*oa, *ob).is_ok() {
-                    // Same origin, effect mismatch → Sequence<T, O, Effectful>
-                    self.coerce_effects_to_effectful(*ea, *eb);
-                    Some(Ty::Sequence(Box::new(self.resolve(ia)), self.resolve_origin(*oa), Effect::Effectful))
+                    // Same origin, effect mismatch → Sequence<T, O, union(E1, E2)>
+                    self.coerce_effects_to_effectful(ea, eb);
+                    let resolved_a = self.resolve_effect(ea);
+                    let resolved_b = self.resolve_effect(eb);
+                    let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
+                    Some(Ty::Sequence(
+                        Box::new(self.resolve(ia)),
+                        self.resolve_origin(*oa),
+                        merged,
+                    ))
                 } else {
-                    // Origin mismatch → Iterator<T, max(E1, E2)>
-                    let effect = match (self.resolve_effect(*ea), self.resolve_effect(*eb)) {
-                        (Effect::Effectful, _) | (_, Effect::Effectful) => Effect::Effectful,
-                        _ => Effect::Pure,
-                    };
-                    self.coerce_effects_to_effectful(*ea, *eb);
+                    // Origin mismatch → Iterator<T, union(E1, E2)>
+                    let resolved_a = self.resolve_effect(ea);
+                    let resolved_b = self.resolve_effect(eb);
+                    let effect = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
+                    self.coerce_effects_to_effectful(ea, eb);
                     Some(Ty::Iterator(Box::new(self.resolve(ia)), effect))
                 }
             }
-            // Effect mismatch: Iterator → Iterator (effect = Effectful)
+            // Effect mismatch: Iterator → Iterator (effect = union)
             (Ty::Iterator(ia, ea), Ty::Iterator(ib, eb)) => {
                 self.unify(ia, ib, Polarity::Invariant).ok()?;
-                self.coerce_effects_to_effectful(*ea, *eb);
-                Some(Ty::Iterator(Box::new(self.resolve(ia)), Effect::Effectful))
+                self.coerce_effects_to_effectful(ea, eb);
+                let resolved_a = self.resolve_effect(ea);
+                let resolved_b = self.resolve_effect(eb);
+                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
+                Some(Ty::Iterator(Box::new(self.resolve(ia)), merged))
             }
-            // Effect mismatch: Fn (same kind/params/ret) → Fn (effect = Effectful)
+            // Effect mismatch: Fn (same params/ret) → Fn (effect = union)
             (
-                Ty::Fn { params: pa, ret: ra, kind: ka, effect: ea, .. },
-                Ty::Fn { params: pb, ret: rb, kind: kb, effect: eb, .. },
+                Ty::Fn {
+                    params: pa,
+                    ret: ra,
+                    effect: ea,
+                    ..
+                },
+                Ty::Fn {
+                    params: pb,
+                    ret: rb,
+                    effect: eb,
+                    ..
+                },
             ) => {
-                if ka != kb || pa.len() != pb.len() { return None; }
+                if pa.len() != pb.len() {
+                    return None;
+                }
                 for (a, b) in pa.iter().zip(pb.iter()) {
-                    self.unify(a, b, Polarity::Invariant).ok()?;
+                    self.unify(&a.ty, &b.ty, Polarity::Invariant).ok()?;
                 }
                 self.unify(ra, rb, Polarity::Invariant).ok()?;
-                self.coerce_effects_to_effectful(*ea, *eb);
+                self.coerce_effects_to_effectful(ea, eb);
+                let resolved_a = self.resolve_effect(ea);
+                let resolved_b = self.resolve_effect(eb);
+                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
                 Some(Ty::Fn {
-                    params: pa.iter().map(|p| self.resolve(p)).collect(),
+                    params: pa.iter().map(|p| Param { name: p.name, ty: self.resolve(&p.ty) }).collect(),
                     ret: Box::new(self.resolve(ra)),
-                    kind: *ka,
                     captures: vec![],
-                    effect: Effect::Effectful,
+                    effect: merged,
                 })
             }
             _ => None,
@@ -680,10 +898,10 @@ impl TySubst {
             return Err((a.clone(), b.clone()));
         }
         let lub = self.try_lub(a, b).ok_or_else(|| (a.clone(), b.clone()))?;
-        if let Some(leaf) = self.find_leaf_var(orig_a) {
+        if let Some(leaf) = self.find_leaf_param(orig_a) {
             self.bindings.insert(leaf, lub.clone());
         }
-        if let Some(leaf) = self.find_leaf_var(orig_b) {
+        if let Some(leaf) = self.find_leaf_param(orig_b) {
             self.bindings.insert(leaf, lub);
         }
         Ok(())
@@ -692,17 +910,25 @@ impl TySubst {
     /// Resolve a type by following substitution chains.
     pub fn resolve(&self, ty: &Ty) -> Ty {
         match ty {
-            Ty::Var(v) => {
-                if let Some(bound) = self.bindings.get(v) {
+            Ty::Param { token, constraint } => {
+                if let Some(bound) = self.bindings.get(token) {
                     self.resolve(bound)
                 } else {
-                    Ty::Var(*v)
+                    Ty::Param { token: *token, constraint: constraint.clone() }
                 }
             }
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
-            Ty::Iterator(inner, effect) => Ty::Iterator(Box::new(self.resolve(inner)), self.resolve_effect(*effect)),
-            Ty::Sequence(inner, origin, effect) => Ty::Sequence(Box::new(self.resolve(inner)), self.resolve_origin(*origin), self.resolve_effect(*effect)),
-            Ty::Deque(inner, origin) => Ty::Deque(Box::new(self.resolve(inner)), self.resolve_origin(*origin)),
+            Ty::Iterator(inner, effect) => {
+                Ty::Iterator(Box::new(self.resolve(inner)), self.resolve_effect(effect))
+            }
+            Ty::Sequence(inner, origin, effect) => Ty::Sequence(
+                Box::new(self.resolve(inner)),
+                self.resolve_origin(*origin),
+                self.resolve_effect(effect),
+            ),
+            Ty::Deque(inner, origin) => {
+                Ty::Deque(Box::new(self.resolve(inner)), self.resolve_origin(*origin))
+            }
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Object(fields) => {
                 let resolved: FxHashMap<_, _> =
@@ -710,12 +936,16 @@ impl TySubst {
                 Ty::Object(resolved)
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
-            Ty::Fn { params, ret, kind, captures, effect } => Ty::Fn {
-                params: params.iter().map(|p| self.resolve(p)).collect(),
+            Ty::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => Ty::Fn {
+                params: params.iter().map(|p| Param { name: p.name, ty: self.resolve(&p.ty) }).collect(),
                 ret: Box::new(self.resolve(ret)),
-                kind: *kind,
                 captures: captures.iter().map(|c| self.resolve(c)).collect(),
-                effect: self.resolve_effect(*effect),
+                effect: self.resolve_effect(effect),
             },
             Ty::Enum { name, variants } => {
                 let resolved: FxHashMap<_, _> = variants
@@ -733,37 +963,37 @@ impl TySubst {
         }
     }
 
-    /// Find the leaf Var in a chain that is bound to a concrete type.
-    /// Returns None if `ty` is not a Var.
-    pub fn find_leaf_var(&self, ty: &Ty) -> Option<TyVar> {
+    /// Find the leaf Param in a chain that is bound to a concrete type.
+    /// Returns None if `ty` is not a Param.
+    pub fn find_leaf_param(&self, ty: &Ty) -> Option<ParamToken> {
         match ty {
-            Ty::Var(v) => {
-                if let Some(bound) = self.bindings.get(v) {
+            Ty::Param { token, .. } => {
+                if let Some(bound) = self.bindings.get(token) {
                     match bound {
-                        Ty::Var(_) => self.find_leaf_var(bound),
-                        _ => Some(*v),
+                        Ty::Param { .. } => self.find_leaf_param(bound),
+                        _ => Some(*token),
                     }
                 } else {
-                    Some(*v)
+                    Some(*token)
                 }
             }
             _ => None,
         }
     }
 
-    /// Rebind a type variable to a new type, replacing any existing binding.
-    pub fn rebind(&mut self, var: TyVar, ty: Ty) {
-        self.bindings.insert(var, ty);
+    /// Rebind a type parameter to a new type, replacing any existing binding.
+    pub fn rebind(&mut self, param: ParamToken, ty: Ty) {
+        self.bindings.insert(param, ty);
     }
 
-    /// Shallow-resolve: follow Var chains but don't recurse into structure.
+    /// Shallow-resolve: follow Param chains but don't recurse into structure.
     pub fn shallow_resolve(&self, ty: &Ty) -> Ty {
         match ty {
-            Ty::Var(v) => {
-                if let Some(bound) = self.bindings.get(v) {
+            Ty::Param { token, constraint } => {
+                if let Some(bound) = self.bindings.get(token) {
                     self.shallow_resolve(bound)
                 } else {
-                    Ty::Var(*v)
+                    Ty::Param { token: *token, constraint: constraint.clone() }
                 }
             }
             other => other.clone(),
@@ -782,8 +1012,8 @@ impl TySubst {
         let b = self.shallow_resolve(b);
 
         match (&a, &b) {
-            // Error (poison) and Infer (unknown) unify with anything.
-            (Ty::Error(_), _) | (_, Ty::Error(_)) | (Ty::Infer(_), _) | (_, Ty::Infer(_)) => Ok(()),
+            // Error (poison) unifies with anything — suppresses cascading errors.
+            (Ty::Error(_), _) | (_, Ty::Error(_)) => Ok(()),
 
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -820,8 +1050,7 @@ impl TySubst {
                     }
                 }
                 // Merge if variant sets differ.
-                let needs_merge = va.len() != vb.len()
-                    || va.keys().any(|k| !vb.contains_key(k));
+                let needs_merge = va.len() != vb.len() || va.keys().any(|k| !vb.contains_key(k));
                 if needs_merge {
                     let mut merged: FxHashMap<Astr, Option<Box<Ty>>> = va.clone();
                     for (tag, payload) in vb {
@@ -831,26 +1060,56 @@ impl TySubst {
                         name: *na,
                         variants: merged,
                     };
-                    if let Some(leaf) = self.find_leaf_var(orig_a) {
+                    if let Some(leaf) = self.find_leaf_param(orig_a) {
                         self.bindings.insert(leaf, merged_ty.clone());
                     }
-                    if let Some(leaf) = self.find_leaf_var(orig_b) {
+                    if let Some(leaf) = self.find_leaf_param(orig_b) {
                         self.bindings.insert(leaf, merged_ty);
                     }
                 }
                 Ok(())
             }
 
-            (Ty::Var(v), other) | (other, Ty::Var(v)) => {
-                if let Ty::Var(v2) = other
-                    && v == v2
+            (Ty::Param { token: p, constraint }, other)
+            | (other, Ty::Param { token: p, constraint }) => {
+                if let Ty::Param { token: p2, .. } = other
+                    && p == p2
                 {
                     return Ok(());
                 }
-                if self.occurs_in(*v, other) {
+                if self.occurs_in(*p, other) {
                     return Err((a.clone(), b.clone()));
                 }
-                self.bindings.insert(*v, other.clone());
+                match other {
+                    // Param + Param: intersect constraints onto the target.
+                    Ty::Param { token: p2, constraint: c2 } => {
+                        let merged = match (constraint, c2) {
+                            (None, None) => None,
+                            (Some(c), None) | (None, Some(c)) => Some(c.clone()),
+                            (Some(ca), Some(cb)) => {
+                                let Some(inter) = ca.intersect(cb) else {
+                                    return Err((a.clone(), b.clone()));
+                                };
+                                Some(inter)
+                            }
+                        };
+                        let target = Ty::Param { token: *p2, constraint: merged };
+                        self.bindings.insert(*p, target);
+                    }
+                    // Param + Error: always OK (poison absorption).
+                    Ty::Error(_) => {
+                        self.bindings.insert(*p, other.clone());
+                    }
+                    // Param + concrete: check constraint.
+                    _ => {
+                        if let Some(c) = constraint {
+                            if !c.allows(other) {
+                                return Err((a.clone(), b.clone()));
+                            }
+                        }
+                        self.bindings.insert(*p, other.clone());
+                    }
+                }
                 Ok(())
             }
 
@@ -869,10 +1128,9 @@ impl TySubst {
             // On parameter mismatch, delegate to lub_or_err which:
             //   - Invariant polarity → error (no silent coercion)
             //   - Non-invariant → coerce both sides to lattice join (try_lub)
-
             (Ty::Iterator(ia, ea), Ty::Iterator(ib, eb)) => {
                 self.unify(ia, ib, Polarity::Invariant)?;
-                self.unify_effects(*ea, *eb, pol)
+                self.unify_effects(ea, eb, pol)
                     .or_else(|_| self.lub_or_err(pol, orig_a, orig_b, &a, &b))
             }
 
@@ -880,7 +1138,7 @@ impl TySubst {
                 // Origin mismatch or effect mismatch → both go through lub_or_err.
                 let origin_ok = self.unify_origins(*oa, *ob).is_ok();
                 let inner_ok = self.unify(ia, ib, Polarity::Invariant).is_ok();
-                let effect_ok = origin_ok && self.unify_effects(*ea, *eb, pol).is_ok();
+                let effect_ok = origin_ok && self.unify_effects(ea, eb, pol).is_ok();
                 if origin_ok && inner_ok && effect_ok {
                     Ok(())
                 } else if !inner_ok {
@@ -892,12 +1150,10 @@ impl TySubst {
 
             (Ty::List(a), Ty::List(b)) => self.unify(a, b, Polarity::Invariant),
 
-            (Ty::Deque(ia, oa), Ty::Deque(ib, ob)) => {
-                match self.unify_origins(*oa, *ob) {
-                    Ok(()) => self.unify(ia, ib, Polarity::Invariant),
-                    Err(_) => self.lub_or_err(pol, orig_a, orig_b, &a, &b),
-                }
-            }
+            (Ty::Deque(ia, oa), Ty::Deque(ib, ob)) => match self.unify_origins(*oa, *ob) {
+                Ok(()) => self.unify(ia, ib, Polarity::Invariant),
+                Err(_) => self.lub_or_err(pol, orig_a, orig_b, &a, &b),
+            },
 
             (Ty::Option(a), Ty::Option(b)) => self.unify(a, b, Polarity::Invariant),
 
@@ -920,8 +1176,8 @@ impl TySubst {
 
                 // Fields differ: merge is only valid if at least one side
                 // traces back to a Var (partial constraint that can grow).
-                let leaf_a = self.find_leaf_var(orig_a);
-                let leaf_b = self.find_leaf_var(orig_b);
+                let leaf_a = self.find_leaf_param(orig_a);
+                let leaf_b = self.find_leaf_param(orig_b);
 
                 if leaf_a.is_none() && leaf_b.is_none() {
                     // Both concrete — differing fields is a type error.
@@ -951,29 +1207,27 @@ impl TySubst {
                 Ty::Fn {
                     params: pa,
                     ret: ra,
-                    kind: ka,
                     captures: _,
                     effect: ea,
                 },
                 Ty::Fn {
                     params: pb,
                     ret: rb,
-                    kind: kb,
                     captures: _,
                     effect: eb,
                 },
             ) => {
-                if ka != kb || pa.len() != pb.len() {
+                if pa.len() != pb.len() {
                     return Err((a.clone(), b.clone()));
                 }
                 // Function params are contravariant: flip polarity.
                 let param_pol = pol.flip();
                 for (ta, tb) in pa.iter().zip(pb.iter()) {
-                    self.unify(ta, tb, param_pol)?;
+                    self.unify(&ta.ty, &tb.ty, param_pol)?;
                 }
                 // Return type keeps polarity.
                 self.unify(ra, rb, pol)?;
-                self.unify_effects(*ea, *eb, pol)
+                self.unify_effects(ea, eb, pol)
                     .or_else(|_| self.lub_or_err(pol, orig_a, orig_b, &a, &b))
             }
 
@@ -1003,64 +1257,254 @@ impl TySubst {
     fn try_coerce(&mut self, sub: &Ty, sup: &Ty) -> Result<(), ()> {
         match (sub, sup) {
             // Deque<T, O> ≤ List<T>
-            (Ty::Deque(inner_d, _), Ty::List(inner_l)) => {
-                self.unify(inner_d, inner_l, Polarity::Invariant).map_err(|_| ())
-            }
+            (Ty::Deque(inner_d, _), Ty::List(inner_l)) => self
+                .unify(inner_d, inner_l, Polarity::Invariant)
+                .map_err(|_| ()),
             // List<T> ≤ Iterator<T, E> (E must accept Pure)
             (Ty::List(inner_l), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
-                self.unify(inner_l, inner_i, Polarity::Invariant).map_err(|_| ())
+                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
+                    .map_err(|_| ())?;
+                self.unify(inner_l, inner_i, Polarity::Invariant)
+                    .map_err(|_| ())
             }
             // Deque<T, O> ≤ Iterator<T, E> (E must accept Pure)
             (Ty::Deque(inner_d, _), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
-                self.unify(inner_d, inner_i, Polarity::Invariant).map_err(|_| ())
+                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
+                    .map_err(|_| ())?;
+                self.unify(inner_d, inner_i, Polarity::Invariant)
+                    .map_err(|_| ())
             }
             // Deque<T, O> ≤ Sequence<T, O', E> (origin preserved, E must accept Pure)
             (Ty::Deque(inner_d, od), Ty::Sequence(inner_s, os, e)) => {
                 self.unify_origins(*od, *os).map_err(|_| ())?;
-                self.unify_effects(Effect::Pure, *e, Polarity::Invariant).map_err(|_| ())?;
-                self.unify(inner_d, inner_s, Polarity::Invariant).map_err(|_| ())
+                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
+                    .map_err(|_| ())?;
+                self.unify(inner_d, inner_s, Polarity::Invariant)
+                    .map_err(|_| ())
             }
             // Sequence<T, O, E> ≤ Iterator<T, E'> (origin lost, effect preserved)
             (Ty::Sequence(inner_s, _, es), Ty::Iterator(inner_i, ei)) => {
-                self.unify_effects(*es, *ei, Polarity::Invariant).map_err(|_| ())?;
-                self.unify(inner_s, inner_i, Polarity::Invariant).map_err(|_| ())
+                self.unify_effects(es, ei, Polarity::Invariant)
+                    .map_err(|_| ())?;
+                self.unify(inner_s, inner_i, Polarity::Invariant)
+                    .map_err(|_| ())
             }
             _ => Err(()),
         }
     }
 
-    /// Occurs check: returns true if `var` appears in `ty`.
-    fn occurs_in(&self, var: TyVar, ty: &Ty) -> bool {
+    /// Instantiate a polymorphic type: replace all `Param`, `Effect::Var`,
+    /// and `Origin::Var` in `ty` with fresh values from this substitution.
+    ///
+    /// Used when calling a generic function: the graph stores a signature
+    /// with "template" Params (e.g. `Param(0)`), and each call site gets
+    /// its own fresh inference variables via this method.
+    pub fn instantiate(&mut self, ty: &Ty) -> Ty {
+        let mut param_map: FxHashMap<ParamToken, ParamToken> = FxHashMap::default();
+        let mut effect_map: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut origin_map: FxHashMap<u32, Origin> = FxHashMap::default();
+        self.instantiate_inner(ty, &mut param_map, &mut effect_map, &mut origin_map)
+    }
+
+    fn instantiate_inner(
+        &mut self,
+        ty: &Ty,
+        param_map: &mut FxHashMap<ParamToken, ParamToken>,
+        effect_map: &mut FxHashMap<u32, u32>,
+        origin_map: &mut FxHashMap<u32, Origin>,
+    ) -> Ty {
         match ty {
-            Ty::Var(v) => {
-                if *v == var {
+            Ty::Param { token, constraint } => {
+                let new_token = *param_map.entry(*token).or_insert_with(|| {
+                    let fresh = ParamToken(self.next_param);
+                    self.next_param += 1;
+                    fresh
+                });
+                Ty::Param { token: new_token, constraint: constraint.clone() }
+            }
+            Ty::List(inner) => {
+                Ty::List(Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)))
+            }
+            Ty::Iterator(inner, e) => {
+                let new_e = self.instantiate_effect(e, effect_map);
+                Ty::Iterator(
+                    Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)),
+                    new_e,
+                )
+            }
+            Ty::Sequence(inner, o, e) => {
+                let new_o = self.instantiate_origin(*o, origin_map);
+                let new_e = self.instantiate_effect(e, effect_map);
+                Ty::Sequence(
+                    Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)),
+                    new_o,
+                    new_e,
+                )
+            }
+            Ty::Deque(inner, o) => {
+                let new_o = self.instantiate_origin(*o, origin_map);
+                Ty::Deque(
+                    Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)),
+                    new_o,
+                )
+            }
+            Ty::Option(inner) => {
+                Ty::Option(Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)))
+            }
+            Ty::Tuple(elems) => Ty::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.instantiate_inner(e, param_map, effect_map, origin_map))
+                    .collect(),
+            ),
+            Ty::Object(fields) => Ty::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (*k, self.instantiate_inner(v, param_map, effect_map, origin_map)))
+                    .collect(),
+            ),
+            Ty::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => {
+                let new_e = self.instantiate_effect(effect, effect_map);
+                Ty::Fn {
+                    params: params
+                        .iter()
+                        .map(|p| Param {
+                            name: p.name,
+                            ty: self.instantiate_inner(&p.ty, param_map, effect_map, origin_map),
+                        })
+                        .collect(),
+                    ret: Box::new(self.instantiate_inner(ret, param_map, effect_map, origin_map)),
+                    captures: captures
+                        .iter()
+                        .map(|c| self.instantiate_inner(c, param_map, effect_map, origin_map))
+                        .collect(),
+                    effect: new_e,
+                }
+            }
+            Ty::Enum { name, variants } => Ty::Enum {
+                name: *name,
+                variants: variants
+                    .iter()
+                    .map(|(tag, payload)| {
+                        (
+                            *tag,
+                            payload
+                                .as_ref()
+                                .map(|ty| Box::new(self.instantiate_inner(ty, param_map, effect_map, origin_map))),
+                        )
+                    })
+                    .collect(),
+            },
+            // Concrete types pass through unchanged.
+            other => other.clone(),
+        }
+    }
+
+    fn instantiate_effect(
+        &mut self,
+        e: &Effect,
+        effect_map: &mut FxHashMap<u32, u32>,
+    ) -> Effect {
+        match e {
+            Effect::Var(id) => {
+                let new_id = *effect_map.entry(*id).or_insert_with(|| {
+                    let fresh = self.next_effect;
+                    self.next_effect += 1;
+                    fresh
+                });
+                Effect::Var(new_id)
+            }
+            concrete => concrete.clone(),
+        }
+    }
+
+    fn instantiate_origin(
+        &mut self,
+        o: Origin,
+        origin_map: &mut FxHashMap<u32, Origin>,
+    ) -> Origin {
+        match o {
+            Origin::Var(id) => {
+                *origin_map.entry(id).or_insert_with(|| {
+                    let fresh = Origin::Var(self.next_origin);
+                    self.next_origin += 1;
+                    fresh
+                })
+            }
+            concrete => concrete,
+        }
+    }
+
+    /// Occurs check: returns true if `param` appears in `ty`.
+    fn occurs_in(&self, param: ParamToken, ty: &Ty) -> bool {
+        match ty {
+            Ty::Param { token: p, .. } => {
+                if *p == param {
                     return true;
                 }
-                if let Some(bound) = self.bindings.get(v) {
-                    self.occurs_in(var, bound)
+                if let Some(bound) = self.bindings.get(p) {
+                    self.occurs_in(param, bound)
                 } else {
                     false
                 }
             }
-            Ty::List(inner) => self.occurs_in(var, inner),
-            Ty::Iterator(inner, _) => self.occurs_in(var, inner),
-            Ty::Sequence(inner, ..) => self.occurs_in(var, inner),
-            Ty::Deque(inner, _) => self.occurs_in(var, inner),
-            Ty::Option(inner) => self.occurs_in(var, inner),
-            Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(var, e)),
-            Ty::Object(fields) => fields.values().any(|v| self.occurs_in(var, v)),
-            Ty::Fn { params, ret, captures, .. } => {
-                params.iter().any(|p| self.occurs_in(var, p))
-                    || self.occurs_in(var, ret)
-                    || captures.iter().any(|c| self.occurs_in(var, c))
+            Ty::List(inner) => self.occurs_in(param, inner),
+            Ty::Iterator(inner, _) => self.occurs_in(param, inner),
+            Ty::Sequence(inner, ..) => self.occurs_in(param, inner),
+            Ty::Deque(inner, _) => self.occurs_in(param, inner),
+            Ty::Option(inner) => self.occurs_in(param, inner),
+            Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(param, e)),
+            Ty::Object(fields) => fields.values().any(|v| self.occurs_in(param, v)),
+            Ty::Fn {
+                params,
+                ret,
+                captures,
+                ..
+            } => {
+                params.iter().any(|p| self.occurs_in(param, &p.ty))
+                    || self.occurs_in(param, ret)
+                    || captures.iter().any(|c| self.occurs_in(param, c))
             }
             Ty::Enum { variants, .. } => variants
                 .values()
-                .any(|p| p.as_ref().map_or(false, |ty| self.occurs_in(var, ty))),
+                .any(|p| p.as_ref().map_or(false, |ty| self.occurs_in(param, ty))),
             _ => false,
         }
+    }
+}
+
+// ── TypeEnv ──────────────────────────────────────────────────────────
+
+/// Unified type environment for the type checker.
+///
+/// Replaces `ContextTypeRegistry` + internal `BuiltinRegistry`.
+/// The type checker receives this as its sole external input —
+/// it does not know whether a function is a builtin, extern, or user-defined.
+#[derive(Debug, Clone)]
+pub struct TypeEnv {
+    /// Context variable types (`@name` → Ty).
+    pub contexts: FxHashMap<Astr, Ty>,
+    /// Function types (`name` → `Ty::Fn`). One entry per function name.
+    pub functions: FxHashMap<Astr, Ty>,
+}
+
+impl TypeEnv {
+    pub fn new() -> Self {
+        Self {
+            contexts: FxHashMap::default(),
+            functions: FxHashMap::default(),
+        }
+    }
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1070,6 +1514,15 @@ mod tests {
     use acvus_utils::Interner;
 
     use Polarity::*;
+
+    /// Test helper: wrap a `Ty` into a `Param` with a dummy name.
+    /// Uses a thread-local interner so all dummy names share the same interner id.
+    fn tp(ty: Ty) -> Param {
+        thread_local! {
+            static INTERNER: Interner = Interner::new();
+        }
+        INTERNER.with(|i| Param { name: i.intern(""), ty })
+    }
 
     #[test]
     fn unify_same_concrete() {
@@ -1092,7 +1545,7 @@ mod tests {
     #[test]
     fn unify_var_with_concrete() {
         let mut s = TySubst::new();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         assert!(s.unify(&t, &Ty::Int, Invariant).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
     }
@@ -1101,7 +1554,7 @@ mod tests {
     fn unify_deque_of_var() {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let deque_t = Ty::Deque(Box::new(t.clone()), o);
         let deque_int = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&deque_t, &deque_int, Invariant).is_ok());
@@ -1112,19 +1565,21 @@ mod tests {
     #[test]
     fn unify_fn_types() {
         let mut s = TySubst::new();
-        let t = s.fresh_var();
-        let u = s.fresh_var();
+        let t = s.fresh_param();
+        let u = s.fresh_param();
         let fn_tu = Ty::Fn {
-            params: vec![t.clone()],
+            params: vec![tp(t.clone())],
             ret: Box::new(u.clone()),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_int_bool = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Bool),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_tu, &fn_int_bool, Covariant).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
@@ -1135,16 +1590,18 @@ mod tests {
     fn unify_fn_arity_mismatch() {
         let mut s = TySubst::new();
         let fn1 = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn2 = Ty::Fn {
-            params: vec![Ty::Int, Ty::Int],
+            params: vec![tp(Ty::Int), tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn1, &fn2, Invariant).is_err());
     }
@@ -1153,7 +1610,7 @@ mod tests {
     fn unify_object() {
         let mut s = TySubst::new();
         let interner = Interner::new();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let obj1 = Ty::Object(FxHashMap::from_iter([
             (interner.intern("name"), Ty::String),
             (interner.intern("age"), t.clone()),
@@ -1182,7 +1639,7 @@ mod tests {
     fn occurs_check() {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let deque_t = Ty::Deque(Box::new(t.clone()), o);
         // T = Deque<T, O> should fail
         assert!(s.unify(&t, &deque_t, Invariant).is_err());
@@ -1191,8 +1648,8 @@ mod tests {
     #[test]
     fn transitive_resolution() {
         let mut s = TySubst::new();
-        let t1 = s.fresh_var();
-        let t2 = s.fresh_var();
+        let t1 = s.fresh_param();
+        let t2 = s.fresh_param();
         assert!(s.unify(&t1, &t2, Invariant).is_ok());
         assert!(s.unify(&t2, &Ty::String, Invariant).is_ok());
         assert_eq!(s.resolve(&t1), Ty::String);
@@ -1205,7 +1662,7 @@ mod tests {
         // Var → {a} then Var → {b} should merge to {a, b}
         let mut s = TySubst::new();
         let i = Interner::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let obj_a = Ty::Object(FxHashMap::from_iter([(i.intern("a"), Ty::Int)]));
         let obj_b = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::String)]));
         assert!(s.unify(&v, &obj_a, Invariant).is_ok());
@@ -1226,7 +1683,7 @@ mod tests {
         // Var → {a, b} then Var → {b, c} should merge to {a, b, c}
         let mut s = TySubst::new();
         let i = Interner::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let obj_ab = Ty::Object(FxHashMap::from_iter([
             (i.intern("a"), Ty::Int),
             (i.intern("b"), Ty::String),
@@ -1254,7 +1711,7 @@ mod tests {
         // {b: Int} and {b: String} via same Var should fail
         let mut s = TySubst::new();
         let i = Interner::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let obj1 = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::Int)]));
         let obj2 = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::String)]));
         assert!(s.unify(&v, &obj1, Invariant).is_ok());
@@ -1267,7 +1724,7 @@ mod tests {
     fn unify_deque_same_origin() {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let d1 = Ty::Deque(Box::new(t.clone()), o);
         let d2 = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&d1, &d2, Invariant).is_ok());
@@ -1284,7 +1741,10 @@ mod tests {
         assert_ne!(o1, o2);
         let d1 = Ty::Deque(Box::new(Ty::Int), o1);
         let d2 = Ty::Deque(Box::new(Ty::Int), o2);
-        assert!(s.unify(&d1, &d2, Invariant).is_err(), "different concrete origins must not unify in Invariant");
+        assert!(
+            s.unify(&d1, &d2, Invariant).is_err(),
+            "different concrete origins must not unify in Invariant"
+        );
     }
 
     #[test]
@@ -1295,7 +1755,10 @@ mod tests {
         let var = s.fresh_origin(); // Origin::Var
         let d1 = Ty::Deque(Box::new(Ty::Int), concrete);
         let d2 = Ty::Deque(Box::new(Ty::Int), var);
-        assert!(s.unify(&d1, &d2, Invariant).is_ok(), "origin Var should bind to Concrete");
+        assert!(
+            s.unify(&d1, &d2, Invariant).is_ok(),
+            "origin Var should bind to Concrete"
+        );
         assert_eq!(s.resolve_origin(var), concrete);
     }
 
@@ -1312,7 +1775,10 @@ mod tests {
         let concrete2 = s.fresh_concrete_origin();
         let d_concrete2 = Ty::Deque(Box::new(Ty::Int), concrete2);
         let d_var2 = Ty::Deque(Box::new(Ty::Int), var);
-        assert!(s.unify(&d_concrete2, &d_var2, Invariant).is_err(), "var already bound to different concrete");
+        assert!(
+            s.unify(&d_concrete2, &d_var2, Invariant).is_err(),
+            "var already bound to different concrete"
+        );
     }
 
     #[test]
@@ -1321,7 +1787,10 @@ mod tests {
         let o = s.fresh_origin();
         let d1 = Ty::Deque(Box::new(Ty::Int), o);
         let d2 = Ty::Deque(Box::new(Ty::String), o);
-        assert!(s.unify(&d1, &d2, Invariant).is_err(), "inner type mismatch with same origin must fail");
+        assert!(
+            s.unify(&d1, &d2, Invariant).is_err(),
+            "inner type mismatch with same origin must fail"
+        );
     }
 
     #[test]
@@ -1330,8 +1799,11 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
         let deque = Ty::Deque(Box::new(Ty::Int), o);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        assert!(s.unify(&deque, &iter, Covariant).is_ok(), "Deque → Iterator coercion should succeed");
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        assert!(
+            s.unify(&deque, &iter, Covariant).is_ok(),
+            "Deque → Iterator coercion should succeed"
+        );
     }
 
     #[test]
@@ -1339,9 +1811,9 @@ mod tests {
         // Deque<T, O> unifies with Iterator<Int> → T becomes Int
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let deque = Ty::Deque(Box::new(t.clone()), o);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&deque, &iter, Covariant).is_ok());
         assert_eq!(s.resolve(&t), Ty::Int);
     }
@@ -1351,9 +1823,12 @@ mod tests {
         // Iterator<Int> cannot become Deque<Int, O> — one-directional only
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         let deque = Ty::Deque(Box::new(Ty::Int), o);
-        assert!(s.unify(&iter, &deque, Covariant).is_err(), "Iterator → Deque coercion must be forbidden");
+        assert!(
+            s.unify(&iter, &deque, Covariant).is_err(),
+            "Iterator → Deque coercion must be forbidden"
+        );
     }
 
     #[test]
@@ -1371,7 +1846,7 @@ mod tests {
     fn resolve_deque_propagates_inner() {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         assert!(s.unify(&t, &Ty::String, Invariant).is_ok());
         let deque = Ty::Deque(Box::new(t.clone()), o);
         assert_eq!(s.resolve(&deque), Ty::Deque(Box::new(Ty::String), o));
@@ -1381,7 +1856,7 @@ mod tests {
     fn occurs_in_deque() {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t = s.fresh_var();
+        let t = s.fresh_param();
         let deque_t = Ty::Deque(Box::new(t.clone()), o);
         // T = Deque<T, O> should fail (occurs check)
         assert!(s.unify(&t, &deque_t, Invariant).is_err());
@@ -1396,7 +1871,11 @@ mod tests {
         assert_eq!(o2, Origin::Var(1)); // second origin
         s.rollback(snap);
         let o_after = s.fresh_origin();
-        assert_eq!(o_after, Origin::Var(1), "rollback should restore origin counter");
+        assert_eq!(
+            o_after,
+            Origin::Var(1),
+            "rollback should restore origin counter"
+        );
     }
 
     #[test]
@@ -1404,10 +1883,10 @@ mod tests {
         // Deque<Var, O> vs Iterator<Var> where both Vars unify to same type
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let t1 = s.fresh_var();
-        let t2 = s.fresh_var();
+        let t1 = s.fresh_param();
+        let t2 = s.fresh_param();
         let deque = Ty::Deque(Box::new(t1.clone()), o);
-        let iter = Ty::Iterator(Box::new(t2.clone()), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(t2.clone()), Effect::pure());
         assert!(s.unify(&deque, &iter, Covariant).is_ok());
         // Now bind t2 to Int
         assert!(s.unify(&t2, &Ty::Int, Invariant).is_ok());
@@ -1421,7 +1900,10 @@ mod tests {
         let o = s.fresh_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
         let l = Ty::List(Box::new(Ty::Int));
-        assert!(s.unify(&d, &l, Covariant).is_ok(), "Deque should coerce to List");
+        assert!(
+            s.unify(&d, &l, Covariant).is_ok(),
+            "Deque should coerce to List"
+        );
     }
 
     #[test]
@@ -1430,15 +1912,21 @@ mod tests {
         let o = s.fresh_origin();
         let l = Ty::List(Box::new(Ty::Int));
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        assert!(s.unify(&l, &d, Covariant).is_err(), "List must not coerce to Deque");
+        assert!(
+            s.unify(&l, &d, Covariant).is_err(),
+            "List must not coerce to Deque"
+        );
     }
 
     #[test]
     fn unify_list_coerces_to_iterator() {
         let mut s = TySubst::new();
         let l = Ty::List(Box::new(Ty::Int));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        assert!(s.unify(&l, &i, Covariant).is_ok(), "List should coerce to Iterator");
+        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        assert!(
+            s.unify(&l, &i, Covariant).is_ok(),
+            "List should coerce to Iterator"
+        );
     }
 
     // -- Polarity-based subtyping tests --
@@ -1449,14 +1937,18 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let d1 = Ty::Deque(Box::new(Ty::Int), o1);
         let d2 = Ty::Deque(Box::new(Ty::Int), o2);
         // Bind v to d1, then unify v with d2 in Covariant → should demote to List
         assert!(s.unify(&v, &d1, Covariant).is_ok());
         assert!(s.unify(&v, &d2, Covariant).is_ok());
         let resolved = s.resolve(&v);
-        assert_eq!(resolved, Ty::List(Box::new(Ty::Int)), "should demote to List<Int>");
+        assert_eq!(
+            resolved,
+            Ty::List(Box::new(Ty::Int)),
+            "should demote to List<Int>"
+        );
     }
 
     #[test]
@@ -1527,16 +2019,18 @@ mod tests {
         let o1 = s.fresh_origin();
         let o2 = s.fresh_origin();
         let fn_a = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o1)),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o2)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o2))],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -1547,7 +2041,7 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let elem_var = s.fresh_var();
+        let elem_var = s.fresh_param();
         let d1 = Ty::Deque(Box::new(Ty::String), o1);
         let d2 = Ty::Deque(Box::new(Ty::String), o2);
         // First element sets the type
@@ -1576,14 +2070,20 @@ mod tests {
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
         let o3 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let d1 = Ty::Deque(Box::new(Ty::Int), o1);
         let d2 = Ty::Deque(Box::new(Ty::Int), o2);
         let d3 = Ty::Deque(Box::new(Ty::Int), o3);
         assert!(s.unify(&d1, &v, Covariant).is_ok());
-        assert!(s.unify(&d2, &v, Covariant).is_ok(), "second deque should trigger demotion");
+        assert!(
+            s.unify(&d2, &v, Covariant).is_ok(),
+            "second deque should trigger demotion"
+        );
         // v is now List<Int>. Third deque: Deque≤List in Covariant should succeed.
-        assert!(s.unify(&d3, &v, Covariant).is_ok(), "third deque should coerce to List via Deque≤List");
+        assert!(
+            s.unify(&d3, &v, Covariant).is_ok(),
+            "third deque should coerce to List via Deque≤List"
+        );
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
     }
 
@@ -1593,9 +2093,15 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant)
+                .is_ok()
+        );
         assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant).is_ok());
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
     }
@@ -1609,15 +2115,24 @@ mod tests {
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
         let o3 = s.fresh_concrete_origin();
-        let inner_var = s.fresh_var();
-        let v = s.fresh_var();
-        assert!(s.unify(&Ty::Deque(Box::new(inner_var.clone()), o1), &v, Covariant).is_ok());
-        assert!(s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v, Covariant).is_ok());
+        let inner_var = s.fresh_param();
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&Ty::Deque(Box::new(inner_var.clone()), o1), &v, Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v, Covariant)
+                .is_ok()
+        );
         // inner_var should now be Int, v should be List<Int>
         assert_eq!(s.resolve(&inner_var), Ty::Int);
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
         // Third deque with same inner type
-        assert!(s.unify(&Ty::Deque(Box::new(Ty::Int), o3), &v, Covariant).is_ok());
+        assert!(
+            s.unify(&Ty::Deque(Box::new(Ty::Int), o3), &v, Covariant)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1642,7 +2157,10 @@ mod tests {
         let o2 = s.fresh_concrete_origin();
         let d1 = Ty::Deque(Box::new(Ty::Int), o1);
         let d2 = Ty::Deque(Box::new(Ty::String), o2);
-        assert!(s.unify(&d1, &d2, Covariant).is_err(), "inner type mismatch must fail regardless of demotion");
+        assert!(
+            s.unify(&d1, &d2, Covariant).is_err(),
+            "inner type mismatch must fail regardless of demotion"
+        );
     }
 
     #[test]
@@ -1651,13 +2169,22 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let inner = s.fresh_var();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(inner.clone()), o1), Covariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(inner.clone()), o2), Covariant).is_ok());
+        let inner = s.fresh_param();
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(inner.clone()), o1), Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(inner.clone()), o2), Covariant)
+                .is_ok()
+        );
         // v should be List<inner_var>, inner still unresolved
         let resolved = s.resolve(&v);
-        assert!(matches!(resolved, Ty::List(_)), "should be List, got {resolved:?}");
+        assert!(
+            matches!(resolved, Ty::List(_)),
+            "should be List, got {resolved:?}"
+        );
         // Now bind inner to String
         assert!(s.unify(&inner, &Ty::String, Invariant).is_ok());
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::String)));
@@ -1669,9 +2196,15 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Contravariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Contravariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Contravariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Contravariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
     }
 
@@ -1682,12 +2215,14 @@ mod tests {
         let mut s = TySubst::new();
         let i = Interner::new();
         let o = s.fresh_concrete_origin();
-        let obj_deque = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::Deque(Box::new(Ty::String), o)),
-        ]));
-        let obj_list = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::List(Box::new(Ty::String))),
-        ]));
+        let obj_deque = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::Deque(Box::new(Ty::String), o),
+        )]));
+        let obj_list = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::List(Box::new(Ty::String)),
+        )]));
         assert!(s.unify(&obj_deque, &obj_list, Covariant).is_ok());
     }
 
@@ -1697,12 +2232,14 @@ mod tests {
         let mut s = TySubst::new();
         let i = Interner::new();
         let o = s.fresh_concrete_origin();
-        let obj_deque = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::Deque(Box::new(Ty::String), o)),
-        ]));
-        let obj_list = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::List(Box::new(Ty::String))),
-        ]));
+        let obj_deque = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::Deque(Box::new(Ty::String), o),
+        )]));
+        let obj_list = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::List(Box::new(Ty::String)),
+        )]));
         assert!(s.unify(&obj_deque, &obj_list, Invariant).is_err());
     }
 
@@ -1714,13 +2251,15 @@ mod tests {
         let i = Interner::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let obj1 = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::Deque(Box::new(Ty::String), o1)),
-        ]));
-        let obj2 = Ty::Object(FxHashMap::from_iter([
-            (i.intern("tags"), Ty::Deque(Box::new(Ty::String), o2)),
-        ]));
+        let v = s.fresh_param();
+        let obj1 = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::Deque(Box::new(Ty::String), o1),
+        )]));
+        let obj2 = Ty::Object(FxHashMap::from_iter([(
+            i.intern("tags"),
+            Ty::Deque(Box::new(Ty::String), o2),
+        )]));
         assert!(s.unify(&v, &obj1, Covariant).is_ok());
         assert!(s.unify(&v, &obj2, Covariant).is_ok());
     }
@@ -1772,28 +2311,32 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let inner_fn_a = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let inner_fn_b = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let outer_a = Ty::Fn {
-            params: vec![inner_fn_a],
+            params: vec![tp(inner_fn_a)],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let outer_b = Ty::Fn {
-            params: vec![inner_fn_b],
+            params: vec![tp(inner_fn_b)],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&outer_a, &outer_b, Covariant).is_ok());
     }
@@ -1805,28 +2348,32 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let inner_fn_a = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let inner_fn_b = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let outer_a = Ty::Fn {
-            params: vec![inner_fn_a],
+            params: vec![tp(inner_fn_a)],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let outer_b = Ty::Fn {
-            params: vec![inner_fn_b],
+            params: vec![tp(inner_fn_b)],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&outer_a, &outer_b, Covariant).is_err());
     }
@@ -1840,14 +2387,16 @@ mod tests {
         let fn_a = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o)),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -1859,16 +2408,18 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -1880,16 +2431,18 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -1899,15 +2452,29 @@ mod tests {
         // Demotion should be fully undone by rollback.
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant)
+                .is_ok()
+        );
         let snap = s.snapshot();
         let o2 = s.fresh_concrete_origin();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant).is_ok());
-        assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)), "demoted after second deque");
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant)
+                .is_ok()
+        );
+        assert_eq!(
+            s.resolve(&v),
+            Ty::List(Box::new(Ty::Int)),
+            "demoted after second deque"
+        );
         s.rollback(snap);
         // After rollback, v should be back to Deque<Int, o1>
-        assert_eq!(s.resolve(&v), Ty::Deque(Box::new(Ty::Int), o1), "rollback should undo demotion");
+        assert_eq!(
+            s.resolve(&v),
+            Ty::Deque(Box::new(Ty::Int), o1),
+            "rollback should undo demotion"
+        );
     }
 
     #[test]
@@ -1916,12 +2483,25 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o2), Covariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
         // List<Int> ≤ Iterator<Int> in Covariant
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Covariant).is_ok());
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Covariant
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1952,7 +2532,7 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&d, &i, Invariant).is_err());
     }
 
@@ -1961,7 +2541,7 @@ mod tests {
         // List → Iterator in Invariant must fail.
         let mut s = TySubst::new();
         let l = Ty::List(Box::new(Ty::Int));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&l, &i, Invariant).is_err());
     }
 
@@ -1971,7 +2551,7 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&d, &i, Contravariant).is_err());
     }
 
@@ -1980,7 +2560,7 @@ mod tests {
         // (Iterator, Deque) in Contravariant → reversed: Deque≤Iterator → OK.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         let d = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&i, &d, Contravariant).is_ok());
     }
@@ -1990,9 +2570,19 @@ mod tests {
         // Deque<Int> → Iterator<Int> directly in Covariant (skipping List).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant).is_ok());
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Covariant
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -2005,15 +2595,14 @@ mod tests {
         let tag = i.intern("Ok");
         let e1 = Ty::Enum {
             name,
-            variants: FxHashMap::from_iter([
-                (tag, Some(Box::new(Ty::Deque(Box::new(Ty::Int), o)))),
-            ]),
+            variants: FxHashMap::from_iter([(
+                tag,
+                Some(Box::new(Ty::Deque(Box::new(Ty::Int), o))),
+            )]),
         };
         let e2 = Ty::Enum {
             name,
-            variants: FxHashMap::from_iter([
-                (tag, Some(Box::new(Ty::List(Box::new(Ty::Int))))),
-            ]),
+            variants: FxHashMap::from_iter([(tag, Some(Box::new(Ty::List(Box::new(Ty::Int)))))]),
         };
         assert!(s.unify(&e1, &e2, Covariant).is_ok());
     }
@@ -2027,15 +2616,14 @@ mod tests {
         let tag = i.intern("Ok");
         let e1 = Ty::Enum {
             name,
-            variants: FxHashMap::from_iter([
-                (tag, Some(Box::new(Ty::Deque(Box::new(Ty::Int), o)))),
-            ]),
+            variants: FxHashMap::from_iter([(
+                tag,
+                Some(Box::new(Ty::Deque(Box::new(Ty::Int), o))),
+            )]),
         };
         let e2 = Ty::Enum {
             name,
-            variants: FxHashMap::from_iter([
-                (tag, Some(Box::new(Ty::List(Box::new(Ty::Int))))),
-            ]),
+            variants: FxHashMap::from_iter([(tag, Some(Box::new(Ty::List(Box::new(Ty::Int)))))]),
         };
         assert!(s.unify(&e1, &e2, Invariant).is_err());
     }
@@ -2049,27 +2637,39 @@ mod tests {
         // Var1 → Var2 → Deque(o1), then unify Var1 with List → Deque ≤ List via chain.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
         assert!(s.unify(&v1, &v2, Invariant).is_ok());
-        assert!(s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o), Invariant).is_ok());
+        assert!(
+            s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o), Invariant)
+                .is_ok()
+        );
         // v1 → v2 → Deque(Int, o). Now v1 as Deque ≤ List.
-        assert!(s.unify(&v1, &Ty::List(Box::new(Ty::Int)), Covariant).is_ok());
+        assert!(
+            s.unify(&v1, &Ty::List(Box::new(Ty::Int)), Covariant)
+                .is_ok()
+        );
     }
 
     #[test]
     fn var_chain_demotion_rebinds_leaf() {
         // Var1 → Var2 → Deque(o1). Unify Var1 with Deque(o2) covariant → demotion.
-        // find_leaf_var should follow chain and rebind Var2 (the leaf).
+        // find_leaf_param should follow chain and rebind Var2 (the leaf).
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
         assert!(s.unify(&v1, &v2, Invariant).is_ok());
-        assert!(s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o1), Invariant).is_ok());
+        assert!(
+            s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o1), Invariant)
+                .is_ok()
+        );
         // Demotion via v1
-        assert!(s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v1, Covariant).is_ok());
+        assert!(
+            s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v1, Covariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v1), Ty::List(Box::new(Ty::Int)));
         assert_eq!(s.resolve(&v2), Ty::List(Box::new(Ty::Int)));
     }
@@ -2077,18 +2677,24 @@ mod tests {
     #[test]
     fn two_vars_sharing_deque_demotion_affects_both() {
         // Chain v2 → v1 while both unbound, THEN bind v1 → Deque(o1).
-        // Demote via v2 → find_leaf_var follows v2 → v1 → rebinds v1 to List.
+        // Demote via v2 → find_leaf_param follows v2 → v1 → rebinds v1 to List.
         // Both Var1 and Var2 should resolve to List.
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
         // Must chain BEFORE binding to concrete — otherwise shallow_resolve
         // flattens the chain and v2 binds directly to Deque, not to v1.
         assert!(s.unify(&v2, &v1, Invariant).is_ok());
-        assert!(s.unify(&v1, &Ty::Deque(Box::new(Ty::Int), o1), Invariant).is_ok());
-        assert!(s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v2, Covariant).is_ok());
+        assert!(
+            s.unify(&v1, &Ty::Deque(Box::new(Ty::Int), o1), Invariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v2, Covariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v1), Ty::List(Box::new(Ty::Int)));
         assert_eq!(s.resolve(&v2), Ty::List(Box::new(Ty::Int)));
     }
@@ -2101,7 +2707,7 @@ mod tests {
     fn occurs_check_through_list_covariant() {
         // Var = List<Var> should fail (occurs) regardless of polarity.
         let mut s = TySubst::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let cyclic = Ty::List(Box::new(v.clone()));
         assert!(s.unify(&v, &cyclic, Covariant).is_err());
     }
@@ -2110,7 +2716,7 @@ mod tests {
     fn occurs_check_through_deque_covariant() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let cyclic = Ty::Deque(Box::new(v.clone()), o);
         assert!(s.unify(&v, &cyclic, Covariant).is_err());
     }
@@ -2119,12 +2725,13 @@ mod tests {
     fn occurs_check_through_fn_ret_covariant() {
         // Var = Fn() -> Var should fail (occurs) in any polarity.
         let mut s = TySubst::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let cyclic = Ty::Fn {
             params: vec![],
             ret: Box::new(v.clone()),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&v, &cyclic, Covariant).is_err());
     }
@@ -2162,7 +2769,10 @@ mod tests {
         // Inner item type is invariant — nested coercion is a type error.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let a = Ty::Option(Box::new(Ty::Option(Box::new(Ty::Deque(Box::new(Ty::Int), o)))));
+        let a = Ty::Option(Box::new(Ty::Option(Box::new(Ty::Deque(
+            Box::new(Ty::Int),
+            o,
+        )))));
         let b = Ty::Option(Box::new(Ty::Option(Box::new(Ty::List(Box::new(Ty::Int))))));
         assert!(s.unify(&a, &b, Covariant).is_err());
     }
@@ -2176,16 +2786,18 @@ mod tests {
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
-            params: vec![Ty::List(Box::new(Ty::Int))],
+            params: vec![tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Deque(Box::new(Ty::Int), o1)),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
-            params: vec![Ty::Deque(Box::new(Ty::Int), o2)],
+            params: vec![tp(Ty::Deque(Box::new(Ty::Int), o2))],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let a = Ty::List(Box::new(fn_a));
         let b = Ty::List(Box::new(fn_b));
@@ -2204,10 +2816,11 @@ mod tests {
         let i = Interner::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let obj1 = Ty::Object(FxHashMap::from_iter([
-            (i.intern("a"), Ty::Deque(Box::new(Ty::Int), o1)),
-        ]));
+        let v = s.fresh_param();
+        let obj1 = Ty::Object(FxHashMap::from_iter([(
+            i.intern("a"),
+            Ty::Deque(Box::new(Ty::Int), o1),
+        )]));
         let obj2 = Ty::Object(FxHashMap::from_iter([
             (i.intern("a"), Ty::Deque(Box::new(Ty::Int), o2)),
             (i.intern("b"), Ty::Int),
@@ -2234,7 +2847,7 @@ mod tests {
         // The two paths must not interfere.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let deque = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&v, &deque, Invariant).is_ok());
 
@@ -2244,7 +2857,14 @@ mod tests {
         s.rollback(snap);
 
         // Path 2: coerce to Iterator — should work independently
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Covariant).is_ok());
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Covariant
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -2254,16 +2874,25 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Invariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Invariant)
+                .is_ok()
+        );
 
         let snap = s.snapshot();
-        assert!(s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v, Covariant).is_ok());
+        assert!(
+            s.unify(&Ty::Deque(Box::new(Ty::Int), o2), &v, Covariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
         s.rollback(snap);
 
         // After rollback, v is still Deque(o1). Same-origin unify should work.
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Invariant).is_ok());
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o1), Invariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v), Ty::Deque(Box::new(Ty::Int), o1));
     }
 
@@ -2293,7 +2922,7 @@ mod tests {
         let _ = s2.fresh_concrete_origin();
         let l = Ty::List(Box::new(Ty::Int));
         let d = Ty::Deque(Box::new(Ty::Int), o1);
-        assert!(s1.unify(&l, &d, Covariant).is_err());   // List ≤ Deque: no
+        assert!(s1.unify(&l, &d, Covariant).is_err()); // List ≤ Deque: no
         assert!(s2.unify(&d, &l, Contravariant).is_err()); // reversed: List ≤ Deque: no
     }
 
@@ -2336,21 +2965,21 @@ mod tests {
         let o2 = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
             params: vec![
-                Ty::List(Box::new(Ty::Int)),
-                Ty::Deque(Box::new(Ty::Int), o1),
-            ],
+                tp(Ty::List(Box::new(Ty::Int))),
+                tp(Ty::Deque(Box::new(Ty::Int), o1))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![
-                Ty::Deque(Box::new(Ty::Int), o2),
-                Ty::List(Box::new(Ty::Int)),
-            ],
+                tp(Ty::Deque(Box::new(Ty::Int), o2)),
+                tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_err());
     }
@@ -2363,22 +2992,20 @@ mod tests {
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
-            params: vec![
-                Ty::List(Box::new(Ty::Int)),
-                Ty::List(Box::new(Ty::Int)),
-            ],
+            params: vec![tp(Ty::List(Box::new(Ty::Int))), tp(Ty::List(Box::new(Ty::Int)))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         let fn_b = Ty::Fn {
             params: vec![
-                Ty::Deque(Box::new(Ty::Int), o1),
-                Ty::Deque(Box::new(Ty::Int), o2),
-            ],
+                tp(Ty::Deque(Box::new(Ty::Int), o1)),
+                tp(Ty::Deque(Box::new(Ty::Int), o2))],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
-                captures: vec![],
+
+            effect: Effect::pure(),
+            captures: vec![],
         };
         assert!(s.unify(&fn_a, &fn_b, Covariant).is_ok());
     }
@@ -2392,8 +3019,8 @@ mod tests {
         // Deque<Var1, O> vs List<Var2> in Covariant → Deque≤List OK, Var1 binds to Var2.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
         let d = Ty::Deque(Box::new(v1.clone()), o);
         let l = Ty::List(Box::new(v2.clone()));
         assert!(s.unify(&d, &l, Covariant).is_ok());
@@ -2407,10 +3034,10 @@ mod tests {
         // Deque<Var1, O> vs Iterator<Var2> in Covariant → OK, Var1 binds to Var2.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
         let d = Ty::Deque(Box::new(v1.clone()), o);
-        let i = Ty::Iterator(Box::new(v2.clone()), Effect::Pure);
+        let i = Ty::Iterator(Box::new(v2.clone()), Effect::pure());
         assert!(s.unify(&d, &i, Covariant).is_ok());
         assert!(s.unify(&v2, &Ty::Int, Invariant).is_ok());
         assert_eq!(s.resolve(&v1), Ty::Int);
@@ -2427,10 +3054,16 @@ mod tests {
         // After: Var1 still resolves to Deque (binding unchanged), Var2 still List.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
-        assert!(s.unify(&v1, &Ty::Deque(Box::new(Ty::Int), o), Invariant).is_ok());
-        assert!(s.unify(&v2, &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
+        assert!(
+            s.unify(&v1, &Ty::Deque(Box::new(Ty::Int), o), Invariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v2, &Ty::List(Box::new(Ty::Int)), Invariant)
+                .is_ok()
+        );
         assert!(s.unify(&v1, &v2, Covariant).is_ok());
     }
 
@@ -2440,10 +3073,16 @@ mod tests {
         // unify(Var1, Var2, Cov) → List≤Deque → fails.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v1 = s.fresh_var();
-        let v2 = s.fresh_var();
-        assert!(s.unify(&v1, &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
-        assert!(s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o), Invariant).is_ok());
+        let v1 = s.fresh_param();
+        let v2 = s.fresh_param();
+        assert!(
+            s.unify(&v1, &Ty::List(Box::new(Ty::Int)), Invariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v2, &Ty::Deque(Box::new(Ty::Int), o), Invariant)
+                .is_ok()
+        );
         assert!(s.unify(&v1, &v2, Covariant).is_err());
     }
 
@@ -2455,7 +3094,7 @@ mod tests {
     fn five_deque_origins_join_to_list() {
         // [d1, d2, d3, d4, d5] each with distinct origin → all join to List.
         let mut s = TySubst::new();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         for _ in 0..5 {
             let o = s.fresh_concrete_origin();
             let d = Ty::Deque(Box::new(Ty::Int), o);
@@ -2475,7 +3114,7 @@ mod tests {
         let c1 = s.fresh_concrete_origin();
         let c2 = s.fresh_concrete_origin();
         let ov = s.fresh_origin(); // Origin::Var
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         let d_var_origin = Ty::Deque(Box::new(Ty::Int), ov);
         let d_c1 = Ty::Deque(Box::new(Ty::Int), c1);
         let d_c2 = Ty::Deque(Box::new(Ty::Int), c2);
@@ -2489,7 +3128,7 @@ mod tests {
     }
 
     // ================================================================
-    // Error / Infer + polarity (poison absorption)
+    // Error / Param + polarity (poison / unification absorption)
     // ================================================================
 
     #[test]
@@ -2499,17 +3138,26 @@ mod tests {
         let d = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&Ty::error(), &d, Covariant).is_ok());
         assert!(s.unify(&d, &Ty::error(), Contravariant).is_ok());
-        assert!(s.unify(&Ty::error(), &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
+        assert!(
+            s.unify(&Ty::error(), &Ty::List(Box::new(Ty::Int)), Invariant)
+                .is_ok()
+        );
     }
 
     #[test]
-    fn infer_absorbs_any_polarity() {
+    fn param_absorbs_any_polarity() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let d = Ty::Deque(Box::new(Ty::Int), o);
-        assert!(s.unify(&Ty::infer(), &d, Covariant).is_ok());
-        assert!(s.unify(&d, &Ty::infer(), Contravariant).is_ok());
-        assert!(s.unify(&Ty::infer(), &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
+        let p1 = s.fresh_param();
+        let p2 = s.fresh_param();
+        let p3 = s.fresh_param();
+        assert!(s.unify(&p1, &d, Covariant).is_ok());
+        assert!(s.unify(&d, &p2, Contravariant).is_ok());
+        assert!(
+            s.unify(&p3, &Ty::List(Box::new(Ty::Int)), Invariant)
+                .is_ok()
+        );
     }
 
     // ================================================================
@@ -2522,21 +3170,41 @@ mod tests {
         // Each step narrows via Covariant.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Invariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Invariant)
+                .is_ok()
+        );
         assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant).is_ok());
         // v resolves to Deque still (Var bound to Deque, no rebind from Deque≤List).
         // Now try Iterator.
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Covariant).is_ok());
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Covariant
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn iterator_cannot_narrow_back_to_list_covariant() {
         // Var = Iterator(Int). Iterator ≤ List is invalid.
         let mut s = TySubst::new();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Invariant).is_ok());
-        assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant).is_err());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Invariant
+            )
+            .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2544,9 +3212,19 @@ mod tests {
         // Var = Iterator(Int). Iterator ≤ Deque is invalid.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Iterator(Box::new(Ty::Int), Effect::Pure), Invariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant).is_err());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(
+                &v,
+                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Invariant
+            )
+            .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2554,9 +3232,12 @@ mod tests {
         // Var = List(Int). List ≤ Deque is invalid.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Invariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant).is_err());
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant)
+                .is_err()
+        );
     }
 
     // ================================================================
@@ -2568,32 +3249,41 @@ mod tests {
         // Deque<Int> ≤ List<String> → inner Int vs String fails.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        assert!(s.unify(
-            &Ty::Deque(Box::new(Ty::Int), o),
-            &Ty::List(Box::new(Ty::String)),
-            Covariant,
-        ).is_err());
+        assert!(
+            s.unify(
+                &Ty::Deque(Box::new(Ty::Int), o),
+                &Ty::List(Box::new(Ty::String)),
+                Covariant,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn deque_to_iterator_inner_type_mismatch_fails() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        assert!(s.unify(
-            &Ty::Deque(Box::new(Ty::Int), o),
-            &Ty::Iterator(Box::new(Ty::String), Effect::Pure),
-            Covariant,
-        ).is_err());
+        assert!(
+            s.unify(
+                &Ty::Deque(Box::new(Ty::Int), o),
+                &Ty::Iterator(Box::new(Ty::String), Effect::pure()),
+                Covariant,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn list_to_iterator_inner_type_mismatch_fails() {
         let mut s = TySubst::new();
-        assert!(s.unify(
-            &Ty::List(Box::new(Ty::Int)),
-            &Ty::Iterator(Box::new(Ty::String), Effect::Pure),
-            Covariant,
-        ).is_err());
+        assert!(
+            s.unify(
+                &Ty::List(Box::new(Ty::Int)),
+                &Ty::Iterator(Box::new(Ty::String), Effect::pure()),
+                Covariant,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2603,11 +3293,14 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        assert!(s.unify(
-            &Ty::Deque(Box::new(Ty::Int), o1),
-            &Ty::Deque(Box::new(Ty::String), o2),
-            Covariant,
-        ).is_err());
+        assert!(
+            s.unify(
+                &Ty::Deque(Box::new(Ty::Int), o1),
+                &Ty::Deque(Box::new(Ty::String), o2),
+                Covariant,
+            )
+            .is_err()
+        );
     }
 
     // ================================================================
@@ -2638,7 +3331,7 @@ mod tests {
     fn iterator_vs_list_of_list_fails() {
         // Iterator<Int> vs List<List<Int>> — not the same structure.
         let mut s = TySubst::new();
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
         assert!(s.unify(&iter, &nested, Covariant).is_err());
     }
@@ -2659,20 +3352,23 @@ mod tests {
         let o = s.fresh_concrete_origin();
         let mk = |inner_param: Ty| -> Ty {
             Ty::Fn {
-                params: vec![Ty::Fn {
-                    params: vec![Ty::Fn {
-                        params: vec![inner_param],
+                params: vec![tp(Ty::Fn {
+                    params: vec![tp(Ty::Fn {
+                        params: vec![tp(inner_param)],
                         ret: Box::new(Ty::Unit),
-                        kind: FnKind::Lambda, effect: Effect::Pure,
-                                        captures: vec![],
-                    }],
-                    ret: Box::new(Ty::Unit),
-                    kind: FnKind::Lambda, effect: Effect::Pure,
-                                captures: vec![],
-                }],
-                ret: Box::new(Ty::Unit),
-                kind: FnKind::Lambda, effect: Effect::Pure,
+
+                        effect: Effect::pure(),
                         captures: vec![],
+                    })],
+                    ret: Box::new(Ty::Unit),
+
+                    effect: Effect::pure(),
+                    captures: vec![],
+                })],
+                ret: Box::new(Ty::Unit),
+
+                effect: Effect::pure(),
+                captures: vec![],
             }
         };
         let a = mk(Ty::Deque(Box::new(Ty::Int), o));
@@ -2689,20 +3385,23 @@ mod tests {
         let o = s.fresh_concrete_origin();
         let mk = |inner_param: Ty| -> Ty {
             Ty::Fn {
-                params: vec![Ty::Fn {
-                    params: vec![Ty::Fn {
-                        params: vec![inner_param],
+                params: vec![tp(Ty::Fn {
+                    params: vec![tp(Ty::Fn {
+                        params: vec![tp(inner_param)],
                         ret: Box::new(Ty::Unit),
-                        kind: FnKind::Lambda, effect: Effect::Pure,
-                                        captures: vec![],
-                    }],
-                    ret: Box::new(Ty::Unit),
-                    kind: FnKind::Lambda, effect: Effect::Pure,
-                                captures: vec![],
-                }],
-                ret: Box::new(Ty::Unit),
-                kind: FnKind::Lambda, effect: Effect::Pure,
+
+                        effect: Effect::pure(),
                         captures: vec![],
+                    })],
+                    ret: Box::new(Ty::Unit),
+
+                    effect: Effect::pure(),
+                    captures: vec![],
+                })],
+                ret: Box::new(Ty::Unit),
+    
+                effect: Effect::pure(),
+                captures: vec![],
             }
         };
         let a = mk(Ty::List(Box::new(Ty::Int)));
@@ -2719,9 +3418,15 @@ mod tests {
         // Same origin → origins unify → no demotion path, stays Deque.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), o), Covariant)
+                .is_ok()
+        );
         assert_eq!(s.resolve(&v), Ty::Deque(Box::new(Ty::Int), o));
     }
 
@@ -2731,14 +3436,26 @@ mod tests {
         let mut s = TySubst::new();
         let c = s.fresh_concrete_origin();
         let ov = s.fresh_origin();
-        let v = s.fresh_var();
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), ov), Invariant).is_ok());
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), c), Covariant).is_ok());
+        let v = s.fresh_param();
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), ov), Invariant)
+                .is_ok()
+        );
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), c), Covariant)
+                .is_ok()
+        );
         // ov now bound to c. Second concrete same as c → no mismatch.
-        assert!(s.unify(&v, &Ty::Deque(Box::new(Ty::Int), c), Covariant).is_ok());
+        assert!(
+            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), c), Covariant)
+                .is_ok()
+        );
         // Still Deque, not List.
         let resolved = s.resolve(&v);
-        assert!(matches!(resolved, Ty::Deque(_, _)), "should stay Deque, got {resolved:?}");
+        assert!(
+            matches!(resolved, Ty::Deque(_, _)),
+            "should stay Deque, got {resolved:?}"
+        );
     }
 
     // ── Sequence origin tracking ─────────────────────────────────
@@ -2747,8 +3464,8 @@ mod tests {
     fn sequence_same_origin_unifies() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         assert!(s.unify(&a, &b, Invariant).is_ok());
     }
 
@@ -2758,13 +3475,16 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Pure);
+        let v = s.fresh_param();
+        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2, Effect::pure());
         assert!(s.unify(&v, &seq1, Covariant).is_ok());
         assert!(s.unify(&v, &seq2, Covariant).is_ok());
         let resolved = s.resolve(&v);
-        assert!(matches!(resolved, Ty::Iterator(..)), "should demote to Iterator, got {resolved:?}");
+        assert!(
+            matches!(resolved, Ty::Iterator(..)),
+            "should demote to Iterator, got {resolved:?}"
+        );
     }
 
     #[test]
@@ -2772,8 +3492,8 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Pure);
+        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::pure());
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
 
@@ -2783,7 +3503,7 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
         let deque = Ty::Deque(Box::new(Ty::Int), o);
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         assert!(s.unify(&deque, &seq, Covariant).is_ok());
     }
 
@@ -2792,7 +3512,7 @@ mod tests {
         // Sequence ≤ Deque is NOT allowed (lazy → eager forbidden).
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         let deque = Ty::Deque(Box::new(Ty::Int), o);
         assert!(s.unify(&seq, &deque, Covariant).is_err());
     }
@@ -2802,8 +3522,8 @@ mod tests {
         // Sequence(T, O) ≤ Iterator(T) — covariant, origin lost.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&seq, &iter, Covariant).is_ok());
     }
 
@@ -2812,8 +3532,8 @@ mod tests {
         // Iterator ≤ Sequence is NOT allowed (no origin to create).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         assert!(s.unify(&iter, &seq, Covariant).is_err());
     }
 
@@ -2823,7 +3543,7 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let deque = Ty::Deque(Box::new(Ty::Int), o);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&deque, &iter, Covariant).is_ok());
     }
 
@@ -2833,10 +3553,10 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
         let c = s.fresh_concrete_origin();
-        let input = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let output = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let input = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let output = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         // Bind o to a concrete origin via the input.
-        let concrete_seq = Ty::Sequence(Box::new(Ty::Int), c, Effect::Pure);
+        let concrete_seq = Ty::Sequence(Box::new(Ty::Int), c, Effect::pure());
         assert!(s.unify(&concrete_seq, &input, Covariant).is_ok());
         // Now output should also resolve to the same concrete origin.
         let resolved = s.resolve(&output);
@@ -2853,23 +3573,26 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Pure);
+        let seq1 = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let seq2 = Ty::Sequence(Box::new(Ty::Int), o2, Effect::pure());
         // Different origins should NOT unify invariantly.
         assert!(s.unify(&seq1, &seq2, Invariant).is_err());
         // But covariantly, they demote to Iterator.
-        let v = s.fresh_var();
+        let v = s.fresh_param();
         assert!(s.unify(&v, &seq1, Covariant).is_ok());
         assert!(s.unify(&v, &seq2, Covariant).is_ok());
         let resolved = s.resolve(&v);
-        assert!(matches!(resolved, Ty::Iterator(..)), "should demote to Iterator, got {resolved:?}");
+        assert!(
+            matches!(resolved, Ty::Iterator(..)),
+            "should demote to Iterator, got {resolved:?}"
+        );
     }
 
     #[test]
     fn sequence_is_not_pure() {
         let o = Origin::Concrete(0);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure).is_pure());
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::Pure).is_pure());
+        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pure());
+        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pure());
         // Deque IS pure (it's an eager, storable container).
         assert!(Ty::Deque(Box::new(Ty::Int), o).is_pure());
     }
@@ -2881,12 +3604,26 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_origin();
         let c = s.fresh_concrete_origin();
-        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         // Bind o to concrete.
-        assert!(s.unify(&Ty::Sequence(Box::new(Ty::Int), c, Effect::Pure), &a, Covariant).is_ok());
+        assert!(
+            s.unify(
+                &Ty::Sequence(Box::new(Ty::Int), c, Effect::pure()),
+                &a,
+                Covariant
+            )
+            .is_ok()
+        );
         // b should also resolve to same origin.
-        assert!(s.unify(&Ty::Sequence(Box::new(Ty::Int), c, Effect::Pure), &b, Covariant).is_ok());
+        assert!(
+            s.unify(
+                &Ty::Sequence(Box::new(Ty::Int), c, Effect::pure()),
+                &b,
+                Covariant
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -2895,8 +3632,8 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Pure);
+        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::pure());
         // In a chain_seq signature, both args share the same origin var.
         // If called with different concrete origins, unification of origins fails.
         assert!(s.unify_origins(o1, o2).is_err());
@@ -2921,8 +3658,14 @@ mod tests {
         let o = s.fresh_concrete_origin();
         assert_eq!(Ty::List(Box::new(Ty::Int)).purity(), Purity::Lazy);
         assert_eq!(Ty::Deque(Box::new(Ty::Int), o).purity(), Purity::Lazy);
-        assert_eq!(Ty::Iterator(Box::new(Ty::Int), Effect::Pure).purity(), Purity::Lazy);
-        assert_eq!(Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure).purity(), Purity::Lazy);
+        assert_eq!(
+            Ty::Iterator(Box::new(Ty::Int), Effect::pure()).purity(),
+            Purity::Lazy
+        );
+        assert_eq!(
+            Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).purity(),
+            Purity::Lazy
+        );
         assert_eq!(Ty::Option(Box::new(Ty::Int)).purity(), Purity::Lazy);
         assert_eq!(Ty::Tuple(vec![Ty::Int]).purity(), Purity::Lazy);
     }
@@ -2937,9 +3680,10 @@ mod tests {
     #[test]
     fn purity_fn_is_lazy() {
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert_eq!(fn_ty.purity(), Purity::Lazy);
@@ -2948,9 +3692,10 @@ mod tests {
     #[test]
     fn purity_extern_fn_is_lazy() {
         let fn_ty = Ty::Fn {
-            params: vec![Ty::String],
+            params: vec![tp(Ty::String)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Extern, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert_eq!(fn_ty.purity(), Purity::Lazy);
@@ -2961,10 +3706,7 @@ mod tests {
         let i = Interner::new();
         let enum_ty = Ty::Enum {
             name: i.intern("Color"),
-            variants: FxHashMap::from_iter([
-                (i.intern("Red"), None),
-                (i.intern("Green"), None),
-            ]),
+            variants: FxHashMap::from_iter([(i.intern("Red"), None), (i.intern("Green"), None)]),
         };
         assert_eq!(enum_ty.purity(), Purity::Lazy);
     }
@@ -2976,9 +3718,10 @@ mod tests {
 
     #[test]
     fn purity_special_types() {
-        assert_eq!(Ty::error().purity(), Purity::Pure);
-        assert_eq!(Ty::infer().purity(), Purity::Pure);
-        assert_eq!(Ty::Var(TyVar(0)).purity(), Purity::Pure);
+        // Unresolved types are conservatively Unpure.
+        assert_eq!(Ty::error().purity(), Purity::Unpure);
+        let mut s = TySubst::new();
+        assert_eq!(s.fresh_param().purity(), Purity::Unpure);
     }
 
     #[test]
@@ -3015,9 +3758,10 @@ mod tests {
     fn pureable_list_of_fn_with_pure_captures() {
         // Fn with empty captures and pure ret → pureable, so List<Fn> is also pureable.
         let list_fn = Ty::List(Box::new(Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         }));
         assert!(list_fn.is_pureable());
@@ -3027,9 +3771,10 @@ mod tests {
     fn pureable_list_of_fn_with_opaque_capture() {
         // Fn with Opaque capture → not pureable, so List<Fn> is also not pureable.
         let list_fn = Ty::List(Box::new(Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("Handle".into())],
         }));
         assert!(!list_fn.is_pureable());
@@ -3052,9 +3797,10 @@ mod tests {
     fn pureable_nested_list_of_fn_pure_captures() {
         // List<List<Fn(Int) -> Int>> with empty captures — pureable
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         let nested = Ty::List(Box::new(Ty::List(Box::new(fn_ty))));
@@ -3065,9 +3811,10 @@ mod tests {
     fn pureable_nested_list_of_fn_opaque_capture() {
         // List<List<Fn(Int) -> Int>> with Opaque capture — not pureable
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("X".into())],
         };
         let nested = Ty::List(Box::new(Ty::List(Box::new(fn_ty))));
@@ -3090,7 +3837,7 @@ mod tests {
 
     #[test]
     fn pureable_iterator_of_scalars() {
-        assert!(Ty::Iterator(Box::new(Ty::String), Effect::Pure).is_pureable());
+        assert!(Ty::Iterator(Box::new(Ty::String), Effect::pure()).is_pureable());
     }
 
     #[test]
@@ -3099,10 +3846,11 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
-        assert!(Ty::Iterator(Box::new(fn_ty), Effect::Pure).is_pureable());
+        assert!(Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_pureable());
     }
 
     #[test]
@@ -3110,17 +3858,18 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Opaque("X".into())),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
-        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::Pure).is_pureable());
+        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_pureable());
     }
 
     #[test]
     fn pureable_sequence_of_scalars() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        assert!(Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure).is_pureable());
+        assert!(Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pureable());
     }
 
     #[test]
@@ -3144,7 +3893,8 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert!(Ty::Tuple(vec![Ty::Int, fn_ty]).is_pureable());
@@ -3155,7 +3905,8 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("X".into())],
         };
         assert!(!Ty::Tuple(vec![Ty::Int, fn_ty]).is_pureable());
@@ -3181,9 +3932,10 @@ mod tests {
         // Fn with no captures, pure ret → object is pureable
         let i = Interner::new();
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         let obj = Ty::Object(FxHashMap::from_iter([
@@ -3197,9 +3949,10 @@ mod tests {
     fn pureable_object_with_fn_opaque_capture() {
         let i = Interner::new();
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("X".into())],
         };
         let obj = Ty::Object(FxHashMap::from_iter([
@@ -3212,9 +3965,10 @@ mod tests {
     #[test]
     fn pureable_object_with_opaque_value() {
         let i = Interner::new();
-        let obj = Ty::Object(FxHashMap::from_iter([
-            (i.intern("handle"), Ty::Opaque("Handle".into())),
-        ]));
+        let obj = Ty::Object(FxHashMap::from_iter([(
+            i.intern("handle"),
+            Ty::Opaque("Handle".into()),
+        )]));
         assert!(!obj.is_pureable());
     }
 
@@ -3236,10 +3990,7 @@ mod tests {
         let i = Interner::new();
         let enum_ty = Ty::Enum {
             name: i.intern("Color"),
-            variants: FxHashMap::from_iter([
-                (i.intern("Red"), None),
-                (i.intern("Green"), None),
-            ]),
+            variants: FxHashMap::from_iter([(i.intern("Red"), None), (i.intern("Green"), None)]),
         };
         assert!(enum_ty.is_pureable());
     }
@@ -3251,7 +4002,8 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         let enum_ty = Ty::Enum {
@@ -3270,7 +4022,8 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::Unit),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("X".into())],
         };
         let enum_ty = Ty::Enum {
@@ -3288,9 +4041,10 @@ mod tests {
         let i = Interner::new();
         let enum_ty = Ty::Enum {
             name: i.intern("Wrap"),
-            variants: FxHashMap::from_iter([
-                (i.intern("Some"), Some(Box::new(Ty::Opaque("X".into())))),
-            ]),
+            variants: FxHashMap::from_iter([(
+                i.intern("Some"),
+                Some(Box::new(Ty::Opaque("X".into()))),
+            )]),
         };
         assert!(!enum_ty.is_pureable());
     }
@@ -3299,9 +4053,10 @@ mod tests {
     fn pureable_fn_with_pure_captures_and_ret() {
         // Fn with captures=[Int, String] and ret=Bool → pureable
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Bool),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Int, Ty::String],
         };
         assert!(fn_ty.is_pureable());
@@ -3311,9 +4066,10 @@ mod tests {
     fn pureable_fn_with_opaque_capture() {
         // Fn with captures=[Opaque] → not pureable
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Bool),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("Handle".into())],
         };
         assert!(!fn_ty.is_pureable());
@@ -3323,15 +4079,17 @@ mod tests {
     fn pureable_fn_with_fn_capture() {
         // Fn with captures=[Fn(Int)->Int (no captures)] → pureable (Fn with empty captures + pure ret)
         let inner_fn = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Bool),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![inner_fn],
         };
         assert!(fn_ty.is_pureable());
@@ -3341,9 +4099,10 @@ mod tests {
     fn pureable_fn_with_opaque_ret() {
         // Fn returning Opaque → not pureable
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Opaque("Handle".into())),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert!(!fn_ty.is_pureable());
@@ -3355,7 +4114,8 @@ mod tests {
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::List(Box::new(Ty::Int))),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert!(fn_ty.is_pureable());
@@ -3365,15 +4125,17 @@ mod tests {
     fn pureable_fn_with_list_fn_ret() {
         // Fn returning List<Fn(Int)->Int> → not pureable (transitive)
         let inner_fn = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![Ty::Opaque("X".into())], // inner Fn captures Opaque
         };
         let fn_ty = Ty::Fn {
             params: vec![],
             ret: Box::new(Ty::List(Box::new(inner_fn))),
-            kind: FnKind::Lambda, effect: Effect::Pure,
+
+            effect: Effect::pure(),
             captures: vec![],
         };
         assert!(!fn_ty.is_pureable());
@@ -3399,10 +4161,7 @@ mod tests {
     #[test]
     fn pureable_mixed_tuple_list_opaque() {
         // (Int, List<Opaque>) — not pureable
-        let ty = Ty::Tuple(vec![
-            Ty::Int,
-            Ty::List(Box::new(Ty::Opaque("X".into()))),
-        ]);
+        let ty = Ty::Tuple(vec![Ty::Int, Ty::List(Box::new(Ty::Opaque("X".into())))]);
         assert!(!ty.is_pureable());
     }
 
@@ -3431,24 +4190,24 @@ mod tests {
     #[test]
     fn iterator_same_effect_pure() {
         let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&a, &b, Invariant).is_ok());
     }
 
     #[test]
     fn iterator_same_effect_effectful() {
         let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let a = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&a, &b, Invariant).is_ok());
     }
 
     #[test]
     fn iterator_effect_mismatch_invariant_fails() {
         let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
 
@@ -3456,14 +4215,14 @@ mod tests {
     fn iterator_pure_to_effectful_covariant() {
         // Pure ≤ Effectful in Covariant → subtyping OK, v stays Pure (more specific)
         let mut s = TySubst::new();
-        let v = s.fresh_var();
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let v = s.fresh_param();
+        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&v, &pure_iter, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_iter, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Pure),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3472,14 +4231,14 @@ mod tests {
     fn iterator_effectful_to_pure_covariant() {
         // Effectful then Pure → coerces to Effectful (lattice top)
         let mut s = TySubst::new();
-        let v = s.fresh_var();
-        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let v = s.fresh_param();
+        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&v, &effectful_iter, Covariant).is_ok());
         assert!(s.unify(&v, &pure_iter, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3488,20 +4247,20 @@ mod tests {
     fn iterator_effect_var_binds_to_pure() {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
-        let a = Ty::Iterator(Box::new(Ty::Int), e);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let a = Ty::Iterator(Box::new(Ty::Int), e.clone());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&a, &b, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
     }
 
     #[test]
     fn iterator_effect_var_binds_to_effectful() {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
-        let a = Ty::Iterator(Box::new(Ty::Int), e);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let a = Ty::Iterator(Box::new(Ty::Int), e.clone());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&a, &b, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful);
+        assert_eq!(s.resolve_effect(&e), Effect::io());
     }
 
     #[test]
@@ -3511,29 +4270,29 @@ mod tests {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
         // First: bind e = Pure (from input iterator)
-        let input = Ty::Iterator(Box::new(Ty::Int), e);
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let input = Ty::Iterator(Box::new(Ty::Int), e.clone());
+        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&input, &pure_iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
         // Second: callback is effectful, needs e = Effectful
-        let callback_effect = Effect::Effectful;
+        let callback_effect = Effect::io();
         let fn_sig = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::String),
-            kind: FnKind::Lambda,
+
             captures: vec![],
-            effect: e,
+            effect: e.clone(),
         };
         let fn_actual = Ty::Fn {
-            params: vec![Ty::Int],
+            params: vec![tp(Ty::Int)],
             ret: Box::new(Ty::String),
-            kind: FnKind::Lambda,
+
             captures: vec![],
             effect: callback_effect,
         };
         // Covariant: Pure ≤ Effectful succeeds, but e stays as Pure (more specific).
         assert!(s.unify(&fn_sig, &fn_actual, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
     }
 
     // -- Sequence effect coercion --
@@ -3542,8 +4301,8 @@ mod tests {
     fn sequence_same_origin_effect_mismatch_invariant_fails() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
+        let a = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
 
@@ -3551,14 +4310,14 @@ mod tests {
     fn sequence_same_origin_effect_coercion_covariant() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let effectful_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
+        let v = s.fresh_param();
+        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let effectful_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
         assert!(s.unify(&v, &pure_seq, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_seq, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Sequence(_, _, e) => assert_eq!(e, Effect::Pure),
+            Ty::Sequence(_, _, e) => assert_eq!(e, Effect::pure()),
             other => panic!("expected Sequence, got {other:?}"),
         }
     }
@@ -3569,14 +4328,14 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Effectful);
-        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Effectful);
+        let v = s.fresh_param();
+        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::io());
+        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::io());
         assert!(s.unify(&v, &a, Covariant).is_ok());
         assert!(s.unify(&v, &b, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3587,14 +4346,14 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Effectful);
+        let v = s.fresh_param();
+        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::io());
         assert!(s.unify(&v, &a, Covariant).is_ok());
         assert!(s.unify(&v, &b, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3605,14 +4364,14 @@ mod tests {
         let mut s = TySubst::new();
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
-        let v = s.fresh_var();
-        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::Pure);
-        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::Pure);
+        let v = s.fresh_param();
+        let a = Ty::Sequence(Box::new(Ty::Int), o1, Effect::pure());
+        let b = Ty::Sequence(Box::new(Ty::Int), o2, Effect::pure());
         assert!(s.unify(&v, &a, Covariant).is_ok());
         assert!(s.unify(&v, &b, Covariant).is_ok());
         let resolved = s.resolve(&v);
         match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Pure),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3622,35 +4381,65 @@ mod tests {
     #[test]
     fn fn_same_effect_ok() {
         let mut s = TySubst::new();
-        let a = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
-        let b = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
+        let a = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+        let b = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
         assert!(s.unify(&a, &b, Invariant).is_ok());
     }
 
     #[test]
     fn fn_effect_mismatch_invariant_fails() {
         let mut s = TySubst::new();
-        let a = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
-        let b = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful };
+        let a = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+        let b = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::io(),
+        };
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
 
     #[test]
     fn fn_pure_to_effectful_covariant() {
         let mut s = TySubst::new();
-        let v = s.fresh_var();
-        let pure_fn = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
-        let effectful_fn = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful };
+        let v = s.fresh_param();
+        let pure_fn = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+        let effectful_fn = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::io(),
+        };
         assert!(s.unify(&v, &pure_fn, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_fn, Covariant).is_ok());
         match s.resolve(&v) {
-            Ty::Fn { effect, .. } => assert_eq!(effect, Effect::Pure),
+            Ty::Fn { effect, .. } => assert_eq!(effect, Effect::pure()),
             other => panic!("expected Fn, got {other:?}"),
         }
     }
@@ -3661,7 +4450,7 @@ mod tests {
     fn list_to_pure_iterator_ok() {
         let mut s = TySubst::new();
         let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&list, &iter, Covariant).is_ok());
     }
 
@@ -3671,7 +4460,7 @@ mod tests {
         // No var to rebind → fails.
         let mut s = TySubst::new();
         let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&list, &iter, Covariant).is_err());
     }
 
@@ -3681,9 +4470,9 @@ mod tests {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
         let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), e);
+        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
         assert!(s.unify(&list, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
     }
 
     #[test]
@@ -3692,9 +4481,9 @@ mod tests {
         let o = s.fresh_origin();
         let e = s.fresh_effect_var();
         let deque = Ty::Deque(Box::new(Ty::Int), o);
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, e);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, e.clone());
         assert!(s.unify(&deque, &seq, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
     }
 
     #[test]
@@ -3702,10 +4491,10 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
         let e = s.fresh_effect_var();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
-        let iter = Ty::Iterator(Box::new(Ty::Int), e);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
+        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
         assert!(s.unify(&seq, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful);
+        assert_eq!(s.resolve_effect(&e), Effect::io());
     }
 
     #[test]
@@ -3714,8 +4503,8 @@ mod tests {
         // Effect: Pure vs Effectful → mismatch, no var to rebind → fails.
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert!(s.unify(&seq, &iter, Covariant).is_err());
     }
 
@@ -3724,38 +4513,53 @@ mod tests {
     #[test]
     fn display_effectful_fn() {
         let i = Interner::new();
-        let ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful };
+        let ty = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::io(),
+        };
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
 
     #[test]
     fn display_pure_fn() {
         let i = Interner::new();
-        let ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
+        let ty = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
         assert_eq!(format!("{}", ty.display(&i)), "Fn(Int) -> String");
     }
 
     #[test]
     fn display_effectful_extern_fn() {
         let i = Interner::new();
-        let ty = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-            kind: FnKind::Extern, captures: vec![], effect: Effect::Effectful };
-        assert_eq!(format!("{}", ty.display(&i)), "ExternFn!(Int) -> String");
+        let ty = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+
+            captures: vec![],
+            effect: Effect::io(),
+        };
+        assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
 
     #[test]
     fn display_effectful_iterator() {
         let i = Interner::new();
-        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         assert_eq!(format!("{}", ty.display(&i)), "Iterator!<Int>");
     }
 
     #[test]
     fn display_pure_iterator() {
         let i = Interner::new();
-        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert_eq!(format!("{}", ty.display(&i)), "Iterator<Int>");
     }
 
@@ -3763,7 +4567,7 @@ mod tests {
     fn display_effectful_sequence() {
         let i = Interner::new();
         let o = Origin::Concrete(0);
-        let ty = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
+        let ty = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
         assert_eq!(format!("{}", ty.display(&i)), "Sequence!<Int, Origin(0)>");
     }
 
@@ -3772,15 +4576,15 @@ mod tests {
     #[test]
     fn three_iterators_pure_effectful_pure() {
         let mut s = TySubst::new();
-        let v = s.fresh_var();
-        let pure1 = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let effectful = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        let pure2 = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let v = s.fresh_param();
+        let pure1 = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let effectful = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        let pure2 = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&v, &pure1, Covariant).is_ok());
         assert!(s.unify(&v, &effectful, Covariant).is_ok());
         assert!(s.unify(&v, &pure2, Covariant).is_ok());
         match s.resolve(&v) {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Pure),
+            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -3792,53 +4596,73 @@ mod tests {
     // -- Pure scalars: always storable --
 
     #[test]
-    fn storable_int() { assert!(Ty::Int.is_storable()); }
+    fn storable_int() {
+        assert!(Ty::Int.is_storable());
+    }
     #[test]
-    fn storable_float() { assert!(Ty::Float.is_storable()); }
+    fn storable_float() {
+        assert!(Ty::Float.is_storable());
+    }
     #[test]
-    fn storable_string() { assert!(Ty::String.is_storable()); }
+    fn storable_string() {
+        assert!(Ty::String.is_storable());
+    }
     #[test]
-    fn storable_bool() { assert!(Ty::Bool.is_storable()); }
+    fn storable_bool() {
+        assert!(Ty::Bool.is_storable());
+    }
     #[test]
-    fn storable_unit() { assert!(Ty::Unit.is_storable()); }
+    fn storable_unit() {
+        assert!(Ty::Unit.is_storable());
+    }
     #[test]
-    fn storable_byte() { assert!(Ty::Byte.is_storable()); }
+    fn storable_byte() {
+        assert!(Ty::Byte.is_storable());
+    }
     #[test]
-    fn storable_range() { assert!(Ty::Range.is_storable()); }
+    fn storable_range() {
+        assert!(Ty::Range.is_storable());
+    }
 
     // -- Lazy containers with pure contents: storable --
 
     #[test]
-    fn storable_list_of_int() { assert!(Ty::List(Box::new(Ty::Int)).is_storable()); }
+    fn storable_list_of_int() {
+        assert!(Ty::List(Box::new(Ty::Int)).is_storable());
+    }
     #[test]
-    fn storable_option_string() { assert!(Ty::Option(Box::new(Ty::String)).is_storable()); }
+    fn storable_option_string() {
+        assert!(Ty::Option(Box::new(Ty::String)).is_storable());
+    }
     #[test]
-    fn storable_tuple() { assert!(Ty::Tuple(vec![Ty::Int, Ty::String]).is_storable()); }
+    fn storable_tuple() {
+        assert!(Ty::Tuple(vec![Ty::Int, Ty::String]).is_storable());
+    }
 
     // -- Iterator/Sequence with Pure effect: storable --
 
     #[test]
     fn storable_pure_iterator() {
-        assert!(Ty::Iterator(Box::new(Ty::Int), Effect::Pure).is_storable());
+        assert!(Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_storable());
     }
 
     #[test]
     fn storable_pure_sequence() {
         let o = Origin::Concrete(0);
-        assert!(Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure).is_storable());
+        assert!(Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_storable());
     }
 
     // -- Iterator/Sequence with Effectful: NOT storable --
 
     #[test]
     fn not_storable_effectful_iterator() {
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::Effectful).is_storable());
+        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::io()).is_storable());
     }
 
     #[test]
     fn not_storable_effectful_sequence() {
         let o = Origin::Concrete(0);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful).is_storable());
+        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::io()).is_storable());
     }
 
     // -- Fn: never storable --
@@ -3846,8 +4670,11 @@ mod tests {
     #[test]
     fn not_storable_pure_fn() {
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int], ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure,
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Int),
+
+            captures: vec![],
+            effect: Effect::pure(),
         };
         assert!(!fn_ty.is_storable());
     }
@@ -3855,8 +4682,11 @@ mod tests {
     #[test]
     fn not_storable_effectful_fn() {
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int], ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful,
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Int),
+
+            captures: vec![],
+            effect: Effect::io(),
         };
         assert!(!fn_ty.is_storable());
     }
@@ -3873,8 +4703,11 @@ mod tests {
     #[test]
     fn not_storable_list_of_fn() {
         let fn_ty = Ty::Fn {
-            params: vec![Ty::Int], ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure,
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Int),
+
+            captures: vec![],
+            effect: Effect::pure(),
         };
         assert!(!Ty::List(Box::new(fn_ty)).is_storable());
     }
@@ -3887,26 +4720,27 @@ mod tests {
     #[test]
     fn not_storable_iterator_of_effectful_fn() {
         let fn_ty = Ty::Fn {
-            params: vec![], ret: Box::new(Ty::Int),
-            kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful,
+            params: vec![],
+            ret: Box::new(Ty::Int),
+
+            captures: vec![],
+            effect: Effect::io(),
         };
-        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::Pure).is_storable());
+        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_storable());
     }
 
     #[test]
     fn storable_list_of_pure_iterator() {
         // List<Iterator<Int, Pure>> — Iterator inner is storable, effect is Pure
-        assert!(Ty::List(Box::new(
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure)
-        )).is_storable());
+        assert!(Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::pure()))).is_storable());
     }
 
     #[test]
     fn not_storable_list_of_effectful_iterator() {
         // List<Iterator<Int, Effectful>> — effectful inner makes the whole thing non-storable
-        assert!(!Ty::List(Box::new(
-            Ty::Iterator(Box::new(Ty::Int), Effect::Effectful)
-        )).is_storable());
+        assert!(
+            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_storable()
+        );
     }
 
     // ================================================================
@@ -3924,16 +4758,31 @@ mod tests {
         // Covariant: Pure ≤ Effectful → should succeed
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
-        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e);
-        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
+        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e.clone());
+        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
         // Unify iterator arg (binds e = Effectful)
         assert!(s.unify(&actual_iter, &iter_ty, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful);
+        assert_eq!(s.resolve_effect(&e), Effect::io());
 
         // Now unify callback: Fn{effect:Pure} vs Fn{effect:e(=Effectful)}
-        let actual_cb = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure };
-        let expected_cb = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e };
-        assert!(s.unify(&actual_cb, &expected_cb, Covariant).is_ok(), "Pure callback should be accepted where Effectful expected (covariant)");
+        let actual_cb = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Bool),
+
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+        let expected_cb = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Bool),
+
+            captures: vec![],
+            effect: e,
+        };
+        assert!(
+            s.unify(&actual_cb, &expected_cb, Covariant).is_ok(),
+            "Pure callback should be accepted where Effectful expected (covariant)"
+        );
     }
 
     #[test]
@@ -3943,26 +4792,44 @@ mod tests {
         // Covariant: Effectful ≤ Pure → should FAIL
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
-        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e);
-        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
+        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e.clone());
+        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
         assert!(s.unify(&actual_iter, &iter_ty, Covariant).is_ok());
 
-        let actual_cb = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful };
-        let expected_cb = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool), kind: FnKind::Lambda, captures: vec![], effect: e };
+        let actual_cb = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Bool),
+
+            captures: vec![],
+            effect: Effect::io(),
+        };
+        let expected_cb = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::Bool),
+
+            captures: vec![],
+            effect: e,
+        };
         // Effectful callback with Pure iterator → Effectful ≤ Pure in Covariant → Err
         // Falls through to lub_or_err → promotes to Effectful
         // This should succeed because lub promotes to Effectful
         let result = s.unify(&actual_cb, &expected_cb, Covariant);
         // This actually succeeds via lub_or_err (Fn effect → Effectful LUB)
-        assert!(result.is_ok(), "lub should promote to Effectful: {result:?}");
+        assert!(
+            result.is_ok(),
+            "lub should promote to Effectful: {result:?}"
+        );
     }
 
     #[test]
     fn effect_subtyping_invariant_rejects_mismatch() {
         let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::Pure);
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::Effectful);
-        assert!(s.unify(&a, &b, Invariant).is_err(), "Invariant should reject Pure vs Effectful");
+        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
+        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
+        assert!(
+            s.unify(&a, &b, Invariant).is_err(),
+            "Invariant should reject Pure vs Effectful"
+        );
     }
 
     // ================================================================
@@ -3973,43 +4840,29 @@ mod tests {
     // type mismatches are properly rejected. Tests use TySubst to
     // simulate overload resolution.
 
-    fn try_builtin(s: &mut TySubst, name: &str, arg_types: &[Ty]) -> Result<Ty, ()> {
-        use crate::builtins::registry;
-        let candidates = registry().candidates(name);
-        for &id in candidates {
-            let snap = s.snapshot();
-            let entry = registry().get(id);
-            let (params, ret) = (entry.signature)(s);
-            if arg_types.len() != params.len() {
-                s.rollback(snap);
-                continue;
-            }
-            let mut ok = true;
-            for (a, p) in arg_types.iter().zip(params.iter()) {
-                if s.unify(a, p, Polarity::Covariant).is_err() {
-                    ok = false;
-                    break;
-                }
-            }
-            if ok {
-                return Ok(s.resolve(&ret));
-            }
-            s.rollback(snap);
-        }
-        Err(())
-    }
+    use crate::builtins::test_support::try_builtin;
 
     // -- map: should accept Iterator and Sequence, return correct type --
 
     #[test]
     fn builtin_map_on_iterator_returns_iterator() {
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "map", &[
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-            Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
-        ]);
-        assert!(matches!(ret, Ok(Ty::Iterator(_, Effect::Pure))));
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "map",
+            &[
+                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Ty::Fn {
+                    params: vec![tp(Ty::Int)],
+                    ret: Box::new(Ty::String),
+        
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ],
+        );
+        assert!(matches!(ret, Ok(Ty::Iterator(_, ref e)) if e.is_pure()));
     }
 
     #[test]
@@ -4017,24 +4870,45 @@ mod tests {
         // map on Sequence breaks origin → returns Iterator (not Sequence)
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "map", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-            Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
-        ]);
-        assert!(matches!(ret, Ok(Ty::Iterator(_, Effect::Pure))));
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "map",
+            &[
+                Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()),
+                Ty::Fn {
+                    params: vec![tp(Ty::Int)],
+                    ret: Box::new(Ty::String),
+        
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ],
+        );
+        assert!(matches!(ret, Ok(Ty::Iterator(_, ref e)) if e.is_pure()));
     }
 
     #[test]
     fn builtin_map_on_list_coerces_to_iterator() {
         // List ≤ Iterator coercion allows map on List
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "map", &[
-            Ty::List(Box::new(Ty::Int)),
-            Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
-        ]).unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, Effect::Pure)));
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "map",
+            &[
+                Ty::List(Box::new(Ty::Int)),
+                Ty::Fn {
+                    params: vec![tp(Ty::Int)],
+                    ret: Box::new(Ty::String),
+        
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(matches!(ret, Ty::Iterator(_, ref e) if e.is_pure()));
     }
 
     // -- take/skip: Sequence preserves origin, Iterator stays Iterator --
@@ -4043,13 +4917,20 @@ mod tests {
     fn builtin_take_on_sequence_returns_sequence_same_origin() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "take", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-            Ty::Int,
-        ]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "take_seq",
+            &[Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()), Ty::Int],
+        )
+        .unwrap();
         match ret {
-            Ty::Sequence(_, ret_o, Effect::Pure) => {
-                assert_eq!(s.resolve_origin(ret_o), s.resolve_origin(o), "origin must be preserved");
+            Ty::Sequence(_, ret_o, ref e) if e.is_pure() => {
+                assert_eq!(
+                    s.resolve_origin(ret_o),
+                    s.resolve_origin(o),
+                    "origin must be preserved"
+                );
             }
             other => panic!("expected Sequence, got {other:?}"),
         }
@@ -4058,21 +4939,27 @@ mod tests {
     #[test]
     fn builtin_take_on_iterator_returns_iterator() {
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "take", &[
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-            Ty::Int,
-        ]).unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, Effect::Pure)));
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "take",
+            &[Ty::Iterator(Box::new(Ty::Int), Effect::pure()), Ty::Int],
+        )
+        .unwrap();
+        assert!(matches!(ret, Ty::Iterator(_, ref e) if e.is_pure()));
     }
 
     #[test]
     fn builtin_skip_on_sequence_preserves_origin() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "skip", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-            Ty::Int,
-        ]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "skip_seq",
+            &[Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()), Ty::Int],
+        )
+        .unwrap();
         match ret {
             Ty::Sequence(_, ret_o, _) => {
                 assert_eq!(s.resolve_origin(ret_o), s.resolve_origin(o));
@@ -4087,13 +4974,23 @@ mod tests {
     fn builtin_chain_on_sequence_with_iterator() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "chain", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-        ]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "chain_seq",
+            &[
+                Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()),
+                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+            ],
+        )
+        .unwrap();
         match ret {
             Ty::Sequence(_, ret_o, _) => {
-                assert_eq!(s.resolve_origin(ret_o), s.resolve_origin(o), "chain must preserve origin");
+                assert_eq!(
+                    s.resolve_origin(ret_o),
+                    s.resolve_origin(o),
+                    "chain must preserve origin"
+                );
             }
             other => panic!("expected Sequence, got {other:?}"),
         }
@@ -4104,9 +5001,13 @@ mod tests {
     #[test]
     fn builtin_collect_iterator_returns_list() {
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "collect", &[
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-        ]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "collect",
+            &[Ty::Iterator(Box::new(Ty::Int), Effect::pure())],
+        )
+        .unwrap();
         assert!(matches!(ret, Ty::List(_)));
     }
 
@@ -4116,10 +5017,17 @@ mod tests {
         // Result is List (not Deque — origin lost via coercion).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "collect", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-        ]).unwrap();
-        assert!(matches!(ret, Ty::List(_)), "collect on Sequence should return List (via Iterator coercion), got {ret:?}");
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "collect",
+            &[Ty::Sequence(Box::new(Ty::Int), o, Effect::pure())],
+        )
+        .unwrap();
+        assert!(
+            matches!(ret, Ty::List(_)),
+            "collect on Sequence should return List (via Iterator coercion), got {ret:?}"
+        );
     }
 
     #[test]
@@ -4128,12 +5036,26 @@ mod tests {
         // Result is Iterator (not Sequence — origin lost).
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "filter", &[
-            Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure),
-            Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
-        ]).unwrap();
-        assert!(matches!(ret, Ty::Iterator(..)), "filter on Sequence should return Iterator (origin lost), got {ret:?}");
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "filter",
+            &[
+                Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()),
+                Ty::Fn {
+                    params: vec![tp(Ty::Int)],
+                    ret: Box::new(Ty::Bool),
+        
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(
+            matches!(ret, Ty::Iterator(..)),
+            "filter on Sequence should return Iterator (origin lost), got {ret:?}"
+        );
     }
 
     // -- Effect propagation through HOF --
@@ -4141,13 +5063,26 @@ mod tests {
     #[test]
     fn builtin_map_effectful_callback_propagates() {
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "map", &[
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-            Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::String),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Effectful },
-        ]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "map",
+            &[
+                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Ty::Fn {
+                    params: vec![tp(Ty::Int)],
+                    ret: Box::new(Ty::String),
+        
+                    captures: vec![],
+                    effect: Effect::io(),
+                },
+            ],
+        )
+        .unwrap();
         match ret {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::Effectful, "effectful callback should propagate"),
+            Ty::Iterator(_, e) => {
+                assert_eq!(e, Effect::io(), "effectful callback should propagate")
+            }
             other => panic!("expected Iterator, got {other:?}"),
         }
     }
@@ -4158,10 +5093,7 @@ mod tests {
     fn builtin_take_on_deque_coerces_to_sequence() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "take", &[
-            Ty::Deque(Box::new(Ty::Int), o),
-            Ty::Int,
-        ]).unwrap();
+        let ret = try_builtin(&Interner::new(), &mut s, "take_seq", &[Ty::Deque(Box::new(Ty::Int), o), Ty::Int]).unwrap();
         // Deque ≤ Sequence coercion, then take preserves origin
         match ret {
             Ty::Sequence(_, ret_o, _) => {
@@ -4176,11 +5108,21 @@ mod tests {
     #[test]
     fn builtin_map_element_type_mismatch_fails() {
         let mut s = TySubst::new();
-        let ret = try_builtin(&mut s, "map", &[
-            Ty::Iterator(Box::new(Ty::Int), Effect::Pure),
-            Ty::Fn { params: vec![Ty::String], ret: Box::new(Ty::String),
-                kind: FnKind::Lambda, captures: vec![], effect: Effect::Pure },
-        ]);
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "map",
+            &[
+                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+                Ty::Fn {
+                    params: vec![tp(Ty::String)],
+                    ret: Box::new(Ty::String),
+        
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ],
+        );
         assert!(ret.is_err(), "map with wrong element type should fail");
     }
 
@@ -4190,10 +5132,21 @@ mod tests {
     fn builtin_flatten_on_sequence_returns_iterator() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&mut s, "flatten", &[
-            Ty::Sequence(Box::new(Ty::List(Box::new(Ty::Int))), o, Effect::Pure),
-        ]).unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, _)), "flatten on Sequence should return Iterator, got {ret:?}");
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "flatten",
+            &[Ty::Sequence(
+                Box::new(Ty::List(Box::new(Ty::Int))),
+                o,
+                Effect::pure(),
+            )],
+        )
+        .unwrap();
+        assert!(
+            matches!(ret, Ty::Iterator(_, _)),
+            "flatten on Sequence should return Iterator, got {ret:?}"
+        );
     }
 
     // -- Sequence effect variable tests --
@@ -4203,10 +5156,10 @@ mod tests {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
         let o = s.fresh_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, e);
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, e.clone());
+        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         assert!(s.unify(&seq, &pure_seq, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Pure);
+        assert_eq!(s.resolve_effect(&e), Effect::pure());
     }
 
     #[test]
@@ -4214,10 +5167,10 @@ mod tests {
         let mut s = TySubst::new();
         let e = s.fresh_effect_var();
         let o = s.fresh_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, e);
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, e.clone());
+        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
         assert!(s.unify(&seq, &eff_seq, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful);
+        assert_eq!(s.resolve_effect(&e), Effect::io());
     }
 
     #[test]
@@ -4225,10 +5178,12 @@ mod tests {
         // Pure Sequence ≤ Effectful Sequence (covariant)
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
-        assert!(s.unify(&pure_seq, &eff_seq, Covariant).is_ok(),
-            "Pure ≤ Effectful in covariant should succeed");
+        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
+        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
+        assert!(
+            s.unify(&pure_seq, &eff_seq, Covariant).is_ok(),
+            "Pure ≤ Effectful in covariant should succeed"
+        );
     }
 
     #[test]
@@ -4236,8 +5191,8 @@ mod tests {
         // Effectful Sequence → Pure Sequence (covariant) should fail
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Pure);
+        let eff_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
+        let pure_seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::pure());
         // This may go through lub_or_err which promotes to Effectful,
         // or fail if polarity prevents it. Just check it doesn't panic.
         let _ = s.unify(&eff_seq, &pure_seq, Covariant);
@@ -4249,10 +5204,468 @@ mod tests {
         // E should bind to Effectful after coercion
         let mut s = TySubst::new();
         let o = s.fresh_origin();
-        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::Effectful);
+        let seq = Ty::Sequence(Box::new(Ty::Int), o, Effect::io());
         let e = s.fresh_effect_var();
-        let iter = Ty::Iterator(Box::new(Ty::Int), e);
+        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
         assert!(s.unify(&seq, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(e), Effect::Effectful, "Sequence effect should propagate to Iterator");
+        assert_eq!(
+            s.resolve_effect(&e),
+            Effect::io(),
+            "Sequence effect should propagate to Iterator"
+        );
+    }
+
+    // ================================================================
+    // instantiate
+    // ================================================================
+
+    #[test]
+    fn instantiate_remaps_params() {
+        // Build a "template" signature with a separate TySubst.
+        let mut sig_subst = TySubst::new();
+        let t = sig_subst.fresh_param(); // Param(0)
+        let sig = Ty::Fn {
+            params: vec![tp(t.clone())],
+            ret: Box::new(t),
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+
+        // Instantiate into a different TySubst.
+        let mut inference = TySubst::new();
+        let _ = inference.fresh_param(); // Param(0) — burn one to show remapping
+        let inst = inference.instantiate(&sig);
+
+        // The instantiated type should have Param(1), not Param(0).
+        match &inst {
+            Ty::Fn { params, ret, .. } => {
+                assert!(matches!(&params[0].ty, Ty::Param { token: p, .. } if p.id() == 1));
+                assert!(matches!(ret.as_ref(), Ty::Param { token: p, .. } if p.id() == 1));
+            }
+            _ => panic!("expected Fn"),
+        }
+    }
+
+    #[test]
+    fn instantiate_remaps_effect_and_origin_vars() {
+        let mut sig_subst = TySubst::new();
+        let t = sig_subst.fresh_param();
+        let e = sig_subst.fresh_effect_var(); // Effect::Var(0)
+        let o = sig_subst.fresh_origin(); // Origin::Var(0)
+        let sig = Ty::Sequence(Box::new(t), o, e);
+
+        let mut inference = TySubst::new();
+        // Burn some ids.
+        let _ = inference.fresh_param();
+        let _ = inference.fresh_effect_var();
+        let _ = inference.fresh_origin();
+        let inst = inference.instantiate(&sig);
+
+        match &inst {
+            Ty::Sequence(inner, new_o, new_e) => {
+                assert!(matches!(inner.as_ref(), Ty::Param { token: p, .. } if p.id() == 1));
+                assert!(matches!(new_e, Effect::Var(1)));
+                assert!(matches!(new_o, Origin::Var(1)));
+            }
+            _ => panic!("expected Sequence"),
+        }
+    }
+
+    #[test]
+    fn instantiate_same_param_maps_to_same_fresh() {
+        // filter: (Iterator<T, E>, Fn(T) → Bool) → Iterator<T, E>
+        let mut sig_subst = TySubst::new();
+        let t = sig_subst.fresh_param();
+        let e = sig_subst.fresh_effect_var();
+        let sig = Ty::Fn {
+            params: vec![
+                tp(Ty::Iterator(Box::new(t.clone()), e.clone())),
+                tp(Ty::Fn {
+                    params: vec![tp(t.clone())],
+                    ret: Box::new(Ty::Bool),
+                    captures: vec![],
+                    effect: e.clone(),
+                })],
+            ret: Box::new(Ty::Iterator(Box::new(t), e)),
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+
+        let mut inference = TySubst::new();
+        let inst = inference.instantiate(&sig);
+
+        // All occurrences of the original Param(0) should map to the same new Param.
+        // All occurrences of Effect::Var(0) should map to the same new Effect::Var.
+        match &inst {
+            Ty::Fn { params, ret, .. } => {
+                // First param: Iterator<NewT, NewE>
+                let (new_t_id, new_e_id) = match &params[0].ty {
+                    Ty::Iterator(inner, Effect::Var(eid)) => match inner.as_ref() {
+                        Ty::Param { token: p, .. } => (p.id(), *eid),
+                        _ => panic!("expected Param"),
+                    },
+                    _ => panic!("expected Iterator"),
+                };
+                // Second param: Fn(NewT) → Bool with same effect
+                match &params[1].ty {
+                    Ty::Fn {
+                        params: fp,
+                        effect: Effect::Var(eid),
+                        ..
+                    } => {
+                        assert!(matches!(&fp[0].ty, Ty::Param{ token: p, ..} if p.id() == new_t_id));
+                        assert_eq!(*eid, new_e_id);
+                    }
+                    _ => panic!("expected Fn"),
+                }
+                // Return: Iterator<NewT, NewE>
+                match ret.as_ref() {
+                    Ty::Iterator(inner, Effect::Var(eid)) => {
+                        assert!(matches!(inner.as_ref(), Ty::Param{token: p, ..} if p.id() == new_t_id));
+                        assert_eq!(*eid, new_e_id);
+                    }
+                    _ => panic!("expected Iterator"),
+                }
+            }
+            _ => panic!("expected Fn"),
+        }
+    }
+
+    #[test]
+    fn instantiate_concrete_untouched() {
+        let mut s = TySubst::new();
+        let concrete = Ty::Fn {
+            params: vec![tp(Ty::Int)],
+            ret: Box::new(Ty::String),
+            captures: vec![],
+            effect: Effect::pure(),
+        };
+        let inst = s.instantiate(&concrete);
+        assert_eq!(inst, concrete);
+    }
+
+    // ── EffectSet tests ─────────────────────────────────────────────
+
+    mod effect_set_tests {
+        use super::*;
+        use crate::graph::types::ContextId;
+
+        fn ctx(n: usize) -> ContextId {
+            // Use alloc() to create unique ContextIds for tests.
+            // We call it n times in sequence — the exact id value doesn't matter,
+            // only that different calls produce different ids.
+            let _ = n; // suppress unused warning
+            ContextId::alloc()
+        }
+
+        #[test]
+        fn default_is_pure() {
+            let s = EffectSet::default();
+            assert!(s.is_pure());
+        }
+
+        #[test]
+        fn io_only_is_not_pure() {
+            let s = EffectSet { io: true, ..Default::default() };
+            assert!(!s.is_pure());
+        }
+
+        #[test]
+        fn reads_only_is_not_pure() {
+            let c = ctx(0);
+            let s = EffectSet {
+                reads: [c].into_iter().collect(),
+                ..Default::default()
+            };
+            assert!(!s.is_pure());
+        }
+
+        #[test]
+        fn writes_only_is_not_pure() {
+            let c = ctx(0);
+            let s = EffectSet {
+                writes: [c].into_iter().collect(),
+                ..Default::default()
+            };
+            assert!(!s.is_pure());
+        }
+
+        #[test]
+        fn union_pure_pure_is_pure() {
+            let a = EffectSet::default();
+            let b = EffectSet::default();
+            assert!(a.union(&b).is_pure());
+        }
+
+        #[test]
+        fn union_reads_disjoint() {
+            let c1 = ctx(0);
+            let c2 = ctx(1);
+            let a = EffectSet { reads: [c1].into_iter().collect(), ..Default::default() };
+            let b = EffectSet { reads: [c2].into_iter().collect(), ..Default::default() };
+            let u = a.union(&b);
+            assert!(u.reads.contains(&c1));
+            assert!(u.reads.contains(&c2));
+            assert!(u.writes.is_empty());
+            assert!(!u.io);
+        }
+
+        #[test]
+        fn union_reads_overlap() {
+            let c = ctx(0);
+            let a = EffectSet { reads: [c].into_iter().collect(), ..Default::default() };
+            let b = EffectSet { reads: [c].into_iter().collect(), ..Default::default() };
+            let u = a.union(&b);
+            assert_eq!(u.reads.len(), 1);
+            assert!(u.reads.contains(&c));
+        }
+
+        #[test]
+        fn union_reads_writes_independent() {
+            let c1 = ctx(0);
+            let c2 = ctx(1);
+            let a = EffectSet { reads: [c1].into_iter().collect(), ..Default::default() };
+            let b = EffectSet { writes: [c2].into_iter().collect(), ..Default::default() };
+            let u = a.union(&b);
+            assert!(u.reads.contains(&c1));
+            assert!(u.writes.contains(&c2));
+            // reads and writes are independent — c1 is NOT in writes
+            assert!(!u.writes.contains(&c1));
+            assert!(!u.reads.contains(&c2));
+        }
+
+        #[test]
+        fn union_io_propagates() {
+            let a = EffectSet { io: true, ..Default::default() };
+            let b = EffectSet::default();
+            assert!(a.union(&b).io);
+            assert!(b.union(&a).io);
+        }
+
+        #[test]
+        fn union_io_both_true() {
+            let a = EffectSet { io: true, ..Default::default() };
+            let b = EffectSet { io: true, ..Default::default() };
+            assert!(a.union(&b).io);
+        }
+
+        // ── Effect enum tests ───────────────────────────────────────
+
+        #[test]
+        fn effect_pure_is_pure() {
+            assert!(Effect::pure().is_pure());
+            assert!(!Effect::pure().is_effectful());
+            assert!(!Effect::pure().is_var());
+        }
+
+        #[test]
+        fn effect_io_is_effectful() {
+            assert!(!Effect::io().is_pure());
+            assert!(Effect::io().is_effectful());
+            assert!(!Effect::io().is_var());
+        }
+
+        #[test]
+        fn effect_var_is_var() {
+            let v = Effect::Var(0);
+            assert!(!v.is_pure());
+            assert!(!v.is_effectful());
+            assert!(v.is_var());
+        }
+
+        #[test]
+        fn effect_union_resolved_resolved() {
+            let c1 = ctx(0);
+            let c2 = ctx(1);
+            let a = Effect::Resolved(EffectSet {
+                reads: [c1].into_iter().collect(),
+                ..Default::default()
+            });
+            let b = Effect::Resolved(EffectSet {
+                writes: [c2].into_iter().collect(),
+                ..Default::default()
+            });
+            let u = a.union(&b).unwrap();
+            match &u {
+                Effect::Resolved(s) => {
+                    assert!(s.reads.contains(&c1));
+                    assert!(s.writes.contains(&c2));
+                }
+                _ => panic!("expected Resolved"),
+            }
+        }
+
+        #[test]
+        fn effect_union_with_var_returns_none() {
+            let a = Effect::pure();
+            let b = Effect::Var(0);
+            assert!(a.union(&b).is_none());
+            assert!(b.union(&a).is_none());
+        }
+
+        #[test]
+        fn effect_union_pure_pure_is_pure() {
+            let u = Effect::pure().union(&Effect::pure()).unwrap();
+            assert!(u.is_pure());
+        }
+
+        // ── TySubst effect unification tests ────────────────────────
+
+        #[test]
+        fn unify_var_binds_to_resolved() {
+            let mut s = TySubst::new();
+            let var = s.fresh_effect_var();
+            let concrete = Effect::io();
+            assert!(s.unify_effect(&var, &concrete).is_ok());
+            let resolved = s.resolve_effect(&var);
+            assert!(resolved.is_effectful());
+        }
+
+        #[test]
+        fn unify_var_binds_to_pure() {
+            let mut s = TySubst::new();
+            let var = s.fresh_effect_var();
+            let pure = Effect::pure();
+            assert!(s.unify_effect(&var, &pure).is_ok());
+            assert!(s.resolve_effect(&var).is_pure());
+        }
+
+        #[test]
+        fn unify_pure_pure_ok() {
+            let mut s = TySubst::new();
+            assert!(s.unify_effect(&Effect::pure(), &Effect::pure()).is_ok());
+        }
+
+        #[test]
+        fn unify_effectful_effectful_ok() {
+            let mut s = TySubst::new();
+            assert!(s.unify_effect(&Effect::io(), &Effect::io()).is_ok());
+        }
+
+        #[test]
+        fn unify_pure_effectful_invariant_fails() {
+            let mut s = TySubst::new();
+            assert!(s.unify_effect(&Effect::pure(), &Effect::io()).is_err());
+        }
+
+        #[test]
+        fn unify_pure_effectful_covariant_ok() {
+            let mut s = TySubst::new();
+            // Pure ≤ Effectful in covariant position
+            assert!(s.unify_effects(&Effect::pure(), &Effect::io(), Covariant).is_ok());
+        }
+
+        #[test]
+        fn unify_effectful_pure_covariant_fails() {
+            let mut s = TySubst::new();
+            // Effectful ≤ Pure in covariant position — should fail
+            assert!(s.unify_effects(&Effect::io(), &Effect::pure(), Covariant).is_err());
+        }
+
+        #[test]
+        fn resolve_unbound_var_returns_var() {
+            let mut s = TySubst::new();
+            let var = s.fresh_effect_var();
+            let resolved = s.resolve_effect(&var);
+            assert!(resolved.is_var());
+        }
+
+        #[test]
+        fn resolve_chain_follows_bindings() {
+            let mut s = TySubst::new();
+            let v0 = s.fresh_effect_var();
+            let v1 = s.fresh_effect_var();
+            let concrete = Effect::io();
+            // v0 → v1 → concrete
+            assert!(s.unify_effect(&v0, &v1).is_ok());
+            assert!(s.unify_effect(&v1, &concrete).is_ok());
+            let resolved = s.resolve_effect(&v0);
+            assert!(resolved.is_effectful());
+        }
+
+        #[test]
+        fn unify_two_vars_share_binding() {
+            let mut s = TySubst::new();
+            let v0 = s.fresh_effect_var();
+            let v1 = s.fresh_effect_var();
+            assert!(s.unify_effect(&v0, &v1).is_ok());
+            // Bind one → both resolve to same
+            let concrete = Effect::io();
+            assert!(s.unify_effect(&v1, &concrete).is_ok());
+            assert!(s.resolve_effect(&v0).is_effectful());
+            assert!(s.resolve_effect(&v1).is_effectful());
+        }
+
+        #[test]
+        fn effect_with_specific_contexts() {
+            let c1 = ctx(0);
+            let c2 = ctx(1);
+            let e = Effect::Resolved(EffectSet {
+                reads: [c1].into_iter().collect(),
+                writes: [c2].into_iter().collect(),
+                io: false,
+            });
+            assert!(!e.is_pure());
+            assert!(e.is_effectful());
+            match &e {
+                Effect::Resolved(s) => {
+                    assert_eq!(s.reads.len(), 1);
+                    assert_eq!(s.writes.len(), 1);
+                    assert!(!s.io);
+                }
+                _ => panic!("expected Resolved"),
+            }
+        }
+
+        #[test]
+        fn unify_var_with_context_effect() {
+            let mut s = TySubst::new();
+            let c = ctx(0);
+            let var = s.fresh_effect_var();
+            let effect = Effect::Resolved(EffectSet {
+                reads: [c].into_iter().collect(),
+                ..Default::default()
+            });
+            assert!(s.unify_effect(&var, &effect).is_ok());
+            let resolved = s.resolve_effect(&var);
+            match &resolved {
+                Effect::Resolved(set) => {
+                    assert!(set.reads.contains(&c));
+                    assert!(set.writes.is_empty());
+                    assert!(!set.io);
+                }
+                _ => panic!("expected Resolved"),
+            }
+        }
+
+        #[test]
+        fn display_pure() {
+            assert_eq!(format!("{}", Effect::pure()), "Pure");
+        }
+
+        #[test]
+        fn display_io() {
+            assert_eq!(format!("{}", Effect::io()), "Effectful(io)");
+        }
+
+        #[test]
+        fn display_reads_writes() {
+            let c1 = ctx(0);
+            let c2 = ctx(1);
+            let e = Effect::Resolved(EffectSet {
+                reads: [c1].into_iter().collect(),
+                writes: [c2].into_iter().collect(),
+                io: false,
+            });
+            let s = format!("{e}");
+            assert!(s.starts_with("Effectful("));
+            assert!(s.contains("r=1"));
+            assert!(s.contains("w=1"));
+        }
+
+        #[test]
+        fn display_var() {
+            assert_eq!(format!("{}", Effect::Var(42)), "EffectVar(42)");
+        }
     }
 }

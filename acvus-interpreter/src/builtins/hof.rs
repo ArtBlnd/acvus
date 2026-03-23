@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_mir::builtins::BuiltinId;
+use acvus_mir::graph::ContextId;
 use acvus_utils::YieldHandle;
 
 use super::exec_ctx::{collect_vec, ExecCtx};
@@ -21,7 +22,7 @@ use crate::value::{PureValue, TypedValue, Value};
 pub async fn first_iter_impl<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Opt<T<0>>), RuntimeError> {
     let (ctx, result) = ctx.exec_next(iter.0, handle).await?;
     match result {
@@ -34,7 +35,7 @@ pub async fn first_iter_impl<'a, Ctx: ExecCtx>(
 pub async fn last_iter_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Opt<T<0>>), RuntimeError> {
     let mut current = iter.0;
     let mut last_item: Option<Value> = None;
@@ -57,7 +58,7 @@ pub async fn contains_iter_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
     needle: TVal<T<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, bool), RuntimeError> {
     let mut current = iter.0;
     loop {
@@ -82,7 +83,7 @@ pub async fn contains_iter_impl<'a, Ctx: ExecCtx>(
 pub async fn next_impl<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Opt<T<0>>), RuntimeError> {
     let (ctx, result) = ctx.exec_next(iter.0, handle).await?;
     match result {
@@ -101,7 +102,7 @@ pub async fn next_impl<'a, Ctx: ExecCtx>(
 pub async fn collect_impl<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Vec<Value>), RuntimeError> {
     collect_vec(ctx, iter.0, handle).await
 }
@@ -111,7 +112,7 @@ pub async fn join_impl<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     iter: Iter<String, E<0>>,
     sep: String,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, String), RuntimeError> {
     let (ctx, items) = collect_vec(ctx, iter.0, handle).await?;
     let mut parts = Vec::with_capacity(items.len());
@@ -139,7 +140,7 @@ pub async fn find_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
     f: Fun1<T<0>, bool, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, TVal<T<0>>), RuntimeError> {
     let (ctx2, items) = collect_vec(ctx, iter.0, handle).await?;
     ctx = ctx2;
@@ -163,7 +164,7 @@ pub async fn reduce_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
     f: Fun2<T<0>, T<0>, T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, TVal<T<0>>), RuntimeError> {
     let (ctx2, items) = collect_vec(ctx, iter.0, handle).await?;
     ctx = ctx2;
@@ -185,7 +186,7 @@ pub async fn fold_impl<'a, Ctx: ExecCtx>(
     iter: Iter<T<0>, E<0>>,
     init: TVal<T<1>>,
     f: Fun2<T<1>, T<0>, T<1>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, TVal<T<1>>), RuntimeError> {
     let (ctx2, items) = collect_vec(ctx, iter.0, handle).await?;
     ctx = ctx2;
@@ -203,7 +204,7 @@ pub async fn any_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
     f: Fun1<T<0>, bool, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, bool), RuntimeError> {
     let (ctx2, items) = collect_vec(ctx, iter.0, handle).await?;
     ctx = ctx2;
@@ -224,7 +225,7 @@ pub async fn all_impl<'a, Ctx: ExecCtx>(
     mut ctx: Ctx,
     iter: Iter<T<0>, E<0>>,
     f: Fun1<T<0>, bool, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, bool), RuntimeError> {
     let (ctx2, items) = collect_vec(ctx, iter.0, handle).await?;
     ctx = ctx2;
@@ -245,7 +246,7 @@ pub async fn extend_impl<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     deque: Deq<T<0>, O<0>>,
     iter: Iter<T<0>, E<0>>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<(Ctx, Deq<T<0>, O<0>>), RuntimeError> {
     let mut d = deque.0;
     let (ctx, items) = collect_vec(ctx, iter.0, handle).await?;
@@ -265,7 +266,7 @@ pub async fn dispatch<'a, Ctx: ExecCtx>(
     ctx: Ctx,
     id: BuiltinId,
     args: Vec<TypedValue>,
-    handle: &'a YieldHandle<TypedValue>,
+    handle: &'a YieldHandle<TypedValue, ContextId>,
 ) -> Result<Option<(Ctx, Value)>, RuntimeError> {
     let mut it = args.into_iter();
     match id {

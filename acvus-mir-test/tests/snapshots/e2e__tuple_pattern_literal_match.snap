@@ -3,57 +3,74 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "zero-one"
-  T1 = "one-any"
-  T2 = "other"
+  T0 = ""
+  T1 = "zero-one"
+  T2 = "one-any"
+  T3 = "other"
 
 === main ===
-     0 │   r0 = context_load @a
-     1 │   r1 = context_load @b
-     2 │   r2 = tuple (r0, r1)
-     3 │ L2:
-     5 │   r4 = r2.0
-     6 │   r5 = test r4 == 0
-     7 │   r6 = true (r3) && r5
-     8 │   r7 = r2.1
-     9 │   r8 = test r7 == 1
-    10 │   r9 = r6 && r8
-    11 │   jump_if r9 then L4 else L3
-    12 │ L4:
-    13 │   r10 = r2.0
-    14 │   r11 = r2.1
-    16 │   yield T0
-    17 │   jump L0
-    18 │ L3:
-    20 │   r14 = r2.0
-    21 │   r15 = test r14 == 1
-    22 │   r16 = true (r13) && r15
-    23 │   jump_if r16 then L5 else L1
-    24 │ L5:
-    25 │   r17 = r2.0
-    27 │   yield T1
-    28 │   jump L0
-    29 │ L1:
-    31 │   yield T2
-    32 │ L0:  ; merge_of L2
+     1 │   r1 = context_project @a
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @b
+     4 │   r4 = context_load r3
+     5 │   r5 = tuple (r2, r4)
+     6 │ L2:
+     8 │   r7 = r5.0
+     9 │   r8 = test r7 == 0
+    10 │   r9 = true (r6) && r8
+    11 │   r10 = r5.1
+    12 │   r11 = test r10 == 1
+    13 │   r12 = r9 && r11
+    14 │   jump_if r12 then L4 else L3
+    15 │ L4:
+    16 │   r13 = r5.0
+    17 │   r14 = r5.1
+    20 │   r17 = T0 + T1
+    21 │   jump L0(r17)
+    22 │ L3:
+    24 │   r19 = r5.0
+    25 │   r20 = test r19 == 1
+    26 │   r21 = true (r18) && r20
+    27 │   jump_if r21 then L5 else L1
+    28 │ L5:
+    29 │   r22 = r5.0
+    32 │   r25 = T0 + T2
+    33 │   jump L0(r25)
+    34 │ L1:
+    37 │   r28 = T0 + T3
+    38 │   jump L0(r28)
+    39 │ L0(r29: String):  ; merge_of L2
+    40 │   r30 = T0 + r29
+    41 │   return r30
 
-    ; r0 (@a) : Int
-    ; r1 (@b) : Int
-    ; r2 (v2) : (Int, Int)
-    ; r3 (v3) : Bool
+    ; r0 (v0) : String
+    ; r1 (@a) : Int
+    ; r2 (v2) : Int
+    ; r3 (@b) : Int
     ; r4 (v4) : Int
-    ; r5 (v5) : Bool
+    ; r5 (v5) : (Int, Int)
     ; r6 (v6) : Bool
     ; r7 (v7) : Int
     ; r8 (v8) : Bool
     ; r9 (v9) : Bool
     ; r10 (v10) : Int
-    ; r11 (v11) : Int
-    ; r12 (v12) : String
-    ; r13 (v13) : Bool
+    ; r11 (v11) : Bool
+    ; r12 (v12) : Bool
+    ; r13 (v13) : Int
     ; r14 (v14) : Int
-    ; r15 (v15) : Bool
-    ; r16 (v16) : Bool
-    ; r17 (v17) : Int
-    ; r18 (v18) : String
-    ; r19 (v19) : String
+    ; r15 (v15) : String
+    ; r16 (v16) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : Bool
+    ; r19 (v19) : Int
+    ; r20 (v20) : Bool
+    ; r21 (v21) : Bool
+    ; r22 (v22) : Int
+    ; r23 (v23) : String
+    ; r24 (v24) : String
+    ; r25 (v25) : String
+    ; r26 (v26) : String
+    ; r27 (v27) : String
+    ; r28 (v28) : String
+    ; r29 (v29) : String
+    ; r30 (v30) : String

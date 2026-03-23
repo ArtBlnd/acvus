@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{RuntimeError, TypedValue, ValueKind};
+use acvus_mir::graph::Id;
 use acvus_orchestration::{
-    build_dag, build_node_table, compile_nodes,
-    CompiledNodeGraph, EntryMut, Execution, ExpressionSpec,
-    Fetch, HttpRequest, Journal, NodeId, NodeKind, NodeSpec, Persistency,
+    build_dag, compile_nodes, compute_external_context_env,
+    EntryMut, Execution, ExpressionSpec,
+    Fetch, HttpRequest, Journal, NodeGraph, NodeKind, NodeSpec, Persistency,
     ResolveError, ResolveState, Resolved, Resolver, Strategy, TreeJournal,
 };
 use acvus_utils::{Astr, Interner};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 // ── Dummy Fetch ─────────────────────────────────────────────────────
 
@@ -164,67 +165,31 @@ impl NodeBuilder {
             FxHashMap::default(),
         );
 
-        let env = acvus_orchestration::compute_external_context_env(
-            &self.interner,
-            &self.specs,
-            registry,
-        )?;
+        // Build context registry via compute_external_context_env (lower + resolve).
+        let env = compute_external_context_env(&self.interner, &self.specs, registry.clone())?;
+        let context_registry = acvus_mir::context_registry::ContextTypeRegistry::new(
+            env.registry.extern_fns().clone(),
+            env.registry.system().clone(),
+            FxHashMap::default(), // scoped
+            env.registry.user().clone(),
+        ).expect("registry construction should not conflict");
 
-        let context_registry = env.registry.to_full();
-
-        let graph = acvus_orchestration::compile_nodes_with_env(
-            &self.interner,
-            &self.specs,
-            env,
-        )?;
-
-        let dag = build_dag(&self.interner, &graph)
-            .map_err(|e| e)?;
-
+        // Compile nodes (lower + compile + assemble in one step).
         let fetch = Arc::new(DummyFetch);
-        let node_table = build_node_table(&graph.nodes, fetch, &self.interner);
+        let node_graph = compile_nodes(&self.interner, &self.specs, registry, fetch)?;
+
+        let name_to_id = node_graph.id_table().to_name_to_id();
 
         Ok(BuiltGraph {
             interner: self.interner,
-            graph,
-            node_table,
-            rdeps: dag.rdeps,
+            graph: node_graph,
             context_registry,
+            name_to_id,
         })
     }
 
     pub fn build(self) -> BuiltGraph {
-        let registry = acvus_mir::context_registry::PartialContextTypeRegistry::system_only(
-            FxHashMap::default(),
-        );
-
-        let env = acvus_orchestration::compute_external_context_env(
-            &self.interner,
-            &self.specs,
-            registry,
-        ).expect("compute_external_context_env failed");
-
-        // Capture the registry AFTER Phase 1-3 (contains node type registrations).
-        let context_registry = env.registry.to_full();
-
-        let graph = acvus_orchestration::compile_nodes_with_env(
-            &self.interner,
-            &self.specs,
-            env,
-        ).expect("compile_nodes_with_env failed");
-
-        let dag = build_dag(&self.interner, &graph).expect("build_dag failed");
-
-        let fetch = Arc::new(DummyFetch);
-        let node_table = build_node_table(&graph.nodes, fetch, &self.interner);
-
-        BuiltGraph {
-            interner: self.interner,
-            graph,
-            node_table,
-            rdeps: dag.rdeps,
-            context_registry,
-        }
+        self.try_build().expect("build failed")
     }
 }
 
@@ -232,12 +197,11 @@ impl NodeBuilder {
 
 pub struct BuiltGraph {
     pub interner: Interner,
-    pub graph: CompiledNodeGraph,
-    pub node_table: Vec<Arc<dyn acvus_orchestration::Node>>,
-    pub rdeps: Vec<FxHashSet<NodeId>>,
+    pub graph: NodeGraph,
     /// The context type registry after compilation.
     /// Contains the types that OTHER nodes see when referencing @name.
     pub context_registry: acvus_mir::context_registry::ContextTypeRegistry,
+    pub name_to_id: FxHashMap<Astr, Id>,
 }
 
 impl BuiltGraph {
@@ -248,23 +212,22 @@ impl BuiltGraph {
         let entry = journal.entry_mut(root).await.unwrap().next().await.unwrap();
 
         let name_astr = self.interner.intern(name);
-        let node_id = self.graph.name_to_primary[&name_astr];
+        let node_id = self.graph.entrypoint(name_astr).expect("node not found");
 
         let resolver = Resolver {
             graph: &self.graph,
-            node_table: &self.node_table,
             resolver: &|_name: Astr| async { Resolved::Once(TypedValue::unit()) },
             extern_handler: &|_name: Astr, _args: Vec<TypedValue>| async {
                 Err(RuntimeError::unexpected_type("extern", &[], ValueKind::Unit))
             },
             interner: &self.interner,
-            rdeps: &self.rdeps,
+            rdeps: &[],
+            name_to_id: &self.name_to_id,
         };
 
         let mut state = ResolveState {
             entry,
             turn_context: FxHashMap::default(),
-            bind_cache: FxHashMap::default(),
         };
 
         resolver.resolve_node(node_id, &mut state, FxHashMap::default(), false).await?;
@@ -292,17 +255,17 @@ impl BuiltGraph {
 
         let (mut journal, root) = TreeJournal::new();
         let name_astr = self.interner.intern(name);
-        let node_id = self.graph.name_to_primary[&name_astr];
+        let node_id = self.graph.entrypoint(name_astr).expect("node not found");
 
         let resolver = Resolver {
             graph: &self.graph,
-            node_table: &self.node_table,
             resolver: &|_name: Astr| async { Resolved::Once(TypedValue::unit()) },
             extern_handler: &|_name: Astr, _args: Vec<TypedValue>| async {
                 Err(RuntimeError::unexpected_type("extern", &[], ValueKind::Unit))
             },
             interner: &self.interner,
-            rdeps: &self.rdeps,
+            rdeps: &[],
+            name_to_id: &self.name_to_id,
         };
 
         let mut entry = journal.entry_mut(root).await.unwrap().next().await.unwrap();
@@ -312,8 +275,7 @@ impl BuiltGraph {
             let mut state = ResolveState {
                 entry,
                 turn_context: FxHashMap::default(),
-                bind_cache: FxHashMap::default(),
-            };
+                };
 
             resolver.resolve_node(node_id, &mut state, FxHashMap::default(), false).await?;
 
@@ -335,12 +297,12 @@ impl BuiltGraph {
         last_value.ok_or_else(|| panic!("node {name:?} produced no value after {turns} turns"))
     }
 
-    /// Get the compiled output_ty of a node by name.
-    /// For persistent nodes with a bind, this is the bind node's output_ty.
+    /// Get the type that OTHER nodes see when referencing @name.
+    /// Uses the registry_ty as the canonical output type, since NodeGraph
+    /// no longer exposes per-unit output_ty directly.
     pub fn output_ty(&self, name: &str) -> acvus_mir::ty::Ty {
-        let name_astr = self.interner.intern(name);
-        let node_id = self.graph.name_to_primary[&name_astr];
-        self.graph.node(node_id).output_ty.clone()
+        self.registry_ty(name)
+            .unwrap_or_else(|| panic!("node {name:?} not found in context registry"))
     }
 
     /// Get the type that OTHER nodes see when referencing @name.
@@ -356,3 +318,4 @@ impl BuiltGraph {
             .or_else(|| self.context_registry.user().get(&name_astr).cloned())
     }
 }
+

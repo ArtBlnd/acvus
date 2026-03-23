@@ -1,156 +1,229 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use acvus_interpreter::{Interpreter, PureValue, Stepped, TypedValue, Value};
-use acvus_mir::context_registry::ContextTypeRegistry;
+use acvus_interpreter::{
+    ContextOverlay, ExecResult, Interpreter, InterpreterContext,
+    SequentialExecutor, Value,
+};
+use acvus_mir::graph::*;
+use acvus_mir::graph::{extract, resolve, lower as graph_lower};
 use acvus_mir::ty::Ty;
-use acvus_utils::{Astr, Interner};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 // ── Core pipeline ───────────────────────────────────────────────
 
-/// Parse + compile + execute, returning the output string.
+/// Compile a template source → MirModule + context id mapping.
+struct CompileResult {
+    entry_id: FunctionId,
+    modules: FxHashMap<FunctionId, acvus_mir::ir::MirModule>,
+    context_names: FxHashMap<ContextId, Astr>,
+    builtin_ids: FxHashMap<Astr, FunctionId>,
+}
+
+fn compile(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+) -> CompileResult {
+    let contexts: Vec<Context> = context_types
+        .iter()
+        .map(|(name, ty)| Context {
+            id: ContextId::alloc(),
+            name: *name,
+            constraint: Constraint::Exact(ty.clone()),
+        })
+        .collect();
+
+    let entry_id = FunctionId::alloc();
+    let mut functions = acvus_mir::builtins::standard_builtins(interner);
+    functions.push(Function {
+        id: entry_id,
+        name: interner.intern("test"),
+        kind: FnKind::Local(SourceCode {
+            name: interner.intern("test"),
+            source: interner.intern(source),
+            kind: SourceKind::Template,
+        }),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+        },
+    });
+
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(interner, &graph, &ext);
+    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &res);
+
+    if result.has_errors() {
+        let errs: Vec<String> = result.errors.iter()
+            .flat_map(|e| e.errors.iter())
+            .map(|e| format!("{}", e.display(interner)))
+            .collect();
+        panic!("compile failed: {}", errs.join("; "));
+    }
+
+    // Collect all modules.
+    let modules: FxHashMap<FunctionId, acvus_mir::ir::MirModule> = result.modules
+        .into_iter()
+        .map(|(id, (module, _hints))| (id, module))
+        .collect();
+
+    // Build context id → name mapping.
+    let context_names: FxHashMap<ContextId, Astr> = graph.contexts
+        .iter()
+        .map(|ctx| (ctx.id, ctx.name))
+        .collect();
+
+    // Build builtin name → id mapping from the same graph functions.
+    let builtin_ids: FxHashMap<Astr, FunctionId> = graph.functions
+        .iter()
+        .map(|f| (f.name, f.id))
+        .collect();
+
+    CompileResult { entry_id, modules, context_names, builtin_ids }
+}
+
+/// Build builtin id mapping from the graph functions.
+fn builtin_id_map(
+    interner: &Interner,
+    modules: &FxHashMap<FunctionId, acvus_mir::ir::MirModule>,
+) -> FxHashMap<Astr, FunctionId> {
+    // Standard builtins have known names — rebuild them to get name→id.
+    let builtins = acvus_mir::builtins::standard_builtins(interner);
+    builtins
+        .into_iter()
+        .map(|f| (f.name, f.id))
+        .filter(|(_, id)| !modules.contains_key(id)) // builtins don't have modules
+        .collect()
+}
+
+/// Parse + compile + execute a template, returning the output string.
 pub async fn run(
     interner: &Interner,
     source: &str,
-    context: FxHashMap<Astr, TypedValue>,
+    context: FxHashMap<Astr, Value>,
 ) -> String {
     let context_types: FxHashMap<Astr, Ty> = context
         .iter()
-        .map(|(k, tv)| (*k, tv.ty().clone()))
+        .map(|(k, v)| (*k, infer_ty(v)))
         .collect();
-    let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let reg = ContextTypeRegistry::all_system(context_types);
-    let (module, _hints) = acvus_mir::compile(
-        interner,
-        &template,
-        &reg,
-    )
-    .expect("compile failed");
 
-    let interp = Interpreter::new(interner, module);
-    emits_to_string(interp.execute_with_context(context).await)
-}
+    let cr = compile(interner, source, &context_types);
 
-/// Concatenate emitted values into a string (for template execution).
-fn emits_to_string(emits: Vec<TypedValue>) -> String {
-    let mut output = String::new();
-    for v in emits {
-        match v.value() {
-            Value::Pure(PureValue::String(s)) => output.push_str(s),
-            other => panic!("template emit: expected String, got {other:?}"),
-        }
+    // Debug: dump entry module IR
+    if let Some(module) = cr.modules.get(&cr.entry_id) {
+        let ir = acvus_mir::printer::dump_with(interner, module);
+        eprintln!("=== IR for entry ===\n{ir}");
     }
-    output
+
+    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
+
+    // Build context snapshot for overlay.
+    let snapshot: HashMap<String, Value> = context
+        .into_iter()
+        .map(|(k, v)| (interner.resolve(k).to_string(), v))
+        .collect();
+
+    let executor = Arc::new(SequentialExecutor);
+    let shared = InterpreterContext::new(interner, cr.modules, executor)
+        .with_builtins(builtin_handlers)
+        .with_context_names(cr.context_names);
+
+    let overlay = ContextOverlay::new(Arc::new(snapshot));
+    let mut interp = Interpreter::new(shared, cr.entry_id, overlay);
+    let result = interp.execute().await.expect("execution failed");
+
+    // Template returns a String.
+    match result.value {
+        Value::String(s) => s.to_string(),
+        Value::Unit => String::new(),
+        other => format!("{other:?}"),
+    }
 }
 
-/// Simple: no context, no extern fns.
+/// Simple: no context.
 pub async fn run_simple(source: &str) -> String {
     let interner = Interner::new();
     run(&interner, source, FxHashMap::default()).await
 }
 
-/// With context + caller-provided interner.
-pub async fn run_ctx(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, TypedValue>,
-) -> String {
-    run(interner, source, context).await
-}
+// ── JSON helpers ─────────────────────────────────────────────────
 
-/// Context call result: the yielded NeedContext info.
-#[derive(Debug)]
-pub struct ContextCallResult {
-    pub output: String,
-    pub calls: Vec<String>,
-}
-
-/// Run a template and capture context calls (names only).
-pub async fn run_capturing_context_calls(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, TypedValue>,
-) -> ContextCallResult {
-    let context_types: FxHashMap<Astr, Ty> = context
-        .iter()
-        .map(|(k, tv)| (*k, tv.ty().clone()))
-        .collect();
-    let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let reg = ContextTypeRegistry::all_system(context_types);
-    let (module, _hints) = acvus_mir::compile(
-        interner,
-        &template,
-        &reg,
-    )
-    .expect("compile failed");
-    let interp = Interpreter::new(interner, module);
-    let mut coroutine = interp.execute();
-    let mut output = String::new();
-    let mut calls = Vec::new();
-    loop {
-        match coroutine.resume().await {
-            Stepped::Emit(value) => match value.value() {
-                Value::Pure(PureValue::String(s)) => output.push_str(s),
-                other => panic!("expected String, got {other:?}"),
-            },
-            Stepped::NeedContext(request) => {
-                let name = request.name();
-                calls.push(interner.resolve(name).to_string());
-                let v = context
-                    .get(&name)
-                    .unwrap_or_else(|| panic!("undefined context @{}", interner.resolve(name)));
-                request.resolve(v.clone());
-            }
-            Stepped::NeedExternCall(_) => panic!("unexpected extern call"),
-            Stepped::Done => break,
-            Stepped::Error(e) => panic!("runtime error: {e}"),
+pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() { Value::Int(i) }
+            else { Value::Float(n.as_f64().unwrap()) }
         }
-    }
-    ContextCallResult { output, calls }
-}
-
-/// Execute a template and return the RuntimeError if one occurs.
-pub async fn run_expect_error(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, TypedValue>,
-) -> acvus_interpreter::RuntimeError {
-    let context_types: FxHashMap<Astr, Ty> = context
-        .iter()
-        .map(|(k, tv)| (*k, tv.ty().clone()))
-        .collect();
-    let template = acvus_ast::parse(interner, source).expect("parse failed");
-    let reg = ContextTypeRegistry::all_system(context_types);
-    let (module, _hints) = acvus_mir::compile(
-        interner,
-        &template,
-        &reg,
-    )
-    .expect("compile failed");
-
-    let interp = Interpreter::new(interner, module);
-    let mut coroutine = interp.execute();
-    loop {
-        match coroutine.resume().await {
-            Stepped::Emit(_) => {}
-            Stepped::NeedContext(request) => {
-                let name = request.name();
-                let v = context
-                    .get(&name)
-                    .unwrap_or_else(|| panic!("undefined context @{}", interner.resolve(name)));
-                request.resolve(v.clone());
-            }
-            Stepped::NeedExternCall(_) => panic!("unexpected extern call"),
-            Stepped::Done => panic!("expected error, got Done"),
-            Stepped::Error(e) => return e,
+        serde_json::Value::String(s) => Value::string(s.as_str()),
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Null => Value::Unit,
+        serde_json::Value::Array(items) => {
+            Value::list(items.iter().map(|v| value_from_json(interner, v)).collect())
+        }
+        serde_json::Value::Object(fields) => {
+            Value::object(fields.iter()
+                .map(|(k, v)| (interner.intern(k), value_from_json(interner, v)))
+                .collect())
         }
     }
 }
 
-// ── Fixture runner ──────────────────────────────────────────────
+/// Infer Ty from a runtime Value (shallow).
+fn infer_ty(v: &Value) -> Ty {
+    match v {
+        Value::Int(_) => Ty::Int,
+        Value::Float(_) => Ty::Float,
+        Value::Bool(_) => Ty::Bool,
+        Value::String(_) => Ty::String,
+        Value::Unit => Ty::Unit,
+        Value::Byte(_) => Ty::Byte,
+        Value::List(items) => {
+            let elem = items.first().map(infer_ty).unwrap_or(Ty::Int);
+            Ty::List(Box::new(elem))
+        }
+        Value::Object(fields) => {
+            let field_types = fields.iter()
+                .map(|(k, v)| (*k, infer_ty(v)))
+                .collect();
+            Ty::Object(field_types)
+        }
+        _ => Ty::Unit,
+    }
+}
+
+// ── Context helpers ──────────────────────────────────────────────
+
+pub fn int_context(interner: &Interner, name: &str, value: i64) -> FxHashMap<Astr, Value> {
+    FxHashMap::from_iter([(interner.intern(name), Value::Int(value))])
+}
+
+pub fn string_context(interner: &Interner, name: &str, value: &str) -> FxHashMap<Astr, Value> {
+    FxHashMap::from_iter([(interner.intern(name), Value::string(value))])
+}
+
+pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Value> {
+    FxHashMap::from_iter([(
+        interner.intern("user"),
+        Value::object(FxHashMap::from_iter([
+            (interner.intern("name"), Value::string("alice")),
+            (interner.intern("age"), Value::Int(30)),
+            (interner.intern("email"), Value::string("alice@example.com")),
+        ])),
+    )])
+}
+
+// ── Fixture runner ───────────────────────────────────────────────
 
 /// Run a single `.json` fixture file.
-pub async fn run_fixture(path: &Path) -> Result<(), String> {
+pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
     let interner = Interner::new();
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -164,15 +237,10 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
         .as_str()
         .ok_or_else(|| format!("{}: missing 'expected'", path.display()))?;
 
-    let context = match fixture.get("context") {
+    let context: FxHashMap<Astr, Value> = match fixture.get("context") {
         Some(serde_json::Value::Object(fields)) => {
-            fields
-                .iter()
-                .map(|(k, v)| {
-                    let ty = ty_from_json(&interner, v);
-                    let val = value_from_json(&interner, v);
-                    (interner.intern(k), TypedValue::new(val, ty))
-                })
+            fields.iter()
+                .map(|(k, v)| (interner.intern(k), value_from_json(&interner, v)))
                 .collect()
         }
         Some(_) => return Err(format!("{}: 'context' must be an object", path.display())),
@@ -190,127 +258,9 @@ pub async fn run_fixture(path: &Path) -> Result<(), String> {
     }
 }
 
-// ── JSON → Ty / Value conversion ────────────────────────────────
-
-/// Infer `Ty` from a JSON value.
-pub fn ty_from_json(interner: &Interner, v: &serde_json::Value) -> Ty {
-    match v {
-        serde_json::Value::Number(n) => {
-            if n.is_i64() {
-                Ty::Int
-            } else {
-                Ty::Float
-            }
-        }
-        serde_json::Value::String(_) => Ty::String,
-        serde_json::Value::Bool(_) => Ty::Bool,
-        serde_json::Value::Null => panic!("null is not a supported type"),
-        serde_json::Value::Array(items) => {
-            let elem_ty = items
-                .first()
-                .map(|v| ty_from_json(interner, v))
-                .expect("empty array: cannot infer element type");
-            Ty::List(Box::new(elem_ty))
-        }
-        serde_json::Value::Object(fields) => {
-            let field_types = fields
-                .iter()
-                .map(|(k, v)| (interner.intern(k), ty_from_json(interner, v)))
-                .collect();
-            Ty::Object(field_types)
-        }
-    }
-}
-
-/// Convert a JSON value to `Value`.
-pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::int(i)
-            } else {
-                Value::float(n.as_f64().unwrap())
-            }
-        }
-        serde_json::Value::String(s) => Value::string(s.clone()),
-        serde_json::Value::Bool(b) => Value::bool_(*b),
-        serde_json::Value::Null => panic!("null is not a supported value"),
-        serde_json::Value::Array(items) => {
-            Value::list(items.iter().map(|v| value_from_json(interner, v)).collect())
-        }
-        serde_json::Value::Object(fields) => {
-            let obj = fields
-                .iter()
-                .map(|(k, v)| (interner.intern(k), value_from_json(interner, v)))
-                .collect();
-            Value::object(obj)
-        }
-    }
-}
-
-/// Convert a JSON value to `TypedValue`.
-pub fn typed_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue {
-    TypedValue::new(value_from_json(interner, v), ty_from_json(interner, v))
-}
-
-// ── Helpers (used by e2e.rs) ─────────────────────────────────
-
-pub fn int_context(
-    interner: &Interner,
-    name: &str,
-    value: i64,
-) -> FxHashMap<Astr, TypedValue> {
-    FxHashMap::from_iter([(interner.intern(name), TypedValue::int(value))])
-}
-
-pub fn string_context(
-    interner: &Interner,
-    name: &str,
-    value: &str,
-) -> FxHashMap<Astr, TypedValue> {
-    FxHashMap::from_iter([(interner.intern(name), TypedValue::string(value))])
-}
-
-pub fn user_context(interner: &Interner) -> FxHashMap<Astr, TypedValue> {
-    let ty = Ty::Object(FxHashMap::from_iter([
-        (interner.intern("name"), Ty::String),
-        (interner.intern("age"), Ty::Int),
-        (interner.intern("email"), Ty::String),
-    ]));
-    let val = Value::object(FxHashMap::from_iter([
-        (interner.intern("name"), Value::string("alice")),
-        (interner.intern("age"), Value::int(30)),
-        (
-            interner.intern("email"),
-            Value::string("alice@example.com"),
-        ),
-    ]));
-    FxHashMap::from_iter([(interner.intern("user"), TypedValue::new(val, ty))])
-}
-
-pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, TypedValue> {
-    let ty = Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
-        (interner.intern("name"), Ty::String),
-        (interner.intern("age"), Ty::Int),
-    ]))));
-    let val = Value::list(vec![
-        Value::object(FxHashMap::from_iter([
-            (interner.intern("name"), Value::string("alice")),
-            (interner.intern("age"), Value::int(30)),
-        ])),
-        Value::object(FxHashMap::from_iter([
-            (interner.intern("name"), Value::string("bob")),
-            (interner.intern("age"), Value::int(25)),
-        ])),
-    ]);
-    FxHashMap::from_iter([(interner.intern("users"), TypedValue::new(val, ty))])
-}
-
-pub fn items_context(
-    interner: &Interner,
-    items: Vec<i64>,
-) -> FxHashMap<Astr, TypedValue> {
-    let ty = Ty::List(Box::new(Ty::Int));
-    let val = Value::list(items.into_iter().map(Value::int).collect());
-    FxHashMap::from_iter([(interner.intern("items"), TypedValue::new(val, ty))])
+pub fn items_context(interner: &Interner, items: Vec<i64>) -> FxHashMap<Astr, Value> {
+    FxHashMap::from_iter([(
+        interner.intern("items"),
+        Value::list(items.into_iter().map(Value::Int).collect()),
+    )])
 }

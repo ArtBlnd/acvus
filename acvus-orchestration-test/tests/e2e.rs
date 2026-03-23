@@ -204,16 +204,15 @@ async fn no_bind_raw_type_is_output() {
 async fn sequence_bind_registry_ty_matches_output_ty_not_raw() {
     use acvus_mir::ty::Ty;
     let g = NodeBuilder::new(Interner::new())
-        .sequence_with_raw_ty(
+        .sequence(
             "history",
-            "[1, 2, 3]",                        // body: List<Int>
+            "[1, 2, 3]",                        // body: Deque<Int>
             "@self | chain(@raw | iter)",        // bind: Sequence<Int>
             "[]",                                // initial: empty → Sequence
-            Ty::List(Box::new(Ty::Int)),         // explicit raw_ty = List<Int> (LLM pattern)
         )
         .build();
 
-    // output_ty (bind node) — this is computed from resolve_node_locals.
+    // output_ty (bind node) — computed from graph engine resolution.
     let output_ty = g.output_ty("history");
     assert!(
         matches!(&output_ty, Ty::Sequence(..)),
@@ -286,12 +285,11 @@ async fn sequence_bind_execution_produces_sequence() {
 async fn sequence_bind_e2e_consumer_sees_sequence_type() {
     use acvus_mir::ty::Ty;
     let g = NodeBuilder::new(Interner::new())
-        .sequence_with_raw_ty(
+        .sequence(
             "history",
             "[1, 2, 3]",
             "@self | chain(@raw | iter)",
             "[]",
-            Ty::List(Box::new(Ty::Int)),
         )
         // Consumer coerces @history to an iterator — works for Sequence.
         .expr("consumer", "@history | collect | len")
@@ -630,7 +628,8 @@ async fn scope_persistent_without_initial_value_fails() {
     let registry = acvus_mir::context_registry::PartialContextTypeRegistry::system_only(
         rustc_hash::FxHashMap::default(),
     );
-    let result = acvus_orchestration::compile_nodes(&i, &specs, registry);
+    let fetch = std::sync::Arc::new(acvus_orchestration::http::NoopFetch);
+    let result = acvus_orchestration::compile_nodes(&i, &specs, registry, fetch);
     assert!(result.is_err(), "Patch without initial_value should be compile error");
 }
 
@@ -1233,4 +1232,68 @@ async fn scope_self_in_patch_ok() {
         .build();
     let val = g.resolve_once("x").await.unwrap();
     assert!(matches!(val.value(), Value::Pure(PureValue::Int(100))));
+}
+
+#[tokio::test]
+async fn debug_sequence_types() {
+    use acvus_mir::context_registry::PartialContextTypeRegistry;
+
+    let interner = Interner::new();
+    let spec = acvus_orchestration::NodeSpec {
+        name: interner.intern("log"),
+        kind: acvus_orchestration::NodeKind::Expression(acvus_orchestration::ExpressionSpec {
+            source: "[1, 2, 3]".to_string(),
+            output_ty: None,
+        }),
+        strategy: acvus_orchestration::Strategy {
+            execution: acvus_orchestration::Execution::OncePerTurn,
+            persistency: acvus_orchestration::Persistency::Sequence {
+                bind: interner.intern("@self | chain(@raw | iter)"),
+            },
+            initial_value: Some(interner.intern("[]")),
+            retry: 0,
+            assert: None,
+        },
+        is_function: false,
+        fn_params: vec![],
+    };
+    let registry = PartialContextTypeRegistry::default();
+    let (graph, node_metas) = acvus_orchestration::lower::lower(&interner, &[spec], &registry);
+    let compiled = graph.compile(&interner);
+
+    let entrypoint_id = node_metas[0].entrypoint_id;
+    eprintln!("entrypoint unit_output: {:?}", compiled.unit_outputs.get(&entrypoint_id));
+}
+
+#[tokio::test]
+async fn debug_scc_membership() {
+    use acvus_mir::context_registry::PartialContextTypeRegistry;
+    let interner = Interner::new();
+    let spec = acvus_orchestration::NodeSpec {
+        name: interner.intern("log"),
+        kind: acvus_orchestration::NodeKind::Expression(acvus_orchestration::ExpressionSpec {
+            source: "[1, 2, 3]".to_string(),
+            output_ty: None,
+        }),
+        strategy: acvus_orchestration::Strategy {
+            execution: acvus_orchestration::Execution::OncePerTurn,
+            persistency: acvus_orchestration::Persistency::Sequence {
+                bind: interner.intern("@self | chain(@raw | iter)"),
+            },
+            initial_value: Some(interner.intern("[]")),
+            retry: 0,
+            assert: None,
+        },
+        is_function: false,
+        fn_params: vec![],
+    };
+    let registry = PartialContextTypeRegistry::default();
+    let (graph, node_metas) = acvus_orchestration::lower::lower(&interner, &[spec], &registry);
+
+    // Check which units are in the graph
+    eprintln!("units: {:?}", graph.units.iter().map(|u| (u.id, u.body.is_some(), u.output_binding)).collect::<Vec<_>>());
+
+    let resolved = graph.resolve(&interner);
+    let entrypoint_id = node_metas[0].entrypoint_id;
+    eprintln!("entrypoint({:?}) output: {:?}", entrypoint_id, resolved.unit_outputs.get(&entrypoint_id));
 }

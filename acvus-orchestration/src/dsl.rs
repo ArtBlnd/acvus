@@ -13,8 +13,6 @@ use crate::spec::NodeKind;
 pub const KEY_SELF: &str = "self";
 /// `@raw` — raw output of the body computation.
 pub const KEY_RAW: &str = "raw";
-/// `@bind` — bind key value (for IfModified).
-pub const KEY_BIND: &str = "bind";
 /// `@turn_index` — current turn number.
 pub const KEY_TURN_INDEX: &str = "turn_index";
 /// `@item` — current element in iterator.
@@ -41,17 +39,15 @@ pub fn message_elem_ty(interner: &Interner) -> Ty {
     ]))
 }
 
-/// Strategy — groups execution, persistency, initial_value, retry, and assert.
+/// Strategy — execution + persistency + retry + assert.
 #[derive(Debug, Clone)]
 pub struct Strategy {
     pub execution: Execution,
     pub persistency: Persistency,
-    /// Optional initial state. When Some, `@self` is available in the node body.
-    pub initial_value: Option<Astr>,
     /// Maximum retry count on RuntimeError. 0 = no retry.
     pub retry: u32,
     /// Assert script (must evaluate to Bool). If false, triggers retry.
-    pub assert: Option<Astr>,
+    pub assert: Astr,
 }
 
 /// A function parameter with name, type, and optional description.
@@ -108,19 +104,21 @@ impl NodeSpec {
             }
         }
         if let Some(locals) = locals {
+            let has_self = matches!(
+                self.strategy.persistency,
+                Persistency::Sequence { .. } | Persistency::Patch { .. }
+            );
             match scope {
                 ContextScope::InitialValue => {
                     // No @self, no @raw
                 }
                 ContextScope::Body => {
-                    // @self only if initial_value exists
-                    if self.strategy.initial_value.is_some() {
+                    if has_self {
                         extra.push((interner.intern(KEY_SELF), locals.self_ty.clone()));
                     }
                 }
                 ContextScope::Bind => {
-                    // @self if initial_value exists + @raw always
-                    if self.strategy.initial_value.is_some() {
+                    if has_self {
                         extra.push((interner.intern(KEY_SELF), locals.self_ty.clone()));
                     }
                     extra.push((interner.intern(KEY_RAW), locals.raw_ty.clone()));
@@ -153,30 +151,22 @@ pub enum Execution {
     /// Next turn can reference previous @self.
     #[default]
     OncePerTurn,
-    /// Execute only when key changes. @self stored in storage (persistent).
-    /// Unchanged key → previous @self retained.
-    IfModified { key: Astr },
 }
 
-/// Persistency mode — determines how node output is persisted.
+/// Persistency mode — determines @self existence and storage location.
 ///
-/// Every persistent mode requires a `bind` script that transforms the raw
-/// node output (`@raw`) into the stored value. The bind result is diffed
-/// against the previous value via `PatchDiff::compute` for history tracking.
-///
-/// - Simple overwrite: `Patch { bind: "@raw" }` (identity — stores @raw as-is)
-/// - Accumulation: `Sequence { bind: "@self | chain(@raw | iter)" }`
-/// - Partial update: `Patch { bind: "{count: @self.count + 1, ..@self}" }`
+/// - Ephemeral: no @self, no bind, no init. Stateless.
+/// - Sequence/Patch: @self exists. bind + initial_value required (in variant).
+///   Storage persists across turns.
 #[derive(Debug, Clone, Default)]
 pub enum Persistency {
-    /// Don't persist to storage.
+    /// No @self. Stateless.
     #[default]
     Ephemeral,
-    /// Tracked sequence with diff-based updates. `bind` script transforms @raw → stored value.
-    Sequence { bind: Astr },
-    /// Recursive value patch. `bind` script transforms @raw → stored value.
-    /// The result is diffed against the previous value for history tracking.
-    Patch { bind: Astr },
+    /// @self in storage. Append semantics.
+    Sequence { initial_value: Astr, bind: Astr },
+    /// @self in storage. Diff-based overwrite.
+    Patch { initial_value: Astr, bind: Astr },
 }
 
 /// A message entry: either a template block or an iterator over a context key.

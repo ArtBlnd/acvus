@@ -72,6 +72,8 @@ pub Script: Script = {
 Stmt: Stmt = {
     <l:@L> <name:"ident"> "=" <e:Expr> <r:@R> =>
         Stmt::Bind { name, expr: e, span: Span::new(l, r) },
+    <l:@L> <name:"@ref"> "=" <e:Expr> <r:@R> =>
+        Stmt::ContextStore { name, expr: e, span: Span::new(l, r) },
     <e:Expr> =>
         Stmt::Expr(e),
 };

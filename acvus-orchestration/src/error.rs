@@ -94,7 +94,9 @@ pub enum OrchErrorKind {
     ToolNotFound(String),
 
     // Provider
-    UnknownProvider { provider: String },
+    UnknownProvider {
+        provider: String,
+    },
 }
 
 impl OrchError {
@@ -187,13 +189,29 @@ impl<'a> fmt::Display for OrchErrorDisplay<'a> {
                 )
             }
             OrchErrorKind::FnParamConflict { node, param } => {
-                write!(f, "function node '{node}': param '{param}' conflicts with existing context key")
+                write!(
+                    f,
+                    "function node '{node}': param '{param}' conflicts with existing context key"
+                )
             }
-            OrchErrorKind::RegistryConflict { key, tier_a, tier_b } => {
-                write!(f, "context type conflict: key '{}' appears in both '{}' and '{}'",
-                    interner.resolve(*key), tier_a, tier_b)
+            OrchErrorKind::RegistryConflict {
+                key,
+                tier_a,
+                tier_b,
+            } => {
+                write!(
+                    f,
+                    "context type conflict: key '{}' appears in both '{}' and '{}'",
+                    interner.resolve(*key),
+                    tier_a,
+                    tier_b
+                )
             }
-            OrchErrorKind::UnpureStoredType { node, persistency, ty } => {
+            OrchErrorKind::UnpureStoredType {
+                node,
+                persistency,
+                ty,
+            } => {
                 write!(
                     f,
                     "node '{}' has {} persistency but its stored type {} is not pure (cannot be persisted)",

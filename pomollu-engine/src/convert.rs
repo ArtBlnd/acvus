@@ -91,10 +91,6 @@ pub enum WebExecution {
     Always,
     #[serde(rename = "once-per-turn")]
     OncePerTurn,
-    #[serde(rename = "if-modified", rename_all = "camelCase")]
-    IfModified {
-        key: String,
-    },
 }
 
 #[derive(Deserialize)]
@@ -273,9 +269,6 @@ impl WebNode {
         let execution = match &self.strategy.execution {
             WebExecution::Always => Execution::Always,
             WebExecution::OncePerTurn => Execution::OncePerTurn,
-            WebExecution::IfModified { key } => Execution::IfModified {
-                key: interner.intern(key),
-            },
         };
 
         let persistency = match &self.strategy.persistency {

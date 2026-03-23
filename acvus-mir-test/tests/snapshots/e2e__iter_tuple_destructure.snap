@@ -2,30 +2,48 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== main ===
-     0 │   r0 = context_load @pairs
-     1 │   r1 = cast ListToIterator r0
-     2 │   jump L0(r1)
-     3 │ L0(r2: Iterator<(String, Int)>):
-     4 │   r3 = iter_step r2
-     5 │   r4 = test r3 is None
-     6 │   jump_if r4 then L1 else L3
-     7 │ L3:
-     8 │   r5 = unwrap r3
-     9 │   r6 = r5.0
-    10 │   r7 = r5.1
-    11 │   r8 = r6.0
-    12 │   yield r8
-    13 │   jump L0(r7)
-    14 │ L1:
-    15 │ L2:
+=== literals ===
+  T0 = ""
 
-    ; r0 (@pairs) : List<(String, Int)>
-    ; r1 (v1) : Iterator<(String, Int)>
-    ; r2 (v2) : Iterator<(String, Int)>
-    ; r3 (v3) : Option<((String, Int), Iterator<(String, Int)>)>
-    ; r4 (v4) : Bool
-    ; r5 (v5) : ((String, Int), Iterator<(String, Int)>)
-    ; r6 (v6) : (String, Int)
-    ; r7 (v7) : Iterator<(String, Int)>
-    ; r8 (a) : String
+=== main ===
+     1 │   r1 = context_project @pairs
+     2 │   r2 = context_load r1
+     3 │   r3 = cast ListToIterator r2
+     5 │   jump L0(r3, T0)
+     6 │ L0(r5: Iterator<(String, Int)>, r6: String):
+     7 │   r7 = iter_step r5
+     8 │   r8 = test r7 is None
+     9 │   jump_if r8 then L1(r6) else L3
+    10 │ L3:
+    11 │   r9 = unwrap r7
+    12 │   r10 = r9.0
+    13 │   r11 = r9.1
+    14 │   r12 = r10.0
+    16 │   r14 = T0 + r12
+    17 │   r15 = r6 + r14
+    18 │   jump L0(r11, r15)
+    19 │ L1(r16: String):
+    20 │   jump L2(r16)
+    21 │ L2(r17: String):
+    22 │   r18 = T0 + r17
+    23 │   return r18
+
+    ; r0 (v0) : String
+    ; r1 (@pairs) : List<(String, Int)>
+    ; r2 (v2) : List<(String, Int)>
+    ; r3 (v3) : Iterator<(String, Int)>
+    ; r4 (v4) : String
+    ; r5 (v5) : Iterator<(String, Int)>
+    ; r6 (v6) : String
+    ; r7 (v7) : Option<((String, Int), Iterator<(String, Int)>)>
+    ; r8 (v8) : Bool
+    ; r9 (v9) : ((String, Int), Iterator<(String, Int)>)
+    ; r10 (v10) : (String, Int)
+    ; r11 (v11) : Iterator<(String, Int)>
+    ; r12 (a) : String
+    ; r13 (v13) : String
+    ; r14 (v14) : String
+    ; r15 (v15) : String
+    ; r16 (v16) : String
+    ; r17 (v17) : String
+    ; r18 (v18) : String

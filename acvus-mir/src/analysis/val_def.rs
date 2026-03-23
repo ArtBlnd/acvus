@@ -33,13 +33,14 @@ impl AnalysisPass for ValDefMapAnalysis {
 fn dst_of(kind: &InstKind) -> Option<ValueId> {
     match kind {
         InstKind::Const { dst, .. }
+        | InstKind::ContextProject { dst, .. }
         | InstKind::ContextLoad { dst, .. }
         | InstKind::VarLoad { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
         | InstKind::FieldGet { dst, .. }
-        | InstKind::BuiltinCall { dst, .. }
-        | InstKind::ExternCall { dst, .. }
+        | InstKind::FunctionCall { dst, .. }
+        | InstKind::LoadFunction { dst, .. }
         | InstKind::MakeDeque { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeRange { dst, .. }
@@ -54,17 +55,18 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::ListSlice { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
-        | InstKind::ClosureCall { dst, .. }
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
         | InstKind::Cast { dst, .. }
         | InstKind::IterStep { dst, .. }
+        | InstKind::Spawn { dst, .. }
+        | InstKind::Eval { dst, .. }
         | InstKind::Poison { dst } => Some(*dst),
 
         // These don't define a new Val
-        InstKind::Yield(_)
-        | InstKind::VarStore { .. }
+        InstKind::VarStore { .. }
+        | InstKind::ContextStore { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return(_)
@@ -79,6 +81,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
+        InstKind::IterStep { iter_dst, .. } => vec![*iter_dst],
         _ => vec![],
     }
 }
@@ -86,17 +89,21 @@ fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_ast::Span;
+    use crate::graph::ContextId;
     use crate::ir::{Inst, MirBody};
-    use acvus_utils::Interner;
+    use crate::ty::Ty;
+    use acvus_ast::Span;
+    use acvus_utils::{Interner, LocalFactory};
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
         MirModule {
             main: MirBody {
                 insts,
                 val_types: FxHashMap::default(),
+                param_regs: Vec::new(),
+                capture_regs: Vec::new(),
                 debug: crate::ir::DebugInfo::new(),
-                val_count: 0,
+                val_factory: LocalFactory::new(),
                 label_count: 0,
             },
             closures: FxHashMap::default(),
@@ -111,71 +118,91 @@ mod tests {
     }
 
     #[test]
-    fn context_load_mapped() {
-        let i = Interner::new();
-        let module = make_module(vec![inst(InstKind::ContextLoad {
-            dst: ValueId(0),
-            name: i.intern("user"),
-        })]);
+    fn context_project_mapped() {
+        let id0 = ContextId::alloc();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let module = make_module(vec![
+            inst(InstKind::ContextProject { dst: v0, id: id0, ty: Ty::error() }),
+            inst(InstKind::ContextLoad { dst: v1, src: v0 }),
+        ]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&ValueId(0)], 0);
+        assert_eq!(result.0[&v0], 0); // ContextProject defines v0
+        assert_eq!(result.0[&v1], 1); // ContextLoad defines v1
     }
 
     #[test]
     fn var_load_mapped() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
         let module = make_module(vec![inst(InstKind::VarLoad {
-            dst: ValueId(0),
+            dst: v0,
             name: i.intern("count"),
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&ValueId(0)], 0);
+        assert_eq!(result.0[&v0], 0);
     }
 
     #[test]
     fn multiple_defs() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
+        let v2 = vf.next();
         let module = make_module(vec![
             inst(InstKind::Const {
-                dst: ValueId(0),
+                dst: v0,
                 value: acvus_ast::Literal::Int(1),
             }),
             inst(InstKind::Const {
-                dst: ValueId(1),
+                dst: v1,
                 value: acvus_ast::Literal::Int(2),
             }),
             inst(InstKind::BinOp {
-                dst: ValueId(2),
+                dst: v2,
                 op: acvus_ast::BinOp::Add,
-                left: ValueId(0),
-                right: ValueId(1),
+                left: v0,
+                right: v1,
             }),
         ]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&ValueId(0)], 0);
-        assert_eq!(result.0[&ValueId(1)], 1);
-        assert_eq!(result.0[&ValueId(2)], 2);
+        assert_eq!(result.0[&v0], 0);
+        assert_eq!(result.0[&v1], 1);
+        assert_eq!(result.0[&v2], 2);
     }
 
     #[test]
     fn block_label_params_mapped() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let v1 = vf.next();
         let module = make_module(vec![inst(InstKind::BlockLabel {
             label: crate::ir::Label(0),
-            params: vec![ValueId(0), ValueId(1)],
+            params: vec![v0, v1],
             merge_of: None,
         })]);
         let result = ValDefMapAnalysis.run(&module, ());
-        assert_eq!(result.0[&ValueId(0)], 0);
-        assert_eq!(result.0[&ValueId(1)], 0);
+        assert_eq!(result.0[&v0], 0);
+        assert_eq!(result.0[&v1], 0);
     }
 
     #[test]
     fn non_defining_insts_skipped() {
         let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        // Skip v1..v98 to get v99
+        for _ in 1..99 {
+            vf.next();
+        }
+        let v99 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::Yield(ValueId(99))),
+            inst(InstKind::Return(v99)),
             inst(InstKind::VarStore {
                 name: i.intern("x"),
-                src: ValueId(0),
+                src: v0,
             }),
             inst(InstKind::Nop),
         ]);
