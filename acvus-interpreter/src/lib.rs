@@ -11,7 +11,7 @@ mod value;
 pub use blob::{BlobHash, BlobStore, MemBlobStore};
 pub use error::{RuntimeError, RuntimeErrorKind, ValueKind};
 pub use executor::{Executor, SequentialExecutor};
-pub use interpreter::{Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Interpreter, InterpreterContext, SyncBuiltinFn};
+pub use interpreter::{Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Executable, Interpreter, InterpreterContext, SyncBuiltinFn};
 pub use iter::{IterHandle, SequenceChain};
 pub use journal::{ContextOverlay, ContextWrite, EntryLifecycle, EntryMut, EntryRef, Journal};
 pub use value::{FnValue, HandleValue, OpaqueValue, RangeValue, Value};

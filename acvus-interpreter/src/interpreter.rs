@@ -3,13 +3,12 @@ use std::sync::Arc;
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_mir::graph::FunctionId;
 use acvus_mir::ir::{Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValueId};
-use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalIdOps, LocalVec, TrackedDeque};
+use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec, TrackedDeque};
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use stackfuture::StackFuture;
 
-use crate::EntryLifecycle;
 use crate::error::RuntimeError;
 use crate::value::{FnValue, Value};
 
@@ -164,12 +163,29 @@ pub struct ExecResult {
     pub writes: Vec<ContextWrite>,
 }
 
+/// A single executable unit — MIR module, builtin handler, or extern function.
+pub enum Executable {
+    Module(MirModule),
+    Builtin(BuiltinHandler),
+    /// External function injected from outside. Internal representation TBD.
+    Extern,
+}
+
+impl Executable {
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Module(_) => "Module",
+            Self::Builtin(_) => "Builtin",
+            Self::Extern => "Extern",
+        }
+    }
+}
+
 /// Readonly shared state — clone is cheap (Freeze/Arc internally).
 #[derive(Clone)]
 pub struct InterpreterContext {
     pub interner: Interner,
-    pub modules: Freeze<FxHashMap<FunctionId, MirModule>>,
-    pub builtins: Freeze<FxHashMap<FunctionId, BuiltinHandler>>,
+    pub functions: Freeze<FxHashMap<FunctionId, Executable>>,
     pub context_names: Freeze<FxHashMap<ContextId, Astr>>,
     pub executor: Arc<dyn crate::executor::Executor>,
 }
@@ -177,25 +193,15 @@ pub struct InterpreterContext {
 impl InterpreterContext {
     pub fn new(
         interner: &Interner,
-        modules: FxHashMap<FunctionId, MirModule>,
+        functions: FxHashMap<FunctionId, Executable>,
         executor: Arc<dyn crate::executor::Executor>,
     ) -> Self {
         Self {
             interner: interner.clone(),
-            modules: Freeze::new(modules),
-            builtins: Freeze::new(FxHashMap::default()),
+            functions: Freeze::new(functions),
             context_names: Freeze::new(FxHashMap::default()),
             executor,
         }
-    }
-
-    /// Build with builtins and context names pre-registered.
-    pub fn with_builtins(
-        mut self,
-        builtins: FxHashMap<FunctionId, BuiltinHandler>,
-    ) -> Self {
-        self.builtins = Freeze::new(builtins);
-        self
     }
 
     pub fn with_context_names(
@@ -213,6 +219,9 @@ pub struct Interpreter {
     entry: FunctionId,
     overlay: ContextOverlay,
     variables: FxHashMap<Astr, Value>,
+    /// Arguments passed to this interpreter via Spawn.
+    /// Bound to MirBody.param_regs when execute_function runs.
+    spawn_args: Vec<Value>,
 }
 
 impl Interpreter {
@@ -226,28 +235,38 @@ impl Interpreter {
             entry,
             overlay,
             variables: FxHashMap::default(),
+            spawn_args: Vec::new(),
         }
     }
 
-    /// Fork for spawn — shared state is cheap clone, overlay forks.
-    pub fn fork(&self, entry: FunctionId) -> Self {
+    /// Fork for spawn — shared state is cheap clone, overlay forks, args carried.
+    pub fn fork(&self, entry: FunctionId, args: Vec<Value>) -> Self {
         Self {
             shared: self.shared.clone(),
             entry,
             overlay: self.overlay.spawn_fork(),
             variables: FxHashMap::default(),
+            spawn_args: args,
         }
     }
 
+    fn function(&self, id: &FunctionId) -> &Executable {
+        self.shared.functions.get(id)
+            .unwrap_or_else(|| panic!("no function for #{}", id.index()))
+    }
+
     fn module(&self, id: &FunctionId) -> &MirModule {
-        self.shared.modules.get(id)
-            .unwrap_or_else(|| panic!("no module for function #{}", id.index()))
+        match self.function(id) {
+            Executable::Module(m) => m,
+            other => panic!("expected Module for #{}, got {}", id.index(), other.variant_name()),
+        }
     }
 
     /// Execute the entry module. Returns value + accumulated context writes.
     pub async fn execute(&mut self) -> Result<ExecResult, RuntimeError> {
         let entry = self.entry;
-        let value = self.execute_function(&entry).await?;
+        let args = std::mem::take(&mut self.spawn_args);
+        let value = self.execute_function(&entry, &args).await?;
         let overlay = std::mem::replace(
             &mut self.overlay,
             ContextOverlay::new(Arc::new(std::collections::HashMap::new())),
@@ -256,13 +275,22 @@ impl Interpreter {
         Ok(ExecResult { value, writes })
     }
 
-    /// Execute a specific function by FunctionId.
-    async fn execute_function(&mut self, id: &FunctionId) -> Result<Value, RuntimeError> {
+    /// Execute a specific function by FunctionId with explicit args.
+    async fn execute_function(
+        &mut self,
+        id: &FunctionId,
+        args: &[Value],
+    ) -> Result<Value, RuntimeError> {
         let m = self.module(id);
         let insts: Arc<[Inst]> = m.main.insts.clone().into();
         let closures = m.closures.clone();
+        let param_regs = m.main.param_regs.clone();
         let label_map = build_label_map(&m.main);
         let mut frame = Frame::new(&m.main.val_factory, label_map);
+        // Bind args to param_regs.
+        for (reg, val) in param_regs.iter().zip(args.iter()) {
+            frame.set(*reg, val.clone());
+        }
         let mut projection_map: FxHashMap<ValueId, ContextId> = FxHashMap::default();
         self.run_loop(&insts, &closures, &mut frame, &mut projection_map).await
     }
@@ -520,7 +548,7 @@ impl Interpreter {
                 let result = match callee {
                     Callee::Direct(id) => {
                         let arg_vals: Args = args.iter().map(|a| frame.share(*a)).collect();
-                        self.call_builtin(id, arg_vals).await?
+                        self.dispatch_call(id, arg_vals).await?
                     }
                     Callee::Indirect(val_id) => {
                         let fv = frame.take(*val_id).into_fn();
@@ -536,14 +564,17 @@ impl Interpreter {
                 };
                 frame.set(*dst, result);
             }
-            InstKind::Spawn { dst, callee, args, context_uses } => {
+            InstKind::Spawn { dst, callee, args, context_uses: _ } => {
                 let callee_id = match callee {
                     Callee::Direct(id) => *id,
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
                 };
-                // Fork interpreter for the spawned function.
-                let child = self.fork(callee_id);
-                // TODO: bind args and context_uses to child
+                // Collect args from parent frame.
+                let spawn_args: Vec<Value> = args.iter()
+                    .map(|a| frame.share(*a))
+                    .collect();
+                // Fork interpreter with args. context_uses is implicit via overlay.
+                let child = self.fork(callee_id, spawn_args);
                 let handle = self.shared.executor.spawn(child);
                 frame.set(*dst, Value::Handle(Box::new(handle)));
             }
@@ -555,7 +586,10 @@ impl Interpreter {
                 let result = self.shared.executor.eval(handle).await?;
                 // Merge child's context writes into our overlay.
                 self.overlay.merge_patches(result.writes);
-                // TODO: bind context_defs from result
+                // Register new SSA names for contexts the child wrote.
+                for (ctx_id, vid) in context_defs {
+                    projection_map.insert(*vid, *ctx_id);
+                }
                 frame.set(*dst, result.value);
             }
 
@@ -624,7 +658,7 @@ impl Interpreter {
         &mut self,
         iter: &mut crate::iter::IterHandle,
     ) -> Result<Option<Value>, RuntimeError> {
-        use crate::iter::{IterHandle, IterOp, PureInit, EffectfulState};
+        use crate::iter::{IterHandle, EffectfulState};
 
         match iter {
             IterHandle::Pure { items, init, index } => {
@@ -857,29 +891,29 @@ impl Interpreter {
         self.run_loop(&body.insts, &empty_closures, &mut frame, &mut projection_map).await
     }
 
-    /// Dispatch a direct function call — try builtin first, then local module.
-    async fn call_builtin(
+    /// Dispatch a direct function call by FunctionId.
+    async fn dispatch_call(
         &mut self,
         id: &FunctionId,
         args: Args,
     ) -> Result<Value, RuntimeError> {
-        // Try builtin handler first.
-        if let Some(handler) = self.shared.builtins.get(id) {
-            return match handler {
-                BuiltinHandler::Sync(f) => {
-                    let f = *f;
-                    f(args)
-                }
-                BuiltinHandler::Async(f) => {
-                    let f = *f;
-                    f(args, self).await
-                }
-            };
+        match self.function(id) {
+            Executable::Builtin(BuiltinHandler::Sync(f)) => {
+                let f = *f;
+                f(args)
+            }
+            Executable::Builtin(BuiltinHandler::Async(f)) => {
+                let f = *f;
+                f(args, self).await
+            }
+            Executable::Module(_) => {
+                let arg_values: Vec<Value> = args.into_vec();
+                self.execute_function(id, &arg_values).await
+            }
+            Executable::Extern => {
+                panic!("extern call not yet implemented for #{}", id.index())
+            }
         }
-
-        // Not a builtin — must be a local function. Execute its module.
-        // TODO: bind args to function params
-        self.execute_function(id).await
     }
 }
 

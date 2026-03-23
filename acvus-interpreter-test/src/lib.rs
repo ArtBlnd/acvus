@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{
-    ContextOverlay, ExecResult, Interpreter, InterpreterContext,
+    ContextOverlay, Executable, Interpreter, InterpreterContext,
     SequentialExecutor, Value,
 };
 use acvus_mir::graph::*;
@@ -16,7 +16,7 @@ use rustc_hash::FxHashMap;
 /// Compile a template source → MirModule + context id mapping.
 struct CompileResult {
     entry_id: FunctionId,
-    modules: FxHashMap<FunctionId, acvus_mir::ir::MirModule>,
+    modules: FxHashMap<FunctionId, Executable>,
     context_names: FxHashMap<ContextId, Astr>,
     builtin_ids: FxHashMap<Astr, FunctionId>,
 }
@@ -69,10 +69,10 @@ fn compile(
         panic!("compile failed: {}", errs.join("; "));
     }
 
-    // Collect all modules.
-    let modules: FxHashMap<FunctionId, acvus_mir::ir::MirModule> = result.modules
+    // Collect all modules as Executable::Module.
+    let modules: FxHashMap<FunctionId, Executable> = result.modules
         .into_iter()
-        .map(|(id, (module, _hints))| (id, module))
+        .map(|(id, (module, _hints))| (id, Executable::Module(module)))
         .collect();
 
     // Build context id → name mapping.
@@ -118,7 +118,7 @@ pub async fn run(
     let cr = compile(interner, source, &context_types);
 
     // Debug: dump entry module IR + closures
-    if let Some(module) = cr.modules.get(&cr.entry_id) {
+    if let Some(Executable::Module(module)) = cr.modules.get(&cr.entry_id) {
         let ir = acvus_mir::printer::dump_with(interner, module);
         eprintln!("=== IR for entry ===\n{ir}");
         for (label, closure) in &module.closures {
@@ -131,6 +131,12 @@ pub async fn run(
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
 
+    // Merge modules + builtins into unified functions map.
+    let mut functions = cr.modules;
+    for (id, handler) in builtin_handlers {
+        functions.insert(id, Executable::Builtin(handler));
+    }
+
     // Build context snapshot for overlay.
     let snapshot: HashMap<String, Value> = context
         .into_iter()
@@ -138,8 +144,7 @@ pub async fn run(
         .collect();
 
     let executor = Arc::new(SequentialExecutor);
-    let shared = InterpreterContext::new(interner, cr.modules, executor)
-        .with_builtins(builtin_handlers)
+    let shared = InterpreterContext::new(interner, functions, executor)
         .with_context_names(cr.context_names);
 
     let overlay = ContextOverlay::new(Arc::new(snapshot));
