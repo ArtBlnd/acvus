@@ -1,10 +1,11 @@
 use std::io::Read;
 use std::{env, fs, process};
 
-use acvus_mir::context_registry::ContextTypeRegistry;
+use acvus_mir::graph::types::*;
+use acvus_mir::graph::{extract, infer, lower as graph_lower, resolve};
 use acvus_mir::printer::dump;
-use acvus_mir::ty::{Effect, FnKind, Ty};
-use acvus_utils::Interner;
+use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
@@ -59,13 +60,19 @@ impl TypeDef {
 
 fn main() {
     let interner = Interner::new();
-    let args: Vec<String> = env::args().collect();
-    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let raw_args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 || *args[1] == "--help" || *args[1] == "-h" {
-        eprintln!("Usage: acvus-mir-cli <template-file> [context.json]");
+    let is_script = raw_args.iter().any(|a| a == "--script");
+    let args: Vec<&String> = raw_args
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .collect();
+
+    if args.len() < 2 || raw_args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("Usage: acvus-mir-cli [--script] <source-file> [context.json]");
         eprintln!();
-        eprintln!("  template-file   Path to .acvus template (or - for stdin)");
+        eprintln!("  --script        Treat input as script (default: template)");
+        eprintln!("  source-file     Path to source file (or - for stdin)");
         eprintln!("  context.json    Optional JSON with context types and extern fns");
         eprintln!();
         eprintln!("Context JSON format:");
@@ -78,7 +85,7 @@ fn main() {
         process::exit(1);
     }
 
-    // Read template.
+    // Read source.
     let source = if *args[1] == "-" {
         let mut buf = String::new();
         std::io::stdin()
@@ -95,7 +102,7 @@ fn main() {
         })
     };
 
-    // Read context.
+    // Read context JSON.
     let ctx: Context = if let Some(&ctx_path) = args.get(2) {
         let json = fs::read_to_string(ctx_path).unwrap_or_else(|e| {
             eprintln!("error: failed to read {ctx_path}: {e}");
@@ -109,54 +116,111 @@ fn main() {
         Context::default()
     };
 
-    let mut context_types: FxHashMap<_, _> = ctx
+    // Build context list.
+    let mut contexts: Vec<acvus_mir::graph::types::Context> = ctx
         .context
         .iter()
-        .map(|(k, v)| (interner.intern(k), v.to_ty(&interner)))
+        .map(|(name, def)| acvus_mir::graph::types::Context {
+            name: interner.intern(name),
+            namespace: None,
+            constraint: Constraint::Exact(def.to_ty(&interner)),
+        })
         .collect();
 
+    // Extern fns are also contexts with Ty::Fn.
     for (name, def) in &ctx.extern_fns {
-        let params: Vec<Ty> = def.params.iter().map(|p| p.to_ty(&interner)).collect();
-        context_types.insert(
-            interner.intern(name),
-            Ty::Fn {
-                params,
-                ret: Box::new(def.ret.to_ty(&interner)),
-                kind: FnKind::Extern,
-                captures: vec![],
-                effect: if def.effectful { Effect::Effectful } else { Effect::Pure },
+        let params: Vec<Param> = def
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Param::new(interner.intern(&format!("_{i}")), p.to_ty(&interner)))
+            .collect();
+        let fn_ty = Ty::Fn {
+            params,
+            ret: Box::new(def.ret.to_ty(&interner)),
+            captures: vec![],
+            effect: if def.effectful {
+                Effect::io()
+            } else {
+                Effect::pure()
             },
-        );
+        };
+        contexts.push(acvus_mir::graph::types::Context {
+            name: interner.intern(name),
+            namespace: None,
+            constraint: Constraint::Exact(fn_ty),
+        });
     }
 
-    // Parse.
-    let template = match acvus_ast::parse(&interner, &source) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("parse error: {e}");
-            process::exit(1);
-        }
+    let source_kind = if is_script {
+        SourceKind::Script
+    } else {
+        SourceKind::Template
     };
 
-    // Compile.
-    let reg = ContextTypeRegistry::all_system(context_types);
-    let mut subst = acvus_mir::ty::TySubst::new();
-    let result = acvus_mir::typecheck_template(&interner, &template, &reg, &mut subst)
-        .and_then(|uc| acvus_mir::check_completeness(uc, &subst))
-        .and_then(|ch| acvus_mir::lower_checked_template(&interner, &template, ch, acvus_mir::build_name_to_id(reg.merged())));
-    match result {
-        Ok((module, _hints)) => {
-            println!("{}", dump(&interner, &module));
+    let fn_id = FunctionId::alloc();
+    let mut functions = acvus_mir::builtins::standard_builtins(&interner);
+    functions.push(Function {
+        id: fn_id,
+        name: interner.intern("main"),
+        namespace: None,
+        kind: FnKind::Local(SourceCode {
+            name: interner.intern("main"),
+            source: interner.intern(&source),
+            kind: source_kind,
+        }),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+        },
+    });
+
+    let graph = CompilationGraph {
+        namespaces: Freeze::new(vec![]),
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+    };
+
+    // Run pipeline: extract → infer → resolve → lower.
+    let ext = extract::extract(&interner, &graph);
+    let inf = infer::infer(&interner, &graph, &ext);
+    let res = resolve::resolve(&interner, &graph, &ext, &inf, &FxHashMap::default());
+
+    // Check resolve errors.
+    let resolve_errors: Vec<_> = res
+        .errors()
+        .iter()
+        .flat_map(|re| &re.errors)
+        .collect();
+    if !resolve_errors.is_empty() {
+        for e in &resolve_errors {
+            eprintln!(
+                "error [{}..{}]: {}",
+                e.span.start, e.span.end, e.display(&interner)
+            );
         }
-        Err(errors) => {
-            for e in &errors {
+        process::exit(1);
+    }
+
+    let result = graph_lower::lower(&interner, &graph, &ext, &res);
+    if result.has_errors() {
+        for le in &result.errors {
+            for e in &le.errors {
                 eprintln!(
                     "error [{}..{}]: {}",
-                    e.span.start,
-                    e.span.end,
-                    e.display(&interner)
+                    e.span.start, e.span.end, e.display(&interner)
                 );
             }
+        }
+        process::exit(1);
+    }
+
+    match result.module(fn_id) {
+        Some(module) => {
+            println!("{}", dump(&interner, module));
+        }
+        None => {
+            eprintln!("error: no module produced for main function");
             process::exit(1);
         }
     }

@@ -132,7 +132,6 @@ dependencies = [
 name = "acvus-mir-cli"
 version = "0.1.0"
 dependencies = [
- "acvus-ast",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
