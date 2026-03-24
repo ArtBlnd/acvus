@@ -69,7 +69,7 @@ pub fn regex_registry() -> ExternRegistry {
             .params(vec![opaque_ty(), Ty::String])
             .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
             .pure()
-            .sync_handler(|mut args, _interner| {
+            .sync_handler(|args, _interner| {
                 let re = extract_regex(&args[0]).clone();
                 let text = args[1].as_str().to_string();
                 let mut start = 0;
@@ -97,7 +97,7 @@ pub fn regex_registry() -> ExternRegistry {
             .params(vec![opaque_ty(), Ty::String])
             .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
             .pure()
-            .sync_handler(|mut args, _interner| {
+            .sync_handler(|args, _interner| {
                 let re = extract_regex(&args[0]).clone();
                 let text = args[1].as_str().to_string();
                 // Split produces all segments — collect lazily via find boundaries.
@@ -127,7 +127,7 @@ pub fn regex_registry() -> ExternRegistry {
             .params(vec![Ty::String, opaque_ty()])
             .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
             .pure()
-            .sync_handler(|mut args, _interner| {
+            .sync_handler(|args, _interner| {
                 let text = args[0].as_str().to_string();
                 let re = extract_regex(&args[1]).clone();
                 let mut start = 0;
