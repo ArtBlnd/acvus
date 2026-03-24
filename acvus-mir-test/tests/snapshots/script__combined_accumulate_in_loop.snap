@@ -10,11 +10,11 @@ expression: ir
      4 │   r4 = context_project @sum
      5 │   r5 = context_load r4
      6 │   r6 = cast ListToIterator r1
-     7 │   jump L0(r6, r5, r3)
+     7 │   jump L0(r6, r3, r5)
      8 │ L0(r7: Iterator<Int>, r8: <error>, r9: <error>):
-     9 │   r10 = context_project @sum
+     9 │   r10 = context_project @product
     10 │   ctx_store r10 = r8
-    11 │   r11 = context_project @product
+    11 │   r11 = context_project @sum
     12 │   ctx_store r11 = r9
     13 │   iter_step r12, r13 = r7 else L1()
     14 │ L2:
@@ -24,7 +24,7 @@ expression: ir
     18 │   r17 = context_project @product
     19 │   r18 = context_load r17
     20 │   r19 = r18 * r12
-    21 │   jump L0(r13, r16, r19)
+    21 │   jump L0(r13, r19, r16)
     22 │ L1:
     23 │   r20 = context_project @sum
     24 │   r21 = context_load r20
@@ -41,8 +41,8 @@ expression: ir
     ; r5 (v5) : Int
     ; r6 (v8) : Iterator<Int>
     ; r7 (v9) : Iterator<Int>
-    ; r8 (v25) : <error>
-    ; r9 (v26) : <error>
+    ; r8 (v26) : <error>
+    ; r9 (v25) : <error>
     ; r10 (v27) : <error>
     ; r11 (v28) : <error>
     ; r12 (x) : Int
