@@ -256,7 +256,8 @@ mod tests {
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
         assert!(
-            refs.context_reads.contains(&QualifiedRef::root(i.intern("x"))),
+            refs.context_reads
+                .contains(&QualifiedRef::root(i.intern("x"))),
             "should detect @x read"
         );
     }
@@ -267,8 +268,14 @@ mod tests {
         let (graph, uid) = make_graph(&i, "@a + @b", &["a", "b"]);
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
-        assert!(refs.context_reads.contains(&QualifiedRef::root(i.intern("a"))));
-        assert!(refs.context_reads.contains(&QualifiedRef::root(i.intern("b"))));
+        assert!(
+            refs.context_reads
+                .contains(&QualifiedRef::root(i.intern("a")))
+        );
+        assert!(
+            refs.context_reads
+                .contains(&QualifiedRef::root(i.intern("b")))
+        );
     }
 
     // -- Completeness: direct writes detected --
@@ -280,7 +287,8 @@ mod tests {
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
         assert!(
-            refs.context_writes.contains(&QualifiedRef::root(i.intern("x"))),
+            refs.context_writes
+                .contains(&QualifiedRef::root(i.intern("x"))),
             "should detect @x write"
         );
     }
@@ -296,9 +304,15 @@ mod tests {
         let (graph, uid) = make_graph(&i, "@x = @x + 1; @x", &["x"]);
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
-        assert!(refs.context_writes.contains(&QualifiedRef::root(i.intern("x"))));
+        assert!(
+            refs.context_writes
+                .contains(&QualifiedRef::root(i.intern("x")))
+        );
         // @x is also read (in @x + 1).
-        assert!(refs.context_reads.contains(&QualifiedRef::root(i.intern("x"))));
+        assert!(
+            refs.context_reads
+                .contains(&QualifiedRef::root(i.intern("x")))
+        );
     }
 
     // -- Soundness: no false writes --
@@ -309,7 +323,10 @@ mod tests {
         let (graph, uid) = make_graph(&i, "@x + 1", &["x"]);
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
-        assert!(refs.context_reads.contains(&QualifiedRef::root(i.intern("x"))));
+        assert!(
+            refs.context_reads
+                .contains(&QualifiedRef::root(i.intern("x")))
+        );
         assert!(
             refs.context_writes.is_empty(),
             "read-only should have no writes"
@@ -335,11 +352,14 @@ mod tests {
         let result = extract(&i, &graph);
         let refs = &result.fn_refs[&uid];
         assert!(
-            refs.context_writes.contains(&QualifiedRef::root(i.intern("x"))),
+            refs.context_writes
+                .contains(&QualifiedRef::root(i.intern("x"))),
             "@x should be written"
         );
         assert!(
-            !refs.context_writes.contains(&QualifiedRef::root(i.intern("y"))),
+            !refs
+                .context_writes
+                .contains(&QualifiedRef::root(i.intern("y"))),
             "@y should NOT be written"
         );
     }

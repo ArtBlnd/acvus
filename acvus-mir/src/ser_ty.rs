@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use acvus_utils::Interner;
 use serde::{Deserialize, Serialize};
 
-use crate::ty::{Effect, EffectSet, Origin, Ty};
 use crate::graph::QualifiedRef;
+use crate::ty::{Effect, EffectSet, Origin, Ty};
 
 // ── Serializable Effect (mirrors ty::Effect without Astr) ────────────
 
@@ -46,7 +46,11 @@ impl Effect {
         match self {
             Effect::Resolved(set) => SerEffect::Resolved(SerEffectSet {
                 reads: set.reads.iter().map(|r| qref_to_ser(r, interner)).collect(),
-                writes: set.writes.iter().map(|r| qref_to_ser(r, interner)).collect(),
+                writes: set
+                    .writes
+                    .iter()
+                    .map(|r| qref_to_ser(r, interner))
+                    .collect(),
                 io: set.io,
                 self_modifying: set.self_modifying,
             }),
@@ -60,7 +64,11 @@ impl SerEffect {
         match self {
             SerEffect::Resolved(set) => Effect::Resolved(EffectSet {
                 reads: set.reads.iter().map(|r| ser_to_qref(r, interner)).collect(),
-                writes: set.writes.iter().map(|r| ser_to_qref(r, interner)).collect(),
+                writes: set
+                    .writes
+                    .iter()
+                    .map(|r| ser_to_qref(r, interner))
+                    .collect(),
                 io: set.io,
                 self_modifying: set.self_modifying,
             }),
@@ -270,7 +278,11 @@ impl SerTy {
                 elem,
                 origin,
                 effect,
-            } => Ty::Sequence(Box::new(elem.to_ty(interner)), *origin, effect.to_effect(interner)),
+            } => Ty::Sequence(
+                Box::new(elem.to_ty(interner)),
+                *origin,
+                effect.to_effect(interner),
+            ),
             SerTy::Deque { elem, origin } => Ty::Deque(Box::new(elem.to_ty(interner)), *origin),
         }
     }

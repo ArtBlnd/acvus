@@ -397,20 +397,6 @@ impl<'a> Lowerer<'a> {
             .unwrap_or_else(|| panic!("unknown context @{}", self.interner.resolve(name)))
     }
 
-    fn context_ty(&self, name: Astr) -> Ty {
-        self.context_ids
-            .get(&name)
-            .map(|(_, ty)| ty.clone())
-            .unwrap_or_else(|| panic!("unknown context @{}", self.interner.resolve(name)))
-    }
-
-    fn function_id(&self, name: Astr) -> FunctionId {
-        self.function_ids
-            .get(&name)
-            .map(|(id, _)| *id)
-            .unwrap_or_else(|| panic!("unknown function {}", self.interner.resolve(name)))
-    }
-
     /// If `val` is a projection, materialize it into a value via ContextLoad.
     /// If it's already a value, return as-is.
     fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
@@ -776,13 +762,7 @@ impl<'a> Lowerer<'a> {
                     let ctx_id = self.context_ref(*name);
                     let dst = self.alloc_typed(*span);
                     self.set_origin(dst, ValOrigin::Context(*name));
-                    self.emit_inst(
-                        *span,
-                        InstKind::ContextProject {
-                            dst,
-                            ctx: ctx_id,
-                        },
-                    );
+                    self.emit_inst(*span, InstKind::ContextProject { dst, ctx: ctx_id });
                     self.mark_projection(dst);
                     dst
                 }
@@ -1984,7 +1964,6 @@ impl<'a> Lowerer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ty::TySubst, typeck::TypeChecker};
 
     fn lower(interner: &Interner, source: &str) -> MirModule {
         lower_with(interner, source, &FxHashMap::default())

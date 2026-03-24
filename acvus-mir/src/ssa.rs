@@ -438,9 +438,6 @@ mod tests {
         // block 1: loop header — NOT sealed yet (back edge pending)
         ssa.add_predecessor(label(1), label(0));
 
-        // Use in unsealed block → pending PHI
-        let v_header = ssa.use_var(label(1), ctx, &mut alloc);
-
         // block 2: loop body — writes
         ssa.add_predecessor(label(2), label(1));
         ssa.seal_block(label(2), &mut alloc);

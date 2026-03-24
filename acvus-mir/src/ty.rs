@@ -3664,10 +3664,10 @@ mod tests {
     #[test]
     fn sequence_is_not_pure() {
         let o = Origin::Concrete(0);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pure());
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pure());
+        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pureable());
+        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pureable());
         // Deque IS pure (it's an eager, storable container).
-        assert!(Ty::Deque(Box::new(Ty::Int), o).is_pure());
+        assert!(Ty::Deque(Box::new(Ty::Int), o).is_pureable());
     }
 
     #[test]
@@ -5430,8 +5430,8 @@ mod tests {
 
     mod effect_set_tests {
         use super::*;
-        use acvus_utils::Interner;
         use crate::graph::types::QualifiedRef;
+        use acvus_utils::Interner;
 
         fn ctx(interner: &Interner, n: usize) -> QualifiedRef {
             QualifiedRef::root(interner.intern(&format!("ctx_{n}")))

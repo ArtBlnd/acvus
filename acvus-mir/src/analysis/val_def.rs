@@ -91,7 +91,6 @@ mod tests {
     use super::*;
     use crate::graph::QualifiedRef;
     use crate::ir::{Inst, MirBody};
-    use crate::ty::Ty;
     use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory};
 
@@ -125,10 +124,7 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject {
-                dst: v0,
-                ctx: id0
-            }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
             inst(InstKind::ContextLoad { dst: v1, src: v0 }),
         ]);
         let result = ValDefMapAnalysis.run(&module, ());

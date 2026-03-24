@@ -4,15 +4,15 @@
 //! to assign the minimum number of physical slots. Rewrites all ValueIds
 //! in the MIR body in-place.
 
-use std::sync::Arc;
 use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
 use acvus_utils::LocalFactory;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 /// Run register coloring on all bodies in a module.
 pub fn color(mut module: MirModule) -> MirModule {
     color_body(&mut module.main);
-    for (_, closure) in &mut module.closures {
+    for closure in module.closures.values_mut() {
         color_body(Arc::make_mut(closure));
     }
     module
@@ -177,7 +177,9 @@ fn for_each_def(kind: &InstKind, mut f: impl FnMut(ValueId)) {
                 f(p);
             }
         }
-        InstKind::Eval { dst, context_defs, .. } => {
+        InstKind::Eval {
+            dst, context_defs, ..
+        } => {
             f(*dst);
             for &(_, v) in context_defs {
                 f(v);
@@ -204,24 +206,42 @@ fn for_each_use(kind: &InstKind, mut f: impl FnMut(ValueId)) {
         | InstKind::Poison { .. } => {}
 
         InstKind::ContextLoad { src, .. } => f(*src),
-        InstKind::ContextStore { dst, value } => { f(*dst); f(*value); }
+        InstKind::ContextStore { dst, value } => {
+            f(*dst);
+            f(*value);
+        }
         InstKind::VarStore { src, .. } => f(*src),
-        InstKind::BinOp { left, right, .. } => { f(*left); f(*right); }
+        InstKind::BinOp { left, right, .. } => {
+            f(*left);
+            f(*right);
+        }
         InstKind::UnaryOp { operand, .. } => f(*operand),
         InstKind::FieldGet { object, .. } => f(*object),
         InstKind::FunctionCall { callee, args, .. } => {
-            if let Callee::Indirect(v) = callee { f(*v); }
+            if let Callee::Indirect(v) = callee {
+                f(*v);
+            }
             args.iter().for_each(|v| f(*v));
         }
-        InstKind::Spawn { callee, args, context_uses, .. } => {
-            if let Callee::Indirect(v) = callee { f(*v); }
+        InstKind::Spawn {
+            callee,
+            args,
+            context_uses,
+            ..
+        } => {
+            if let Callee::Indirect(v) = callee {
+                f(*v);
+            }
             args.iter().for_each(|v| f(*v));
             context_uses.iter().for_each(|(_, v)| f(*v));
         }
         InstKind::Eval { src, .. } => f(*src),
         InstKind::MakeDeque { elements, .. } => elements.iter().for_each(|v| f(*v)),
         InstKind::MakeObject { fields, .. } => fields.iter().for_each(|(_, v)| f(*v)),
-        InstKind::MakeRange { start, end, .. } => { f(*start); f(*end); }
+        InstKind::MakeRange { start, end, .. } => {
+            f(*start);
+            f(*end);
+        }
         InstKind::MakeTuple { elements, .. } => elements.iter().for_each(|v| f(*v)),
         InstKind::TupleIndex { tuple, .. } => f(*tuple),
         InstKind::TestLiteral { src, .. }
@@ -229,21 +249,35 @@ fn for_each_use(kind: &InstKind, mut f: impl FnMut(ValueId)) {
         | InstKind::TestObjectKey { src, .. }
         | InstKind::TestRange { src, .. } => f(*src),
         InstKind::ListIndex { list, .. } => f(*list),
-        InstKind::ListGet { list, index, .. } => { f(*list); f(*index); }
+        InstKind::ListGet { list, index, .. } => {
+            f(*list);
+            f(*index);
+        }
         InstKind::ListSlice { list, .. } => f(*list),
         InstKind::ObjectGet { object, .. } => f(*object),
         InstKind::MakeClosure { captures, .. } => captures.iter().for_each(|v| f(*v)),
-        InstKind::IterStep { iter_src, done_args, .. } => {
+        InstKind::IterStep {
+            iter_src,
+            done_args,
+            ..
+        } => {
             f(*iter_src);
             done_args.iter().for_each(|v| f(*v));
         }
         InstKind::MakeVariant { payload, .. } => {
-            if let Some(v) = payload { f(*v); }
+            if let Some(v) = payload {
+                f(*v);
+            }
         }
         InstKind::TestVariant { src, .. } | InstKind::UnwrapVariant { src, .. } => f(*src),
         InstKind::Cast { src, .. } => f(*src),
         InstKind::Jump { args, .. } => args.iter().for_each(|v| f(*v)),
-        InstKind::JumpIf { cond, then_args, else_args, .. } => {
+        InstKind::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
             f(*cond);
             then_args.iter().for_each(|v| f(*v));
             else_args.iter().for_each(|v| f(*v));
@@ -257,26 +291,57 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
     match kind {
         InstKind::Const { dst, .. } => r(dst),
         InstKind::ContextProject { dst, .. } => r(dst),
-        InstKind::ContextLoad { dst, src } => { r(dst); r(src); }
-        InstKind::ContextStore { dst, value } => { r(dst); r(value); }
+        InstKind::ContextLoad { dst, src } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::ContextStore { dst, value } => {
+            r(dst);
+            r(value);
+        }
         InstKind::VarLoad { dst, .. } => r(dst),
         InstKind::VarStore { src, .. } => r(src),
-        InstKind::BinOp { dst, left, right, .. } => { r(dst); r(left); r(right); }
-        InstKind::UnaryOp { dst, operand, .. } => { r(dst); r(operand); }
-        InstKind::FieldGet { dst, object, .. } => { r(dst); r(object); }
+        InstKind::BinOp {
+            dst, left, right, ..
+        } => {
+            r(dst);
+            r(left);
+            r(right);
+        }
+        InstKind::UnaryOp { dst, operand, .. } => {
+            r(dst);
+            r(operand);
+        }
+        InstKind::FieldGet { dst, object, .. } => {
+            r(dst);
+            r(object);
+        }
         InstKind::LoadFunction { dst, .. } => r(dst),
         InstKind::FunctionCall { dst, callee, args } => {
             r(dst);
-            if let Callee::Indirect(v) = callee { r(v); }
+            if let Callee::Indirect(v) = callee {
+                r(v);
+            }
             args.iter_mut().for_each(&r);
         }
-        InstKind::Spawn { dst, callee, args, context_uses } => {
+        InstKind::Spawn {
+            dst,
+            callee,
+            args,
+            context_uses,
+        } => {
             r(dst);
-            if let Callee::Indirect(v) = callee { r(v); }
+            if let Callee::Indirect(v) = callee {
+                r(v);
+            }
             args.iter_mut().for_each(&r);
             context_uses.iter_mut().for_each(|(_, v)| r(v));
         }
-        InstKind::Eval { dst, src, context_defs } => {
+        InstKind::Eval {
+            dst,
+            src,
+            context_defs,
+        } => {
             r(dst);
             r(src);
             context_defs.iter_mut().for_each(|(_, v)| r(v));
@@ -289,45 +354,103 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             fields.iter_mut().for_each(|(_, v)| r(v));
         }
-        InstKind::MakeRange { dst, start, end, .. } => { r(dst); r(start); r(end); }
+        InstKind::MakeRange {
+            dst, start, end, ..
+        } => {
+            r(dst);
+            r(start);
+            r(end);
+        }
         InstKind::MakeTuple { dst, elements } => {
             r(dst);
             elements.iter_mut().for_each(&r);
         }
-        InstKind::TupleIndex { dst, tuple, .. } => { r(dst); r(tuple); }
-        InstKind::TestLiteral { dst, src, .. } => { r(dst); r(src); }
-        InstKind::TestListLen { dst, src, .. } => { r(dst); r(src); }
-        InstKind::TestObjectKey { dst, src, .. } => { r(dst); r(src); }
-        InstKind::TestRange { dst, src, .. } => { r(dst); r(src); }
-        InstKind::ListIndex { dst, list, .. } => { r(dst); r(list); }
-        InstKind::ListGet { dst, list, index } => { r(dst); r(list); r(index); }
-        InstKind::ListSlice { dst, list, .. } => { r(dst); r(list); }
-        InstKind::ObjectGet { dst, object, .. } => { r(dst); r(object); }
+        InstKind::TupleIndex { dst, tuple, .. } => {
+            r(dst);
+            r(tuple);
+        }
+        InstKind::TestLiteral { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::TestListLen { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::TestObjectKey { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::TestRange { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::ListIndex { dst, list, .. } => {
+            r(dst);
+            r(list);
+        }
+        InstKind::ListGet { dst, list, index } => {
+            r(dst);
+            r(list);
+            r(index);
+        }
+        InstKind::ListSlice { dst, list, .. } => {
+            r(dst);
+            r(list);
+        }
+        InstKind::ObjectGet { dst, object, .. } => {
+            r(dst);
+            r(object);
+        }
         InstKind::MakeClosure { dst, captures, .. } => {
             r(dst);
             captures.iter_mut().for_each(&r);
         }
-        InstKind::IterStep { dst, iter_src, iter_dst, done_args, .. } => {
-            r(dst); r(iter_src); r(iter_dst);
+        InstKind::IterStep {
+            dst,
+            iter_src,
+            iter_dst,
+            done_args,
+            ..
+        } => {
+            r(dst);
+            r(iter_src);
+            r(iter_dst);
             done_args.iter_mut().for_each(&r);
         }
         InstKind::MakeVariant { dst, payload, .. } => {
             r(dst);
-            if let Some(v) = payload { r(v); }
+            if let Some(v) = payload {
+                r(v);
+            }
         }
-        InstKind::TestVariant { dst, src, .. } => { r(dst); r(src); }
-        InstKind::UnwrapVariant { dst, src } => { r(dst); r(src); }
+        InstKind::TestVariant { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
+        InstKind::UnwrapVariant { dst, src } => {
+            r(dst);
+            r(src);
+        }
         InstKind::BlockLabel { params, .. } => {
             params.iter_mut().for_each(&r);
         }
         InstKind::Jump { args, .. } => args.iter_mut().for_each(&r),
-        InstKind::JumpIf { cond, then_args, else_args, .. } => {
+        InstKind::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
             r(cond);
             then_args.iter_mut().for_each(&r);
             else_args.iter_mut().for_each(&r);
         }
         InstKind::Return(v) => r(v),
-        InstKind::Cast { dst, src, .. } => { r(dst); r(src); }
+        InstKind::Cast { dst, src, .. } => {
+            r(dst);
+            r(src);
+        }
         InstKind::Poison { dst, .. } => r(dst),
         InstKind::Nop => {}
     }

@@ -55,11 +55,6 @@ impl ValNormalizer {
     }
 }
 
-fn fmt_val_raw(r: ValueId) -> String {
-    use acvus_utils::LocalIdOps;
-    format!("r{}", r.to_raw())
-}
-
 fn fmt_label(l: Label) -> String {
     format!("L{}", l.0)
 }

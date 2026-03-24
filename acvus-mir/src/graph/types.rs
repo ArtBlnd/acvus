@@ -121,11 +121,17 @@ pub struct QualifiedRef {
 
 impl QualifiedRef {
     pub fn root(name: Astr) -> Self {
-        Self { namespace: None, name }
+        Self {
+            namespace: None,
+            name,
+        }
     }
 
     pub fn qualified(namespace: Astr, name: Astr) -> Self {
-        Self { namespace: Some(namespace), name }
+        Self {
+            namespace: Some(namespace),
+            name,
+        }
     }
 }
 
@@ -147,7 +153,10 @@ impl Context {
         // Note: namespace here is NamespaceId, but QualifiedRef uses Astr.
         // The graph must resolve NamespaceId → Astr for this.
         // For root contexts (namespace=None), this is straightforward.
-        QualifiedRef { namespace: None, name: self.name }
+        QualifiedRef {
+            namespace: None,
+            name: self.name,
+        }
     }
 }
 

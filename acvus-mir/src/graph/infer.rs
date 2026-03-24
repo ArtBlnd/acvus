@@ -754,8 +754,11 @@ pub fn infer(
     // Build name→QualifiedRef mapping, convert direct accesses (Astr) to QualifiedRef,
     // then propagate through call graph in SCC order (fixpoint within each SCC).
 
-    let name_to_qref: FxHashMap<Astr, QualifiedRef> =
-        graph.contexts.iter().map(|c| (c.name, c.qualified_ref())).collect();
+    let name_to_qref: FxHashMap<Astr, QualifiedRef> = graph
+        .contexts
+        .iter()
+        .map(|c| (c.name, c.qualified_ref()))
+        .collect();
 
     // Convert direct accesses: Astr → QualifiedRef and store in function meta.
     // Also union parameter effects (over-approximation: any effectful param contributes).

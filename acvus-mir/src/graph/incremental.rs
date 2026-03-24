@@ -105,14 +105,18 @@ impl IncrementalGraph {
         if let Some(ns) = self.namespaces.remove(&id) {
             self.name_to_ns.remove(&ns.name);
             // Remove all functions and contexts in this namespace.
-            let fn_ids: Vec<FunctionId> = self.functions.values()
+            let fn_ids: Vec<FunctionId> = self
+                .functions
+                .values()
                 .filter(|f| f.namespace == Some(id))
                 .map(|f| f.id)
                 .collect();
             for fid in fn_ids {
                 self.remove_function(fid);
             }
-            let ctx_refs: Vec<QualifiedRef> = self.contexts.iter()
+            let ctx_refs: Vec<QualifiedRef> = self
+                .contexts
+                .iter()
                 .filter(|(_, c)| c.namespace == Some(id))
                 .map(|(qref, _)| *qref)
                 .collect();
@@ -247,7 +251,9 @@ impl IncrementalGraph {
     }
 
     pub fn namespace_by_name(&self, name: Astr) -> Option<&Namespace> {
-        self.name_to_ns.get(&name).and_then(|id| self.namespaces.get(id))
+        self.name_to_ns
+            .get(&name)
+            .and_then(|id| self.namespaces.get(id))
     }
 
     // ── Resolution ───────────────────────────────────────────────────
@@ -282,9 +288,12 @@ impl IncrementalGraph {
 
     /// All contexts visible from a namespace (own namespace + root).
     /// Used by LSP for completions.
-    pub fn visible_contexts(&self, ns: Option<NamespaceId>) -> Vec<(Option<NamespaceId>, Astr, &Context)> {
-        self.contexts.iter()
-            .map(|(_, c)| c)
+    pub fn visible_contexts(
+        &self,
+        ns: Option<NamespaceId>,
+    ) -> Vec<(Option<NamespaceId>, Astr, &Context)> {
+        self.contexts
+            .values()
             .filter(|c| c.namespace.is_none() || c.namespace == ns)
             .map(|c| (c.namespace, c.name, c))
             .collect()
@@ -294,8 +303,12 @@ impl IncrementalGraph {
     /// - Root functions (unqualified)
     /// - Same-namespace functions (would need qualified, but are accessible)
     /// Used by LSP for completions.
-    pub fn visible_functions(&self, ns: Option<NamespaceId>) -> Vec<(Option<NamespaceId>, Astr, &Function)> {
-        self.functions.values()
+    pub fn visible_functions(
+        &self,
+        ns: Option<NamespaceId>,
+    ) -> Vec<(Option<NamespaceId>, Astr, &Function)> {
+        self.functions
+            .values()
             .filter(|f| f.namespace.is_none() || f.namespace == ns)
             .map(|f| (f.namespace, f.name, f))
             .collect()
@@ -326,7 +339,9 @@ impl IncrementalGraph {
             // Update call edges.
             // TODO: qualified call edges once AST supports ns:func() syntax.
             // For now, only unqualified (root) names are resolved.
-            let root_fn_names: FxHashMap<Astr, FunctionId> = self.name_to_fn.iter()
+            let root_fn_names: FxHashMap<Astr, FunctionId> = self
+                .name_to_fn
+                .iter()
                 .filter(|((ns, _), _)| ns.is_none())
                 .map(|((_, name), &id)| (*name, id))
                 .collect();
@@ -571,7 +586,9 @@ impl IncrementalGraph {
     fn propagate_effects(&mut self) {
         // TODO: namespace-aware context resolution once AST supports @ns:name.
         // For now, only root contexts are resolved by name.
-        let known_ctx_names: FxHashSet<Astr> = self.contexts.iter()
+        let known_ctx_names: FxHashSet<Astr> = self
+            .contexts
+            .iter()
             .filter(|(qref, _)| qref.namespace.is_none())
             .map(|(qref, _)| qref.name)
             .collect();

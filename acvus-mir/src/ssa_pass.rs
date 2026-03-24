@@ -6,8 +6,8 @@
 //! Write-back model: branch-internal ContextStores are removed;
 //! a single write-back ContextStore is inserted after each merge block.
 
-use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::cfg::{BlockIdx, Cfg, Terminator};
 use crate::graph::QualifiedRef;
@@ -211,102 +211,6 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
     }
 }
 
-// ── Step 0: Ensure initial loads ────────────────────────────────────
-
-/// Scan the MIR for all QualifiedRefs referenced by ContextProject.
-/// For any context that doesn't have a ContextLoad in the entry region
-/// (before the first BlockLabel), insert ContextProject + ContextLoad.
-fn ensure_initial_loads(body: &mut MirBody) {
-    // Find the first BlockLabel position — everything before it is the entry region.
-    let first_label_pos = body
-        .insts
-        .iter()
-        .position(|i| matches!(&i.kind, InstKind::BlockLabel { .. }))
-        .unwrap_or(body.insts.len());
-
-    // Collect all referenced QualifiedRefs and which ones already have loads in entry.
-    let mut all_ctx_ids: FxHashSet<QualifiedRef> = FxHashSet::default();
-    let mut ctx_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-    let mut entry_loaded: FxHashSet<QualifiedRef> = FxHashSet::default();
-    let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
-
-    for (i, inst) in body.insts.iter().enumerate() {
-        match &inst.kind {
-            InstKind::ContextProject { dst, ctx } => {
-                all_ctx_ids.insert(*ctx);
-                if let Some(ty) = body.val_types.get(dst) {
-                    ctx_types.entry(*ctx).or_insert_with(|| ty.clone());
-                }
-                val_to_ctx.insert(*dst, *ctx);
-            }
-            InstKind::ContextLoad { src, .. } if i < first_label_pos => {
-                if let Some(&ctx_id) = val_to_ctx.get(src) {
-                    entry_loaded.insert(ctx_id);
-                }
-            }
-            InstKind::FieldGet { dst, object, .. } => {
-                if let Some(&ctx_id) = val_to_ctx.get(object) {
-                    val_to_ctx.insert(*dst, ctx_id);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Insert initial loads for contexts that don't have one.
-    // Collect missing contexts in order of first appearance (deterministic).
-    let mut seen = FxHashSet::default();
-    let mut missing: Vec<QualifiedRef> = Vec::new();
-    for inst in body.insts.iter() {
-        if let InstKind::ContextProject { ctx, .. } = &inst.kind
-            && all_ctx_ids.contains(ctx)
-            && !entry_loaded.contains(ctx)
-            && seen.insert(*ctx)
-        {
-            missing.push(*ctx);
-        }
-    }
-    if missing.is_empty() {
-        return;
-    }
-
-    let span = body
-        .insts
-        .first()
-        .map(|i| i.span)
-        .unwrap_or(acvus_ast::Span::new(0, 0));
-
-    // Insert at position 0 (before all other instructions).
-    let mut prefix = Vec::with_capacity(missing.len() * 2);
-    for ctx_id in missing {
-        let ty = ctx_types
-            .get(&ctx_id)
-            .expect("missing ty for context")
-            .clone();
-        let proj = body.val_factory.next();
-        body.val_types.insert(proj, ty.clone());
-        prefix.push(Inst {
-            span,
-            kind: InstKind::ContextProject {
-                dst: proj,
-                ctx: ctx_id,
-            },
-        });
-        let val = body.val_factory.next();
-        body.val_types.insert(val, ty);
-        prefix.push(Inst {
-            span,
-            kind: InstKind::ContextLoad {
-                dst: val,
-                src: proj,
-            },
-        });
-    }
-
-    prefix.append(&mut body.insts);
-    body.insts = prefix;
-}
-
 // ── Step 1: Context info collection ─────────────────────────────────
 
 /// Per-block context operations.
@@ -326,7 +230,11 @@ struct ContextInfo {
     ctx_types: FxHashMap<QualifiedRef, Ty>,
 }
 
-fn collect_context_info(cfg: &Cfg, insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> ContextInfo {
+fn collect_context_info(
+    cfg: &Cfg,
+    insts: &[Inst],
+    val_types: &FxHashMap<ValueId, Ty>,
+) -> ContextInfo {
     let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     let mut written_contexts = FxHashSet::default();
     let mut block_ops: FxHashMap<BlockIdx, BlockContextOps> = FxHashMap::default();
@@ -479,10 +387,7 @@ fn patch_instructions(
     for (&label, phis) in &block_phis {
         for phi in phis {
             for &(pred, val) in &phi.incoming {
-                jump_extra_args
-                    .entry((pred, label))
-                    .or_default()
-                    .push(val);
+                jump_extra_args.entry((pred, label)).or_default().push(val);
             }
         }
     }
