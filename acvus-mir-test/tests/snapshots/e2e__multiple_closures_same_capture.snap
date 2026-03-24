@@ -26,20 +26,20 @@ expression: ir
     ; r1 (v1) : List<Int>
     ; r2 (@offset) : <error>
     ; r3 (v3) : Int
-    ; r14 (v4) : String
-    ; r15 (@items) : List<Int>
-    ; r16 (v6) : List<Int>
     ; r4 (iter(...)) : Iterator<Int>
     ; r5 (v8) : Fn!(Int) -> Int
     ; r6 (map(...)) : Iterator!<Int>
     ; r7 (v10) : Fn(Int) -> Bool
     ; r8 (filter(...)) : Iterator!<Int>
     ; r9 (collect(...)) : List<Int>
-    ; r17 (v13) : String
     ; r10 (v14) : String
     ; r11 (len(...)) : Int
     ; r12 (to_string(...)) : String
     ; r13 (v17) : String
+    ; r14 (v6) : List<Int>
+    ; r15 (v4) : String
+    ; r16 (v13) : String
+    ; r17 (@items) : List<Int>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = context_project @offset
@@ -47,15 +47,15 @@ expression: ir
      2 │   r2 = r3 + r1
      3 │   return r2
 
-    ; r3 (v0) : Int
     ; r0 (@offset) : Int
     ; r1 (v2) : Int
     ; r2 (v3) : Int
+    ; r3 (v0) : Int
 
 === closure L1 (ValueId(0)) ===
      1 │   r0 = r1 > 0 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Bool
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Bool

@@ -25,17 +25,17 @@ expression: ir
 
     ; r0 (@pair) : <error>
     ; r1 (v1) : ({name: String}, Int)
-    ; r11 (v2) : String
-    ; r12 (@pair) : ({name: String}, Int)
-    ; r13 (v4) : ({name: String}, Int)
-    ; r4 (v5) : Bool
     ; r2 (v6) : {name: String}
-    ; r5 (v7) : Bool
     ; r3 (v8) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v7) : Bool
     ; r6 (obj) : {name: String}
-    ; r14 (v10) : String
     ; r7 (name) : String
     ; r8 (v12) : String
-    ; r15 (v13) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
+    ; r11 (@pair) : ({name: String}, Int)
+    ; r12 (v4) : ({name: String}, Int)
+    ; r13 (v10) : String
+    ; r14 (v2) : String
+    ; r15 (v13) : String

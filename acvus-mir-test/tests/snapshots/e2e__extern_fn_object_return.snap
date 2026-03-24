@@ -16,12 +16,12 @@ expression: ir
 
     ; r0 (@get_user) : <error>
     ; r1 (v1) : Fn(Int) -> {age: Int, name: String}
-    ; r7 (v2) : String
-    ; r3 (v3) : Int
     ; r2 (<closure>(...)) : {age: Int, name: String}
-    ; r8 (@get_user) : Fn(Int) -> {age: Int, name: String}
-    ; r9 (v6) : Fn(Int) -> {age: Int, name: String}
-    ; r10 (v7) : String
+    ; r3 (v3) : Int
     ; r4 (v8) : String
     ; r5 (name) : String
     ; r6 (v10) : String
+    ; r7 (v7) : String
+    ; r8 (v6) : Fn(Int) -> {age: Int, name: String}
+    ; r9 (v2) : String
+    ; r10 (@get_user) : Fn(Int) -> {age: Int, name: String}

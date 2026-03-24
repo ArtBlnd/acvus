@@ -10,6 +10,6 @@ expression: ir
 
     ; r0 (@val) : String
     ; r1 (v1) : Int
-    ; r3 (@val) : Int
-    ; r4 (v3) : Int
     ; r2 (to_string(...)) : String
+    ; r3 (v3) : Int
+    ; r4 (@val) : Int

@@ -36,23 +36,16 @@ expression: ir
 
     ; r0 (@matrix) : <error>
     ; r1 (v1) : List<List<Int>>
-    ; r22 (v2) : String
-    ; r23 (@matrix) : List<List<Int>>
-    ; r24 (v4) : List<List<Int>>
     ; r2 (v5) : Iterator<List<Int>>
-    ; r25 (v6) : String
     ; r3 (v7) : Iterator<List<Int>>
     ; r4 (v8) : String
     ; r5 (row) : List<Int>
     ; r6 (v10) : Iterator<List<Int>>
-    ; r26 (v11) : String
     ; r7 (v12) : Iterator<Int>
-    ; r27 (v13) : String
     ; r8 (v14) : Iterator<Int>
     ; r9 (v15) : String
     ; r10 (x) : Int
     ; r11 (v17) : Iterator<Int>
-    ; r28 (v18) : String
     ; r12 (to_string(...)) : String
     ; r13 (v20) : String
     ; r14 (v21) : String
@@ -63,3 +56,10 @@ expression: ir
     ; r19 (v26) : String
     ; r20 (v27) : String
     ; r21 (v28) : String
+    ; r22 (@matrix) : List<List<Int>>
+    ; r23 (v6) : String
+    ; r24 (v11) : String
+    ; r25 (v18) : String
+    ; r26 (v2) : String
+    ; r27 (v4) : List<List<Int>>
+    ; r28 (v13) : String

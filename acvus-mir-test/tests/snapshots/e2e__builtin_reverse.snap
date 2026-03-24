@@ -26,20 +26,20 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r14 (v2) : String
-    ; r15 (@items) : List<Int>
-    ; r16 (v4) : List<Int>
     ; r2 (reverse(...)) : List<Int>
     ; r3 (v6) : Iterator<Int>
-    ; r17 (v7) : String
     ; r4 (v8) : Iterator<Int>
     ; r5 (v9) : String
     ; r6 (x) : Int
     ; r7 (v11) : Iterator<Int>
-    ; r18 (v12) : String
     ; r8 (to_string(...)) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
     ; r11 (v16) : String
     ; r12 (v17) : String
     ; r13 (v18) : String
+    ; r14 (@items) : List<Int>
+    ; r15 (v12) : String
+    ; r16 (v4) : List<Int>
+    ; r17 (v7) : String
+    ; r18 (v2) : String

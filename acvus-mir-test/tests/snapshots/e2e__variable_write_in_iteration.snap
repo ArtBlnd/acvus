@@ -28,17 +28,11 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r15 (v2) : String
-    ; r16 (@items) : List<Int>
-    ; r17 (v4) : List<Int>
     ; r2 (v5) : Iterator<Int>
-    ; r18 (v6) : String
     ; r3 (v7) : Iterator<Int>
     ; r4 (v8) : String
     ; r5 (x) : Int
     ; r6 (v10) : Iterator<Int>
-    ; r19 (v11) : String
-    ; r20 (v12) : String
     ; r7 (v13) : String
     ; r8 (v14) : String
     ; r9 (v15) : String
@@ -47,3 +41,9 @@ expression: ir
     ; r12 ($last) : Int
     ; r13 (to_string(...)) : String
     ; r14 (v20) : String
+    ; r15 (v11) : String
+    ; r16 (@items) : List<Int>
+    ; r17 (v6) : String
+    ; r18 (v4) : List<Int>
+    ; r19 (v2) : String
+    ; r20 (v12) : String

@@ -22,27 +22,27 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r12 (v2) : String
     ; r2 (v3) : Int
-    ; r13 (v4) : String
     ; r3 (v5) : String
-    ; r14 (@items) : List<Int>
-    ; r15 (v7) : List<Int>
     ; r4 (iter(...)) : Iterator<Int>
     ; r5 (v9) : Fn(Int) -> Bool
     ; r6 (filter(...)) : Iterator<Int>
     ; r7 (collect(...)) : List<Int>
-    ; r16 (v12) : String
     ; r8 (v13) : String
     ; r9 (len(...)) : Int
     ; r10 (to_string(...)) : String
     ; r11 (v16) : String
+    ; r12 (@items) : List<Int>
+    ; r13 (v12) : String
+    ; r14 (v4) : String
+    ; r15 (v7) : List<Int>
+    ; r16 (v2) : String
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = var_load $offset
      1 │   r1 = r2 > r0
      2 │   return r1
 
-    ; r2 (v0) : Int
     ; r0 ($offset) : Int
     ; r1 (v2) : Bool
+    ; r2 (v0) : Int

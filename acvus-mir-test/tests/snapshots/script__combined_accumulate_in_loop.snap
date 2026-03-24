@@ -39,26 +39,26 @@ expression: ir
     ; r3 (v3) : Int
     ; r4 (@sum) : <error>
     ; r5 (v5) : Int
-    ; r25 (@items) : List<Int>
-    ; r26 (v7) : List<Int>
     ; r6 (v8) : Iterator<Int>
     ; r7 (v9) : Iterator<Int>
+    ; r8 (v25) : Int
+    ; r9 (v26) : Int
+    ; r10 (v27) : Int
+    ; r11 (v28) : Int
     ; r12 (x) : Int
     ; r13 (v11) : Iterator<Int>
     ; r14 (@sum) : Int
     ; r15 (v13) : Int
     ; r16 (v14) : Int
-    ; r27 (v15) : Int
     ; r17 (@product) : Int
     ; r18 (v17) : Int
     ; r19 (v18) : Int
-    ; r28 (v19) : Int
     ; r20 (@sum) : Int
     ; r21 (v21) : Int
     ; r22 (@product) : Int
     ; r23 (v23) : Int
     ; r24 (v24) : Int
-    ; r8 (v25) : Int
-    ; r9 (v26) : Int
-    ; r10 (v27) : Int
-    ; r11 (v28) : Int
+    ; r25 (@items) : List<Int>
+    ; r26 (v15) : Int
+    ; r27 (v7) : List<Int>
+    ; r28 (v19) : Int

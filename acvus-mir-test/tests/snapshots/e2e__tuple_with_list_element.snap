@@ -40,33 +40,33 @@ expression: ir
 
     ; r0 (@data) : <error>
     ; r1 (v1) : (String, List<Int>)
-    ; r25 (v2) : String
-    ; r26 (@data) : (String, List<Int>)
-    ; r27 (v4) : (String, List<Int>)
-    ; r4 (v5) : Bool
     ; r2 (v6) : String
-    ; r5 (v7) : Bool
     ; r3 (v8) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v7) : Bool
     ; r6 (v9) : List<Int>
-    ; r8 (v10) : Bool
     ; r7 (v11) : Bool
+    ; r8 (v10) : Bool
     ; r9 (label) : String
     ; r10 (items) : List<Int>
-    ; r28 (v14) : String
     ; r11 (v15) : String
     ; r12 (v16) : Iterator<Int>
-    ; r29 (v17) : String
     ; r13 (v18) : Iterator<Int>
     ; r14 (v19) : String
     ; r15 (x) : Int
     ; r16 (v21) : Iterator<Int>
-    ; r30 (v22) : String
     ; r17 (to_string(...)) : String
     ; r18 (v24) : String
     ; r19 (v25) : String
     ; r20 (v26) : String
     ; r21 (v27) : String
     ; r22 (v28) : String
-    ; r31 (v29) : String
     ; r23 (v30) : String
     ; r24 (v31) : String
+    ; r25 (v22) : String
+    ; r26 (@data) : (String, List<Int>)
+    ; r27 (v14) : String
+    ; r28 (v17) : String
+    ; r29 (v2) : String
+    ; r30 (v4) : (String, List<Int>)
+    ; r31 (v29) : String

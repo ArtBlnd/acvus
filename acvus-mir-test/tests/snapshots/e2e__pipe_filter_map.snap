@@ -22,33 +22,33 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r12 (v2) : String
-    ; r13 (@items) : List<Int>
-    ; r14 (v4) : List<Int>
     ; r2 (iter(...)) : Iterator<Int>
     ; r3 (v6) : Fn(Int) -> Bool
     ; r4 (filter(...)) : Iterator<Int>
     ; r5 (v8) : Fn(Int) -> Int
     ; r6 (map(...)) : Iterator<Int>
     ; r7 (collect(...)) : List<Int>
-    ; r15 (v11) : String
     ; r8 (v12) : String
     ; r9 (len(...)) : Int
     ; r10 (to_string(...)) : String
     ; r11 (v15) : String
+    ; r12 (v11) : String
+    ; r13 (@items) : List<Int>
+    ; r14 (v4) : List<Int>
+    ; r15 (v2) : String
 
 === closure L0 (ValueId(0)) ===
      1 │   r0 = r1 != 0 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Bool
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Bool
 
 === closure L1 (ValueId(0)) ===
      1 │   r0 = r1 + 1 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Int
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Int

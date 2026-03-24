@@ -27,20 +27,20 @@ expression: ir
 
     ; r0 (@pair) : <error>
     ; r1 (v1) : (String, Int)
-    ; r14 (v2) : String
-    ; r15 (@pair) : (String, Int)
-    ; r16 (v4) : (String, Int)
-    ; r4 (v5) : Bool
     ; r2 (v6) : String
-    ; r5 (v7) : Bool
     ; r3 (v8) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v7) : Bool
     ; r6 (v9) : Int
-    ; r8 (v10) : Bool
     ; r7 (v11) : Bool
+    ; r8 (v10) : Bool
     ; r9 (name) : String
     ; r10 (age) : Int
-    ; r17 (v14) : String
     ; r11 (v15) : String
-    ; r18 (v16) : String
     ; r12 (v17) : String
     ; r13 (v18) : String
+    ; r14 (@pair) : (String, Int)
+    ; r15 (v14) : String
+    ; r16 (v4) : (String, Int)
+    ; r17 (v2) : String
+    ; r18 (v16) : String

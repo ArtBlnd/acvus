@@ -31,25 +31,25 @@ expression: ir
 
     ; r0 (@data) : <error>
     ; r1 (v1) : (String, {x: Int})
-    ; r19 (v2) : String
-    ; r20 (@data) : (String, {x: Int})
-    ; r21 (v4) : (String, {x: Int})
-    ; r4 (v5) : Bool
     ; r2 (v6) : String
-    ; r5 (v7) : Bool
     ; r3 (v8) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v7) : Bool
     ; r6 (v9) : {x: Int}
-    ; r10 (v10) : Bool
     ; r7 (v11) : Bool
     ; r8 (v12) : Int
-    ; r11 (v13) : Bool
     ; r9 (v14) : Bool
+    ; r10 (v10) : Bool
+    ; r11 (v13) : Bool
     ; r12 (v15) : Bool
     ; r13 (label) : String
     ; r14 (v17) : {x: Int}
     ; r15 (x) : Int
-    ; r22 (v19) : String
     ; r16 (v20) : String
-    ; r23 (v21) : String
     ; r17 (v22) : String
     ; r18 (v23) : String
+    ; r19 (@data) : (String, {x: Int})
+    ; r20 (v4) : (String, {x: Int})
+    ; r21 (v21) : String
+    ; r22 (v2) : String
+    ; r23 (v19) : String

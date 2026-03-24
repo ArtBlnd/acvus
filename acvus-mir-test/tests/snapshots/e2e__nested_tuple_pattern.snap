@@ -33,28 +33,28 @@ expression: ir
 
     ; r0 (@data) : <error>
     ; r1 (v1) : ((Int, Int), String)
-    ; r22 (v2) : String
-    ; r23 (@data) : ((Int, Int), String)
-    ; r24 (v4) : ((Int, Int), String)
-    ; r11 (v5) : Bool
     ; r2 (v6) : (Int, Int)
-    ; r5 (v7) : Bool
     ; r3 (v8) : Int
-    ; r6 (v9) : Bool
     ; r4 (v10) : Bool
+    ; r5 (v7) : Bool
+    ; r6 (v9) : Bool
     ; r7 (v11) : Int
-    ; r9 (v12) : Bool
     ; r8 (v13) : Bool
+    ; r9 (v12) : Bool
     ; r10 (v14) : Bool
+    ; r11 (v5) : Bool
     ; r12 (v15) : String
-    ; r14 (v16) : Bool
     ; r13 (v17) : Bool
+    ; r14 (v16) : Bool
     ; r15 (v18) : (Int, Int)
     ; r16 (a) : Int
     ; r17 (b) : Int
     ; r18 (label) : String
-    ; r25 (v22) : String
     ; r19 (v23) : String
-    ; r26 (v24) : String
     ; r20 (v25) : String
     ; r21 (v26) : String
+    ; r22 (@data) : ((Int, Int), String)
+    ; r23 (v22) : String
+    ; r24 (v4) : ((Int, Int), String)
+    ; r25 (v2) : String
+    ; r26 (v24) : String

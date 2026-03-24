@@ -29,19 +29,19 @@ expression: ir
 
     ; r0 (@role) : <error>
     ; r1 (v1) : String
-    ; r9 (v2) : String
-    ; r10 (@role) : String
-    ; r11 (v4) : String
     ; r2 (v5) : Bool
-    ; r12 (v6) : String
-    ; r13 (v7) : String
-    ; r14 (v8) : String
     ; r3 (v9) : String
-    ; r15 (v10) : String
-    ; r16 (v11) : String
-    ; r17 (v12) : String
     ; r4 (v13) : String
     ; r5 (v14) : String
     ; r6 (v15) : String
     ; r7 ($selected) : String
     ; r8 (v17) : String
+    ; r9 (v11) : String
+    ; r10 (@role) : String
+    ; r11 (v6) : String
+    ; r12 (v12) : String
+    ; r13 (v4) : String
+    ; r14 (v7) : String
+    ; r15 (v10) : String
+    ; r16 (v2) : String
+    ; r17 (v8) : String

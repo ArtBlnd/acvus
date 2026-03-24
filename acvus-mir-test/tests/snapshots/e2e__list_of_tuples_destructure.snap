@@ -26,20 +26,20 @@ expression: ir
 
     ; r0 (@pairs) : <error>
     ; r1 (v1) : List<(String, Int)>
-    ; r14 (v2) : String
-    ; r15 (@pairs) : List<(String, Int)>
-    ; r16 (v4) : List<(String, Int)>
     ; r2 (v5) : Iterator<(String, Int)>
-    ; r17 (v6) : String
     ; r3 (v7) : Iterator<(String, Int)>
     ; r4 (v8) : String
     ; r5 (v9) : (String, Int)
     ; r6 (v10) : Iterator<(String, Int)>
     ; r7 (name) : String
     ; r8 (age) : Int
-    ; r18 (v13) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
     ; r11 (v16) : String
     ; r12 (v17) : String
     ; r13 (v18) : String
+    ; r14 (@pairs) : List<(String, Int)>
+    ; r15 (v6) : String
+    ; r16 (v4) : List<(String, Int)>
+    ; r17 (v2) : String
+    ; r18 (v13) : String

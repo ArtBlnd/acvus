@@ -14,10 +14,10 @@ expression: ir
      6 │   r2 = T0 + r1
      7 │   return r2
 
-    ; r3 (v0) : String
-    ; r4 (v1) : String
-    ; r5 (v2) : String
     ; r0 (v3) : String
-    ; r6 (v4) : String
     ; r1 (v5) : String
     ; r2 (v6) : String
+    ; r3 (v0) : String
+    ; r4 (v1) : String
+    ; r5 (v4) : String
+    ; r6 (v2) : String

@@ -29,22 +29,22 @@ expression: ir
 
     ; r0 (@user) : <error>
     ; r1 (v1) : {age: Int, email: String, name: String}
-    ; r16 (v2) : String
-    ; r17 (@user) : {age: Int, email: String, name: String}
-    ; r18 (v4) : {age: Int, email: String, name: String}
-    ; r5 (v5) : Bool
     ; r2 (v6) : Bool
     ; r3 (v7) : String
-    ; r6 (v8) : Bool
     ; r4 (v9) : Bool
+    ; r5 (v5) : Bool
+    ; r6 (v8) : Bool
     ; r7 (v10) : Bool
     ; r8 (v11) : Int
-    ; r10 (v12) : Bool
     ; r9 (v13) : Bool
+    ; r10 (v12) : Bool
     ; r11 (name) : String
     ; r12 (age) : Int
-    ; r19 (v16) : String
     ; r13 (v17) : String
-    ; r20 (v18) : String
     ; r14 (v19) : String
     ; r15 (v20) : String
+    ; r16 (@user) : {age: Int, email: String, name: String}
+    ; r17 (v4) : {age: Int, email: String, name: String}
+    ; r18 (v18) : String
+    ; r19 (v2) : String
+    ; r20 (v16) : String

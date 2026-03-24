@@ -13,17 +13,17 @@ expression: ir
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
-    ; r6 (@items) : List<Int>
-    ; r7 (v3) : List<Int>
     ; r2 (v4) : Iterator<Int>
     ; r3 (v5) : Fn(Int) -> Bool
     ; r4 (filter(...)) : Iterator<Int>
     ; r5 (collect(...)) : List<Int>
+    ; r6 (v3) : List<Int>
+    ; r7 (@items) : List<Int>
 
 === closure L0 (ValueId(0)) ===
      1 │   r0 = r1 > 0 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Bool
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Bool

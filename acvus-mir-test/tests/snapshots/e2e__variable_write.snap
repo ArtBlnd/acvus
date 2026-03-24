@@ -10,7 +10,7 @@ expression: ir
      4 │   r1 = T0 + T0
      5 │   return r1
 
-    ; r2 (v0) : String
     ; r0 (v1) : Int
-    ; r3 (v2) : String
     ; r1 (v3) : String
+    ; r2 (v0) : String
+    ; r3 (v2) : String

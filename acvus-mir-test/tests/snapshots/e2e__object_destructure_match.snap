@@ -33,26 +33,26 @@ expression: ir
 
     ; r0 (@user) : <error>
     ; r1 (v1) : {age: Int, email: String, name: String}
-    ; r19 (v2) : String
-    ; r20 (@user) : {age: Int, email: String, name: String}
-    ; r21 (v4) : {age: Int, email: String, name: String}
-    ; r5 (v5) : Bool
     ; r2 (v6) : Bool
     ; r3 (v7) : String
-    ; r6 (v8) : Bool
     ; r4 (v9) : Bool
+    ; r5 (v5) : Bool
+    ; r6 (v8) : Bool
     ; r7 (v10) : Bool
     ; r8 (v11) : Int
-    ; r10 (v12) : Bool
     ; r9 (v13) : Bool
+    ; r10 (v12) : Bool
     ; r11 (name) : String
     ; r12 (age) : Int
-    ; r22 (v16) : String
     ; r13 (v17) : String
     ; r14 (to_string(...)) : String
     ; r15 (v19) : String
-    ; r23 (v20) : String
-    ; r24 (v21) : String
     ; r16 (v22) : String
     ; r17 (v23) : String
     ; r18 (v24) : String
+    ; r19 (@user) : {age: Int, email: String, name: String}
+    ; r20 (v4) : {age: Int, email: String, name: String}
+    ; r21 (v21) : String
+    ; r22 (v2) : String
+    ; r23 (v20) : String
+    ; r24 (v16) : String

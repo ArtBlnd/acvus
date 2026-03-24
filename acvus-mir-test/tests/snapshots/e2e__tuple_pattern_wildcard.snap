@@ -24,16 +24,16 @@ expression: ir
 
     ; r0 (@pair) : <error>
     ; r1 (v1) : (String, Int)
-    ; r10 (v2) : String
-    ; r11 (@pair) : (String, Int)
-    ; r12 (v4) : (String, Int)
-    ; r4 (v5) : Bool
     ; r2 (v6) : String
-    ; r5 (v7) : Bool
     ; r3 (v8) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v7) : Bool
     ; r6 (name) : String
-    ; r13 (v10) : String
     ; r7 (v11) : String
-    ; r14 (v12) : String
     ; r8 (v13) : String
     ; r9 (v14) : String
+    ; r10 (@pair) : (String, Int)
+    ; r11 (v12) : String
+    ; r12 (v4) : (String, Int)
+    ; r13 (v10) : String
+    ; r14 (v2) : String

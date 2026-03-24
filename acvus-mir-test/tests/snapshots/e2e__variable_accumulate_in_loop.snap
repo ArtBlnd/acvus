@@ -32,22 +32,15 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r19 (v2) : String
     ; r2 (v3) : Int
-    ; r20 (v4) : String
     ; r3 (v5) : String
-    ; r21 (@items) : List<Int>
-    ; r22 (v7) : List<Int>
     ; r4 (v8) : Iterator<Int>
-    ; r23 (v9) : String
     ; r5 (v10) : Iterator<Int>
     ; r6 (v11) : String
     ; r7 (x) : Int
     ; r8 (v13) : Iterator<Int>
-    ; r24 (v14) : String
     ; r9 ($sum) : Int
     ; r10 (v16) : Int
-    ; r25 (v17) : String
     ; r11 (v18) : String
     ; r12 (v19) : String
     ; r13 (v20) : String
@@ -56,3 +49,10 @@ expression: ir
     ; r16 ($sum) : Int
     ; r17 (to_string(...)) : String
     ; r18 (v25) : String
+    ; r19 (v14) : String
+    ; r20 (@items) : List<Int>
+    ; r21 (v17) : String
+    ; r22 (v4) : String
+    ; r23 (v7) : List<Int>
+    ; r24 (v2) : String
+    ; r25 (v9) : String

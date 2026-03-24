@@ -11,7 +11,7 @@ expression: ir
 
     ; r0 (@x) : <error>
     ; r1 (v1) : Int
-    ; r3 (v2) : Int
     ; r2 (v3) : Int
-    ; r4 (@x) : Int
-    ; r5 (v5) : Int
+    ; r3 (v2) : Int
+    ; r4 (v5) : Int
+    ; r5 (@x) : Int

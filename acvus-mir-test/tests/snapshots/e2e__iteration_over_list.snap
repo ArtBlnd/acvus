@@ -25,19 +25,19 @@ expression: ir
 
     ; r0 (@users) : <error>
     ; r1 (v1) : List<{age: Int, name: String}>
-    ; r13 (v2) : String
-    ; r14 (@users) : List<{age: Int, name: String}>
-    ; r15 (v4) : List<{age: Int, name: String}>
     ; r2 (v5) : Iterator<{age: Int, name: String}>
-    ; r16 (v6) : String
     ; r3 (v7) : Iterator<{age: Int, name: String}>
     ; r4 (v8) : String
     ; r5 (v9) : {age: Int, name: String}
     ; r6 (v10) : Iterator<{age: Int, name: String}>
     ; r7 (name) : String
-    ; r17 (v12) : String
     ; r8 (v13) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
     ; r11 (v16) : String
     ; r12 (v17) : String
+    ; r13 (@users) : List<{age: Int, name: String}>
+    ; r14 (v6) : String
+    ; r15 (v12) : String
+    ; r16 (v4) : List<{age: Int, name: String}>
+    ; r17 (v2) : String

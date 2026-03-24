@@ -19,21 +19,21 @@ expression: ir
 
     ; r0 (@users) : <error>
     ; r1 (v1) : List<{age: Int, name: String}>
-    ; r8 (v2) : String
-    ; r9 (@users) : List<{age: Int, name: String}>
-    ; r10 (v4) : List<{age: Int, name: String}>
     ; r2 (iter(...)) : Iterator<{age: Int, name: String}>
     ; r3 (v6) : Fn({age: Int, name: String}) -> String
     ; r4 (map(...)) : Iterator<String>
-    ; r11 (v8) : String
     ; r5 (v9) : String
-    ; r12 (v10) : String
     ; r6 (join(...)) : String
     ; r7 (v12) : String
+    ; r8 (@users) : List<{age: Int, name: String}>
+    ; r9 (v10) : String
+    ; r10 (v2) : String
+    ; r11 (v8) : String
+    ; r12 (v4) : List<{age: Int, name: String}>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = r1.name
      1 │   return r0
 
-    ; r1 (v0) : {age: Int, name: String}
     ; r0 (name) : String
+    ; r1 (v0) : {age: Int, name: String}

@@ -20,12 +20,12 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (@x) : <error>
     ; r3 (v3) : Int
-    ; r8 (@cond) : Int
-    ; r9 (v5) : Int
     ; r4 (v6) : Bool
     ; r5 (v7) : Int
-    ; r10 (v8) : Int
-    ; r11 (@x) : Int
-    ; r12 (v10) : Int
     ; r6 (v11) : Int
     ; r7 (v12) : Int
+    ; r8 (v10) : Int
+    ; r9 (@x) : Int
+    ; r10 (v5) : Int
+    ; r11 (v8) : Int
+    ; r12 (@cond) : Int

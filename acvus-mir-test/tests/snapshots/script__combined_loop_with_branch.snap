@@ -34,21 +34,21 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (@items) : <error>
     ; r3 (v3) : List<Int>
-    ; r19 (@items) : List<Int>
-    ; r20 (v5) : List<Int>
     ; r4 (v6) : Iterator<Int>
     ; r5 (v7) : Iterator<Int>
+    ; r6 (v18) : Int
+    ; r7 (v20) : Int
     ; r8 (x) : Int
     ; r9 (v9) : Iterator<Int>
     ; r10 (v10) : Bool
     ; r11 (@count) : Int
     ; r12 (v12) : Int
-    ; r14 (v13) : Int
     ; r13 (v14) : Int
-    ; r21 (v15) : Int
+    ; r14 (v13) : Int
+    ; r15 (v19) : Int
+    ; r16 (v21) : Int
     ; r17 (@count) : Int
     ; r18 (v17) : Int
-    ; r6 (v18) : Int
-    ; r15 (v19) : Int
-    ; r7 (v20) : Int
-    ; r16 (v21) : Int
+    ; r19 (v15) : Int
+    ; r20 (v5) : List<Int>
+    ; r21 (@items) : List<Int>

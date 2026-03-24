@@ -14,14 +14,14 @@ expression: ir
     10 │   r8 = r4 + r7
     11 │   return r8
 
-    ; r9 (v0) : String
+    ; r0 (v4) : Deque<Int, Origin(0)>
     ; r1 (v1) : Int
     ; r2 (v2) : Int
     ; r3 (v3) : Int
-    ; r0 (v4) : Deque<Int, Origin(0)>
-    ; r10 (v5) : String
     ; r4 (v6) : String
     ; r5 (v7) : List<Int>
     ; r6 (len(...)) : Int
     ; r7 (to_string(...)) : String
     ; r8 (v10) : String
+    ; r9 (v0) : String
+    ; r10 (v5) : String

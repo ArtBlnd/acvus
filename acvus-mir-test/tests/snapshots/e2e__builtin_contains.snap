@@ -16,11 +16,11 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r6 (v2) : String
-    ; r7 (@items) : List<Int>
-    ; r8 (v4) : List<Int>
     ; r2 (v5) : Iterator<Int>
-    ; r9 (v6) : Int
     ; r3 (contains(...)) : Bool
     ; r4 (to_string(...)) : String
     ; r5 (v9) : String
+    ; r6 (@items) : List<Int>
+    ; r7 (v6) : Int
+    ; r8 (v2) : String
+    ; r9 (v4) : List<Int>

@@ -14,8 +14,8 @@ expression: ir
 
     ; r0 (@n) : <error>
     ; r1 (v1) : Int
-    ; r4 (v2) : String
-    ; r5 (@n) : Int
-    ; r6 (v4) : Int
     ; r2 (to_string(...)) : String
     ; r3 (v6) : String
+    ; r4 (@n) : Int
+    ; r5 (v4) : Int
+    ; r6 (v2) : String

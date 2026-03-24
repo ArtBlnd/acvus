@@ -16,10 +16,10 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (@out) : <error>
     ; r3 (v3) : Int
-    ; r7 (@data) : Int
-    ; r8 (x) : Int
-    ; r5 (v6) : Int
     ; r4 (v7) : Int
+    ; r5 (v6) : Int
     ; r6 (v8) : Int
-    ; r9 (@out) : Int
-    ; r10 (v10) : Int
+    ; r7 (v10) : Int
+    ; r8 (@out) : Int
+    ; r9 (x) : Int
+    ; r10 (@data) : Int

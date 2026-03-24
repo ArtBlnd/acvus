@@ -13,10 +13,10 @@ expression: ir
      7 │   r4 = r1 + r3
      8 │   return r4
 
-    ; r5 (v0) : String
     ; r0 (v1) : Int
-    ; r6 (v2) : String
     ; r1 (v3) : String
     ; r2 ($x) : Int
     ; r3 (to_string(...)) : String
     ; r4 (v6) : String
+    ; r5 (v0) : String
+    ; r6 (v2) : String

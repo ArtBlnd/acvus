@@ -20,23 +20,23 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r10 (v2) : String
-    ; r11 (@items) : List<Int>
-    ; r12 (v4) : List<Int>
     ; r2 (iter(...)) : Iterator<Int>
     ; r3 (v6) : Fn(Int) -> Bool
     ; r4 (filter(...)) : Iterator<Int>
     ; r5 (collect(...)) : List<Int>
-    ; r13 (v9) : String
     ; r6 (v10) : String
     ; r7 (len(...)) : Int
     ; r8 (to_string(...)) : String
     ; r9 (v13) : String
+    ; r10 (@items) : List<Int>
+    ; r11 (v2) : String
+    ; r12 (v9) : String
+    ; r13 (v4) : List<Int>
 
 === closure L0 (ValueId(0)) ===
      1 │   r0 = r1 > 0 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Bool
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Bool

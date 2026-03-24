@@ -38,26 +38,19 @@ expression: ir
 
     ; r0 (@users) : <error>
     ; r1 (v1) : List<{name: String, posts: List<{title: String}>}>
-    ; r24 (v2) : String
-    ; r25 (@users) : List<{name: String, posts: List<{title: String}>}>
-    ; r26 (v4) : List<{name: String, posts: List<{title: String}>}>
     ; r2 (v5) : Iterator<{name: String, posts: List<{title: String}>}>
-    ; r27 (v6) : String
     ; r3 (v7) : Iterator<{name: String, posts: List<{title: String}>}>
     ; r4 (v8) : String
     ; r5 (v9) : {name: String, posts: List<{title: String}>}
     ; r6 (v10) : Iterator<{name: String, posts: List<{title: String}>}>
     ; r7 (name) : String
     ; r8 (posts) : List<{title: String}>
-    ; r28 (v13) : String
     ; r9 (v14) : Iterator<{title: String}>
-    ; r29 (v15) : String
     ; r10 (v16) : Iterator<{title: String}>
     ; r11 (v17) : String
     ; r12 (v18) : {title: String}
     ; r13 (v19) : Iterator<{title: String}>
     ; r14 (title) : String
-    ; r30 (v21) : String
     ; r15 (v22) : String
     ; r16 (v23) : String
     ; r17 (v24) : String
@@ -67,3 +60,10 @@ expression: ir
     ; r21 (v28) : String
     ; r22 (v29) : String
     ; r23 (v30) : String
+    ; r24 (@users) : List<{name: String, posts: List<{title: String}>}>
+    ; r25 (v6) : String
+    ; r26 (v15) : String
+    ; r27 (v21) : String
+    ; r28 (v2) : String
+    ; r29 (v4) : List<{name: String, posts: List<{title: String}>}>
+    ; r30 (v13) : String

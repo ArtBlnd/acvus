@@ -28,23 +28,23 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r15 (v2) : String
-    ; r16 (@items) : List<Int>
-    ; r17 (v4) : List<Int>
     ; r2 (v5) : Iterator<Int>
-    ; r18 (v6) : String
     ; r3 (v7) : Iterator<Int>
     ; r4 (v8) : String
     ; r5 (x) : Int
     ; r6 (v10) : Iterator<Int>
-    ; r19 (v11) : String
     ; r7 (to_string(...)) : String
     ; r8 (v13) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
-    ; r20 (v16) : String
-    ; r21 (v17) : String
     ; r11 (v18) : String
     ; r12 (v19) : String
     ; r13 (v20) : String
     ; r14 (v21) : String
+    ; r15 (v11) : String
+    ; r16 (@items) : List<Int>
+    ; r17 (v17) : String
+    ; r18 (v6) : String
+    ; r19 (v2) : String
+    ; r20 (v4) : List<Int>
+    ; r21 (v16) : String

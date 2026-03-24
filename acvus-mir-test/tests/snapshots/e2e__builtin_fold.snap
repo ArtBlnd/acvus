@@ -17,20 +17,20 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r7 (v2) : String
-    ; r8 (@items) : List<Int>
-    ; r9 (v4) : List<Int>
     ; r2 (v5) : Iterator<Int>
-    ; r10 (v6) : Int
     ; r3 (v7) : Fn(Int, Int) -> Int
     ; r4 (fold(...)) : Int
     ; r5 (to_string(...)) : String
     ; r6 (v10) : String
+    ; r7 (@items) : List<Int>
+    ; r8 (v6) : Int
+    ; r9 (v2) : String
+    ; r10 (v4) : List<Int>
 
 === closure L0 (ValueId(0), ValueId(1)) ===
      0 │   r0 = r1 + r2
      1 │   return r0
 
+    ; r0 (v2) : Int
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Int

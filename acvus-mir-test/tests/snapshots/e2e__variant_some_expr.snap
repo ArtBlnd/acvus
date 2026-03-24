@@ -10,8 +10,8 @@ expression: ir
      4 │   r2 = T0 + T0
      5 │   return r2
 
-    ; r3 (v0) : String
-    ; r1 (v1) : Int
     ; r0 (v2) : Option<Int>
-    ; r4 (v3) : String
+    ; r1 (v1) : Int
     ; r2 (v4) : String
+    ; r3 (v3) : String
+    ; r4 (v0) : String

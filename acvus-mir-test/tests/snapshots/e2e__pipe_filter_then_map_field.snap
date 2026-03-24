@@ -21,33 +21,33 @@ expression: ir
 
     ; r0 (@users) : <error>
     ; r1 (v1) : List<{age: Int, name: String}>
-    ; r10 (v2) : String
-    ; r11 (@users) : List<{age: Int, name: String}>
-    ; r12 (v4) : List<{age: Int, name: String}>
     ; r2 (iter(...)) : Iterator<{age: Int, name: String}>
     ; r3 (v6) : Fn({age: Int, name: String}) -> Bool
     ; r4 (filter(...)) : Iterator<{age: Int, name: String}>
     ; r5 (v8) : Fn({age: Int, name: String}) -> String
     ; r6 (map(...)) : Iterator<String>
-    ; r13 (v10) : String
     ; r7 (v11) : String
-    ; r14 (v12) : String
     ; r8 (join(...)) : String
     ; r9 (v14) : String
+    ; r10 (@users) : List<{age: Int, name: String}>
+    ; r11 (v12) : String
+    ; r12 (v4) : List<{age: Int, name: String}>
+    ; r13 (v10) : String
+    ; r14 (v2) : String
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = r1.age
      2 │   r2 = r0 > 18 (r3)
      3 │   return r2
 
-    ; r1 (v0) : {age: Int, name: String}
     ; r0 (age) : Int
-    ; r3 (v2) : Int
+    ; r1 (v0) : {age: Int, name: String}
     ; r2 (v3) : Bool
+    ; r3 (v2) : Int
 
 === closure L1 (ValueId(0)) ===
      0 │   r0 = r1.name
      1 │   return r0
 
-    ; r1 (v0) : {age: Int, name: String}
     ; r0 (name) : String
+    ; r1 (v0) : {age: Int, name: String}

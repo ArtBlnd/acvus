@@ -25,19 +25,19 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r13 (v2) : String
-    ; r14 (@items) : List<Int>
-    ; r15 (v4) : List<Int>
     ; r2 (v5) : Iterator<Int>
-    ; r16 (v6) : String
     ; r3 (v7) : Iterator<Int>
     ; r4 (v8) : String
     ; r5 (x) : Int
     ; r6 (v10) : Iterator<Int>
-    ; r17 (v11) : String
     ; r7 (to_string(...)) : String
     ; r8 (v13) : String
     ; r9 (v14) : String
     ; r10 (v15) : String
     ; r11 (v16) : String
     ; r12 (v17) : String
+    ; r13 (v11) : String
+    ; r14 (@items) : List<Int>
+    ; r15 (v6) : String
+    ; r16 (v4) : List<Int>
+    ; r17 (v2) : String

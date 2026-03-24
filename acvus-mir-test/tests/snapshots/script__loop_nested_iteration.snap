@@ -36,23 +36,23 @@ expression: ir
     ; r1 (v1) : List<List<Int>>
     ; r2 (@sum) : <error>
     ; r3 (v3) : Int
-    ; r21 (@matrix) : List<List<Int>>
-    ; r22 (v5) : List<List<Int>>
     ; r4 (v6) : Iterator<List<Int>>
     ; r5 (v7) : Iterator<List<Int>>
+    ; r6 (v21) : Int
+    ; r7 (v22) : Int
     ; r8 (row) : List<Int>
     ; r9 (v9) : Iterator<List<Int>>
     ; r10 (v10) : Iterator<Int>
     ; r11 (v11) : Iterator<Int>
+    ; r12 (v20) : Int
+    ; r13 (v23) : Int
     ; r14 (x) : Int
     ; r15 (v13) : Iterator<Int>
     ; r16 (@sum) : Int
     ; r17 (v15) : Int
     ; r18 (v16) : Int
-    ; r23 (v17) : Int
     ; r19 (@sum) : Int
     ; r20 (v19) : Int
-    ; r12 (v20) : Int
-    ; r6 (v21) : Int
-    ; r7 (v22) : Int
-    ; r13 (v23) : Int
+    ; r21 (v17) : Int
+    ; r22 (@matrix) : List<List<Int>>
+    ; r23 (v5) : List<List<Int>>

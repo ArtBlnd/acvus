@@ -45,29 +45,29 @@ expression: ir
     ; r3 (v3) : List<Int>
     ; r4 (@sum) : <error>
     ; r5 (v5) : Int
-    ; r28 (@a) : List<Int>
-    ; r29 (v7) : List<Int>
     ; r6 (v8) : Iterator<Int>
     ; r7 (v9) : Iterator<Int>
+    ; r8 (v28) : Int
+    ; r9 (v30) : Int
     ; r10 (x) : Int
     ; r11 (v11) : Iterator<Int>
     ; r12 (@sum) : Int
     ; r13 (v13) : Int
     ; r14 (v14) : Int
-    ; r30 (v15) : Int
     ; r15 (@b) : List<Int>
     ; r16 (v17) : List<Int>
     ; r17 (v18) : Iterator<Int>
     ; r18 (v19) : Iterator<Int>
+    ; r19 (v29) : Int
+    ; r20 (v31) : Int
     ; r21 (y) : Int
     ; r22 (v21) : Iterator<Int>
     ; r23 (@sum) : Int
     ; r24 (v23) : Int
     ; r25 (v24) : Int
-    ; r31 (v25) : Int
     ; r26 (@sum) : Int
     ; r27 (v27) : Int
-    ; r8 (v28) : Int
-    ; r19 (v29) : Int
-    ; r9 (v30) : Int
-    ; r20 (v31) : Int
+    ; r28 (v25) : Int
+    ; r29 (@a) : List<Int>
+    ; r30 (v15) : Int
+    ; r31 (v7) : List<Int>

@@ -17,11 +17,11 @@ expression: ir
 
     ; r0 (@name) : <error>
     ; r1 (v1) : String
-    ; r5 (v2) : String
-    ; r6 (v3) : String
     ; r2 (v4) : String
-    ; r7 (@name) : String
-    ; r8 (v6) : String
     ; r3 (v7) : String
-    ; r9 (v8) : String
     ; r4 (v9) : String
+    ; r5 (v3) : String
+    ; r6 (v6) : String
+    ; r7 (v2) : String
+    ; r8 (@name) : String
+    ; r9 (v8) : String

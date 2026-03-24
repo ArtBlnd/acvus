@@ -37,25 +37,25 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r18 (v2) : String
-    ; r19 (@items) : List<Int>
-    ; r20 (v4) : List<Int>
     ; r2 (v5) : Bool
     ; r3 (v6) : Int
-    ; r5 (v7) : Bool
     ; r4 (v8) : Bool
+    ; r5 (v7) : Bool
     ; r6 (v9) : Int
-    ; r8 (v10) : Bool
     ; r7 (v11) : Bool
-    ; r10 (v12) : Bool
+    ; r8 (v10) : Bool
     ; r9 (v13) : Bool
+    ; r10 (v12) : Bool
     ; r11 (a) : Int
     ; r12 (b) : Int
-    ; r21 (v16) : String
     ; r13 (to_string(...)) : String
     ; r14 (v18) : String
-    ; r22 (v19) : String
-    ; r23 (v20) : String
     ; r15 (v21) : String
     ; r16 (v22) : String
     ; r17 (v23) : String
+    ; r18 (@items) : List<Int>
+    ; r19 (v4) : List<Int>
+    ; r20 (v2) : String
+    ; r21 (v20) : String
+    ; r22 (v16) : String
+    ; r23 (v19) : String

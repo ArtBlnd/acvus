@@ -22,20 +22,20 @@ expression: ir
     18 │   r13 = T0 + r12
     19 │   return r13
 
-    ; r14 (v0) : String
+    ; r0 (v3) : Range
     ; r1 (v1) : Int
     ; r2 (v2) : Int
-    ; r0 (v3) : Range
     ; r3 (v4) : Iterator<Int>
-    ; r15 (v5) : String
     ; r4 (v6) : Iterator<Int>
     ; r5 (v7) : String
     ; r6 (x) : Int
     ; r7 (v9) : Iterator<Int>
-    ; r16 (v10) : String
     ; r8 (to_string(...)) : String
     ; r9 (v12) : String
     ; r10 (v13) : String
     ; r11 (v14) : String
     ; r12 (v15) : String
     ; r13 (v16) : String
+    ; r14 (v0) : String
+    ; r15 (v10) : String
+    ; r16 (v5) : String

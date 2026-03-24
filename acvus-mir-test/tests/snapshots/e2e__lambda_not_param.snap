@@ -20,22 +20,22 @@ expression: ir
 
     ; r0 (@flags) : <error>
     ; r1 (v1) : List<Bool>
-    ; r10 (v2) : String
-    ; r11 (@flags) : List<Bool>
-    ; r12 (v4) : List<Bool>
     ; r2 (iter(...)) : Iterator<Bool>
     ; r3 (v6) : Fn(Bool) -> Bool
     ; r4 (map(...)) : Iterator<Bool>
     ; r5 (collect(...)) : List<Bool>
-    ; r13 (v9) : String
     ; r6 (v10) : String
     ; r7 (len(...)) : Int
     ; r8 (to_string(...)) : String
     ; r9 (v13) : String
+    ; r10 (@flags) : List<Bool>
+    ; r11 (v2) : String
+    ; r12 (v9) : String
+    ; r13 (v4) : List<Bool>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = !r1
      1 │   return r0
 
-    ; r1 (v0) : Bool
     ; r0 (v1) : Bool
+    ; r1 (v0) : Bool

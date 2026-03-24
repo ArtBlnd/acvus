@@ -633,7 +633,7 @@ fn write_body(
     if !body.val_types.is_empty() {
         writeln!(f)?;
         let mut entries: Vec<_> = body.val_types.iter().collect();
-        entries.sort_by_key(|(v, _)| **v);
+        entries.sort_by_key(|(v, _)| vn.get(**v));
         for (val, ty) in entries {
             let origin = body.debug.label(*val, ctx.interner);
             writeln!(

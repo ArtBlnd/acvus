@@ -14,8 +14,8 @@ expression: ir
 
     ; r0 (@user) : <error>
     ; r1 (v1) : {age: Int, email: String, name: String}
-    ; r4 (v2) : String
-    ; r5 (@user) : {age: Int, email: String, name: String}
-    ; r6 (v4) : {age: Int, email: String, name: String}
     ; r2 (name) : String
     ; r3 (v6) : String
+    ; r4 (@user) : {age: Int, email: String, name: String}
+    ; r5 (v4) : {age: Int, email: String, name: String}
+    ; r6 (v2) : String

@@ -34,25 +34,25 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (@b) : <error>
     ; r3 (v3) : String
-    ; r19 (v4) : String
-    ; r20 (@a) : Int
-    ; r21 (v6) : Int
-    ; r22 (@b) : String
-    ; r23 (v8) : String
     ; r4 (v9) : (Int, String)
-    ; r7 (v10) : Bool
     ; r5 (v11) : Int
-    ; r8 (v12) : Bool
     ; r6 (v13) : Bool
+    ; r7 (v10) : Bool
+    ; r8 (v12) : Bool
     ; r9 (v14) : String
-    ; r11 (v15) : Bool
     ; r10 (v16) : Bool
+    ; r11 (v15) : Bool
     ; r12 (a) : Int
     ; r13 (b) : String
-    ; r24 (v19) : String
     ; r14 (to_string(...)) : String
     ; r15 (v21) : String
     ; r16 (v22) : String
-    ; r25 (v23) : String
     ; r17 (v24) : String
     ; r18 (v25) : String
+    ; r19 (v6) : Int
+    ; r20 (v4) : String
+    ; r21 (@b) : String
+    ; r22 (v23) : String
+    ; r23 (@a) : Int
+    ; r24 (v8) : String
+    ; r25 (v19) : String

@@ -20,22 +20,22 @@ expression: ir
 
     ; r0 (@users) : <error>
     ; r1 (v1) : List<{active: Bool, name: String}>
-    ; r10 (v2) : String
-    ; r11 (@users) : List<{active: Bool, name: String}>
-    ; r12 (v4) : List<{active: Bool, name: String}>
     ; r2 (iter(...)) : Iterator<{active: Bool, name: String}>
     ; r3 (v6) : Fn({active: Bool, name: String}) -> Bool
     ; r4 (filter(...)) : Iterator<{active: Bool, name: String}>
     ; r5 (collect(...)) : List<{active: Bool, name: String}>
-    ; r13 (v9) : String
     ; r6 (v10) : String
     ; r7 (len(...)) : Int
     ; r8 (to_string(...)) : String
     ; r9 (v13) : String
+    ; r10 (@users) : List<{active: Bool, name: String}>
+    ; r11 (v2) : String
+    ; r12 (v9) : String
+    ; r13 (v4) : List<{active: Bool, name: String}>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = r1.active
      1 │   return r0
 
-    ; r1 (v0) : {active: Bool, name: String}
     ; r0 (active) : Bool
+    ; r1 (v0) : {active: Bool, name: String}

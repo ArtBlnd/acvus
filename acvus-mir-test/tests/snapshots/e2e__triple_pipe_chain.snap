@@ -24,9 +24,6 @@ expression: ir
 
     ; r0 (@items) : <error>
     ; r1 (v1) : List<Int>
-    ; r14 (v2) : String
-    ; r15 (@items) : List<Int>
-    ; r16 (v4) : List<Int>
     ; r2 (iter(...)) : Iterator<Int>
     ; r3 (v6) : Fn(Int) -> Bool
     ; r4 (filter(...)) : Iterator<Int>
@@ -35,32 +32,35 @@ expression: ir
     ; r7 (v10) : Fn(Int) -> Int
     ; r8 (map(...)) : Iterator<Int>
     ; r9 (collect(...)) : List<Int>
-    ; r17 (v13) : String
     ; r10 (v14) : String
     ; r11 (len(...)) : Int
     ; r12 (to_string(...)) : String
     ; r13 (v17) : String
+    ; r14 (@items) : List<Int>
+    ; r15 (v4) : List<Int>
+    ; r16 (v2) : String
+    ; r17 (v13) : String
 
 === closure L0 (ValueId(0)) ===
      1 │   r0 = r1 != 0 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Bool
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Bool
 
 === closure L1 (ValueId(0)) ===
      1 │   r0 = r1 + 1 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Int
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Int
 
 === closure L2 (ValueId(0)) ===
      1 │   r0 = r1 * 2 (r2)
      2 │   return r0
 
+    ; r0 (v2) : Int
     ; r1 (v0) : Int
     ; r2 (v1) : Int
-    ; r0 (v2) : Int

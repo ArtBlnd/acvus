@@ -11,9 +11,9 @@ expression: ir
      5 │   r3 = r2 + r0
      6 │   return r3
 
-    ; r4 (v0) : String
-    ; r1 (v1) : Int
     ; r0 (fetch_user(...)) : String
-    ; r5 (v3) : String
+    ; r1 (v1) : Int
     ; r2 (v4) : String
     ; r3 (v5) : String
+    ; r4 (v3) : String
+    ; r5 (v0) : String

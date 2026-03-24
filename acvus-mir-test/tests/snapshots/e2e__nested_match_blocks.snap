@@ -42,24 +42,24 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (@role) : <error>
     ; r3 (v3) : String
-    ; r15 (v4) : String
-    ; r16 (@role) : String
-    ; r17 (v6) : String
     ; r4 (v7) : Bool
-    ; r18 (v8) : String
     ; r5 (@level) : Int
     ; r6 (v10) : Int
     ; r7 (v11) : Bool
-    ; r19 (v12) : String
-    ; r20 (v13) : String
     ; r8 (v14) : String
-    ; r21 (v15) : String
-    ; r22 (v16) : String
     ; r9 (v17) : String
     ; r10 (v18) : String
     ; r11 (v19) : String
-    ; r23 (v20) : String
-    ; r24 (v21) : String
     ; r12 (v22) : String
     ; r13 (v23) : String
     ; r14 (v24) : String
+    ; r15 (v6) : String
+    ; r16 (v15) : String
+    ; r17 (v4) : String
+    ; r18 (v21) : String
+    ; r19 (v13) : String
+    ; r20 (v20) : String
+    ; r21 (v12) : String
+    ; r22 (@role) : String
+    ; r23 (v16) : String
+    ; r24 (v8) : String
