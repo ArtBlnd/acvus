@@ -63,7 +63,7 @@ pub fn lower(
         .collect();
 
     for func in graph.functions.iter() {
-        let FnKind::Local(source) = &func.kind else {
+        let FnKind::Local(_source) = &func.kind else {
             continue;
         };
         let Some(parsed) = extract.parsed.get(&func.id) else {
@@ -85,10 +85,7 @@ pub fn lower(
                         .get(&name)
                         .copied()
                         .unwrap_or_else(ContextId::alloc);
-                    let ty = resolved
-                        .context_type(id)
-                        .cloned()
-                        .unwrap_or(Ty::error());
+                    let ty = resolved.context_type(id).cloned().unwrap_or(Ty::error());
                     Some((name, (id, ty)))
                 })
                 .collect(),
@@ -99,7 +96,9 @@ pub fn lower(
         let resolution_clone = resolution.clone();
 
         // Build function_ids from graph functions.
-        let function_ids: FxHashMap<Astr, (FunctionId, Ty)> = graph.functions.iter()
+        let function_ids: FxHashMap<Astr, (FunctionId, Ty)> = graph
+            .functions
+            .iter()
             .filter_map(|f| {
                 let ty = match &f.constraint.output {
                     Constraint::Exact(ty) => ty.clone(),
@@ -241,7 +240,11 @@ mod tests {
     #[test]
     fn lower_script_irrefutable_match_bind() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "x = @data { @out = x + 1; }; @out", &[("data", Ty::Int), ("out", Ty::Int)]);
+        let graph = make_graph_with_ctx(
+            &i,
+            "x = @data { @out = x + 1; }; @out",
+            &[("data", Ty::Int), ("out", Ty::Int)],
+        );
         let ext = extract::extract(&i, &graph);
         let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
@@ -250,7 +253,11 @@ mod tests {
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Irrefutable match-bind should NOT generate JumpIf.
         assert!(
-            !module.main.insts.iter().any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
+            !module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
             "irrefutable match-bind should not generate JumpIf"
         );
     }
@@ -258,7 +265,11 @@ mod tests {
     #[test]
     fn lower_script_refutable_match_bind() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "42 = @val { @out = 1; }; @out", &[("val", Ty::Int), ("out", Ty::Int)]);
+        let graph = make_graph_with_ctx(
+            &i,
+            "42 = @val { @out = 1; }; @out",
+            &[("val", Ty::Int), ("out", Ty::Int)],
+        );
         let ext = extract::extract(&i, &graph);
         let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
@@ -267,7 +278,11 @@ mod tests {
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Refutable match-bind MUST generate JumpIf.
         assert!(
-            module.main.insts.iter().any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
+            module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
             "refutable match-bind should generate JumpIf"
         );
     }
@@ -288,7 +303,11 @@ mod tests {
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Iterate must generate IterStep.
         assert!(
-            module.main.insts.iter().any(|i| matches!(i.kind, InstKind::IterStep { .. })),
+            module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(i.kind, InstKind::IterStep { .. })),
             "iterate should generate IterStep"
         );
     }
@@ -299,7 +318,10 @@ mod tests {
         let graph = make_graph_with_ctx(
             &i,
             "row in @matrix { x in row { @sum = @sum + x; }; }; @sum",
-            &[("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))), ("sum", Ty::Int)],
+            &[
+                ("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
+                ("sum", Ty::Int),
+            ],
         );
         let ext = extract::extract(&i, &graph);
         let inf = crate::graph::infer::infer(&i, &graph, &ext);
@@ -308,7 +330,10 @@ mod tests {
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Nested iterate: two IterStep instructions.
-        let iter_count = module.main.insts.iter()
+        let iter_count = module
+            .main
+            .insts
+            .iter()
             .filter(|i| matches!(i.kind, InstKind::IterStep { .. }))
             .count();
         assert_eq!(iter_count, 2, "nested iterate should have 2 IterStep");

@@ -124,7 +124,11 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, id: id0, ty: Ty::error() }),
+            inst(InstKind::ContextProject {
+                dst: v0,
+                id: id0,
+                ty: Ty::error(),
+            }),
             inst(InstKind::ContextLoad { dst: v1, src: v0 }),
         ]);
         let result = ValDefMapAnalysis.run(&module, ());

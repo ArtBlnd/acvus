@@ -8,7 +8,7 @@
 //! no two functions will have conflicting access to the same mutable context.
 
 use acvus_utils::Astr;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use super::extract::ExtractResult;
 use super::types::*;

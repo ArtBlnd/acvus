@@ -36,13 +36,13 @@ fn make_graph(
         name: interner.intern("test"),
         kind: FnKind::Local(SourceCode {
             name: interner.intern("test"),
-                source: interner.intern(source),
-                kind,
-            }),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-            },
+            source: interner.intern(source),
+            kind,
+        }),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+        },
     });
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

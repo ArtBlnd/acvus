@@ -6,7 +6,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
-use crate::graph::{ContextId, FunctionId, VersionId};
+use crate::graph::{ContextId, FunctionId};
 use crate::ty::{Effect, Ty};
 
 acvus_utils::declare_local_id!(pub ValueId);
@@ -59,7 +59,9 @@ impl CastKind {
     pub fn result_ty(&self, src_ty: &Ty) -> Ty {
         match (self, src_ty) {
             (CastKind::DequeToList, Ty::Deque(elem, _)) => Ty::List(elem.clone()),
-            (CastKind::ListToIterator, Ty::List(elem)) => Ty::Iterator(elem.clone(), Effect::pure()),
+            (CastKind::ListToIterator, Ty::List(elem)) => {
+                Ty::Iterator(elem.clone(), Effect::pure())
+            }
             (CastKind::DequeToIterator, Ty::Deque(elem, _)) => {
                 Ty::Iterator(elem.clone(), Effect::pure())
             }
@@ -69,7 +71,9 @@ impl CastKind {
             (CastKind::SequenceToIterator, Ty::Sequence(elem, _, e)) => {
                 Ty::Iterator(elem.clone(), e.clone())
             }
-            (CastKind::RangeToIterator, Ty::Range) => Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
+            (CastKind::RangeToIterator, Ty::Range) => {
+                Ty::Iterator(Box::new(Ty::Int), Effect::pure())
+            }
             _ => panic!("CastKind::result_ty: {self:?} incompatible with {src_ty:?}"),
         }
     }

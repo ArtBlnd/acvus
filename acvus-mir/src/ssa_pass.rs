@@ -67,7 +67,9 @@ fn forward_context_values(body: &mut MirBody) {
                         subst.insert(*dst, known_val);
                         remove.insert(i);
                         // Also remove the preceding ContextProject if it was just for this load.
-                        if i > 0 && matches!(body.insts[i - 1].kind, InstKind::ContextProject { dst: proj_dst, .. } if proj_dst == src_resolved) {
+                        if i > 0
+                            && matches!(body.insts[i - 1].kind, InstKind::ContextProject { dst: proj_dst, .. } if proj_dst == src_resolved)
+                        {
                             remove.insert(i - 1);
                         }
                     } else {
@@ -119,50 +121,89 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::Const { .. } | InstKind::Nop | InstKind::Poison { .. } => {}
         InstKind::ContextProject { .. } => {}
         InstKind::ContextLoad { src, .. } => s(src),
-        InstKind::ContextStore { dst, value } => { s(dst); s(value); }
+        InstKind::ContextStore { dst, value } => {
+            s(dst);
+            s(value);
+        }
         InstKind::VarLoad { .. } => {}
         InstKind::VarStore { src, .. } => s(src),
-        InstKind::BinOp { left, right, .. } => { s(left); s(right); }
+        InstKind::BinOp { left, right, .. } => {
+            s(left);
+            s(right);
+        }
         InstKind::UnaryOp { operand, .. } => s(operand),
         InstKind::FieldGet { object, .. } => s(object),
         InstKind::LoadFunction { .. } => {}
         InstKind::FunctionCall { callee, args, .. } => {
-            if let Callee::Indirect(v) = callee { s(v); }
-            args.iter_mut().for_each(|a| s(a));
+            if let Callee::Indirect(v) = callee {
+                s(v);
+            }
+            args.iter_mut().for_each(&s);
         }
-        InstKind::Spawn { callee, args, context_uses, .. } => {
-            if let Callee::Indirect(v) = callee { s(v); }
-            args.iter_mut().for_each(|a| s(a));
+        InstKind::Spawn {
+            callee,
+            args,
+            context_uses,
+            ..
+        } => {
+            if let Callee::Indirect(v) = callee {
+                s(v);
+            }
+            args.iter_mut().for_each(&s);
             context_uses.iter_mut().for_each(|(_, v)| s(v));
         }
-        InstKind::Eval { src, context_defs, .. } => {
+        InstKind::Eval {
+            src, context_defs, ..
+        } => {
             s(src);
             context_defs.iter_mut().for_each(|(_, v)| s(v));
         }
-        InstKind::MakeDeque { elements, .. } => elements.iter_mut().for_each(|e| s(e)),
+        InstKind::MakeDeque { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
-        InstKind::MakeRange { start, end, .. } => { s(start); s(end); }
-        InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(|e| s(e)),
+        InstKind::MakeRange { start, end, .. } => {
+            s(start);
+            s(end);
+        }
+        InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::TupleIndex { tuple, .. } => s(tuple),
         InstKind::TestLiteral { src, .. } => s(src),
         InstKind::TestListLen { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
         InstKind::TestRange { src, .. } => s(src),
         InstKind::ListIndex { list, .. } => s(list),
-        InstKind::ListGet { list, index, .. } => { s(list); s(index); }
+        InstKind::ListGet { list, index, .. } => {
+            s(list);
+            s(index);
+        }
         InstKind::ListSlice { list, .. } => s(list),
         InstKind::ObjectGet { object, .. } => s(object),
-        InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(|c| s(c)),
-        InstKind::IterStep { iter_src, done_args, .. } => { s(iter_src); done_args.iter_mut().for_each(|a| s(a)); }
-        InstKind::MakeVariant { payload, .. } => { if let Some(p) = payload { s(p); } }
+        InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(&s),
+        InstKind::IterStep {
+            iter_src,
+            done_args,
+            ..
+        } => {
+            s(iter_src);
+            done_args.iter_mut().for_each(&s);
+        }
+        InstKind::MakeVariant { payload, .. } => {
+            if let Some(p) = payload {
+                s(p);
+            }
+        }
         InstKind::TestVariant { src, .. } => s(src),
         InstKind::UnwrapVariant { src, .. } => s(src),
-        InstKind::BlockLabel { params, .. } => params.iter_mut().for_each(|p| s(p)),
-        InstKind::Jump { args, .. } => args.iter_mut().for_each(|a| s(a)),
-        InstKind::JumpIf { cond, then_args, else_args, .. } => {
+        InstKind::BlockLabel { params, .. } => params.iter_mut().for_each(&s),
+        InstKind::Jump { args, .. } => args.iter_mut().for_each(&s),
+        InstKind::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
             s(cond);
-            then_args.iter_mut().for_each(|a| s(a));
-            else_args.iter_mut().for_each(|a| s(a));
+            then_args.iter_mut().for_each(&s);
+            else_args.iter_mut().for_each(&s);
         }
         InstKind::Return(v) => s(v),
         InstKind::Cast { src, .. } => s(src),
@@ -214,10 +255,12 @@ fn ensure_initial_loads(body: &mut MirBody) {
     let mut seen = FxHashSet::default();
     let mut missing: Vec<ContextId> = Vec::new();
     for inst in body.insts.iter() {
-        if let InstKind::ContextProject { id, .. } = &inst.kind {
-            if all_ctx_ids.contains(id) && !entry_loaded.contains(id) && seen.insert(*id) {
-                missing.push(*id);
-            }
+        if let InstKind::ContextProject { id, .. } = &inst.kind
+            && all_ctx_ids.contains(id)
+            && !entry_loaded.contains(id)
+            && seen.insert(*id)
+        {
+            missing.push(*id);
         }
     }
     if missing.is_empty() {
@@ -448,20 +491,15 @@ fn patch_instructions(
             Terminator::IterStep { done, .. } => merge_labels.contains(done),
             _ => false,
         };
-        if jumps_to_merge {
-            if let Some(ops) = ctx_info.block_ops.get(&BlockIdx(bi)) {
-                for &(inst_i, ctx_id, _) in &ops.stores {
-                    if phi_contexts.contains(&ctx_id) {
-                        remove_indices.insert(inst_i);
-                        // Remove preceding ContextProject if it exists.
-                        if inst_i > 0
-                            && matches!(
-                                body.insts[inst_i - 1].kind,
-                                InstKind::ContextProject { .. }
-                            )
-                        {
-                            remove_indices.insert(inst_i - 1);
-                        }
+        if jumps_to_merge && let Some(ops) = ctx_info.block_ops.get(&BlockIdx(bi)) {
+            for &(inst_i, ctx_id, _) in &ops.stores {
+                if phi_contexts.contains(&ctx_id) {
+                    remove_indices.insert(inst_i);
+                    // Remove preceding ContextProject if it exists.
+                    if inst_i > 0
+                        && matches!(body.insts[inst_i - 1].kind, InstKind::ContextProject { .. })
+                    {
+                        remove_indices.insert(inst_i - 1);
                     }
                 }
             }
@@ -675,18 +713,29 @@ mod tests {
         )
         .unwrap();
 
-        let first_label = module.main.insts.iter()
+        let first_label = module
+            .main
+            .insts
+            .iter()
             .position(|i| matches!(i.kind, InstKind::BlockLabel { .. }))
             .unwrap_or(module.main.insts.len());
-        let entry_projects: Vec<_> = module.main.insts[..first_label].iter()
+        let entry_projects: Vec<_> = module.main.insts[..first_label]
+            .iter()
             .filter(|i| matches!(i.kind, InstKind::ContextProject { .. }))
             .collect();
-        let entry_loads: Vec<_> = module.main.insts[..first_label].iter()
+        let entry_loads: Vec<_> = module.main.insts[..first_label]
+            .iter()
             .filter(|i| matches!(i.kind, InstKind::ContextLoad { .. }))
             .collect();
         // Both @items and @sum should have entry loads.
-        assert!(entry_projects.len() >= 2, "expected entry ContextProject for all contexts");
-        assert!(entry_loads.len() >= 2, "expected entry ContextLoad for all contexts");
+        assert!(
+            entry_projects.len() >= 2,
+            "expected entry ContextProject for all contexts"
+        );
+        assert!(
+            entry_loads.len() >= 2,
+            "expected entry ContextLoad for all contexts"
+        );
     }
 
     #[test]
@@ -716,10 +765,7 @@ mod tests {
         let (module, _) = compile_script(
             &i,
             "x in @items { 0 = x { @count = @count + 1; }; }; @count",
-            &[
-                ("items", Ty::List(Box::new(Ty::Int))),
-                ("count", Ty::Int),
-            ],
+            &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
         )
         .unwrap();
         assert!(

@@ -9,10 +9,8 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::{ContextId, FunctionId};
-use crate::hints::{Hint, HintTable};
-use crate::ir::{
-    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId,
-};
+use crate::hints::HintTable;
+use crate::ir::{Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
 use crate::ty::{Effect, Ty};
 use crate::typeck::{CoercionMap, TypeMap};
 
@@ -125,7 +123,7 @@ impl<'a> Lowerer<'a> {
     ) -> Self {
         let coercion_lookup: FxHashMap<Span, CastKind> = coercion_map.into_iter().collect();
         // Pre-inject function names into the initial scope.
-        let mut initial_scope = FxHashMap::default();
+        let initial_scope = FxHashMap::default();
         // (function values will be resolved at call sites, not as scope values)
         Self {
             body: MirBody::new(),
@@ -146,7 +144,9 @@ impl<'a> Lowerer<'a> {
     /// This is the alloca equivalent — SSA pass will promote these to PHI form.
     /// Order is deterministic (sorted by context name).
     fn emit_entry_context_loads(&mut self, span: Span) {
-        let mut entries: Vec<_> = self.context_ids.iter()
+        let mut entries: Vec<_> = self
+            .context_ids
+            .iter()
             .map(|(&name, &(id, ref ty))| (name, id, ty.clone()))
             .collect();
         entries.sort_by_key(|(name, _, _)| self.interner.resolve(*name).to_string());
@@ -154,11 +154,24 @@ impl<'a> Lowerer<'a> {
         for (name, id, ty) in entries {
             let proj = self.alloc_typed(span);
             self.set_origin(proj, ValOrigin::Context(name));
-            self.emit_inst(span, InstKind::ContextProject { dst: proj, id, ty: ty.clone() });
+            self.emit_inst(
+                span,
+                InstKind::ContextProject {
+                    dst: proj,
+                    id,
+                    ty: ty.clone(),
+                },
+            );
             self.mark_projection(proj);
             let val = self.alloc_val();
             self.set_val_type(val, ty);
-            self.emit_inst(span, InstKind::ContextLoad { dst: val, src: proj });
+            self.emit_inst(
+                span,
+                InstKind::ContextLoad {
+                    dst: val,
+                    src: proj,
+                },
+            );
         }
     }
 
@@ -193,10 +206,20 @@ impl<'a> Lowerer<'a> {
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
-            Stmt::MatchBind { pattern, source, body, span } => {
+            Stmt::MatchBind {
+                pattern,
+                source,
+                body,
+                span,
+            } => {
                 self.lower_stmt_match_bind(pattern, source, body, *span);
             }
-            Stmt::Iterate { pattern, source, body, span } => {
+            Stmt::Iterate {
+                pattern,
+                source,
+                body,
+                span,
+            } => {
                 self.lower_stmt_iterate(pattern, source, body, *span);
             }
         }
@@ -249,7 +272,13 @@ impl<'a> Lowerer<'a> {
                 self.lower_stmt(s);
             }
             self.pop_scope();
-            self.emit_inst(span, InstKind::Jump { label: end_label, args: vec![] });
+            self.emit_inst(
+                span,
+                InstKind::Jump {
+                    label: end_label,
+                    args: vec![],
+                },
+            );
 
             self.emit_label(span, end_label);
         }
@@ -258,13 +287,7 @@ impl<'a> Lowerer<'a> {
     /// Lower an iterate statement: `pattern in source { body; };`
     ///
     /// No string accumulation — just executes body for each element.
-    fn lower_stmt_iterate(
-        &mut self,
-        pattern: &Pattern,
-        source: &Expr,
-        body: &[Stmt],
-        span: Span,
-    ) {
+    fn lower_stmt_iterate(&mut self, pattern: &Pattern, source: &Expr, body: &[Stmt], span: Span) {
         let source_raw = self.lower_expr(source);
         let source_reg = self.materialize(source_raw, span);
 
@@ -279,20 +302,37 @@ impl<'a> Lowerer<'a> {
 
         let cast_dst = self.alloc_val();
         self.set_val_type(cast_dst, iter_ty.clone());
-        self.emit_inst(span, InstKind::Cast { dst: cast_dst, src: source_reg, kind: cast_kind });
+        self.emit_inst(
+            span,
+            InstKind::Cast {
+                dst: cast_dst,
+                src: source_reg,
+                kind: cast_kind,
+            },
+        );
 
         let loop_label = self.alloc_label();
         let end_label = self.alloc_label();
 
         // Jump to loop with initial iterator.
-        self.emit_inst(span, InstKind::Jump { label: loop_label, args: vec![cast_dst] });
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: loop_label,
+                args: vec![cast_dst],
+            },
+        );
 
         // Loop header — receives iterator as block param.
         let iter_param = self.alloc_val();
         self.set_val_type(iter_param, iter_ty.clone());
         self.emit_inst(
             span,
-            InstKind::BlockLabel { label: loop_label, params: vec![iter_param], merge_of: None },
+            InstKind::BlockLabel {
+                label: loop_label,
+                params: vec![iter_param],
+                merge_of: None,
+            },
         );
 
         // Pull one element — jumps to end if exhausted.
@@ -324,12 +364,22 @@ impl<'a> Lowerer<'a> {
         self.pop_scope();
 
         // Jump back to loop.
-        self.emit_inst(span, InstKind::Jump { label: loop_label, args: vec![rest_iter] });
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: loop_label,
+                args: vec![rest_iter],
+            },
+        );
 
         // End block.
         self.emit_inst(
             span,
-            InstKind::BlockLabel { label: end_label, params: vec![], merge_of: None },
+            InstKind::BlockLabel {
+                label: end_label,
+                params: vec![],
+                merge_of: None,
+            },
         );
     }
 
@@ -361,7 +411,6 @@ impl<'a> Lowerer<'a> {
             .map(|(id, _)| *id)
             .unwrap_or_else(|| panic!("unknown function {}", self.interner.resolve(name)))
     }
-
 
     /// If `val` is a projection, materialize it into a value via ContextLoad.
     /// If it's already a value, return as-is.
@@ -635,14 +684,28 @@ impl<'a> Lowerer<'a> {
     fn emit_empty_string(&mut self, span: Span) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::String);
-        self.emit_inst(span, InstKind::Const { dst, value: Literal::String(String::new()) });
+        self.emit_inst(
+            span,
+            InstKind::Const {
+                dst,
+                value: Literal::String(String::new()),
+            },
+        );
         dst
     }
 
     fn emit_concat(&mut self, span: Span, left: ValueId, right: ValueId) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::String);
-        self.emit_inst(span, InstKind::BinOp { dst, op: BinOp::Add, left, right });
+        self.emit_inst(
+            span,
+            InstKind::BinOp {
+                dst,
+                op: BinOp::Add,
+                left,
+                right,
+            },
+        );
         dst
     }
 
@@ -878,7 +941,7 @@ impl<'a> Lowerer<'a> {
                 // Swap state.
                 let saved_body = std::mem::replace(&mut self.body, sub_body);
                 let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
-                let saved_projections = std::mem::replace(&mut self.projections, FxHashSet::default());
+                let saved_projections = std::mem::take(&mut self.projections);
 
                 // lower_expr calls maybe_cast(body.span(), val) which will
                 // pick up any lambda return coercion registered by the typechecker.
@@ -898,14 +961,15 @@ impl<'a> Lowerer<'a> {
 
                 closure_body_mir.capture_regs = closure_capture_regs;
                 closure_body_mir.param_regs = closure_param_regs;
-                self.closures.insert(closure_label, Arc::new(closure_body_mir));
+                self.closures
+                    .insert(closure_label, Arc::new(closure_body_mir));
 
                 // Allocate dst with Fn type. If a return-site Cast was inserted,
                 // update the Fn's ret to match the actual (cast) return type.
                 let dst = self.alloc_val();
                 let mut fn_ty = self.type_of_span(*span);
                 if let Ty::Fn { ref mut ret, .. } = fn_ty {
-                    *ret = Box::new(actual_ret_ty);
+                    **ret = actual_ret_ty;
                 }
                 self.set_val_type(dst, fn_ty);
                 self.emit_inst(
@@ -1053,12 +1117,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_context_store(
-        &mut self,
-        name: Astr,
-        value_expr: &Expr,
-        span: Span,
-    ) -> ValueId {
+    fn lower_context_store(&mut self, name: Astr, value_expr: &Expr, span: Span) -> ValueId {
         let val = self.lower_expr(value_expr);
         let ctx_id = self.context_id(name);
         let ctx_ty = self.context_ty(name);
@@ -1953,11 +2012,17 @@ mod tests {
         let interner = Interner::new();
         let module = lower(&interner, "hello world");
         // Template: empty_str const + text const + concat + return
-        let has_text = module.main.insts.iter().any(|i| matches!(
-            &i.kind,
-            InstKind::Const { value: Literal::String(s), .. } if s == "hello world"
-        ));
-        let has_return = module.main.insts.iter().any(|i| matches!(&i.kind, InstKind::Return(_)));
+        let has_text = module.main.insts.iter().any(|i| {
+            matches!(
+                &i.kind,
+                InstKind::Const { value: Literal::String(s), .. } if s == "hello world"
+            )
+        });
+        let has_return = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::Return(_)));
         assert!(has_text);
         assert!(has_return);
     }

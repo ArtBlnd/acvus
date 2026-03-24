@@ -171,11 +171,7 @@ pub struct TypeChecker<'a, 's> {
 }
 
 impl<'a, 's> TypeChecker<'a, 's> {
-    pub fn new(
-        interner: &'a Interner,
-        env: &'a TypeEnv,
-        subst: &'s mut TySubst,
-    ) -> Self {
+    pub fn new(interner: &'a Interner, env: &'a TypeEnv, subst: &'s mut TySubst) -> Self {
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
@@ -259,18 +255,18 @@ impl<'a, 's> TypeChecker<'a, 's> {
         }
         let tail_ty = if let Some(tail) = &script.tail {
             let ty = self.check_expr(false, tail);
-            if let Some(expected) = expected_tail {
-                if self.unify_covariant(&ty, expected, tail.span()).is_err() {
-                    let resolved = self.subst.resolve(&ty);
-                    let expected_resolved = self.subst.resolve(expected);
-                    self.error(
-                        MirErrorKind::UnificationFailure {
-                            expected: expected_resolved,
-                            got: resolved,
-                        },
-                        tail.span(),
-                    );
-                }
+            if let Some(expected) = expected_tail
+                && self.unify_covariant(&ty, expected, tail.span()).is_err()
+            {
+                let resolved = self.subst.resolve(&ty);
+                let expected_resolved = self.subst.resolve(expected);
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: expected_resolved,
+                        got: resolved,
+                    },
+                    tail.span(),
+                );
             }
             ty
         } else {
@@ -488,7 +484,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.body_writes.insert(*name);
                 self.propagate_call_effect(Effect::io());
                 let ctx_ty = self
-                    .env.contexts
+                    .env
+                    .contexts
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| self.subst.fresh_param());
@@ -506,7 +503,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
             acvus_ast::Stmt::Expr(expr) => {
                 self.check_expr(false, expr);
             }
-            acvus_ast::Stmt::MatchBind { pattern, source, body, span } => {
+            acvus_ast::Stmt::MatchBind {
+                pattern,
+                source,
+                body,
+                span,
+            } => {
                 let source_ty = self.check_expr(false, source);
                 let resolved_source = self.subst.resolve(&source_ty);
                 self.push_scope();
@@ -516,7 +518,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
                 self.pop_scope();
             }
-            acvus_ast::Stmt::Iterate { pattern, source, body, span } => {
+            acvus_ast::Stmt::Iterate {
+                pattern,
+                source,
+                body,
+                span,
+            } => {
                 let source_ty = self.check_expr(false, source);
                 let resolved = self.subst.resolve(&source_ty);
                 let elem_ty = match &resolved {
@@ -524,10 +531,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Ty::Range => Ty::Int,
                     Ty::Error(_) => Ty::error(),
                     _ => {
-                        self.error(
-                            MirErrorKind::SourceNotIterable { actual: resolved },
-                            *span,
-                        );
+                        self.error(MirErrorKind::SourceNotIterable { actual: resolved }, *span);
                         return;
                     }
                 };
@@ -689,7 +693,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         // Reading external state is effectful.
                         self.body_reads.insert(*name);
                         self.propagate_call_effect(Effect::io());
-                        if !allow_non_pure && ty.purity() == Purity::Unpure && !ty.is_error() && !ty.is_param() {
+                        if !allow_non_pure
+                            && ty.purity() == Purity::Unpure
+                            && !ty.is_error()
+                            && !ty.is_param()
+                        {
                             self.error(
                                 MirErrorKind::NonPureContextLoad {
                                     name: self.interner.resolve(*name).to_string(),
@@ -722,13 +730,15 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                 // In analysis mode, undefined values are implicit
                                 // function parameters. Use declared type from Signature
                                 // if available, otherwise fresh Param.
-                                let ty = if self.next_declared_param < self.declared_param_types.len() {
-                                    let t = self.declared_param_types[self.next_declared_param].clone();
-                                    self.next_declared_param += 1;
-                                    t
-                                } else {
-                                    self.subst.fresh_param()
-                                };
+                                let ty =
+                                    if self.next_declared_param < self.declared_param_types.len() {
+                                        let t = self.declared_param_types[self.next_declared_param]
+                                            .clone();
+                                        self.next_declared_param += 1;
+                                        t
+                                    } else {
+                                        self.subst.fresh_param()
+                                    };
                                 self.define_var(*name, ty.clone());
                                 self.inferred_params.push((*name, ty.clone()));
                                 ty
@@ -831,7 +841,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         let ok = self.subst.unify(&lt, &rt, Polarity::Invariant).is_ok()
-                            && matches!(self.subst.resolve(&lt), Ty::Int | Ty::Float | Ty::Param { .. });
+                            && matches!(
+                                self.subst.resolve(&lt),
+                                Ty::Int | Ty::Float | Ty::Param { .. }
+                            );
                         if !ok {
                             self.binop_error(
                                 op_str(*op),
@@ -1239,7 +1252,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
             let fn_ty = self.subst.instantiate(fn_sig);
             match &fn_ty {
-                Ty::Fn { params: param_tys, ret, effect, .. } => {
+                Ty::Fn {
+                    params: param_tys,
+                    ret,
+                    effect,
+                    ..
+                } => {
                     self.propagate_call_effect(effect.clone());
                     let tys: Vec<Ty> = param_tys.iter().map(|p| p.ty.clone()).collect();
                     if !self.check_args(name_str, &arg_types, &arg_spans, &tys, call_span) {
@@ -1248,9 +1266,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     return self.subst.resolve(ret);
                 }
                 _ => {
-                    self.error(MirErrorKind::UndefinedFunction(
-                        name_str.to_string(),
-                    ), call_span);
+                    self.error(
+                        MirErrorKind::UndefinedFunction(name_str.to_string()),
+                        call_span,
+                    );
                     return Ty::error();
                 }
             }
@@ -1267,7 +1286,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             MirErrorKind::UndefinedFunction(self.interner.resolve(*name).to_string()),
             call_span,
         );
-        return Ty::error();
+        Ty::error()
     }
 
     /// Propagate a callee's effect to the enclosing scope.
@@ -1340,7 +1359,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let ret = self.subst.fresh_param();
                 let dummy = self.interner.intern("_");
                 let fn_ty = Ty::Fn {
-                    params: arg_types.into_iter().map(|ty| Param::new(dummy, ty)).collect(),
+                    params: arg_types
+                        .into_iter()
+                        .map(|ty| Param::new(dummy, ty))
+                        .collect(),
                     ret: Box::new(ret.clone()),
                     captures: vec![],
                     effect: Effect::pure(),
@@ -1369,7 +1391,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 RefKind::Context => {
                     // Context write allowed — mutability will be enforced later.
                     let ctx_ty = self
-                        .env.contexts
+                        .env
+                        .contexts
                         .get(name)
                         .cloned()
                         .unwrap_or_else(|| self.subst.fresh_param());
@@ -1644,10 +1667,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let option_name = self.interner.intern("Option");
 
         // Check qualified name if present.
-        if let Some(ename) = ast_enum_name {
-            if *ename != option_name {
-                return None;
-            }
+        if let Some(ename) = ast_enum_name
+            && *ename != option_name
+        {
+            return None;
         }
 
         let payload = match tag_str {
@@ -1705,13 +1728,17 @@ pub(crate) fn contains_var(ty: &Ty) -> bool {
         Ty::Error(_) => false,
         Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => false,
         Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => contains_var(inner),
-        Ty::Iterator(inner, _) | Ty::Sequence(inner, _, _) | Ty::Handle(inner, _) => contains_var(inner),
+        Ty::Iterator(inner, _) | Ty::Sequence(inner, _, _) | Ty::Handle(inner, _) => {
+            contains_var(inner)
+        }
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
-        Ty::Fn { params, ret, .. } => params.iter().any(|p| contains_var(&p.ty)) || contains_var(ret),
+        Ty::Fn { params, ret, .. } => {
+            params.iter().any(|p| contains_var(&p.ty)) || contains_var(ret)
+        }
         Ty::Enum { variants, .. } => variants
             .values()
-            .any(|p| p.as_ref().map_or(false, |ty| contains_var(ty))),
+            .any(|p| p.as_ref().is_some_and(|ty| contains_var(ty))),
         Ty::Opaque(_) => false,
     }
 }
@@ -1758,8 +1785,7 @@ mod tests {
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
     ) -> Result<TypeMap, Vec<MirError>> {
-        let template = acvus_ast::parse(interner, source)
-            .expect("parse failed");
+        let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut subst = TySubst::new();
         let env = crate::ty::TypeEnv {
             contexts: context.clone(),

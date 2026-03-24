@@ -25,10 +25,11 @@ pub const ASYNC_FUTURE_SIZE: usize = 1024;
 pub type SyncBuiltinFn = fn(Args, &Interner) -> Result<Value, RuntimeError>;
 
 /// Async builtin — stack-allocated future, receives &mut Interpreter.
-pub type AsyncBuiltinFn = for<'x> fn(
-    Args,
-    &'x mut Interpreter,
-) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE>;
+pub type AsyncBuiltinFn =
+    for<'x> fn(
+        Args,
+        &'x mut Interpreter,
+    ) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE>;
 
 /// Builtin handler — sync or async.
 pub enum BuiltinHandler {
@@ -85,10 +86,10 @@ impl Frame {
     /// Soundness: move_check guarantees move-only values are used at most once.
     #[inline]
     fn use_val(&mut self, id: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> Value {
-        if let Some(ty) = val_types.get(&id) {
-            if acvus_mir::validate::move_check::is_move_only(ty) == Some(true) {
-                return self.take(id);
-            }
+        if let Some(ty) = val_types.get(&id)
+            && acvus_mir::validate::move_check::is_move_only(ty) == Some(true)
+        {
+            return self.take(id);
         }
         self.share(id)
     }
@@ -165,8 +166,8 @@ enum ApplyResult {
     Expand(Vec<Value>),
 }
 
-use acvus_mir::graph::ContextId;
 use crate::journal::{ContextOverlay, ContextWrite, EntryMut, EntryRef};
+use acvus_mir::graph::ContextId;
 
 // ── Interpreter ──────────────────────────────────────────────────────
 
@@ -217,10 +218,7 @@ impl InterpreterContext {
         }
     }
 
-    pub fn with_context_names(
-        mut self,
-        context_names: FxHashMap<ContextId, Astr>,
-    ) -> Self {
+    pub fn with_context_names(mut self, context_names: FxHashMap<ContextId, Astr>) -> Self {
         self.context_names = Freeze::new(context_names);
         self
     }
@@ -238,11 +236,7 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    pub fn new(
-        shared: InterpreterContext,
-        entry: FunctionId,
-        overlay: ContextOverlay,
-    ) -> Self {
+    pub fn new(shared: InterpreterContext, entry: FunctionId, overlay: ContextOverlay) -> Self {
         Self {
             shared,
             entry,
@@ -264,14 +258,20 @@ impl Interpreter {
     }
 
     fn function(&self, id: &FunctionId) -> &Executable {
-        self.shared.functions.get(id)
+        self.shared
+            .functions
+            .get(id)
             .unwrap_or_else(|| panic!("no function for #{}", id.index()))
     }
 
     fn module(&self, id: &FunctionId) -> &MirModule {
         match self.function(id) {
             Executable::Module(m) => m,
-            other => panic!("expected Module for #{}, got {}", id.index(), other.variant_name()),
+            other => panic!(
+                "expected Module for #{}, got {}",
+                id.index(),
+                other.variant_name()
+            ),
         }
     }
 
@@ -306,7 +306,14 @@ impl Interpreter {
             frame.set(*reg, val.clone());
         }
         let mut projection_map: FxHashMap<ValueId, ContextId> = FxHashMap::default();
-        self.run_loop(&insts, &closures, &mut frame, &mut projection_map, &val_types).await
+        self.run_loop(
+            &insts,
+            &closures,
+            &mut frame,
+            &mut projection_map,
+            &val_types,
+        )
+        .await
     }
 
     /// Shared execution loop — used by both execute and closure calls.
@@ -332,7 +339,10 @@ impl Interpreter {
     ) -> Result<Value, RuntimeError> {
         let mut pc = 0;
         while pc < insts.len() {
-            match self.execute_inst(insts, closures, pc, frame, projection_map, val_types).await? {
+            match self
+                .execute_inst(insts, closures, pc, frame, projection_map, val_types)
+                .await?
+            {
                 Flow::Next => pc += 1,
                 Flow::Jump(target) => pc = target,
                 Flow::Return(val) => return Ok(val),
@@ -359,8 +369,15 @@ impl Interpreter {
 
             // ── Variables ────────────────────────────────────
             InstKind::VarLoad { dst, name } => {
-                let val = self.variables.get(name)
-                    .unwrap_or_else(|| panic!("undefined variable ${}", self.shared.interner.resolve(*name)))
+                let val = self
+                    .variables
+                    .get(name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "undefined variable ${}",
+                            self.shared.interner.resolve(*name)
+                        )
+                    })
                     .share();
                 frame.set(*dst, val);
             }
@@ -376,17 +393,25 @@ impl Interpreter {
             }
             InstKind::ContextLoad { dst, src } => {
                 let ctx_id = projection_map[src];
-                let name = self.shared.context_names.get(&ctx_id)
+                let name = self
+                    .shared
+                    .context_names
+                    .get(&ctx_id)
                     .unwrap_or_else(|| panic!("context load: no name for {:?}", ctx_id));
                 let key = self.shared.interner.resolve(*name);
-                let val = self.overlay.get(key)
+                let val = self
+                    .overlay
+                    .get(key)
                     .unwrap_or_else(|| panic!("context load: undefined context '{}'", key))
                     .clone();
                 frame.set(*dst, val);
             }
             InstKind::ContextStore { dst, value } => {
                 let ctx_id = projection_map[dst];
-                let name = self.shared.context_names.get(&ctx_id)
+                let name = self
+                    .shared
+                    .context_names
+                    .get(&ctx_id)
                     .unwrap_or_else(|| panic!("context store: no name for {:?}", ctx_id));
                 let key = self.shared.interner.resolve(*name);
                 let val = frame.share(*value);
@@ -394,7 +419,12 @@ impl Interpreter {
             }
 
             // ── Arithmetic / Logic ───────────────────────────
-            InstKind::BinOp { dst, op, left, right } => {
+            InstKind::BinOp {
+                dst,
+                op,
+                left,
+                right,
+            } => {
                 let result = eval_binop(*op, frame.get(*left), frame.get(*right))?;
                 frame.set(*dst, result);
             }
@@ -408,7 +438,9 @@ impl Interpreter {
                 let val = match frame.get(*object) {
                     Value::Object(obj) => obj
                         .get(field)
-                        .unwrap_or_else(|| panic!("missing field {}", self.shared.interner.resolve(*field)))
+                        .unwrap_or_else(|| {
+                            panic!("missing field {}", self.shared.interner.resolve(*field))
+                        })
                         .share(),
                     other => panic!("FieldGet on non-object: {other:?}"),
                 };
@@ -428,28 +460,45 @@ impl Interpreter {
                 frame.set(*dst, Value::deque(TrackedDeque::from_vec(items)));
             }
             InstKind::MakeObject { dst, fields } => {
-                let obj: FxHashMap<Astr, Value> = fields
-                    .iter()
-                    .map(|(k, v)| (*k, frame.share(*v)))
-                    .collect();
+                let obj: FxHashMap<Astr, Value> =
+                    fields.iter().map(|(k, v)| (*k, frame.share(*v))).collect();
                 frame.set(*dst, Value::object(obj));
             }
-            InstKind::MakeRange { dst, start, end, kind } => {
+            InstKind::MakeRange {
+                dst,
+                start,
+                end,
+                kind,
+            } => {
                 let s = frame.get(*start).as_int();
                 let e = frame.get(*end).as_int();
-                frame.set(*dst, Value::range(s, e, matches!(kind, RangeKind::InclusiveEnd)));
+                frame.set(
+                    *dst,
+                    Value::range(s, e, matches!(kind, RangeKind::InclusiveEnd)),
+                );
             }
             InstKind::MakeTuple { dst, elements } => {
                 let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
                 frame.set(*dst, Value::tuple(items));
             }
-            InstKind::MakeClosure { dst, body, captures } => {
+            InstKind::MakeClosure {
+                dst,
+                body,
+                captures,
+            } => {
                 let captured: Vec<Value> = captures.iter().map(|c| frame.share(*c)).collect();
                 let closure_body = Arc::clone(
-                    closures.get(body)
-                        .unwrap_or_else(|| panic!("closure body not found: {body:?}"))
+                    closures
+                        .get(body)
+                        .unwrap_or_else(|| panic!("closure body not found: {body:?}")),
                 );
-                frame.set(*dst, Value::closure(FnValue { body: closure_body, captures: captured.into() }));
+                frame.set(
+                    *dst,
+                    Value::closure(FnValue {
+                        body: closure_body,
+                        captures: captured.into(),
+                    }),
+                );
             }
 
             // ── Variant ──────────────────────────────────────
@@ -466,9 +515,9 @@ impl Interpreter {
             }
             InstKind::UnwrapVariant { dst, src } => {
                 let val = match frame.take(*src) {
-                    Value::Variant { payload: Some(p), .. } => {
-                        Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share())
-                    }
+                    Value::Variant {
+                        payload: Some(p), ..
+                    } => Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share()),
                     Value::Variant { payload: None, .. } => Value::Unit,
                     other => panic!("UnwrapVariant on non-variant: {other:?}"),
                 };
@@ -486,13 +535,22 @@ impl Interpreter {
                 };
                 frame.set(*dst, Value::bool_(matches));
             }
-            InstKind::TestListLen { dst, src, min_len, exact } => {
+            InstKind::TestListLen {
+                dst,
+                src,
+                min_len,
+                exact,
+            } => {
                 let len = match frame.get(*src) {
                     Value::List(l) => l.len(),
                     Value::Deque(d) => d.len(),
                     _ => 0,
                 };
-                let matches = if *exact { len == *min_len } else { len >= *min_len };
+                let matches = if *exact {
+                    len == *min_len
+                } else {
+                    len >= *min_len
+                };
                 frame.set(*dst, Value::bool_(matches));
             }
             InstKind::TestObjectKey { dst, src, key } => {
@@ -502,12 +560,16 @@ impl Interpreter {
                 };
                 frame.set(*dst, Value::bool_(has));
             }
-            InstKind::TestRange { dst, src, start, end, kind } => {
+            InstKind::TestRange {
+                dst,
+                src,
+                start,
+                end,
+                kind,
+            } => {
                 let inclusive = matches!(kind, RangeKind::InclusiveEnd);
                 let in_range = match frame.get(*src) {
-                    Value::Int(n) => {
-                        *n >= *start && if inclusive { *n <= *end } else { *n < *end }
-                    }
+                    Value::Int(n) => *n >= *start && if inclusive { *n <= *end } else { *n < *end },
                     _ => false,
                 };
                 frame.set(*dst, Value::bool_(in_range));
@@ -520,7 +582,13 @@ impl Interpreter {
             }
 
             // ── Iterator ─────────────────────────────────────
-            InstKind::IterStep { dst, iter_src, iter_dst, done, done_args } => {
+            InstKind::IterStep {
+                dst,
+                iter_src,
+                iter_dst,
+                done,
+                done_args,
+            } => {
                 let mut iter = frame.take(*iter_src).into_iterator();
                 match self.exec_next(&mut iter).await? {
                     Some(val) => {
@@ -540,7 +608,13 @@ impl Interpreter {
                 let target = frame.jump(insts, label, args);
                 return Ok(Flow::Jump(target));
             }
-            InstKind::JumpIf { cond, then_label, then_args, else_label, else_args } => {
+            InstKind::JumpIf {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+            } => {
                 let target = frame.jump_if(
                     insts,
                     *cond,
@@ -564,16 +638,31 @@ impl Interpreter {
             InstKind::FunctionCall { dst, callee, args } => {
                 let result = match callee {
                     Callee::Direct(id) => {
-                        let arg_vals: Args = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+                        let arg_vals: Args =
+                            args.iter().map(|a| frame.use_val(*a, val_types)).collect();
                         self.dispatch_call(id, arg_vals).await?
                     }
                     Callee::Indirect(val_id) => {
                         let fv = frame.take(*val_id).into_fn();
                         match args.len() {
-                            1 => self.call_closure(&fv, frame.use_val(args[0], val_types)).await?,
-                            2 => self.call_closure_2(&fv, frame.use_val(args[0], val_types), frame.use_val(args[1], val_types)).await?,
+                            1 => {
+                                self.call_closure(&fv, frame.use_val(args[0], val_types))
+                                    .await?
+                            }
+                            2 => {
+                                self.call_closure_2(
+                                    &fv,
+                                    frame.use_val(args[0], val_types),
+                                    frame.use_val(args[1], val_types),
+                                )
+                                .await?
+                            }
                             _ => {
-                                let arg = if args.is_empty() { Value::Unit } else { frame.use_val(args[0], val_types) };
+                                let arg = if args.is_empty() {
+                                    Value::Unit
+                                } else {
+                                    frame.use_val(args[0], val_types)
+                                };
                                 self.call_closure(&fv, arg).await?
                             }
                         }
@@ -581,21 +670,28 @@ impl Interpreter {
                 };
                 frame.set(*dst, result);
             }
-            InstKind::Spawn { dst, callee, args, context_uses: _ } => {
+            InstKind::Spawn {
+                dst,
+                callee,
+                args,
+                context_uses: _,
+            } => {
                 let callee_id = match callee {
                     Callee::Direct(id) => *id,
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
                 };
                 // Collect args from parent frame.
-                let spawn_args: Vec<Value> = args.iter()
-                    .map(|a| frame.share(*a))
-                    .collect();
+                let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
                 // Fork interpreter with args. context_uses is implicit via overlay.
                 let child = self.fork(callee_id, spawn_args);
                 let handle = self.shared.executor.spawn(child);
                 frame.set(*dst, Value::Handle(Box::new(handle)));
             }
-            InstKind::Eval { dst, src, context_defs } => {
+            InstKind::Eval {
+                dst,
+                src,
+                context_defs,
+            } => {
                 let handle = match frame.take(*src) {
                     Value::Handle(h) => *h,
                     other => panic!("eval: expected Handle, got {other:?}"),
@@ -613,7 +709,8 @@ impl Interpreter {
             // ── Object/List dynamic access ───────────────────
             InstKind::ObjectGet { dst, object, key } => {
                 let val = match frame.get(*object) {
-                    Value::Object(obj) => obj.get(key)
+                    Value::Object(obj) => obj
+                        .get(key)
                         .unwrap_or_else(|| panic!("ObjectGet: missing key"))
                         .share(),
                     other => panic!("ObjectGet on non-object: {other:?}"),
@@ -642,7 +739,12 @@ impl Interpreter {
                 };
                 frame.set(*dst, val);
             }
-            InstKind::ListSlice { dst, list, skip_head, skip_tail } => {
+            InstKind::ListSlice {
+                dst,
+                list,
+                skip_head,
+                skip_tail,
+            } => {
                 let val = match frame.take(*list) {
                     Value::List(l) => {
                         let len = l.len();
@@ -675,7 +777,7 @@ impl Interpreter {
         &mut self,
         iter: &mut crate::iter::IterHandle,
     ) -> Result<Option<Value>, RuntimeError> {
-        use crate::iter::{IterHandle, EffectfulState};
+        use crate::iter::{EffectfulState, IterHandle};
 
         match iter {
             IterHandle::Pure { items, init, index } => {
@@ -691,7 +793,10 @@ impl Interpreter {
                 }
 
                 // First access: collect through ops pipeline.
-                let pinit = init.lock().unwrap().take()
+                let pinit = init
+                    .lock()
+                    .unwrap()
+                    .take()
                     .expect("pure iterator: init already consumed but items not set");
                 let collected = self.collect_through_ops(pinit.source, &pinit.ops).await?;
                 let arc: Arc<[Value]> = collected.into();
@@ -707,8 +812,13 @@ impl Interpreter {
             }
             IterHandle::Effectful { state, .. } => {
                 match state {
-                    EffectfulState::Done => return Ok(None),
-                    EffectfulState::Suspended { source, elem_ops, offset, take_remaining } => {
+                    EffectfulState::Done => Ok(None),
+                    EffectfulState::Suspended {
+                        source,
+                        elem_ops,
+                        offset,
+                        take_remaining,
+                    } => {
                         // Take limit reached?
                         if let Some(0) = take_remaining {
                             *state = EffectfulState::Done;
@@ -743,7 +853,11 @@ impl Interpreter {
                         *state = EffectfulState::Done;
                         Ok(None)
                     }
-                    EffectfulState::Generator { next_fn, elem_ops, take_remaining } => {
+                    EffectfulState::Generator {
+                        next_fn,
+                        elem_ops,
+                        take_remaining,
+                    } => {
                         if let Some(0) = take_remaining {
                             *state = EffectfulState::Done;
                             return Ok(None);
@@ -895,11 +1009,7 @@ impl Interpreter {
     }
 
     /// Call a closure with a single argument.
-    pub async fn call_closure(
-        &mut self,
-        f: &FnValue,
-        arg: Value,
-    ) -> Result<Value, RuntimeError> {
+    pub async fn call_closure(&mut self, f: &FnValue, arg: Value) -> Result<Value, RuntimeError> {
         let body = &f.body;
         let label_map = build_label_map_from_insts(&body.insts);
         let mut frame = Frame::new(&body.val_factory, label_map);
@@ -913,7 +1023,14 @@ impl Interpreter {
         }
 
         let empty_closures = FxHashMap::default();
-        self.run_loop(&body.insts, &empty_closures, &mut frame, &mut projection_map, &body.val_types).await
+        self.run_loop(
+            &body.insts,
+            &empty_closures,
+            &mut frame,
+            &mut projection_map,
+            &body.val_types,
+        )
+        .await
     }
 
     /// Call a closure with two arguments (for reduce, fold).
@@ -932,19 +1049,26 @@ impl Interpreter {
             frame.set(*reg, cap.clone());
         }
         let mut params = body.param_regs.iter();
-        if let Some(&r) = params.next() { frame.set(r, arg1); }
-        if let Some(&r) = params.next() { frame.set(r, arg2); }
+        if let Some(&r) = params.next() {
+            frame.set(r, arg1);
+        }
+        if let Some(&r) = params.next() {
+            frame.set(r, arg2);
+        }
 
         let empty_closures = FxHashMap::default();
-        self.run_loop(&body.insts, &empty_closures, &mut frame, &mut projection_map, &body.val_types).await
+        self.run_loop(
+            &body.insts,
+            &empty_closures,
+            &mut frame,
+            &mut projection_map,
+            &body.val_types,
+        )
+        .await
     }
 
     /// Dispatch a direct function call by FunctionId.
-    async fn dispatch_call(
-        &mut self,
-        id: &FunctionId,
-        args: Args,
-    ) -> Result<Value, RuntimeError> {
+    async fn dispatch_call(&mut self, id: &FunctionId, args: Args) -> Result<Value, RuntimeError> {
         match self.function(id) {
             Executable::Builtin(BuiltinHandler::Sync(f)) => {
                 let f = *f;
@@ -988,11 +1112,15 @@ fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Result<Value, RuntimeEr
             BinOp::Sub => Value::Int(a.wrapping_sub(*b)),
             BinOp::Mul => Value::Int(a.wrapping_mul(*b)),
             BinOp::Div => {
-                if *b == 0 { return Err(RuntimeError::division_by_zero()); }
+                if *b == 0 {
+                    return Err(RuntimeError::division_by_zero());
+                }
                 Value::Int(a / b)
             }
             BinOp::Mod => {
-                if *b == 0 { return Err(RuntimeError::division_by_zero()); }
+                if *b == 0 {
+                    return Err(RuntimeError::division_by_zero());
+                }
                 Value::Int(a % b)
             }
             BinOp::Eq => Value::Bool(a == b),
@@ -1062,18 +1190,18 @@ fn eval_unaryop(op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
 // ── Cast ─────────────────────────────────────────────────────────────
 
 fn eval_cast(kind: CastKind, val: Value) -> Value {
-    use acvus_mir::ty::Effect;
     use crate::iter::{IterHandle, SequenceChain};
+    use acvus_mir::ty::Effect;
 
     match kind {
         CastKind::DequeToList => match val {
-            Value::Deque(d) => Value::list(d.as_slice().iter().map(|v| v.clone()).collect()),
+            Value::Deque(d) => Value::list(d.as_slice().to_vec()),
             other => panic!("DequeToList on {other:?}"),
         },
         CastKind::ListToIterator => match val {
             Value::List(l) => {
-                let items = std::sync::Arc::try_unwrap(l)
-                    .unwrap_or_else(|arc| arc.as_ref().clone());
+                let items =
+                    std::sync::Arc::try_unwrap(l).unwrap_or_else(|arc| arc.as_ref().clone());
                 Value::iterator(IterHandle::from_list(items, Effect::pure()))
             }
             other => panic!("ListToIterator on {other:?}"),
@@ -1100,8 +1228,7 @@ fn eval_cast(kind: CastKind, val: Value) -> Value {
         },
         CastKind::DequeToSequence => match val {
             Value::Deque(d) => {
-                let td = std::sync::Arc::try_unwrap(d)
-                    .unwrap_or_else(|arc| (*arc).clone());
+                let td = std::sync::Arc::try_unwrap(d).unwrap_or_else(|arc| (*arc).clone());
                 Value::sequence(SequenceChain::from_stored(td, Effect::pure()))
             }
             other => panic!("DequeToSequence on {other:?}"),

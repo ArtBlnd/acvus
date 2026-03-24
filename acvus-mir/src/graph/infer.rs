@@ -64,10 +64,11 @@ pub fn extract_call_edges(
     };
     let mut callees = Vec::new();
     for name in names {
-        if let Some(&callee_id) = name_to_fn.get(&name) {
-            if callee_id != self_id && !callees.contains(&callee_id) {
-                callees.push(callee_id);
-            }
+        if let Some(&callee_id) = name_to_fn.get(&name)
+            && callee_id != self_id
+            && !callees.contains(&callee_id)
+        {
+            callees.push(callee_id);
         }
     }
     callees
@@ -88,8 +89,12 @@ fn build_call_graph(
 
     let mut edges: FxHashMap<FunctionId, Vec<FunctionId>> = FxHashMap::default();
     for func in graph.functions.iter() {
-        let FnKind::Local(_) = &func.kind else { continue; };
-        let Some(parsed) = extract.parsed.get(&func.id) else { continue; };
+        let FnKind::Local(_) = &func.kind else {
+            continue;
+        };
+        let Some(parsed) = extract.parsed.get(&func.id) else {
+            continue;
+        };
         edges.insert(func.id, extract_call_edges(parsed, &name_to_id, func.id));
     }
     edges
@@ -113,7 +118,6 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
 
 /// Collect all RefKind::Value identifiers from a script AST.
 fn collect_value_refs_script(script: &acvus_ast::Script) -> Vec<Astr> {
-    use acvus_ast::*;
     let mut refs = Vec::new();
     collect_value_refs_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
@@ -137,17 +141,25 @@ fn collect_value_refs_node(node: &acvus_ast::Node, refs: &mut Vec<Astr>) {
         acvus_ast::Node::MatchBlock(mb) => {
             collect_value_refs_expr(&mb.source, refs);
             for arm in &mb.arms {
-                for n in &arm.body { collect_value_refs_node(n, refs); }
+                for n in &arm.body {
+                    collect_value_refs_node(n, refs);
+                }
             }
             if let Some(ca) = &mb.catch_all {
-                for n in &ca.body { collect_value_refs_node(n, refs); }
+                for n in &ca.body {
+                    collect_value_refs_node(n, refs);
+                }
             }
         }
         acvus_ast::Node::IterBlock(ib) => {
             collect_value_refs_expr(&ib.source, refs);
-            for n in &ib.body { collect_value_refs_node(n, refs); }
+            for n in &ib.body {
+                collect_value_refs_node(n, refs);
+            }
             if let Some(ca) = &ib.catch_all {
-                for n in &ca.body { collect_value_refs_node(n, refs); }
+                for n in &ca.body {
+                    collect_value_refs_node(n, refs);
+                }
             }
         }
     }
@@ -156,7 +168,11 @@ fn collect_value_refs_node(node: &acvus_ast::Node, refs: &mut Vec<Astr>) {
 fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     match expr {
-        Expr::Ident { name, ref_kind: RefKind::Value, .. } => refs.push(*name),
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } => refs.push(*name),
         Expr::Ident { .. } | Expr::Literal { .. } => {}
         Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
             collect_value_refs_expr(left, refs);
@@ -166,15 +182,21 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
         Expr::FieldAccess { object, .. } => collect_value_refs_expr(object, refs),
         Expr::FuncCall { func, args, .. } => {
             collect_value_refs_expr(func, refs);
-            for a in args { collect_value_refs_expr(a, refs); }
+            for a in args {
+                collect_value_refs_expr(a, refs);
+            }
         }
         Expr::Lambda { body, .. } => collect_value_refs_expr(body, refs),
         Expr::Paren { inner, .. } => collect_value_refs_expr(inner, refs),
         Expr::List { head, tail, .. } => {
-            for e in head.iter().chain(tail.iter()) { collect_value_refs_expr(e, refs); }
+            for e in head.iter().chain(tail.iter()) {
+                collect_value_refs_expr(e, refs);
+            }
         }
         Expr::Object { fields, .. } => {
-            for f in fields { collect_value_refs_expr(&f.value, refs); }
+            for f in fields {
+                collect_value_refs_expr(&f.value, refs);
+            }
         }
         Expr::Range { start, end, .. } => {
             collect_value_refs_expr(start, refs);
@@ -182,13 +204,20 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
         }
         Expr::Tuple { elements, .. } => {
             for e in elements {
-                if let TupleElem::Expr(e) = e { collect_value_refs_expr(e, refs); }
+                if let TupleElem::Expr(e) = e {
+                    collect_value_refs_expr(e, refs);
+                }
             }
         }
         Expr::Group { elements, .. } => {
-            for e in elements { collect_value_refs_expr(e, refs); }
+            for e in elements {
+                collect_value_refs_expr(e, refs);
+            }
         }
-        Expr::Variant { payload: Some(inner), .. } => collect_value_refs_expr(inner, refs),
+        Expr::Variant {
+            payload: Some(inner),
+            ..
+        } => collect_value_refs_expr(inner, refs),
         Expr::Variant { payload: None, .. } => {}
         Expr::Block { stmts, tail, .. } => {
             collect_value_refs_stmts(stmts, refs);
@@ -199,7 +228,10 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
 
 /// Tarjan's SCC algorithm. Returns SCCs in reverse topological order
 /// (leaf SCCs first — dependencies before dependents).
-pub fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<FunctionId>>) -> Vec<Vec<FunctionId>> {
+pub fn tarjan_scc(
+    ids: &[FunctionId],
+    edges: &FxHashMap<FunctionId, Vec<FunctionId>>,
+) -> Vec<Vec<FunctionId>> {
     let mut index_counter: u32 = 0;
     let mut stack: Vec<FunctionId> = Vec::new();
     let mut on_stack: FxHashSet<FunctionId> = FxHashSet::default();
@@ -226,7 +258,16 @@ pub fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<Function
         if let Some(neighbors) = edges.get(&v) {
             for &w in neighbors {
                 if !index.contains_key(&w) {
-                    strongconnect(w, edges, index_counter, stack, on_stack, index, lowlink, result);
+                    strongconnect(
+                        w,
+                        edges,
+                        index_counter,
+                        stack,
+                        on_stack,
+                        index,
+                        lowlink,
+                        result,
+                    );
                     let lw = lowlink[&w];
                     let lv = lowlink[&v];
                     lowlink.insert(v, lv.min(lw));
@@ -244,7 +285,9 @@ pub fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<Function
                 let w = stack.pop().unwrap();
                 on_stack.remove(&w);
                 component.push(w);
-                if w == v { break; }
+                if w == v {
+                    break;
+                }
             }
             result.push(component);
         }
@@ -252,7 +295,16 @@ pub fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<Function
 
     for &id in ids {
         if !index.contains_key(&id) {
-            strongconnect(id, edges, &mut index_counter, &mut stack, &mut on_stack, &mut index, &mut lowlink, &mut result);
+            strongconnect(
+                id,
+                edges,
+                &mut index_counter,
+                &mut stack,
+                &mut on_stack,
+                &mut index,
+                &mut lowlink,
+                &mut result,
+            );
         }
     }
 
@@ -330,8 +382,12 @@ pub fn infer_scc(
     // Typecheck each function in this SCC.
     for &fid in scc {
         let func = fn_by_id[&fid];
-        let Some(fn_ref) = extract_refs.get(&fid) else { continue; };
-        let Some(parsed) = extract_parsed.get(&fid) else { continue; };
+        let Some(fn_ref) = extract_refs.get(&fid) else {
+            continue;
+        };
+        let Some(parsed) = extract_parsed.get(&fid) else {
+            continue;
+        };
 
         let mut ctx_types: FxHashMap<Astr, Ty> = FxHashMap::default();
         let mut unknown_vars: FxHashMap<Astr, Ty> = FxHashMap::default();
@@ -384,7 +440,10 @@ pub fn infer_scc(
 
         let params: Vec<InferredParam> = unknown_vars
             .into_iter()
-            .map(|(name, var)| InferredParam { name, ty: subst.resolve(&var) })
+            .map(|(name, var)| InferredParam {
+                name,
+                ty: subst.resolve(&var),
+            })
             .collect();
         fn_params.insert(fid, params);
     }
@@ -395,11 +454,21 @@ pub fn infer_scc(
 
     for &fid in scc {
         let func = fn_by_id[&fid];
-        let ret = fn_ret_vars.get(&fid).map(|r| subst.resolve(r)).unwrap_or_else(Ty::error);
-        let effect = fn_effect_vars.get(&fid).map(|e| subst.resolve_effect(e)).unwrap_or_else(Effect::pure);
+        let ret = fn_ret_vars
+            .get(&fid)
+            .map(|r| subst.resolve(r))
+            .unwrap_or_else(Ty::error);
+        let effect = fn_effect_vars
+            .get(&fid)
+            .map(|e| subst.resolve_effect(e))
+            .unwrap_or_else(Effect::pure);
         let bind: Vec<Param> = fn_bind_params
             .get(&fid)
-            .map(|b| b.iter().map(|p| Param::new(p.name, subst.resolve(&p.ty))).collect())
+            .map(|b| {
+                b.iter()
+                    .map(|p| Param::new(p.name, subst.resolve(&p.ty)))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let fn_ty = Ty::Fn {
@@ -409,14 +478,21 @@ pub fn infer_scc(
             effect,
         };
         resolved_types.insert(func.name, fn_ty.clone());
-        fn_metas.insert(fid, FunctionMeta {
-            ty: fn_ty,
-            params: bind,
-            effect: EffectSet::default(), // filled by effect propagation later
-        });
+        fn_metas.insert(
+            fid,
+            FunctionMeta {
+                ty: fn_ty,
+                params: bind,
+                effect: EffectSet::default(), // filled by effect propagation later
+            },
+        );
     }
 
-    SccInferResult { fn_metas, fn_params, resolved_types }
+    SccInferResult {
+        fn_metas,
+        fn_params,
+        resolved_types,
+    }
 }
 
 // ── Batch inference ─────────────────────────────────────────────────
@@ -520,8 +596,12 @@ pub fn infer(
         // Typecheck each function in this SCC.
         for &fid in scc {
             let func = fn_by_id[&fid];
-            let Some(fn_ref) = extract.fn_refs.get(&fid) else { continue; };
-            let Some(parsed) = extract.parsed.get(&fid) else { continue; };
+            let Some(fn_ref) = extract.fn_refs.get(&fid) else {
+                continue;
+            };
+            let Some(parsed) = extract.parsed.get(&fid) else {
+                continue;
+            };
 
             // Build context types.
             let mut ctx_types: FxHashMap<Astr, Ty> = FxHashMap::default();
@@ -576,7 +656,10 @@ pub fn infer(
 
             let params: Vec<InferredParam> = unknown_vars
                 .into_iter()
-                .map(|(name, var)| InferredParam { name, ty: subst.resolve(&var) })
+                .map(|(name, var)| InferredParam {
+                    name,
+                    ty: subst.resolve(&var),
+                })
                 .collect();
             fn_params.insert(fid, params);
         }
@@ -618,7 +701,9 @@ pub fn infer(
     let mut all_map: FxHashMap<Astr, Ty> = FxHashMap::default();
     for params in fn_params.values() {
         for param in params {
-            all_map.entry(param.name).or_insert_with(|| param.ty.clone());
+            all_map
+                .entry(param.name)
+                .or_insert_with(|| param.ty.clone());
         }
     }
     let all_params: Vec<InferredParam> = all_map
@@ -629,11 +714,21 @@ pub fn infer(
     let mut functions: FxHashMap<FunctionId, FunctionMeta> = FxHashMap::default();
 
     for &fid in &local_ids {
-        let ret = fn_ret_vars.get(&fid).map(|r| subst.resolve(r)).unwrap_or_else(Ty::error);
-        let effect = fn_effect_vars.get(&fid).map(|e| subst.resolve_effect(e)).unwrap_or_else(Effect::pure);
+        let ret = fn_ret_vars
+            .get(&fid)
+            .map(|r| subst.resolve(r))
+            .unwrap_or_else(Ty::error);
+        let effect = fn_effect_vars
+            .get(&fid)
+            .map(|e| subst.resolve_effect(e))
+            .unwrap_or_else(Effect::pure);
         let bind: Vec<Param> = fn_bind_params
             .get(&fid)
-            .map(|b| b.iter().map(|p| Param::new(p.name, subst.resolve(&p.ty))).collect())
+            .map(|b| {
+                b.iter()
+                    .map(|p| Param::new(p.name, subst.resolve(&p.ty)))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let fn_ty = Ty::Fn {
@@ -642,11 +737,14 @@ pub fn infer(
             captures: vec![],
             effect,
         };
-        functions.insert(fid, FunctionMeta {
-            ty: fn_ty,
-            params: bind,
-            effect: EffectSet::default(), // filled in step 4
-        });
+        functions.insert(
+            fid,
+            FunctionMeta {
+                ty: fn_ty,
+                params: bind,
+                effect: EffectSet::default(), // filled in step 4
+            },
+        );
     }
 
     // ── STEP 4: Compute transitive effects ─────────────────────────
@@ -654,11 +752,8 @@ pub fn infer(
     // Build name→ContextId mapping, convert direct accesses (Astr) to ContextId,
     // then propagate through call graph in SCC order (fixpoint within each SCC).
 
-    let name_to_ctx_id: FxHashMap<Astr, ContextId> = graph
-        .contexts
-        .iter()
-        .map(|c| (c.name, c.id))
-        .collect();
+    let name_to_ctx_id: FxHashMap<Astr, ContextId> =
+        graph.contexts.iter().map(|c| (c.name, c.id)).collect();
 
     // Convert direct accesses: Astr → ContextId and store in function meta.
     // Also union parameter effects (over-approximation: any effectful param contributes).
@@ -666,24 +761,35 @@ pub fn infer(
         let reads: BTreeSet<ContextId> = fn_direct_reads
             .get(&fid)
             .map(|names| {
-                names.iter().filter_map(|n| name_to_ctx_id.get(n).copied()).collect()
+                names
+                    .iter()
+                    .filter_map(|n| name_to_ctx_id.get(n).copied())
+                    .collect()
             })
             .unwrap_or_default();
         let writes: BTreeSet<ContextId> = fn_direct_writes
             .get(&fid)
             .map(|names| {
-                names.iter().filter_map(|n| name_to_ctx_id.get(n).copied()).collect()
+                names
+                    .iter()
+                    .filter_map(|n| name_to_ctx_id.get(n).copied())
+                    .collect()
             })
             .unwrap_or_default();
-        let mut effect = EffectSet { reads, writes, io: false, self_modifying: false };
+        let mut effect = EffectSet {
+            reads,
+            writes,
+            io: false,
+            self_modifying: false,
+        };
 
         // Union effects carried by parameters (Iterator<T,E>, Fn{effect}, Sequence<T,_,E>).
         if let Some(meta) = functions.get(&fid) {
             for param in &meta.params {
-                if let Some(param_effect) = param.ty.carried_effect() {
-                    if let Effect::Resolved(param_set) = param_effect {
-                        effect = effect.union(param_set);
-                    }
+                if let Some(param_effect) = param.ty.carried_effect()
+                    && let Effect::Resolved(param_set) = param_effect
+                {
+                    effect = effect.union(param_set);
                 }
             }
         }
@@ -701,18 +807,20 @@ pub fn infer(
             for &fid in scc {
                 if let Some(callees) = call_graph.get(&fid) {
                     for &callee_id in callees {
-                        let callee_effect = functions.get(&callee_id)
+                        let callee_effect = functions
+                            .get(&callee_id)
                             .map(|m| m.effect.clone())
                             .unwrap_or_default();
-                        let current = functions.get(&fid)
+                        let current = functions
+                            .get(&fid)
                             .map(|m| m.effect.clone())
                             .unwrap_or_default();
                         let merged = current.union(&callee_effect);
-                        if merged != current {
-                            if let Some(meta) = functions.get_mut(&fid) {
-                                meta.effect = merged;
-                                changed = true;
-                            }
+                        if merged != current
+                            && let Some(meta) = functions.get_mut(&fid)
+                        {
+                            meta.effect = merged;
+                            changed = true;
                         }
                     }
                 }
@@ -835,8 +943,14 @@ mod tests {
 
         assert_eq!(result.all_params.len(), 2);
         // At least one should still be a Param (unresolved).
-        let has_param = result.all_params.iter().any(|p| matches!(p.ty, Ty::Param { .. }));
-        assert!(has_param, "without a literal, type should remain unresolved");
+        let has_param = result
+            .all_params
+            .iter()
+            .any(|p| matches!(p.ty, Ty::Param { .. }));
+        assert!(
+            has_param,
+            "without a literal, type should remain unresolved"
+        );
     }
 
     // -- Completeness: known context not re-inferred --
@@ -880,12 +994,12 @@ mod tests {
         for &(name, source, ref params) in fns {
             let fid = FunctionId::alloc();
             let aname = interner.intern(name);
-            let sig = params.as_ref().map(|p| {
-                Signature {
-                    params: p.iter().enumerate().map(|(i, ty)| {
-                        Param::new(interner.intern(&format!("_{i}")), ty.clone())
-                    }).collect(),
-                }
+            let sig = params.as_ref().map(|p| Signature {
+                params: p
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty.clone()))
+                    .collect(),
             });
             functions.push(Function {
                 id: fid,
@@ -902,11 +1016,14 @@ mod tests {
             });
             ids.push((aname, fid));
         }
-        let contexts = ctx.iter().map(|(name, ty)| Context {
-            id: ContextId::alloc(),
-            name: interner.intern(name),
-            constraint: Constraint::Exact(ty.clone()),
-        }).collect();
+        let contexts = ctx
+            .iter()
+            .map(|(name, ty)| Context {
+                id: ContextId::alloc(),
+                name: interner.intern(name),
+                constraint: Constraint::Exact(ty.clone()),
+            })
+            .collect();
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
@@ -927,8 +1044,18 @@ mod tests {
 
         let fid = ids[0].1;
         let effect = &result.functions[&fid].effect;
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
-        let ctx_y = graph.contexts.iter().find(|c| c.name == i.intern("y")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
+        let ctx_y = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("y"))
+            .unwrap()
+            .id;
         assert!(effect.reads.contains(&ctx_x), "should have @x in reads");
         assert!(effect.reads.contains(&ctx_y), "should have @y in reads");
         assert!(effect.writes.is_empty(), "read-only should have no writes");
@@ -947,19 +1074,23 @@ mod tests {
 
         let fid = ids[0].1;
         let effect = &result.functions[&fid].effect;
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
         assert!(effect.writes.contains(&ctx_x), "should have @x in writes");
-        assert!(effect.reads.contains(&ctx_x), "should also have @x in reads (tail)");
+        assert!(
+            effect.reads.contains(&ctx_x),
+            "should also have @x in reads (tail)"
+        );
     }
 
     #[test]
     fn effect_pure_function_empty() {
         let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[("pure_fn", "1 + 2", Some(vec![]))],
-            &[],
-        );
+        let (graph, ids) = make_multi_graph(&i, &[("pure_fn", "1 + 2", Some(vec![]))], &[]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
@@ -973,16 +1104,18 @@ mod tests {
         let i = Interner::new();
         let (graph, ids) = make_multi_graph(
             &i,
-            &[
-                ("get_x", "@x", Some(vec![])),
-                ("main", "get_x()", None),
-            ],
+            &[("get_x", "@x", Some(vec![])), ("main", "get_x()", None)],
             &[("x", Ty::Int)],
         );
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
 
         // get_x directly reads @x
         let get_x_effect = &result.functions[&ids[0].1].effect;
@@ -1011,7 +1144,12 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
         // top → mid → read_x → @x. All should have @x in reads.
         for (_, fid) in &ids {
             let effect = &result.functions[fid].effect;
@@ -1037,7 +1175,12 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
         // main calls pure_fn (not read_x) → should NOT have @x
         let main_effect = &result.functions[&ids[2].1].effect;
         assert!(
@@ -1063,16 +1206,32 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
-        let ctx_y = graph.contexts.iter().find(|c| c.name == i.intern("y")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
+        let ctx_y = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("y"))
+            .unwrap()
+            .id;
 
         // a and b are in the same SCC.
         // After fixpoint: both should have reads = {@x, @y}.
         let a_effect = &result.functions[&ids[0].1].effect;
         let b_effect = &result.functions[&ids[1].1].effect;
         assert!(a_effect.reads.contains(&ctx_x), "a should read @x (direct)");
-        assert!(a_effect.reads.contains(&ctx_y), "a should read @y (transitive from b)");
-        assert!(b_effect.reads.contains(&ctx_x), "b should read @x (transitive from a)");
+        assert!(
+            a_effect.reads.contains(&ctx_y),
+            "a should read @y (transitive from b)"
+        );
+        assert!(
+            b_effect.reads.contains(&ctx_x),
+            "b should read @x (transitive from a)"
+        );
         assert!(b_effect.reads.contains(&ctx_y), "b should read @y (direct)");
     }
 
@@ -1090,7 +1249,12 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_x = graph.contexts.iter().find(|c| c.name == i.intern("x")).unwrap().id;
+        let ctx_x = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("x"))
+            .unwrap()
+            .id;
 
         // writer writes @x → caller should transitively inherit
         let caller_effect = &result.functions[&ids[1].1].effect;
@@ -1112,9 +1276,11 @@ mod tests {
         let (graph, ids) = make_multi_graph(
             &i,
             // takes an iterator param, returns element
-            &[("consumer", "_0", Some(vec![
-                Ty::Iterator(Box::new(Ty::Int), iter_effect),
-            ]))],
+            &[(
+                "consumer",
+                "_0",
+                Some(vec![Ty::Iterator(Box::new(Ty::Int), iter_effect)]),
+            )],
             &[],
         );
         let ext = extract::extract(&i, &graph);
@@ -1133,16 +1299,21 @@ mod tests {
         let i = Interner::new();
         let (graph, ids) = make_multi_graph(
             &i,
-            &[("processor", "_0", Some(vec![
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-            ]))],
+            &[(
+                "processor",
+                "_0",
+                Some(vec![Ty::Iterator(Box::new(Ty::Int), Effect::pure())]),
+            )],
             &[],
         );
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
         let effect = &result.functions[&ids[0].1].effect;
-        assert!(effect.is_pure(), "pure iterator param should not make function effectful");
+        assert!(
+            effect.is_pure(),
+            "pure iterator param should not make function effectful"
+        );
     }
 
     #[test]
@@ -1156,14 +1327,16 @@ mod tests {
         });
         let (graph, ids) = make_multi_graph(
             &i,
-            &[("caller", "_0", Some(vec![
-                Ty::Fn {
+            &[(
+                "caller",
+                "_0",
+                Some(vec![Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
                     effect: fn_effect,
-                },
-            ]))],
+                }]),
+            )],
             &[],
         );
         let ext = extract::extract(&i, &graph);
@@ -1190,14 +1363,16 @@ mod tests {
             &i,
             &[
                 ("read_a", "@a", Some(vec![])),
-                ("use_fn", "_0", Some(vec![
-                    Ty::Fn {
+                (
+                    "use_fn",
+                    "_0",
+                    Some(vec![Ty::Fn {
                         params: vec![],
                         ret: Box::new(Ty::Int),
                         captures: vec![],
                         effect: fn_effect,
-                    },
-                ])),
+                    }]),
+                ),
                 // caller invokes both → gets both effects transitively
                 ("caller", "read_a() + use_fn(read_a)", None),
             ],
@@ -1206,10 +1381,21 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);
 
-        let ctx_a = graph.contexts.iter().find(|c| c.name == i.intern("a")).unwrap().id;
+        let ctx_a = graph
+            .contexts
+            .iter()
+            .find(|c| c.name == i.intern("a"))
+            .unwrap()
+            .id;
         let caller_effect = &result.functions[&ids[2].1].effect;
-        assert!(caller_effect.reads.contains(&ctx_a), "transitive read of @a from read_a");
-        assert!(caller_effect.writes.contains(&ctx_b), "param Fn's write of @b from use_fn");
+        assert!(
+            caller_effect.reads.contains(&ctx_a),
+            "transitive read of @a from read_a"
+        );
+        assert!(
+            caller_effect.writes.contains(&ctx_b),
+            "param Fn's write of @b from use_fn"
+        );
     }
 
     #[test]
@@ -1221,8 +1407,10 @@ mod tests {
         let (graph, ids) = make_multi_graph(
             &i,
             &[
-                ("fn_a", "_0", Some(vec![
-                    Ty::Fn {
+                (
+                    "fn_a",
+                    "_0",
+                    Some(vec![Ty::Fn {
                         params: vec![],
                         ret: Box::new(Ty::Int),
                         captures: vec![],
@@ -1230,10 +1418,12 @@ mod tests {
                             reads: [ctx_x].into_iter().collect(),
                             ..Default::default()
                         }),
-                    },
-                ])),
-                ("fn_b", "_0", Some(vec![
-                    Ty::Fn {
+                    }]),
+                ),
+                (
+                    "fn_b",
+                    "_0",
+                    Some(vec![Ty::Fn {
                         params: vec![],
                         ret: Box::new(Ty::Int),
                         captures: vec![],
@@ -1241,8 +1431,8 @@ mod tests {
                             writes: [ctx_y].into_iter().collect(),
                             ..Default::default()
                         }),
-                    },
-                ])),
+                    }]),
+                ),
                 // caller gets both effects transitively
                 ("caller", "fn_a(fn_b) + fn_b(fn_a)", None),
             ],

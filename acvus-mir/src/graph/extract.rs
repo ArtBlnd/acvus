@@ -45,10 +45,7 @@ pub enum ParsedSource {
 
 /// Extract information from a single local function.
 /// Returns None if the function is not Local or fails to parse.
-pub fn extract_one(
-    interner: &Interner,
-    func: &Function,
-) -> Option<(FnRefs, ParsedSource)> {
+pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, ParsedSource)> {
     let FnKind::Local(source) = &func.kind else {
         return None;
     };
@@ -134,10 +131,10 @@ fn analyze_refs(module: &MirModule, id_to_name: &FxHashMap<ContextId, Astr>) -> 
             }
             // ContextStore: trace dst back through projection chain to find root context.
             InstKind::ContextStore { dst, .. } => {
-                if let Some(root_id) = trace_projection_root(*dst, &val_def, insts) {
-                    if let Some(&name) = id_to_name.get(&root_id) {
-                        writes.insert(name);
-                    }
+                if let Some(root_id) = trace_projection_root(*dst, &val_def, insts)
+                    && let Some(&name) = id_to_name.get(&root_id)
+                {
+                    writes.insert(name);
                 }
             }
             _ => {}
@@ -166,10 +163,9 @@ fn analyze_refs(module: &MirModule, id_to_name: &FxHashMap<ContextId, Astr>) -> 
                 InstKind::ContextStore { dst, .. } => {
                     if let Some(root_id) =
                         trace_projection_root(*dst, &closure_val_def, closure_insts)
+                        && let Some(&name) = id_to_name.get(&root_id)
                     {
-                        if let Some(&name) = id_to_name.get(&root_id) {
-                            writes.insert(name);
-                        }
+                        writes.insert(name);
                     }
                 }
                 _ => {}

@@ -174,7 +174,10 @@ impl SerTy {
                 ret,
                 effect,
             } => Ty::Fn {
-                params: params.iter().map(|p| crate::ty::Param::new(interner.intern("_"), p.to_ty(interner))).collect(),
+                params: params
+                    .iter()
+                    .map(|p| crate::ty::Param::new(interner.intern("_"), p.to_ty(interner)))
+                    .collect(),
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
                 effect: effect.clone(),

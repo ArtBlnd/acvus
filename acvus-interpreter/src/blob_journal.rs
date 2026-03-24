@@ -54,8 +54,15 @@ enum SerValue {
     Object(Vec<(String, SerValue)>),
     Tuple(Vec<SerValue>),
     Deque(Vec<SerValue>),
-    Variant { tag: String, payload: Option<Box<SerValue>> },
-    Range { start: i64, end: i64, inclusive: bool },
+    Variant {
+        tag: String,
+        payload: Option<Box<SerValue>>,
+    },
+    Range {
+        start: i64,
+        end: i64,
+        inclusive: bool,
+    },
 }
 
 impl SerValue {
@@ -67,29 +74,39 @@ impl SerValue {
             Value::Unit => SerValue::Unit,
             Value::Byte(b) => SerValue::Byte(*b),
             Value::String(s) => SerValue::String(s.to_string()),
-            Value::List(items) => {
-                SerValue::List(items.iter().map(|v| SerValue::from_value(v, interner)).collect())
-            }
-            Value::Object(obj) => {
-                SerValue::Object(
-                    obj.iter()
-                        .map(|(k, v)| {
-                            (interner.resolve(*k).to_string(), SerValue::from_value(v, interner))
-                        })
-                        .collect(),
-                )
-            }
-            Value::Tuple(elems) => {
-                SerValue::Tuple(elems.iter().map(|v| SerValue::from_value(v, interner)).collect())
-            }
-            Value::Deque(d) => {
-                SerValue::Deque(
-                    d.as_slice().iter().map(|v| SerValue::from_value(v, interner)).collect(),
-                )
-            }
+            Value::List(items) => SerValue::List(
+                items
+                    .iter()
+                    .map(|v| SerValue::from_value(v, interner))
+                    .collect(),
+            ),
+            Value::Object(obj) => SerValue::Object(
+                obj.iter()
+                    .map(|(k, v)| {
+                        (
+                            interner.resolve(*k).to_string(),
+                            SerValue::from_value(v, interner),
+                        )
+                    })
+                    .collect(),
+            ),
+            Value::Tuple(elems) => SerValue::Tuple(
+                elems
+                    .iter()
+                    .map(|v| SerValue::from_value(v, interner))
+                    .collect(),
+            ),
+            Value::Deque(d) => SerValue::Deque(
+                d.as_slice()
+                    .iter()
+                    .map(|v| SerValue::from_value(v, interner))
+                    .collect(),
+            ),
             Value::Variant { tag, payload } => SerValue::Variant {
                 tag: interner.resolve(*tag).to_string(),
-                payload: payload.as_ref().map(|p| Box::new(SerValue::from_value(p, interner))),
+                payload: payload
+                    .as_ref()
+                    .map(|p| Box::new(SerValue::from_value(p, interner))),
             },
             Value::Range(r) => SerValue::Range {
                 start: r.start,
@@ -133,8 +150,9 @@ impl SerValue {
                 Value::tuple(elems.into_iter().map(|v| v.to_value(interner)).collect())
             }
             SerValue::Deque(items) => {
-                let deque =
-                    TrackedDeque::from_vec(items.into_iter().map(|v| v.to_value(interner)).collect());
+                let deque = TrackedDeque::from_vec(
+                    items.into_iter().map(|v| v.to_value(interner)).collect(),
+                );
                 Value::deque(deque)
             }
             SerValue::Variant { tag, payload } => {
@@ -142,7 +160,11 @@ impl SerValue {
                 let payload_val = payload.map(|p| p.to_value(interner));
                 Value::variant(astr_tag, payload_val)
             }
-            SerValue::Range { start, end, inclusive } => Value::range(start, end, inclusive),
+            SerValue::Range {
+                start,
+                end,
+                inclusive,
+            } => Value::range(start, end, inclusive),
         }
     }
 }
@@ -488,10 +510,10 @@ impl<S: BlobStore> BlobStoreJournal<S> {
     /// Otherwise → walk up to the nearest snapshot ancestor, apply diffs forward.
     async fn load_state(&self, idx: usize) -> Result<HashMap<String, Value>, JournalError> {
         // Check hot node first.
-        if let Some(ref hot) = self.hot {
-            if hot.idx == idx {
-                return Ok(hot.state.clone());
-            }
+        if let Some(ref hot) = self.hot
+            && hot.idx == idx
+        {
+            return Ok(hot.state.clone());
         }
 
         // Walk up to the nearest node with a snapshot.
@@ -524,8 +546,7 @@ impl<S: BlobStore> BlobStoreJournal<S> {
                     .get(&diff_hash)
                     .await
                     .ok_or_else(|| JournalError::MissingBlob("diff".into()))?;
-                let (fields, sequences) =
-                    deserialize_turn_diff(&diff_bytes, &self.interner)?;
+                let (fields, sequences) = deserialize_turn_diff(&diff_bytes, &self.interner)?;
 
                 // Apply field diffs: replace values.
                 for (k, v) in fields {
@@ -566,17 +587,14 @@ impl<S: BlobStore> BlobStoreJournal<S> {
 
         // Store combined diffs if non-empty.
         if !hot.changed_fields.is_empty() || !hot.changed_sequences.is_empty() {
-            let diff_bytes = serialize_turn_diff(
-                &hot.changed_fields,
-                &hot.changed_sequences,
-                &self.interner,
-            )?;
+            let diff_bytes =
+                serialize_turn_diff(&hot.changed_fields, &hot.changed_sequences, &self.interner)?;
             let diff_hash = self.store.put(diff_bytes).await;
             self.tree.nodes[idx].diff_hash = Some(diff_hash);
         }
 
         // Snapshot only at interval boundaries.
-        if depth % self.snapshot_interval == 0 {
+        if depth.is_multiple_of(self.snapshot_interval) {
             let snap_bytes = serialize_entries(&hot.state, &self.interner)?;
             let snap_hash = self.store.put(snap_bytes).await;
             self.tree.nodes[idx].snapshot_hash = Some(snap_hash);
@@ -588,10 +606,10 @@ impl<S: BlobStore> BlobStoreJournal<S> {
     /// Ensure the given node is the hot node.
     /// Persists the previous hot node if switching.
     async fn ensure_hot(&mut self, target_idx: usize) -> Result<(), JournalError> {
-        if let Some(ref hot) = self.hot {
-            if hot.idx == target_idx {
-                return Ok(());
-            }
+        if let Some(ref hot) = self.hot
+            && hot.idx == target_idx
+        {
+            return Ok(());
         }
         self.persist_hot_node().await?;
         let state = self.load_state(target_idx).await?;
@@ -790,11 +808,9 @@ impl<S: BlobStore> EntryMut for BlobEntryMut<'_, S> {
 
         let new_sc = SequenceChain::from_stored(squashed, Effect::pure());
         let key_owned = key.to_string();
-        hot.state
-            .insert(key_owned.clone(), Value::sequence(new_sc));
+        hot.state.insert(key_owned.clone(), Value::sequence(new_sc));
         hot.changed_sequences.insert(key_owned, diff);
     }
-
 }
 
 impl<S: BlobStore> EntryLifecycle for BlobEntryMut<'_, S> {
@@ -806,7 +822,10 @@ impl<S: BlobStore> EntryLifecycle for BlobEntryMut<'_, S> {
         // For async blob stores, this would need to be async.
         // TODO: make this properly async when needed.
         futures::executor::block_on(async {
-            journal.persist_hot_node().await.expect("persist_hot_node failed in next()");
+            journal
+                .persist_hot_node()
+                .await
+                .expect("persist_hot_node failed in next()");
         });
 
         // Inherit state from current node.
@@ -849,12 +868,18 @@ impl<S: BlobStore> EntryLifecycle for BlobEntryMut<'_, S> {
 
         // Persist current hot node before switching.
         futures::executor::block_on(async {
-            journal.persist_hot_node().await.expect("persist_hot_node failed in fork()");
+            journal
+                .persist_hot_node()
+                .await
+                .expect("persist_hot_node failed in fork()");
         });
 
         // Load parent's state.
         let parent_state = futures::executor::block_on(async {
-            journal.load_state(parent_idx).await.expect("load_state failed in fork()")
+            journal
+                .load_state(parent_idx)
+                .await
+                .expect("load_state failed in fork()")
         });
 
         // Create sibling node.
@@ -901,7 +926,9 @@ impl<S: BlobStore> Journal for BlobStoreJournal<S> {
     fn entry_ref(&self, id: Uuid) -> Self::Ref<'_> {
         let idx = self.tree.uuid_to_idx[&id];
         let state = futures::executor::block_on(async {
-            self.load_state(idx).await.expect("load_state failed in entry_ref()")
+            self.load_state(idx)
+                .await
+                .expect("load_state failed in entry_ref()")
         });
         BlobEntryRef {
             _journal: self,
@@ -912,7 +939,9 @@ impl<S: BlobStore> Journal for BlobStoreJournal<S> {
     fn entry_mut(&mut self, id: Uuid) -> Self::Mut<'_> {
         let idx = self.tree.uuid_to_idx[&id];
         futures::executor::block_on(async {
-            self.ensure_hot(idx).await.expect("ensure_hot failed in entry_mut()")
+            self.ensure_hot(idx)
+                .await
+                .expect("ensure_hot failed in entry_mut()")
         });
         BlobEntryMut { journal: self, idx }
     }

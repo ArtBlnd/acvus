@@ -62,6 +62,12 @@ pub struct PhiInsertion {
 /// Entry block label constant — used by Lowerer to identify the implicit entry block.
 pub const ENTRY_BLOCK: Label = Label(u32::MAX);
 
+impl Default for SSABuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SSABuilder {
     pub fn new() -> Self {
         Self {

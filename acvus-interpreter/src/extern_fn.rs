@@ -25,7 +25,7 @@ use acvus_mir::ty::{Effect, Param, Ty};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::interpreter::{BuiltinHandler, Executable, SyncBuiltinFn, AsyncBuiltinFn};
+use crate::interpreter::{AsyncBuiltinFn, BuiltinHandler, Executable, SyncBuiltinFn};
 
 /// A fully-specified external function: signature + handler.
 pub struct ExternFn {
@@ -120,7 +120,9 @@ impl ExternRegistry {
     /// Create a registry from a factory that receives the interner.
     /// This allows ExternFn params/ret to use Astr-based types (Object, etc).
     pub fn new(factory: impl FnOnce(&Interner) -> Vec<ExternFn> + 'static) -> Self {
-        Self { factory: Box::new(factory) }
+        Self {
+            factory: Box::new(factory),
+        }
     }
 
     /// Allocate FunctionIds and produce both graph Functions and runtime Executables.
@@ -134,7 +136,10 @@ impl ExternRegistry {
             let name = interner.intern(&f.name);
 
             // Build Ty::Fn for the graph.
-            let params: Vec<Param> = f.params.iter().enumerate()
+            let params: Vec<Param> = f
+                .params
+                .iter()
+                .enumerate()
                 .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty.clone()))
                 .collect();
             let fn_ty = Ty::Fn {
@@ -147,7 +152,9 @@ impl ExternRegistry {
             functions.push(Function {
                 id,
                 name,
-                kind: FnKind::Extern { deps: Freeze::new(vec![]) },
+                kind: FnKind::Extern {
+                    deps: Freeze::new(vec![]),
+                },
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Exact(fn_ty),
@@ -157,6 +164,9 @@ impl ExternRegistry {
             executables.insert(id, Executable::Builtin(f.handler));
         }
 
-        Registered { functions, executables }
+        Registered {
+            functions,
+            executables,
+        }
     }
 }

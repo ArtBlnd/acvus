@@ -176,9 +176,7 @@ impl IterHandle {
     /// (caller must collect via interpreter and call `set_collected`).
     pub fn get_collected(&self) -> Option<Arc<[Value]>> {
         match self {
-            Self::Pure { items, .. } => {
-                items.lock().unwrap().clone()
-            }
+            Self::Pure { items, .. } => items.lock().unwrap().clone(),
             _ => panic!("get_collected on effectful iterator"),
         }
     }
@@ -223,12 +221,24 @@ impl IterHandle {
 
     // ── Lazy builders (push ops) ─────────────────────────────────
 
-    pub fn map(self, f: FnValue) -> Self { self.push_op(IterOp::Map(f)) }
-    pub fn filter(self, f: FnValue) -> Self { self.push_op(IterOp::Filter(f)) }
-    pub fn take(self, n: usize) -> Self { self.push_op(IterOp::Take(n)) }
-    pub fn skip(self, n: usize) -> Self { self.push_op(IterOp::Skip(n)) }
-    pub fn flatten(self) -> Self { self.push_op(IterOp::Flatten) }
-    pub fn flat_map(self, f: FnValue) -> Self { self.push_op(IterOp::FlatMap(f)) }
+    pub fn map(self, f: FnValue) -> Self {
+        self.push_op(IterOp::Map(f))
+    }
+    pub fn filter(self, f: FnValue) -> Self {
+        self.push_op(IterOp::Filter(f))
+    }
+    pub fn take(self, n: usize) -> Self {
+        self.push_op(IterOp::Take(n))
+    }
+    pub fn skip(self, n: usize) -> Self {
+        self.push_op(IterOp::Skip(n))
+    }
+    pub fn flatten(self) -> Self {
+        self.push_op(IterOp::Flatten)
+    }
+    pub fn flat_map(self, f: FnValue) -> Self {
+        self.push_op(IterOp::FlatMap(f))
+    }
 
     pub fn chain(self, other: IterHandle) -> Self {
         // For chain, we need to collect the other iter's source.
@@ -276,24 +286,29 @@ impl IterHandle {
             }
             Self::Effectful { mut state, effect } => {
                 match &mut state {
-                    EffectfulState::Suspended { source, elem_ops, offset, take_remaining } => {
-                        match op {
-                            IterOp::Skip(n) => *offset += n,
-                            IterOp::Take(n) => {
-                                *take_remaining = Some(take_remaining.map_or(n, |prev| prev.min(n)));
-                            }
-                            IterOp::Chain(extra) => source.extend(extra),
-                            other => elem_ops.push(other),
+                    EffectfulState::Suspended {
+                        source,
+                        elem_ops,
+                        offset,
+                        take_remaining,
+                    } => match op {
+                        IterOp::Skip(n) => *offset += n,
+                        IterOp::Take(n) => {
+                            *take_remaining = Some(take_remaining.map_or(n, |prev| prev.min(n)));
                         }
-                    }
-                    EffectfulState::Generator { elem_ops, take_remaining, .. } => {
-                        match op {
-                            IterOp::Take(n) => {
-                                *take_remaining = Some(take_remaining.map_or(n, |prev| prev.min(n)));
-                            }
-                            other => elem_ops.push(other),
+                        IterOp::Chain(extra) => source.extend(extra),
+                        other => elem_ops.push(other),
+                    },
+                    EffectfulState::Generator {
+                        elem_ops,
+                        take_remaining,
+                        ..
+                    } => match op {
+                        IterOp::Take(n) => {
+                            *take_remaining = Some(take_remaining.map_or(n, |prev| prev.min(n)));
                         }
-                    }
+                        other => elem_ops.push(other),
+                    },
                     EffectfulState::Done => {}
                 }
                 Self::Effectful { state, effect }
@@ -324,23 +339,34 @@ impl std::fmt::Debug for IterHandle {
                 let collected = items.lock().unwrap().is_some();
                 write!(f, "Iter::Pure(idx={index}, collected={collected})")
             }
-            Self::Effectful { state, .. } => {
-                match state {
-                    EffectfulState::Suspended { source, elem_ops, offset, .. } => {
-                        write!(f, "Iter::Effectful(len={}, ops={}, off={})", source.len(), elem_ops.len(), offset)
-                    }
-                    EffectfulState::Generator { elem_ops, .. } => {
-                        write!(f, "Iter::Generator(ops={})", elem_ops.len())
-                    }
-                    EffectfulState::Done => write!(f, "Iter::Effectful(done)"),
+            Self::Effectful { state, .. } => match state {
+                EffectfulState::Suspended {
+                    source,
+                    elem_ops,
+                    offset,
+                    ..
+                } => {
+                    write!(
+                        f,
+                        "Iter::Effectful(len={}, ops={}, off={})",
+                        source.len(),
+                        elem_ops.len(),
+                        offset
+                    )
                 }
-            }
+                EffectfulState::Generator { elem_ops, .. } => {
+                    write!(f, "Iter::Generator(ops={})", elem_ops.len())
+                }
+                EffectfulState::Done => write!(f, "Iter::Effectful(done)"),
+            },
         }
     }
 }
 
 impl PartialEq for IterHandle {
-    fn eq(&self, _other: &Self) -> bool { false }
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
 }
 
 // ── SequenceChain ────────────────────────────────────────────────────
@@ -366,7 +392,11 @@ pub enum SequenceOp {
 impl SequenceChain {
     pub fn new(origin: TrackedDeque<Value>, effect: Effect) -> Self {
         debug_assert!(origin.is_dirty() || true, "origin must have checkpoint");
-        Self { origin, ops: Vec::new(), effect }
+        Self {
+            origin,
+            ops: Vec::new(),
+            effect,
+        }
     }
 
     pub fn from_stored(stored: TrackedDeque<Value>, effect: Effect) -> Self {
@@ -381,18 +411,41 @@ impl SequenceChain {
         Self::new(deque, effect)
     }
 
-    pub fn take(mut self, n: usize) -> Self { self.ops.push(SequenceOp::Take(n)); self }
-    pub fn skip(mut self, n: usize) -> Self { self.ops.push(SequenceOp::Skip(n)); self }
-    pub fn chain(mut self, iter: IterHandle) -> Self { self.ops.push(SequenceOp::Chain(iter)); self }
+    pub fn take(mut self, n: usize) -> Self {
+        self.ops.push(SequenceOp::Take(n));
+        self
+    }
+    pub fn skip(mut self, n: usize) -> Self {
+        self.ops.push(SequenceOp::Skip(n));
+        self
+    }
+    pub fn chain(mut self, iter: IterHandle) -> Self {
+        self.ops.push(SequenceOp::Chain(iter));
+        self
+    }
 
-    pub fn origin(&self) -> &TrackedDeque<Value> { &self.origin }
-    pub fn ops(&self) -> &[SequenceOp] { &self.ops }
-    pub fn effect(&self) -> &Effect { &self.effect }
-    pub fn has_ops(&self) -> bool { !self.ops.is_empty() }
-    pub fn origin_checksum(&self) -> u64 { self.origin.checksum() }
+    pub fn origin(&self) -> &TrackedDeque<Value> {
+        &self.origin
+    }
+    pub fn ops(&self) -> &[SequenceOp] {
+        &self.ops
+    }
+    pub fn effect(&self) -> &Effect {
+        &self.effect
+    }
+    pub fn has_ops(&self) -> bool {
+        !self.ops.is_empty()
+    }
+    pub fn origin_checksum(&self) -> u64 {
+        self.origin.checksum()
+    }
 
     pub fn into_origin(self) -> TrackedDeque<Value> {
-        assert!(self.ops.is_empty(), "into_origin with {} pending ops", self.ops.len());
+        assert!(
+            self.ops.is_empty(),
+            "into_origin with {} pending ops",
+            self.ops.len()
+        );
         self.origin
     }
 
@@ -400,29 +453,40 @@ impl SequenceChain {
     pub fn into_iter_handle(self) -> IterHandle {
         let effect = self.effect.clone();
         let source = self.origin.into_vec();
-        let ops: Vec<IterOp> = self.ops.into_iter().map(|op| match op {
-            SequenceOp::Take(n) => IterOp::Take(n),
-            SequenceOp::Skip(n) => IterOp::Skip(n),
-            SequenceOp::Chain(ih) => {
-                // Collect the chained iterator's items.
-                if let Some(collected) = ih.get_collected() {
-                    IterOp::Chain(collected.to_vec())
-                } else {
-                    IterOp::Chain(Vec::new())
+        let ops: Vec<IterOp> = self
+            .ops
+            .into_iter()
+            .map(|op| match op {
+                SequenceOp::Take(n) => IterOp::Take(n),
+                SequenceOp::Skip(n) => IterOp::Skip(n),
+                SequenceOp::Chain(ih) => {
+                    // Collect the chained iterator's items.
+                    if let Some(collected) = ih.get_collected() {
+                        IterOp::Chain(collected.to_vec())
+                    } else {
+                        IterOp::Chain(Vec::new())
+                    }
                 }
-            }
-        }).collect();
+            })
+            .collect();
         IterHandle::new(source, ops, effect)
     }
 }
 
 impl std::fmt::Debug for SequenceChain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Seq(len={}, ops={}, cksum={:#x})",
-            self.origin.len(), self.ops.len(), self.origin.checksum())
+        write!(
+            f,
+            "Seq(len={}, ops={}, cksum={:#x})",
+            self.origin.len(),
+            self.ops.len(),
+            self.origin.checksum()
+        )
     }
 }
 
 impl PartialEq for SequenceChain {
-    fn eq(&self, _other: &Self) -> bool { false }
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
 }

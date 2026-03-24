@@ -163,11 +163,11 @@ fn join_intervals(a: &[Interval], b: &[Interval]) -> AbstractValue {
     // Merge overlapping/adjacent
     let mut merged: SmallVec<[Interval; 4]> = SmallVec::new();
     for iv in all {
-        if let Some(last) = merged.last_mut() {
-            if last.overlaps_or_adjacent(&iv) {
-                *last = last.merge(&iv);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && last.overlaps_or_adjacent(&iv)
+        {
+            *last = last.merge(&iv);
+            continue;
         }
         merged.push(iv);
     }

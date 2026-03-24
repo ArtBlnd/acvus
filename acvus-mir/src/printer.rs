@@ -13,7 +13,9 @@ struct ValNormalizer {
 
 impl ValNormalizer {
     fn new() -> Self {
-        Self { map: FxHashMap::default() }
+        Self {
+            map: FxHashMap::default(),
+        }
     }
 
     fn get(&mut self, v: ValueId) -> usize {
@@ -142,8 +144,14 @@ fn collect_fn_ids_from_body(
     for inst in &body.insts {
         let ids: &[crate::graph::FunctionId] = match &inst.kind {
             InstKind::LoadFunction { id, .. } => std::slice::from_ref(id),
-            InstKind::FunctionCall { callee: Callee::Direct(id), .. } => std::slice::from_ref(id),
-            InstKind::Spawn { callee: Callee::Direct(id), .. } => std::slice::from_ref(id),
+            InstKind::FunctionCall {
+                callee: Callee::Direct(id),
+                ..
+            } => std::slice::from_ref(id),
+            InstKind::Spawn {
+                callee: Callee::Direct(id),
+                ..
+            } => std::slice::from_ref(id),
             _ => &[],
         };
         for &id in ids {
@@ -152,7 +160,6 @@ fn collect_fn_ids_from_body(
         }
     }
 }
-
 
 /// Collect unique String/List literals from a body and register them into the text table.
 fn collect_texts_from_body(
@@ -185,12 +192,12 @@ fn write_body(
     // Build ContextId → name mapping from ContextProject instructions + debug info.
     let mut ctx_id_to_name: FxHashMap<crate::graph::ContextId, String> = FxHashMap::default();
     for inst in &body.insts {
-        if let InstKind::ContextProject { dst, id, .. } = &inst.kind {
-            if let Some(crate::ir::ValOrigin::Context(name)) = body.debug.get(*dst) {
-                ctx_id_to_name
-                    .entry(*id)
-                    .or_insert_with(|| ctx.interner.resolve(*name).to_string());
-            }
+        if let InstKind::ContextProject { dst, id, .. } = &inst.kind
+            && let Some(crate::ir::ValOrigin::Context(name)) = body.debug.get(*dst)
+        {
+            ctx_id_to_name
+                .entry(*id)
+                .or_insert_with(|| ctx.interner.resolve(*name).to_string());
         }
     }
 
@@ -321,7 +328,12 @@ fn write_body(
             }
 
             // Spawn / Eval
-            InstKind::Spawn { dst, callee, args, context_uses } => {
+            InstKind::Spawn {
+                dst,
+                callee,
+                args,
+                context_uses,
+            } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
@@ -346,7 +358,11 @@ fn write_body(
                     vn.fmt_uses(args, &consts, &texts)
                 )?
             }
-            InstKind::Eval { dst, src, context_defs } => {
+            InstKind::Eval {
+                dst,
+                src,
+                context_defs,
+            } => {
                 let ctx_str = if context_defs.is_empty() {
                     String::new()
                 } else {
@@ -533,7 +549,13 @@ fn write_body(
             )?,
 
             // Iteration
-            InstKind::IterStep { dst, iter_src, iter_dst, done, done_args } => writeln!(
+            InstKind::IterStep {
+                dst,
+                iter_src,
+                iter_dst,
+                done,
+                done_args,
+            } => writeln!(
                 f,
                 "iter_step {}, {} = {} else {}({})",
                 vn.fmt_val(*dst),
@@ -666,11 +688,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
         let mut labels: Vec<_> = module.closures.keys().collect();
         labels.sort_by_key(|l| l.0);
         for label in &labels {
-            collect_texts_from_body(
-                &module.closures[label],
-                &mut lit_to_tidx,
-                &mut text_entries,
-            );
+            collect_texts_from_body(&module.closures[label], &mut lit_to_tidx, &mut text_entries);
         }
 
         // Collect FunctionIds across all bodies for canonical numbering.
@@ -790,11 +808,12 @@ mod tests {
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
     ) -> String {
-        let ctx: Vec<(&str, Ty)> = context.iter()
+        let ctx: Vec<(&str, Ty)> = context
+            .iter()
             .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
             .collect();
-        let (module, _) = crate::test::compile_template(interner, source, &ctx)
-            .expect("compile failed");
+        let (module, _) =
+            crate::test::compile_template(interner, source, &ctx).expect("compile failed");
         dump(interner, &module)
     }
 

@@ -222,7 +222,11 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::Cast { src, .. } => remap_val(src, remap),
 
-        InstKind::IterStep { iter_src, done_args, .. } => {
+        InstKind::IterStep {
+            iter_src,
+            done_args,
+            ..
+        } => {
             remap_val(iter_src, remap);
             remap_vec(done_args, remap);
         }

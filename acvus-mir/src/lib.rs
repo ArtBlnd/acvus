@@ -21,7 +21,7 @@ pub(crate) mod test;
 
 pub use pass::AnalysisPass;
 
-use acvus_utils::{Astr, Interner};
+use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
 use crate::graph::ContextId;

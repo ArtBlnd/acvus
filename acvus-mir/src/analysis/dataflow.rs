@@ -17,6 +17,12 @@ pub struct DataflowState<D: SemiLattice> {
     pub values: FxHashMap<ValueId, D>,
 }
 
+impl<D: SemiLattice> Default for DataflowState<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<D: SemiLattice> DataflowState<D> {
     pub fn new() -> Self {
         DataflowState {
@@ -118,31 +124,31 @@ where
                 let cond_val = block_exit[idx.0].get(*cond);
                 let definite = cond_val.as_definite_bool();
 
-                if definite != Some(false) {
-                    if let Some(&target_idx) = cfg.label_to_block.get(then_label) {
-                        let changed = propagate_to_successor(
-                            &block_exit[idx.0],
-                            &cfg.blocks[target_idx.0].params,
-                            then_args,
-                            &mut block_entry[target_idx.0],
-                        );
-                        if changed {
-                            worklist.push_back(target_idx);
-                        }
+                if definite != Some(false)
+                    && let Some(&target_idx) = cfg.label_to_block.get(then_label)
+                {
+                    let changed = propagate_to_successor(
+                        &block_exit[idx.0],
+                        &cfg.blocks[target_idx.0].params,
+                        then_args,
+                        &mut block_entry[target_idx.0],
+                    );
+                    if changed {
+                        worklist.push_back(target_idx);
                     }
                 }
 
-                if definite != Some(true) {
-                    if let Some(&target_idx) = cfg.label_to_block.get(else_label) {
-                        let changed = propagate_to_successor(
-                            &block_exit[idx.0],
-                            &cfg.blocks[target_idx.0].params,
-                            else_args,
-                            &mut block_entry[target_idx.0],
-                        );
-                        if changed {
-                            worklist.push_back(target_idx);
-                        }
+                if definite != Some(true)
+                    && let Some(&target_idx) = cfg.label_to_block.get(else_label)
+                {
+                    let changed = propagate_to_successor(
+                        &block_exit[idx.0],
+                        &cfg.blocks[target_idx.0].params,
+                        else_args,
+                        &mut block_entry[target_idx.0],
+                    );
+                    if changed {
+                        worklist.push_back(target_idx);
                     }
                 }
             }

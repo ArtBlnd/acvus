@@ -159,7 +159,10 @@ fn sig_flatten_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_param();
     let e = s.fresh_effect_var();
     (
-        vec![Ty::Iterator(Box::new(Ty::List(Box::new(t.clone()))), e.clone())],
+        vec![Ty::Iterator(
+            Box::new(Ty::List(Box::new(t.clone()))),
+            e.clone(),
+        )],
         Ty::Iterator(Box::new(t), e),
     )
 }
@@ -183,7 +186,10 @@ fn sig_int_to_char(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
 fn sig_contains_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_param();
     let e = s.fresh_effect_var();
-    (vec![Ty::Iterator(Box::new(t.clone()), e.clone()), t], Ty::Bool)
+    (
+        vec![Ty::Iterator(Box::new(t.clone()), e.clone()), t],
+        Ty::Bool,
+    )
 }
 
 fn sig_contains_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -423,11 +429,7 @@ fn sig_chain_seq(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
 // ---------------------------------------------------------------------------
 
 /// Build a graph `Function` from a name and signature generator.
-fn make_builtin(
-    interner: &Interner,
-    name: &str,
-    sig_fn: SigFn,
-) -> Function {
+fn make_builtin(interner: &Interner, name: &str, sig_fn: SigFn) -> Function {
     let mut sig_subst = TySubst::new();
     let (params, ret) = sig_fn(interner, &mut sig_subst);
     let named_params: Vec<Param> = params
@@ -442,7 +444,9 @@ fn make_builtin(
             deps: Freeze::new(vec![]),
         },
         constraint: FnConstraint {
-            signature: Some(Signature { params: named_params.clone() }),
+            signature: Some(Signature {
+                params: named_params.clone(),
+            }),
             output: Constraint::Exact(Ty::Fn {
                 params: named_params,
                 ret: Box::new(ret),

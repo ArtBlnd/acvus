@@ -38,9 +38,16 @@ pub enum ContextWrite {
     /// Whole-value replacement (scalar, list, etc.)
     Set { key: String, value: Value },
     /// Nested object field patch.
-    FieldPatch { key: String, path: Vec<String>, value: Value },
+    FieldPatch {
+        key: String,
+        path: Vec<String>,
+        value: Value,
+    },
     /// Deque/Sequence diff (checksum-verified by journal).
-    DequeDiff { key: String, diff: OwnedDequeDiff<Value> },
+    DequeDiff {
+        key: String,
+        diff: OwnedDequeDiff<Value>,
+    },
 }
 
 // ── ContextOverlay ───────────────────────────────────────────────────
@@ -95,7 +102,11 @@ impl ContextOverlay {
                 ContextWrite::Set { key, value } => {
                     self.cache.insert(key.clone(), value.clone());
                 }
-                ContextWrite::FieldPatch { key, path: _, value } => {
+                ContextWrite::FieldPatch {
+                    key,
+                    path: _,
+                    value,
+                } => {
                     // TODO: nested field patching
                     self.cache.insert(key.clone(), value.clone());
                 }
@@ -192,8 +203,12 @@ impl EntryLifecycle for ContextOverlay {
 // ── Journal trait ────────────────────────────────────────────────────
 
 pub trait Journal {
-    type Ref<'a>: EntryRef where Self: 'a;
-    type Mut<'a>: EntryMut where Self: 'a;
+    type Ref<'a>: EntryRef
+    where
+        Self: 'a;
+    type Mut<'a>: EntryMut
+    where
+        Self: 'a;
 
     fn entry_ref(&self, id: uuid::Uuid) -> Self::Ref<'_>;
     fn entry_mut(&mut self, id: uuid::Uuid) -> Self::Mut<'_>;

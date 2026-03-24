@@ -36,7 +36,12 @@ impl ParamConstraint {
     /// Intersect two constraint sets. Returns `None` if the result is empty
     /// (no concrete type can satisfy both constraints simultaneously).
     pub fn intersect(&self, other: &Self) -> Option<Self> {
-        let result: Vec<Ty> = self.0.iter().filter(|t| other.0.contains(t)).cloned().collect();
+        let result: Vec<Ty> = self
+            .0
+            .iter()
+            .filter(|t| other.0.contains(t))
+            .cloned()
+            .collect();
         if result.is_empty() {
             None
         } else {
@@ -200,12 +205,18 @@ impl Effect {
 
     /// Opaque IO effect (e.g. context access without known ContextId).
     pub fn io() -> Self {
-        Effect::Resolved(EffectSet { io: true, ..EffectSet::default() })
+        Effect::Resolved(EffectSet {
+            io: true,
+            ..EffectSet::default()
+        })
     }
 
     /// Self-modifying effect: value mutates on use (e.g. Iterator cursor).
     pub fn self_modifying() -> Self {
-        Effect::Resolved(EffectSet { self_modifying: true, ..EffectSet::default() })
+        Effect::Resolved(EffectSet {
+            self_modifying: true,
+            ..EffectSet::default()
+        })
     }
 
     pub fn is_pure(&self) -> bool {
@@ -224,9 +235,7 @@ impl Effect {
     /// Union two resolved effects. If either is Var, returns None.
     pub fn union(&self, other: &Self) -> Option<Self> {
         match (self, other) {
-            (Effect::Resolved(a), Effect::Resolved(b)) => {
-                Some(Effect::Resolved(a.union(b)))
-            }
+            (Effect::Resolved(a), Effect::Resolved(b)) => Some(Effect::Resolved(a.union(b))),
             _ => None,
         }
     }
@@ -240,7 +249,6 @@ impl fmt::Display for Effect {
         }
     }
 }
-
 
 /// Origin identity for Deque types — prevents mixing deques from different sources.
 ///
@@ -376,8 +384,12 @@ impl Ty {
             Ty::Object(fields) => fields.values().all(|v| v.is_pure()),
             Ty::Enum { variants, .. } => variants
                 .values()
-                .all(|p| p.as_ref().map_or(true, |ty| ty.is_pure())),
-            Ty::Fn { .. } | Ty::Opaque(_) | Ty::Handle(..) | Ty::Iterator(..) | Ty::Sequence(..) => false,
+                .all(|p| p.as_ref().is_none_or(|ty| ty.is_pure())),
+            Ty::Fn { .. }
+            | Ty::Opaque(_)
+            | Ty::Handle(..)
+            | Ty::Iterator(..)
+            | Ty::Sequence(..) => false,
             Ty::Param { .. } | Ty::Error(_) => false,
         }
     }
@@ -415,7 +427,7 @@ impl Ty {
             Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
             Ty::Enum { variants, .. } => variants
                 .values()
-                .all(|p| p.as_ref().map_or(true, |ty| ty.is_pureable())),
+                .all(|p| p.as_ref().is_none_or(|ty| ty.is_pureable())),
             Ty::Fn { captures, ret, .. } => {
                 captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
             }
@@ -447,7 +459,7 @@ impl Ty {
             Ty::Object(fields) => fields.values().all(|v| v.is_storable()),
             Ty::Enum { variants, .. } => variants
                 .values()
-                .all(|p| p.as_ref().map_or(true, |ty| ty.is_storable())),
+                .all(|p| p.as_ref().is_none_or(|ty| ty.is_storable())),
             Ty::Iterator(inner, effect) | Ty::Sequence(inner, _, effect) => {
                 effect.is_pure() && inner.is_storable()
             }
@@ -640,14 +652,20 @@ impl TySubst {
     pub fn fresh_param(&mut self) -> Ty {
         let token = ParamToken(self.next_param);
         self.next_param += 1;
-        Ty::Param { token, constraint: None }
+        Ty::Param {
+            token,
+            constraint: None,
+        }
     }
 
     /// Allocate a fresh type parameter with a constraint (restricted inference hole).
     pub fn fresh_param_constrained(&mut self, constraint: ParamConstraint) -> Ty {
         let token = ParamToken(self.next_param);
         self.next_param += 1;
-        Ty::Param { token, constraint: Some(constraint) }
+        Ty::Param {
+            token,
+            constraint: Some(constraint),
+        }
     }
 
     /// Resolve an origin by following binding chains for Origin::Var.
@@ -678,10 +696,10 @@ impl TySubst {
                 }
             }
             (Origin::Var(v), other) | (other, Origin::Var(v)) => {
-                if let Origin::Var(v2) = other {
-                    if v == v2 {
-                        return Ok(());
-                    }
+                if let Origin::Var(v2) = other
+                    && v == v2
+                {
+                    return Ok(());
                 }
                 self.origin_bindings.insert(v, other);
                 Ok(())
@@ -742,9 +760,7 @@ impl TySubst {
                     },
                     (false, true) => match pol {
                         Polarity::Contravariant => Ok(()),
-                        Polarity::Covariant | Polarity::Invariant => {
-                            Err((a.clone(), b.clone()))
-                        }
+                        Polarity::Covariant | Polarity::Invariant => Err((a.clone(), b.clone())),
                     },
                     // Both effectful — invariant requires structural match,
                     // but for now we accept (union is implicitly applied).
@@ -753,10 +769,10 @@ impl TySubst {
             }
 
             (Effect::Var(v), other) | (other, Effect::Var(v)) => {
-                if let Effect::Var(v2) = other {
-                    if v == v2 {
-                        return Ok(());
-                    }
+                if let Effect::Var(v2) = other
+                    && v == v2
+                {
+                    return Ok(());
                 }
                 self.effect_bindings.insert(*v, other.clone());
                 Ok(())
@@ -883,7 +899,13 @@ impl TySubst {
                 let resolved_b = self.resolve_effect(eb);
                 let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
                 Some(Ty::Fn {
-                    params: pa.iter().map(|p| Param { name: p.name, ty: self.resolve(&p.ty) }).collect(),
+                    params: pa
+                        .iter()
+                        .map(|p| Param {
+                            name: p.name,
+                            ty: self.resolve(&p.ty),
+                        })
+                        .collect(),
                     ret: Box::new(self.resolve(ra)),
                     captures: vec![],
                     effect: merged,
@@ -926,7 +948,10 @@ impl TySubst {
                 if let Some(bound) = self.bindings.get(token) {
                     self.resolve(bound)
                 } else {
-                    Ty::Param { token: *token, constraint: constraint.clone() }
+                    Ty::Param {
+                        token: *token,
+                        constraint: constraint.clone(),
+                    }
                 }
             }
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
@@ -954,7 +979,13 @@ impl TySubst {
                 captures,
                 effect,
             } => Ty::Fn {
-                params: params.iter().map(|p| Param { name: p.name, ty: self.resolve(&p.ty) }).collect(),
+                params: params
+                    .iter()
+                    .map(|p| Param {
+                        name: p.name,
+                        ty: self.resolve(&p.ty),
+                    })
+                    .collect(),
                 ret: Box::new(self.resolve(ret)),
                 captures: captures.iter().map(|c| self.resolve(c)).collect(),
                 effect: self.resolve_effect(effect),
@@ -1005,7 +1036,10 @@ impl TySubst {
                 if let Some(bound) = self.bindings.get(token) {
                     self.shallow_resolve(bound)
                 } else {
-                    Ty::Param { token: *token, constraint: constraint.clone() }
+                    Ty::Param {
+                        token: *token,
+                        constraint: constraint.clone(),
+                    }
                 }
             }
             other => other.clone(),
@@ -1082,8 +1116,20 @@ impl TySubst {
                 Ok(())
             }
 
-            (Ty::Param { token: p, constraint }, other)
-            | (other, Ty::Param { token: p, constraint }) => {
+            (
+                Ty::Param {
+                    token: p,
+                    constraint,
+                },
+                other,
+            )
+            | (
+                other,
+                Ty::Param {
+                    token: p,
+                    constraint,
+                },
+            ) => {
                 if let Ty::Param { token: p2, .. } = other
                     && p == p2
                 {
@@ -1094,7 +1140,10 @@ impl TySubst {
                 }
                 match other {
                     // Param + Param: intersect constraints onto the target.
-                    Ty::Param { token: p2, constraint: c2 } => {
+                    Ty::Param {
+                        token: p2,
+                        constraint: c2,
+                    } => {
                         let merged = match (constraint, c2) {
                             (None, None) => None,
                             (Some(c), None) | (None, Some(c)) => Some(c.clone()),
@@ -1105,7 +1154,10 @@ impl TySubst {
                                 Some(inter)
                             }
                         };
-                        let target = Ty::Param { token: *p2, constraint: merged };
+                        let target = Ty::Param {
+                            token: *p2,
+                            constraint: merged,
+                        };
                         self.bindings.insert(*p, target);
                     }
                     // Param + Error: always OK (poison absorption).
@@ -1114,10 +1166,10 @@ impl TySubst {
                     }
                     // Param + concrete: check constraint.
                     _ => {
-                        if let Some(c) = constraint {
-                            if !c.allows(other) {
-                                return Err((a.clone(), b.clone()));
-                            }
+                        if let Some(c) = constraint
+                            && !c.allows(other)
+                        {
+                            return Err((a.clone(), b.clone()));
                         }
                         self.bindings.insert(*p, other.clone());
                     }
@@ -1332,11 +1384,14 @@ impl TySubst {
                     self.next_param += 1;
                     fresh
                 });
-                Ty::Param { token: new_token, constraint: constraint.clone() }
+                Ty::Param {
+                    token: new_token,
+                    constraint: constraint.clone(),
+                }
             }
-            Ty::List(inner) => {
-                Ty::List(Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)))
-            }
+            Ty::List(inner) => Ty::List(Box::new(
+                self.instantiate_inner(inner, param_map, effect_map, origin_map),
+            )),
             Ty::Iterator(inner, e) => {
                 let new_e = self.instantiate_effect(e, effect_map);
                 Ty::Iterator(
@@ -1360,9 +1415,9 @@ impl TySubst {
                     new_o,
                 )
             }
-            Ty::Option(inner) => {
-                Ty::Option(Box::new(self.instantiate_inner(inner, param_map, effect_map, origin_map)))
-            }
+            Ty::Option(inner) => Ty::Option(Box::new(
+                self.instantiate_inner(inner, param_map, effect_map, origin_map),
+            )),
             Ty::Tuple(elems) => Ty::Tuple(
                 elems
                     .iter()
@@ -1372,7 +1427,12 @@ impl TySubst {
             Ty::Object(fields) => Ty::Object(
                 fields
                     .iter()
-                    .map(|(k, v)| (*k, self.instantiate_inner(v, param_map, effect_map, origin_map)))
+                    .map(|(k, v)| {
+                        (
+                            *k,
+                            self.instantiate_inner(v, param_map, effect_map, origin_map),
+                        )
+                    })
                     .collect(),
             ),
             Ty::Fn {
@@ -1405,9 +1465,11 @@ impl TySubst {
                     .map(|(tag, payload)| {
                         (
                             *tag,
-                            payload
-                                .as_ref()
-                                .map(|ty| Box::new(self.instantiate_inner(ty, param_map, effect_map, origin_map))),
+                            payload.as_ref().map(|ty| {
+                                Box::new(
+                                    self.instantiate_inner(ty, param_map, effect_map, origin_map),
+                                )
+                            }),
                         )
                     })
                     .collect(),
@@ -1417,11 +1479,7 @@ impl TySubst {
         }
     }
 
-    fn instantiate_effect(
-        &mut self,
-        e: &Effect,
-        effect_map: &mut FxHashMap<u32, u32>,
-    ) -> Effect {
+    fn instantiate_effect(&mut self, e: &Effect, effect_map: &mut FxHashMap<u32, u32>) -> Effect {
         match e {
             Effect::Var(id) => {
                 let new_id = *effect_map.entry(*id).or_insert_with(|| {
@@ -1435,19 +1493,13 @@ impl TySubst {
         }
     }
 
-    fn instantiate_origin(
-        &mut self,
-        o: Origin,
-        origin_map: &mut FxHashMap<u32, Origin>,
-    ) -> Origin {
+    fn instantiate_origin(&mut self, o: Origin, origin_map: &mut FxHashMap<u32, Origin>) -> Origin {
         match o {
-            Origin::Var(id) => {
-                *origin_map.entry(id).or_insert_with(|| {
-                    let fresh = Origin::Var(self.next_origin);
-                    self.next_origin += 1;
-                    fresh
-                })
-            }
+            Origin::Var(id) => *origin_map.entry(id).or_insert_with(|| {
+                let fresh = Origin::Var(self.next_origin);
+                self.next_origin += 1;
+                fresh
+            }),
             concrete => concrete,
         }
     }
@@ -1484,7 +1536,7 @@ impl TySubst {
             }
             Ty::Enum { variants, .. } => variants
                 .values()
-                .any(|p| p.as_ref().map_or(false, |ty| self.occurs_in(param, ty))),
+                .any(|p| p.as_ref().is_some_and(|ty| self.occurs_in(param, ty))),
             _ => false,
         }
     }
@@ -1533,7 +1585,10 @@ mod tests {
         thread_local! {
             static INTERNER: Interner = Interner::new();
         }
-        INTERNER.with(|i| Param { name: i.intern(""), ty })
+        INTERNER.with(|i| Param {
+            name: i.intern(""),
+            ty,
+        })
     }
 
     #[test]
@@ -2978,7 +3033,8 @@ mod tests {
         let fn_a = Ty::Fn {
             params: vec![
                 tp(Ty::List(Box::new(Ty::Int))),
-                tp(Ty::Deque(Box::new(Ty::Int), o1))],
+                tp(Ty::Deque(Box::new(Ty::Int), o1)),
+            ],
             ret: Box::new(Ty::Unit),
 
             effect: Effect::pure(),
@@ -2987,7 +3043,8 @@ mod tests {
         let fn_b = Ty::Fn {
             params: vec![
                 tp(Ty::Deque(Box::new(Ty::Int), o2)),
-                tp(Ty::List(Box::new(Ty::Int)))],
+                tp(Ty::List(Box::new(Ty::Int))),
+            ],
             ret: Box::new(Ty::Unit),
 
             effect: Effect::pure(),
@@ -3004,7 +3061,10 @@ mod tests {
         let o1 = s.fresh_concrete_origin();
         let o2 = s.fresh_concrete_origin();
         let fn_a = Ty::Fn {
-            params: vec![tp(Ty::List(Box::new(Ty::Int))), tp(Ty::List(Box::new(Ty::Int)))],
+            params: vec![
+                tp(Ty::List(Box::new(Ty::Int))),
+                tp(Ty::List(Box::new(Ty::Int))),
+            ],
             ret: Box::new(Ty::Unit),
 
             effect: Effect::pure(),
@@ -3013,7 +3073,8 @@ mod tests {
         let fn_b = Ty::Fn {
             params: vec![
                 tp(Ty::Deque(Box::new(Ty::Int), o1)),
-                tp(Ty::Deque(Box::new(Ty::Int), o2))],
+                tp(Ty::Deque(Box::new(Ty::Int), o2)),
+            ],
             ret: Box::new(Ty::Unit),
 
             effect: Effect::pure(),
@@ -3411,7 +3472,7 @@ mod tests {
                     captures: vec![],
                 })],
                 ret: Box::new(Ty::Unit),
-    
+
                 effect: Effect::pure(),
                 captures: vec![],
             }
@@ -4750,9 +4811,7 @@ mod tests {
     #[test]
     fn not_storable_list_of_effectful_iterator() {
         // List<Iterator<Int, Effectful>> — effectful inner makes the whole thing non-storable
-        assert!(
-            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_storable()
-        );
+        assert!(!Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_storable());
     }
 
     // ================================================================
@@ -4868,7 +4927,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::Int)],
                     ret: Box::new(Ty::String),
-        
+
                     captures: vec![],
                     effect: Effect::pure(),
                 },
@@ -4891,7 +4950,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::Int)],
                     ret: Box::new(Ty::String),
-        
+
                     captures: vec![],
                     effect: Effect::pure(),
                 },
@@ -4913,7 +4972,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::Int)],
                     ret: Box::new(Ty::String),
-        
+
                     captures: vec![],
                     effect: Effect::pure(),
                 },
@@ -5057,7 +5116,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::Int)],
                     ret: Box::new(Ty::Bool),
-        
+
                     captures: vec![],
                     effect: Effect::pure(),
                 },
@@ -5084,7 +5143,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::Int)],
                     ret: Box::new(Ty::String),
-        
+
                     captures: vec![],
                     effect: Effect::io(),
                 },
@@ -5105,7 +5164,13 @@ mod tests {
     fn builtin_take_on_deque_coerces_to_sequence() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        let ret = try_builtin(&Interner::new(), &mut s, "take_seq", &[Ty::Deque(Box::new(Ty::Int), o), Ty::Int]).unwrap();
+        let ret = try_builtin(
+            &Interner::new(),
+            &mut s,
+            "take_seq",
+            &[Ty::Deque(Box::new(Ty::Int), o), Ty::Int],
+        )
+        .unwrap();
         // Deque ≤ Sequence coercion, then take preserves origin
         match ret {
             Ty::Sequence(_, ret_o, _) => {
@@ -5129,7 +5194,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![tp(Ty::String)],
                     ret: Box::new(Ty::String),
-        
+
                     captures: vec![],
                     effect: Effect::pure(),
                 },
@@ -5297,7 +5362,8 @@ mod tests {
                     ret: Box::new(Ty::Bool),
                     captures: vec![],
                     effect: e.clone(),
-                })],
+                }),
+            ],
             ret: Box::new(Ty::Iterator(Box::new(t), e)),
             captures: vec![],
             effect: Effect::pure(),
@@ -5325,7 +5391,9 @@ mod tests {
                         effect: Effect::Var(eid),
                         ..
                     } => {
-                        assert!(matches!(&fp[0].ty, Ty::Param{ token: p, ..} if p.id() == new_t_id));
+                        assert!(
+                            matches!(&fp[0].ty, Ty::Param{ token: p, ..} if p.id() == new_t_id)
+                        );
                         assert_eq!(*eid, new_e_id);
                     }
                     _ => panic!("expected Fn"),
@@ -5333,7 +5401,9 @@ mod tests {
                 // Return: Iterator<NewT, NewE>
                 match ret.as_ref() {
                     Ty::Iterator(inner, Effect::Var(eid)) => {
-                        assert!(matches!(inner.as_ref(), Ty::Param{token: p, ..} if p.id() == new_t_id));
+                        assert!(
+                            matches!(inner.as_ref(), Ty::Param{token: p, ..} if p.id() == new_t_id)
+                        );
                         assert_eq!(*eid, new_e_id);
                     }
                     _ => panic!("expected Iterator"),
@@ -5378,7 +5448,10 @@ mod tests {
 
         #[test]
         fn io_only_is_not_pure() {
-            let s = EffectSet { io: true, ..Default::default() };
+            let s = EffectSet {
+                io: true,
+                ..Default::default()
+            };
             assert!(!s.is_pure());
         }
 
@@ -5413,8 +5486,14 @@ mod tests {
         fn union_reads_disjoint() {
             let c1 = ctx(0);
             let c2 = ctx(1);
-            let a = EffectSet { reads: [c1].into_iter().collect(), ..Default::default() };
-            let b = EffectSet { reads: [c2].into_iter().collect(), ..Default::default() };
+            let a = EffectSet {
+                reads: [c1].into_iter().collect(),
+                ..Default::default()
+            };
+            let b = EffectSet {
+                reads: [c2].into_iter().collect(),
+                ..Default::default()
+            };
             let u = a.union(&b);
             assert!(u.reads.contains(&c1));
             assert!(u.reads.contains(&c2));
@@ -5425,8 +5504,14 @@ mod tests {
         #[test]
         fn union_reads_overlap() {
             let c = ctx(0);
-            let a = EffectSet { reads: [c].into_iter().collect(), ..Default::default() };
-            let b = EffectSet { reads: [c].into_iter().collect(), ..Default::default() };
+            let a = EffectSet {
+                reads: [c].into_iter().collect(),
+                ..Default::default()
+            };
+            let b = EffectSet {
+                reads: [c].into_iter().collect(),
+                ..Default::default()
+            };
             let u = a.union(&b);
             assert_eq!(u.reads.len(), 1);
             assert!(u.reads.contains(&c));
@@ -5436,8 +5521,14 @@ mod tests {
         fn union_reads_writes_independent() {
             let c1 = ctx(0);
             let c2 = ctx(1);
-            let a = EffectSet { reads: [c1].into_iter().collect(), ..Default::default() };
-            let b = EffectSet { writes: [c2].into_iter().collect(), ..Default::default() };
+            let a = EffectSet {
+                reads: [c1].into_iter().collect(),
+                ..Default::default()
+            };
+            let b = EffectSet {
+                writes: [c2].into_iter().collect(),
+                ..Default::default()
+            };
             let u = a.union(&b);
             assert!(u.reads.contains(&c1));
             assert!(u.writes.contains(&c2));
@@ -5448,7 +5539,10 @@ mod tests {
 
         #[test]
         fn union_io_propagates() {
-            let a = EffectSet { io: true, ..Default::default() };
+            let a = EffectSet {
+                io: true,
+                ..Default::default()
+            };
             let b = EffectSet::default();
             assert!(a.union(&b).io);
             assert!(b.union(&a).io);
@@ -5456,8 +5550,14 @@ mod tests {
 
         #[test]
         fn union_io_both_true() {
-            let a = EffectSet { io: true, ..Default::default() };
-            let b = EffectSet { io: true, ..Default::default() };
+            let a = EffectSet {
+                io: true,
+                ..Default::default()
+            };
+            let b = EffectSet {
+                io: true,
+                ..Default::default()
+            };
             assert!(a.union(&b).io);
         }
 
@@ -5564,14 +5664,20 @@ mod tests {
         fn unify_pure_effectful_covariant_ok() {
             let mut s = TySubst::new();
             // Pure ≤ Effectful in covariant position
-            assert!(s.unify_effects(&Effect::pure(), &Effect::io(), Covariant).is_ok());
+            assert!(
+                s.unify_effects(&Effect::pure(), &Effect::io(), Covariant)
+                    .is_ok()
+            );
         }
 
         #[test]
         fn unify_effectful_pure_covariant_fails() {
             let mut s = TySubst::new();
             // Effectful ≤ Pure in covariant position — should fail
-            assert!(s.unify_effects(&Effect::io(), &Effect::pure(), Covariant).is_err());
+            assert!(
+                s.unify_effects(&Effect::io(), &Effect::pure(), Covariant)
+                    .is_err()
+            );
         }
 
         #[test]

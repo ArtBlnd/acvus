@@ -97,10 +97,7 @@ pub enum RuntimeErrorKind {
         right: ValueKind,
     },
     /// Unary operator applied to incompatible type.
-    UnaryOpMismatch {
-        op: UnaryOp,
-        operand: ValueKind,
-    },
+    UnaryOpMismatch { op: UnaryOp, operand: ValueKind },
     /// Value was not the expected kind.
     UnexpectedType {
         /// What operation required this type (static label).
@@ -143,11 +140,15 @@ pub enum RuntimeErrorKind {
 
 impl RuntimeError {
     pub fn bin_op_mismatch(op: BinOp, left: ValueKind, right: ValueKind) -> Self {
-        Self { kind: RuntimeErrorKind::BinOpMismatch { op, left, right } }
+        Self {
+            kind: RuntimeErrorKind::BinOpMismatch { op, left, right },
+        }
     }
 
     pub fn unary_op_mismatch(op: UnaryOp, operand: ValueKind) -> Self {
-        Self { kind: RuntimeErrorKind::UnaryOpMismatch { op, operand } }
+        Self {
+            kind: RuntimeErrorKind::UnaryOpMismatch { op, operand },
+        }
     }
 
     pub fn unexpected_type(
@@ -155,43 +156,77 @@ impl RuntimeError {
         expected: &'static [ValueKind],
         got: ValueKind,
     ) -> Self {
-        Self { kind: RuntimeErrorKind::UnexpectedType { operation, expected, got } }
+        Self {
+            kind: RuntimeErrorKind::UnexpectedType {
+                operation,
+                expected,
+                got,
+            },
+        }
     }
 
     pub fn nan_comparison() -> Self {
-        Self { kind: RuntimeErrorKind::NanComparison }
+        Self {
+            kind: RuntimeErrorKind::NanComparison,
+        }
     }
 
     pub fn division_by_zero() -> Self {
-        Self { kind: RuntimeErrorKind::DivisionByZero }
+        Self {
+            kind: RuntimeErrorKind::DivisionByZero,
+        }
     }
 
     pub fn index_out_of_bounds(index: i64, len: usize) -> Self {
-        Self { kind: RuntimeErrorKind::IndexOutOfBounds { index, len } }
+        Self {
+            kind: RuntimeErrorKind::IndexOutOfBounds { index, len },
+        }
     }
 
     pub fn empty_collection(op: CollectionOp) -> Self {
-        Self { kind: RuntimeErrorKind::EmptyCollection { op } }
+        Self {
+            kind: RuntimeErrorKind::EmptyCollection { op },
+        }
     }
 
     pub fn missing_field(field: impl Into<std::string::String>) -> Self {
-        Self { kind: RuntimeErrorKind::MissingField { field: field.into() } }
+        Self {
+            kind: RuntimeErrorKind::MissingField {
+                field: field.into(),
+            },
+        }
     }
 
-    pub fn extern_call(name: impl Into<std::string::String>, source: impl Into<std::string::String>) -> Self {
-        Self { kind: RuntimeErrorKind::ExternCallFailed { name: name.into(), source: source.into() } }
+    pub fn extern_call(
+        name: impl Into<std::string::String>,
+        source: impl Into<std::string::String>,
+    ) -> Self {
+        Self {
+            kind: RuntimeErrorKind::ExternCallFailed {
+                name: name.into(),
+                source: source.into(),
+            },
+        }
     }
 
     pub fn fetch(source: impl Into<std::string::String>) -> Self {
-        Self { kind: RuntimeErrorKind::FetchFailed { source: source.into() } }
+        Self {
+            kind: RuntimeErrorKind::FetchFailed {
+                source: source.into(),
+            },
+        }
     }
 
     pub fn tool_call_limit(limit: usize) -> Self {
-        Self { kind: RuntimeErrorKind::ToolCallLimitExceeded { limit } }
+        Self {
+            kind: RuntimeErrorKind::ToolCallLimitExceeded { limit },
+        }
     }
 
     pub fn assert_failed() -> Self {
-        Self { kind: RuntimeErrorKind::AssertFailed }
+        Self {
+            kind: RuntimeErrorKind::AssertFailed,
+        }
     }
 }
 
@@ -204,8 +239,12 @@ fn fmt_expected(expected: &[ValueKind], f: &mut fmt::Formatter<'_>) -> fmt::Resu
         [a, b] => write!(f, "{a} or {b}"),
         many => {
             for (i, k) in many.iter().enumerate() {
-                if i > 0 { write!(f, ", ")?; }
-                if i == many.len() - 1 { write!(f, "or ")?; }
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                if i == many.len() - 1 {
+                    write!(f, "or ")?;
+                }
                 write!(f, "{k}")?;
             }
             Ok(())
@@ -222,7 +261,11 @@ impl fmt::Display for RuntimeError {
             RuntimeErrorKind::UnaryOpMismatch { op, operand } => {
                 write!(f, "{op:?}: incompatible type {operand}")
             }
-            RuntimeErrorKind::UnexpectedType { operation, expected, got } => {
+            RuntimeErrorKind::UnexpectedType {
+                operation,
+                expected,
+                got,
+            } => {
                 write!(f, "{operation}: expected ")?;
                 fmt_expected(expected, f)?;
                 write!(f, ", got {got}")

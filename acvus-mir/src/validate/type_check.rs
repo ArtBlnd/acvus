@@ -117,7 +117,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Object(a), Ty::Object(b)) => {
             a.len() == b.len()
                 && a.iter()
-                    .all(|(k, v)| b.get(k).map_or(false, |bv| types_match(v, bv)))
+                    .all(|(k, v)| b.get(k).is_some_and(|bv| types_match(v, bv)))
         }
         (Ty::Iterator(a, e1), Ty::Iterator(b, e2)) => effects_match(e1, e2) && types_match(a, b),
         (Ty::Sequence(a, o1, e1), Ty::Sequence(b, o2, e2)) => {
@@ -180,7 +180,7 @@ fn literal_ty(lit: &Literal) -> Ty {
         // Literal::List produces Deque at runtime, but the *type* from the
         // typechecker perspective depends on context.  We check dst type
         // via val_types instead of inferring from the literal.
-        Literal::List(_) => return Ty::error(), // skip — heterogeneous check not possible here
+        Literal::List(_) => Ty::error(), // skip — heterogeneous check not possible here
     }
 }
 
@@ -908,16 +908,29 @@ impl CheckCtx {
             }
 
             // === IterStep ===
-            InstKind::IterStep { dst, iter_src, iter_dst, .. } => {
+            InstKind::IterStep {
+                dst,
+                iter_src,
+                iter_dst,
+                ..
+            } => {
                 let src_ty = ty!(*iter_src);
                 if let Ty::Iterator(elem, effect) = src_ty {
                     // dst gets the element type
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "IterStep", "dst", &*elem, dst_ty, errors);
+                    self.assert_match(pc, span, "IterStep", "dst", elem, dst_ty, errors);
                     // iter_dst gets the same iterator type
                     let iter_dst_ty = ty!(*iter_dst);
                     let expected_iter = Ty::Iterator(elem.clone(), effect.clone());
-                    self.assert_match(pc, span, "IterStep", "iter_dst", &expected_iter, iter_dst_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "IterStep",
+                        "iter_dst",
+                        &expected_iter,
+                        iter_dst_ty,
+                        errors,
+                    );
                 } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
@@ -972,7 +985,15 @@ impl CheckCtx {
                                 }
                             }
                             let dst_ty = ty!(*dst);
-                            self.assert_match(pc, span, "FunctionCall(Indirect)", "return", ret, dst_ty, errors);
+                            self.assert_match(
+                                pc,
+                                span,
+                                "FunctionCall(Indirect)",
+                                "return",
+                                ret,
+                                dst_ty,
+                                errors,
+                            );
                         }
                         // Fn type might be Error/Var — skip
                     }
@@ -980,7 +1001,9 @@ impl CheckCtx {
             }
 
             // === Spawn / Eval ===
-            InstKind::Spawn { dst, callee, args, .. } => {
+            InstKind::Spawn {
+                dst, callee, args, ..
+            } => {
                 match callee {
                     Callee::Direct(_) => {
                         // Direct graph function — cannot verify signature at MIR level
@@ -1000,7 +1023,13 @@ impl CheckCtx {
                     }
                     Callee::Indirect(closure) => {
                         let closure_ty = ty!(*closure);
-                        if let Ty::Fn { params, ret, effect, .. } = closure_ty {
+                        if let Ty::Fn {
+                            params,
+                            ret,
+                            effect,
+                            ..
+                        } = closure_ty
+                        {
                             if args.len() != params.len() {
                                 errors.push(ValidationError {
                                     scope: self.scope_name.clone(),
@@ -1026,9 +1055,18 @@ impl CheckCtx {
                                     );
                                 }
                             }
-                            let expected_dst = Ty::Handle(Box::new(ret.as_ref().clone()), effect.clone());
+                            let expected_dst =
+                                Ty::Handle(Box::new(ret.as_ref().clone()), effect.clone());
                             let dst_ty = ty!(*dst);
-                            self.assert_match(pc, span, "Spawn(Indirect)", "dst", &expected_dst, dst_ty, errors);
+                            self.assert_match(
+                                pc,
+                                span,
+                                "Spawn(Indirect)",
+                                "dst",
+                                &expected_dst,
+                                dst_ty,
+                                errors,
+                            );
                         }
                         // Fn type might be Error/Var — skip
                     }

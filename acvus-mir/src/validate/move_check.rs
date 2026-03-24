@@ -283,10 +283,8 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
             Terminator::IterStep { done, done_args } => {
                 // Fallthrough.
                 let next = idx.0 + 1;
-                if next < n {
-                    if propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
-                        worklist.push_back(BlockIdx(next));
-                    }
+                if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
+                    worklist.push_back(BlockIdx(next));
                 }
                 // Done branch.
                 if let Some(&target_idx) = cfg.label_to_block.get(done) {
@@ -306,10 +304,8 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
             }
             Terminator::Fallthrough => {
                 let next = idx.0 + 1;
-                if next < n {
-                    if propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
-                        worklist.push_back(BlockIdx(next));
-                    }
+                if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
+                    worklist.push_back(BlockIdx(next));
                 }
             }
             Terminator::Return => {}
@@ -410,27 +406,26 @@ fn process_inst(
         // === Variable operations ===
         InstKind::VarLoad { dst, name } => {
             // Check if $variable has been moved
-            if let Some(Liveness::Moved { at }) = state.get_var(*name) {
-                if let Some(ty) = val_types.get(dst) {
-                    if is_move_only(ty) == Some(true) {
-                        errors.push(ValidationError {
-                            scope: scope.to_string(),
-                            inst_index: inst_idx,
-                            span,
-                            kind: ValidationErrorKind::UseAfterMove {
-                                value_id: dst.to_raw() as u32,
-                                moved_at: at,
-                                ty: ty.clone(),
-                            },
-                        });
-                    }
-                }
+            if let Some(Liveness::Moved { at }) = state.get_var(*name)
+                && let Some(ty) = val_types.get(dst)
+                && is_move_only(ty) == Some(true)
+            {
+                errors.push(ValidationError {
+                    scope: scope.to_string(),
+                    inst_index: inst_idx,
+                    span,
+                    kind: ValidationErrorKind::UseAfterMove {
+                        value_id: dst.to_raw() as u32,
+                        moved_at: at,
+                        ty: ty.clone(),
+                    },
+                });
             }
             // Loading a move-only value from $var → var is now moved
-            if let Some(ty) = val_types.get(dst) {
-                if is_move_only(ty) == Some(true) {
-                    state.set_var(*name, Liveness::Moved { at: inst_idx });
-                }
+            if let Some(ty) = val_types.get(dst)
+                && is_move_only(ty) == Some(true)
+            {
+                state.set_var(*name, Liveness::Moved { at: inst_idx });
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -453,7 +448,12 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::IterStep { dst, iter_src, iter_dst, .. } => {
+        InstKind::IterStep {
+            dst,
+            iter_src,
+            iter_dst,
+            ..
+        } => {
             try_consume_value(scope, inst_idx, span, *iter_src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
             state.set_value(*iter_dst, Liveness::Alive);
@@ -574,7 +574,9 @@ fn process_inst(
         }
 
         // Spawn — consumes args (and indirect callee), defines dst
-        InstKind::Spawn { dst, callee, args, .. } => {
+        InstKind::Spawn {
+            dst, callee, args, ..
+        } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
             }
@@ -676,10 +678,7 @@ mod tests {
 
     #[test]
     fn tuple_with_effectful_is_move() {
-        let ty = Ty::Tuple(vec![
-            Ty::Int,
-            Ty::Iterator(Box::new(Ty::Int), Effect::io()),
-        ]);
+        let ty = Ty::Tuple(vec![Ty::Int, Ty::Iterator(Box::new(Ty::Int), Effect::io())]);
         assert_eq!(is_move_only(&ty), Some(true));
     }
 
@@ -948,14 +947,22 @@ mod tests {
             let interner = Interner::new();
             crate::test::compile_script(&interner, source, ctx)
                 .map(|_| ())
-                .map_err(|errs| errs.iter().map(|e| format!("{}", e.display(&interner))).collect())
+                .map_err(|errs| {
+                    errs.iter()
+                        .map(|e| format!("{}", e.display(&interner)))
+                        .collect()
+                })
         }
 
         fn compile_template(source: &str, _ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
             let interner = Interner::new();
             crate::test::compile_template(&interner, source, _ctx)
                 .map(|_| ())
-                .map_err(|errs| errs.iter().map(|e| format!("{}", e.display(&interner))).collect())
+                .map_err(|errs| {
+                    errs.iter()
+                        .map(|e| format!("{}", e.display(&interner)))
+                        .collect()
+                })
         }
 
         fn has_use_after_move(errors: &[String]) -> bool {

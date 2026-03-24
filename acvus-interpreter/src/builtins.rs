@@ -218,10 +218,28 @@ fn builtin_to_int(args: Args, _interner: &Interner) -> Result<Value, RuntimeErro
     let n = match &args[0] {
         Value::Int(n) => *n,
         Value::Float(f) => *f as i64,
-        Value::String(s) => s.parse::<i64>()
-            .map_err(|_| RuntimeError::unexpected_type("to_int", &[ValueKind::String], ValueKind::String))?,
-        Value::Bool(b) => if *b { 1 } else { 0 },
-        other => return Err(RuntimeError::unexpected_type("to_int", &[ValueKind::Int, ValueKind::Float, ValueKind::String, ValueKind::Bool], other.kind())),
+        Value::String(s) => s.parse::<i64>().map_err(|_| {
+            RuntimeError::unexpected_type("to_int", &[ValueKind::String], ValueKind::String)
+        })?,
+        Value::Bool(b) => {
+            if *b {
+                1
+            } else {
+                0
+            }
+        }
+        other => {
+            return Err(RuntimeError::unexpected_type(
+                "to_int",
+                &[
+                    ValueKind::Int,
+                    ValueKind::Float,
+                    ValueKind::String,
+                    ValueKind::Bool,
+                ],
+                other.kind(),
+            ));
+        }
     };
     Ok(Value::Int(n))
 }
@@ -231,9 +249,16 @@ fn builtin_to_float(args: Args, _interner: &Interner) -> Result<Value, RuntimeEr
     let f = match &args[0] {
         Value::Int(n) => *n as f64,
         Value::Float(f) => *f,
-        Value::String(s) => s.parse::<f64>()
-            .map_err(|_| RuntimeError::unexpected_type("to_float", &[ValueKind::String], ValueKind::String))?,
-        other => return Err(RuntimeError::unexpected_type("to_float", &[ValueKind::Int, ValueKind::Float, ValueKind::String], other.kind())),
+        Value::String(s) => s.parse::<f64>().map_err(|_| {
+            RuntimeError::unexpected_type("to_float", &[ValueKind::String], ValueKind::String)
+        })?,
+        other => {
+            return Err(RuntimeError::unexpected_type(
+                "to_float",
+                &[ValueKind::Int, ValueKind::Float, ValueKind::String],
+                other.kind(),
+            ));
+        }
     };
     Ok(Value::Float(f))
 }
@@ -242,9 +267,9 @@ fn builtin_to_float(args: Args, _interner: &Interner) -> Result<Value, RuntimeEr
 
 fn builtin_unwrap(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
     match args[0].take() {
-        Value::Variant { payload: Some(p), .. } => {
-            Ok(Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share()))
-        }
+        Value::Variant {
+            payload: Some(p), ..
+        } => Ok(Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share())),
         Value::Variant { payload: None, .. } => {
             panic!("unwrap: called on None")
         }
@@ -254,9 +279,9 @@ fn builtin_unwrap(mut args: Args, _interner: &Interner) -> Result<Value, Runtime
 
 fn builtin_unwrap_or(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
     match args[0].take() {
-        Value::Variant { payload: Some(p), .. } => {
-            Ok(Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share()))
-        }
+        Value::Variant {
+            payload: Some(p), ..
+        } => Ok(Arc::try_unwrap(p).unwrap_or_else(|arc| arc.as_ref().share())),
         Value::Variant { payload: None, .. } => Ok(args[1].take()),
         other => panic!("unwrap_or: expected Variant, got {other:?}"),
     }
@@ -286,8 +311,13 @@ fn builtin_to_bytes(args: Args, _interner: &Interner) -> Result<Value, RuntimeEr
 
 fn builtin_to_utf8(args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
     let bytes: Vec<u8> = args[0].as_list().iter().map(|v| v.as_byte()).collect();
-    let s = String::from_utf8(bytes)
-        .map_err(|_| RuntimeError::unexpected_type("to_utf8", &[crate::error::ValueKind::List], crate::error::ValueKind::List))?;
+    let s = String::from_utf8(bytes).map_err(|_| {
+        RuntimeError::unexpected_type(
+            "to_utf8",
+            &[crate::error::ValueKind::List],
+            crate::error::ValueKind::List,
+        )
+    })?;
     Ok(Value::string(s))
 }
 
@@ -341,7 +371,10 @@ fn builtin_iter(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeEr
         }
         other => panic!("iter: expected List or Deque, got {other:?}"),
     };
-    Ok(Value::iterator(IterHandle::from_list(items, Effect::pure())))
+    Ok(Value::iterator(IterHandle::from_list(
+        items,
+        Effect::pure(),
+    )))
 }
 
 fn builtin_rev_iter(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
@@ -354,7 +387,10 @@ fn builtin_rev_iter(mut args: Args, _interner: &Interner) -> Result<Value, Runti
         other => panic!("rev_iter: expected List or Deque, got {other:?}"),
     };
     items.reverse();
-    Ok(Value::iterator(IterHandle::from_list(items, Effect::pure())))
+    Ok(Value::iterator(IterHandle::from_list(
+        items,
+        Effect::pure(),
+    )))
 }
 
 // ── Iterator lazy combinators ────────────────────────────────────────
@@ -429,10 +465,13 @@ fn builtin_chain_seq(mut args: Args, _interner: &Interner) -> Result<Value, Runt
 
 // ── Async builtins (iterator consumers) ──────────────────────────────
 
+use crate::interpreter::{ASYNC_FUTURE_SIZE, Interpreter};
 use stackfuture::StackFuture;
-use crate::interpreter::{Interpreter, ASYNC_FUTURE_SIZE};
 
-fn builtin_collect<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_collect<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let mut items = Vec::new();
@@ -443,7 +482,10 @@ fn builtin_collect<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFutu
     })
 }
 
-fn builtin_join<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_join<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let sep = args[1].as_str();
@@ -455,7 +497,10 @@ fn builtin_join<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<
     })
 }
 
-fn builtin_first<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_first<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         match interp.exec_next(&mut iter).await? {
@@ -465,7 +510,10 @@ fn builtin_first<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture
     })
 }
 
-fn builtin_last<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_last<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let mut last = None;
@@ -479,7 +527,10 @@ fn builtin_last<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<
     })
 }
 
-fn builtin_contains<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_contains<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let needle = &args[1];
@@ -492,7 +543,10 @@ fn builtin_contains<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFut
     })
 }
 
-fn builtin_next<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_next<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         match interp.exec_next(&mut iter).await? {
@@ -505,7 +559,10 @@ fn builtin_next<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<
     })
 }
 
-fn builtin_next_seq<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_next_seq<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         // Sequence next = convert to iterator, pull one.
         let seq = *args[0].take().into_sequence();
@@ -520,7 +577,10 @@ fn builtin_next_seq<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFut
     })
 }
 
-fn builtin_find<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_find<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let f = args[1].take().into_fn();
@@ -530,16 +590,23 @@ fn builtin_find<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<
                 return Ok(val);
             }
         }
-        Err(RuntimeError::empty_collection(crate::error::CollectionOp::Find))
+        Err(RuntimeError::empty_collection(
+            crate::error::CollectionOp::Find,
+        ))
     })
 }
 
-fn builtin_reduce<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_reduce<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let f = args[1].take().into_fn();
         let Some(mut acc) = interp.exec_next(&mut iter).await? else {
-            return Err(RuntimeError::empty_collection(crate::error::CollectionOp::Reduce));
+            return Err(RuntimeError::empty_collection(
+                crate::error::CollectionOp::Reduce,
+            ));
         };
         while let Some(val) = interp.exec_next(&mut iter).await? {
             acc = interp.call_closure_2(&f, acc, val).await?;
@@ -548,7 +615,10 @@ fn builtin_reduce<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFutur
     })
 }
 
-fn builtin_fold<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_fold<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let mut acc = args[1].take();
@@ -560,7 +630,10 @@ fn builtin_fold<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<
     })
 }
 
-fn builtin_any<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_any<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let f = args[1].take().into_fn();
@@ -574,7 +647,10 @@ fn builtin_any<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'
     })
 }
 
-fn builtin_all<'x>(mut args: Args, interp: &'x mut Interpreter) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
+fn builtin_all<'x>(
+    mut args: Args,
+    interp: &'x mut Interpreter,
+) -> StackFuture<'x, Result<Value, RuntimeError>, ASYNC_FUTURE_SIZE> {
     StackFuture::from(async move {
         let mut iter = *args[0].take().into_iterator();
         let f = args[1].take().into_fn();

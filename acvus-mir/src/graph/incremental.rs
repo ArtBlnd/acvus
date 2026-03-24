@@ -13,8 +13,7 @@ use crate::typeck::{Checked, TypeResolution};
 
 use super::extract::{ExtractResult, FnRefs, ParsedSource, extract_one};
 use super::infer::{
-    FunctionMeta, InferredParam, SccInferResult,
-    extract_call_edges, infer_scc, tarjan_scc,
+    FunctionMeta, InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
 };
 use super::resolve::resolve_one;
 use super::types::*;
@@ -132,7 +131,9 @@ impl IncrementalGraph {
     // ── Source update (main incremental entry point) ────────────────
 
     pub fn update_source(&mut self, id: FunctionId, source: Astr) {
-        let Some(func) = self.functions.get_mut(&id) else { return; };
+        let Some(func) = self.functions.get_mut(&id) else {
+            return;
+        };
         match &mut func.kind {
             FnKind::Local(src) => src.source = source,
             FnKind::Extern { .. } => return,
@@ -158,11 +159,16 @@ impl IncrementalGraph {
     // ── Queries ─────────────────────────────────────────────────────
 
     pub fn diagnostics(&self, id: FunctionId) -> &[MirError] {
-        self.diagnostics.get(&id).map(|v| v.as_slice()).unwrap_or(&[])
+        self.diagnostics
+            .get(&id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn all_diagnostics(&self) -> impl Iterator<Item = (FunctionId, &[MirError])> {
-        self.diagnostics.iter().map(|(&id, errs)| (id, errs.as_slice()))
+        self.diagnostics
+            .iter()
+            .map(|(&id, errs)| (id, errs.as_slice()))
     }
 
     /// Get context/param info that must be injected externally for a function.
@@ -176,13 +182,17 @@ impl IncrementalGraph {
             Some(Some(r)) => r,
             _ => return vec![],
         };
-        scc_result.fn_params
+        scc_result
+            .fn_params
             .get(&id)
             .map(|params| {
-                params.iter().map(|p| ContextInfo {
-                    name: p.name,
-                    ty: p.ty.clone(),
-                }).collect()
+                params
+                    .iter()
+                    .map(|p| ContextInfo {
+                        name: p.name,
+                        ty: p.ty.clone(),
+                    })
+                    .collect()
             })
             .unwrap_or_default()
     }
@@ -202,7 +212,9 @@ impl IncrementalGraph {
     // ── Internal: Extract ───────────────────────────────────────────
 
     fn run_extract(&mut self, id: FunctionId) {
-        let Some(func) = self.functions.get(&id) else { return; };
+        let Some(func) = self.functions.get(&id) else {
+            return;
+        };
 
         // Check source hash for early skip.
         let source_hash = if let FnKind::Local(src) = &func.kind {
@@ -211,10 +223,10 @@ impl IncrementalGraph {
             return;
         };
 
-        if let Some(entry) = self.extract_cache.get(&id) {
-            if entry.source_hash == source_hash {
-                return; // No change.
-            }
+        if let Some(entry) = self.extract_cache.get(&id)
+            && entry.source_hash == source_hash
+        {
+            return; // No change.
         }
 
         // Run extract.
@@ -227,11 +239,14 @@ impl IncrementalGraph {
             }
             self.call_edges.insert(id, new_edges);
 
-            self.extract_cache.insert(id, ExtractEntry {
-                source_hash,
-                refs,
-                parsed,
-            });
+            self.extract_cache.insert(
+                id,
+                ExtractEntry {
+                    source_hash,
+                    refs,
+                    parsed,
+                },
+            );
         } else {
             // Parse failed — clear caches.
             self.extract_cache.remove(&id);
@@ -257,7 +272,8 @@ impl IncrementalGraph {
     // ── Internal: Graph rebuild (SCC) ───────────────────────────────
 
     fn rebuild_graph(&mut self) {
-        let local_ids: Vec<FunctionId> = self.functions
+        let local_ids: Vec<FunctionId> = self
+            .functions
             .values()
             .filter(|f| matches!(f.kind, FnKind::Local(_)))
             .map(|f| f.id)
@@ -285,17 +301,20 @@ impl IncrementalGraph {
         let known_ctx = self.known_context_types();
         let mut resolved_fn_types = crate::builtins::builtin_fn_types(&self.interner);
 
-        let fn_by_id: FxHashMap<FunctionId, &Function> = self.functions
+        let fn_by_id: FxHashMap<FunctionId, &Function> = self
+            .functions
             .iter()
             .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
             .map(|(&id, f)| (id, f))
             .collect();
 
-        let extract_refs: FxHashMap<FunctionId, &FnRefs> = self.extract_cache
+        let extract_refs: FxHashMap<FunctionId, &FnRefs> = self
+            .extract_cache
             .iter()
             .map(|(&id, e)| (id, &e.refs))
             .collect();
-        let extract_parsed: FxHashMap<FunctionId, &ParsedSource> = self.extract_cache
+        let extract_parsed: FxHashMap<FunctionId, &ParsedSource> = self
+            .extract_cache
             .iter()
             .map(|(&id, e)| (id, &e.parsed))
             .collect();
@@ -310,17 +329,23 @@ impl IncrementalGraph {
                 continue;
             }
 
-            let refs_owned: FxHashMap<FunctionId, FnRefs> = scc.iter()
+            let refs_owned: FxHashMap<FunctionId, FnRefs> = scc
+                .iter()
                 .filter_map(|fid| extract_refs.get(fid).map(|r| (*fid, (*r).clone())))
                 .collect();
-            let parsed_owned: FxHashMap<FunctionId, &ParsedSource> = scc.iter()
+            let parsed_owned: FxHashMap<FunctionId, &ParsedSource> = scc
+                .iter()
                 .filter_map(|fid| extract_parsed.get(fid).map(|p| (*fid, *p)))
                 .collect();
 
             let result = infer_scc(
-                &self.interner, scc, &fn_by_id,
-                &refs_owned, &parsed_owned,
-                &known_ctx, &resolved_fn_types,
+                &self.interner,
+                scc,
+                &fn_by_id,
+                &refs_owned,
+                &parsed_owned,
+                &known_ctx,
+                &resolved_fn_types,
             );
 
             resolved_fn_types.extend(result.resolved_types.clone());
@@ -335,7 +360,9 @@ impl IncrementalGraph {
     }
 
     fn dirty_propagate(&mut self, changed_fn: FunctionId) {
-        let Some(&start_scc) = self.fn_to_scc.get(&changed_fn) else { return; };
+        let Some(&start_scc) = self.fn_to_scc.get(&changed_fn) else {
+            return;
+        };
 
         // Mark this SCC as dirty.
         let _old_result = self.infer_cache[start_scc].take();
@@ -344,17 +371,20 @@ impl IncrementalGraph {
         let known_ctx = self.known_context_types();
         let mut resolved_fn_types = crate::builtins::builtin_fn_types(&self.interner);
 
-        let fn_by_id: FxHashMap<FunctionId, &Function> = self.functions
+        let fn_by_id: FxHashMap<FunctionId, &Function> = self
+            .functions
             .iter()
             .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
             .map(|(&id, f)| (id, f))
             .collect();
 
-        let extract_refs: FxHashMap<FunctionId, FnRefs> = self.extract_cache
+        let extract_refs: FxHashMap<FunctionId, FnRefs> = self
+            .extract_cache
             .iter()
             .map(|(&id, e)| (id, e.refs.clone()))
             .collect();
-        let extract_parsed: FxHashMap<FunctionId, &ParsedSource> = self.extract_cache
+        let extract_parsed: FxHashMap<FunctionId, &ParsedSource> = self
+            .extract_cache
             .iter()
             .map(|(&id, e)| (id, &e.parsed))
             .collect();
@@ -384,17 +414,23 @@ impl IncrementalGraph {
                 .as_ref()
                 .map(|r| r.resolved_types.clone());
 
-            let refs_for_scc: FxHashMap<FunctionId, FnRefs> = scc.iter()
+            let refs_for_scc: FxHashMap<FunctionId, FnRefs> = scc
+                .iter()
                 .filter_map(|fid| extract_refs.get(fid).map(|r| (*fid, r.clone())))
                 .collect();
-            let parsed_for_scc: FxHashMap<FunctionId, &ParsedSource> = scc.iter()
+            let parsed_for_scc: FxHashMap<FunctionId, &ParsedSource> = scc
+                .iter()
                 .filter_map(|fid| extract_parsed.get(fid).map(|p| (*fid, *p)))
                 .collect();
 
             let result = infer_scc(
-                &self.interner, scc, &fn_by_id,
-                &refs_for_scc, &parsed_for_scc,
-                &known_ctx, &resolved_fn_types,
+                &self.interner,
+                scc,
+                &fn_by_id,
+                &refs_for_scc,
+                &parsed_for_scc,
+                &known_ctx,
+                &resolved_fn_types,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -408,10 +444,10 @@ impl IncrementalGraph {
                 for &fid in scc {
                     if let Some(callers) = self.reverse_edges.get(&fid) {
                         for &caller in callers {
-                            if let Some(&caller_scc) = self.fn_to_scc.get(&caller) {
-                                if caller_scc > scc_idx {
-                                    dirty_sccs.insert(caller_scc);
-                                }
+                            if let Some(&caller_scc) = self.fn_to_scc.get(&caller)
+                                && caller_scc > scc_idx
+                            {
+                                dirty_sccs.insert(caller_scc);
                             }
                         }
                     }
@@ -435,28 +471,39 @@ impl IncrementalGraph {
     }
 
     fn propagate_effects(&mut self) {
-        let name_to_ctx_id: FxHashMap<Astr, ContextId> = self.contexts
-            .values()
-            .map(|c| (c.name, c.id))
-            .collect();
+        let name_to_ctx_id: FxHashMap<Astr, ContextId> =
+            self.contexts.values().map(|c| (c.name, c.id)).collect();
 
         // Collect direct reads/writes from extract cache.
         for scc_idx in 0..self.scc_order.len() {
             let scc = &self.scc_order[scc_idx];
-            let Some(ref mut scc_result) = self.infer_cache[scc_idx] else { continue; };
+            let Some(ref mut scc_result) = self.infer_cache[scc_idx] else {
+                continue;
+            };
 
             for &fid in scc {
-                let Some(extract_entry) = self.extract_cache.get(&fid) else { continue; };
-                let reads: std::collections::BTreeSet<ContextId> = extract_entry.refs.context_reads
+                let Some(extract_entry) = self.extract_cache.get(&fid) else {
+                    continue;
+                };
+                let reads: std::collections::BTreeSet<ContextId> = extract_entry
+                    .refs
+                    .context_reads
                     .iter()
                     .filter_map(|n| name_to_ctx_id.get(n).copied())
                     .collect();
-                let writes: std::collections::BTreeSet<ContextId> = extract_entry.refs.context_writes
+                let writes: std::collections::BTreeSet<ContextId> = extract_entry
+                    .refs
+                    .context_writes
                     .iter()
                     .filter_map(|n| name_to_ctx_id.get(n).copied())
                     .collect();
                 if let Some(meta) = scc_result.fn_metas.get_mut(&fid) {
-                    meta.effect = EffectSet { reads, writes, io: false, self_modifying: false };
+                    meta.effect = EffectSet {
+                        reads,
+                        writes,
+                        io: false,
+                        self_modifying: false,
+                    };
                 }
             }
         }
@@ -476,10 +523,9 @@ impl IncrementalGraph {
                 for &fid in scc {
                     if let Some(callees) = self.call_edges.get(&fid) {
                         for &callee_id in callees {
-                            let callee_effect = all_effects.get(&callee_id).cloned()
-                                .unwrap_or_default();
-                            let current = all_effects.get(&fid).cloned()
-                                .unwrap_or_default();
+                            let callee_effect =
+                                all_effects.get(&callee_id).cloned().unwrap_or_default();
+                            let current = all_effects.get(&fid).cloned().unwrap_or_default();
                             let merged = current.union(&callee_effect);
                             if merged != current {
                                 all_effects.insert(fid, merged);
@@ -488,7 +534,9 @@ impl IncrementalGraph {
                         }
                     }
                 }
-                if !changed { break; }
+                if !changed {
+                    break;
+                }
             }
         }
 
@@ -502,18 +550,21 @@ impl IncrementalGraph {
         }
     }
 
-    fn run_resolve_all(&mut self, known_ctx: &FxHashMap<Astr, Ty>) {
+    fn run_resolve_all(&mut self, _known_ctx: &FxHashMap<Astr, Ty>) {
         // Build context type map.
         let mut context_types: FxHashMap<Astr, Ty> = FxHashMap::default();
         for ctx in self.contexts.values() {
             match &ctx.constraint {
-                Constraint::Exact(ty) => { context_types.insert(ctx.name, ty.clone()); }
+                Constraint::Exact(ty) => {
+                    context_types.insert(ctx.name, ty.clone());
+                }
                 _ => {} // Inferred contexts need user-provided types
             }
         }
 
         // Build function type environment.
-        let mut fn_type_env: FxHashMap<Astr, Ty> = crate::builtins::builtin_fn_types(&self.interner);
+        let mut fn_type_env: FxHashMap<Astr, Ty> =
+            crate::builtins::builtin_fn_types(&self.interner);
         for scc_result in self.infer_cache.iter().flatten() {
             for (&fid, meta) in &scc_result.fn_metas {
                 if let Some(func) = self.functions.get(&fid) {
@@ -524,10 +575,10 @@ impl IncrementalGraph {
 
         // Add extern function types.
         for func in self.functions.values() {
-            if let FnKind::Extern { .. } = &func.kind {
-                if let Constraint::Exact(ty) = &func.constraint.output {
-                    fn_type_env.insert(func.name, ty.clone());
-                }
+            if let FnKind::Extern { .. } = &func.kind
+                && let Constraint::Exact(ty) = &func.constraint.output
+            {
+                fn_type_env.insert(func.name, ty.clone());
             }
         }
 
@@ -538,25 +589,42 @@ impl IncrementalGraph {
 
         // Resolve each function that doesn't have a cached result.
         for func in self.functions.values() {
-            let FnKind::Local(_) = &func.kind else { continue; };
-            if self.resolve_cache.contains_key(&func.id) { continue; }
+            let FnKind::Local(_) = &func.kind else {
+                continue;
+            };
+            if self.resolve_cache.contains_key(&func.id) {
+                continue;
+            }
 
-            let Some(extract_entry) = self.extract_cache.get(&func.id) else { continue; };
+            let Some(extract_entry) = self.extract_cache.get(&func.id) else {
+                continue;
+            };
 
             // Get bind params from infer cache.
-            let bind_params = self.fn_to_scc.get(&func.id)
+            let bind_params = self
+                .fn_to_scc
+                .get(&func.id)
                 .and_then(|&idx| self.infer_cache.get(idx))
                 .and_then(|opt| opt.as_ref())
                 .and_then(|r| r.fn_metas.get(&func.id))
                 .map(|m| m.params.clone())
                 .unwrap_or_default();
 
-            match resolve_one(&self.interner, func, &extract_entry.parsed, &bind_params, &env) {
+            match resolve_one(
+                &self.interner,
+                func,
+                &extract_entry.parsed,
+                &bind_params,
+                &env,
+            ) {
                 Ok((resolution, output_ty)) => {
-                    self.resolve_cache.insert(func.id, ResolveEntry {
-                        resolution,
-                        output_ty,
-                    });
+                    self.resolve_cache.insert(
+                        func.id,
+                        ResolveEntry {
+                            resolution,
+                            output_ty,
+                        },
+                    );
                     self.diagnostics.remove(&func.id);
                 }
                 Err(errs) => {
@@ -593,7 +661,7 @@ impl IncrementalGraph {
     /// Build a snapshot ExtractResult for compatibility with batch APIs.
     pub fn extract_result(&self) -> ExtractResult {
         let mut fn_refs = FxHashMap::default();
-        let mut parsed = FxHashMap::default();
+        let parsed = FxHashMap::default();
         for (&id, entry) in &self.extract_cache {
             fn_refs.insert(id, entry.refs.clone());
             // ParsedSource is not Clone — we need to handle this.
@@ -615,7 +683,9 @@ impl IncrementalGraph {
         let mut all_map: FxHashMap<Astr, Ty> = FxHashMap::default();
         for params in fn_params.values() {
             for param in params {
-                all_map.entry(param.name).or_insert_with(|| param.ty.clone());
+                all_map
+                    .entry(param.name)
+                    .or_insert_with(|| param.ty.clone());
             }
         }
         let all_params: Vec<InferredParam> = all_map
@@ -623,7 +693,11 @@ impl IncrementalGraph {
             .map(|(name, ty)| InferredParam { name, ty })
             .collect();
 
-        super::infer::InferResult { fn_params, all_params, functions }
+        super::infer::InferResult {
+            fn_params,
+            all_params,
+            functions,
+        }
     }
 }
 

@@ -106,7 +106,9 @@ impl Cfg {
                         merge_of: current_merge_of.take(),
                     });
                 }
-                InstKind::IterStep { done, done_args, .. } => {
+                InstKind::IterStep {
+                    done, done_args, ..
+                } => {
                     inst_indices.push(i);
                     blocks.push(BasicBlock {
                         label: label.take(),
@@ -230,7 +232,10 @@ mod tests {
         )
         .unwrap();
         let cfg = Cfg::build(&module.main.insts);
-        let has_iter_term = cfg.blocks.iter().any(|b| matches!(b.terminator, Terminator::IterStep { .. }));
+        let has_iter_term = cfg
+            .blocks
+            .iter()
+            .any(|b| matches!(b.terminator, Terminator::IterStep { .. }));
         assert!(has_iter_term, "IterStep should be a CFG terminator");
     }
 
@@ -248,11 +253,15 @@ mod tests {
         let preds = cfg.predecessors();
         // Every block with a label should have at least one predecessor (except entry).
         for (bi, block) in cfg.blocks.iter().enumerate() {
-            if bi == 0 { continue; }
+            if bi == 0 {
+                continue;
+            }
             if block.label.is_some() {
                 assert!(
                     preds.get(&BlockIdx(bi)).map_or(false, |p| !p.is_empty()),
-                    "block {} ({:?}) has no predecessors", bi, block.label
+                    "block {} ({:?}) has no predecessors",
+                    bi,
+                    block.label
                 );
             }
         }
@@ -274,11 +283,15 @@ mod tests {
         let cfg = Cfg::build(&module.main.insts);
         let preds = cfg.predecessors();
         for (bi, block) in cfg.blocks.iter().enumerate() {
-            if bi == 0 { continue; }
+            if bi == 0 {
+                continue;
+            }
             if block.label.is_some() {
                 assert!(
                     preds.get(&BlockIdx(bi)).map_or(false, |p| !p.is_empty()),
-                    "nested loop: block {} ({:?}) has no predecessors", bi, block.label
+                    "nested loop: block {} ({:?}) has no predecessors",
+                    bi,
+                    block.label
                 );
             }
         }

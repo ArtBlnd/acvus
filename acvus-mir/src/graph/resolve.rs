@@ -6,7 +6,7 @@
 //!
 //! SSA/PHI will be added later on top of this.
 
-use acvus_utils::{Astr, Freeze, Interner};
+use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
@@ -38,7 +38,9 @@ pub struct ResolvedGraph {
 
 impl ResolvedGraph {
     pub fn resolution(&self, id: FunctionId) -> &TypeResolution<Checked> {
-        self.resolutions.get(&id).expect("no resolution for function")
+        self.resolutions
+            .get(&id)
+            .expect("no resolution for function")
     }
 
     pub fn try_resolution(&self, id: FunctionId) -> Option<&TypeResolution<Checked>> {
@@ -98,23 +100,21 @@ pub fn resolve_one(
     }
 
     let mut subst = TySubst::new();
-    let checker = crate::typeck::TypeChecker::new(interner, env, &mut subst)
-        .with_params(bind_params);
+    let checker =
+        crate::typeck::TypeChecker::new(interner, env, &mut subst).with_params(bind_params);
     let unchecked_result = match parsed {
         ParsedSource::Script(script) => checker.check_script(script, None),
         ParsedSource::Template(template) => checker.check_template(template),
     };
 
     match unchecked_result {
-        Ok(unchecked) => {
-            match check_completeness(unchecked, &subst) {
-                Ok(checked) => {
-                    let tail_ty = checked.tail_ty.clone();
-                    Ok((checked, tail_ty))
-                }
-                Err(errs) => Err(errs),
+        Ok(unchecked) => match check_completeness(unchecked, &subst) {
+            Ok(checked) => {
+                let tail_ty = checked.tail_ty.clone();
+                Ok((checked, tail_ty))
             }
-        }
+            Err(errs) => Err(errs),
+        },
         Err(errs) => Err(errs),
     }
 }
@@ -169,7 +169,11 @@ pub fn resolve(
     //    Phase 2 requires all contexts to be known (from graph + Phase 1 infer).
     //    Undeclared contexts are errors.
     for (&fn_id, fn_ref) in &extract.fn_refs {
-        for &name in fn_ref.context_reads.iter().chain(fn_ref.context_writes.iter()) {
+        for &name in fn_ref
+            .context_reads
+            .iter()
+            .chain(fn_ref.context_writes.iter())
+        {
             if !context_types.contains_key(&name) {
                 errors.push(ResolveError {
                     fn_id,
@@ -254,8 +258,8 @@ pub fn resolve(
         }
 
         // Typecheck with pre-bound parameters.
-        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut subst)
-            .with_params(&bind_params);
+        let checker =
+            crate::typeck::TypeChecker::new(interner, &env, &mut subst).with_params(&bind_params);
         let unchecked_result = match parsed {
             ParsedSource::Script(script) => checker.check_script(script, None),
             ParsedSource::Template(template) => checker.check_template(template),
@@ -312,7 +316,7 @@ mod tests {
     use super::*;
     use crate::graph::extract;
     use crate::ty::Effect;
-    use acvus_utils::Interner;
+    use acvus_utils::{Freeze, Interner};
 
     // ── Single-function helpers (existing) ───────────────────────────
 
@@ -509,7 +513,9 @@ mod tests {
                     signature: sig.as_ref().map(|params| Signature {
                         params: params
                             .iter()
-                            .map(|(name, ty)| crate::ty::Param::new(interner.intern(name), ty.clone()))
+                            .map(|(name, ty)| {
+                                crate::ty::Param::new(interner.intern(name), ty.clone())
+                            })
                             .collect(),
                     }),
                     output: output.clone(),
@@ -568,7 +574,9 @@ mod tests {
                     signature: sig.as_ref().map(|params| Signature {
                         params: params
                             .iter()
-                            .map(|(name, ty)| crate::ty::Param::new(interner.intern(name), ty.clone()))
+                            .map(|(name, ty)| {
+                                crate::ty::Param::new(interner.intern(name), ty.clone())
+                            })
                             .collect(),
                     }),
                     output: output.clone(),
@@ -605,7 +613,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "double",
+                    "x * 2",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "double(21)", None, Constraint::Inferred),
             ],
             &[],
@@ -641,7 +654,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                (
+                    "add",
+                    "x + y",
+                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "add(1, 2)", None, Constraint::Inferred),
             ],
             &[],
@@ -659,8 +677,18 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("double_inc", "inc(x) + inc(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "inc",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "double_inc",
+                    "inc(x) + inc(x)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "double_inc(5)", None, Constraint::Inferred),
             ],
             &[],
@@ -696,7 +724,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("make_str", "\"hi\"", Some(vec![]), Constraint::Exact(Ty::String)),
+                (
+                    "make_str",
+                    "\"hi\"",
+                    Some(vec![]),
+                    Constraint::Exact(Ty::String),
+                ),
                 ("main", "make_str()", None, Constraint::Inferred),
             ],
             &[],
@@ -732,7 +765,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "double",
+                    "x * 2",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "10 | double", None, Constraint::Inferred),
             ],
             &[],
@@ -768,7 +806,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("echo", "s", Some(vec![("s", Ty::String)]), Constraint::Inferred),
+                (
+                    "echo",
+                    "s",
+                    Some(vec![("s", Ty::String)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "echo(\"hello\")", None, Constraint::Inferred),
             ],
             &[],
@@ -786,7 +829,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "inc",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("a", "inc(10)", None, Constraint::Inferred),
                 ("b", "inc(20)", None, Constraint::Inferred),
             ],
@@ -805,7 +853,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("is_positive", "x > 0", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "is_positive",
+                    "x > 0",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "is_positive(42)", None, Constraint::Inferred),
             ],
             &[],
@@ -861,7 +914,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "inc",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "inc(inc(0))", None, Constraint::Inferred),
             ],
             &[],
@@ -879,8 +937,18 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("is_even", "is_odd(n - 1)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Bool)),
-                ("is_odd", "is_even(n - 1)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Bool)),
+                (
+                    "is_even",
+                    "is_odd(n - 1)",
+                    Some(vec![("n", Ty::Int)]),
+                    Constraint::Exact(Ty::Bool),
+                ),
+                (
+                    "is_odd",
+                    "is_even(n - 1)",
+                    Some(vec![("n", Ty::Int)]),
+                    Constraint::Exact(Ty::Bool),
+                ),
                 ("main", "is_even(10)", None, Constraint::Inferred),
             ],
             &[],
@@ -898,7 +966,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("fib", "fib(n - 1) + fib(n - 2)", Some(vec![("n", Ty::Int)]), Constraint::Exact(Ty::Int)),
+                (
+                    "fib",
+                    "fib(n - 1) + fib(n - 2)",
+                    Some(vec![("n", Ty::Int)]),
+                    Constraint::Exact(Ty::Int),
+                ),
                 ("main", "fib(10)", None, Constraint::Inferred),
             ],
             &[],
@@ -916,7 +989,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("avg", "(a + b) / 2.0", Some(vec![("a", Ty::Float), ("b", Ty::Float)]), Constraint::Inferred),
+                (
+                    "avg",
+                    "(a + b) / 2.0",
+                    Some(vec![("a", Ty::Float), ("b", Ty::Float)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "avg(1.0, 3.0)", None, Constraint::Inferred),
             ],
             &[],
@@ -936,12 +1014,20 @@ mod tests {
         let (result, _ids) = resolve_multi(
             &i,
             &[
-                ("double", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "double",
+                    "x * 2",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "double(\"hello\")", None, Constraint::Inferred),
             ],
             &[],
         );
-        assert!(result.has_errors(), "should reject String arg for Int param");
+        assert!(
+            result.has_errors(),
+            "should reject String arg for Int param"
+        );
     }
 
     /// S2: Too many arguments.
@@ -951,7 +1037,12 @@ mod tests {
         let (result, _ids) = resolve_multi(
             &i,
             &[
-                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "inc",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "inc(1, 2)", None, Constraint::Inferred),
             ],
             &[],
@@ -966,7 +1057,12 @@ mod tests {
         let (result, _ids) = resolve_multi(
             &i,
             &[
-                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                (
+                    "add",
+                    "x + y",
+                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "add(1)", None, Constraint::Inferred),
             ],
             &[],
@@ -999,7 +1095,10 @@ mod tests {
             &[("main", "nonexistent(1)", None, Constraint::Inferred)],
             &[],
         );
-        assert!(result.has_errors(), "should reject call to undefined function");
+        assert!(
+            result.has_errors(),
+            "should reject call to undefined function"
+        );
     }
 
     /// S6: Declared output type contradicts actual body.
@@ -1034,8 +1133,18 @@ mod tests {
             &[
                 // No Exact output — types must be inferred.
                 // This is hard and may legitimately error, but must not panic/infinite loop.
-                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "ping",
+                    "pong(x)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "pong",
+                    "ping(x)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
             ],
             &[],
         );
@@ -1050,12 +1159,20 @@ mod tests {
         let (result, _ids) = resolve_multi(
             &i,
             &[
-                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "needs_int",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "\"hello\" | needs_int", None, Constraint::Inferred),
             ],
             &[],
         );
-        assert!(result.has_errors(), "should reject String piped to Int param");
+        assert!(
+            result.has_errors(),
+            "should reject String piped to Int param"
+        );
     }
 
     /// S9: Function with wrong context type propagated through call.
@@ -1071,7 +1188,10 @@ mod tests {
             ],
             &[("name", Ty::String)],
         );
-        assert!(result.has_errors(), "should reject String + Int through call chain");
+        assert!(
+            result.has_errors(),
+            "should reject String + Int through call chain"
+        );
     }
 
     /// S10: Calling a function as if it had different arity in different call sites.
@@ -1100,11 +1220,19 @@ mod tests {
                 ("make_int", "42", Some(vec![]), Constraint::Inferred),
                 ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
                 // [Int, String] — heterogeneous list should error.
-                ("main", "[make_int(), make_str()]", None, Constraint::Inferred),
+                (
+                    "main",
+                    "[make_int(), make_str()]",
+                    None,
+                    Constraint::Inferred,
+                ),
             ],
             &[],
         );
-        assert!(result.has_errors(), "should reject heterogeneous list from calls");
+        assert!(
+            result.has_errors(),
+            "should reject heterogeneous list from calls"
+        );
     }
 
     /// S12: Passing function return to wrong-typed parameter of another function.
@@ -1115,12 +1243,20 @@ mod tests {
             &i,
             &[
                 ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
-                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "needs_int",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "needs_int(make_str())", None, Constraint::Inferred),
             ],
             &[],
         );
-        assert!(result.has_errors(), "should reject String passed to Int param");
+        assert!(
+            result.has_errors(),
+            "should reject String passed to Int param"
+        );
     }
 
     // ── Edge cases ──────────────────────────────────────────────────
@@ -1180,7 +1316,10 @@ mod tests {
             &[],
         );
         let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "forward reference should resolve: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "forward reference should resolve: {errs:?}"
+        );
         let main_id = ids[0].1;
         assert_eq!(*result.fn_type(main_id).unwrap(), Ty::Int);
     }
@@ -1211,7 +1350,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), Constraint::Exact(Ty::Int)),
+                (
+                    "f",
+                    "f(x - 1)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Exact(Ty::Int),
+                ),
                 ("main", "f(10)", None, Constraint::Inferred),
             ],
             &[],
@@ -1250,7 +1394,12 @@ mod tests {
             &i,
             &[
                 ("make_list", "[1, 2, 3]", Some(vec![]), Constraint::Inferred),
-                ("main", "make_list() | iter | map(x -> x + 1) | collect | len", None, Constraint::Inferred),
+                (
+                    "main",
+                    "make_list() | iter | map(x -> x + 1) | collect | len",
+                    None,
+                    Constraint::Inferred,
+                ),
             ],
             &[],
         );
@@ -1289,7 +1438,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("maybe_first", "@items | iter | first", Some(vec![]), Constraint::Inferred),
+                (
+                    "maybe_first",
+                    "@items | iter | first",
+                    Some(vec![]),
+                    Constraint::Inferred,
+                ),
                 ("main", "maybe_first() | unwrap", None, Constraint::Inferred),
             ],
             &[("items", Ty::List(Box::new(Ty::Int)))],
@@ -1307,10 +1461,30 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("stage1", "x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("stage2", "x * 2", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("stage3", "x - 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("main", "0 | stage1 | stage2 | stage3", None, Constraint::Inferred),
+                (
+                    "stage1",
+                    "x + 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "stage2",
+                    "x * 2",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "stage3",
+                    "x - 1",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "main",
+                    "0 | stage1 | stage2 | stage3",
+                    None,
+                    Constraint::Inferred,
+                ),
             ],
             &[],
         );
@@ -1353,10 +1527,13 @@ mod tests {
                 ("get_user", "@user", Some(vec![]), Constraint::Exact(obj_ty)),
                 ("main", "get_user().name", None, Constraint::Inferred),
             ],
-            &[("user", Ty::Object(FxHashMap::from_iter([
-                (i.intern("name"), Ty::String),
-                (i.intern("age"), Ty::Int),
-            ])))],
+            &[(
+                "user",
+                Ty::Object(FxHashMap::from_iter([
+                    (i.intern("name"), Ty::String),
+                    (i.intern("age"), Ty::Int),
+                ])),
+            )],
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
@@ -1401,7 +1578,10 @@ mod tests {
             ],
             &[],
         );
-        assert!(result.has_errors(), "should reject inconsistent return type usage");
+        assert!(
+            result.has_errors(),
+            "should reject inconsistent return type usage"
+        );
     }
 
     /// B3: Mutual recursion with Inferred output — should NOT silently succeed.
@@ -1413,8 +1593,18 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "ping",
+                    "pong(x)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
+                (
+                    "pong",
+                    "ping(x)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
             ],
             &[],
         );
@@ -1437,13 +1627,21 @@ mod tests {
         let (result, _) = resolve_multi(
             &i,
             &[
-                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
+                (
+                    "f",
+                    "f(x - 1)",
+                    Some(vec![("x", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "f(10)", None, Constraint::Inferred),
             ],
             &[],
         );
         // Should error — f's return type is entirely circular.
-        assert!(result.has_errors(), "purely recursive return type should fail inference");
+        assert!(
+            result.has_errors(),
+            "purely recursive return type should fail inference"
+        );
     }
 
     /// B5: Effect soundness — function reading context must be Effectful,
@@ -1466,7 +1664,8 @@ mod tests {
         let main_id = ids[1].1;
         if let Some(resolution) = result.try_resolution(main_id) {
             assert_eq!(
-                resolution.body_effect, Effect::io(),
+                resolution.body_effect,
+                Effect::io(),
                 "caller of context-reading function must be effectful"
             );
         }
@@ -1479,7 +1678,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("add", "x + y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred),
+                (
+                    "add",
+                    "x + y",
+                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                    Constraint::Inferred,
+                ),
                 ("main", "add(1, 2)", None, Constraint::Inferred),
             ],
             &[],
@@ -1489,7 +1693,8 @@ mod tests {
         let main_id = ids[1].1;
         if let Some(resolution) = result.try_resolution(main_id) {
             assert_eq!(
-                resolution.body_effect, Effect::pure(),
+                resolution.body_effect,
+                Effect::pure(),
                 "caller of pure function should remain pure"
             );
         }
@@ -1512,7 +1717,8 @@ mod tests {
         let set_id = ids[0].1;
         if let Some(resolution) = result.try_resolution(set_id) {
             assert_eq!(
-                resolution.body_effect, Effect::io(),
+                resolution.body_effect,
+                Effect::io(),
                 "context-writing function must be effectful"
             );
         }
@@ -1535,7 +1741,11 @@ mod tests {
         // The system must NOT let main see Int when bad declared String.
         let main_id = ids[1].1;
         if let Some(main_ty) = result.fn_type(main_id) {
-            assert_ne!(*main_ty, Ty::Int, "main must not see Int when bad declared String");
+            assert_ne!(
+                *main_ty,
+                Ty::Int,
+                "main must not see Int when bad declared String"
+            );
         }
     }
 
@@ -1574,7 +1784,12 @@ mod tests {
         let (result, ids) = resolve_multi(
             &i,
             &[
-                ("consume_iter", "@src | collect", Some(vec![]), Constraint::Inferred),
+                (
+                    "consume_iter",
+                    "@src | collect",
+                    Some(vec![]),
+                    Constraint::Inferred,
+                ),
                 ("use_it", "consume_iter()", None, Constraint::Inferred),
             ],
             &[("src", eff_iter)],
@@ -1586,7 +1801,8 @@ mod tests {
         let use_id = ids[1].1;
         if let Some(resolution) = result.try_resolution(use_id) {
             assert_eq!(
-                resolution.body_effect, Effect::io(),
+                resolution.body_effect,
+                Effect::io(),
                 "transitive effect must propagate"
             );
         }
@@ -1715,7 +1931,9 @@ mod tests {
                 deps: Freeze::new(vec![]),
             },
             constraint: FnConstraint {
-                signature: Some(Signature { params: named_params.clone() }),
+                signature: Some(Signature {
+                    params: named_params.clone(),
+                }),
                 output: Constraint::Exact(Ty::Fn {
                     params: named_params,
                     ret: Box::new(ret),
@@ -1754,7 +1972,10 @@ mod tests {
             &[fetch],
             &[],
         );
-        assert!(result.has_errors(), "should reject String where Int expected");
+        assert!(
+            result.has_errors(),
+            "should reject String where Int expected"
+        );
     }
 
     /// Extern function return type flows into caller's expression.

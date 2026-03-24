@@ -176,13 +176,12 @@ fn compute_reach(
 
         // Merge point upgrade: the match structure guarantees this block
         // is reached whenever the first arm's test block is reached.
-        if let Some(source_label) = block.merge_of {
-            if let Some(&source_idx) = cfg.label_to_block.get(&source_label) {
-                if reach[source_idx.0] > block_reach {
-                    block_reach = reach[source_idx.0];
-                    reach[idx] = block_reach;
-                }
-            }
+        if let Some(source_label) = block.merge_of
+            && let Some(&source_idx) = cfg.label_to_block.get(&source_label)
+            && reach[source_idx.0] > block_reach
+        {
+            block_reach = reach[source_idx.0];
+            reach[idx] = block_reach;
         }
 
         match &block.terminator {
