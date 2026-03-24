@@ -26,6 +26,15 @@ fn compile(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
+    compile_source(interner, source, context_types, SourceKind::Template)
+}
+
+fn compile_source(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+    kind: SourceKind,
+) -> CompileResult {
     let contexts: Vec<Context> = context_types
         .iter()
         .map(|(name, ty)| Context {
@@ -43,7 +52,7 @@ fn compile(
         kind: FnKind::Local(SourceCode {
             name: interner.intern("test"),
             source: interner.intern(source),
-            kind: SourceKind::Template,
+            kind,
         }),
         constraint: FnConstraint {
             signature: None,
@@ -163,6 +172,40 @@ pub async fn run(
 pub async fn run_simple(source: &str) -> String {
     let interner = Interner::new();
     run(&interner, source, FxHashMap::default()).await
+}
+
+/// Compile and execute a **script**, returning the result Value.
+pub async fn run_script(
+    interner: &Interner,
+    source: &str,
+    context: FxHashMap<Astr, Value>,
+) -> Value {
+    let context_types: FxHashMap<Astr, Ty> = context
+        .iter()
+        .map(|(k, v)| (*k, infer_ty(v)))
+        .collect();
+
+    let cr = compile_source(interner, source, &context_types, SourceKind::Script);
+
+    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
+    let mut functions = cr.modules;
+    for (id, handler) in builtin_handlers {
+        functions.insert(id, Executable::Builtin(handler));
+    }
+
+    let snapshot: HashMap<String, Value> = context
+        .into_iter()
+        .map(|(k, v)| (interner.resolve(k).to_string(), v))
+        .collect();
+
+    let executor = Arc::new(SequentialExecutor);
+    let shared = InterpreterContext::new(interner, functions, executor)
+        .with_context_names(cr.context_names);
+
+    let overlay = ContextOverlay::new(Arc::new(snapshot));
+    let mut interp = Interpreter::new(shared, cr.entry_id, overlay);
+    let result = interp.execute().await.expect("execution failed");
+    result.value
 }
 
 // ── JSON helpers ─────────────────────────────────────────────────
