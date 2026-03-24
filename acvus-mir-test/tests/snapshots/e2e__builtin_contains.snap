@@ -6,21 +6,19 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r7 = context_project @items
-     1 │   r8 = context_load r7
-     3 │   r1 = context_project @items
-     4 │   r2 = cast ListToIterator r1
-     6 │   r4 = poison
-     7 │   r5 = poison
-     8 │   r6 = T0 + r5
-     9 │   return r6
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = cast ListToIterator r2
+     5 │   r5 = poison
+     6 │   r6 = poison
+     7 │   r7 = T0 + r6
+     8 │   return r7
 
     ; r0 (v0) : String
     ; r1 (@items) : List<Int>
-    ; r2 (v2) : Iterator<Int>
-    ; r3 (v3) : Int
-    ; r4 (contains(...)) : Bool
-    ; r5 (to_string(...)) : String
-    ; r6 (v6) : String
-    ; r7 (v7) : List<Int>
-    ; r8 (v8) : List<Int>
+    ; r2 (v2) : List<Int>
+    ; r3 (v3) : Iterator<Int>
+    ; r4 (v4) : Int
+    ; r5 (contains(...)) : Bool
+    ; r6 (to_string(...)) : String
+    ; r7 (v7) : String

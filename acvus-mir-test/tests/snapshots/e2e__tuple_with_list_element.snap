@@ -21,27 +21,21 @@ expression: ir
     17 │   r14 = cast ListToIterator r11
     19 │   jump L4(r14, T0)
     20 │ L4(r16: Iterator<Int>, r17: String):
-    21 │   r18 = iter_step r16
-    22 │   r19 = test r18 is None
-    23 │   jump_if r19 then L5(r17) else L7
-    24 │ L7:
-    25 │   r20 = unwrap r18
-    26 │   r21 = r20.0
-    27 │   r22 = r20.1
-    29 │   r24 = poison
-    30 │   r25 = T0 + r24
-    31 │   r26 = r17 + r25
-    32 │   jump L4(r22, r26)
-    33 │ L5(r27: String):
-    34 │   jump L6(r27)
-    35 │ L6(r28: String):
-    36 │   r29 = r13 + r28
-    37 │   jump L0(r29)
-    38 │ L1:
-    40 │   jump L0(T0)
-    41 │ L0(r31: String):  ; merge_of L2
-    42 │   r32 = T0 + r31
-    43 │   return r32
+    21 │   iter_step r18, r19 = r16 else L5(r17)
+    23 │   r21 = poison
+    24 │   r22 = T0 + r21
+    25 │   r23 = r17 + r22
+    26 │   jump L4(r19, r23)
+    27 │ L5(r24: String):
+    28 │   jump L6(r24)
+    29 │ L6(r25: String):
+    30 │   r26 = r13 + r25
+    31 │   jump L0(r26)
+    32 │ L1:
+    34 │   jump L0(T0)
+    35 │ L0(r28: String):  ; merge_of L2
+    36 │   r29 = T0 + r28
+    37 │   return r29
 
     ; r0 (v0) : String
     ; r1 (@data) : (String, List<Int>)
@@ -61,18 +55,15 @@ expression: ir
     ; r15 (v15) : String
     ; r16 (v16) : Iterator<Int>
     ; r17 (v17) : String
-    ; r18 (v18) : Option<(Int, Iterator<Int>)>
-    ; r19 (v19) : Bool
-    ; r20 (v20) : (Int, Iterator<Int>)
-    ; r21 (x) : Int
-    ; r22 (v22) : Iterator<Int>
+    ; r18 (x) : Int
+    ; r19 (v19) : Iterator<Int>
+    ; r20 (v20) : String
+    ; r21 (to_string(...)) : String
+    ; r22 (v22) : String
     ; r23 (v23) : String
-    ; r24 (to_string(...)) : String
+    ; r24 (v24) : String
     ; r25 (v25) : String
     ; r26 (v26) : String
     ; r27 (v27) : String
     ; r28 (v28) : String
     ; r29 (v29) : String
-    ; r30 (v30) : String
-    ; r31 (v31) : String
-    ; r32 (v32) : String

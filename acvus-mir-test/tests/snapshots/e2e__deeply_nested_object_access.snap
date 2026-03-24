@@ -7,17 +7,17 @@ expression: ir
 
 === main ===
      1 │   r1 = context_project @data
-     2 │   r2 = r1.user
-     3 │   r3 = r2.address
-     4 │   r4 = r3.city
-     5 │   r5 = context_load r4
+     2 │   r2 = context_load r1
+     3 │   r3 = r2.user
+     4 │   r4 = r3.address
+     5 │   r5 = r4.city
      6 │   r6 = T0 + r5
      7 │   return r6
 
     ; r0 (v0) : String
     ; r1 (@data) : {user: {address: {city: String}}}
-    ; r2 (user) : {address: {city: String}}
-    ; r3 (address) : {city: String}
-    ; r4 (city) : String
-    ; r5 (v5) : String
+    ; r2 (v2) : {user: {address: {city: String}}}
+    ; r3 (user) : {address: {city: String}}
+    ; r4 (address) : {city: String}
+    ; r5 (city) : String
     ; r6 (v6) : String

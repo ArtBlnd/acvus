@@ -395,19 +395,20 @@ mod tests {
         let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
         let (module, _) = compile_script(&i, "@obj.name", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
+        // SSA pass: ContextProject → ContextLoad (materialize object) → FieldGet (on value).
         let proj = kinds
             .iter()
             .position(|k| matches!(k, InstKind::ContextProject { .. }))
-            .unwrap();
-        let field = kinds
-            .iter()
-            .position(|k| matches!(k, InstKind::FieldGet { .. }))
             .unwrap();
         let load = kinds
             .iter()
             .position(|k| matches!(k, InstKind::ContextLoad { .. }))
             .unwrap();
-        assert!(proj < field && field < load);
+        let field = kinds
+            .iter()
+            .position(|k| matches!(k, InstKind::FieldGet { .. }))
+            .unwrap();
+        assert!(proj < load && load < field);
     }
 
     #[test]

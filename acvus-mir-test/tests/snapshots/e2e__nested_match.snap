@@ -11,40 +11,28 @@ expression: ir
      3 │   r3 = cast ListToIterator r2
      5 │   jump L0(r3, T0)
      6 │ L0(r5: Iterator<{name: String, posts: List<{title: String}>}>, r6: String):
-     7 │   r7 = iter_step r5
-     8 │   r8 = test r7 is None
-     9 │   jump_if r8 then L1(r6) else L3
-    10 │ L3:
-    11 │   r9 = unwrap r7
-    12 │   r10 = r9.0
-    13 │   r11 = r9.1
-    14 │   r12 = r10.name
-    15 │   r13 = r10.posts
-    17 │   r15 = cast ListToIterator r13
-    19 │   jump L4(r15, T0)
-    20 │ L4(r17: Iterator<{title: String}>, r18: String):
-    21 │   r19 = iter_step r17
-    22 │   r20 = test r19 is None
-    23 │   jump_if r20 then L5(r18) else L7
-    24 │ L7:
-    25 │   r21 = unwrap r19
-    26 │   r22 = r21.0
-    27 │   r23 = r21.1
-    28 │   r24 = r22.title
-    30 │   r26 = T0 + r24
-    31 │   r27 = r18 + r26
-    32 │   jump L4(r23, r27)
-    33 │ L5(r28: String):
-    34 │   jump L6(r28)
-    35 │ L6(r29: String):
-    36 │   r30 = T0 + r29
-    37 │   r31 = r6 + r30
-    38 │   jump L0(r11, r31)
-    39 │ L1(r32: String):
-    40 │   jump L2(r32)
-    41 │ L2(r33: String):
-    42 │   r34 = T0 + r33
-    43 │   return r34
+     7 │   iter_step r7, r8 = r5 else L1(r6)
+     8 │   r9 = r7.name
+     9 │   r10 = r7.posts
+    11 │   r12 = cast ListToIterator r10
+    13 │   jump L3(r12, T0)
+    14 │ L3(r14: Iterator<{title: String}>, r15: String):
+    15 │   iter_step r16, r17 = r14 else L4(r15)
+    16 │   r18 = r16.title
+    18 │   r20 = T0 + r18
+    19 │   r21 = r15 + r20
+    20 │   jump L3(r17, r21)
+    21 │ L4(r22: String):
+    22 │   jump L5(r22)
+    23 │ L5(r23: String):
+    24 │   r24 = T0 + r23
+    25 │   r25 = r6 + r24
+    26 │   jump L0(r8, r25)
+    27 │ L1(r26: String):
+    28 │   jump L2(r26)
+    29 │ L2(r27: String):
+    30 │   r28 = T0 + r27
+    31 │   return r28
 
     ; r0 (v0) : String
     ; r1 (@users) : List<{name: String, posts: List<{title: String}>}>
@@ -53,31 +41,25 @@ expression: ir
     ; r4 (v4) : String
     ; r5 (v5) : Iterator<{name: String, posts: List<{title: String}>}>
     ; r6 (v6) : String
-    ; r7 (v7) : Option<({name: String, posts: List<{title: String}>}, Iterator<{name: String, posts: List<{title: String}>}>)>
-    ; r8 (v8) : Bool
-    ; r9 (v9) : ({name: String, posts: List<{title: String}>}, Iterator<{name: String, posts: List<{title: String}>}>)
-    ; r10 (v10) : {name: String, posts: List<{title: String}>}
-    ; r11 (v11) : Iterator<{name: String, posts: List<{title: String}>}>
-    ; r12 (name) : String
-    ; r13 (posts) : List<{title: String}>
-    ; r14 (v14) : String
-    ; r15 (v15) : Iterator<{title: String}>
-    ; r16 (v16) : String
+    ; r7 (v7) : {name: String, posts: List<{title: String}>}
+    ; r8 (v8) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r9 (name) : String
+    ; r10 (posts) : List<{title: String}>
+    ; r11 (v11) : String
+    ; r12 (v12) : Iterator<{title: String}>
+    ; r13 (v13) : String
+    ; r14 (v14) : Iterator<{title: String}>
+    ; r15 (v15) : String
+    ; r16 (v16) : {title: String}
     ; r17 (v17) : Iterator<{title: String}>
-    ; r18 (v18) : String
-    ; r19 (v19) : Option<({title: String}, Iterator<{title: String}>)>
-    ; r20 (v20) : Bool
-    ; r21 (v21) : ({title: String}, Iterator<{title: String}>)
-    ; r22 (v22) : {title: String}
-    ; r23 (v23) : Iterator<{title: String}>
-    ; r24 (title) : String
+    ; r18 (title) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : String
+    ; r22 (v22) : String
+    ; r23 (v23) : String
+    ; r24 (v24) : String
     ; r25 (v25) : String
     ; r26 (v26) : String
     ; r27 (v27) : String
     ; r28 (v28) : String
-    ; r29 (v29) : String
-    ; r30 (v30) : String
-    ; r31 (v31) : String
-    ; r32 (v32) : String
-    ; r33 (v33) : String
-    ; r34 (v34) : String

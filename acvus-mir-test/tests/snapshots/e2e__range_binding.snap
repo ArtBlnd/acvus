@@ -10,22 +10,16 @@ expression: ir
      4 │   r4 = cast RangeToIterator r3
      6 │   jump L0(r4, T0)
      7 │ L0(r6: Iterator<Int>, r7: String):
-     8 │   r8 = iter_step r6
-     9 │   r9 = test r8 is None
-    10 │   jump_if r9 then L1(r7) else L3
-    11 │ L3:
-    12 │   r10 = unwrap r8
-    13 │   r11 = r10.0
-    14 │   r12 = r10.1
-    16 │   r14 = poison
-    17 │   r15 = T0 + r14
-    18 │   r16 = r7 + r15
-    19 │   jump L0(r12, r16)
-    20 │ L1(r17: String):
-    21 │   jump L2(r17)
-    22 │ L2(r18: String):
-    23 │   r19 = T0 + r18
-    24 │   return r19
+     8 │   iter_step r8, r9 = r6 else L1(r7)
+    10 │   r11 = poison
+    11 │   r12 = T0 + r11
+    12 │   r13 = r7 + r12
+    13 │   jump L0(r9, r13)
+    14 │ L1(r14: String):
+    15 │   jump L2(r14)
+    16 │ L2(r15: String):
+    17 │   r16 = T0 + r15
+    18 │   return r16
 
     ; r0 (v0) : String
     ; r1 (v1) : Int
@@ -35,15 +29,12 @@ expression: ir
     ; r5 (v5) : String
     ; r6 (v6) : Iterator<Int>
     ; r7 (v7) : String
-    ; r8 (v8) : Option<(Int, Iterator<Int>)>
-    ; r9 (v9) : Bool
-    ; r10 (v10) : (Int, Iterator<Int>)
-    ; r11 (x) : Int
-    ; r12 (v12) : Iterator<Int>
+    ; r8 (x) : Int
+    ; r9 (v9) : Iterator<Int>
+    ; r10 (v10) : String
+    ; r11 (to_string(...)) : String
+    ; r12 (v12) : String
     ; r13 (v13) : String
-    ; r14 (to_string(...)) : String
+    ; r14 (v14) : String
     ; r15 (v15) : String
     ; r16 (v16) : String
-    ; r17 (v17) : String
-    ; r18 (v18) : String
-    ; r19 (v19) : String

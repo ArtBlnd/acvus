@@ -11,38 +11,26 @@ expression: ir
      3 │   r3 = cast ListToIterator r2
      5 │   jump L0(r3, T0)
      6 │ L0(r5: Iterator<List<Int>>, r6: String):
-     7 │   r7 = iter_step r5
-     8 │   r8 = test r7 is None
-     9 │   jump_if r8 then L1(r6) else L3
-    10 │ L3:
-    11 │   r9 = unwrap r7
-    12 │   r10 = r9.0
-    13 │   r11 = r9.1
-    15 │   r13 = cast ListToIterator r10
-    17 │   jump L4(r13, T0)
-    18 │ L4(r15: Iterator<Int>, r16: String):
-    19 │   r17 = iter_step r15
-    20 │   r18 = test r17 is None
-    21 │   jump_if r18 then L5(r16) else L7
-    22 │ L7:
-    23 │   r19 = unwrap r17
-    24 │   r20 = r19.0
-    25 │   r21 = r19.1
-    27 │   r23 = poison
-    28 │   r24 = T0 + r23
-    29 │   r25 = r16 + r24
-    30 │   jump L4(r21, r25)
-    31 │ L5(r26: String):
-    32 │   jump L6(r26)
-    33 │ L6(r27: String):
-    34 │   r28 = T0 + r27
-    35 │   r29 = r6 + r28
-    36 │   jump L0(r11, r29)
-    37 │ L1(r30: String):
-    38 │   jump L2(r30)
-    39 │ L2(r31: String):
-    40 │   r32 = T0 + r31
-    41 │   return r32
+     7 │   iter_step r7, r8 = r5 else L1(r6)
+     9 │   r10 = cast ListToIterator r7
+    11 │   jump L3(r10, T0)
+    12 │ L3(r12: Iterator<Int>, r13: String):
+    13 │   iter_step r14, r15 = r12 else L4(r13)
+    15 │   r17 = poison
+    16 │   r18 = T0 + r17
+    17 │   r19 = r13 + r18
+    18 │   jump L3(r15, r19)
+    19 │ L4(r20: String):
+    20 │   jump L5(r20)
+    21 │ L5(r21: String):
+    22 │   r22 = T0 + r21
+    23 │   r23 = r6 + r22
+    24 │   jump L0(r8, r23)
+    25 │ L1(r24: String):
+    26 │   jump L2(r24)
+    27 │ L2(r25: String):
+    28 │   r26 = T0 + r25
+    29 │   return r26
 
     ; r0 (v0) : String
     ; r1 (@matrix) : List<List<Int>>
@@ -51,29 +39,23 @@ expression: ir
     ; r4 (v4) : String
     ; r5 (v5) : Iterator<List<Int>>
     ; r6 (v6) : String
-    ; r7 (v7) : Option<(List<Int>, Iterator<List<Int>>)>
-    ; r8 (v8) : Bool
-    ; r9 (v9) : (List<Int>, Iterator<List<Int>>)
-    ; r10 (row) : List<Int>
-    ; r11 (v11) : Iterator<List<Int>>
-    ; r12 (v12) : String
-    ; r13 (v13) : Iterator<Int>
-    ; r14 (v14) : String
+    ; r7 (row) : List<Int>
+    ; r8 (v8) : Iterator<List<Int>>
+    ; r9 (v9) : String
+    ; r10 (v10) : Iterator<Int>
+    ; r11 (v11) : String
+    ; r12 (v12) : Iterator<Int>
+    ; r13 (v13) : String
+    ; r14 (x) : Int
     ; r15 (v15) : Iterator<Int>
     ; r16 (v16) : String
-    ; r17 (v17) : Option<(Int, Iterator<Int>)>
-    ; r18 (v18) : Bool
-    ; r19 (v19) : (Int, Iterator<Int>)
-    ; r20 (x) : Int
-    ; r21 (v21) : Iterator<Int>
+    ; r17 (to_string(...)) : String
+    ; r18 (v18) : String
+    ; r19 (v19) : String
+    ; r20 (v20) : String
+    ; r21 (v21) : String
     ; r22 (v22) : String
-    ; r23 (to_string(...)) : String
+    ; r23 (v23) : String
     ; r24 (v24) : String
     ; r25 (v25) : String
     ; r26 (v26) : String
-    ; r27 (v27) : String
-    ; r28 (v28) : String
-    ; r29 (v29) : String
-    ; r30 (v30) : String
-    ; r31 (v31) : String
-    ; r32 (v32) : String

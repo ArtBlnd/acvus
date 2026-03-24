@@ -70,11 +70,39 @@ fn fmt_range_kind(kind: RangeKind) -> &'static str {
 struct PrintCtx<'a> {
     interner: &'a Interner,
     lit_to_tidx: &'a FxHashMap<String, usize>,
+    /// FunctionId → canonical index (order of first appearance across all bodies).
+    fn_id_map: FxHashMap<crate::graph::FunctionId, usize>,
 }
 
 impl PrintCtx<'_> {
     fn tag_name(&self, tag: &Astr) -> String {
         self.interner.resolve(*tag).to_string()
+    }
+
+    fn fmt_fn_id(&self, id: crate::graph::FunctionId) -> String {
+        match self.fn_id_map.get(&id) {
+            Some(&idx) => format!("#{idx}"),
+            None => format!("#?{}", id.index()),
+        }
+    }
+}
+
+/// Collect FunctionIds from a body in order of first appearance.
+fn collect_fn_ids_from_body(
+    body: &MirBody,
+    fn_id_map: &mut FxHashMap<crate::graph::FunctionId, usize>,
+) {
+    for inst in &body.insts {
+        let ids: &[crate::graph::FunctionId] = match &inst.kind {
+            InstKind::LoadFunction { id, .. } => std::slice::from_ref(id),
+            InstKind::FunctionCall { callee: Callee::Direct(id), .. } => std::slice::from_ref(id),
+            InstKind::Spawn { callee: Callee::Direct(id), .. } => std::slice::from_ref(id),
+            _ => &[],
+        };
+        for &id in ids {
+            let len = fn_id_map.len();
+            fn_id_map.entry(id).or_insert(len);
+        }
     }
 }
 
@@ -249,13 +277,13 @@ fn write_body(
             // Functions
             InstKind::LoadFunction { dst, id } => writeln!(
                 f,
-                "{} = load_function #{}",
+                "{} = load_function {}",
                 fmt_val(*dst),
-                id.index(),
+                ctx.fmt_fn_id(*id),
             )?,
             InstKind::FunctionCall { dst, callee, args } => {
                 let callee_str = match callee {
-                    Callee::Direct(id) => format!("#{}", id.index()),
+                    Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => fmt_use(*val, &consts, &texts),
                 };
                 writeln!(
@@ -270,7 +298,7 @@ fn write_body(
             // Spawn / Eval
             InstKind::Spawn { dst, callee, args, context_uses } => {
                 let callee_str = match callee {
-                    Callee::Direct(id) => format!("#{}", id.index()),
+                    Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => fmt_use(*val, &consts, &texts),
                 };
                 let ctx_str = if context_uses.is_empty() {
@@ -620,6 +648,13 @@ impl fmt::Display for MirModuleDisplay<'_> {
             );
         }
 
+        // Collect FunctionIds across all bodies for canonical numbering.
+        let mut fn_id_map: FxHashMap<crate::graph::FunctionId, usize> = FxHashMap::default();
+        collect_fn_ids_from_body(&module.main, &mut fn_id_map);
+        for label in &labels {
+            collect_fn_ids_from_body(&module.closures[label], &mut fn_id_map);
+        }
+
         if !text_entries.is_empty() {
             writeln!(f, "=== literals ===")?;
             for (idx, lit) in text_entries.iter().enumerate() {
@@ -631,6 +666,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
         let ctx = PrintCtx {
             interner: self.interner,
             lit_to_tidx: &lit_to_tidx,
+            fn_id_map,
         };
 
         writeln!(f, "=== main ===")?;
@@ -687,9 +723,12 @@ pub struct MirBodyDisplay<'a> {
 impl fmt::Display for MirBodyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let empty_lits = FxHashMap::default();
+        let mut fn_id_map = FxHashMap::default();
+        collect_fn_ids_from_body(self.body, &mut fn_id_map);
         let ctx = PrintCtx {
             interner: self.interner,
             lit_to_tidx: &empty_lits,
+            fn_id_map,
         };
         write_body(f, self.body, "", &ctx)
     }

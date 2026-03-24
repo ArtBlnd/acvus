@@ -13,27 +13,21 @@ expression: ir
      7 │   r6 = cast ListToIterator r5
      9 │   jump L0(r6, T0)
     10 │ L0(r8: Iterator<Int>, r9: String):
-    11 │   r10 = iter_step r8
-    12 │   r11 = test r10 is None
-    13 │   jump_if r11 then L1(r9) else L3
-    14 │ L3:
-    15 │   r12 = unwrap r10
-    16 │   r13 = r12.0
-    17 │   r14 = r12.1
-    19 │   r16 = var_load $sum
-    20 │   r17 = r16 + r13
-    21 │   var_store $sum = r17
-    23 │   r19 = T0 + T0
-    24 │   r20 = r9 + r19
-    25 │   jump L0(r14, r20)
-    26 │ L1(r21: String):
-    27 │   jump L2(r21)
-    28 │ L2(r22: String):
-    29 │   r23 = r3 + r22
-    30 │   r24 = var_load $sum
-    31 │   r25 = poison
-    32 │   r26 = r23 + r25
-    33 │   return r26
+    11 │   iter_step r10, r11 = r8 else L1(r9)
+    13 │   r13 = var_load $sum
+    14 │   r14 = r13 + r10
+    15 │   var_store $sum = r14
+    17 │   r16 = T0 + T0
+    18 │   r17 = r9 + r16
+    19 │   jump L0(r11, r17)
+    20 │ L1(r18: String):
+    21 │   jump L2(r18)
+    22 │ L2(r19: String):
+    23 │   r20 = r3 + r19
+    24 │   r21 = var_load $sum
+    25 │   r22 = poison
+    26 │   r23 = r20 + r22
+    27 │   return r23
 
     ; r0 (v0) : String
     ; r1 (v1) : Int
@@ -45,20 +39,17 @@ expression: ir
     ; r7 (v7) : String
     ; r8 (v8) : Iterator<Int>
     ; r9 (v9) : String
-    ; r10 (v10) : Option<(Int, Iterator<Int>)>
-    ; r11 (v11) : Bool
-    ; r12 (v12) : (Int, Iterator<Int>)
-    ; r13 (x) : Int
-    ; r14 (v14) : Iterator<Int>
+    ; r10 (x) : Int
+    ; r11 (v11) : Iterator<Int>
+    ; r12 (v12) : String
+    ; r13 ($sum) : Int
+    ; r14 (v14) : Int
     ; r15 (v15) : String
-    ; r16 ($sum) : Int
-    ; r17 (v17) : Int
+    ; r16 (v16) : String
+    ; r17 (v17) : String
     ; r18 (v18) : String
     ; r19 (v19) : String
     ; r20 (v20) : String
-    ; r21 (v21) : String
-    ; r22 (v22) : String
+    ; r21 ($sum) : Int
+    ; r22 (to_string(...)) : String
     ; r23 (v23) : String
-    ; r24 ($sum) : Int
-    ; r25 (to_string(...)) : String
-    ; r26 (v26) : String
