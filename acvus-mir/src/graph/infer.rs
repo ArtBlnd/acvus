@@ -51,13 +51,34 @@ pub struct InferResult {
 
 // ── Call graph + SCC ─────────────────────────────────────────────────
 
+/// Extract call edges for a single function from its parsed AST.
+/// Returns the list of FunctionIds that this function references.
+pub fn extract_call_edges(
+    parsed: &ParsedSource,
+    name_to_fn: &FxHashMap<Astr, FunctionId>,
+    self_id: FunctionId,
+) -> Vec<FunctionId> {
+    let names: Vec<Astr> = match parsed {
+        ParsedSource::Script(script) => collect_value_refs_script(script),
+        ParsedSource::Template(template) => collect_value_refs_template(template),
+    };
+    let mut callees = Vec::new();
+    for name in names {
+        if let Some(&callee_id) = name_to_fn.get(&name) {
+            if callee_id != self_id && !callees.contains(&callee_id) {
+                callees.push(callee_id);
+            }
+        }
+    }
+    callees
+}
+
 /// Build a call graph: for each local function, which other local functions
 /// does it reference by name in its body?
 fn build_call_graph(
     graph: &CompilationGraph,
     extract: &ExtractResult,
 ) -> FxHashMap<FunctionId, Vec<FunctionId>> {
-    // name → FunctionId for local functions only.
     let name_to_id: FxHashMap<Astr, FunctionId> = graph
         .functions
         .iter()
@@ -66,28 +87,10 @@ fn build_call_graph(
         .collect();
 
     let mut edges: FxHashMap<FunctionId, Vec<FunctionId>> = FxHashMap::default();
-
     for func in graph.functions.iter() {
         let FnKind::Local(_) = &func.kind else { continue; };
         let Some(parsed) = extract.parsed.get(&func.id) else { continue; };
-
-        let mut callees = Vec::new();
-        let names: Vec<Astr> = match parsed {
-            ParsedSource::Script(script) => collect_value_refs_script(script),
-            ParsedSource::Template(template) => collect_value_refs_template(template),
-        };
-        for name in names {
-            if let Some(&callee_id) = name_to_id.get(&name) {
-                if callee_id != func.id {
-                    // Skip self-calls for graph building (self-recursion is
-                    // handled within an SCC naturally).
-                    if !callees.contains(&callee_id) {
-                        callees.push(callee_id);
-                    }
-                }
-            }
-        }
-        edges.insert(func.id, callees);
+        edges.insert(func.id, extract_call_edges(parsed, &name_to_id, func.id));
     }
     edges
 }
@@ -194,7 +197,7 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
 
 /// Tarjan's SCC algorithm. Returns SCCs in reverse topological order
 /// (leaf SCCs first — dependencies before dependents).
-fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<FunctionId>>) -> Vec<Vec<FunctionId>> {
+pub fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<FunctionId>>) -> Vec<Vec<FunctionId>> {
     let mut index_counter: u32 = 0;
     let mut stack: Vec<FunctionId> = Vec::new();
     let mut on_stack: FxHashSet<FunctionId> = FxHashSet::default();
@@ -255,7 +258,166 @@ fn tarjan_scc(ids: &[FunctionId], edges: &FxHashMap<FunctionId, Vec<FunctionId>>
     result
 }
 
-// ── Inference ───────────────────────────────────────────────────────
+// ── Per-SCC inference ────────────────────────────────────────────────
+
+/// Result of inferring a single SCC.
+#[derive(Debug, Clone)]
+pub struct SccInferResult {
+    /// Per-function metadata (type, params, effect).
+    pub fn_metas: FxHashMap<FunctionId, FunctionMeta>,
+    /// Per-function inferred context parameters.
+    pub fn_params: FxHashMap<FunctionId, Vec<InferredParam>>,
+    /// Function name → resolved Ty::Fn (for passing to next SCC).
+    pub resolved_types: FxHashMap<Astr, Ty>,
+}
+
+/// Infer types for a single SCC.
+///
+/// `resolved_fn_types`: all function types already resolved by prior SCCs + builtins.
+/// `known_ctx`: declared context types from the graph.
+pub fn infer_scc(
+    interner: &Interner,
+    scc: &[FunctionId],
+    fn_by_id: &FxHashMap<FunctionId, &Function>,
+    extract_refs: &FxHashMap<FunctionId, super::extract::FnRefs>,
+    extract_parsed: &FxHashMap<FunctionId, &ParsedSource>,
+    known_ctx: &FxHashMap<Astr, Ty>,
+    resolved_fn_types: &FxHashMap<Astr, Ty>,
+) -> SccInferResult {
+    let mut subst = TySubst::new();
+    let mut fn_params: FxHashMap<FunctionId, Vec<InferredParam>> = FxHashMap::default();
+    let mut fn_bind_params: FxHashMap<FunctionId, Vec<Param>> = FxHashMap::default();
+    let mut fn_ret_vars: FxHashMap<FunctionId, Ty> = FxHashMap::default();
+    let mut fn_effect_vars: FxHashMap<FunctionId, Effect> = FxHashMap::default();
+    let mut fn_direct_reads: FxHashMap<FunctionId, FxHashSet<Astr>> = FxHashMap::default();
+    let mut fn_direct_writes: FxHashMap<FunctionId, FxHashSet<Astr>> = FxHashMap::default();
+
+    // Build Ty::Fn for functions in this SCC (with fresh ret/effect vars).
+    let mut scc_fn_types: FxHashMap<Astr, Ty> = FxHashMap::default();
+
+    for &fid in scc {
+        let func = fn_by_id[&fid];
+        let ret = match &func.constraint.output {
+            Constraint::Exact(ty) => ty.clone(),
+            _ => subst.fresh_param(),
+        };
+        let effect = subst.fresh_effect_var();
+        fn_ret_vars.insert(fid, ret.clone());
+        fn_effect_vars.insert(fid, effect.clone());
+
+        let sig_params: Vec<Param> = func
+            .constraint
+            .signature
+            .as_ref()
+            .map(|s| s.params.clone())
+            .unwrap_or_default();
+
+        let fn_ty = Ty::Fn {
+            params: sig_params,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect,
+        };
+        scc_fn_types.insert(func.name, fn_ty);
+    }
+
+    // Build TypeEnv: already-resolved functions + this SCC's unresolved functions.
+    let mut env_functions = resolved_fn_types.clone();
+    env_functions.extend(scc_fn_types);
+
+    // Typecheck each function in this SCC.
+    for &fid in scc {
+        let func = fn_by_id[&fid];
+        let Some(fn_ref) = extract_refs.get(&fid) else { continue; };
+        let Some(parsed) = extract_parsed.get(&fid) else { continue; };
+
+        let mut ctx_types: FxHashMap<Astr, Ty> = FxHashMap::default();
+        let mut unknown_vars: FxHashMap<Astr, Ty> = FxHashMap::default();
+
+        for &name in &fn_ref.context_reads {
+            if let Some(ty) = known_ctx.get(&name) {
+                ctx_types.insert(name, ty.clone());
+            } else {
+                let var = subst.fresh_param();
+                unknown_vars.insert(name, var.clone());
+                ctx_types.insert(name, var);
+            }
+        }
+
+        let env = crate::ty::TypeEnv {
+            contexts: ctx_types,
+            functions: env_functions.clone(),
+        };
+
+        let expected_tail = fn_ret_vars.get(&fid);
+        let declared_types: Vec<Ty> = func
+            .constraint
+            .signature
+            .as_ref()
+            .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
+            .unwrap_or_default();
+
+        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut subst)
+            .with_analysis_mode()
+            .with_declared_param_types(declared_types);
+        let result = match parsed {
+            ParsedSource::Script(script) => checker.check_script(script, expected_tail),
+            ParsedSource::Template(template) => checker.check_template(template),
+        };
+
+        if let Ok(ref unchecked) = result {
+            if let Some(effect_var) = fn_effect_vars.get(&fid) {
+                let _ = subst.unify_effect(effect_var, &unchecked.body_effect);
+            }
+            fn_direct_reads.insert(fid, unchecked.body_reads.clone());
+            fn_direct_writes.insert(fid, unchecked.body_writes.clone());
+
+            let bind: Vec<Param> = unchecked
+                .inferred_params
+                .iter()
+                .map(|(name, ty)| Param::new(*name, subst.resolve(ty)))
+                .collect();
+            fn_bind_params.insert(fid, bind);
+        }
+
+        let params: Vec<InferredParam> = unknown_vars
+            .into_iter()
+            .map(|(name, var)| InferredParam { name, ty: subst.resolve(&var) })
+            .collect();
+        fn_params.insert(fid, params);
+    }
+
+    // Resolve all functions in this SCC.
+    let mut resolved_types: FxHashMap<Astr, Ty> = FxHashMap::default();
+    let mut fn_metas: FxHashMap<FunctionId, FunctionMeta> = FxHashMap::default();
+
+    for &fid in scc {
+        let func = fn_by_id[&fid];
+        let ret = fn_ret_vars.get(&fid).map(|r| subst.resolve(r)).unwrap_or_else(Ty::error);
+        let effect = fn_effect_vars.get(&fid).map(|e| subst.resolve_effect(e)).unwrap_or_else(Effect::pure);
+        let bind: Vec<Param> = fn_bind_params
+            .get(&fid)
+            .map(|b| b.iter().map(|p| Param::new(p.name, subst.resolve(&p.ty))).collect())
+            .unwrap_or_default();
+
+        let fn_ty = Ty::Fn {
+            params: bind.clone(),
+            ret: Box::new(ret),
+            captures: vec![],
+            effect,
+        };
+        resolved_types.insert(func.name, fn_ty.clone());
+        fn_metas.insert(fid, FunctionMeta {
+            ty: fn_ty,
+            params: bind,
+            effect: EffectSet::default(), // filled by effect propagation later
+        });
+    }
+
+    SccInferResult { fn_metas, fn_params, resolved_types }
+}
+
+// ── Batch inference ─────────────────────────────────────────────────
 
 /// Run Phase 1 inference with SCC-based processing.
 ///

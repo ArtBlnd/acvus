@@ -62,9 +62,66 @@ impl ResolvedGraph {
     }
 }
 
-// ── Resolution ──────────────────────────────────────────────────────
+// ── Per-function resolution ──────────────────────────────────────────
 
-/// Run Phase 2 resolution.
+/// Resolve a single function. Returns the checked resolution + output type,
+/// or a list of errors.
+pub fn resolve_one(
+    interner: &Interner,
+    func: &Function,
+    parsed: &ParsedSource,
+    bind_params: &[crate::ty::Param],
+    env: &crate::ty::TypeEnv,
+) -> Result<(TypeResolution<Checked>, Ty), Vec<MirError>> {
+    // Validate: inferred params must be declared in the signature.
+    if !bind_params.is_empty() {
+        let sig_names: FxHashSet<Astr> = func
+            .constraint
+            .signature
+            .as_ref()
+            .map(|sig| sig.params.iter().map(|p| p.name).collect())
+            .unwrap_or_default();
+        let mut undeclared_errors = Vec::new();
+        for param in bind_params {
+            if !sig_names.contains(&param.name) {
+                undeclared_errors.push(MirError {
+                    kind: crate::error::MirErrorKind::UndefinedVariable(
+                        interner.resolve(param.name).to_string(),
+                    ),
+                    span: acvus_ast::Span::new(0, 0),
+                });
+            }
+        }
+        if !undeclared_errors.is_empty() {
+            return Err(undeclared_errors);
+        }
+    }
+
+    let mut subst = TySubst::new();
+    let checker = crate::typeck::TypeChecker::new(interner, env, &mut subst)
+        .with_params(bind_params);
+    let unchecked_result = match parsed {
+        ParsedSource::Script(script) => checker.check_script(script, None),
+        ParsedSource::Template(template) => checker.check_template(template),
+    };
+
+    match unchecked_result {
+        Ok(unchecked) => {
+            match check_completeness(unchecked, &subst) {
+                Ok(checked) => {
+                    let tail_ty = checked.tail_ty.clone();
+                    Ok((checked, tail_ty))
+                }
+                Err(errs) => Err(errs),
+            }
+        }
+        Err(errs) => Err(errs),
+    }
+}
+
+// ── Batch resolution ────────────────────────────────────────────────
+
+/// Run Phase 2 resolution (batch).
 ///
 /// All types must be fully resolved by this point (from infer + UI).
 /// `user_context_types`: additional context types provided by the user

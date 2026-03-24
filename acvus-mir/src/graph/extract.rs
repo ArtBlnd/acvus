@@ -41,66 +41,74 @@ pub enum ParsedSource {
     Template(acvus_ast::Template),
 }
 
-// ── Extraction ──────────────────────────────────────────────────────
+// ── Per-function extraction ──────────────────────────────────────────
 
-/// Run Phase 0 extraction on a compilation graph.
+/// Extract information from a single local function.
+/// Returns None if the function is not Local or fails to parse.
+pub fn extract_one(
+    interner: &Interner,
+    func: &Function,
+) -> Option<(FnRefs, ParsedSource)> {
+    let FnKind::Local(source) = &func.kind else {
+        return None;
+    };
+    let source_str = interner.resolve(source.source);
+
+    // Step 1: Parse AST and extract context names.
+    let (context_names, parsed_source) = match source.kind {
+        SourceKind::Script => {
+            let script = acvus_ast::parse_script(interner, source_str).ok()?;
+            let names = acvus_ast::extract_script_context_refs(&script);
+            (names, ParsedSource::Script(script))
+        }
+        SourceKind::Template => {
+            let template = acvus_ast::parse(interner, source_str).ok()?;
+            let names = acvus_ast::extract_template_context_refs(&template);
+            (names, ParsedSource::Template(template))
+        }
+    };
+
+    // Step 2: Build temp name→(id, ty) mapping for skeleton MIR.
+    let name_to_id: FxHashMap<Astr, (ContextId, crate::ty::Ty)> = context_names
+        .iter()
+        .map(|&name| (name, (ContextId::alloc(), crate::ty::Ty::error())))
+        .collect();
+    let id_to_name: FxHashMap<ContextId, Astr> = name_to_id
+        .iter()
+        .map(|(&name, &(id, _))| (id, name))
+        .collect();
+
+    // Step 3: Build skeleton MIR (empty type maps).
+    let lowerer = Lowerer::new(
+        interner,
+        FxHashMap::default(),
+        Vec::new(),
+        Freeze::new(name_to_id),
+        Freeze::new(FxHashMap::default()),
+    );
+    let (module, _) = match &parsed_source {
+        ParsedSource::Script(script) => lowerer.lower_script(script),
+        ParsedSource::Template(template) => lowerer.lower_template(template),
+    };
+
+    // Step 4: Run val_def analysis and trace write chains.
+    let refs = analyze_refs(&module, &id_to_name);
+
+    Some((refs, parsed_source))
+}
+
+// ── Batch extraction ────────────────────────────────────────────────
+
+/// Run Phase 0 extraction on a compilation graph (batch).
 pub fn extract(interner: &Interner, graph: &CompilationGraph) -> ExtractResult {
     let mut fn_refs = FxHashMap::default();
     let mut parsed = FxHashMap::default();
 
     for func in graph.functions.iter() {
-        let FnKind::Local(source) = &func.kind else {
-            continue;
-        };
-        let source_str = interner.resolve(source.source);
-
-        // Step 1: Parse AST and extract context names.
-        let (context_names, parsed_source) = match source.kind {
-            SourceKind::Script => {
-                let Ok(script) = acvus_ast::parse_script(interner, source_str) else {
-                    continue;
-                };
-                let names = acvus_ast::extract_script_context_refs(&script);
-                (names, ParsedSource::Script(script))
-            }
-            SourceKind::Template => {
-                let Ok(template) = acvus_ast::parse(interner, source_str) else {
-                    continue;
-                };
-                let names = acvus_ast::extract_template_context_refs(&template);
-                (names, ParsedSource::Template(template))
-            }
-        };
-
-        // Step 2: Build temp name→(id, ty) mapping for skeleton MIR.
-        // Types are unknown at extract phase — use Ty::error() as placeholder.
-        let name_to_id: FxHashMap<Astr, (ContextId, crate::ty::Ty)> = context_names
-            .iter()
-            .map(|&name| (name, (ContextId::alloc(), crate::ty::Ty::error())))
-            .collect();
-        let id_to_name: FxHashMap<ContextId, Astr> = name_to_id
-            .iter()
-            .map(|(&name, &(id, _))| (id, name))
-            .collect();
-
-        // Step 3: Build skeleton MIR (empty type maps).
-        let lowerer = Lowerer::new(
-            interner,
-            FxHashMap::default(),
-            Vec::new(),
-            Freeze::new(name_to_id),
-            Freeze::new(FxHashMap::default()),
-        );
-        let (module, _) = match &parsed_source {
-            ParsedSource::Script(script) => lowerer.lower_script(script),
-            ParsedSource::Template(template) => lowerer.lower_template(template),
-        };
-
-        // Step 4: Run val_def analysis and trace write chains.
-        let refs = analyze_refs(&module, &id_to_name);
-
-        fn_refs.insert(func.id, refs);
-        parsed.insert(func.id, parsed_source);
+        if let Some((refs, parsed_source)) = extract_one(interner, func) {
+            fn_refs.insert(func.id, refs);
+            parsed.insert(func.id, parsed_source);
+        }
     }
 
     ExtractResult { fn_refs, parsed }
