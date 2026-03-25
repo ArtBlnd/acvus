@@ -10,13 +10,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::cfg::{BlockIdx, Cfg, Terminator};
-use crate::graph::QualifiedRef;
+use crate::graph::{FunctionId, QualifiedRef};
 use crate::ir::{Callee, Inst, InstKind, Label, MirBody, ValueId};
 use crate::ssa::{ENTRY_BLOCK, SSABuilder};
-use crate::ty::Ty;
+use crate::ty::{Effect, Ty};
 
 /// Run the SSA context pass on a MirBody.
-pub fn run(body: &mut MirBody) {
+///
+/// `fn_types` maps FunctionId → Ty for resolving callee effects
+/// (which contexts a function reads/writes). Used to populate
+/// `context_uses`/`context_defs` on FunctionCall/Spawn instructions.
+pub fn run(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, Ty>) {
     // Step 1: Build CFG + collect context ops.
     let cfg = Cfg::build(&body.insts);
     if cfg.blocks.is_empty() {
@@ -33,8 +37,8 @@ pub fn run(body: &mut MirBody) {
         }
     }
 
-    // Step 3: Forward context values — eliminate redundant loads.
-    forward_context_values(body);
+    // Step 3: Forward context values — eliminate redundant loads + populate call context bindings.
+    forward_context_values(body, fn_types);
 }
 
 /// Store-load forwarding for context variables.
@@ -45,7 +49,7 @@ pub fn run(body: &mut MirBody) {
 ///
 /// Also eliminates the initial entry load if the context is never read
 /// before it's written (dead initial load).
-fn forward_context_values(body: &mut MirBody) {
+fn forward_context_values(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, Ty>) {
     // Map: projection ValueId → QualifiedRef.
     let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     // Current known value per context (from entry load or store).
@@ -54,6 +58,9 @@ fn forward_context_values(body: &mut MirBody) {
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     // Instructions to remove (dead loads + their preceding projects).
     let mut remove: FxHashSet<usize> = FxHashSet::default();
+    // Deferred patches: (inst_index, new context_uses, new context_defs).
+    let mut call_patches: Vec<(usize, Vec<(QualifiedRef, ValueId)>, Vec<(QualifiedRef, ValueId)>)> =
+        Vec::new();
 
     for (i, inst) in body.insts.iter().enumerate() {
         match &inst.kind {
@@ -86,6 +93,43 @@ fn forward_context_values(body: &mut MirBody) {
                     current_val.insert(ctx_id, value_resolved);
                 }
             }
+
+            // FunctionCall with Direct callee: populate context_uses/context_defs from effect.
+            InstKind::FunctionCall {
+                callee: Callee::Direct(fn_id),
+                context_uses,
+                context_defs,
+                ..
+            } if context_uses.is_empty() && context_defs.is_empty() => {
+                if let Some(reads_writes) = extract_effect_refs(fn_types, fn_id) {
+                    let (reads, writes) = reads_writes;
+                    // Populate context_uses: bind current SSA value for each read.
+                    let mut uses = Vec::new();
+                    for qref in &reads {
+                        if let Some(&val) = current_val.get(qref) {
+                            uses.push((*qref, val));
+                        }
+                    }
+                    // Populate context_defs: allocate new ValueId for each write.
+                    let mut defs = Vec::new();
+                    for qref in &writes {
+                        let new_val = body.val_factory.next();
+                        // Copy type from current SSA value (if known).
+                        if let Some(&current) = current_val.get(qref) {
+                            if let Some(ty) = body.val_types.get(&current) {
+                                body.val_types.insert(new_val, ty.clone());
+                            }
+                        }
+                        defs.push((*qref, new_val));
+                        // Update current_val — subsequent loads see the new value.
+                        current_val.insert(*qref, new_val);
+                    }
+                    if !uses.is_empty() || !defs.is_empty() {
+                        call_patches.push((i, uses, defs));
+                    }
+                }
+            }
+
             // Branch/merge: invalidate tracked values (conservative).
             InstKind::BlockLabel { .. } | InstKind::Jump { .. } | InstKind::JumpIf { .. } => {
                 current_val.clear();
@@ -94,21 +138,54 @@ fn forward_context_values(body: &mut MirBody) {
         }
     }
 
-    if remove.is_empty() && subst.is_empty() {
+    if remove.is_empty() && subst.is_empty() && call_patches.is_empty() {
         return;
     }
 
-    // Apply substitutions and remove dead instructions.
+    // Apply call patches (context_uses/context_defs population).
+    let patch_map: FxHashMap<usize, _> = call_patches.into_iter().map(|(i, u, d)| (i, (u, d))).collect();
+
+    // Apply substitutions, patches, and remove dead instructions.
     let old_insts = std::mem::take(&mut body.insts);
     body.insts = old_insts
         .into_iter()
         .enumerate()
         .filter(|(i, _)| !remove.contains(i))
-        .map(|(_, mut inst)| {
+        .map(|(i, mut inst)| {
             apply_subst(&mut inst.kind, &subst);
+            // Apply context_uses/context_defs patches.
+            if let Some((uses, defs)) = patch_map.get(&i) {
+                if let InstKind::FunctionCall {
+                    context_uses,
+                    context_defs,
+                    ..
+                } = &mut inst.kind
+                {
+                    *context_uses = uses.clone();
+                    *context_defs = defs.clone();
+                }
+            }
             inst
         })
         .collect();
+}
+
+/// Extract reads/writes QualifiedRefs from a function's type effect.
+fn extract_effect_refs(
+    fn_types: &FxHashMap<FunctionId, Ty>,
+    fn_id: &FunctionId,
+) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
+    let ty = fn_types.get(fn_id)?;
+    let Ty::Fn { effect: Effect::Resolved(eff), .. } = ty else {
+        return None;
+    };
+    if eff.reads.is_empty() && eff.writes.is_empty() {
+        return None;
+    }
+    Some((
+        eff.reads.iter().cloned().collect(),
+        eff.writes.iter().cloned().collect(),
+    ))
 }
 
 /// Apply value substitutions to an instruction's operands.
@@ -135,11 +212,19 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::UnaryOp { operand, .. } => s(operand),
         InstKind::FieldGet { object, .. } => s(object),
         InstKind::LoadFunction { .. } => {}
-        InstKind::FunctionCall { callee, args, .. } => {
+        InstKind::FunctionCall {
+            callee,
+            args,
+            context_uses,
+            context_defs,
+            ..
+        } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
+            context_uses.iter_mut().for_each(|(_, v)| s(v));
+            context_defs.iter_mut().for_each(|(_, v)| s(v));
         }
         InstKind::Spawn {
             callee,
@@ -508,8 +593,14 @@ fn patch_instructions(
 mod tests {
     use super::*;
     use crate::test::{compile_script, compile_template};
-    use crate::ty::Ty;
+    use crate::ty::{EffectSet, Ty};
     use acvus_utils::Interner;
+    use std::collections::BTreeSet;
+
+    /// Empty fn_types — no ExternFn effect info.
+    fn no_fn_types() -> FxHashMap<FunctionId, Ty> {
+        FxHashMap::default()
+    }
 
     fn count_phi_blocks(body: &MirBody) -> usize {
         body.insts
@@ -538,7 +629,7 @@ mod tests {
             &[("x", Ty::Int), ("name", Ty::String)],
         )
         .unwrap();
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert!(
             count_phi_blocks(&module.main) >= 1,
             "merge should have PHI for @x"
@@ -558,7 +649,7 @@ mod tests {
             &[("x", Ty::Int), ("name", Ty::String)],
         )
         .unwrap();
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert!(count_phi_blocks(&module.main) >= 1);
     }
 
@@ -571,7 +662,7 @@ mod tests {
             &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
         )
         .unwrap();
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert!(
             count_phi_blocks(&module.main) >= 1,
             "loop header should have PHI for @sum"
@@ -590,7 +681,7 @@ mod tests {
         )
         .unwrap();
         let stores_before = count_context_stores(&module.main);
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert_eq!(count_context_stores(&module.main), stores_before);
     }
 
@@ -603,7 +694,7 @@ mod tests {
             &[("items", Ty::List(Box::new(Ty::String)))],
         )
         .unwrap();
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert_eq!(count_context_stores(&module.main), 0);
     }
 
@@ -612,7 +703,7 @@ mod tests {
         let i = Interner::new();
         let (mut module, _) = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
         let stores_before = count_context_stores(&module.main);
-        run(&mut module.main);
+        run(&mut module.main, &no_fn_types());
         assert_eq!(count_context_stores(&module.main), stores_before);
     }
 
@@ -688,6 +779,198 @@ mod tests {
             count_phi_blocks(&module.main) >= 1,
             "loop + branch should produce PHI"
         );
+    }
+
+    // ── FunctionCall context_uses/context_defs population ──
+
+    /// Build a minimal MirBody with a FunctionCall to a callee that reads and writes @ctx.
+    /// Before SSA pass: context_uses/context_defs are empty.
+    /// After SSA pass: they should be populated.
+    #[test]
+    fn function_call_populates_context_uses_defs() {
+        let interner = Interner::new();
+        let ctx_name = interner.intern("ctx");
+        let qref = QualifiedRef::root(ctx_name);
+        let callee_id = FunctionId::alloc();
+
+        // Build fn_types: callee reads + writes @ctx.
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::from([qref]),
+                    writes: BTreeSet::from([qref]),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        // Build MIR manually:
+        // v0 = ContextProject @ctx
+        // v1 = ContextLoad v0        (entry load)
+        // v2 = FunctionCall callee() uses[] defs[]   ← SSA pass should fill
+        // Return v2
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        let v1 = body.val_factory.next();
+        let v2 = body.val_factory.next();
+        body.val_types.insert(v0, Ty::Int);
+        body.val_types.insert(v1, Ty::Int);
+        body.val_types.insert(v2, Ty::Int);
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v0, ctx: qref } });
+        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v1, src: v0 } });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst { span, kind: InstKind::Return(v2) });
+
+        run(&mut body, &fn_types);
+
+        // Find the FunctionCall and verify context_uses/context_defs are populated.
+        let call_inst = body.insts.iter().find(|i| matches!(i.kind, InstKind::FunctionCall { .. }));
+        assert!(call_inst.is_some(), "FunctionCall should exist");
+
+        if let InstKind::FunctionCall { context_uses, context_defs, .. } = &call_inst.unwrap().kind
+        {
+            assert_eq!(context_uses.len(), 1, "should have 1 context use (@ctx)");
+            assert_eq!(context_uses[0].0, qref, "use should be @ctx");
+            assert_eq!(context_uses[0].1, v1, "use should bind to entry load v1");
+
+            assert_eq!(context_defs.len(), 1, "should have 1 context def (@ctx)");
+            assert_eq!(context_defs[0].0, qref, "def should be @ctx");
+            // def ValueId should be a fresh value (not v0, v1, or v2).
+            let def_val = context_defs[0].1;
+            assert!(def_val != v0 && def_val != v1 && def_val != v2,
+                "def should be a fresh SSA value, got {def_val:?}");
+        } else {
+            panic!("expected FunctionCall");
+        }
+    }
+
+    /// FunctionCall with pure callee (no reads/writes) should NOT get context bindings.
+    #[test]
+    fn function_call_pure_no_context() {
+        let interner = Interner::new();
+        let callee_id = FunctionId::alloc();
+
+        // Pure function — no reads, no writes.
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::pure(),
+            },
+        );
+
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        body.val_types.insert(v0, Ty::Int);
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v0,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst { span, kind: InstKind::Return(v0) });
+
+        run(&mut body, &fn_types);
+
+        let call_inst = body.insts.iter().find(|i| matches!(i.kind, InstKind::FunctionCall { .. })).unwrap();
+        if let InstKind::FunctionCall { context_uses, context_defs, .. } = &call_inst.kind {
+            assert!(context_uses.is_empty(), "pure function should have no context_uses");
+            assert!(context_defs.is_empty(), "pure function should have no context_defs");
+        }
+    }
+
+    /// After a FunctionCall that writes @ctx, subsequent ContextLoad should see the new value.
+    #[test]
+    fn function_call_def_forwards_to_subsequent_load() {
+        let interner = Interner::new();
+        let ctx_name = interner.intern("ctx");
+        let qref = QualifiedRef::root(ctx_name);
+        let callee_id = FunctionId::alloc();
+
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Unit),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::new(),
+                    writes: BTreeSet::from([qref]),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        // v0 = ContextProject @ctx
+        // v1 = ContextLoad v0
+        // v2 = FunctionCall callee()    ← writes @ctx, def = v_new
+        // v3 = ContextProject @ctx
+        // v4 = ContextLoad v3           ← should be replaced by v_new
+        // Return v4
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        let v1 = body.val_factory.next();
+        let v2 = body.val_factory.next();
+        let v3 = body.val_factory.next();
+        let v4 = body.val_factory.next();
+        for v in [v0, v1, v2, v3, v4] {
+            body.val_types.insert(v, Ty::Int);
+        }
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v0, ctx: qref } });
+        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v1, src: v0 } });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v3, ctx: qref } });
+        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v4, src: v3 } });
+        body.insts.push(Inst { span, kind: InstKind::Return(v4) });
+
+        run(&mut body, &fn_types);
+
+        // The second ContextLoad (v4) should be eliminated — replaced by the def from the call.
+        let remaining_loads: Vec<_> = body.insts.iter()
+            .filter(|i| matches!(i.kind, InstKind::ContextLoad { .. }))
+            .collect();
+        // Only the entry load should remain; the second should be forwarded.
+        assert_eq!(remaining_loads.len(), 1,
+            "second ContextLoad should be eliminated by forwarding from FunctionCall def");
     }
 
     #[test]

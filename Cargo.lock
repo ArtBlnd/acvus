@@ -96,6 +96,7 @@ name = "acvus-interpreter-test"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-ext",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",

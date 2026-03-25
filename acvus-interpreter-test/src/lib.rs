@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{
-    ContextOverlay, Executable, Interpreter, InterpreterContext,
-    SequentialExecutor, Value,
+    ContextOverlay, ExecResult, Executable, ExternFn, ExternRegistry, Interpreter,
+    InterpreterContext, Registered, SequentialExecutor, Value,
 };
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, resolve, lower as graph_lower};
@@ -14,11 +14,13 @@ use rustc_hash::FxHashMap;
 // ── Core pipeline ───────────────────────────────────────────────
 
 /// Compile a template source → MirModule + context id mapping.
-struct CompileResult {
-    entry_id: FunctionId,
-    modules: FxHashMap<FunctionId, Executable>,
-    context_names: FxHashMap<QualifiedRef, Astr>,
-    builtin_ids: FxHashMap<Astr, FunctionId>,
+pub struct CompileResult {
+    pub entry_id: FunctionId,
+    pub modules: FxHashMap<FunctionId, Executable>,
+    pub context_names: FxHashMap<QualifiedRef, Astr>,
+    pub builtin_ids: FxHashMap<Astr, FunctionId>,
+    pub fn_types: FxHashMap<FunctionId, Ty>,
+    pub extern_executables: FxHashMap<FunctionId, Executable>,
 }
 
 fn compile(
@@ -34,6 +36,16 @@ fn compile_source(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
     kind: SourceKind,
+) -> CompileResult {
+    compile_source_with_externs(interner, source, context_types, kind, vec![])
+}
+
+pub fn compile_source_with_externs(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+    kind: SourceKind,
+    extern_registries: Vec<ExternRegistry>,
 ) -> CompileResult {
     let contexts: Vec<Context> = context_types
         .iter()
@@ -60,6 +72,21 @@ fn compile_source(
             output: Constraint::Inferred,
         },
     });
+
+    // Register ExternFns.
+    let mut extern_executables: FxHashMap<FunctionId, Executable> = FxHashMap::default();
+    let mut fn_types: FxHashMap<FunctionId, Ty> = FxHashMap::default();
+    for registry in extern_registries {
+        let registered = registry.register(interner);
+        for func in &registered.functions {
+            // Extract Ty from constraint for fn_types map.
+            if let Constraint::Exact(ty) = &func.constraint.output {
+                fn_types.insert(func.id, ty.clone());
+            }
+        }
+        functions.extend(registered.functions);
+        extern_executables.extend(registered.executables);
+    }
 
     let graph = CompilationGraph {
         namespaces: Freeze::new(vec![]),
@@ -98,7 +125,7 @@ fn compile_source(
         .map(|f| (f.name, f.id))
         .collect();
 
-    CompileResult { entry_id, modules, context_names, builtin_ids }
+    CompileResult { entry_id, modules, context_names, builtin_ids, fn_types, extern_executables }
 }
 
 /// Build builtin id mapping from the graph functions.
@@ -142,10 +169,13 @@ pub async fn run(
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
 
-    // Merge modules + builtins into unified functions map.
+    // Merge modules + builtins + externs into unified functions map.
     let mut functions = cr.modules;
     for (id, handler) in builtin_handlers {
         functions.insert(id, Executable::Builtin(handler));
+    }
+    for (id, exec) in cr.extern_executables {
+        functions.insert(id, exec);
     }
 
     // Build context snapshot for overlay.
@@ -156,6 +186,7 @@ pub async fn run(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let overlay = ContextOverlay::new(Arc::new(snapshot));
@@ -194,6 +225,9 @@ pub async fn run_script(
     for (id, handler) in builtin_handlers {
         functions.insert(id, Executable::Builtin(handler));
     }
+    for (id, exec) in cr.extern_executables {
+        functions.insert(id, exec);
+    }
 
     let snapshot: HashMap<String, Value> = context
         .into_iter()
@@ -202,12 +236,58 @@ pub async fn run_script(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let overlay = ContextOverlay::new(Arc::new(snapshot));
     let mut interp = Interpreter::new(shared, cr.entry_id, overlay);
     let result = interp.execute().await.expect("execution failed");
     result.value
+}
+
+/// Compile and execute a script with ExternFn registries, returning (result, context writes).
+pub async fn run_script_with_externs(
+    interner: &Interner,
+    source: &str,
+    context: FxHashMap<Astr, Value>,
+    extern_registries: Vec<ExternRegistry>,
+) -> ExecResult {
+    let context_types: FxHashMap<Astr, Ty> = context
+        .iter()
+        .map(|(k, v)| (*k, infer_ty(v)))
+        .collect();
+
+    let cr = compile_source_with_externs(
+        interner,
+        source,
+        &context_types,
+        SourceKind::Script,
+        extern_registries,
+    );
+
+    let builtin_handlers =
+        acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
+    let mut functions = cr.modules;
+    for (id, handler) in builtin_handlers {
+        functions.insert(id, Executable::Builtin(handler));
+    }
+    for (id, exec) in cr.extern_executables {
+        functions.insert(id, exec);
+    }
+
+    let snapshot: HashMap<String, Value> = context
+        .into_iter()
+        .map(|(k, v)| (interner.resolve(k).to_string(), v))
+        .collect();
+
+    let executor = Arc::new(SequentialExecutor);
+    let shared = InterpreterContext::new(interner, functions, executor)
+        .with_fn_types(cr.fn_types)
+        .with_context_names(cr.context_names);
+
+    let overlay = ContextOverlay::new(Arc::new(snapshot));
+    let mut interp = Interpreter::new(shared, cr.entry_id, overlay);
+    interp.execute().await.expect("execution failed")
 }
 
 // ── JSON helpers ─────────────────────────────────────────────────

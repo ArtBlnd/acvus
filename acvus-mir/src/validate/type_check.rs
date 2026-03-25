@@ -950,10 +950,12 @@ impl CheckCtx {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
             }
 
-            InstKind::FunctionCall { dst, callee, args } => {
+            InstKind::FunctionCall { dst, callee, args, context_uses: _, context_defs: _ } => {
                 match callee {
                     Callee::Direct(_) => {
-                        // Direct graph function — cannot verify signature at MIR level
+                        // Direct graph function — cannot verify signature at MIR level.
+                        // TODO: verify context_uses/context_defs count matches callee's
+                        // EffectSet reads/writes (requires fn type info in CheckCtx).
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
                     }
                     Callee::Indirect(closure) => {

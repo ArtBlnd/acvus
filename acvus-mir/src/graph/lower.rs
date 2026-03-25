@@ -98,6 +98,12 @@ pub fn lower(
             })
             .collect();
 
+        // Build FunctionId → Ty map for SSA pass (callee effect resolution).
+        let fn_type_map: FxHashMap<FunctionId, Ty> = function_ids
+            .values()
+            .map(|(id, ty)| (*id, ty.clone()))
+            .collect();
+
         let lowerer = crate::lower::Lowerer::new(
             interner,
             resolution_clone.type_map,
@@ -111,7 +117,7 @@ pub fn lower(
         };
 
         // SSA context pass: promote ContextProject/Load/Store to SSA form.
-        crate::ssa_pass::run(&mut module.main);
+        crate::ssa_pass::run(&mut module.main, &fn_type_map);
 
         let validation_errors = crate::validate::validate(&module);
         let result: Result<_, Vec<crate::error::MirError>> = if validation_errors.is_empty() {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
 use acvus_mir::graph::FunctionId;
 use acvus_mir::ir::{Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValueId};
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Effect, Ty};
 use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec, TrackedDeque};
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
@@ -171,18 +171,21 @@ use acvus_mir::graph::QualifiedRef;
 
 // ── Interpreter ──────────────────────────────────────────────────────
 
-/// Result of execution — return value + accumulated context writes.
+/// Result of execution — return value + context mutations.
 pub struct ExecResult {
     pub value: Value,
+    /// Legacy: context writes from Module/overlay path.
     pub writes: Vec<ContextWrite>,
+    /// ExternFn: context defs as raw Values (ordered by context_defs declaration).
+    pub defs: Vec<Value>,
 }
 
 /// A single executable unit — MIR module, builtin handler, or extern function.
 pub enum Executable {
     Module(MirModule),
     Builtin(BuiltinHandler),
-    /// External function injected from outside. Internal representation TBD.
-    Extern,
+    /// External function with type-safe handler (uses/defs aware).
+    Extern(crate::extern_fn::ExternHandler),
 }
 
 impl Executable {
@@ -190,7 +193,7 @@ impl Executable {
         match self {
             Self::Module(_) => "Module",
             Self::Builtin(_) => "Builtin",
-            Self::Extern => "Extern",
+            Self::Extern(_) => "Extern",
         }
     }
 }
@@ -200,6 +203,7 @@ impl Executable {
 pub struct InterpreterContext {
     pub interner: Interner,
     pub functions: Freeze<FxHashMap<FunctionId, Executable>>,
+    pub fn_types: Freeze<FxHashMap<FunctionId, Ty>>,
     pub context_names: Freeze<FxHashMap<QualifiedRef, Astr>>,
     pub executor: Arc<dyn crate::executor::Executor>,
 }
@@ -213,9 +217,15 @@ impl InterpreterContext {
         Self {
             interner: interner.clone(),
             functions: Freeze::new(functions),
+            fn_types: Freeze::new(FxHashMap::default()),
             context_names: Freeze::new(FxHashMap::default()),
             executor,
         }
+    }
+
+    pub fn with_fn_types(mut self, fn_types: FxHashMap<FunctionId, Ty>) -> Self {
+        self.fn_types = Freeze::new(fn_types);
+        self
     }
 
     pub fn with_context_names(mut self, context_names: FxHashMap<QualifiedRef, Astr>) -> Self {
@@ -243,6 +253,45 @@ impl Interpreter {
             overlay,
             variables: FxHashMap::default(),
             spawn_args: Vec::new(),
+        }
+    }
+
+    /// Fork for spawn — shared state is cheap clone, overlay forks, args carried.
+    /// Fallback: collect context uses from function type (overlay path, no SSA hint).
+    fn collect_uses_from_type(&self, fn_id: &FunctionId) -> Vec<Value> {
+        let Some(fn_ty) = self.shared.fn_types.get(fn_id) else {
+            return vec![];
+        };
+        let Ty::Fn { effect: Effect::Resolved(eff), .. } = fn_ty else {
+            return vec![];
+        };
+        eff.reads
+            .iter()
+            .map(|qref| {
+                let name = self.shared.context_names.get(qref)
+                    .unwrap_or_else(|| panic!("collect_uses: no name for {:?}", qref));
+                let key = self.shared.interner.resolve(*name);
+                self.overlay
+                    .get(key)
+                    .unwrap_or_else(|| panic!("collect_uses: undefined context '{}'", key))
+                    .clone()
+            })
+            .collect()
+    }
+
+    /// Fallback: apply context defs from function type (overlay path, no SSA hint).
+    fn apply_defs_from_type(&mut self, fn_id: &FunctionId, defs: Vec<Value>) {
+        let Some(fn_ty) = self.shared.fn_types.get(fn_id) else {
+            return;
+        };
+        let Ty::Fn { effect: Effect::Resolved(eff), .. } = fn_ty else {
+            return;
+        };
+        for (qref, def_value) in eff.writes.iter().zip(defs) {
+            let name = self.shared.context_names.get(qref)
+                .unwrap_or_else(|| panic!("apply_defs: no name for {:?}", qref));
+            let key = self.shared.interner.resolve(*name);
+            self.overlay.apply_field(key, &[], def_value);
         }
     }
 
@@ -285,7 +334,7 @@ impl Interpreter {
             ContextOverlay::new(Arc::new(std::collections::HashMap::new())),
         );
         let writes = overlay.into_patches();
-        Ok(ExecResult { value, writes })
+        Ok(ExecResult { value, writes, defs: Vec::new() })
     }
 
     /// Execute a specific function by FunctionId with explicit args.
@@ -635,12 +684,70 @@ impl Interpreter {
             InstKind::LoadFunction { dst, id } => {
                 frame.set(*dst, Value::Int(id.index() as i64));
             }
-            InstKind::FunctionCall { dst, callee, args } => {
+            InstKind::FunctionCall {
+                dst,
+                callee,
+                args,
+                context_uses,
+                context_defs,
+            } => {
                 let result = match callee {
                     Callee::Direct(id) => {
-                        let arg_vals: Args =
-                            args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                        self.dispatch_call(id, arg_vals).await?
+                        let is_extern =
+                            matches!(self.function(id), Executable::Extern(_));
+                        if is_extern {
+                            let handler = match self.function(id) {
+                                Executable::Extern(h) => h.clone(),
+                                _ => unreachable!(),
+                            };
+                            let arg_vals: Vec<Value> =
+                                args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+
+                            // Collect uses: SSA hint (frame) or fallback (overlay via type).
+                            let uses = if !context_uses.is_empty() {
+                                context_uses
+                                    .iter()
+                                    .map(|(_, vid)| frame.share(*vid))
+                                    .collect()
+                            } else {
+                                self.collect_uses_from_type(id)
+                            };
+
+                            let output = match &handler {
+                                crate::extern_fn::ExternHandler::Sync(f) => {
+                                    f(arg_vals, uses, &self.shared.interner)?
+                                }
+                                crate::extern_fn::ExternHandler::Async(f) => {
+                                    let interner = self.shared.interner.clone();
+                                    f(arg_vals, uses, interner).await?
+                                }
+                            };
+
+                            // Apply defs: SSA hint (frame + overlay) or fallback (overlay only via type).
+                            if !context_defs.is_empty() {
+                                for ((ctx_id, vid), def_value) in
+                                    context_defs.iter().zip(output.defs)
+                                {
+                                    let name = self.shared.context_names.get(ctx_id)
+                                        .unwrap_or_else(|| panic!("call: no name for {:?}", ctx_id));
+                                    let key = self.shared.interner.resolve(*name);
+                                    // Write to both overlay (for context persistence) and
+                                    // frame (for SSA def — subsequent reads see this value).
+                                    let for_overlay = def_value.share();
+                                    frame.set(*vid, def_value);
+                                    self.overlay.apply_field(key, &[], for_overlay);
+                                    projection_map.insert(*vid, *ctx_id);
+                                }
+                            } else {
+                                self.apply_defs_from_type(id, output.defs);
+                            }
+
+                            output.rets.into_iter().next().unwrap_or(Value::Unit)
+                        } else {
+                            let arg_vals: Args =
+                                args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+                            self.dispatch_call(id, arg_vals).await?
+                        }
                     }
                     Callee::Indirect(val_id) => {
                         let fv = frame.take(*val_id).into_fn();
@@ -674,17 +781,62 @@ impl Interpreter {
                 dst,
                 callee,
                 args,
-                context_uses: _,
+                context_uses,
             } => {
                 let callee_id = match callee {
                     Callee::Direct(id) => *id,
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
                 };
-                // Collect args from parent frame.
-                let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
-                // Fork interpreter with args. context_uses is implicit via overlay.
-                let child = self.fork(callee_id, spawn_args);
-                let handle = self.shared.executor.spawn(child);
+                let is_extern = matches!(self.function(&callee_id), Executable::Extern(_));
+                let handle = if is_extern {
+                    let spawn_args: Vec<Value> =
+                        args.iter().map(|a| frame.share(*a)).collect();
+                    // Uses: SSA hint (frame) or fallback (overlay via type).
+                    let uses: Vec<Value> = if !context_uses.is_empty() {
+                        context_uses
+                            .iter()
+                            .map(|(_, vid)| frame.share(*vid))
+                            .collect()
+                    } else {
+                        self.collect_uses_from_type(&callee_id)
+                    };
+                    let handler = match self.function(&callee_id) {
+                        Executable::Extern(h) => h.clone(),
+                        _ => unreachable!(),
+                    };
+                    let interner = self.shared.interner.clone();
+                    // Spawn is pure — handler executes at eval time.
+                    match &handler {
+                        crate::extern_fn::ExternHandler::Sync(f) => {
+                            let f = Arc::clone(f);
+                            self.shared.executor.spawn_blocking(Box::new(move || {
+                                let output = f(spawn_args, uses, &interner)?;
+                                Ok(ExecResult {
+                                    value: output.rets.into_iter().next().unwrap_or(Value::Unit),
+                                    writes: Vec::new(),
+                                    defs: output.defs,
+                                })
+                            }))
+                        }
+                        crate::extern_fn::ExternHandler::Async(f) => {
+                            let f = Arc::clone(f);
+                            self.shared.executor.spawn_async(Box::pin(async move {
+                                let output = f(spawn_args, uses, interner).await?;
+                                Ok(ExecResult {
+                                    value: output.rets.into_iter().next().unwrap_or(Value::Unit),
+                                    writes: Vec::new(),
+                                    defs: output.defs,
+                                })
+                            }))
+                        }
+                    }
+                } else {
+                    // Existing path: fork interpreter for Module/Builtin.
+                    let spawn_args: Vec<Value> =
+                        args.iter().map(|a| frame.share(*a)).collect();
+                    let child = self.fork(callee_id, spawn_args);
+                    self.shared.executor.spawn_interpreter(child)
+                };
                 frame.set(*dst, Value::Handle(Box::new(handle)));
             }
             InstKind::Eval {
@@ -697,12 +849,35 @@ impl Interpreter {
                     other => panic!("eval: expected Handle, got {other:?}"),
                 };
                 let result = self.shared.executor.eval(handle).await?;
-                // Merge child's context writes into our overlay.
-                self.overlay.merge_patches(result.writes);
-                // Register new SSA names for contexts the child wrote.
-                for (ctx_id, vid) in context_defs {
+
+                // Legacy Module path: merge overlay patches.
+                if !result.writes.is_empty() {
+                    self.overlay.merge_patches(result.writes);
+                }
+
+                // ExternFn path: apply defs to overlay via context_defs mapping.
+                let defs = result.defs;
+                let defs_count = defs.len();
+                for ((ctx_id, vid), def_value) in
+                    context_defs.iter().zip(defs)
+                {
+                    let name = self
+                        .shared
+                        .context_names
+                        .get(ctx_id)
+                        .unwrap_or_else(|| panic!("eval: no name for {:?}", ctx_id));
+                    let key = self.shared.interner.resolve(*name);
+                    let for_overlay = def_value.share();
+                    frame.set(*vid, def_value);
+                    self.overlay.apply_field(key, &[], for_overlay);
                     projection_map.insert(*vid, *ctx_id);
                 }
+
+                // Module path: register remaining SSA names not covered by defs.
+                for (ctx_id, vid) in context_defs.iter().skip(defs_count) {
+                    projection_map.insert(*vid, *ctx_id);
+                }
+
                 frame.set(*dst, result.value);
             }
 
@@ -1082,8 +1257,15 @@ impl Interpreter {
                 let arg_values: Vec<Value> = args.into_vec();
                 self.execute_function(id, &arg_values).await
             }
-            Executable::Extern => {
-                panic!("extern call not yet implemented for #{}", id.index())
+            Executable::Extern(_) => {
+                // ExternHandler dispatch requires uses/defs from Spawn/Eval path.
+                // Direct FunctionCall to an Extern is not supported — the compiler
+                // should emit Spawn+Eval for extern functions.
+                panic!(
+                    "extern function #{} called via FunctionCall; \
+                     use Spawn+Eval for extern functions with uses/defs",
+                    id.index()
+                )
             }
         }
     }

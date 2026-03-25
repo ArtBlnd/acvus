@@ -437,6 +437,8 @@ mod tests {
 
         // block 1: loop header — NOT sealed yet (back edge pending)
         ssa.add_predecessor(label(1), label(0));
+        // Use ctx in loop header — this triggers PHI creation when sealed.
+        let _v_header = ssa.use_var(label(1), ctx, &mut alloc);
 
         // block 2: loop body — writes
         ssa.add_predecessor(label(2), label(1));

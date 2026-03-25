@@ -420,8 +420,12 @@ impl Ty {
     pub fn is_pureable(&self) -> bool {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
-            Ty::List(inner) | Ty::Iterator(inner, _) | Ty::Handle(inner, _) => inner.is_pureable(),
-            Ty::Deque(inner, _) | Ty::Sequence(inner, ..) => inner.is_pureable(),
+            Ty::List(inner) => inner.is_pureable(),
+            Ty::Iterator(inner, effect) | Ty::Handle(inner, effect) => {
+                inner.is_pureable() && effect.is_pure()
+            }
+            Ty::Deque(inner, _) => inner.is_pureable(),
+            Ty::Sequence(inner, _, effect) => inner.is_pureable() && effect.is_pure(),
             Ty::Option(inner) => inner.is_pureable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
@@ -3662,11 +3666,15 @@ mod tests {
     }
 
     #[test]
-    fn sequence_is_not_pure() {
+    fn sequence_and_iterator_purity() {
         let o = Origin::Concrete(0);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pureable());
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pureable());
-        // Deque IS pure (it's an eager, storable container).
+        // Pure effect + pure inner → pureable.
+        assert!(Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).is_pureable());
+        assert!(Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pureable());
+        // IO effect → not pureable.
+        assert!(!Ty::Sequence(Box::new(Ty::Int), o, Effect::io()).is_pureable());
+        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::io()).is_pureable());
+        // Deque IS pure (eager, storable container).
         assert!(Ty::Deque(Box::new(Ty::Int), o).is_pureable());
     }
 

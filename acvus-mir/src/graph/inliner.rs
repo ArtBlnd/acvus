@@ -88,6 +88,8 @@ fn inline_body(
                     dst,
                     callee: Callee::Direct(callee_id),
                     args,
+                    context_uses: _,
+                    context_defs: _,
                 } if !recursive_fns.contains(callee_id) && all_modules.contains_key(callee_id) => {
                     let callee_module = &all_modules[callee_id];
                     let callee_body = &callee_module.main;
@@ -270,7 +272,7 @@ fn remap_inst(
             dst: r(*dst),
             id: *id,
         },
-        InstKind::FunctionCall { dst, callee, args } => {
+        InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
                 Callee::Indirect(v) => Callee::Indirect(r(*v)),
@@ -279,6 +281,8 @@ fn remap_inst(
                 dst: r(*dst),
                 callee,
                 args: rv(args),
+                context_uses: context_uses.iter().map(|(id, v)| (*id, r(*v))).collect(),
+                context_defs: context_defs.iter().map(|(id, v)| (*id, r(*v))).collect(),
             }
         }
         InstKind::Spawn {
@@ -565,6 +569,8 @@ mod tests {
                     dst: v(1),
                     callee: Callee::Direct(callee_id),
                     args: vec![v(0)],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -618,6 +624,8 @@ mod tests {
                     dst: v(1),
                     callee: Callee::Direct(extern_id),
                     args: vec![v(0)],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -661,6 +669,8 @@ mod tests {
                     dst: v(0),
                     callee: Callee::Direct(rec_id),
                     args: vec![],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -713,6 +723,8 @@ mod tests {
                     dst: v(0),
                     callee: Callee::Direct(g_id),
                     args: vec![],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -725,6 +737,8 @@ mod tests {
                     dst: v(0),
                     callee: Callee::Direct(f_id),
                     args: vec![],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -763,6 +777,8 @@ mod tests {
                     dst: v(1),
                     callee: Callee::Indirect(v(0)),
                     args: vec![],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],

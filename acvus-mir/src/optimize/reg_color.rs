@@ -317,12 +317,14 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(object);
         }
         InstKind::LoadFunction { dst, .. } => r(dst),
-        InstKind::FunctionCall { dst, callee, args } => {
+        InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
                 r(v);
             }
             args.iter_mut().for_each(&r);
+            for (_, v) in context_uses { r(v); }
+            for (_, v) in context_defs { r(v); }
         }
         InstKind::Spawn {
             dst,

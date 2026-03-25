@@ -464,14 +464,20 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         // Calls — all args are consumed; indirect callee is also consumed
-        InstKind::FunctionCall { dst, callee, args } => {
+        InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
             }
             for arg in args {
                 try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
             }
+            for (_, vid) in context_uses {
+                try_consume_value(scope, inst_idx, span, *vid, val_types, state, errors);
+            }
             state.set_value(*dst, Liveness::Alive);
+            for (_, vid) in context_defs {
+                state.set_value(*vid, Liveness::Alive);
+            }
         }
 
         // Constructors — elements are consumed
@@ -724,11 +730,15 @@ mod tests {
                     dst: v1,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v0],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v0],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
             ],
             val_types,
@@ -756,11 +766,15 @@ mod tests {
                     dst: v1,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v0],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v0],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
             ],
             val_types,
@@ -793,6 +807,8 @@ mod tests {
                 dst: v1,
                 callee: Callee::Direct(FunctionId::alloc()),
                 args: vec![v0],
+                    context_uses: vec![],
+                    context_defs: vec![],
             })],
             val_types,
         );
@@ -834,6 +850,8 @@ mod tests {
                     dst: v4,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v1],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
                 // $a = v2 (new value) → revives $a
                 inst(InstKind::VarStore { name: a, src: v2 }),
@@ -844,6 +862,8 @@ mod tests {
                     dst: v5,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v3],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
             ],
             val_types,
@@ -884,6 +904,8 @@ mod tests {
                     dst: v3,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v1],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
                 // Second load — $a already moved
                 inst(InstKind::VarLoad { dst: v2, name: a }),
@@ -891,6 +913,8 @@ mod tests {
                     dst: v4,
                     callee: Callee::Direct(FunctionId::alloc()),
                     args: vec![v2],
+                    context_uses: vec![],
+                    context_defs: vec![],
                 }),
             ],
             val_types,

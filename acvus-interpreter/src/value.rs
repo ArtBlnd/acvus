@@ -7,6 +7,7 @@ use acvus_utils::{Astr, Interner, TrackedDeque};
 use rustc_hash::FxHashMap;
 
 pub use crate::iter::{IterHandle, SequenceChain};
+use crate::error::RuntimeError;
 
 // ── Value ────────────────────────────────────────────────────────────
 
@@ -89,6 +90,19 @@ impl HandleValue {
     }
     pub fn downcast<T: std::any::Any + Send + Sync>(self) -> T {
         *self.inner.downcast().expect("HandleValue type mismatch")
+    }
+
+    /// Try to downcast, returning the original HandleValue on failure.
+    pub fn try_downcast<T: std::any::Any + Send + Sync>(self) -> Result<T, Self> {
+        match self.inner.downcast::<T>() {
+            Ok(val) => Ok(*val),
+            Err(inner) => Err(Self { inner }),
+        }
+    }
+
+    /// Consume into the inner type-erased box (for executor dispatch).
+    pub fn into_inner(self) -> Box<dyn std::any::Any + Send + Sync> {
+        self.inner
     }
 }
 
@@ -531,6 +545,237 @@ impl PartialEq for OpaqueValue {
         false
     }
 }
+
+// ── Value conversion traits ──────────────────────────────────────────
+
+/// Convert a `Value` into a concrete Rust type.
+pub trait FromValue: Sized {
+    fn from_value(value: Value) -> Result<Self, RuntimeError>;
+}
+
+/// Convert a concrete Rust type into a `Value`.
+pub trait IntoValue {
+    fn into_value(self) -> Value;
+}
+
+/// Convert a `Vec<Value>` into a tuple of concrete types.
+pub trait FromValues: Sized {
+    fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError>;
+}
+
+/// Convert a tuple of concrete types into a `Vec<Value>`.
+pub trait IntoValues {
+    fn into_values(self) -> Vec<Value>;
+}
+
+// ── Identity impls ──────────────────────────────────────────────────
+
+impl FromValue for Value {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        Ok(value)
+    }
+}
+
+impl IntoValue for Value {
+    fn into_value(self) -> Value {
+        self
+    }
+}
+
+// ── Primitive impls ─────────────────────────────────────────────────
+
+impl FromValue for i64 {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Int(n) => Ok(n),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<i64>",
+                &[crate::error::ValueKind::Int],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for i64 {
+    fn into_value(self) -> Value {
+        Value::Int(self)
+    }
+}
+
+impl FromValue for f64 {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Float(f) => Ok(f),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<f64>",
+                &[crate::error::ValueKind::Float],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for f64 {
+    fn into_value(self) -> Value {
+        Value::Float(self)
+    }
+}
+
+impl FromValue for bool {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Bool(b) => Ok(b),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<bool>",
+                &[crate::error::ValueKind::Bool],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for bool {
+    fn into_value(self) -> Value {
+        Value::Bool(self)
+    }
+}
+
+impl FromValue for () {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Unit => Ok(()),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<()>",
+                &[crate::error::ValueKind::Unit],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for () {
+    fn into_value(self) -> Value {
+        Value::Unit
+    }
+}
+
+impl FromValue for u8 {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Byte(b) => Ok(b),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<u8>",
+                &[crate::error::ValueKind::Byte],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for u8 {
+    fn into_value(self) -> Value {
+        Value::Byte(self)
+    }
+}
+
+impl FromValue for String {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::String(s) => Ok(s.to_string()),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<String>",
+                &[crate::error::ValueKind::String],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for String {
+    fn into_value(self) -> Value {
+        Value::string(self)
+    }
+}
+
+impl FromValue for Arc<str> {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::String(s) => Ok(s),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<Arc<str>>",
+                &[crate::error::ValueKind::String],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for Arc<str> {
+    fn into_value(self) -> Value {
+        Value::String(self)
+    }
+}
+
+impl FromValue for Vec<Value> {
+    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        match value {
+            Value::List(l) => Ok(Arc::try_unwrap(l).unwrap_or_else(|arc| (*arc).clone())),
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<Vec<Value>>",
+                &[crate::error::ValueKind::List],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl IntoValue for Vec<Value> {
+    fn into_value(self) -> Value {
+        Value::list(self)
+    }
+}
+
+// ── Tuple conversion macros ─────────────────────────────────────────
+
+impl FromValues for () {
+    fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError> {
+        debug_assert!(values.is_empty(), "expected 0 values, got {}", values.len());
+        Ok(())
+    }
+}
+
+impl IntoValues for () {
+    fn into_values(self) -> Vec<Value> {
+        vec![]
+    }
+}
+
+macro_rules! impl_tuple_values {
+    ($($T:ident : $idx:tt),+) => {
+        impl<$($T: FromValue),+> FromValues for ($($T,)+) {
+            fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError> {
+                let mut iter = values.into_iter();
+                Ok(($( $T::from_value(iter.next().expect(concat!(
+                    "FromValues: not enough values for tuple element ", stringify!($idx)
+                )))?, )+))
+            }
+        }
+
+        impl<$($T: IntoValue),+> IntoValues for ($($T,)+) {
+            fn into_values(self) -> Vec<Value> {
+                vec![$(self.$idx.into_value(),)+]
+            }
+        }
+    };
+}
+
+impl_tuple_values!(T0: 0);
+impl_tuple_values!(T0: 0, T1: 1);
+impl_tuple_values!(T0: 0, T1: 1, T2: 2);
+impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3);
+impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4);
+impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5);
 
 // ── Size assertion ───────────────────────────────────────────────────
 

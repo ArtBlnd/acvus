@@ -308,18 +308,35 @@ fn write_body(
                 vn.fmt_val(*dst),
                 ctx.fmt_fn_id(*id),
             )?,
-            InstKind::FunctionCall { dst, callee, args } => {
+            InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
                 };
-                writeln!(
+                write!(
                     f,
                     "{} = call {}({})",
                     vn.fmt_val(*dst),
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
-                )?
+                )?;
+                if !context_uses.is_empty() {
+                    write!(f, " uses[")?;
+                    for (i, (ctx_id, vid)) in context_uses.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{:?}={}", ctx_id, vn.fmt_use(*vid, &consts, &texts))?;
+                    }
+                    write!(f, "]")?;
+                }
+                if !context_defs.is_empty() {
+                    write!(f, " defs[")?;
+                    for (i, (ctx_id, vid)) in context_defs.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{:?}={}", ctx_id, vn.fmt_val(*vid))?;
+                    }
+                    write!(f, "]")?;
+                }
+                writeln!(f)?
             }
 
             // Spawn / Eval

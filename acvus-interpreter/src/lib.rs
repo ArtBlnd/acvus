@@ -12,11 +12,13 @@ mod value;
 pub use blob::{BlobHash, BlobStore, MemBlobStore};
 pub use error::{RuntimeError, RuntimeErrorKind, ValueKind};
 pub use executor::{Executor, SequentialExecutor};
-pub use extern_fn::{ExternFn, ExternFnBuilder, ExternRegistry, Registered};
+pub use extern_fn::{
+    Defs, ExternFn, ExternFnBuilder, ExternHandler, ExternOutput, ExternRegistry, Registered, Uses,
+};
 pub use interpreter::{
     Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Executable, Interpreter, InterpreterContext,
     SyncBuiltinFn,
 };
 pub use iter::{IterHandle, SequenceChain};
 pub use journal::{ContextOverlay, ContextWrite, EntryLifecycle, EntryMut, EntryRef, Journal};
-pub use value::{FnValue, HandleValue, OpaqueValue, RangeValue, Value};
+pub use value::{FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue, RangeValue, Value};
