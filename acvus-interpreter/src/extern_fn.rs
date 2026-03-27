@@ -367,6 +367,7 @@ impl ExternRegistry {
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Exact(fn_ty),
+                    effect: None,
                 },
             });
 

@@ -8,6 +8,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
+use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{Effect, Param, Polarity, Materiality, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
@@ -42,13 +43,9 @@ pub struct TypeResolution<S = Checked> {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
     pub tail_ty: Ty,
-    /// Effect of the function body (Pure or Effectful).
-    /// Determined by whether the body reads/writes contexts or calls effectful functions.
+    /// Effect of the function body.
+    /// Contains reads/writes as QualifiedRef sets, io, and self_modifying flags.
     pub body_effect: Effect,
-    /// Context names directly read by this function body (shallow — no transitive).
-    pub body_reads: FxHashSet<Astr>,
-    /// Context names directly written by this function body (shallow — no transitive).
-    pub body_writes: FxHashSet<Astr>,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
     _marker: PhantomData<S>,
@@ -60,8 +57,6 @@ impl<S> TypeResolution<S> {
         coercion_map: CoercionMap,
         tail_ty: Ty,
         body_effect: Effect,
-        body_reads: FxHashSet<Astr>,
-        body_writes: FxHashSet<Astr>,
         extern_params: Vec<(Astr, Ty)>,
     ) -> Self {
         Self {
@@ -69,8 +64,6 @@ impl<S> TypeResolution<S> {
             coercion_map,
             tail_ty,
             body_effect,
-            body_reads,
-            body_writes,
             extern_params,
             _marker: PhantomData,
         }
@@ -108,10 +101,56 @@ pub fn check_completeness(
         resolution.coercion_map,
         tail_ty,
         resolution.body_effect,
-        resolution.body_reads,
-        resolution.body_writes,
         resolution.extern_params,
     ))
+}
+
+/// Check that a function's body effect satisfies the constraint.
+/// `allowed` is the upper bound: body must not exceed it.
+pub fn check_effect_constraint(
+    body_effect: &Effect,
+    allowed: &crate::ty::EffectSet,
+) -> Result<(), MirError> {
+    let actual = match body_effect {
+        Effect::Resolved(set) => set,
+        // Unresolved effect variable — cannot verify, reject to be sound.
+        Effect::Var(_) => {
+            return Err(MirError {
+                kind: MirErrorKind::EffectViolation {
+                    detail: "unresolved effect variable".to_string(),
+                },
+                span: Span::ZERO,
+            });
+        }
+    };
+
+    let mut violations = Vec::new();
+
+    if !allowed.writes.is_superset(&actual.writes) {
+        let forbidden: Vec<_> = actual.writes.difference(&allowed.writes).collect();
+        violations.push(format!("writes to {:?}", forbidden));
+    }
+    if !allowed.reads.is_superset(&actual.reads) {
+        let forbidden: Vec<_> = actual.reads.difference(&allowed.reads).collect();
+        violations.push(format!("reads from {:?}", forbidden));
+    }
+    if actual.io && !allowed.io {
+        violations.push("performs IO".to_string());
+    }
+    if actual.self_modifying && !allowed.self_modifying {
+        violations.push("is self-modifying".to_string());
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(MirError {
+            kind: MirErrorKind::EffectViolation {
+                detail: violations.join(", "),
+            },
+            span: Span::ZERO,
+        })
+    }
 }
 
 struct LambdaScope {
@@ -125,6 +164,8 @@ pub struct TypeChecker<'a, 's> {
     interner: &'a Interner,
     /// Unified type environment: contexts + functions.
     env: &'a TypeEnv,
+    /// Namespace this function belongs to.
+    namespace: Option<Astr>,
     /// Stack of scopes: each scope maps variable names to types.
     scopes: Vec<FxHashMap<Astr, Ty>>,
     /// Extern parameter types (`$name`, inferred at first use).
@@ -150,14 +191,9 @@ pub struct TypeChecker<'a, 's> {
     /// correct span (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
     lambda_body_spans: FxHashMap<Span, Span>,
-    /// Top-level body effect. Tracks whether the function body performs
-    /// effectful operations (context read/write, effectful callee invocation).
-    /// Starts as Pure; set to Effectful when any effectful operation is encountered.
+    /// Top-level body effect. Tracks reads/writes as QualifiedRef, io, and self_modifying.
+    /// Starts as pure (empty EffectSet); updated as context access and effectful calls occur.
     body_effect: Effect,
-    /// Context names directly read by this function body (shallow).
-    body_reads: FxHashSet<Astr>,
-    /// Context names directly written by this function body (shallow).
-    body_writes: FxHashSet<Astr>,
     /// In analysis mode: free parameters discovered during typecheck.
     /// These are `RefKind::Value` identifiers that were undefined — treated as
     /// Declared parameter types from Signature, consumed in order as
@@ -173,6 +209,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             interner,
             scopes: vec![FxHashMap::default()],
             env,
+            namespace: None,
             param_types: FxHashMap::default(),
             subst,
             infer_vars: FxHashMap::default(),
@@ -183,8 +220,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             lambda_stack: Vec::new(),
             lambda_body_spans: FxHashMap::default(),
             body_effect: Effect::pure(),
-            body_reads: FxHashSet::default(),
-            body_writes: FxHashSet::default(),
             declared_param_types: Vec::new(),
             next_declared_param: 0,
         }
@@ -196,6 +231,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
         for param in params {
             self.param_types.insert(param.name, param.ty.clone());
         }
+        self
+    }
+
+    /// Set the namespace for context lookups.
+    pub fn with_namespace(mut self, namespace: Option<Astr>) -> Self {
+        self.namespace = namespace;
         self
     }
 
@@ -237,8 +278,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             self.coercion_map,
             Ty::String,
             self.body_effect,
-            self.body_reads,
-            self.body_writes,
             extern_params,
         ))
     }
@@ -289,8 +328,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             self.coercion_map,
             tail_ty,
             self.body_effect,
-            self.body_reads,
-            self.body_writes,
             extern_params,
         ))
     }
@@ -361,20 +398,33 @@ impl<'a, 's> TypeChecker<'a, 's> {
         ty
     }
 
-    /// Resolve a context variable (`@name`) to its type.
-    fn resolve_context_type(&mut self, name: Astr, span: Span) -> Ty {
-        if let Some(ty) = self.env.contexts.get(&name) {
+    /// Record a context read in the body effect.
+    fn record_context_read(&mut self, qref: QualifiedRef) {
+        if let Effect::Resolved(ref mut set) = self.body_effect {
+            set.reads.insert(qref);
+        }
+    }
+
+    /// Record a context write in the body effect.
+    fn record_context_write(&mut self, qref: QualifiedRef) {
+        if let Effect::Resolved(ref mut set) = self.body_effect {
+            set.writes.insert(qref);
+        }
+    }
+
+    fn resolve_context_type(&mut self, qref: QualifiedRef, span: Span) -> Ty {
+        if let Some(ty) = self.env.contexts.get(&qref) {
             return ty.clone();
         }
         if self.analysis_mode {
             return self
                 .infer_vars
-                .entry(name)
+                .entry(qref.name)
                 .or_insert_with(|| self.subst.fresh_param())
                 .clone();
         }
         self.error(
-            MirErrorKind::UndefinedContext(self.interner.resolve(name).to_string()),
+            MirErrorKind::UndefinedContext(self.interner.resolve(qref.name).to_string()),
             span,
         );
         Ty::error()
@@ -485,8 +535,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
             acvus_ast::Stmt::ContextStore { name, expr, span } => {
                 let ty = self.check_expr(false, expr);
-                self.body_writes.insert(*name);
-                self.propagate_call_effect(Effect::io());
+                self.record_context_write(*name);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -686,34 +735,34 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.record_ret(*span, ty)
             }
 
+            Expr::ContextRef { name: qref, span } => {
+                let ty = self.resolve_context_type(*qref, *span);
+                self.record_context_read(*qref);
+                let ty = if !allow_non_pure
+                    && ty.materiality() == Materiality::Ephemeral
+                    && !ty.is_error()
+                    && !ty.is_param()
+                {
+                    self.error(
+                        MirErrorKind::NonPureContextLoad {
+                            name: self.interner.resolve(qref.name).to_string(),
+                            ty: ty.clone(),
+                        },
+                        *span,
+                    );
+                    Ty::error()
+                } else {
+                    ty
+                };
+                self.record_ret(*span, ty)
+            }
+
             Expr::Ident {
                 name,
                 ref_kind,
                 span,
             } => {
                 let ty = match ref_kind {
-                    RefKind::Context => {
-                        let ty = self.resolve_context_type(*name, *span);
-                        // Reading external state is effectful.
-                        self.body_reads.insert(*name);
-                        self.propagate_call_effect(Effect::io());
-                        if !allow_non_pure
-                            && ty.materiality() == Materiality::Ephemeral
-                            && !ty.is_error()
-                            && !ty.is_param()
-                        {
-                            self.error(
-                                MirErrorKind::NonPureContextLoad {
-                                    name: self.interner.resolve(*name).to_string(),
-                                    ty: ty.clone(),
-                                },
-                                *span,
-                            );
-                            Ty::error()
-                        } else {
-                            ty
-                        }
-                    }
                     RefKind::ExternParam => match self.param_types.get(name) {
                         Some(ty) => ty.clone(),
                         None => {
@@ -976,9 +1025,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         self.check_func_call(func, args, pipe_left, *span)
                     }
                     Expr::Ident {
-                        ref_kind: RefKind::Value | RefKind::Context,
+                        ref_kind: RefKind::Value,
                         ..
-                    } => self.check_func_call(right, &[], pipe_left, *span),
+                    }
+                    | Expr::ContextRef { .. } => {
+                        self.check_func_call(right, &[], pipe_left, *span)
+                    }
                     _ => {
                         let lt = self.check_expr(false, left);
                         let rt = self.check_expr(false, right);
@@ -1296,11 +1348,17 @@ impl<'a, 's> TypeChecker<'a, 's> {
     /// Otherwise, propagates to the top-level body_effect.
     fn propagate_call_effect(&mut self, effect: Effect) {
         let resolved = self.subst.resolve_effect(&effect);
-        if resolved.is_effectful() {
-            if let Some(ls) = self.lambda_stack.last_mut() {
-                ls.effect = Effect::io();
-            } else {
-                self.body_effect = Effect::io();
+        if let Effect::Resolved(callee_set) = &resolved {
+            if !callee_set.is_pure() {
+                if let Some(ls) = self.lambda_stack.last_mut() {
+                    if let Effect::Resolved(ref mut ls_set) = ls.effect {
+                        *ls_set = ls_set.union(callee_set);
+                    } else {
+                        ls.effect = resolved.clone();
+                    }
+                } else if let Effect::Resolved(ref mut body_set) = self.body_effect {
+                    *body_set = body_set.union(callee_set);
+                }
             }
         }
     }
@@ -1385,33 +1443,34 @@ impl<'a, 's> TypeChecker<'a, 's> {
     fn check_pattern(&mut self, pattern: &Pattern, source_ty: &Ty, span: Span) {
         let source_resolved = self.subst.resolve(source_ty);
         match pattern {
+            Pattern::ContextBind { name: qref, .. } => {
+                // Context write allowed — mutability will be enforced later.
+                self.record_context_write(*qref);
+                let ctx_ty = self
+                    .env
+                    .contexts
+                    .get(qref)
+                    .cloned()
+                    .unwrap_or_else(|| self.subst.fresh_param());
+                if self
+                    .subst
+                    .unify(&source_resolved, &ctx_ty, Polarity::Invariant)
+                    .is_err()
+                {
+                    self.error(
+                        MirErrorKind::PatternTypeMismatch {
+                            pattern_ty: ctx_ty,
+                            source_ty: source_resolved,
+                        },
+                        span,
+                    );
+                }
+            }
             Pattern::Binding {
                 name,
                 ref_kind,
                 span: _,
             } => match ref_kind {
-                RefKind::Context => {
-                    // Context write allowed — mutability will be enforced later.
-                    let ctx_ty = self
-                        .env
-                        .contexts
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| self.subst.fresh_param());
-                    if self
-                        .subst
-                        .unify(&source_resolved, &ctx_ty, Polarity::Invariant)
-                        .is_err()
-                    {
-                        self.error(
-                            MirErrorKind::PatternTypeMismatch {
-                                pattern_ty: ctx_ty,
-                                source_ty: source_resolved,
-                            },
-                            span,
-                        );
-                    }
-                }
                 RefKind::ExternParam => {
                     self.error(
                         MirErrorKind::ExternParamAssign(
@@ -1778,8 +1837,13 @@ mod tests {
     ) -> Result<TypeMap, Vec<MirError>> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut subst = TySubst::new();
+        // Convert Astr-keyed context map to QualifiedRef-keyed (root namespace).
+        let qref_contexts: FxHashMap<QualifiedRef, Ty> = context
+            .iter()
+            .map(|(&name, ty)| (QualifiedRef::root(name), ty.clone()))
+            .collect();
         let env = crate::ty::TypeEnv {
-            contexts: context.clone(),
+            contexts: qref_contexts,
             functions: crate::builtins::builtin_fn_types(interner),
         };
         let checker = TypeChecker::new(interner, &env, &mut subst);

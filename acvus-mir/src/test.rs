@@ -1,6 +1,6 @@
 //! Test helpers for compiling source → MIR via the graph pipeline.
 //!
-//! These are convenience wrappers around extract → resolve → lower.
+//! These are convenience wrappers around extract → infer → lower.
 //! Real callers should use the graph phases directly.
 
 use acvus_utils::{Freeze, Interner};
@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::error::MirError;
 use crate::graph::*;
-use crate::graph::{extract, infer, lower as graph_lower, resolve};
+use crate::graph::{extract, infer, lower as graph_lower};
 use crate::hints::HintTable;
 use crate::ir::MirModule;
 use crate::ty::Ty;
@@ -43,6 +43,7 @@ fn make_graph(
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
+            effect: None,
         },
     });
     let graph = CompilationGraph {
@@ -59,9 +60,8 @@ fn run_pipeline(
     target: FunctionId,
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
     let ext = extract::extract(interner, graph);
-    let inf = infer::infer(interner, graph, &ext);
-    let res = resolve::resolve(interner, graph, &ext, &inf, &FxHashMap::default());
-    let result = graph_lower::lower(interner, graph, &ext, &res);
+    let inf = infer::infer(interner, graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(interner, graph, &ext, &inf);
     if result.has_errors() {
         return Err(result.errors.into_iter().flat_map(|e| e.errors).collect());
     }

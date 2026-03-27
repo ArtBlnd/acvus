@@ -3,7 +3,7 @@
 
 use acvus_lsp::LspSession;
 use acvus_mir::graph::types::*;
-use acvus_mir::graph::{extract, infer, resolve, lower as graph_lower};
+use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -29,21 +29,15 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
+                effect: None,
             },
         }]),
         contexts: Freeze::new(contexts),
     };
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
-    // Collect errors from both resolve and lower stages.
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
     let mut errs: Vec<String> = Vec::new();
-    for re in res.errors() {
-        for e in &re.errors {
-            errs.push(format!("{}", e.display(interner)));
-        }
-    }
-    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for le in &result.errors {
         for e in &le.errors {
             errs.push(format!("{}", e.display(interner)));

@@ -13,7 +13,7 @@ fn compile_analysis(
     source: &str,
     ctx: &[(&str, Ty)],
 ) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), Vec<acvus_mir::error::MirError>> {
-    use acvus_mir::graph::{extract, resolve, lower as graph_lower};
+    use acvus_mir::graph::{extract, lower as graph_lower};
     use acvus_mir::graph::{CompilationGraph, Function, FunctionId, FnKind, SourceCode, SourceKind,
                            FnConstraint, Constraint, Context};
     use acvus_mir::ty::Param;
@@ -31,10 +31,10 @@ fn compile_analysis(
     let template = acvus_ast::parse(interner, source)
         .expect("parse failed");
     let declared: FxHashSet<Astr> = contexts.iter().map(|c| c.name).collect();
-    for name in acvus_ast::extract_template_context_refs(&template) {
-        if !declared.contains(&name) {
+    for qref in acvus_ast::extract_template_context_refs(&template) {
+        if !declared.contains(&qref.name) {
             contexts.push(Context {
-                name,
+                name: qref.name,
                 namespace: None,
                 constraint: Constraint::Inferred,
             });
@@ -55,15 +55,15 @@ fn compile_analysis(
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
+                effect: None,
             },
         }]),
         contexts: Freeze::new(contexts),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
         return Err(result.errors.into_iter()
@@ -378,6 +378,7 @@ fn extern_async_call() {
                 captures: vec![],
                 effect: Effect::pure(),
             }),
+            effect: None,
         },
     };
     let ir = compile_to_ir_with(

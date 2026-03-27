@@ -7,7 +7,6 @@
 //! Soundness guarantee: if the Executor respects these constraints,
 //! no two functions will have conflicting access to the same mutable context.
 
-use acvus_utils::Astr;
 use rustc_hash::FxHashSet;
 
 use super::extract::ExtractResult;
@@ -33,7 +32,7 @@ pub struct Access {
 /// Functions accessing this context must respect this sequence.
 #[derive(Debug, Clone)]
 pub struct ContextOrdering {
-    pub context_name: Astr,
+    pub context_name: QualifiedRef,
     /// Ordered access sequence. The Executor must ensure:
     /// - Reads can be concurrent with other reads.
     /// - Write must be exclusive (no concurrent reads or writes).
@@ -47,7 +46,7 @@ pub struct ClusterResult {
     /// Mutable contexts and their access orderings.
     pub mutable_orderings: Vec<ContextOrdering>,
     /// Set of mutable context names (convenience for quick lookup).
-    pub mutable_contexts: FxHashSet<Astr>,
+    pub mutable_contexts: FxHashSet<QualifiedRef>,
     /// Function dependency edges derived from context data flow.
     /// (fn_a, fn_b) means fn_a must complete before fn_b starts
     /// (because fn_a writes a context that fn_b reads).
@@ -62,7 +61,7 @@ pub fn cluster(graph: &CompilationGraph, extract: &ExtractResult) -> ClusterResu
     let mut mutable_contexts = FxHashSet::default();
     for fn_ref in extract.fn_refs.values() {
         for r in &fn_ref.context_writes {
-            mutable_contexts.insert(r.name);
+            mutable_contexts.insert(*r);
         }
     }
 
@@ -70,7 +69,7 @@ pub fn cluster(graph: &CompilationGraph, extract: &ExtractResult) -> ClusterResu
     let mut orderings = Vec::new();
     let mut dependencies = Vec::new();
 
-    for &ctx_name in &mutable_contexts {
+    for &ctx_qref in &mutable_contexts {
         let mut accesses = Vec::new();
         let mut writers: Vec<FunctionId> = Vec::new();
         let mut readers: Vec<FunctionId> = Vec::new();
@@ -80,8 +79,8 @@ pub fn cluster(graph: &CompilationGraph, extract: &ExtractResult) -> ClusterResu
                 continue;
             };
 
-            let is_write = fn_ref.context_writes.iter().any(|r| r.name == ctx_name);
-            let is_read = fn_ref.context_reads.iter().any(|r| r.name == ctx_name);
+            let is_write = fn_ref.context_writes.contains(&ctx_qref);
+            let is_read = fn_ref.context_reads.contains(&ctx_qref);
 
             if is_write {
                 // Writer also reads (read-modify-write pattern).
@@ -120,7 +119,7 @@ pub fn cluster(graph: &CompilationGraph, extract: &ExtractResult) -> ClusterResu
         }
 
         orderings.push(ContextOrdering {
-            context_name: ctx_name,
+            context_name: ctx_qref,
             accesses,
         });
     }
@@ -156,6 +155,7 @@ mod tests {
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
+                    effect: None,
                 },
             })
             .collect();
@@ -175,7 +175,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = cluster(&graph, &ext);
 
-        assert!(result.mutable_contexts.contains(&i.intern("x")));
+        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("x"))));
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
 
         assert_eq!(result.mutable_orderings.len(), 1);
         let ordering = &result.mutable_orderings[0];
-        assert_eq!(ordering.context_name, i.intern("x"));
+        assert_eq!(ordering.context_name, QualifiedRef::root(i.intern("x")));
         assert_eq!(ordering.accesses.len(), 2); // writer + reader
     }
 
@@ -258,8 +258,8 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = cluster(&graph, &ext);
 
-        assert!(result.mutable_contexts.contains(&i.intern("x")));
-        assert!(result.mutable_contexts.contains(&i.intern("y")));
+        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("x"))));
+        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("y"))));
         assert_eq!(result.mutable_orderings.len(), 2);
     }
 }

@@ -65,14 +65,14 @@ pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, Pars
         }
     };
 
-    // Step 2: Build temp name→(QualifiedRef, ty) mapping for skeleton MIR.
-    let name_to_id: FxHashMap<Astr, (QualifiedRef, crate::ty::Ty)> = context_names
+    // Step 2: Build QualifiedRef→Ty mapping for skeleton MIR.
+    let context_ids: FxHashMap<QualifiedRef, crate::ty::Ty> = context_names
         .iter()
-        .map(|&name| (name, (QualifiedRef::root(name), crate::ty::Ty::error())))
+        .map(|&qref| (qref, crate::ty::Ty::error()))
         .collect();
-    let qref_to_name: FxHashMap<QualifiedRef, Astr> = name_to_id
+    let qref_to_name: FxHashMap<QualifiedRef, Astr> = context_names
         .iter()
-        .map(|(&name, &(qref, _))| (qref, name))
+        .map(|&qref| (qref, qref.name))
         .collect();
 
     // Step 3: Build skeleton MIR (empty type maps).
@@ -80,7 +80,7 @@ pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, Pars
         interner,
         FxHashMap::default(),
         Vec::new(),
-        Freeze::new(name_to_id),
+        Freeze::new(context_ids),
         Freeze::new(FxHashMap::default()),
     );
     let (module, _) = match &parsed_source {
@@ -240,6 +240,7 @@ mod tests {
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
+                    effect: None,
                 },
             }]),
             contexts: Freeze::new(contexts),

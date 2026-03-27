@@ -1,6 +1,6 @@
 //! Phase 3: Lower
 //!
-//! Takes ResolvedGraph + cached ASTs and produces MirModule per function.
+//! Takes InferResult (Complete outcomes) + cached ASTs and produces MirModule per function.
 //! Reuses the existing MIR lowerer — this is just the orchestration layer.
 
 use acvus_utils::{Astr, Freeze, Interner};
@@ -12,7 +12,7 @@ use crate::ir::MirModule;
 use crate::ty::Ty;
 
 use super::extract::{ExtractResult, ParsedSource};
-use super::resolve::ResolvedGraph;
+use super::infer::InferResult;
 use super::types::*;
 
 // ── Phase 3 output ──────────────────────────────────────────────────
@@ -45,12 +45,12 @@ impl LowerResult {
 
 // ── Lowering ────────────────────────────────────────────────────────
 
-/// Run Phase 3: lower each local function to MIR.
+/// Run Phase 3: lower each Complete function to MIR.
 pub fn lower(
     interner: &Interner,
     graph: &CompilationGraph,
     extract: &ExtractResult,
-    resolved: &ResolvedGraph,
+    infer_result: &InferResult,
 ) -> LowerResult {
     let mut modules = FxHashMap::default();
     let mut errors = Vec::new();
@@ -62,21 +62,21 @@ pub fn lower(
         let Some(parsed) = extract.parsed.get(&func.id) else {
             continue;
         };
-        let Some(resolution) = resolved.try_resolution(func.id) else {
+        // Only lower Complete functions.
+        let Some(resolution) = infer_result.try_resolution(func.id) else {
             continue;
         };
 
-        // Build name_to_id for this function: only contexts that this function references.
+        // Build context_ids for this function: only contexts that this function references.
         let fn_refs = extract.fn_refs.get(&func.id);
-        let name_to_id: FxHashMap<Astr, (QualifiedRef, Ty)> = match fn_refs {
+        let context_ids: FxHashMap<QualifiedRef, Ty> = match fn_refs {
             Some(refs) => refs
                 .context_reads
                 .iter()
                 .chain(refs.context_writes.iter())
-                .map(|r| {
-                    let qref = *r;
-                    let ty = resolved.context_type(&qref).cloned().unwrap_or(Ty::error());
-                    (r.name, (qref, ty))
+                .map(|&qref| {
+                    let ty = infer_result.context_type(&qref).cloned().unwrap_or(Ty::error());
+                    (qref, ty)
                 })
                 .collect(),
             None => FxHashMap::default(),
@@ -108,7 +108,7 @@ pub fn lower(
             interner,
             resolution_clone.type_map,
             resolution_clone.coercion_map,
-            Freeze::new(name_to_id),
+            Freeze::new(context_ids),
             Freeze::new(function_ids),
         );
         let (mut module, hints) = match parsed {
@@ -151,7 +151,7 @@ pub fn lower(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{extract, resolve};
+    use crate::graph::extract;
     use crate::ir::InstKind;
     use Ty;
     use acvus_utils::Interner;
@@ -183,6 +183,7 @@ mod tests {
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
+                    effect: None,
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -200,9 +201,8 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "1 + 2", &[]);
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let uid = first_fn_id(&graph);
@@ -214,9 +214,8 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::Int)]);
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let uid = first_fn_id(&graph);
@@ -229,9 +228,8 @@ mod tests {
         let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
         let graph = make_graph_with_ctx(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
     }
@@ -247,9 +245,8 @@ mod tests {
             &[("data", Ty::Int), ("out", Ty::Int)],
         );
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Irrefutable match-bind should NOT generate JumpIf.
@@ -272,9 +269,8 @@ mod tests {
             &[("val", Ty::Int), ("out", Ty::Int)],
         );
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Refutable match-bind MUST generate JumpIf.
@@ -297,9 +293,8 @@ mod tests {
             &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
         );
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Iterate must generate IterStep.
@@ -325,9 +320,8 @@ mod tests {
             ],
         );
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-        let result = lower(&i, &graph, &ext, &res);
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_id(&graph)).unwrap();
         // Nested iterate: two IterStep instructions.
@@ -347,12 +341,10 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let inf = crate::graph::infer::infer(&i, &graph, &ext);
-        let res = resolve::resolve(&i, &graph, &ext, &inf, &FxHashMap::default());
-
-        // Resolve should have errors, so no resolution for the unit.
+        let inf = crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default());
+        // Infer should produce Incomplete for this function (type mismatch).
         // Lower should produce no module for this unit.
-        let result = lower(&i, &graph, &ext, &res);
+        let result = lower(&i, &graph, &ext, &inf);
         let uid = first_fn_id(&graph);
         assert!(result.module(uid).is_none());
     }

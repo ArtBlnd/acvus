@@ -68,7 +68,7 @@ pub(crate) fn try_extract_known(
         .with_analysis_mode();
     let (type_map, builtin_map, coercion_map, _tail) =
         checker.check_script_with_hint(&script, None).ok()?;
-    let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(registry.merged()));
+    let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(registry.merged()));
     let (module, _hints) = lowerer.lower_script(&script);
     // Look for a Const or MakeVariant instruction in the main body
     for inst in &module.main.insts {
@@ -148,7 +148,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                         }.into_ts()?.js_value());
                     }
                 };
-                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(full_reg.merged()));
+                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(full_reg.merged()));
                 let (module, _) = lowerer.lower_template(&ast);
                 module
             }
@@ -178,7 +178,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                         }.into_ts()?.js_value());
                     }
                 };
-                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_name_to_id(full_reg.merged()));
+                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(full_reg.merged()));
                 let (module, _) = lowerer.lower_script(&script);
                 module
             }
@@ -186,7 +186,7 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
     };
 
     // Build context values — use the same merged context types used for compilation.
-    let name_to_id = acvus_mir::build_name_to_id(full_reg.merged());
+    let name_to_id = acvus_mir::build_context_ids(full_reg.merged());
     let ctx: FxHashMap<acvus_mir::graph::Id, acvus_interpreter::TypedValue> = options.context
         .into_iter()
         .filter_map(|(k, v)| {

@@ -450,6 +450,7 @@ fn make_builtin(interner: &Interner, name: &str, sig_fn: SigFn) -> Function {
                 captures: vec![],
                 effect: Effect::pure(),
             }),
+            effect: None,
         },
     }
 }

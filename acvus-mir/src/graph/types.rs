@@ -9,7 +9,7 @@
 use acvus_utils::Astr;
 use acvus_utils::Freeze;
 
-use crate::ty::Ty;
+use crate::ty::{EffectSet, Ty};
 
 // ── Identifiers ─────────────────────────────────────────────────────
 
@@ -68,6 +68,8 @@ pub struct FnConstraint {
     pub signature: Option<Signature>,
     /// Output type constraint.
     pub output: Constraint,
+    /// Effect upper bound. `None` = no constraint.
+    pub effect: Option<EffectSet>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,36 +92,8 @@ pub struct Function {
     pub constraint: FnConstraint,
 }
 
-// ── Qualified reference (replaces ContextId) ────────────────────────
-
-/// A namespace-qualified reference. Used as the identity for contexts
-/// and for qualified function/context access in the IR.
-///
-/// - `QualifiedRef::root(name)` → unqualified (root namespace)
-/// - `QualifiedRef::qualified(ns, name)` → specific namespace
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct QualifiedRef {
-    /// Namespace name. `None` = root.
-    pub namespace: Option<Astr>,
-    /// Context or function name.
-    pub name: Astr,
-}
-
-impl QualifiedRef {
-    pub fn root(name: Astr) -> Self {
-        Self {
-            namespace: None,
-            name,
-        }
-    }
-
-    pub fn qualified(namespace: Astr, name: Astr) -> Self {
-        Self {
-            namespace: Some(namespace),
-            name,
-        }
-    }
-}
+// Re-export from acvus-utils.
+pub use acvus_utils::QualifiedRef;
 
 // ── Context ──────────────────────────────────────────────────────────
 

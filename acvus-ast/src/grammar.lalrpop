@@ -1,4 +1,4 @@
-use acvus_utils::{Astr, Interner};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use crate::ast::*;
 use crate::span::Span;
@@ -93,7 +93,7 @@ ScriptStmt: Stmt = {
         match &lhs {
             Expr::Ident { name, ref_kind: RefKind::Value, .. } =>
                 Ok(Stmt::Bind { name: *name, expr: rhs, span }),
-            Expr::Ident { name, ref_kind: RefKind::Context, .. } =>
+            Expr::ContextRef { name, .. } =>
                 Ok(Stmt::ContextStore { name: *name, expr: rhs, span }),
             _ => Err(lalrpop_util::ParseError::User {
                 error: ParseError { kind: ParseErrorKind::InvalidAssignTarget, span },
@@ -244,7 +244,7 @@ PrimaryExpr: Expr = {
     <l:@L> <name:"$ref"> <r:@R> =>
         Expr::Ident { name, ref_kind: RefKind::ExternParam, span: Span::new(l, r) },
     <l:@L> <name:"@ref"> <r:@R> =>
-        Expr::Ident { name, ref_kind: RefKind::Context, span: Span::new(l, r) },
+        Expr::ContextRef { name: QualifiedRef::root(name), span: Span::new(l, r) },
     <l:@L> <n:"int"> <r:@R> =>
         Expr::Literal { value: Literal::Int(n), span: Span::new(l, r) },
     <l:@L> <n:"float"> <r:@R> =>
@@ -372,7 +372,7 @@ ObjectField: ObjectExprField = {
         let span = Span::new(l, r);
         ObjectExprField {
             key: name,
-            value: Expr::Ident { name, ref_kind: RefKind::Context, span },
+            value: Expr::ContextRef { name: QualifiedRef::root(name), span },
             span,
         }
     },

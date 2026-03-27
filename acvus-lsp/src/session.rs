@@ -164,6 +164,7 @@ impl LspSession {
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
+                effect: None,
             },
         };
 

@@ -1,4 +1,4 @@
-use acvus_mir::graph::{extract, resolve, lower as graph_lower};
+use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::graph::*;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{Param, Ty};
@@ -41,6 +41,7 @@ pub fn compile_to_ir_with(
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
+            effect: None,
         },
     }];
     functions.extend_from_slice(extern_fns);
@@ -50,9 +51,8 @@ pub fn compile_to_ir_with(
         contexts: Freeze::new(contexts),
     };
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     if result.has_errors() {
         let errs: Vec<String> = result.errors.iter()
             .flat_map(|e| e.errors.iter())
@@ -124,14 +124,14 @@ pub fn compile_script_ir(
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
+                effect: None,
             },
         }]),
         contexts: Freeze::new(contexts),
     };
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     if result.has_errors() {
         let errs: Vec<String> = result.errors.iter()
             .flat_map(|e| e.errors.iter())

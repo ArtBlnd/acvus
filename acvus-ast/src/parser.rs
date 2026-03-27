@@ -162,7 +162,7 @@ impl<'a> TreeBuilder<'a> {
                         TagContent::Binding { lhs, rhs, .. } => {
                             let pattern = expr_to_pattern(&lhs)?;
                             // Bare binding (variable or storage) → body-less (no {{/}})
-                            if matches!(&pattern, Pattern::Binding { .. }) {
+                            if matches!(&pattern, Pattern::Binding { .. } | Pattern::ContextBind { .. }) {
                                 let match_block = MatchBlock {
                                     source: rhs,
                                     arms: vec![MatchArm {
@@ -394,7 +394,7 @@ fn convert_lalrpop_error(
 /// are allowed. Literals, Ranges, and Lists are refutable.
 fn validate_irrefutable(pattern: &Pattern) -> Result<(), ParseError> {
     match pattern {
-        Pattern::Binding { .. } => Ok(()),
+        Pattern::Binding { .. } | Pattern::ContextBind { .. } => Ok(()),
         Pattern::Object { fields, .. } => {
             for f in fields {
                 validate_irrefutable(&f.pattern)?;
@@ -426,6 +426,10 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
         } => Ok(Pattern::Binding {
             name: *name,
             ref_kind: *ref_kind,
+            span: *span,
+        }),
+        Expr::ContextRef { name, span } => Ok(Pattern::ContextBind {
+            name: *name,
             span: *span,
         }),
         Expr::Literal { value, span } => Ok(Pattern::Literal {
@@ -927,7 +931,7 @@ mod tests {
         assert!(s.stmts.is_empty());
         assert!(matches!(
             s.tail.as_deref(),
-            Some(Expr::Ident { name, ref_kind: RefKind::Context, .. }) if interner.resolve(*name) == "data"
+            Some(Expr::ContextRef { name, .. }) if interner.resolve(name.name) == "data"
         ));
     }
 
@@ -1003,7 +1007,7 @@ mod tests {
         let interner = Interner::new();
         let s = parse_script(&interner, "@count = @count + 1; @count").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "count"));
+        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "count"));
         assert!(s.tail.is_some());
     }
 
@@ -1012,7 +1016,7 @@ mod tests {
         let interner = Interner::new();
         let s = parse_script(&interner, "@x = 42;").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "x"));
+        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x"));
         assert!(s.tail.is_none());
     }
 
@@ -1022,7 +1026,7 @@ mod tests {
         let s = parse_script(&interner, "tmp = @x + 1; @x = tmp; @x").unwrap();
         assert_eq!(s.stmts.len(), 2);
         assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "tmp"));
-        assert!(matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(*name) == "x"));
+        assert!(matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x"));
         assert!(s.tail.is_some());
     }
 

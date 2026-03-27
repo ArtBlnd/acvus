@@ -27,10 +27,10 @@ expression: ir
     ; r2 (@offset) : <error>
     ; r3 (v3) : Int
     ; r4 (iter(...)) : Iterator<Int>
-    ; r5 (v8) : Fn!(Int) -> Int
-    ; r6 (map(...)) : Iterator!<Int>
+    ; r5 (v8) : Fn(Int) -> Int
+    ; r6 (map(...)) : Iterator<Int>
     ; r7 (v10) : Fn(Int) -> Bool
-    ; r8 (filter(...)) : Iterator!<Int>
+    ; r8 (filter(...)) : Iterator<Int>
     ; r9 (collect(...)) : List<Int>
     ; r10 (v14) : String
     ; r11 (len(...)) : Int

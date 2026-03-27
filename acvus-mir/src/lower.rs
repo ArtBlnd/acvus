@@ -29,8 +29,8 @@ pub struct Lowerer<'a> {
     closure_label_count: u32,
     /// Hint table.
     hints: HintTable,
-    /// Context name → (QualifiedRef, Ty).
-    context_ids: Freeze<FxHashMap<Astr, (QualifiedRef, Ty)>>,
+    /// Context QualifiedRef → Ty.
+    context_ids: Freeze<FxHashMap<QualifiedRef, Ty>>,
     /// Function name → (FunctionId, Ty).
     function_ids: Freeze<FxHashMap<Astr, (FunctionId, Ty)>>,
     /// ValueIds that are projections (not yet materialized values).
@@ -116,7 +116,7 @@ impl<'a> Lowerer<'a> {
         interner: &'a Interner,
         type_map: TypeMap,
         coercion_map: CoercionMap,
-        context_ids: Freeze<FxHashMap<Astr, (QualifiedRef, Ty)>>,
+        context_ids: Freeze<FxHashMap<QualifiedRef, Ty>>,
         function_ids: Freeze<FxHashMap<Astr, (FunctionId, Ty)>>,
     ) -> Self {
         let coercion_lookup: FxHashMap<Span, CastKind> = coercion_map.into_iter().collect();
@@ -144,13 +144,13 @@ impl<'a> Lowerer<'a> {
         let mut entries: Vec<_> = self
             .context_ids
             .iter()
-            .map(|(&name, &(id, ref ty))| (name, id, ty.clone()))
+            .map(|(&qref, ty)| (qref, ty.clone()))
             .collect();
-        entries.sort_by_key(|(name, _, _)| self.interner.resolve(*name).to_string());
+        entries.sort_by_key(|(qref, _)| self.interner.resolve(qref.name).to_string());
 
-        for (name, qref, ty) in entries {
+        for (qref, ty) in entries {
             let proj = self.alloc_typed(span);
-            self.set_origin(proj, ValOrigin::Context(name));
+            self.set_origin(proj, ValOrigin::Context(qref.name));
             self.emit_inst(
                 span,
                 InstKind::ContextProject {
@@ -199,7 +199,7 @@ impl<'a> Lowerer<'a> {
                 self.define_var(*name, ty);
             }
             Stmt::ContextStore { name, expr, span } => {
-                self.lower_context_store(*name, expr, *span);
+                self.lower_context_store(*name, expr, *span);  // name is QualifiedRef
             }
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
@@ -236,7 +236,7 @@ impl<'a> Lowerer<'a> {
     ) {
         let source_reg = self.lower_expr(source);
 
-        let is_irrefutable = matches!(pattern, Pattern::Binding { .. });
+        let is_irrefutable = matches!(pattern, Pattern::Binding { .. } | Pattern::ContextBind { .. });
 
         if is_irrefutable {
             // No branching needed — just bind and execute body.
@@ -387,13 +387,6 @@ impl<'a> Lowerer<'a> {
             closures: self.closures,
         };
         (module, self.hints)
-    }
-
-    fn context_ref(&self, name: Astr) -> QualifiedRef {
-        self.context_ids
-            .get(&name)
-            .map(|(qref, _)| *qref)
-            .unwrap_or_else(|| panic!("unknown context @{}", self.interner.resolve(name)))
     }
 
     /// If `val` is a projection, materialize it into a value via ContextLoad.
@@ -767,19 +760,19 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
+            Expr::ContextRef { name: qref, span } => {
+                let dst = self.alloc_typed(*span);
+                self.set_origin(dst, ValOrigin::Context(qref.name));
+                self.emit_inst(*span, InstKind::ContextProject { dst, ctx: *qref });
+                self.mark_projection(dst);
+                dst
+            }
+
             Expr::Ident {
                 name,
                 ref_kind,
                 span,
             } => match ref_kind {
-                RefKind::Context => {
-                    let ctx_id = self.context_ref(*name);
-                    let dst = self.alloc_typed(*span);
-                    self.set_origin(dst, ValOrigin::Context(*name));
-                    self.emit_inst(*span, InstKind::ContextProject { dst, ctx: ctx_id });
-                    self.mark_projection(dst);
-                    dst
-                }
                 RefKind::ExternParam => {
                     let dst = self.alloc_typed(*span);
                     self.set_origin(dst, ValOrigin::ExternParam(*name));
@@ -1128,9 +1121,9 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_context_store(&mut self, name: Astr, value_expr: &Expr, span: Span) -> ValueId {
+    fn lower_context_store(&mut self, qref: QualifiedRef, value_expr: &Expr, span: Span) -> ValueId {
         let val = self.lower_expr(value_expr);
-        let ctx_id = self.context_ref(name);
+        let ctx_id = qref;
         let proj = self.alloc_typed(span);
         self.emit_inst(
             span,
@@ -1168,27 +1161,28 @@ impl<'a> Lowerer<'a> {
         }
         let dst = self.alloc_typed(call_span);
 
+        // @fn_name(args) — context-based function call.
+        if let Expr::ContextRef { name: qref, .. } = func {
+            let fn_id = self.function_ids.get(&qref.name).map(|(id, _)| *id);
+            if let Some(fn_id) = fn_id {
+                self.set_origin(dst, ValOrigin::Call(qref.name));
+                self.emit_inst(
+                    call_span,
+                    InstKind::FunctionCall {
+                        dst,
+                        callee: Callee::Direct(fn_id),
+                        args: arg_regs,
+                        context_uses: vec![],
+                        context_defs: vec![],
+                    },
+                );
+                return dst;
+            }
+        }
+
         // Named function call (Ident).
         if let Expr::Ident { name, ref_kind, span: ident_span, .. } = func {
             match ref_kind {
-                // @fn_name(args) — context-based function (legacy, will be migrated)
-                RefKind::Context => {
-                    let fn_id = self.function_ids.get(name).map(|(id, _)| *id);
-                    if let Some(fn_id) = fn_id {
-                        self.set_origin(dst, ValOrigin::Call(*name));
-                        self.emit_inst(
-                            call_span,
-                            InstKind::FunctionCall {
-                                dst,
-                                callee: Callee::Direct(fn_id),
-                                args: arg_regs,
-                                context_uses: vec![],
-                                context_defs: vec![],
-                            },
-                        );
-                        return dst;
-                    }
-                }
                 // fn_name(args) — named call
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(*name));
@@ -1256,6 +1250,33 @@ impl<'a> Lowerer<'a> {
     // --- Match block lowering ---
 
     fn lower_match_block(&mut self, mb: &MatchBlock) -> ValueId {
+        // Body-less context bind shorthand.
+        if mb.arms.len() == 1
+            && mb.arms[0].body.is_empty()
+            && let Pattern::ContextBind {
+                name: qref,
+                span: pat_span,
+            } = &mb.arms[0].pattern
+        {
+            let src = self.lower_expr(&mb.source);
+            let proj = self.alloc_typed(*pat_span);
+            self.emit_inst(
+                *pat_span,
+                InstKind::ContextProject {
+                    dst: proj,
+                    ctx: *qref,
+                },
+            );
+            self.emit_inst(
+                *pat_span,
+                InstKind::ContextStore {
+                    dst: proj,
+                    value: src,
+                },
+            );
+            return self.emit_empty_string(mb.span);
+        }
+
         // Body-less binding shorthand (variable write or value binding).
         if mb.arms.len() == 1
             && mb.arms[0].body.is_empty()
@@ -1272,24 +1293,6 @@ impl<'a> Lowerer<'a> {
                     let dst = self.alloc_val();
                     self.emit_inst(*pat_span, InstKind::Poison { dst });
                     return dst;
-                }
-                RefKind::Context => {
-                    let ctx_id = self.context_ref(*name);
-                    let proj = self.alloc_typed(*pat_span);
-                    self.emit_inst(
-                        *pat_span,
-                        InstKind::ContextProject {
-                            dst: proj,
-                            ctx: ctx_id,
-                        },
-                    );
-                    self.emit_inst(
-                        *pat_span,
-                        InstKind::ContextStore {
-                            dst: proj,
-                            value: src,
-                        },
-                    );
                 }
                 RefKind::Value => {
                     let ty = self.body.val_types.get(&src).cloned().unwrap_or(Ty::error());
@@ -1565,6 +1568,9 @@ impl<'a> Lowerer<'a> {
     /// Returns a register holding a Bool (true = match).
     fn lower_pattern_test(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) -> ValueId {
         match pattern {
+            // Context bind is always irrefutable.
+            Pattern::ContextBind { .. } => self.emit_const_bool(span, true),
+
             Pattern::Binding { ref_kind, .. } => {
                 if *ref_kind == RefKind::ExternParam {
                     // Typeck already reported ExternParamAssign.
@@ -1790,6 +1796,23 @@ impl<'a> Lowerer<'a> {
     /// Emit instructions that bind pattern variables from a matched value.
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
+            Pattern::ContextBind { name: qref, .. } => {
+                let proj = self.alloc_typed(span);
+                self.emit_inst(
+                    span,
+                    InstKind::ContextProject {
+                        dst: proj,
+                        ctx: *qref,
+                    },
+                );
+                self.emit_inst(
+                    span,
+                    InstKind::ContextStore {
+                        dst: proj,
+                        value: src_reg,
+                    },
+                );
+            }
             Pattern::Binding {
                 name,
                 ref_kind: RefKind::Value,
@@ -1801,7 +1824,7 @@ impl<'a> Lowerer<'a> {
                 self.define_var(*name, ty);
             }
             Pattern::Binding {
-                name,
+                name: _,
                 ref_kind: RefKind::ExternParam,
                 ..
             } => {
@@ -1809,7 +1832,7 @@ impl<'a> Lowerer<'a> {
                 let dst = self.alloc_val();
                 self.emit_inst(span, InstKind::Poison { dst });
             }
-            Pattern::Binding { .. } | Pattern::Literal { .. } => {}
+            Pattern::Literal { .. } => {}
 
             Pattern::List {
                 head,
@@ -1943,11 +1966,12 @@ impl<'a> Lowerer<'a> {
                     free.push((*name, *span));
                 }
             }
-            // Variable/context refs resolve at runtime — no capture needed.
+            // ExternParam/context refs resolve at runtime — no capture needed.
             Expr::Ident {
-                ref_kind: RefKind::ExternParam | RefKind::Context,
+                ref_kind: RefKind::ExternParam,
                 ..
-            } => {}
+            }
+            | Expr::ContextRef { .. } => {}
             Expr::BinaryOp { left, right, .. } => {
                 self.collect_free_vars(left, bound, free, seen);
                 self.collect_free_vars(right, bound, free, seen);

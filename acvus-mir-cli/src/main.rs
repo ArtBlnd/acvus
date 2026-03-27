@@ -2,7 +2,7 @@ use std::io::Read;
 use std::{env, fs, process};
 
 use acvus_mir::graph::types::*;
-use acvus_mir::graph::{extract, infer, lower as graph_lower, resolve};
+use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::printer::dump;
 use acvus_mir::ty::{Effect, Param, Ty};
 use acvus_utils::{Freeze, Interner};
@@ -172,6 +172,7 @@ fn main() {
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
+            effect: None,
         },
     });
 
@@ -181,28 +182,10 @@ fn main() {
         contexts: Freeze::new(contexts),
     };
 
-    // Run pipeline: extract → infer → resolve → lower.
+    // Run pipeline: extract → infer → lower.
     let ext = extract::extract(&interner, &graph);
-    let inf = infer::infer(&interner, &graph, &ext);
-    let res = resolve::resolve(&interner, &graph, &ext, &inf, &FxHashMap::default());
-
-    // Check resolve errors.
-    let resolve_errors: Vec<_> = res
-        .errors()
-        .iter()
-        .flat_map(|re| &re.errors)
-        .collect();
-    if !resolve_errors.is_empty() {
-        for e in &resolve_errors {
-            eprintln!(
-                "error [{}..{}]: {}",
-                e.span.start, e.span.end, e.display(&interner)
-            );
-        }
-        process::exit(1);
-    }
-
-    let result = graph_lower::lower(&interner, &graph, &ext, &res);
+    let inf = infer::infer(&interner, &graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(&interner, &graph, &ext, &inf);
     if result.has_errors() {
         for le in &result.errors {
             for e in &le.errors {

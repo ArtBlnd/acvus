@@ -1,4 +1,4 @@
-use acvus_utils::Astr;
+use acvus_utils::{Astr, QualifiedRef};
 
 use crate::span::Span;
 
@@ -14,7 +14,7 @@ pub struct Script {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Bind { name: Astr, expr: Expr, span: Span },
-    ContextStore { name: Astr, expr: Expr, span: Span },
+    ContextStore { name: QualifiedRef, expr: Expr, span: Span },
     Expr(Expr),
     /// Match-bind (if-let): `pattern = source { body };`
     MatchBind {
@@ -179,6 +179,11 @@ pub enum Expr {
         tail: Box<Expr>,
         span: Span,
     },
+    /// A context reference: `@name`.
+    ContextRef {
+        name: QualifiedRef,
+        span: Span,
+    },
     /// A variant constructor: `Some(expr)`, `None`, or `Color::Red`.
     Variant {
         enum_name: Option<Astr>,
@@ -212,6 +217,7 @@ impl Expr {
             | Expr::Object { span, .. }
             | Expr::Range { span, .. }
             | Expr::Tuple { span, .. }
+            | Expr::ContextRef { span, .. }
             | Expr::Variant { span, .. }
             | Expr::Block { span, .. } => *span,
         }
@@ -239,10 +245,15 @@ pub struct ObjectExprField {
 /// A pattern used on the LHS of `=` in a match block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    /// A binding that captures a value: `item`, `$name`, or `@name`.
+    /// A binding that captures a value: `item` or `$name`.
     Binding {
         name: Astr,
         ref_kind: RefKind,
+        span: Span,
+    },
+    /// A context binding: `@name`.
+    ContextBind {
+        name: QualifiedRef,
         span: Span,
     },
     /// A literal pattern that filters: `true`, `"admin"`, `42`.
@@ -285,6 +296,7 @@ impl Pattern {
     pub fn span(&self) -> Span {
         match self {
             Pattern::Binding { span, .. }
+            | Pattern::ContextBind { span, .. }
             | Pattern::Literal { span, .. }
             | Pattern::List { span, .. }
             | Pattern::Object { span, .. }
@@ -365,8 +377,6 @@ pub enum UnaryOp {
 pub enum RefKind {
     /// A bare name: `x`.
     Value,
-    /// A context reference: `@x` (read-write, persisted state).
-    Context,
     /// An extern parameter: `$x` (immutable, externally injected).
     ExternParam,
 }
@@ -385,7 +395,7 @@ pub enum Literal {
 // ── AST walk: context reference extraction ──────────────────────────
 
 /// Extract all `@name` context references from a Script AST.
-pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<Astr> {
+pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = rustc_hash::FxHashSet::default();
     walk_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
@@ -394,7 +404,7 @@ pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<Ast
     refs
 }
 
-fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<Astr>) {
+fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     for stmt in stmts {
         match stmt {
             Stmt::Bind { expr, .. } => walk_expr(expr, refs),
@@ -418,13 +428,13 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<Astr>) {
 }
 
 /// Extract all `@name` context references from a Template AST.
-pub fn extract_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<Astr> {
+pub fn extract_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = rustc_hash::FxHashSet::default();
     walk_nodes(&template.body, &mut refs);
     refs
 }
 
-fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<Astr>) {
+fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     for node in nodes {
         match node {
             Node::Text { .. } | Node::Comment { .. } => {}
@@ -450,15 +460,10 @@ fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<Astr>) {
     }
 }
 
-fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<Astr>) {
+fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     match pattern {
-        Pattern::Binding { name, ref_kind, .. } => {
-            match ref_kind {
-                RefKind::Context => { refs.insert(*name); }
-                RefKind::ExternParam | RefKind::Value => {}
-            }
-        }
-        Pattern::Literal { .. } => {}
+        Pattern::ContextBind { name, .. } => { refs.insert(*name); }
+        Pattern::Binding { .. } | Pattern::Literal { .. } => {}
         Pattern::List { head, tail, .. } => {
             for p in head { walk_pattern(p, refs); }
             for p in tail { walk_pattern(p, refs); }
@@ -486,9 +491,9 @@ fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<Astr>) {
     }
 }
 
-fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<Astr>) {
+fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     match expr {
-        Expr::Ident { name, ref_kind: RefKind::Context, .. } => {
+        Expr::ContextRef { name, .. } => {
             refs.insert(*name);
         }
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}

@@ -1524,8 +1524,8 @@ impl TySubst {
 /// it does not know whether a function is a builtin, extern, or user-defined.
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
-    /// Context variable types (`@name` → Ty).
-    pub contexts: FxHashMap<Astr, Ty>,
+    /// Context variable types (`@name` → Ty), keyed by QualifiedRef (namespace-aware).
+    pub contexts: FxHashMap<QualifiedRef, Ty>,
     /// Function types (`name` → `Ty::Fn`). One entry per function name.
     pub functions: FxHashMap<Astr, Ty>,
 }

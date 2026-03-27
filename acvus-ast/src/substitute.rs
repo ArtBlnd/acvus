@@ -62,7 +62,7 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             ),
             None => expr,
         },
-        Expr::Ident { .. } | Expr::Literal { .. } => expr,
+        Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } => expr,
 
         // Binary chains: flatten same-op chain → splice → re-fold (left-associative).
         Expr::BinaryOp { left, op, right, span } => {
@@ -344,7 +344,7 @@ fn validate_splice_expr(
                 errors.push((*name, *span));
             }
         }
-        Expr::Ident { .. } | Expr::Literal { .. } => {}
+        Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } => {}
 
         // Binary op chain: both sides are sequence contexts.
         Expr::BinaryOp { left, right, .. } => {

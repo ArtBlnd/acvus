@@ -1,21 +1,19 @@
 //! Incremental compilation graph.
 //!
-//! Manages per-function extract/infer/resolve caches with dirty tracking.
+//! Manages per-function extract/infer caches with dirty tracking.
 //! On source change: re-extract → diff call edges → re-SCC if needed →
-//! re-infer dirty SCCs (with early cutoff) → re-resolve dirty functions.
+//! re-infer dirty SCCs (with early cutoff).
 
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
 use crate::ty::{EffectSet, Ty};
-use crate::typeck::{Checked, TypeResolution};
 
 use super::extract::{ExtractResult, FnRefs, ParsedSource, extract_one};
 use super::infer::{
-    FunctionMeta, InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
+    InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
 };
-use super::resolve::resolve_one;
 use super::types::*;
 
 // ── Cached entries ──────────────────────────────────────────────────
@@ -24,11 +22,6 @@ struct ExtractEntry {
     source_hash: u64,
     refs: FnRefs,
     parsed: ParsedSource,
-}
-
-struct ResolveEntry {
-    resolution: TypeResolution<Checked>,
-    output_ty: Ty,
 }
 
 // ── Context info (public output) ────────────────────────────────────
@@ -67,9 +60,6 @@ pub struct IncrementalGraph {
     // ── Phase 1: Infer cache (per SCC index) ──
     infer_cache: Vec<Option<SccInferResult>>,
 
-    // ── Phase 2: Resolve cache (per function) ──
-    resolve_cache: FxHashMap<FunctionId, ResolveEntry>,
-
     // ── Diagnostics ──
     diagnostics: FxHashMap<FunctionId, Vec<MirError>>,
 }
@@ -89,7 +79,6 @@ impl IncrementalGraph {
             scc_order: Vec::new(),
             fn_to_scc: FxHashMap::default(),
             infer_cache: Vec::new(),
-            resolve_cache: FxHashMap::default(),
             diagnostics: FxHashMap::default(),
         }
     }
@@ -143,7 +132,6 @@ impl IncrementalGraph {
             self.name_to_fn.remove(&key);
             self.extract_cache.remove(&id);
             self.call_edges.remove(&id);
-            self.resolve_cache.remove(&id);
             self.diagnostics.remove(&id);
             self.remove_reverse_edges(id);
             self.rebuild_graph();
@@ -153,15 +141,15 @@ impl IncrementalGraph {
     pub fn add_context(&mut self, ctx: Context) {
         let qref = ctx.qualified_ref();
         self.contexts.insert(qref, ctx);
-        // Context change can affect all infer/resolve — full rebuild.
+        // Context change can affect all infer — full rebuild.
         self.invalidate_all_infer();
-        self.run_infer_and_resolve();
+        self.run_infer();
     }
 
     pub fn remove_context(&mut self, qref: QualifiedRef) {
         if self.contexts.remove(&qref).is_some() {
             self.invalidate_all_infer();
-            self.run_infer_and_resolve();
+            self.run_infer();
         }
     }
 
@@ -234,8 +222,11 @@ impl IncrementalGraph {
             .unwrap_or_default()
     }
 
-    pub fn resolution(&self, id: FunctionId) -> Option<&TypeResolution<Checked>> {
-        self.resolve_cache.get(&id).map(|e| &e.resolution)
+    // TODO: resolution now comes from InferResult outcomes.
+    // SccInferResult needs to store resolutions for this to work.
+    // For now, always returns None.
+    pub fn resolution(&self, _id: FunctionId) -> Option<()> {
+        None
     }
 
     pub fn function(&self, id: FunctionId) -> Option<&Function> {
@@ -367,8 +358,6 @@ impl IncrementalGraph {
             self.remove_reverse_edges(id);
         }
 
-        // Invalidate downstream.
-        self.resolve_cache.remove(&id);
     }
 
     fn remove_reverse_edges(&mut self, id: FunctionId) {
@@ -402,15 +391,14 @@ impl IncrementalGraph {
 
         // Rebuild all infer caches.
         self.infer_cache = vec![None; self.scc_order.len()];
-        self.resolve_cache.clear();
         self.diagnostics.clear();
 
-        self.run_infer_and_resolve();
+        self.run_infer();
     }
 
-    // ── Internal: Infer + Resolve ───────────────────────────────────
+    // ── Internal: Infer ─────────────────────────────────────────────
 
-    fn run_infer_and_resolve(&mut self) {
+    fn run_infer(&mut self) {
         let known_ctx = self.known_context_types();
         let mut resolved_fn_types = crate::builtins::builtin_fn_types(&self.interner);
 
@@ -467,9 +455,6 @@ impl IncrementalGraph {
 
         // Effect propagation across SCCs.
         self.propagate_effects();
-
-        // Resolve all dirty functions.
-        self.run_resolve_all(&known_ctx);
     }
 
     fn dirty_propagate(&mut self, changed_fn: FunctionId) {
@@ -567,20 +552,12 @@ impl IncrementalGraph {
                 }
             }
 
-            // Invalidate resolve for functions in this SCC.
-            for &fid in scc {
-                self.resolve_cache.remove(&fid);
-            }
-
             resolved_fn_types.extend(result.resolved_types.clone());
             self.infer_cache[scc_idx] = Some(result);
         }
 
         // Effect propagation.
         self.propagate_effects();
-
-        // Re-resolve dirty functions.
-        self.run_resolve_all(&known_ctx);
     }
 
     fn propagate_effects(&mut self) {
@@ -671,99 +648,14 @@ impl IncrementalGraph {
         }
     }
 
-    fn run_resolve_all(&mut self, _known_ctx: &FxHashMap<Astr, Ty>) {
-        // Build context type map.
-        let mut context_types: FxHashMap<Astr, Ty> = FxHashMap::default();
-        for ctx in self.contexts.values() {
-            match &ctx.constraint {
-                Constraint::Exact(ty) => {
-                    context_types.insert(ctx.name, ty.clone());
-                }
-                _ => {} // Inferred contexts need user-provided types
-            }
-        }
-
-        // Build function type environment.
-        let mut fn_type_env: FxHashMap<Astr, Ty> =
-            crate::builtins::builtin_fn_types(&self.interner);
-        for scc_result in self.infer_cache.iter().flatten() {
-            for (&fid, meta) in &scc_result.fn_metas {
-                if let Some(func) = self.functions.get(&fid) {
-                    fn_type_env.insert(func.name, meta.ty.clone());
-                }
-            }
-        }
-
-        // Add extern function types.
-        for func in self.functions.values() {
-            if let FnKind::Extern = &func.kind
-                && let Constraint::Exact(ty) = &func.constraint.output
-            {
-                fn_type_env.insert(func.name, ty.clone());
-            }
-        }
-
-        let env = crate::ty::TypeEnv {
-            contexts: context_types,
-            functions: fn_type_env,
-        };
-
-        // Resolve each function that doesn't have a cached result.
-        for func in self.functions.values() {
-            let FnKind::Local(_) = &func.kind else {
-                continue;
-            };
-            if self.resolve_cache.contains_key(&func.id) {
-                continue;
-            }
-
-            let Some(extract_entry) = self.extract_cache.get(&func.id) else {
-                continue;
-            };
-
-            // Get bind params from infer cache.
-            let bind_params = self
-                .fn_to_scc
-                .get(&func.id)
-                .and_then(|&idx| self.infer_cache.get(idx))
-                .and_then(|opt| opt.as_ref())
-                .and_then(|r| r.fn_metas.get(&func.id))
-                .map(|m| m.params.clone())
-                .unwrap_or_default();
-
-            match resolve_one(
-                &self.interner,
-                func,
-                &extract_entry.parsed,
-                &bind_params,
-                &env,
-            ) {
-                Ok((resolution, output_ty)) => {
-                    self.resolve_cache.insert(
-                        func.id,
-                        ResolveEntry {
-                            resolution,
-                            output_ty,
-                        },
-                    );
-                    self.diagnostics.remove(&func.id);
-                }
-                Err(errs) => {
-                    self.diagnostics.insert(func.id, errs);
-                    self.resolve_cache.remove(&func.id);
-                }
-            }
-        }
-    }
-
     // ── Helpers ─────────────────────────────────────────────────────
 
-    fn known_context_types(&self) -> FxHashMap<Astr, Ty> {
+    fn known_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
         self.contexts
             .values()
             .filter_map(|ctx| {
                 if let Constraint::Exact(ty) = &ctx.constraint {
-                    Some((ctx.name, ty.clone()))
+                    Some((ctx.qualified_ref(), ty.clone()))
                 } else {
                     None
                 }
@@ -775,7 +667,6 @@ impl IncrementalGraph {
         for slot in &mut self.infer_cache {
             *slot = None;
         }
-        self.resolve_cache.clear();
         self.diagnostics.clear();
     }
 
@@ -794,11 +685,20 @@ impl IncrementalGraph {
     /// Build a snapshot InferResult for compatibility with batch APIs.
     pub fn infer_result(&self) -> super::infer::InferResult {
         let mut fn_params: FxHashMap<FunctionId, Vec<InferredParam>> = FxHashMap::default();
-        let mut functions: FxHashMap<FunctionId, FunctionMeta> = FxHashMap::default();
+        let mut outcomes: FxHashMap<FunctionId, super::infer::FnInferOutcome> = FxHashMap::default();
 
         for scc_result in self.infer_cache.iter().flatten() {
             fn_params.extend(scc_result.fn_params.clone());
-            functions.extend(scc_result.fn_metas.clone());
+            // Convert SccInferResult metas to Incomplete outcomes (temporary — incremental
+            // does not yet run check_completeness; this will be reworked in Step 6).
+            for (&fid, meta) in &scc_result.fn_metas {
+                outcomes.insert(fid, super::infer::FnInferOutcome::Incomplete {
+                    unknown_contexts: scc_result.fn_params.get(&fid).cloned().unwrap_or_default(),
+                    unknown_extern_params: vec![],
+                    meta: meta.clone(),
+                    errors: vec![],
+                });
+            }
         }
 
         let mut all_map: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
@@ -815,9 +715,10 @@ impl IncrementalGraph {
             .collect();
 
         super::infer::InferResult {
+            outcomes,
             fn_params,
             all_params,
-            functions,
+            context_types: self.known_context_types(),
         }
     }
 }

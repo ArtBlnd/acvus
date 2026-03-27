@@ -6,7 +6,7 @@ use acvus_interpreter::{
     InterpreterContext, Registered, SequentialExecutor, Value,
 };
 use acvus_mir::graph::*;
-use acvus_mir::graph::{extract, resolve, lower as graph_lower};
+use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -70,6 +70,7 @@ pub fn compile_source_with_externs(
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
+            effect: None,
         },
     });
 
@@ -95,9 +96,8 @@ pub fn compile_source_with_externs(
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let res = resolve::resolve(interner, &graph, &ext, &inf, &FxHashMap::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &res);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
         let errs: Vec<String> = result.errors.iter()
