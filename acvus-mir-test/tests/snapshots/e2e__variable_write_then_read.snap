@@ -6,16 +6,17 @@ expression: ir
   T0 = ""
 
 === main ===
-     3 │   r0 = T0 + T0
-     4 │   r1 = poison
-     5 │   r2 = r0 + r1
-     6 │   return r2
+     0 │   r0 = undef
+     4 │   r1 = T0 + T0
+     5 │   r2 = call #0(42 (r3))
+     6 │   r4 = r1 + r2
+     7 │   return r4
 
-    ; r0 (v3) : String
-    ; r1 (to_string(...)) : String
-    ; r2 (v6) : String
-    ; r3 (v7) : Int
-    ; r4 (v0) : String
-    ; r5 (v2) : String
-    ; r6 (v1) : Int
+    ; r0 (v7) : Int
+    ; r1 (v3) : String
+    ; r2 (to_string(...)) : String
+    ; r3 (v1) : Int
+    ; r4 (v6) : String
+    ; r5 (v0) : String
+    ; r6 (v2) : String
     ; r7 (x) : Int

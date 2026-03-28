@@ -295,14 +295,14 @@ mod tests {
         let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
-        // Iterate must generate IterStep.
+        // Iterate must generate ListStep.
         assert!(
             module
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(i.kind, InstKind::IterStep { .. })),
-            "iterate should generate IterStep"
+                .any(|i| matches!(i.kind, InstKind::ListStep { .. })),
+            "iterate should generate ListStep"
         );
     }
 
@@ -322,14 +322,14 @@ mod tests {
         let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
-        // Nested iterate: two IterStep instructions.
+        // Nested iterate: two ListStep instructions.
         let iter_count = module
             .main
             .insts
             .iter()
-            .filter(|i| matches!(i.kind, InstKind::IterStep { .. }))
+            .filter(|i| matches!(i.kind, InstKind::ListStep { .. }))
             .count();
-        assert_eq!(iter_count, 2, "nested iterate should have 2 IterStep");
+        assert_eq!(iter_count, 2, "nested iterate should have 2 ListStep");
     }
 
     // -- Soundness: type errors don't produce modules --

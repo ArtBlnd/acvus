@@ -3,11 +3,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use acvus_mir::ir::MirBody;
-use acvus_mir::ty::UserDefinedId;
+use acvus_mir::graph::QualifiedRef;
 use acvus_utils::{Astr, Interner, TrackedDeque};
 use rustc_hash::FxHashMap;
 
 use crate::error::RuntimeError;
+use crate::interpreter::InterpreterContext;
+use crate::journal::ContextOverlay;
 pub use crate::iter::{IterHandle, SequenceChain};
 
 // ── Value ────────────────────────────────────────────────────────────
@@ -28,6 +30,9 @@ pub use crate::iter::{IterHandle, SequenceChain};
 pub enum Value {
     // ── Inline (no allocation) ───────────────────────────────────
     Empty,
+    /// Undefined value — clone/move OK, read as concrete value = UB.
+    /// Used as SSA initial value for variables defined inside loops.
+    Undef,
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -67,12 +72,44 @@ pub struct RangeValue {
     pub inclusive: bool,
 }
 
-/// A closure: body + captured values.
-/// Captures are shared (Arc) since closures can be cloned.
-#[derive(Debug, Clone)]
+/// A self-contained callable: execution context + body + captured values.
+///
+/// Created at `MakeClosure` time with a fork of the current overlay.
+/// `call()` executes the body in an independent RunContext — no Interpreter needed.
 pub struct FnValue {
+    pub shared: InterpreterContext,
+    pub overlay: ContextOverlay,
     pub body: Arc<MirBody>,
     pub captures: Arc<[Value]>,
+}
+
+impl Clone for FnValue {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            overlay: self.overlay.spawn_fork(),
+            body: Arc::clone(&self.body),
+            captures: Arc::clone(&self.captures),
+        }
+    }
+}
+
+impl fmt::Debug for FnValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<fn {:?}>", Arc::as_ptr(&self.body))
+    }
+}
+
+impl FnValue {
+    /// Call this closure with a single argument. Self-contained — no Interpreter needed.
+    pub async fn call(&self, arg: Value) -> Result<Value, RuntimeError> {
+        crate::interpreter::fn_value_call(self, vec![arg]).await
+    }
+
+    /// Call this closure with two arguments.
+    pub async fn call2(&self, arg1: Value, arg2: Value) -> Result<Value, RuntimeError> {
+        crate::interpreter::fn_value_call(self, vec![arg1, arg2]).await
+    }
 }
 
 /// A deferred computation handle (spawn result).
@@ -114,9 +151,9 @@ impl std::fmt::Debug for HandleValue {
 }
 
 /// A user-defined value from extern boundary.
-/// Identified by `UserDefinedId` (matching `Ty::UserDefined`).
+/// Identified by `QualifiedRef` (matching `Ty::UserDefined`).
 pub struct OpaqueValue {
-    pub type_id: UserDefinedId,
+    pub type_id: QualifiedRef,
     inner: Arc<dyn Any + Send + Sync>,
 }
 
@@ -229,6 +266,7 @@ impl Value {
         use crate::error::ValueKind;
         match self {
             Value::Empty => panic!("kind: accessed moved-out value"),
+            Value::Undef => panic!("kind: accessed undef value"),
             Value::Int(_) => ValueKind::Int,
             Value::Float(_) => ValueKind::Float,
             Value::Bool(_) => ValueKind::Bool,
@@ -422,6 +460,7 @@ impl Clone for Value {
     fn clone(&self) -> Self {
         match self {
             Value::Empty => panic!("clone: accessed moved-out value"),
+            Value::Undef => Value::Undef,
             Value::Int(n) => Value::Int(*n),
             Value::Float(f) => Value::Float(*f),
             Value::Bool(b) => Value::Bool(*b),
@@ -464,6 +503,7 @@ impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Empty => write!(f, "<empty>"),
+            Value::Undef => write!(f, "<undef>"),
             Value::Int(n) => write!(f, "{n}"),
             Value::Float(v) => write!(f, "{v}"),
             Value::Bool(b) => write!(f, "{b}"),
@@ -524,7 +564,7 @@ impl Clone for OpaqueValue {
 }
 
 impl OpaqueValue {
-    pub fn new<T: Any + Send + Sync>(type_id: UserDefinedId, value: T) -> Self {
+    pub fn new<T: Any + Send + Sync>(type_id: QualifiedRef, value: T) -> Self {
         Self {
             type_id,
             inner: Arc::new(value),

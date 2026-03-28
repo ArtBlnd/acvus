@@ -6,19 +6,20 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @name
-     1 │   r1 = context_load r0
-     4 │   r2 = T0 + T0
-     5 │   r3 = r2 + r1
-     6 │   return r3
+     0 │   r0 = undef
+     1 │   r1 = context_project @name
+     2 │   r2 = context_load r1
+     5 │   r3 = T0 + T0
+     6 │   r4 = r3 + r2
+     7 │   return r4
 
-    ; r0 (@name) : String
-    ; r1 (v1) : String
-    ; r2 (v6) : String
-    ; r3 (v8) : String
-    ; r4 (result) : String
-    ; r5 (@name) : String
-    ; r6 (v2) : String
-    ; r7 (v9) : String
+    ; r0 (v9) : String
+    ; r1 (@name) : String
+    ; r2 (v1) : String
+    ; r3 (v6) : String
+    ; r4 (v8) : String
+    ; r5 (result) : String
+    ; r6 (@name) : String
+    ; r7 (v2) : String
     ; r8 (v5) : String
     ; r9 (v4) : String

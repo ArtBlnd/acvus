@@ -2,4 +2,5 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-no module produced
+[infer:test] [7..15] range bounds must be Int, got Float
+[infer:test] [7..15] range bounds must be Int, got Float

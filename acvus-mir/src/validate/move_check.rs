@@ -38,19 +38,6 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
             Some(false)
         }
 
-        // Containers — depends on effect
-        Ty::Iterator(_, e) if e.is_effectful() => Some(true),
-        Ty::Iterator(_, e) if e.is_pure() => Some(false),
-        Ty::Sequence(_, _, e) if e.is_effectful() => Some(true),
-        Ty::Sequence(_, _, e) if e.is_pure() => Some(false),
-
-        // Unresolved effect — skip
-        Ty::Iterator(_, e) if e.is_var() => None,
-        Ty::Sequence(_, _, e) if e.is_var() => None,
-
-        // Catch-all for Iterator/Sequence (should not happen with well-formed types)
-        Ty::Iterator(_, _) | Ty::Sequence(_, _, _) => None,
-
         // Handle — always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
@@ -300,7 +287,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
-            Terminator::IterStep { done, done_args } => {
+            Terminator::ListStep { done, done_args } => {
                 // Fallthrough.
                 let next = idx.0 + 1;
                 if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
@@ -421,7 +408,8 @@ fn process_inst(
         // === No operands / define only ===
         InstKind::Const { dst, .. }
         | InstKind::ContextProject { dst, .. }
-        | InstKind::Poison { dst } => {
+        | InstKind::Poison { dst }
+        | InstKind::Undef { dst } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::ContextLoad { dst, src } => {
@@ -483,15 +471,14 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::IterStep {
+        InstKind::ListStep {
             dst,
-            iter_src,
-            iter_dst,
+            index_dst,
             ..
         } => {
-            try_consume_value(scope, inst_idx, span, *iter_src, val_types, state, errors);
+            // list is borrowed (not consumed), index_src is Int (copyable).
             state.set_value(*dst, Liveness::Alive);
-            state.set_value(*iter_dst, Liveness::Alive);
+            state.set_value(*index_dst, Liveness::Alive);
         }
 
         // Functions
@@ -686,28 +673,13 @@ mod tests {
 
     // -- is_move_only tests --
 
-    #[test]
-    fn pure_iterator_is_copy() {
-        assert_eq!(
-            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::pure())),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn effectful_iterator_is_move() {
-        assert_eq!(
-            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::io())),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn effect_var_is_unknown() {
-        assert_eq!(
-            is_move_only(&Ty::Iterator(Box::new(Ty::Int), Effect::Var(0))),
-            None
-        );
+    fn test_user_defined() -> Ty {
+        let i = Interner::new();
+        Ty::UserDefined {
+            id: QualifiedRef::root(i.intern("TestType")),
+            type_args: vec![],
+            effect_args: vec![],
+        }
     }
 
     #[test]
@@ -720,27 +692,21 @@ mod tests {
 
     #[test]
     fn user_defined_is_move() {
-        use crate::ty::UserDefinedId;
-        let ty = Ty::UserDefined {
-            id: UserDefinedId::alloc(),
-            type_args: vec![],
-            effect_args: vec![],
-        };
+        assert_eq!(is_move_only(&test_user_defined()), Some(true));
+    }
+
+    #[test]
+    fn tuple_with_user_defined_is_move() {
+        let ty = Ty::Tuple(vec![Ty::Int, test_user_defined()]);
         assert_eq!(is_move_only(&ty), Some(true));
     }
 
     #[test]
-    fn tuple_with_effectful_is_move() {
-        let ty = Ty::Tuple(vec![Ty::Int, Ty::Iterator(Box::new(Ty::Int), Effect::io())]);
-        assert_eq!(is_move_only(&ty), Some(true));
-    }
-
-    #[test]
-    fn fn_with_effectful_capture_is_move() {
+    fn fn_with_user_defined_capture_is_move() {
         let ty = Ty::Fn {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
-            captures: vec![Ty::Iterator(Box::new(Ty::Int), Effect::io())],
+            captures: vec![test_user_defined()],
             effect: Effect::pure(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
@@ -760,50 +726,14 @@ mod tests {
     // -- move check integration tests --
 
     #[test]
-    fn no_error_for_pure_iterator_reuse() {
+    fn error_for_user_defined_reuse() {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         let v2 = vf.next();
-        // v0 = Pure Iterator, used twice → OK
+        // v0 = UserDefined (move-only), used twice → ERROR
         let mut val_types = FxHashMap::default();
-        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::pure()));
-        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
-        val_types.insert(v2, Ty::List(Box::new(Ty::Int)));
-
-        let module = make_module(
-            vec![
-                inst(InstKind::FunctionCall {
-                    dst: v1,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    args: vec![v0],
-                    context_uses: vec![],
-                    context_defs: vec![],
-                }),
-                inst(InstKind::FunctionCall {
-                    dst: v2,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    args: vec![v0],
-                    context_uses: vec![],
-                    context_defs: vec![],
-                }),
-            ],
-            val_types,
-        );
-
-        let errors = check_moves(&module);
-        assert!(errors.is_empty(), "pure iterator reuse should be allowed");
-    }
-
-    #[test]
-    fn error_for_effectful_iterator_reuse() {
-        let mut vf = LocalFactory::<ValueId>::new();
-        let v0 = vf.next();
-        let v1 = vf.next();
-        let v2 = vf.next();
-        // v0 = Effectful Iterator, used twice → ERROR
-        let mut val_types = FxHashMap::default();
-        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::io()));
+        val_types.insert(v0, test_user_defined());
         val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
         val_types.insert(v2, Ty::List(Box::new(Ty::Int)));
 
@@ -831,7 +761,7 @@ mod tests {
         assert_eq!(
             errors.len(),
             1,
-            "effectful iterator reuse should be rejected"
+            "UserDefined reuse should be rejected"
         );
         assert!(matches!(
             errors[0].kind,
@@ -840,13 +770,13 @@ mod tests {
     }
 
     #[test]
-    fn no_error_for_single_use_effectful() {
+    fn no_error_for_single_use_user_defined() {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
-        // v0 = Effectful Iterator, used once → OK
+        // v0 = UserDefined, used once → OK
         let mut val_types = FxHashMap::default();
-        val_types.insert(v0, Ty::Iterator(Box::new(Ty::Int), Effect::io()));
+        val_types.insert(v0, test_user_defined());
         val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
 
         let module = make_module(
@@ -873,13 +803,13 @@ mod tests {
         let v3 = vf.next();
         let v4 = vf.next();
         let v5 = vf.next();
-        // $a = effectful iter (v0), VarLoad (v1) → moved, $a = new iter (v2) → alive, VarLoad (v3) → OK
+        // $a = move-only (v0), VarLoad (v1) → moved, $a = new value (v2) → alive, VarLoad (v3) → OK
         let mut val_types = FxHashMap::default();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        val_types.insert(v0, eff_iter.clone());
-        val_types.insert(v1, eff_iter.clone());
-        val_types.insert(v2, eff_iter.clone());
-        val_types.insert(v3, eff_iter.clone());
+        let move_ty = test_user_defined();
+        val_types.insert(v0, move_ty.clone());
+        val_types.insert(v1, move_ty.clone());
+        val_types.insert(v2, move_ty.clone());
+        val_types.insert(v3, move_ty.clone());
         val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
         val_types.insert(v5, Ty::List(Box::new(Ty::Int)));
 
@@ -888,7 +818,7 @@ mod tests {
 
         let module = make_module(
             vec![
-                // $a = v0 (effectful)
+                // $a = v0 (move-only)
                 inst(InstKind::VarStore { name: a, src: v0 }),
                 // v1 = $a → moves $a
                 inst(InstKind::VarLoad { dst: v1, name: a }),
@@ -931,12 +861,12 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let v4 = vf.next();
-        // $a = effectful, VarLoad → moved, VarLoad again → ERROR
+        // $a = move-only, VarLoad → moved, VarLoad again → ERROR
         let mut val_types = FxHashMap::default();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        val_types.insert(v0, eff_iter.clone());
-        val_types.insert(v1, eff_iter.clone());
-        val_types.insert(v2, eff_iter.clone());
+        let move_ty = test_user_defined();
+        val_types.insert(v0, move_ty.clone());
+        val_types.insert(v1, move_ty.clone());
+        val_types.insert(v2, move_ty.clone());
         val_types.insert(v3, Ty::List(Box::new(Ty::Int)));
         val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
 
@@ -990,412 +920,6 @@ mod tests {
         assert!(errors.is_empty(), "Ty::Param should be skipped");
     }
 
-    // =====================================================================
-    // E2E compile pipeline tests
-    //
-    // These test the full pipeline: parse → typeck → lower → validate.
-    // Effectful iterators are injected via context types.
-    // =====================================================================
-
-    mod e2e {
-        use crate::ty::{Effect, Param, Ty};
-        use acvus_utils::Interner;
-
-        fn param(ty: Ty) -> Param {
-            let interner = Interner::new();
-            Param::new(interner.intern("_"), ty)
-        }
-
-        fn eff_iter_ty() -> Ty {
-            Ty::Iterator(Box::new(Ty::Int), Effect::io())
-        }
-
-        fn pure_iter_ty() -> Ty {
-            Ty::Iterator(Box::new(Ty::Int), Effect::pure())
-        }
-
-        fn compile_script(source: &str, ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
-            let interner = Interner::new();
-            crate::test::compile_script(&interner, source, ctx)
-                .map(|_| ())
-                .map_err(|errs| {
-                    errs.iter()
-                        .map(|e| format!("{}", e.display(&interner)))
-                        .collect()
-                })
-        }
-
-        fn compile_template(source: &str, _ctx: &[(&str, Ty)]) -> Result<(), Vec<String>> {
-            let interner = Interner::new();
-            crate::test::compile_template(&interner, source, _ctx)
-                .map(|_| ())
-                .map_err(|errs| {
-                    errs.iter()
-                        .map(|e| format!("{}", e.display(&interner)))
-                        .collect()
-                })
-        }
-
-        fn has_use_after_move(errors: &[String]) -> bool {
-            errors.iter().any(|e| e.contains("use of move-only value"))
-        }
-
-        // -- Soundness: should REJECT --
-
-        /// S1: effectful iterator used twice in sequence
-        #[test]
-        fn reject_effectful_iter_reuse() {
-            let result = compile_script(
-                "x = @src; x | collect; x | collect",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(result.is_err(), "should reject effectful iter reuse");
-            assert!(has_use_after_move(&result.unwrap_err()));
-        }
-
-        /// S2: effectful iter assigned to var, loaded twice
-        #[test]
-        fn reject_var_double_load() {
-            let result = compile_template(
-                "{{ a = @src }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "should reject var double load of effectful"
-            );
-            assert!(has_use_after_move(&result.unwrap_err()));
-        }
-
-        /// S3: effectful iter piped twice
-        #[test]
-        fn reject_effectful_pipe_reuse() {
-            let result = compile_script(
-                "x = @src; a = x | collect; b = x | collect; a",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(result.is_err());
-            assert!(has_use_after_move(&result.unwrap_err()));
-        }
-
-        // -- Completeness: should ACCEPT --
-
-        /// C1: pure iterator reused freely
-        #[test]
-        fn accept_pure_iter_reuse() {
-            let result = compile_script(
-                "x = @src; a = x | collect; b = x | collect; a",
-                &[("src", pure_iter_ty())],
-            );
-            assert!(
-                result.is_ok(),
-                "pure iterator should be reusable: {result:?}"
-            );
-        }
-
-        /// C2: effectful iterator used once
-        #[test]
-        fn accept_effectful_single_use() {
-            let result = compile_script("x = @src; x | collect", &[("src", eff_iter_ty())]);
-            assert!(
-                result.is_ok(),
-                "single use of effectful should be allowed: {result:?}"
-            );
-        }
-
-        /// C3: effectful iter collected → list is pure, reusable
-        #[test]
-        fn accept_collect_then_reuse() {
-            let result = compile_script(
-                "list = @src | collect; a = list | len; b = list | len; a + b",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_ok(),
-                "collected list should be reusable: {result:?}"
-            );
-        }
-
-        /// C4: var reassignment revives
-        #[test]
-        fn accept_var_reassign() {
-            let result = compile_template(
-                "{{ a = @src }}{{ a | collect | len | to_string }}{{ a = @src2 }}{{ a | collect | len | to_string }}",
-                &[("src", eff_iter_ty()), ("src2", eff_iter_ty())],
-            );
-            assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
-        }
-
-        /// C5: pure values are always copyable
-        #[test]
-        fn accept_pure_values_copy() {
-            let result =
-                compile_script("x = @val; a = x + 1; b = x + 2; a + b", &[("val", Ty::Int)]);
-            assert!(result.is_ok());
-        }
-
-        /// C6: effectful iter in pipe chain (single linear flow)
-        #[test]
-        fn accept_effectful_pipe_chain() {
-            let result = compile_script(
-                "@src | filter(|x| -> x > 0) | map(|x| -> x * 2) | collect",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_ok(),
-                "linear pipe chain should be allowed: {result:?}"
-            );
-        }
-
-        /// C7: effectful function (no move-only captures) can be called multiple times
-        #[test]
-        fn accept_effectful_fn_multiple_calls() {
-            let fn_ty = Ty::Fn {
-                params: vec![param(Ty::Int)],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::io(),
-            };
-            let result = compile_script("a = @f(1); b = @f(2); a + b", &[("f", fn_ty)]);
-            assert!(
-                result.is_ok(),
-                "effectful fn without move-only captures should be callable multiple times: {result:?}"
-            );
-        }
-
-        /// E2: List containing effectful iterator (transitive move-only)
-        #[test]
-        fn reject_list_of_effectful_reuse() {
-            let ty = Ty::List(Box::new(eff_iter_ty()));
-            let result =
-                compile_script("x = @src; a = x | len; b = x | len; a + b", &[("src", ty)]);
-            // List<Iterator<Int, Effectful>> is move-only (transitive)
-            assert!(
-                result.is_err(),
-                "List containing effectful should be move-only"
-            );
-        }
-
-        /// E3: Option containing effectful (transitive)
-        #[test]
-        fn reject_option_effectful_reuse() {
-            let ty = Ty::Option(Box::new(eff_iter_ty()));
-            let result = compile_script(
-                "x = @src; a = x | unwrap | collect; b = x | unwrap | collect; a",
-                &[("src", ty)],
-            );
-            assert!(result.is_err(), "Option<Effectful> should be move-only");
-        }
-
-        // -- Branch tests: move in one branch, use after merge --
-        // Note: @context loads always create fresh values (ContextLoad → Alive),
-        // so branch tests must use $var (mutable variable) which tracks liveness.
-
-        /// B1: var holding move-only value, consumed in one branch, used after merge → ERROR
-        /// (conservative: any branch moves → merged state is Moved)
-        #[test]
-        fn reject_branch_move_then_use() {
-            // a holds effectful iter, consumed in true branch, used again after merge
-            let result = compile_template(
-                "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}{{ a | collect | len | to_string }}",
-                &[("flag", Ty::Bool), ("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "should reject use after move across branch: {result:?}"
-            );
-            assert!(has_use_after_move(&result.unwrap_err()));
-        }
-
-        /// B2: var consumed in both branches, then used after merge → ERROR
-        #[test]
-        fn reject_both_branches_move_then_use() {
-            let result = compile_template(
-                "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}{{ a | collect | len | to_string }}{{/}}{{ a | collect | len | to_string }}",
-                &[("flag", Ty::Bool), ("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "should reject use after move in both branches: {result:?}"
-            );
-        }
-
-        /// B3: var consumed in one branch only, no use after merge → OK
-        #[test]
-        fn accept_branch_move_no_use_after() {
-            let result = compile_template(
-                "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
-                &[("flag", Ty::Bool), ("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_ok(),
-                "move in branch without post-merge use should be OK: {result:?}"
-            );
-        }
-
-        // -- Nested closure + move-only tests --
-        // Note: Lambda body cannot contain pipe expressions (-> binds tighter than |).
-        // Use collect(x) call syntax instead of x | collect.
-
-        /// N1: Closure capturing effectful iterator → FnOnce, called twice → ERROR
-        /// f captures move-only x via closure, so f itself is move-only.
-        /// Second call of f → use after move.
-        #[test]
-        fn reject_fnonce_double_call() {
-            let result = compile_script(
-                "x = @src; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "FnOnce called twice should be rejected: {result:?}"
-            );
-            assert!(has_use_after_move(&result.unwrap_err()));
-        }
-
-        /// N2: Closure capturing pure value → Fn, called multiple times → OK
-        #[test]
-        fn accept_pure_capture_fn_multi_call() {
-            let result = compile_script(
-                "x = @val; f = (|a| -> x + a); a = f(1); b = f(2); a + b",
-                &[("val", Ty::Int)],
-            );
-            assert!(
-                result.is_ok(),
-                "Fn with pure captures should be callable multiple times: {result:?}"
-            );
-        }
-
-        /// N3: Closure capturing effectful → used once → OK
-        #[test]
-        fn accept_fnonce_single_call() {
-            let result = compile_script(
-                "x = @src; f = (|z| -> collect(x)); f(0)",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_ok(),
-                "FnOnce called once should be OK: {result:?}"
-            );
-        }
-
-        // -- Lambda return coercion tests --
-
-        /// L1: Lambda returns Deque where Iterator expected (flat_map) → Cast inserted at return
-        #[test]
-        fn accept_lambda_return_deque_as_iterator() {
-            // flat_map expects Fn(T) → Iterator<U>
-            // Lambda body [x, x*2] returns Deque → DequeToIterator Cast inserted
-            let result = compile_script(
-                "@items | flat_map(|x| -> [x, x * 2]) | collect",
-                &[("items", Ty::List(Box::new(Ty::Int)))],
-            );
-            assert!(
-                result.is_ok(),
-                "lambda returning Deque where Iterator expected should compile: {result:?}"
-            );
-        }
-
-        /// L2: Lambda returns Int (no coercion needed for map)
-        #[test]
-        fn accept_lambda_return_scalar() {
-            let result = compile_script(
-                "@items | map(|x| -> x + 1) | collect",
-                &[("items", Ty::List(Box::new(Ty::Int)))],
-            );
-            assert!(
-                result.is_ok(),
-                "lambda returning scalar should compile: {result:?}"
-            );
-        }
-
-        /// L3: Nested flat_map with Deque return at both levels
-        #[test]
-        fn accept_nested_flat_map_deque_return() {
-            let result = compile_script(
-                "@items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
-                &[("items", Ty::List(Box::new(Ty::Int)))],
-            );
-            assert!(
-                result.is_ok(),
-                "nested flat_map + map with Deque return should compile: {result:?}"
-            );
-        }
-
-        // -- FunctionCall (Indirect) FnOnce tests --
-
-        /// F1: FnOnce passed to map (HOF calls it multiple times) → should be OK
-        /// because at the MIR level, the fn is passed once to FunctionCall.
-        #[test]
-        fn accept_fnonce_passed_to_map() {
-            // f captures effectful, passed to map (single use of f at MIR level)
-            let result = compile_script(
-                "x = @src; f = (|z| -> collect(x)); @items | map(f) | collect",
-                &[
-                    ("src", eff_iter_ty()),
-                    ("items", Ty::List(Box::new(Ty::Int))),
-                ],
-            );
-            // This should compile — f is passed once to map (single FunctionCall arg)
-            assert!(
-                result.is_ok(),
-                "FnOnce passed once to HOF should be OK: {result:?}"
-            );
-        }
-
-        /// F2: Lambda with @context in body (not capture) should be Fn, not FnOnce.
-        /// @src is a ContextLoad in the lambda body, executed at each call, not captured.
-        #[test]
-        fn accept_lambda_context_in_body_is_fn() {
-            let result = compile_template(
-                "{{ f = (|z| -> collect(@src)) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
-                &[("src", eff_iter_ty())],
-            );
-            // @src is NOT captured — it's loaded fresh each call via ContextLoad.
-            // So the lambda is Fn (not FnOnce), callable multiple times.
-            assert!(
-                result.is_ok(),
-                "Lambda with @context in body (not capture) should be Fn: {result:?}"
-            );
-        }
-
-        /// F3: Closure explicitly capturing a local move-only value, called twice → ERROR
-        #[test]
-        fn reject_fnonce_local_capture_double() {
-            let result = compile_script(
-                "x = @src; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "FnOnce with local capture double call should be rejected: {result:?}"
-            );
-        }
-
-        /// Effectful without purify — still rejected (soundness baseline)
-        #[test]
-        fn reject_effectful_without_purify() {
-            let result = compile_script(
-                "x = @src; a = x | collect; b = x | collect; a",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "effectful without purify should still be rejected"
-            );
-        }
-
-        /// Effectful in var — reuse rejected (soundness)
-        #[test]
-        fn reject_effectful_var_without_purify() {
-            let result = compile_template(
-                "{{ a = @src }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
-                &[("src", eff_iter_ty())],
-            );
-            assert!(
-                result.is_err(),
-                "effectful var without purify should be rejected"
-            );
-        }
-    }
+    // E2E compile pipeline tests have been migrated to acvus-mir-test/tests/e2e.rs
+    // (they depend on ExternFn registries which are only available there).
 }

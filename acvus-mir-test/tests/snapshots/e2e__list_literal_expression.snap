@@ -1,30 +1,30 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 856
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     4 │   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     6 │   r4 = T0 + T0
-     7 │   r5 = cast DequeToList r0
-     8 │   r6 = poison
-     9 │   r7 = poison
-    10 │   r8 = r4 + r7
-    11 │   return r8
+     0 │   r0 = undef
+     5 │   r1 = list [1 (r2), 2 (r3), 3 (r4)]
+     7 │   r5 = T0 + T0
+     8 │   r6 = cast DequeToList r1
+     9 │   r7 = call #0(r6)
+    10 │   r8 = call #1(r7)
+    11 │   r9 = r5 + r8
+    12 │   return r9
 
-    ; r0 (v4) : Deque<Int, Identity(IdentityId(0))>
-    ; r1 (v1) : Int
-    ; r2 (v2) : Int
-    ; r3 (v3) : Int
-    ; r4 (v6) : String
-    ; r5 (v8) : List<Int>
-    ; r6 (len(...)) : Int
-    ; r7 (to_string(...)) : String
-    ; r8 (v11) : String
-    ; r9 (x) : Deque<Int, Identity(IdentityId(0))>
-    ; r10 (v0) : String
-    ; r11 (v5) : String
-    ; r12 (v12) : Deque<Int, Identity(IdentityId(0))>
+    ; r0 (v12) : Deque<Int, Identity(IdentityId(0))>
+    ; r1 (v4) : Deque<Int, Identity(IdentityId(0))>
+    ; r2 (v1) : Int
+    ; r3 (v2) : Int
+    ; r4 (v3) : Int
+    ; r5 (v6) : String
+    ; r6 (v8) : List<Int>
+    ; r7 (len(...)) : Int
+    ; r8 (to_string(...)) : String
+    ; r9 (v11) : String
+    ; r10 (x) : Deque<Int, Identity(IdentityId(0))>
+    ; r11 (v0) : String
+    ; r12 (v5) : String

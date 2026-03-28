@@ -11,7 +11,7 @@ expression: ir
      2 │   r2 = context_project @b
      3 │   r3 = context_load r2
      5 │   r4 = r1 + r3
-     6 │   r5 = poison
+     6 │   r5 = call #0(r4)
      7 │   r6 = T0 + r5
      8 │   return r6
 

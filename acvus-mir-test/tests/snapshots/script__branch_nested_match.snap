@@ -3,32 +3,34 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @a
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @b
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @a
      3 │   r3 = context_load r2
-     4 │   r4 = context_project @out
+     4 │   r4 = context_project @b
      5 │   r5 = context_load r4
-     6 │   r6 = r1 + r3
-     7 │   r7 = context_project @out
-     8 │   ctx_store r7 = r6
-     9 │   return r6
+     6 │   r6 = context_project @out
+     7 │   r7 = context_load r6
+     8 │   r8 = r3 + r5
+     9 │   r9 = context_project @out
+    10 │   ctx_store r9 = r8
+    11 │   return r8
 
-    ; r0 (@a) : Int
-    ; r1 (v1) : Int
-    ; r2 (@b) : Int
-    ; r3 (v3) : Int
-    ; r4 (@out) : Int
-    ; r5 (v5) : Int
-    ; r6 (v12) : Int
-    ; r7 (v13) : Int
-    ; r8 (y) : Int
-    ; r9 (@out) : Int
-    ; r10 (@a) : Int
-    ; r11 (v17) : Int
-    ; r12 (y) : Int
-    ; r13 (v15) : Int
-    ; r14 (x) : Int
+    ; r0 (v16) : Int
+    ; r1 (v17) : Int
+    ; r2 (@a) : Int
+    ; r3 (v1) : Int
+    ; r4 (@b) : Int
+    ; r5 (v3) : Int
+    ; r6 (@out) : Int
+    ; r7 (v5) : Int
+    ; r8 (v12) : Int
+    ; r9 (v13) : Int
+    ; r10 (y) : Int
+    ; r11 (@out) : Int
+    ; r12 (@a) : Int
+    ; r13 (y) : Int
+    ; r14 (v15) : Int
     ; r15 (x) : Int
-    ; r16 (v16) : Int
+    ; r16 (x) : Int
     ; r17 (@b) : Int

@@ -8,42 +8,43 @@ expression: ir
   T2 = "no"
 
 === main ===
-     0 │   r0 = context_project @role
-     1 │   r1 = context_load r0
-     5 │   r2 = T0 + T0
-     6 │ L2:
-     7 │   r3 = test r1 == "admin"
-     8 │   jump_if r3 then L3 else L1
-     9 │ L3:
-    13 │   r4 = T0 + T0
-    14 │   jump L0(r4, T1)
-    15 │ L1:
-    19 │   r5 = T0 + T0
-    20 │   jump L0(r5, T2)
-    21 │ L0(r6: String, r7: String):  ; merge_of L2
-    22 │   r8 = r2 + r6
-    23 │   r9 = r8 + r7
-    24 │   return r9
+     0 │   r0 = undef
+     1 │   r1 = context_project @role
+     2 │   r2 = context_load r1
+     6 │   r3 = T0 + T0
+     7 │ L2:
+     8 │   r4 = test r2 == "admin"
+     9 │   jump_if r4 then L3 else L1
+    10 │ L3:
+    14 │   r5 = T0 + T0
+    15 │   jump L0(r5, T1)
+    16 │ L1:
+    20 │   r6 = T0 + T0
+    21 │   jump L0(r6, T2)
+    22 │ L0(r7: String, r8: String):  ; merge_of L2
+    23 │   r9 = r3 + r7
+    24 │   r10 = r9 + r8
+    25 │   return r10
 
-    ; r0 (@role) : String
-    ; r1 (v1) : String
-    ; r2 (v5) : String
-    ; r3 (v8) : Bool
-    ; r4 (v12) : String
-    ; r5 (v16) : String
-    ; r6 (v17) : String
-    ; r7 (v22) : String
-    ; r8 (v18) : String
-    ; r9 (v20) : String
-    ; r10 (v11) : String
-    ; r11 (v3) : String
-    ; r12 (v14) : String
-    ; r13 (@role) : String
-    ; r14 (v9) : String
-    ; r15 (v15) : String
-    ; r16 (v4) : String
-    ; r17 (v7) : String
-    ; r18 (v21) : String
+    ; r0 (v21) : String
+    ; r1 (@role) : String
+    ; r2 (v1) : String
+    ; r3 (v5) : String
+    ; r4 (v8) : Bool
+    ; r5 (v12) : String
+    ; r6 (v16) : String
+    ; r7 (v17) : String
+    ; r8 (v22) : String
+    ; r9 (v18) : String
+    ; r10 (v20) : String
+    ; r11 (v11) : String
+    ; r12 (v3) : String
+    ; r13 (v14) : String
+    ; r14 (@role) : String
+    ; r15 (v9) : String
+    ; r16 (v15) : String
+    ; r17 (v4) : String
+    ; r18 (v7) : String
     ; r19 (v10) : String
     ; r20 (v13) : String
     ; r21 (v2) : String

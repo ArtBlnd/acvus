@@ -5,11 +5,11 @@ use acvus_interpreter::{
     Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
     Value, ValueKind,
 };
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
+use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 
-fn user_defined_ty(id: UserDefinedId) -> Ty {
+fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
@@ -17,8 +17,8 @@ fn user_defined_ty(id: UserDefinedId) -> Ty {
     }
 }
 
-/// Newtype for `regex::Regex` — carries its `UserDefinedId` for type-safe conversion.
-struct Re(regex::Regex, UserDefinedId);
+/// Newtype for `regex::Regex` — carries its `QualifiedRef` for type-safe conversion.
+struct Re(regex::Regex, QualifiedRef);
 
 impl FromValue for Re {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
@@ -71,16 +71,16 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
 
 /// Build the regex ExternRegistry.
 /// Registers the `Regex` UserDefined type into `type_registry`.
-pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
-    let id = UserDefinedId::alloc();
+pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> ExternRegistry {
+    let qref = QualifiedRef::root(interner.intern("Regex"));
+    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
     type_registry.register(UserDefinedDecl {
-        id,
-        name: "Regex".into(),
+        qref,
         type_params: vec![],
         effect_params: vec![],
     });
 
-    let ty = user_defined_ty(id);
+    let ty = user_defined_ty(qref);
     ExternRegistry::new(move |interner| {
         vec![
             // regex(pattern) -> Regex
@@ -92,7 +92,7 @@ pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 move |_interner: &Interner, (pattern,): (String,), Uses(()): Uses<()>| {
                     let re = regex::Regex::new(&pattern)
                         .unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"));
-                    Ok((Re(re, id), Defs(())))
+                    Ok((Re(re, qref), Defs(())))
                 },
             ),
             // regex_match(re, text) -> Bool
@@ -125,7 +125,7 @@ pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 sig(
                     interner,
                     vec![ty.clone(), Ty::String],
-                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
+                    Ty::UserDefined { id: iter_qref, type_args: vec![Ty::String], effect_args: vec![Effect::self_modifying()] },
                 ),
             )
             .handler(
@@ -160,7 +160,7 @@ pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 sig(
                     interner,
                     vec![ty.clone(), Ty::String],
-                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
+                    Ty::UserDefined { id: iter_qref, type_args: vec![Ty::String], effect_args: vec![Effect::self_modifying()] },
                 ),
             )
             .handler(
@@ -195,7 +195,7 @@ pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 sig(
                     interner,
                     vec![Ty::String, ty.clone()],
-                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
+                    Ty::UserDefined { id: iter_qref, type_args: vec![Ty::String], effect_args: vec![Effect::self_modifying()] },
                 ),
             )
             .handler(
@@ -232,7 +232,7 @@ mod tests {
     fn registry_produces_functions() {
         let i = Interner::new();
         let mut tr = TypeRegistry::new();
-        let reg = regex_registry(&mut tr);
+        let reg = regex_registry(&i, &mut tr);
         let registered = reg.register(&i);
         assert_eq!(registered.functions.len(), 7);
         assert_eq!(registered.executables.len(), 7);

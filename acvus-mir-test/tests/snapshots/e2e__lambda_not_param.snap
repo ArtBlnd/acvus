@@ -1,45 +1,48 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1143
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @flags
-     1 │   r1 = context_load r0
-     3 │   r2 = poison
-     4 │   r3 = closure L0 []
-     5 │   r4 = poison
-     6 │   r5 = poison
-     8 │   r6 = T0 + T0
-     9 │   r7 = poison
-    10 │   r8 = poison
-    11 │   r9 = r6 + r8
-    12 │   return r9
+     0 │   r0 = undef
+     1 │   r1 = context_project @flags
+     2 │   r2 = context_load r1
+     4 │   r3 = call #0(r2)
+     5 │   r4 = closure L0 []
+     6 │   r5 = call #1(r3, r4)
+     7 │   r6 = call #2(r5)
+     9 │   r7 = T0 + T0
+    10 │   r8 = call #3(r6)
+    11 │   r9 = call #4(r8)
+    12 │   r10 = r7 + r9
+    13 │   return r10
 
-    ; r0 (@flags) : List<Bool>
-    ; r1 (v1) : List<Bool>
-    ; r2 (iter(...)) : Iterator<Bool>
-    ; r3 (v6) : Fn(Bool) -> Bool
-    ; r4 (map(...)) : Iterator<Bool>
-    ; r5 (collect(...)) : List<Bool>
-    ; r6 (v10) : String
-    ; r7 (len(...)) : Int
-    ; r8 (to_string(...)) : String
-    ; r9 (v14) : String
-    ; r10 (x) : List<Bool>
-    ; r11 (@flags) : List<Bool>
-    ; r12 (v9) : String
-    ; r13 (v4) : List<Bool>
-    ; r14 (v15) : List<Bool>
+    ; r0 (v15) : List<Bool>
+    ; r1 (@flags) : List<Bool>
+    ; r2 (v1) : List<Bool>
+    ; r3 (iter(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r4 (v6) : Fn(Bool) -> Bool
+    ; r5 (map(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (collect(...)) : List<Bool>
+    ; r7 (v10) : String
+    ; r8 (len(...)) : Int
+    ; r9 (to_string(...)) : String
+    ; r10 (v14) : String
+    ; r11 (x) : List<Bool>
+    ; r12 (@flags) : List<Bool>
+    ; r13 (v9) : String
+    ; r14 (v4) : List<Bool>
     ; r15 (v2) : String
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = !r1
-     1 │   return r0
+     0 │   r0 = undef
+     1 │   r1 = !r2
+     2 │   return r1
 
-    ; r0 (v2) : Bool
-    ; r1 (v0) : Bool
-    ; r2 (v3) : Bool
+    ; r0 (v3) : Bool
+    ; r1 (v2) : Bool
+    ; r2 (v0) : Bool
     ; r3 (i) : Bool

@@ -6,24 +6,25 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @get_user
-     1 │   r1 = context_load r0
-     4 │   r2 = call r1(1 (r3))
-     6 │   r4 = T0 + T0
-     7 │   r5 = r2.name
-     8 │   r6 = r4 + r5
-     9 │   return r6
+     0 │   r0 = undef
+     1 │   r1 = context_project @get_user
+     2 │   r2 = context_load r1
+     5 │   r3 = call r2(1 (r4))
+     7 │   r5 = T0 + T0
+     8 │   r6 = r3.name
+     9 │   r7 = r5 + r6
+    10 │   return r7
 
-    ; r0 (@get_user) : Fn(Int) -> {age: Int, name: String}
-    ; r1 (v1) : Fn(Int) -> {age: Int, name: String}
-    ; r2 (<closure>(...)) : {age: Int, name: String}
-    ; r3 (v3) : Int
-    ; r4 (v8) : String
-    ; r5 (name) : String
-    ; r6 (v11) : String
-    ; r7 (v7) : String
-    ; r8 (v6) : Fn(Int) -> {age: Int, name: String}
-    ; r9 (v2) : String
-    ; r10 (u) : {age: Int, name: String}
-    ; r11 (@get_user) : Fn(Int) -> {age: Int, name: String}
-    ; r12 (v12) : {age: Int, name: String}
+    ; r0 (v12) : {age: Int, name: String}
+    ; r1 (@get_user) : Fn(Int) -> {age: Int, name: String}
+    ; r2 (v1) : Fn(Int) -> {age: Int, name: String}
+    ; r3 (<closure>(...)) : {age: Int, name: String}
+    ; r4 (v3) : Int
+    ; r5 (v8) : String
+    ; r6 (name) : String
+    ; r7 (v11) : String
+    ; r8 (v7) : String
+    ; r9 (v6) : Fn(Int) -> {age: Int, name: String}
+    ; r10 (v2) : String
+    ; r11 (u) : {age: Int, name: String}
+    ; r12 (@get_user) : Fn(Int) -> {age: Int, name: String}

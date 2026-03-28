@@ -3,69 +3,69 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @a
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @b
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @a
      3 │   r3 = context_load r2
-     4 │   r4 = context_project @sum
+     4 │   r4 = context_project @b
      5 │   r5 = context_load r4
-     6 │   r6 = cast ListToIterator r1
-     7 │   jump L0(r6, r5, r7)
-     8 │ L0(r8: Iterator<Int>, r9: Int, r10: Int):
-     9 │   r11 = context_project @sum
-    10 │   ctx_store r11 = r9
-    11 │   iter_step r12, r13 = r8 else L1()
-    12 │ L2:
-    13 │   r14 = context_project @sum
-    14 │   r15 = context_load r14
-    15 │   r16 = r15 + r12
-    16 │   jump L0(r13, r16, r12)
-    17 │ L1:
-    18 │   r17 = context_project @b
-    19 │   r18 = context_load r17
-    20 │   r19 = cast ListToIterator r18
-    21 │   jump L3(r19, r9, r20)
-    22 │ L3(r21: Iterator<Int>, r22: Int, r23: Int):
-    23 │   r24 = context_project @sum
-    24 │   ctx_store r24 = r22
-    25 │   iter_step r25, r26 = r21 else L4()
-    26 │ L5:
-    27 │   r27 = context_project @sum
-    28 │   r28 = context_load r27
-    29 │   r29 = r28 + r25
-    30 │   jump L3(r26, r29, r25)
-    31 │ L4:
-    32 │   r30 = context_project @sum
-    33 │   r31 = context_load r30
-    34 │   return r31
+     6 │   r6 = context_project @sum
+     7 │   r7 = context_load r6
+     9 │   jump L0(0 (r8), r7, r0)
+    10 │ L0(r9: Int, r10: Int, r11: Int):
+    11 │   r12 = context_project @sum
+    12 │   ctx_store r12 = r10
+    13 │   list_step r13, r14 = r3[r9] else L1()
+    14 │ L2:
+    15 │   r15 = context_project @sum
+    16 │   r16 = context_load r15
+    17 │   r17 = r16 + r13
+    18 │   jump L0(r14, r17, r13)
+    19 │ L1:
+    20 │   r18 = context_project @b
+    21 │   r19 = context_load r18
+    23 │   jump L3(0 (r20), r10, r1)
+    24 │ L3(r21: Int, r22: Int, r23: Int):
+    25 │   r24 = context_project @sum
+    26 │   ctx_store r24 = r22
+    27 │   list_step r25, r26 = r19[r21] else L4()
+    28 │ L5:
+    29 │   r27 = context_project @sum
+    30 │   r28 = context_load r27
+    31 │   r29 = r28 + r25
+    32 │   jump L3(r26, r29, r25)
+    33 │ L4:
+    34 │   r30 = context_project @sum
+    35 │   r31 = context_load r30
+    36 │   return r31
 
-    ; r0 (@a) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@b) : List<Int>
-    ; r3 (v3) : List<Int>
-    ; r4 (@sum) : Int
-    ; r5 (v5) : Int
-    ; r6 (v8) : Iterator<Int>
-    ; r7 (v30) : Int
-    ; r8 (v9) : Iterator<Int>
-    ; r9 (v32) : Int
-    ; r10 (v33) : Int
-    ; r11 (v38) : Int
-    ; r12 (x) : Int
-    ; r13 (v11) : Iterator<Int>
-    ; r14 (@sum) : Int
-    ; r15 (v13) : Int
-    ; r16 (v15) : Int
-    ; r17 (@b) : List<Int>
-    ; r18 (v18) : List<Int>
-    ; r19 (v19) : Iterator<Int>
-    ; r20 (v31) : Int
-    ; r21 (v20) : Iterator<Int>
+    ; r0 (v30) : Int
+    ; r1 (v31) : Int
+    ; r2 (@a) : List<Int>
+    ; r3 (v1) : List<Int>
+    ; r4 (@b) : List<Int>
+    ; r5 (v3) : List<Int>
+    ; r6 (@sum) : Int
+    ; r7 (v5) : Int
+    ; r8 (v8) : Int
+    ; r9 (v9) : Int
+    ; r10 (v32) : Int
+    ; r11 (v33) : Int
+    ; r12 (v38) : Int
+    ; r13 (x) : Int
+    ; r14 (v11) : Int
+    ; r15 (@sum) : Int
+    ; r16 (v13) : Int
+    ; r17 (v15) : Int
+    ; r18 (@b) : List<Int>
+    ; r19 (v18) : List<Int>
+    ; r20 (v19) : Int
+    ; r21 (v20) : Int
     ; r22 (v35) : Int
     ; r23 (v37) : Int
     ; r24 (v39) : Int
     ; r25 (y) : Int
-    ; r26 (v22) : Iterator<Int>
+    ; r26 (v22) : Int
     ; r27 (@sum) : Int
     ; r28 (v24) : Int
     ; r29 (v26) : Int

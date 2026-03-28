@@ -2,4 +2,5 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-no module produced
+[infer:test] [0..23] pattern type (?1, ?2, ?3) incompatible with source type (Int, Int)
+[infer:test] [26..27] undefined variable `a`

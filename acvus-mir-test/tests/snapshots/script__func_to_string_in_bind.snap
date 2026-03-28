@@ -5,7 +5,7 @@ expression: ir
 === main ===
      0 │   r0 = context_project @val
      1 │   r1 = context_load r0
-     2 │   r2 = poison
+     2 │   r2 = call #0(r1)
      3 │   return r2
 
     ; r0 (@val) : Int

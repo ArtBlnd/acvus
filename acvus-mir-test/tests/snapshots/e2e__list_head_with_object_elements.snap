@@ -7,44 +7,45 @@ expression: ir
   T1 = "empty"
 
 === main ===
-     0 │   r0 = context_project @users
-     1 │   r1 = context_load r0
-     3 │ L2:
-     4 │   r2 = test len(r1) >= 1
-     5 │   jump_if r2 then L3 else L4
-     6 │ L3:
-     7 │   r3 = r1[0]
-     9 │   r4 = r2 && true (r5)
-    10 │   jump L5(r4)
-    11 │ L4:
-    13 │   jump L5(false (r6))
-    14 │ L5(r7: Bool):
-    15 │   jump_if r7 then L6 else L1
-    16 │ L6:
-    17 │   r8 = r1[0]
-    19 │   r9 = r8.name
-    20 │   r10 = T0 + r9
-    21 │   jump L0(r10, r8)
-    22 │ L1:
-    25 │   r11 = T0 + T1
-    26 │   jump L0(r11, r12)
-    27 │ L0(r13: String, r14: {name: String}):  ; merge_of L2
-    28 │   r15 = T0 + r13
-    29 │   return r15
+     0 │   r0 = undef
+     1 │   r1 = context_project @users
+     2 │   r2 = context_load r1
+     4 │ L2:
+     5 │   r3 = test len(r2) >= 1
+     6 │   jump_if r3 then L3 else L4
+     7 │ L3:
+     8 │   r4 = r2[0]
+    10 │   r5 = r3 && true (r6)
+    11 │   jump L5(r5)
+    12 │ L4:
+    14 │   jump L5(false (r7))
+    15 │ L5(r8: Bool):
+    16 │   jump_if r8 then L6 else L1
+    17 │ L6:
+    18 │   r9 = r2[0]
+    20 │   r10 = r9.name
+    21 │   r11 = T0 + r10
+    22 │   jump L0(r11, r9)
+    23 │ L1:
+    26 │   r12 = T0 + T1
+    27 │   jump L0(r12, r0)
+    28 │ L0(r13: String, r14: {name: String}):  ; merge_of L2
+    29 │   r15 = T0 + r13
+    30 │   return r15
 
-    ; r0 (@users) : List<{name: String}>
-    ; r1 (v1) : List<{name: String}>
-    ; r2 (v5) : Bool
-    ; r3 (v6) : {name: String}
-    ; r4 (v8) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v10) : Bool
-    ; r7 (v9) : Bool
-    ; r8 (first) : {name: String}
-    ; r9 (name) : String
-    ; r10 (v15) : String
-    ; r11 (v18) : String
-    ; r12 (v21) : {name: String}
+    ; r0 (v21) : {name: String}
+    ; r1 (@users) : List<{name: String}>
+    ; r2 (v1) : List<{name: String}>
+    ; r3 (v5) : Bool
+    ; r4 (v6) : {name: String}
+    ; r5 (v8) : Bool
+    ; r6 (v7) : Bool
+    ; r7 (v10) : Bool
+    ; r8 (v9) : Bool
+    ; r9 (first) : {name: String}
+    ; r10 (name) : String
+    ; r11 (v15) : String
+    ; r12 (v18) : String
     ; r13 (v19) : String
     ; r14 (v23) : {name: String}
     ; r15 (v20) : String

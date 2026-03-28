@@ -52,40 +52,30 @@ mod tests {
     #[test]
     fn integration_text_only() {
         let i = Interner::new();
-        assert!(compile_template(&i, "hello world", &[]).is_ok());
+        compile_template(&i, "hello world", &[]).unwrap();
     }
 
     #[test]
     fn integration_string_emit() {
         let i = Interner::new();
-        assert!(compile_template(&i, r#"{{ "hello" }}"#, &[]).is_ok());
-    }
-
-    #[test]
-    fn extern_param_write_rejected() {
-        let i = Interner::new();
-        assert!(compile_template(&i, "{{ $count = 42 }}", &[]).is_err());
-        // Reading an extern param via context is still valid.
-        assert!(compile_template(&i, "{{ @count | to_string }}", &[("count", Ty::Int)]).is_ok());
+        compile_template(&i, r#"{{ "hello" }}"#, &[]).unwrap();
     }
 
     #[test]
     fn integration_match_with_catch_all() {
         let i = Interner::new();
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
-                &[("name", Ty::String)]
-            )
-            .is_ok()
-        );
+        compile_template(
+            &i,
+            r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
+            &[("name", Ty::String)],
+        )
+        .unwrap();
     }
 
     #[test]
     fn integration_variable_binding() {
         let i = Interner::new();
-        assert!(compile_template(&i, r#"{{ x = @name }}{{ x }}"#, &[("name", Ty::String)]).is_ok());
+        compile_template(&i, r#"{{ x = @name }}{{ x }}"#, &[("name", Ty::String)]).unwrap();
     }
 
     #[test]
@@ -97,24 +87,12 @@ mod tests {
             captures: vec![],
             effect: Effect::pure(),
         };
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-                &[("fetch_user", fn_ty)]
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn integration_pipe_with_lambda() {
-        let i = Interner::new();
-        assert!(compile_template(
+        compile_template(
             &i,
-            r#"{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
-            &[("items", Ty::List(Box::new(Ty::Int)))],
-        ).is_ok());
+            r#"{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
+            &[("fetch_user", fn_ty)],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -124,7 +102,7 @@ mod tests {
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
         ]));
-        assert!(compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).is_ok());
+        compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap();
     }
 
     #[test]
@@ -134,14 +112,12 @@ mod tests {
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
         ]))));
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
-                &[("users", users_ty)]
-            )
-            .is_ok()
-        );
+        compile_template(
+            &i,
+            r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
+            &[("users", users_ty)],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -151,58 +127,35 @@ mod tests {
     }
 
     #[test]
-    fn integration_range_expression() {
-        let i = Interner::new();
-        assert!(compile_template(&i, "{{ x in 0..10 }}{{ x | to_string }}{{/}}", &[]).is_ok());
-    }
-
-    #[test]
     fn integration_object_pattern() {
         let i = Interner::new();
         let data_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("value"), Ty::Int),
         ]));
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
-                &[("data", data_ty)]
-            )
-            .is_ok()
-        );
+        compile_template(
+            &i,
+            r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
+            &[("data", data_ty)],
+        )
+        .unwrap();
     }
 
     #[test]
     fn integration_multi_arm() {
         let i = Interner::new();
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
-                &[("role", Ty::String)],
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn integration_list_destructure() {
-        let i = Interner::new();
-        assert!(
-            compile_template(
-                &i,
-                r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}"#,
-                &[("items", Ty::List(Box::new(Ty::Int)))],
-            )
-            .is_ok()
-        );
+        compile_template(
+            &i,
+            r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
+            &[("role", Ty::String)],
+        )
+        .unwrap();
     }
 
     #[test]
     fn integration_string_concat() {
         let i = Interner::new();
-        assert!(compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).is_ok());
+        compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).unwrap();
     }
 
     #[test]
@@ -278,42 +231,31 @@ mod tests {
     }
 
     #[test]
-    fn pipe_extern_fn_ok() {
-        let i = Interner::new();
-        let ctx = extern_fn_ctx(&i);
-        assert!(compile_template(
-            &i,
-            r#"{{ x = @items | map(|i| -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
-            &ctx,
-        ).is_ok());
-    }
-
-    #[test]
     fn direct_extern_fn_call_ok() {
         let i = Interner::new();
         let ctx = extern_fn_ctx(&i);
-        assert!(compile_template(&i, "{{ @mapper(42) }}", &ctx).is_ok());
+        compile_template(&i, "{{ @mapper(42) }}", &ctx).unwrap();
     }
 
     #[test]
     fn bare_extern_fn_load_ok() {
         let i = Interner::new();
         let ctx = extern_fn_ctx(&i);
-        assert!(compile_template(&i, "{{ x = @mapper }}{{ x(1) }}{{_}}{{/}}", &ctx).is_ok());
+        compile_template(&i, "{{ x = @mapper }}{{ x(1) }}{{_}}{{/}}", &ctx).unwrap();
     }
 
     #[test]
     fn script_extern_fn_call_ok() {
         let i = Interner::new();
         let ctx = extern_fn_ctx(&i);
-        assert!(compile_script(&i, "@mapper(1)", &ctx).is_ok());
+        compile_script(&i, "@mapper(1)", &ctx).unwrap();
     }
 
     #[test]
     fn script_bare_extern_fn_ok() {
         let i = Interner::new();
         let ctx = extern_fn_ctx(&i);
-        assert!(compile_script(&i, "@mapper", &ctx).is_ok());
+        compile_script(&i, "@mapper", &ctx).unwrap();
     }
 
     #[test]
@@ -325,14 +267,13 @@ mod tests {
                 Ty::Fn {
                     params: vec![Param::new(i.intern("_"), Ty::List(Box::new(Ty::Int)))],
                     ret: Box::new(Ty::String),
-
                     captures: vec![],
                     effect: Effect::pure(),
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
         ];
-        assert!(compile_script(&i, "@items | @mapper", &ctx).is_ok());
+        compile_script(&i, "@items | @mapper", &ctx).unwrap();
     }
 
     // ── Context store tests ─────────────────────────────────────────
@@ -340,7 +281,7 @@ mod tests {
     #[test]
     fn context_store_compiles() {
         let i = Interner::new();
-        assert!(compile_script(&i, "@x = @x + 1; @x", &[("x", Ty::Int)]).is_ok());
+        compile_script(&i, "@x = @x + 1; @x", &[("x", Ty::Int)]).unwrap();
     }
 
     #[test]
@@ -359,14 +300,12 @@ mod tests {
     #[test]
     fn context_store_roundtrip() {
         let i = Interner::new();
-        assert!(
-            compile_script(
-                &i,
-                "tmp = @count + 1; @count = tmp; @count",
-                &[("count", Ty::Int)]
-            )
-            .is_ok()
-        );
+        compile_script(
+            &i,
+            "tmp = @count + 1; @count = tmp; @count",
+            &[("count", Ty::Int)],
+        )
+        .unwrap();
     }
 
     // ── Projection IR structure tests ───────────────────────────────
@@ -410,36 +349,6 @@ mod tests {
             .position(|k| matches!(k, InstKind::FieldGet { .. }))
             .unwrap();
         assert!(proj < load && load < field);
-    }
-
-    #[test]
-    fn projection_chained_field_access() {
-        let i = Interner::new();
-        let inner = Ty::Object(FxHashMap::from_iter([(i.intern("b"), Ty::Int)]));
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("a"), inner)]));
-        let (module, _) = compile_script(&i, "@obj.a.b | to_string", &[("obj", obj_ty)]).unwrap();
-        let kinds = inst_kinds(&module);
-        assert_eq!(
-            kinds
-                .iter()
-                .filter(|k| matches!(k, InstKind::ContextProject { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            kinds
-                .iter()
-                .filter(|k| matches!(k, InstKind::FieldGet { .. }))
-                .count(),
-            2
-        );
-        assert_eq!(
-            kinds
-                .iter()
-                .filter(|k| matches!(k, InstKind::ContextLoad { .. }))
-                .count(),
-            1
-        );
     }
 
     #[test]
@@ -630,12 +539,8 @@ mod tests {
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
     }
 
-    #[test]
-    fn materiality_reject_iterator_in_context() {
-        let i = Interner::new();
-        let iter_ty = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(compile_script(&i, "@it = @it; @it", &[("it", iter_ty)]).is_err());
-    }
+    // materiality_reject_iterator_in_context: migrated to acvus-mir-test
+    // (Iterator is now UserDefined, requires TypeRegistry + Interner).
 
     // ── Soundness: nested non-materializable rejected ──
 

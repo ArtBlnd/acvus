@@ -287,7 +287,7 @@ async fn regex_match_via_extern() {
     let i = Interner::new();
 
     let mut tr = TypeRegistry::new();
-    let registry = acvus_ext::regex_registry(&mut tr);
+    let registry = acvus_ext::regex_registry(&i, &mut tr);
     let c = ctx(&i, &[("text", Value::string("hello world 42"))]);
     let result = run_script_with_externs(
         &i,
@@ -304,7 +304,7 @@ async fn regex_find_via_extern() {
     let i = Interner::new();
 
     let mut tr = TypeRegistry::new();
-    let registry = acvus_ext::regex_registry(&mut tr);
+    let registry = acvus_ext::regex_registry(&i, &mut tr);
     let c = ctx(&i, &[("text", Value::string("price is 42 dollars"))]);
     let result = run_script_with_externs(
         &i,
@@ -364,6 +364,7 @@ fn ir_function_call_has_context_bindings() {
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error")),
         &context_types,
         vec![registry],
+        acvus_mir::ty::TypeRegistry::new(),
     );
 
     // Find the FunctionCall in the entry module's IR.
@@ -443,6 +444,7 @@ fn ir_pure_function_call_no_context_bindings() {
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error")),
         &context_types,
         vec![registry],
+        acvus_mir::ty::TypeRegistry::new(),
     );
 
     let entry_module = cr.modules.get(&cr.entry_qref).unwrap();

@@ -8,7 +8,7 @@ expression: ir
 === main ===
      0 │   r0 = context_project @count
      1 │   r1 = context_load r0
-     3 │   r2 = poison
+     3 │   r2 = call #0(r1)
      4 │   r3 = T0 + r2
      5 │   return r3
 

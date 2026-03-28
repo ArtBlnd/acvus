@@ -152,7 +152,7 @@ where
                     }
                 }
             }
-            Terminator::IterStep { done, done_args } => {
+            Terminator::ListStep { done, done_args } => {
                 // Fallthrough (element available).
                 let next = idx.0 + 1;
                 if next < n {

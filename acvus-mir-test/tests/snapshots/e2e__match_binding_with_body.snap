@@ -8,37 +8,38 @@ expression: ir
   T2 = "no user"
 
 === main ===
-     0 │   r0 = context_project @user
-     1 │   r1 = context_load r0
-     3 │ L2:
-     5 │   r2 = test has_key(r1, "name")
-     6 │   r3 = r1.name
-     8 │   r4 = true (r5) && true (r6)
-     9 │   jump_if r4 then L3 else L1
-    10 │ L3:
-    11 │   r7 = r1.name
-    13 │   r8 = T0 + r7
-    15 │   r9 = r8 + T1
-    16 │   jump L0(r9, r7)
-    17 │ L1:
-    20 │   r10 = T0 + T2
-    21 │   jump L0(r10, r11)
-    22 │ L0(r12: String, r13: String):  ; merge_of L2
-    23 │   r14 = T0 + r12
-    24 │   return r14
+     0 │   r0 = undef
+     1 │   r1 = context_project @user
+     2 │   r2 = context_load r1
+     4 │ L2:
+     6 │   r3 = test has_key(r2, "name")
+     7 │   r4 = r2.name
+     9 │   r5 = true (r6) && true (r7)
+    10 │   jump_if r5 then L3 else L1
+    11 │ L3:
+    12 │   r8 = r2.name
+    14 │   r9 = T0 + r8
+    16 │   r10 = r9 + T1
+    17 │   jump L0(r10, r8)
+    18 │ L1:
+    21 │   r11 = T0 + T2
+    22 │   jump L0(r11, r0)
+    23 │ L0(r12: String, r13: String):  ; merge_of L2
+    24 │   r14 = T0 + r12
+    25 │   return r14
 
-    ; r0 (@user) : {age: Int, email: String, name: String}
-    ; r1 (v1) : {age: Int, email: String, name: String}
-    ; r2 (v6) : Bool
-    ; r3 (v7) : String
-    ; r4 (v9) : Bool
-    ; r5 (v5) : Bool
-    ; r6 (v8) : Bool
-    ; r7 (name) : String
-    ; r8 (v13) : String
-    ; r9 (v15) : String
-    ; r10 (v18) : String
-    ; r11 (v21) : String
+    ; r0 (v21) : String
+    ; r1 (@user) : {age: Int, email: String, name: String}
+    ; r2 (v1) : {age: Int, email: String, name: String}
+    ; r3 (v6) : Bool
+    ; r4 (v7) : String
+    ; r5 (v9) : Bool
+    ; r6 (v5) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (name) : String
+    ; r9 (v13) : String
+    ; r10 (v15) : String
+    ; r11 (v18) : String
     ; r12 (v19) : String
     ; r13 (v22) : String
     ; r14 (v20) : String

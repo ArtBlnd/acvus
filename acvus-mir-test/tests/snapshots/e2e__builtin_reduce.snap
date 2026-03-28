@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1501
 expression: ir
 ---
 === literals ===
@@ -8,16 +9,16 @@ expression: ir
 === main ===
      0 │   r0 = context_project @items
      1 │   r1 = context_load r0
-     3 │   r2 = cast ListToIterator r1
+     3 │   r2 = call #0(r1)
      4 │   r3 = closure L0 []
-     5 │   r4 = poison
-     6 │   r5 = poison
+     5 │   r4 = call #1(r2, r3)
+     6 │   r5 = call #2(r4)
      7 │   r6 = T0 + r5
      8 │   return r6
 
     ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
-    ; r2 (v5) : Iterator<Int>
+    ; r2 (v5) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
     ; r3 (v6) : Fn(Int, Int) -> Int
     ; r4 (reduce(...)) : Int
     ; r5 (to_string(...)) : String
@@ -27,13 +28,15 @@ expression: ir
     ; r9 (v4) : List<Int>
 
 === closure L0 (ValueId(0), ValueId(1)) ===
-     0 │   r0 = r1 + r2
-     1 │   return r0
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = r3 + r4
+     3 │   return r2
 
-    ; r0 (v4) : Int
-    ; r1 (v0) : Int
-    ; r2 (v1) : Int
-    ; r3 (b) : Int
-    ; r4 (v5) : Int
-    ; r5 (v6) : Int
+    ; r0 (v5) : Int
+    ; r1 (v6) : Int
+    ; r2 (v4) : Int
+    ; r3 (v0) : Int
+    ; r4 (v1) : Int
+    ; r5 (b) : Int
     ; r6 (a) : Int

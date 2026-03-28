@@ -167,13 +167,9 @@ fn main() {
 
     let fn_qref = QualifiedRef::root(interner.intern("main"));
     let mut functions = acvus_mir::builtins::standard_builtins(&interner);
-    // Register stdlib ExternFn registries.
-    for registry in [
-        acvus_ext::string_registry(),
-        acvus_ext::conversion_registry(),
-        acvus_ext::list_registry(),
-        acvus_ext::option_registry(),
-    ] {
+    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(&interner, &mut type_registry);
+    for registry in std_regs {
         let registered = registry.register(&interner);
         functions.extend(registered.functions);
     }
@@ -194,7 +190,7 @@ fn main() {
 
     // Run pipeline: extract → infer → lower.
     let ext = extract::extract(&interner, &graph);
-    let inf = infer::infer(&interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
+    let inf = infer::infer(&interner, &graph, &ext, &FxHashMap::default(), Freeze::new(type_registry));
     let result = graph_lower::lower(&interner, &graph, &ext, &inf);
     if result.has_errors() {
         for le in &result.errors {

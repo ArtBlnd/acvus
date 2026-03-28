@@ -3,38 +3,38 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @sum
-     3 │   r3 = context_load r2
-     4 │   r4 = cast ListToIterator r1
-     5 │   jump L0(r4, r3, r5)
-     6 │ L0(r6: Iterator<Int>, r7: Int, r8: Int):
-     7 │   r9 = context_project @sum
-     8 │   ctx_store r9 = r7
-     9 │   iter_step r10, r11 = r6 else L1()
-    10 │ L2:
-    11 │   r12 = context_project @sum
-    12 │   r13 = context_load r12
-    13 │   r14 = r13 + r10
-    14 │   jump L0(r11, r14, r10)
-    15 │ L1:
-    16 │   r15 = context_project @sum
-    17 │   r16 = context_load r15
-    18 │   return r16
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @sum
+     4 │   r4 = context_load r3
+     6 │   jump L0(0 (r5), r4, r0)
+     7 │ L0(r6: Int, r7: Int, r8: Int):
+     8 │   r9 = context_project @sum
+     9 │   ctx_store r9 = r7
+    10 │   list_step r10, r11 = r2[r6] else L1()
+    11 │ L2:
+    12 │   r12 = context_project @sum
+    13 │   r13 = context_load r12
+    14 │   r14 = r13 + r10
+    15 │   jump L0(r11, r14, r10)
+    16 │ L1:
+    17 │   r15 = context_project @sum
+    18 │   r16 = context_load r15
+    19 │   return r16
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@sum) : Int
-    ; r3 (v3) : Int
-    ; r4 (v6) : Iterator<Int>
-    ; r5 (v17) : Int
-    ; r6 (v7) : Iterator<Int>
+    ; r0 (v17) : Int
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (@sum) : Int
+    ; r4 (v3) : Int
+    ; r5 (v6) : Int
+    ; r6 (v7) : Int
     ; r7 (v18) : Int
     ; r8 (v19) : Int
     ; r9 (v20) : Int
     ; r10 (x) : Int
-    ; r11 (v9) : Iterator<Int>
+    ; r11 (v9) : Int
     ; r12 (@sum) : Int
     ; r13 (v11) : Int
     ; r14 (v13) : Int

@@ -129,11 +129,6 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
                 && a.iter()
                     .all(|(k, v)| b.get(k).is_some_and(|bv| types_match(v, bv)))
         }
-        (Ty::Iterator(a, e1), Ty::Iterator(b, e2)) => effects_match(e1, e2) && types_match(a, b),
-        (Ty::Sequence(a, o1, e1), Ty::Sequence(b, o2, e2)) => {
-            identities_match(o1, o2) && effects_match(e1, e2) && types_match(a, b)
-        }
-
         // Functions
         (
             Ty::Fn {
@@ -379,6 +374,7 @@ impl<'a> CheckCtx<'a> {
             // === Skip ===
             InstKind::Cast { .. }
             | InstKind::Poison { .. }
+            | InstKind::Undef { .. }
             | InstKind::Nop
             | InstKind::BlockLabel { .. } => {}
 
@@ -939,42 +935,36 @@ impl<'a> CheckCtx<'a> {
                 }
             }
 
-            // === IterStep ===
-            InstKind::IterStep {
+            // === ListStep ===
+            InstKind::ListStep {
                 dst,
-                iter_src,
-                iter_dst,
+                list,
+                index_src,
+                index_dst,
                 ..
             } => {
-                let src_ty = ty!(*iter_src);
-                if let Ty::Iterator(elem, effect) = src_ty {
+                let list_ty = ty!(*list);
+                if let Ty::List(elem) = list_ty {
                     // dst gets the element type
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "IterStep", "dst", elem, dst_ty, errors);
-                    // iter_dst gets the same iterator type
-                    let iter_dst_ty = ty!(*iter_dst);
-                    let expected_iter = Ty::Iterator(elem.clone(), effect.clone());
-                    self.assert_match(
-                        pc,
-                        span,
-                        "IterStep",
-                        "iter_dst",
-                        &expected_iter,
-                        iter_dst_ty,
-                        errors,
-                    );
-                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
+                    self.assert_match(pc, span, "ListStep", "dst", elem, dst_ty, errors);
+                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "IterStep".to_string(),
-                            expected_constructor: "Iterator".to_string(),
-                            actual: src_ty.clone(),
+                            inst_name: "ListStep".to_string(),
+                            expected_constructor: "List".to_string(),
+                            actual: list_ty.clone(),
                         },
                     });
                 }
+                // index_src and index_dst must be Int
+                let index_src_ty = ty!(*index_src);
+                self.assert_match(pc, span, "ListStep", "index_src", &Ty::Int, index_src_ty, errors);
+                let index_dst_ty = ty!(*index_dst);
+                self.assert_match(pc, span, "ListStep", "index_dst", &Ty::Int, index_dst_ty, errors);
             }
 
             // === Calls ===
@@ -1388,14 +1378,16 @@ mod tests {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
+        let mut subst = crate::ty::TySubst::new();
+        let o = subst.alloc_identity(false);
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::List(Box::new(Ty::Int)));
-        vt.insert(v1, Ty::Iterator(Box::new(Ty::Int), Effect::pure()));
+        vt.insert(v0, Ty::Deque(Box::new(Ty::Int), Box::new(o)));
+        vt.insert(v1, Ty::List(Box::new(Ty::Int)));
         let module = make_module(
             vec![inst(InstKind::Cast {
                 dst: v1,
                 src: v0,
-                kind: CastKind::ListToIterator,
+                kind: CastKind::DequeToList,
             })],
             vt,
         );

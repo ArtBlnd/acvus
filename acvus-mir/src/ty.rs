@@ -8,14 +8,11 @@ use crate::graph::types::QualifiedRef;
 
 // ── UserDefined type system ──────────────────────────────────────────
 
-acvus_utils::declare_id!(pub UserDefinedId);
-
 /// Declaration of a user-defined type — the **single source of truth**
-/// for parameter count and constraints. Registered once, referenced by Id everywhere.
+/// for parameter count and constraints. Registered once, referenced by QualifiedRef everywhere.
 #[derive(Debug, Clone)]
 pub struct UserDefinedDecl {
-    pub id: UserDefinedId,
-    pub name: String,
+    pub qref: QualifiedRef,
     /// Type parameter constraints. `None` = unconstrained.
     pub type_params: Vec<Option<ParamConstraint>>,
     /// Effect parameter constraints. `None` = unconstrained.
@@ -30,9 +27,13 @@ pub struct UserDefinedDecl {
 /// - `cast_rules`: ExternCast coercion rules (UserDefined → other type).
 #[derive(Debug, Clone, Default)]
 pub struct TypeRegistry {
-    decls: FxHashMap<UserDefinedId, UserDefinedDecl>,
-    // pub(crate) for test access (ambiguity test bypasses register_cast).
-    pub(crate) cast_rules: Vec<CastRule>,
+    decls: FxHashMap<QualifiedRef, UserDefinedDecl>,
+    /// ExternCast coercion rules, indexed by source UserDefined QualifiedRef.
+    /// `from_rules`: keyed by the `from` type's QualifiedRef.
+    /// `to_rules`: keyed by the `to` type's QualifiedRef (when target is UserDefined).
+    // pub(crate) for test access.
+    pub(crate) from_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
+    pub(crate) to_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
 }
 
 /// A coercion rule: `from` can be implicitly converted to `to`.
@@ -65,8 +66,8 @@ pub struct CastRule {
 enum TyHead {
     Int, Float, String, Bool, Unit, Range, Byte,
     List, Object, Tuple, Fn, Option, Enum,
-    Handle, Iterator, Sequence, Deque, Identity,
-    UserDefined(UserDefinedId),
+    Handle, Deque, Identity,
+    UserDefined(QualifiedRef),
     Param, Error,
 }
 
@@ -86,8 +87,6 @@ fn ty_head(ty: &Ty) -> TyHead {
         Ty::Option(_) => TyHead::Option,
         Ty::Enum { .. } => TyHead::Enum,
         Ty::Handle(..) => TyHead::Handle,
-        Ty::Iterator(..) => TyHead::Iterator,
-        Ty::Sequence(..) => TyHead::Sequence,
         Ty::Deque(..) => TyHead::Deque,
         Ty::Identity(..) => TyHead::Identity,
         Ty::UserDefined { id, .. } => TyHead::UserDefined(*id),
@@ -103,51 +102,72 @@ impl TypeRegistry {
 
     // ── Type declarations ───────────────────────────────────────────
 
-    /// Register a declaration. Panics on duplicate id.
+    /// Register a declaration. Panics on duplicate qref.
     pub fn register(&mut self, decl: UserDefinedDecl) {
-        let id = decl.id;
-        let prev = self.decls.insert(id, decl);
-        assert!(prev.is_none(), "duplicate UserDefinedId: {id:?}");
+        let qref = decl.qref;
+        let prev = self.decls.insert(qref, decl);
+        assert!(prev.is_none(), "duplicate UserDefined type: {qref:?}");
     }
 
-    /// Look up a declaration by id. Panics if not found — missing decl is a bug.
-    pub fn get(&self, id: UserDefinedId) -> &UserDefinedDecl {
+    /// Look up a declaration by qref. Panics if not found — missing decl is a bug.
+    pub fn get(&self, qref: QualifiedRef) -> &UserDefinedDecl {
         self.decls
-            .get(&id)
-            .unwrap_or_else(|| panic!("unknown UserDefinedId: {id:?}"))
+            .get(&qref)
+            .unwrap_or_else(|| panic!("unknown UserDefined type: {qref:?}"))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&UserDefinedId, &UserDefinedDecl)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&QualifiedRef, &UserDefinedDecl)> {
         self.decls.iter()
     }
 
     // ── Cast rules ──────────────────────────────────────────────────
 
-    /// Register a cast rule. Panics on duplicate (same from_id + same to head).
+    /// Register a cast rule. Indexes by `from`'s QualifiedRef (if UserDefined)
+    /// and by `to`'s QualifiedRef (if UserDefined). At least one side must be UserDefined.
     pub fn register_cast(&mut self, rule: CastRule) {
-        let from_id = match &rule.from {
-            Ty::UserDefined { id, .. } => *id,
-            _ => panic!("CastRule from must be UserDefined"),
+        let from_qref = match &rule.from {
+            Ty::UserDefined { id, .. } => Some(*id),
+            _ => None,
         };
+        let to_qref = match &rule.to {
+            Ty::UserDefined { id, .. } => Some(*id),
+            _ => None,
+        };
+        assert!(
+            from_qref.is_some() || to_qref.is_some(),
+            "CastRule: at least one side must be UserDefined"
+        );
+
+        // Duplicate check (same from head + same to head).
+        let from_head = ty_head(&rule.from);
         let to_head = ty_head(&rule.to);
-        for existing in &self.cast_rules {
-            let existing_from_id = match &existing.from {
-                Ty::UserDefined { id, .. } => *id,
-                _ => unreachable!(),
-            };
-            assert!(
-                !(existing_from_id == from_id && ty_head(&existing.to) == to_head),
-                "duplicate CastRule: same from UserDefined and same to head constructor"
-            );
+        if let Some(fq) = from_qref {
+            for existing in self.from_rules.get(&fq).into_iter().flatten() {
+                assert!(
+                    !(ty_head(&existing.from) == from_head && ty_head(&existing.to) == to_head),
+                    "duplicate CastRule: same from and to head constructor"
+                );
+            }
         }
-        self.cast_rules.push(rule);
+
+        // Index by from (if UserDefined).
+        if let Some(fq) = from_qref {
+            self.from_rules.entry(fq).or_default().push(rule.clone());
+        }
+        // Index by to (if UserDefined).
+        if let Some(tq) = to_qref {
+            self.to_rules.entry(tq).or_default().push(rule);
+        }
     }
 
-    /// Get all cast rules for a given source UserDefinedId.
-    pub fn cast_rules_for(&self, from_id: UserDefinedId) -> impl Iterator<Item = &CastRule> {
-        self.cast_rules.iter().filter(move |r| {
-            matches!(&r.from, Ty::UserDefined { id, .. } if *id == from_id)
-        })
+    /// Get all cast rules where `from` matches the given QualifiedRef.
+    pub fn rules_from(&self, qref: QualifiedRef) -> &[CastRule] {
+        self.from_rules.get(&qref).map_or(&[], |v| v.as_slice())
+    }
+
+    /// Get all cast rules where `to` is a UserDefined matching the given QualifiedRef.
+    pub fn rules_to(&self, qref: QualifiedRef) -> &[CastRule] {
+        self.to_rules.get(&qref).map_or(&[], |v| v.as_slice())
     }
 }
 
@@ -502,12 +522,12 @@ pub enum Ty {
         effect: Effect,
     },
     Byte,
-    /// User-defined type, identified by `UserDefinedId`.
+    /// User-defined type, identified by `QualifiedRef`.
     /// `type_args` and `effect_args` lengths must match the corresponding
     /// `UserDefinedDecl` (source of truth). Initially filled with inference
     /// variables (`Param`/`Var`), resolved to concrete types via unification.
     UserDefined {
-        id: UserDefinedId,
+        id: QualifiedRef,
         type_args: Vec<Ty>,
         effect_args: Vec<Effect>,
     },
@@ -524,11 +544,6 @@ pub enum Ty {
     /// Carries the spawned computation's return type and effect.
     /// Always move-only (Effectful) — eval consumes the handle exactly once.
     Handle(Box<Ty>, Effect),
-    /// Lazy iterator over elements of type T, with effect classification.
-    Iterator(Box<Ty>, Effect),
-    /// Lazy sequence over elements of type T. Lazy version of Deque with identity and effect.
-    /// Second `Ty` is the identity slot: `Ty::Identity(...)` or `Ty::Param` (bound to Identity).
-    Sequence(Box<Ty>, Box<Ty>, Effect),
     /// Deque type: tracked deque with identity.
     /// Second `Ty` is the identity slot: `Ty::Identity(...)` or `Ty::Param` (bound to Identity).
     Deque(Box<Ty>, Box<Ty>),
@@ -573,9 +588,7 @@ impl Ty {
     /// Handle, Iterator, Sequence, and Fn types carry effects; other types are pure.
     pub fn carried_effect(&self) -> Option<&Effect> {
         match self {
-            Ty::Handle(_, effect) | Ty::Iterator(_, effect) | Ty::Sequence(_, _, effect) => {
-                Some(effect)
-            }
+            Ty::Handle(_, effect) => Some(effect),
             Ty::Fn { effect, .. } => Some(effect),
             _ => None,
         }
@@ -587,10 +600,7 @@ impl Ty {
     /// (principle 6-A: one fact, one place).
     pub fn elem_of(&self) -> Option<&Ty> {
         match self {
-            Ty::List(elem)
-            | Ty::Deque(elem, _)
-            | Ty::Iterator(elem, _)
-            | Ty::Sequence(elem, _, _) => Some(elem),
+            Ty::List(elem) | Ty::Deque(elem, _) => Some(elem),
             _ => None,
         }
     }
@@ -607,8 +617,6 @@ impl Ty {
             | Ty::Tuple(_)
             | Ty::Fn { .. }
             | Ty::Handle(..)
-            | Ty::Iterator(..)
-            | Ty::Sequence(..)
             | Ty::Option(_)
             | Ty::Enum { .. } => Materiality::Composite,
             Ty::UserDefined { .. } => Materiality::Ephemeral,
@@ -623,11 +631,8 @@ impl Ty {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
             Ty::List(inner) => inner.is_pureable(),
-            Ty::Iterator(inner, effect) | Ty::Handle(inner, effect) => {
-                inner.is_pureable() && effect.is_pure()
-            }
+            Ty::Handle(inner, effect) => inner.is_pureable() && effect.is_pure(),
             Ty::Deque(inner, _) => inner.is_pureable(),
-            Ty::Sequence(inner, _, effect) => inner.is_pureable() && effect.is_pure(),
             Ty::Option(inner) => inner.is_pureable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
@@ -661,9 +666,7 @@ impl Ty {
             Ty::Enum { variants, .. } => variants
                 .values()
                 .all(|p| p.as_ref().is_none_or(|ty| ty.is_materializable())),
-            Ty::Iterator(_, _)
-            | Ty::Sequence(_, _, _)
-            | Ty::Handle(..)
+            Ty::Handle(..)
             | Ty::Fn { .. }
             | Ty::UserDefined { .. }
             | Ty::Identity(_) => false,
@@ -744,19 +747,6 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 let bang = if effect.is_effectful() { "!" } else { "" };
                 write!(f, "Handle{bang}<{}>", inner.display(self.interner))
             }
-            Ty::Iterator(inner, effect) => {
-                let bang = if effect.is_effectful() { "!" } else { "" };
-                write!(f, "Iterator{bang}<{}>", inner.display(self.interner))
-            }
-            Ty::Sequence(inner, identity, effect) => {
-                let bang = if effect.is_effectful() { "!" } else { "" };
-                write!(
-                    f,
-                    "Sequence{bang}<{}, {}>",
-                    inner.display(self.interner),
-                    identity.display(self.interner)
-                )
-            }
             Ty::Deque(inner, identity) => {
                 write!(
                     f,
@@ -768,16 +758,21 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::Identity(id) => write!(f, "{id}"),
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::UserDefined { id, type_args, effect_args } => {
-                // Display requires TypeRegistry for name lookup.
-                // Fallback to id-based display here; TyDisplay with registry is preferred.
-                write!(f, "UserDefined({id:?}")?;
-                for arg in type_args {
-                    write!(f, ", {}", arg.display(self.interner))?;
+                let name = self.interner.resolve(id.name);
+                write!(f, "{name}")?;
+                if !type_args.is_empty() || !effect_args.is_empty() {
+                    write!(f, "<")?;
+                    for (i, arg) in type_args.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", arg.display(self.interner))?;
+                    }
+                    for (i, arg) in effect_args.iter().enumerate() {
+                        if i > 0 || !type_args.is_empty() { write!(f, ", ")?; }
+                        write!(f, "{arg:?}")?;
+                    }
+                    write!(f, ">")?;
                 }
-                for arg in effect_args {
-                    write!(f, ", {arg:?}")?;
-                }
-                write!(f, ")")
+                Ok(())
             }
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
             Ty::Param { token: t, .. } => write!(f, "?{}", t.0),
@@ -798,7 +793,7 @@ pub struct TySubstSnapshot {
     effect_bindings: FxHashMap<u32, Effect>,
     next_param: u32,
     next_effect: u32,
-    next_identity: u32,
+    identity_factory: acvus_utils::LocalFactory<IdentityId>,
     last_extern_cast: Option<QualifiedRef>,
 }
 
@@ -808,7 +803,7 @@ pub struct TySubst {
     effect_bindings: FxHashMap<u32, Effect>,
     next_param: u32,
     next_effect: u32,
-    next_identity: u32,
+    identity_factory: acvus_utils::LocalFactory<IdentityId>,
     /// Frozen type registry — provides ExternCast rules for `try_coerce`.
     type_registry: Freeze<TypeRegistry>,
     /// Set by try_coerce when an ExternCast matches. Read by typeck.
@@ -828,7 +823,7 @@ impl TySubst {
             effect_bindings: FxHashMap::default(),
             next_param: 0,
             next_effect: 0,
-            next_identity: 0,
+            identity_factory: acvus_utils::LocalFactory::new(),
             type_registry: Freeze::default(),
             last_extern_cast: None,
         }
@@ -854,7 +849,7 @@ impl TySubst {
             effect_bindings: self.effect_bindings.clone(),
             next_param: self.next_param,
             next_effect: self.next_effect,
-            next_identity: self.next_identity,
+            identity_factory: self.identity_factory.clone(),
             last_extern_cast: self.last_extern_cast,
         }
     }
@@ -865,7 +860,7 @@ impl TySubst {
         self.effect_bindings = snap.effect_bindings;
         self.next_param = snap.next_param;
         self.next_effect = snap.next_effect;
-        self.next_identity = snap.next_identity;
+        self.identity_factory = snap.identity_factory;
         self.last_extern_cast = snap.last_extern_cast;
     }
 
@@ -873,9 +868,7 @@ impl TySubst {
     /// `fresh = false`: Concrete identity for `[]` literals — fixed provenance.
     /// `fresh = true`: Fresh identity for signatures — instantiate replaces with Concrete.
     pub fn alloc_identity(&mut self, fresh: bool) -> Ty {
-        use acvus_utils::LocalIdOps;
-        let id = IdentityId::from_raw(self.next_identity as usize);
-        self.next_identity += 1;
+        let id = self.identity_factory.next();
         if fresh {
             Ty::Identity(Identity::Fresh(id))
         } else {
@@ -1036,38 +1029,6 @@ impl TySubst {
                 self.unify(ia, ib, Polarity::Invariant).ok()?;
                 Some(Ty::List(Box::new(self.resolve(ia))))
             }
-            // Sequence: identity mismatch → Iterator; same identity + effect mismatch → union
-            (Ty::Sequence(ia, oa, ea), Ty::Sequence(ib, ob, eb)) => {
-                self.unify(ia, ib, Polarity::Invariant).ok()?;
-                if self.unify(oa, ob, Polarity::Invariant).is_ok() {
-                    // Same identity, effect mismatch → Sequence<T, O, union(E1, E2)>
-                    self.coerce_effects_to_effectful(ea, eb);
-                    let resolved_a = self.resolve_effect(ea);
-                    let resolved_b = self.resolve_effect(eb);
-                    let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
-                    Some(Ty::Sequence(
-                        Box::new(self.resolve(ia)),
-                        Box::new(self.resolve(oa)),
-                        merged,
-                    ))
-                } else {
-                    // Identity mismatch → Iterator<T, union(E1, E2)>
-                    let resolved_a = self.resolve_effect(ea);
-                    let resolved_b = self.resolve_effect(eb);
-                    let effect = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
-                    self.coerce_effects_to_effectful(ea, eb);
-                    Some(Ty::Iterator(Box::new(self.resolve(ia)), effect))
-                }
-            }
-            // Effect mismatch: Iterator → Iterator (effect = union)
-            (Ty::Iterator(ia, ea), Ty::Iterator(ib, eb)) => {
-                self.unify(ia, ib, Polarity::Invariant).ok()?;
-                self.coerce_effects_to_effectful(ea, eb);
-                let resolved_a = self.resolve_effect(ea);
-                let resolved_b = self.resolve_effect(eb);
-                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
-                Some(Ty::Iterator(Box::new(self.resolve(ia)), merged))
-            }
             // Effect mismatch: Fn (same params/ret) → Fn (effect = union)
             (
                 Ty::Fn {
@@ -1107,8 +1068,89 @@ impl TySubst {
                     effect: merged,
                 })
             }
+            // UserDefined: same id, effect mismatch → effect union.
+            // type_args mismatch → CastRule-based LUB (common target).
+            (
+                Ty::UserDefined { id: id_a, type_args: ta_a, effect_args: ea_a },
+                Ty::UserDefined { id: id_b, type_args: ta_b, effect_args: ea_b },
+            ) if id_a == id_b => {
+                assert_eq!(ta_a.len(), ta_b.len());
+                assert_eq!(ea_a.len(), ea_b.len());
+
+                // Try type_args invariant unify first.
+                let snap = self.snapshot();
+                let type_args_ok = ta_a.iter().zip(ta_b.iter()).all(|(a, b)| {
+                    self.unify(a, b, Polarity::Invariant).is_ok()
+                });
+
+                if type_args_ok {
+                    // type_args match — union effect_args.
+                    let merged_effects: Vec<Effect> = ea_a.iter().zip(ea_b.iter())
+                        .map(|(ea, eb)| {
+                            self.coerce_effects_to_effectful(ea, eb);
+                            let ra = self.resolve_effect(ea);
+                            let rb = self.resolve_effect(eb);
+                            ra.union(&rb).unwrap_or_else(Effect::io)
+                        })
+                        .collect();
+                    Some(Ty::UserDefined {
+                        id: *id_a,
+                        type_args: ta_a.iter().map(|t| self.resolve(t)).collect(),
+                        effect_args: merged_effects,
+                    })
+                } else {
+                    // type_args mismatch — rollback and try CastRule-based LUB.
+                    self.rollback(snap);
+                    self.try_lub_via_cast_rules(*id_a, a, b)
+                }
+            }
             _ => None,
         }
+    }
+
+    /// Find LUB via CastRule: both sides cast to a common target type.
+    fn try_lub_via_cast_rules(
+        &mut self,
+        from_id: QualifiedRef,
+        a: &Ty,
+        b: &Ty,
+    ) -> Option<Ty> {
+        let rules = self.type_registry.rules_from(from_id).to_vec();
+        if rules.is_empty() {
+            return None;
+        }
+
+        for rule in &rules {
+            let snap = self.snapshot();
+
+            // Cast A through this rule.
+            let (inst_from_a, inst_to_a) = self.instantiate_pair(&rule.from, &rule.to);
+            let a_ok = self.unify(a, &inst_from_a, Polarity::Invariant).is_ok();
+            let target_a = if a_ok { Some(self.resolve(&inst_to_a)) } else { None };
+            self.rollback(snap);
+
+            let target_a = target_a?;
+
+            let snap = self.snapshot();
+            // Cast B through the same rule.
+            let (inst_from_b, inst_to_b) = self.instantiate_pair(&rule.from, &rule.to);
+            let b_ok = self.unify(b, &inst_from_b, Polarity::Invariant).is_ok();
+            let target_b = if b_ok { Some(self.resolve(&inst_to_b)) } else { None };
+            self.rollback(snap);
+
+            let target_b = target_b?;
+
+            // Try to unify the two cast targets (recursively — may invoke LUB again).
+            let snap = self.snapshot();
+            if self.unify(&target_a, &target_b, Polarity::Covariant).is_ok() {
+                let result = self.resolve(&target_a);
+                self.rollback(snap);
+                return Some(result);
+            }
+            self.rollback(snap);
+        }
+
+        None
     }
 
     /// Rebind leaf type-vars to the LUB, or return Err if polarity is Invariant.
@@ -1127,11 +1169,18 @@ impl TySubst {
         if pol == Polarity::Invariant {
             return Err((a.clone(), b.clone()));
         }
+        let leaf_a = self.find_leaf_param(orig_a);
+        let leaf_b = self.find_leaf_param(orig_b);
+        // LUB only applies when at least one side traces back to a Param
+        // that can be rebound. concrete vs concrete → no rebind target → fail.
+        if leaf_a.is_none() && leaf_b.is_none() {
+            return Err((a.clone(), b.clone()));
+        }
         let lub = self.try_lub(a, b).ok_or_else(|| (a.clone(), b.clone()))?;
-        if let Some(leaf) = self.find_leaf_param(orig_a) {
+        if let Some(leaf) = leaf_a {
             self.bindings.insert(leaf, lub.clone());
         }
-        if let Some(leaf) = self.find_leaf_param(orig_b) {
+        if let Some(leaf) = leaf_b {
             self.bindings.insert(leaf, lub);
         }
         Ok(())
@@ -1151,14 +1200,6 @@ impl TySubst {
                 }
             }
             Ty::List(inner) => Ty::List(Box::new(self.resolve(inner))),
-            Ty::Iterator(inner, effect) => {
-                Ty::Iterator(Box::new(self.resolve(inner)), self.resolve_effect(effect))
-            }
-            Ty::Sequence(inner, identity, effect) => Ty::Sequence(
-                Box::new(self.resolve(inner)),
-                Box::new(self.resolve(identity)),
-                self.resolve_effect(effect),
-            ),
             Ty::Deque(inner, identity) => {
                 Ty::Deque(Box::new(self.resolve(inner)), Box::new(self.resolve(identity)))
             }
@@ -1276,18 +1317,23 @@ impl TySubst {
                 Ty::UserDefined { id: id_b, type_args: tb_args, effect_args: eb_args },
             ) if id_a == id_b => {
                 // Same UserDefined type — unify args pairwise.
+                // type_args: invariant. effect_args: caller's polarity.
+                // On any mismatch → lub_or_err for LUB (effect union, CastRule LUB).
                 assert_eq!(ta_args.len(), tb_args.len(), "type_args length mismatch");
                 assert_eq!(ea_args.len(), eb_args.len(), "effect_args length mismatch");
-                let a_snap = a.clone();
-                let b_snap = b.clone();
-                for (a, b) in ta_args.into_iter().zip(tb_args.into_iter()) {
-                    self.unify(&a, &b, Polarity::Invariant)?;
+                let snap = self.snapshot();
+                let type_ok = ta_args.iter().zip(tb_args.iter()).all(|(a, b)| {
+                    self.unify(a, b, Polarity::Invariant).is_ok()
+                });
+                let effect_ok = type_ok && ea_args.iter().zip(eb_args.iter()).all(|(ea, eb)| {
+                    self.unify_effects(ea, eb, pol).is_ok()
+                });
+                if effect_ok {
+                    Ok(())
+                } else {
+                    self.rollback(snap);
+                    self.lub_or_err(pol, orig_a, orig_b, &a, &b)
                 }
-                for (ea, eb) in ea_args.into_iter().zip(eb_args.into_iter()) {
-                    self.unify_effects(&ea, &eb, pol)
-                        .map_err(|_| (a_snap.clone(), b_snap.clone()))?;
-                }
-                Ok(())
             }
 
             // Structural enum unification: merge variant sets (open matching).
@@ -1411,26 +1457,6 @@ impl TySubst {
             // On parameter mismatch, delegate to lub_or_err which:
             //   - Invariant polarity → error (no silent coercion)
             //   - Non-invariant → coerce both sides to lattice join (try_lub)
-            (Ty::Iterator(ia, ea), Ty::Iterator(ib, eb)) => {
-                self.unify(ia, ib, Polarity::Invariant)?;
-                self.unify_effects(ea, eb, pol)
-                    .or_else(|_| self.lub_or_err(pol, orig_a, orig_b, &a, &b))
-            }
-
-            (Ty::Sequence(ia, oa, ea), Ty::Sequence(ib, ob, eb)) => {
-                // Identity mismatch or effect mismatch → both go through lub_or_err.
-                let identity_ok = self.unify(oa, ob, Polarity::Invariant).is_ok();
-                let inner_ok = self.unify(ia, ib, Polarity::Invariant).is_ok();
-                let effect_ok = identity_ok && self.unify_effects(ea, eb, pol).is_ok();
-                if identity_ok && inner_ok && effect_ok {
-                    Ok(())
-                } else if !inner_ok {
-                    Err((a.clone(), b.clone()))
-                } else {
-                    self.lub_or_err(pol, orig_a, orig_b, &a, &b)
-                }
-            }
-
             (Ty::List(a), Ty::List(b)) => self.unify(a, b, Polarity::Invariant),
 
             (Ty::Deque(ia, oa), Ty::Deque(ib, ob)) => {
@@ -1452,11 +1478,54 @@ impl TySubst {
             (Ty::Option(a), Ty::Option(b)) => self.unify(a, b, Polarity::Invariant),
 
             (Ty::Object(fa), Ty::Object(fb)) => {
-                // Unify overlapping fields.
+                // Unify overlapping fields. On field mismatch, try field-level LUB.
+                let snap = self.snapshot();
+                let mut field_mismatch = false;
                 for (key, ty_a) in fa {
                     if let Some(ty_b) = fb.get(key) {
-                        self.unify(ty_a, ty_b, pol)?;
+                        if self.unify(ty_a, ty_b, pol).is_err() {
+                            field_mismatch = true;
+                            break;
+                        }
                     }
+                }
+                if field_mismatch && pol != Polarity::Invariant {
+                    // Rollback and try field-level LUB for mismatched fields.
+                    self.rollback(snap);
+                    let mut merged = FxHashMap::default();
+                    for (key, ty_a) in fa {
+                        if let Some(ty_b) = fb.get(key) {
+                            // Try exact unify first (snapshot+rollback).
+                            let fsnap = self.snapshot();
+                            if self.unify(ty_a, ty_b, pol).is_ok() {
+                                merged.insert(*key, self.resolve(ty_a));
+                            } else {
+                                self.rollback(fsnap);
+                                // Field LUB.
+                                let lub = self.try_lub(ty_a, ty_b)
+                                    .ok_or_else(|| (a.clone(), b.clone()))?;
+                                merged.insert(*key, lub);
+                            }
+                        } else {
+                            merged.insert(*key, self.resolve(ty_a));
+                        }
+                    }
+                    // Add fields only in fb.
+                    for (key, ty_b) in fb {
+                        if !fa.contains_key(key) {
+                            merged.insert(*key, self.resolve(ty_b));
+                        }
+                    }
+                    let merged_ty = Ty::Object(merged);
+                    if let Some(leaf) = self.find_leaf_param(orig_a) {
+                        self.bindings.insert(leaf, merged_ty.clone());
+                    }
+                    if let Some(leaf) = self.find_leaf_param(orig_b) {
+                        self.bindings.insert(leaf, merged_ty);
+                    }
+                    return Ok(());
+                } else if field_mismatch {
+                    return Err((a.clone(), b.clone()));
                 }
 
                 // Check if fields differ (one side has keys the other doesn't).
@@ -1554,58 +1623,28 @@ impl TySubst {
             (Ty::Deque(inner_d, _), Ty::List(inner_l)) => self
                 .unify(inner_d, inner_l, Polarity::Invariant)
                 .map_err(|_| ()),
-            // List<T> ≤ Iterator<T, E> (E must accept Pure)
-            (Ty::List(inner_l), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
-                    .map_err(|_| ())?;
-                self.unify(inner_l, inner_i, Polarity::Invariant)
-                    .map_err(|_| ())
+            // ExternCast: UserDefined → anything, via registered CastRule (from_rules).
+            (Ty::UserDefined { id, .. }, _) => {
+                let rules = self.type_registry.rules_from(*id).to_vec();
+                self.try_extern_cast_rules(&rules, sub, sup)
             }
-            // Deque<T, O> ≤ Iterator<T, E> (E must accept Pure)
-            (Ty::Deque(inner_d, _), Ty::Iterator(inner_i, e)) => {
-                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
-                    .map_err(|_| ())?;
-                self.unify(inner_d, inner_i, Polarity::Invariant)
-                    .map_err(|_| ())
+            // ExternCast: anything → UserDefined, via registered CastRule (to_rules).
+            (_, Ty::UserDefined { id, .. }) => {
+                let rules = self.type_registry.rules_to(*id).to_vec();
+                self.try_extern_cast_rules(&rules, sub, sup)
             }
-            // Deque<T, O> ≤ Sequence<T, O', E> (identity preserved, E must accept Pure)
-            (Ty::Deque(inner_d, od), Ty::Sequence(inner_s, os, e)) => {
-                self.unify(od, os, Polarity::Invariant).map_err(|_| ())?;
-                self.unify_effects(&Effect::pure(), e, Polarity::Invariant)
-                    .map_err(|_| ())?;
-                self.unify(inner_d, inner_s, Polarity::Invariant)
-                    .map_err(|_| ())
-            }
-            // Sequence<T, O, E> ≤ Iterator<T, E'> (identity lost, effect preserved)
-            (Ty::Sequence(inner_s, _, es), Ty::Iterator(inner_i, ei)) => {
-                self.unify_effects(es, ei, Polarity::Invariant)
-                    .map_err(|_| ())?;
-                self.unify(inner_s, inner_i, Polarity::Invariant)
-                    .map_err(|_| ())
-            }
-            // ExternCast: UserDefined → anything, via registered CastRule.
-            (Ty::UserDefined { id, .. }, _) => self.try_extern_cast(*id, sub, sup),
             _ => Err(()),
         }
     }
 
-    /// Try to find a unique ExternCast rule for `from_id` that converts `sub` to `sup`.
+    /// Try to find a unique ExternCast rule among `rules` that converts `sub` to `sup`.
     /// Sets `last_extern_cast` on success for typeck to read.
-    fn try_extern_cast(
+    fn try_extern_cast_rules(
         &mut self,
-        from_id: UserDefinedId,
+        rules: &[CastRule],
         sub: &Ty,
         sup: &Ty,
     ) -> Result<(), ()> {
-        // Collect matching rules (clone to avoid borrow conflict with &mut self).
-        let rules: Vec<CastRule> = self
-            .type_registry
-            .cast_rules
-            .iter()
-            .filter(|r| matches!(&r.from, Ty::UserDefined { id, .. } if *id == from_id))
-            .cloned()
-            .collect();
-
         if rules.is_empty() {
             return Err(());
         }
@@ -1614,14 +1653,13 @@ impl TySubst {
         let mut matched_idx = None;
         for (i, rule) in rules.iter().enumerate() {
             let snap = self.snapshot();
-            let inst_from = self.instantiate(&rule.from);
-            let inst_to = self.instantiate(&rule.to);
+            let (inst_from, inst_to) = self.instantiate_pair(&rule.from, &rule.to);
             let ok = self.unify(sub, &inst_from, Polarity::Invariant).is_ok()
                 && self.unify(&inst_to, sup, Polarity::Invariant).is_ok();
             self.rollback(snap);
             if ok {
                 if matched_idx.is_some() {
-                    return Err(()); // ambiguity (Case 2)
+                    return Err(()); // ambiguity
                 }
                 matched_idx = Some(i);
             }
@@ -1631,8 +1669,7 @@ impl TySubst {
         let idx = matched_idx.ok_or(())?;
         let rule = &rules[idx];
         let fn_ref = rule.fn_ref;
-        let inst_from = self.instantiate(&rule.from);
-        let inst_to = self.instantiate(&rule.to);
+        let (inst_from, inst_to) = self.instantiate_pair(&rule.from, &rule.to);
         self.unify(sub, &inst_from, Polarity::Invariant)
             .map_err(|_| ())?;
         self.unify(&inst_to, sup, Polarity::Invariant)
@@ -1654,6 +1691,17 @@ impl TySubst {
         let mut effect_map: FxHashMap<u32, u32> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
         self.instantiate_inner(ty, &mut param_map, &mut effect_map, &mut fresh_map)
+    }
+
+    /// Instantiate two types sharing the same Param/Effect/Identity mappings.
+    /// Used for CastRule where `from` and `to` share placeholder variables.
+    pub fn instantiate_pair(&mut self, a: &Ty, b: &Ty) -> (Ty, Ty) {
+        let mut param_map: FxHashMap<ParamToken, ParamToken> = FxHashMap::default();
+        let mut effect_map: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
+        let ia = self.instantiate_inner(a, &mut param_map, &mut effect_map, &mut fresh_map);
+        let ib = self.instantiate_inner(b, &mut param_map, &mut effect_map, &mut fresh_map);
+        (ia, ib)
     }
 
     fn instantiate_inner(
@@ -1678,21 +1726,6 @@ impl TySubst {
             Ty::List(inner) => Ty::List(Box::new(
                 self.instantiate_inner(inner, param_map, effect_map, fresh_map),
             )),
-            Ty::Iterator(inner, e) => {
-                let new_e = self.instantiate_effect(e, effect_map);
-                Ty::Iterator(
-                    Box::new(self.instantiate_inner(inner, param_map, effect_map, fresh_map)),
-                    new_e,
-                )
-            }
-            Ty::Sequence(inner, identity, e) => {
-                let new_e = self.instantiate_effect(e, effect_map);
-                Ty::Sequence(
-                    Box::new(self.instantiate_inner(inner, param_map, effect_map, fresh_map)),
-                    Box::new(self.instantiate_inner(identity, param_map, effect_map, fresh_map)),
-                    new_e,
-                )
-            }
             Ty::Deque(inner, identity) => {
                 Ty::Deque(
                     Box::new(self.instantiate_inner(inner, param_map, effect_map, fresh_map)),
@@ -1704,9 +1737,7 @@ impl TySubst {
                 match identity {
                     Identity::Fresh(id) => {
                         let new_id = *fresh_map.entry(*id).or_insert_with(|| {
-                            let cid = IdentityId::from_raw(self.next_identity as usize);
-                            self.next_identity += 1;
-                            cid
+                            self.identity_factory.next()
                         });
                         Ty::Identity(Identity::Concrete(new_id))
                     }
@@ -1772,6 +1803,24 @@ impl TySubst {
                     })
                     .collect(),
             },
+            Ty::UserDefined { id, type_args, effect_args } => Ty::UserDefined {
+                id: *id,
+                type_args: type_args
+                    .iter()
+                    .map(|t| self.instantiate_inner(t, param_map, effect_map, fresh_map))
+                    .collect(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| self.instantiate_effect(e, effect_map))
+                    .collect(),
+            },
+            Ty::Handle(inner, effect) => {
+                let new_e = self.instantiate_effect(effect, effect_map);
+                Ty::Handle(
+                    Box::new(self.instantiate_inner(inner, param_map, effect_map, fresh_map)),
+                    new_e,
+                )
+            }
             // Concrete types pass through unchanged.
             other => other.clone(),
         }
@@ -1805,10 +1854,6 @@ impl TySubst {
                 }
             }
             Ty::List(inner) => self.occurs_in(param, inner),
-            Ty::Iterator(inner, _) => self.occurs_in(param, inner),
-            Ty::Sequence(inner, identity, _) => {
-                self.occurs_in(param, inner) || self.occurs_in(param, identity)
-            }
             Ty::Deque(inner, identity) => {
                 self.occurs_in(param, inner) || self.occurs_in(param, identity)
             }
@@ -1829,6 +1874,9 @@ impl TySubst {
             Ty::Enum { variants, .. } => variants
                 .values()
                 .any(|p| p.as_ref().is_some_and(|ty| self.occurs_in(param, ty))),
+            Ty::UserDefined { type_args, .. } => {
+                type_args.iter().any(|t| self.occurs_in(param, t))
+            }
             _ => false,
         }
     }
@@ -1868,13 +1916,26 @@ impl Default for TypeEnv {
 mod tests {
     use super::*;
     use acvus_utils::Interner;
+    use crate::graph::types::QualifiedRef;
 
     use Polarity::*;
+
+    /// Test helper: create a unique `QualifiedRef` for each call.
+    /// Uses a thread-local counter to ensure uniqueness across tests.
+    fn fresh_qref() -> QualifiedRef {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        thread_local! {
+            static INTERNER: Interner = Interner::new();
+        }
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        INTERNER.with(|i| QualifiedRef::root(i.intern(&format!("TestType{n}"))))
+    }
 
     /// Test helper: create a `Ty::UserDefined` with a fresh id and no type/effect args.
     fn test_user_defined() -> Ty {
         Ty::UserDefined {
-            id: UserDefinedId::alloc(),
+            id: fresh_qref(),
             type_args: vec![],
             effect_args: vec![],
         }
@@ -2162,44 +2223,6 @@ mod tests {
     }
 
     #[test]
-    fn coerce_deque_to_iterator() {
-        // Deque<Int, O> can be used where Iterator<Int> is expected (Covariant)
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(
-            s.unify(&deque, &iter, Covariant).is_ok(),
-            "Deque → Iterator coercion should succeed"
-        );
-    }
-
-    #[test]
-    fn coerce_deque_to_iterator_with_var() {
-        // Deque<T, O> unifies with Iterator<Int> → T becomes Int
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let t = s.fresh_param();
-        let deque = Ty::Deque(Box::new(t.clone()), Box::new(o));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&deque, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve(&t), Ty::Int);
-    }
-
-    #[test]
-    fn coerce_iterator_to_deque_fails() {
-        // Iterator<Int> cannot become Deque<Int, O> — one-directional only
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        assert!(
-            s.unify(&iter, &deque, Covariant).is_err(),
-            "Iterator → Deque coercion must be forbidden"
-        );
-    }
-
-    #[test]
     fn fresh_param_produces_unique_ids() {
         let mut s = TySubst::new();
         let o1 = s.fresh_param();
@@ -2246,22 +2269,6 @@ mod tests {
     }
 
     #[test]
-    fn deque_to_iterator_coercion_with_inner_var_unification() {
-        // Deque<Var, O> vs Iterator<Var> where both Vars unify to same type
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let t1 = s.fresh_param();
-        let t2 = s.fresh_param();
-        let deque = Ty::Deque(Box::new(t1.clone()), Box::new(o));
-        let iter = Ty::Iterator(Box::new(t2.clone()), Effect::pure());
-        assert!(s.unify(&deque, &iter, Covariant).is_ok());
-        // Now bind t2 to Int
-        assert!(s.unify(&t2, &Ty::Int, Invariant).is_ok());
-        // t1 should also resolve to Int via transitive unification
-        assert_eq!(s.resolve(&t1), Ty::Int);
-    }
-
-    #[test]
     fn unify_deque_coerces_to_list() {
         let mut s = TySubst::new();
         let o = s.fresh_param();
@@ -2282,17 +2289,6 @@ mod tests {
         assert!(
             s.unify(&l, &d, Covariant).is_err(),
             "List must not coerce to Deque"
-        );
-    }
-
-    #[test]
-    fn unify_list_coerces_to_iterator() {
-        let mut s = TySubst::new();
-        let l = Ty::List(Box::new(Ty::Int));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(
-            s.unify(&l, &i, Covariant).is_ok(),
-            "List should coerce to Iterator"
         );
     }
 
@@ -2505,15 +2501,14 @@ mod tests {
     #[test]
     fn concrete_deque_deque_covariant_no_var_no_rebind() {
         // Two concrete Deques (no Var backing) with mismatched identities.
-        // Covariant demotion: Ok() returned but no Var to rebind.
-        // This is semantically "they are compatible as List", caller uses resolve on orig.
+        // No Param to rebind → LUB cannot be applied → Err.
         let mut s = TySubst::new();
         let o1 = s.alloc_identity(false);
         let o2 = s.alloc_identity(false);
         let d1 = Ty::Deque(Box::new(Ty::Int), Box::new(o1));
         let d2 = Ty::Deque(Box::new(Ty::Int), Box::new(o2));
-        // Should succeed — covariant allows demotion even without Var.
-        assert!(s.unify(&d1, &d2, Covariant).is_ok());
+        assert!(s.unify(&d1, &d2, Covariant).is_err(),
+            "concrete Deque identity mismatch with no Param should fail");
     }
 
     #[test]
@@ -2845,33 +2840,6 @@ mod tests {
     }
 
     #[test]
-    fn demotion_then_iterator_coercion() {
-        // After demotion to List, the result should still coerce to Iterator.
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let v = s.fresh_param();
-        assert!(
-            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), Box::new(o1)), Covariant)
-                .is_ok()
-        );
-        assert!(
-            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), Box::new(o2)), Covariant)
-                .is_ok()
-        );
-        assert_eq!(s.resolve(&v), Ty::List(Box::new(Ty::Int)));
-        // List<Int> ≤ Iterator<Int> in Covariant
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Covariant
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
     fn nested_list_of_deque_coercion_fails() {
         // List<Deque<Int, o1>> vs List<List<Int>> in Covariant.
         // Inner item type is invariant — Deque vs List inside List is a type error.
@@ -2891,65 +2859,6 @@ mod tests {
         let a = Ty::List(Box::new(Ty::Deque(Box::new(Ty::Int), Box::new(o))));
         let b = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
         assert!(s.unify(&a, &b, Invariant).is_err());
-    }
-
-    #[test]
-    fn deque_to_iterator_invariant_fails() {
-        // Deque → Iterator in Invariant must fail.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let d = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&d, &i, Invariant).is_err());
-    }
-
-    #[test]
-    fn list_to_iterator_invariant_fails() {
-        // List → Iterator in Invariant must fail.
-        let mut s = TySubst::new();
-        let l = Ty::List(Box::new(Ty::Int));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&l, &i, Invariant).is_err());
-    }
-
-    #[test]
-    fn deque_to_iterator_contravariant_fails() {
-        // (Deque, Iterator) in Contravariant → reversed: Iterator≤Deque → fails.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let d = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&d, &i, Contravariant).is_err());
-    }
-
-    #[test]
-    fn iterator_to_deque_contravariant_ok() {
-        // (Iterator, Deque) in Contravariant → reversed: Deque≤Iterator → OK.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let i = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let d = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        assert!(s.unify(&i, &d, Contravariant).is_ok());
-    }
-
-    #[test]
-    fn chained_coercion_deque_to_iterator_covariant() {
-        // Deque<Int> → Iterator<Int> directly in Covariant (skipping List).
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v = s.fresh_param();
-        assert!(
-            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), Box::new(o)), Covariant)
-                .is_ok()
-        );
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Covariant
-            )
-            .is_ok()
-        );
     }
 
     #[test]
@@ -3209,32 +3118,6 @@ mod tests {
     // ================================================================
 
     #[test]
-    fn snapshot_rollback_coercion_then_different_path() {
-        // Snapshot → try Deque≤List (OK) → rollback → try Deque≤Iterator (OK).
-        // The two paths must not interfere.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        assert!(s.unify(&v, &deque, Invariant).is_ok());
-
-        // Path 1: coerce to List
-        let snap = s.snapshot();
-        assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant).is_ok());
-        s.rollback(snap);
-
-        // Path 2: coerce to Iterator — should work independently
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Covariant
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
     fn snapshot_rollback_demotion_no_residue() {
         // Snapshot → demotion → rollback → same Var with different Deque (same identity).
         // Rollback must fully undo the demotion so the new unify works cleanly.
@@ -3402,20 +3285,6 @@ mod tests {
         assert_eq!(s.resolve(&v1), Ty::String);
     }
 
-    #[test]
-    fn empty_deque_var_vs_empty_iterator_var_covariant() {
-        // Deque<Var1, O> vs Iterator<Var2> in Covariant → OK, Var1 binds to Var2.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v1 = s.fresh_param();
-        let v2 = s.fresh_param();
-        let d = Ty::Deque(Box::new(v1.clone()), Box::new(o));
-        let i = Ty::Iterator(Box::new(v2.clone()), Effect::pure());
-        assert!(s.unify(&d, &i, Covariant).is_ok());
-        assert!(s.unify(&v2, &Ty::Int, Invariant).is_ok());
-        assert_eq!(s.resolve(&v1), Ty::Int);
-    }
-
     // ================================================================
     // Bidirectional Var binding + coercion
     // ================================================================
@@ -3538,69 +3407,6 @@ mod tests {
     // ================================================================
 
     #[test]
-    fn var_bound_deque_then_coerce_to_list_then_coerce_to_iterator() {
-        // Var = Deque(o) → coerce to List → coerce to Iterator.
-        // Each step narrows via Covariant.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v = s.fresh_param();
-        assert!(
-            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), Box::new(o)), Invariant)
-                .is_ok()
-        );
-        assert!(s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant).is_ok());
-        // v resolves to Deque still (Var bound to Deque, no rebind from Deque≤List).
-        // Now try Iterator.
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Covariant
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn iterator_cannot_narrow_back_to_list_covariant() {
-        // Var = Iterator(Int). Iterator ≤ List is invalid.
-        let mut s = TySubst::new();
-        let v = s.fresh_param();
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Invariant
-            )
-            .is_ok()
-        );
-        assert!(
-            s.unify(&v, &Ty::List(Box::new(Ty::Int)), Covariant)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn iterator_cannot_narrow_back_to_deque_covariant() {
-        // Var = Iterator(Int). Iterator ≤ Deque is invalid.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v = s.fresh_param();
-        assert!(
-            s.unify(
-                &v,
-                &Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Invariant
-            )
-            .is_ok()
-        );
-        assert!(
-            s.unify(&v, &Ty::Deque(Box::new(Ty::Int), Box::new(o)), Covariant)
-                .is_err()
-        );
-    }
-
-    #[test]
     fn list_cannot_narrow_back_to_deque_covariant() {
         // Var = List(Int). List ≤ Deque is invalid.
         let mut s = TySubst::new();
@@ -3626,33 +3432,6 @@ mod tests {
             s.unify(
                 &Ty::Deque(Box::new(Ty::Int), Box::new(o)),
                 &Ty::List(Box::new(Ty::String)),
-                Covariant,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn deque_to_iterator_inner_type_mismatch_fails() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        assert!(
-            s.unify(
-                &Ty::Deque(Box::new(Ty::Int), Box::new(o)),
-                &Ty::Iterator(Box::new(Ty::String), Effect::pure()),
-                Covariant,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn list_to_iterator_inner_type_mismatch_fails() {
-        let mut s = TySubst::new();
-        assert!(
-            s.unify(
-                &Ty::List(Box::new(Ty::Int)),
-                &Ty::Iterator(Box::new(Ty::String), Effect::pure()),
                 Covariant,
             )
             .is_err()
@@ -3698,15 +3477,6 @@ mod tests {
         let t = Ty::Tuple(vec![Ty::Int]);
         assert!(s.unify(&l, &t, Covariant).is_err());
         assert!(s.unify(&l, &t, Invariant).is_err());
-    }
-
-    #[test]
-    fn iterator_vs_list_of_list_fails() {
-        // Iterator<Int> vs List<List<Int>> — not the same structure.
-        let mut s = TySubst::new();
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
-        assert!(s.unify(&iter, &nested, Covariant).is_err());
     }
 
     // ================================================================
@@ -3833,193 +3603,9 @@ mod tests {
 
     // ── Sequence identity tracking ─────────────────────────────────
 
-    #[test]
-    fn sequence_same_identity_unifies() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        assert!(s.unify(&a, &b, Invariant).is_ok());
-    }
-
-    #[test]
-    fn sequence_different_identity_demotes_to_iterator() {
-        // Two Sequences with different identities → demote to Iterator (like Deque→List).
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let seq1 = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::pure());
-        let seq2 = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::pure());
-        assert!(s.unify(&v, &seq1, Covariant).is_ok());
-        assert!(s.unify(&v, &seq2, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        assert!(
-            matches!(resolved, Ty::Iterator(..)),
-            "should demote to Iterator, got {resolved:?}"
-        );
-    }
-
-    #[test]
-    fn sequence_different_identity_invariant_fails() {
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::pure());
-        assert!(s.unify(&a, &b, Invariant).is_err());
-    }
-
-    #[test]
-    fn deque_coerces_to_sequence_same_identity() {
-        // Deque(T, O) ≤ Sequence(T, O) — covariant, identity preserved.
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o.clone()));
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        assert!(s.unify(&deque, &seq, Covariant).is_ok());
-    }
-
-    #[test]
-    fn sequence_does_not_coerce_to_deque() {
-        // Sequence ≤ Deque is NOT allowed (lazy → eager forbidden).
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        assert!(s.unify(&seq, &deque, Covariant).is_err());
-    }
-
-    #[test]
-    fn sequence_coerces_to_iterator() {
-        // Sequence(T, O) ≤ Iterator(T) — covariant, identity lost.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&seq, &iter, Covariant).is_ok());
-    }
-
-    #[test]
-    fn iterator_does_not_coerce_to_sequence() {
-        // Iterator ≤ Sequence is NOT allowed (no identity to create).
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        assert!(s.unify(&iter, &seq, Covariant).is_err());
-    }
-
-    #[test]
-    fn deque_coerces_to_iterator_via_sequence() {
-        // Deque(T, O) ≤ Iterator(T) — transitive through Sequence, identity lost.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&deque, &iter, Covariant).is_ok());
-    }
-
-    #[test]
-    fn sequence_structural_op_preserves_identity() {
-        // Simulates take_seq signature: Sequence<T, O> → Sequence<T, O> (same O).
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let c = s.alloc_identity(false);
-        let input = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let output = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        // Bind o to a concrete identity via the input.
-        let concrete_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(c.clone()), Effect::pure());
-        assert!(s.unify(&concrete_seq, &input, Covariant).is_ok());
-        // Now output should also resolve to the same concrete identity.
-        let resolved = s.resolve(&output);
-        match resolved {
-            Ty::Sequence(_, resolved_o, _) => assert_eq!(s.resolve(&resolved_o), c),
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn sequence_transform_op_creates_new_identity() {
-        // Simulates map_seq output having a different identity from the input.
-        // Two Sequence<Int> with different concrete identities → demote to Iterator.
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let seq1 = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::pure());
-        let seq2 = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::pure());
-        // Different identities should NOT unify invariantly.
-        assert!(s.unify(&seq1, &seq2, Invariant).is_err());
-        // But covariantly, they demote to Iterator.
-        let v = s.fresh_param();
-        assert!(s.unify(&v, &seq1, Covariant).is_ok());
-        assert!(s.unify(&v, &seq2, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        assert!(
-            matches!(resolved, Ty::Iterator(..)),
-            "should demote to Iterator, got {resolved:?}"
-        );
-    }
-
-    #[test]
-    fn sequence_and_iterator_purity() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        // Pure effect + pure inner → pureable.
-        assert!(Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure()).is_pureable());
-        assert!(Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_pureable());
-        // IO effect → not pureable.
-        assert!(!Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::io()).is_pureable());
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::io()).is_pureable());
-        // Deque IS pure (eager, storable container).
-        assert!(Ty::Deque(Box::new(Ty::Int), Box::new(o)).is_pureable());
-    }
-
-    #[test]
-    fn sequence_chain_same_identity_ok() {
-        // chain_seq: (Sequence<T, O>, Sequence<T, O>) → Sequence<T, O>
-        // Both inputs must have the same identity.
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let c = s.alloc_identity(false);
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        // Bind o to concrete.
-        assert!(
-            s.unify(
-                &Ty::Sequence(Box::new(Ty::Int), Box::new(c.clone()), Effect::pure()),
-                &a,
-                Covariant
-            )
-            .is_ok()
-        );
-        // b should also resolve to same identity.
-        assert!(
-            s.unify(
-                &Ty::Sequence(Box::new(Ty::Int), Box::new(c), Effect::pure()),
-                &b,
-                Covariant
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn sequence_chain_different_identity_fails_invariant() {
-        // chain_seq requires same identity. Different identities in invariant → error.
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o1.clone()), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o2.clone()), Effect::pure());
-        // In a chain_seq signature, both args share the same identity var.
-        // If called with different concrete identities, unification of identities fails.
-        assert!(s.unify(&o1, &o2, Invariant).is_err());
-    }
-
     // ── UserDefined unification tests ───────────────────────────────
 
-    fn ud(id: UserDefinedId, type_args: Vec<Ty>, effect_args: Vec<Effect>) -> Ty {
+    fn ud(id: QualifiedRef, type_args: Vec<Ty>, effect_args: Vec<Effect>) -> Ty {
         Ty::UserDefined { id, type_args, effect_args }
     }
 
@@ -4028,14 +3614,14 @@ mod tests {
     #[test]
     fn user_defined_same_id_empty_args_unifies() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         assert!(s.unify(&ud(id, vec![], vec![]), &ud(id, vec![], vec![]), Invariant).is_ok());
     }
 
     #[test]
     fn user_defined_same_id_concrete_type_args_unifies() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         assert!(s.unify(
             &ud(id, vec![Ty::Int], vec![]),
             &ud(id, vec![Ty::Int], vec![]),
@@ -4046,7 +3632,7 @@ mod tests {
     #[test]
     fn user_defined_param_type_arg_resolved_via_unify() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let p = s.fresh_param();
         assert!(s.unify(
             &ud(id, vec![p.clone()], vec![]),
@@ -4059,7 +3645,7 @@ mod tests {
     #[test]
     fn user_defined_effect_var_resolved_via_unify() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let e = s.fresh_effect_var();
         assert!(s.unify(
             &ud(id, vec![], vec![e.clone()]),
@@ -4073,7 +3659,7 @@ mod tests {
     fn user_defined_nested_type_arg_unifies() {
         // UserDefined<List<Param>> vs UserDefined<List<Int>> → resolves Param to Int
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let p = s.fresh_param();
         assert!(s.unify(
             &ud(id, vec![Ty::List(Box::new(p.clone()))], vec![]),
@@ -4088,15 +3674,15 @@ mod tests {
     #[test]
     fn user_defined_different_id_fails() {
         let mut s = TySubst::new();
-        let id_a = UserDefinedId::alloc();
-        let id_b = UserDefinedId::alloc();
+        let id_a = fresh_qref();
+        let id_b = fresh_qref();
         assert!(s.unify(&ud(id_a, vec![], vec![]), &ud(id_b, vec![], vec![]), Invariant).is_err());
     }
 
     #[test]
     fn user_defined_type_arg_mismatch_fails() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         assert!(s.unify(
             &ud(id, vec![Ty::Int], vec![]),
             &ud(id, vec![Ty::String], vec![]),
@@ -4107,7 +3693,7 @@ mod tests {
     #[test]
     fn user_defined_effect_arg_mismatch_fails() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         assert!(s.unify(
             &ud(id, vec![], vec![Effect::pure()]),
             &ud(id, vec![], vec![Effect::io()]),
@@ -4118,7 +3704,7 @@ mod tests {
     #[test]
     fn user_defined_vs_other_ty_fails() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         assert!(s.unify(&ud(id, vec![], vec![]), &Ty::Int, Invariant).is_err());
         assert!(s.unify(&Ty::String, &ud(id, vec![], vec![]), Invariant).is_err());
     }
@@ -4128,7 +3714,7 @@ mod tests {
     #[test]
     fn user_defined_resolve_substitutes_args() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let p = s.fresh_param();
         let e = s.fresh_effect_var();
         let ty = ud(id, vec![p.clone()], vec![e.clone()]);
@@ -4151,7 +3737,7 @@ mod tests {
     #[test]
     fn user_defined_inside_list_resolves() {
         let mut s = TySubst::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let p = s.fresh_param();
         let ty = Ty::List(Box::new(ud(id, vec![p.clone()], vec![])));
         assert!(s.unify(&p, &Ty::Int, Invariant).is_ok());
@@ -4169,15 +3755,14 @@ mod tests {
     #[test]
     fn type_registry_register_and_get() {
         let mut reg = TypeRegistry::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         reg.register(UserDefinedDecl {
-            id,
-            name: "TestType".into(),
+            qref: id,
             type_params: vec![None],
             effect_params: vec![],
         });
         let decl = reg.get(id);
-        assert_eq!(decl.name, "TestType");
+        assert_eq!(decl.qref, id);
         assert_eq!(decl.type_params.len(), 1);
     }
 
@@ -4185,16 +3770,16 @@ mod tests {
     #[should_panic(expected = "duplicate")]
     fn type_registry_duplicate_panics() {
         let mut reg = TypeRegistry::new();
-        let id = UserDefinedId::alloc();
-        reg.register(UserDefinedDecl { id, name: "A".into(), type_params: vec![], effect_params: vec![] });
-        reg.register(UserDefinedDecl { id, name: "B".into(), type_params: vec![], effect_params: vec![] });
+        let id = fresh_qref();
+        reg.register(UserDefinedDecl { qref: id, type_params: vec![], effect_params: vec![] });
+        reg.register(UserDefinedDecl { qref: id, type_params: vec![], effect_params: vec![] });
     }
 
     #[test]
     #[should_panic(expected = "unknown")]
     fn type_registry_unknown_id_panics() {
         let reg = TypeRegistry::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         reg.get(id);
     }
 
@@ -4205,8 +3790,8 @@ mod tests {
     fn make_cast_subst(
         type_param_count: usize,
         build_to: impl FnOnce(&[Ty]) -> Ty,
-    ) -> (UserDefinedId, QualifiedRef, TySubst) {
-        let id = UserDefinedId::alloc();
+    ) -> (QualifiedRef, QualifiedRef, TySubst) {
+        let id = fresh_qref();
         let i = acvus_utils::Interner::new();
         let fn_id = QualifiedRef::root(i.intern("cast_fn"));
         let mut rule_subst = TySubst::new();
@@ -4219,8 +3804,7 @@ mod tests {
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
-            id,
-            name: "TestType".into(),
+            qref: id,
             type_params: vec![None; type_param_count],
             effect_params: vec![],
         });
@@ -4277,7 +3861,7 @@ mod tests {
     #[test]
     fn extern_cast_no_rule_fails() {
         // No cast rules registered
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let mut s = TySubst::new();
 
         let from = Ty::UserDefined { id, type_args: vec![], effect_args: vec![] };
@@ -4300,7 +3884,7 @@ mod tests {
         // Bypass TypeRegistry duplicate check — inject two rules with same to head
         // directly into the type_registry to test try_extern_cast ambiguity detection.
         let i = acvus_utils::Interner::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let fn_id_a = QualifiedRef::root(i.intern("cast_a"));
         let fn_id_b = QualifiedRef::root(i.intern("cast_b"));
 
@@ -4322,10 +3906,10 @@ mod tests {
         // Build registry manually (bypassing register_cast duplicate check)
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
-            id, name: "A".into(), type_params: vec![None], effect_params: vec![],
+            qref: id, type_params: vec![None], effect_params: vec![],
         });
-        reg.cast_rules.push(rule_a);
-        reg.cast_rules.push(rule_b);
+        reg.from_rules.entry(id).or_default().push(rule_a);
+        reg.from_rules.entry(id).or_default().push(rule_b);
         let mut s = TySubst::with_registry(Freeze::new(reg));
 
         let from = Ty::UserDefined { id, type_args: vec![Ty::Int], effect_args: vec![] };
@@ -4338,7 +3922,7 @@ mod tests {
     #[should_panic(expected = "duplicate")]
     fn cast_registry_duplicate_panics() {
         let i = acvus_utils::Interner::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let fn_id_a = QualifiedRef::root(i.intern("cast_a"));
         let fn_id_b = QualifiedRef::root(i.intern("cast_b"));
         let mut s = TySubst::new();
@@ -4346,7 +3930,7 @@ mod tests {
 
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
-            id, name: "A".into(), type_params: vec![None], effect_params: vec![],
+            qref: id, type_params: vec![None], effect_params: vec![],
         });
         reg.register_cast(CastRule {
             from: Ty::UserDefined { id, type_args: vec![t.clone()], effect_args: vec![] },
@@ -4366,13 +3950,13 @@ mod tests {
     #[test]
     fn cast_registry_different_to_head_ok() {
         let i = acvus_utils::Interner::new();
-        let id = UserDefinedId::alloc();
+        let id = fresh_qref();
         let fn_id_a = QualifiedRef::root(i.intern("cast_a"));
         let fn_id_b = QualifiedRef::root(i.intern("cast_b"));
 
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
-            id, name: "A".into(), type_params: vec![None], effect_params: vec![],
+            qref: id, type_params: vec![None], effect_params: vec![],
         });
         let mut s1 = TySubst::new();
         let t1 = s1.fresh_param();
@@ -4389,7 +3973,7 @@ mod tests {
             to: Ty::Option(Box::new(t2)),
             fn_ref: fn_id_b,
         });
-        assert_eq!(reg.cast_rules_for(id).count(), 2);
+        assert_eq!(reg.rules_from(id).len(), 2);
     }
 
     // ── Purity tier tests ──────────────────────────────────────────────
@@ -4414,15 +3998,7 @@ mod tests {
             Materiality::Composite
         );
         assert_eq!(
-            Ty::Deque(Box::new(Ty::Int), Box::new(o.clone())).materiality(),
-            Materiality::Composite
-        );
-        assert_eq!(
-            Ty::Iterator(Box::new(Ty::Int), Effect::pure()).materiality(),
-            Materiality::Composite
-        );
-        assert_eq!(
-            Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()).materiality(),
+            Ty::Deque(Box::new(Ty::Int), Box::new(o)).materiality(),
             Materiality::Composite
         );
         assert_eq!(
@@ -4610,43 +4186,6 @@ mod tests {
         let mut s = TySubst::new();
         let o = s.alloc_identity(false);
         assert!(!Ty::Deque(Box::new(test_user_defined()), Box::new(o)).is_pureable());
-    }
-
-    #[test]
-    fn pureable_iterator_of_scalars() {
-        assert!(Ty::Iterator(Box::new(Ty::String), Effect::pure()).is_pureable());
-    }
-
-    #[test]
-    fn pureable_iterator_of_fn_pure() {
-        // Fn with empty captures and pure ret → pureable
-        let fn_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::Unit),
-
-            effect: Effect::pure(),
-            captures: vec![],
-        };
-        assert!(Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_pureable());
-    }
-
-    #[test]
-    fn pureable_iterator_of_fn_with_user_defined() {
-        let fn_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(test_user_defined()),
-
-            effect: Effect::pure(),
-            captures: vec![],
-        };
-        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_pureable());
-    }
-
-    #[test]
-    fn pureable_sequence_of_scalars() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        assert!(Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()).is_pureable());
     }
 
     #[test]
@@ -4964,194 +4503,7 @@ mod tests {
 
     // -- Iterator effect coercion --
 
-    #[test]
-    fn iterator_same_effect_pure() {
-        let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&a, &b, Invariant).is_ok());
-    }
-
-    #[test]
-    fn iterator_same_effect_effectful() {
-        let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&a, &b, Invariant).is_ok());
-    }
-
-    #[test]
-    fn iterator_effect_mismatch_invariant_fails() {
-        let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&a, &b, Invariant).is_err());
-    }
-
-    #[test]
-    fn iterator_pure_to_effectful_covariant() {
-        // Pure ≤ Effectful in Covariant → subtyping OK, v stays Pure (more specific)
-        let mut s = TySubst::new();
-        let v = s.fresh_param();
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&v, &pure_iter, Covariant).is_ok());
-        assert!(s.unify(&v, &effectful_iter, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn iterator_effectful_to_pure_covariant() {
-        // Effectful then Pure → coerces to Effectful (lattice top)
-        let mut s = TySubst::new();
-        let v = s.fresh_param();
-        let effectful_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&v, &effectful_iter, Covariant).is_ok());
-        assert!(s.unify(&v, &pure_iter, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn iterator_effect_var_binds_to_pure() {
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let a = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&a, &b, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-    }
-
-    #[test]
-    fn iterator_effect_var_binds_to_effectful() {
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let a = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&a, &b, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::io());
-    }
-
-    #[test]
-    fn iterator_shared_effect_var_pure_then_effectful() {
-        // Simulates HOF: effect var e is shared, first binds Pure, then sees Effectful.
-        // In Covariant, Pure ≤ Effectful succeeds without promoting — e stays Pure.
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        // First: bind e = Pure (from input iterator)
-        let input = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        let pure_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&input, &pure_iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-        // Second: callback is effectful, needs e = Effectful
-        let callback_effect = Effect::io();
-        let fn_sig = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::String),
-
-            captures: vec![],
-            effect: e.clone(),
-        };
-        let fn_actual = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::String),
-
-            captures: vec![],
-            effect: callback_effect,
-        };
-        // Covariant: Pure ≤ Effectful succeeds, but e stays as Pure (more specific).
-        assert!(s.unify(&fn_sig, &fn_actual, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-    }
-
     // -- Sequence effect coercion --
-
-    #[test]
-    fn sequence_same_identity_effect_mismatch_invariant_fails() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        assert!(s.unify(&a, &b, Invariant).is_err());
-    }
-
-    #[test]
-    fn sequence_same_identity_effect_coercion_covariant() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let effectful_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        assert!(s.unify(&v, &pure_seq, Covariant).is_ok());
-        assert!(s.unify(&v, &effectful_seq, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Sequence(_, _, e) => assert_eq!(e, Effect::pure()),
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn sequence_identity_mismatch_both_effectful() {
-        // Different identities + both effectful → Iterator<T, Effectful>
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::io());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::io());
-        assert!(s.unify(&v, &a, Covariant).is_ok());
-        assert!(s.unify(&v, &b, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn sequence_identity_mismatch_mixed_effects() {
-        // Different identities + Pure/Effectful → Iterator<T, Effectful>
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::io());
-        assert!(s.unify(&v, &a, Covariant).is_ok());
-        assert!(s.unify(&v, &b, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::io()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn sequence_identity_mismatch_both_pure() {
-        // Different identities + both pure → Iterator<T, Pure>
-        let mut s = TySubst::new();
-        let o1 = s.alloc_identity(false);
-        let o2 = s.alloc_identity(false);
-        let v = s.fresh_param();
-        let a = Ty::Sequence(Box::new(Ty::Int), Box::new(o1), Effect::pure());
-        let b = Ty::Sequence(Box::new(Ty::Int), Box::new(o2), Effect::pure());
-        assert!(s.unify(&v, &a, Covariant).is_ok());
-        assert!(s.unify(&v, &b, Covariant).is_ok());
-        let resolved = s.resolve(&v);
-        match resolved {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
 
     // -- Fn effect coercion --
 
@@ -5223,68 +4575,6 @@ mod tests {
 
     // -- Coercion arm + effect interaction --
 
-    #[test]
-    fn list_to_pure_iterator_ok() {
-        let mut s = TySubst::new();
-        let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&list, &iter, Covariant).is_ok());
-    }
-
-    #[test]
-    fn list_to_effectful_iterator_fails() {
-        // List → Iterator coercion produces Pure. Pure vs Effectful = mismatch in unify_effects.
-        // No var to rebind → fails.
-        let mut s = TySubst::new();
-        let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&list, &iter, Covariant).is_err());
-    }
-
-    #[test]
-    fn list_to_iterator_effect_var_binds_pure() {
-        // List → Iterator<T, e> → e = Pure
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let list = Ty::List(Box::new(Ty::Int));
-        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        assert!(s.unify(&list, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-    }
-
-    #[test]
-    fn deque_to_sequence_effect_var_binds_pure() {
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
-        let deque = Ty::Deque(Box::new(Ty::Int), Box::new(o.clone()));
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), e.clone());
-        assert!(s.unify(&deque, &seq, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-    }
-
-    #[test]
-    fn sequence_to_iterator_preserves_effect() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let e = s.fresh_effect_var();
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        assert!(s.unify(&seq, &iter, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::io());
-    }
-
-    #[test]
-    fn sequence_pure_to_iterator_effectful_fails() {
-        // Sequence<Int, O, Pure> → Iterator<Int, Effectful>
-        // Effect: Pure vs Effectful → mismatch, no var to rebind → fails.
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        let iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(s.unify(&seq, &iter, Covariant).is_err());
-    }
-
     // -- Effect display --
 
     #[test]
@@ -5326,46 +4616,7 @@ mod tests {
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
 
-    #[test]
-    fn display_effectful_iterator() {
-        let i = Interner::new();
-        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert_eq!(format!("{}", ty.display(&i)), "Iterator!<Int>");
-    }
-
-    #[test]
-    fn display_pure_iterator() {
-        let i = Interner::new();
-        let ty = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert_eq!(format!("{}", ty.display(&i)), "Iterator<Int>");
-    }
-
-    #[test]
-    fn display_effectful_sequence() {
-        let i = Interner::new();
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ty = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        assert_eq!(format!("{}", ty.display(&i)), "Sequence!<Int, Identity(IdentityId(0))>");
-    }
-
     // -- Three-way effect unification --
-
-    #[test]
-    fn three_iterators_pure_effectful_pure() {
-        let mut s = TySubst::new();
-        let v = s.fresh_param();
-        let pure1 = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let effectful = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        let pure2 = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&v, &pure1, Covariant).is_ok());
-        assert!(s.unify(&v, &effectful, Covariant).is_ok());
-        assert!(s.unify(&v, &pure2, Covariant).is_ok());
-        match s.resolve(&v) {
-            Ty::Iterator(_, e) => assert_eq!(e, Effect::pure()),
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
 
     // ================================================================
     // is_storable tests
@@ -5419,31 +4670,7 @@ mod tests {
 
     // -- Iterator/Sequence: always Ephemeral, never materializable --
 
-    #[test]
-    fn not_materializable_pure_iterator() {
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::pure()).is_materializable());
-    }
-
-    #[test]
-    fn not_materializable_pure_sequence() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()).is_materializable());
-    }
-
     // -- Iterator/Sequence with Effectful: also NOT materializable --
-
-    #[test]
-    fn not_storable_effectful_iterator() {
-        assert!(!Ty::Iterator(Box::new(Ty::Int), Effect::io()).is_materializable());
-    }
-
-    #[test]
-    fn not_storable_effectful_sequence() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        assert!(!Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io()).is_materializable());
-    }
 
     // -- Fn: never storable --
 
@@ -5497,35 +4724,6 @@ mod tests {
         assert!(!Ty::List(Box::new(test_user_defined())).is_materializable());
     }
 
-    #[test]
-    fn not_storable_iterator_of_effectful_fn() {
-        let fn_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::Int),
-
-            captures: vec![],
-            effect: Effect::io(),
-        };
-        assert!(!Ty::Iterator(Box::new(fn_ty), Effect::pure()).is_materializable());
-    }
-
-    #[test]
-    fn not_materializable_list_of_pure_iterator() {
-        // List<Iterator<Int, Pure>> — Iterator is Ephemeral, so List containing it is not materializable.
-        assert!(
-            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::pure())))
-                .is_materializable()
-        );
-    }
-
-    #[test]
-    fn not_storable_list_of_effectful_iterator() {
-        // List<Iterator<Int, Effectful>> — effectful inner makes the whole thing non-storable
-        assert!(
-            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_materializable()
-        );
-    }
-
     // ================================================================
     // Effect subtyping in HOF signatures
     // ================================================================
@@ -5534,475 +4732,7 @@ mod tests {
     // binds to Effectful. The Pure callback then unifies with E(=Effectful) covariant.
     // Pure ≤ Effectful → OK.
 
-    #[test]
-    fn hof_pure_callback_effectful_iterator() {
-        // Simulate: filter(Iterator<Int, Effectful>, Fn(Int→Bool, effect:Pure))
-        // Shared E: first binds to Effectful from iterator, then Pure from callback
-        // Covariant: Pure ≤ Effectful → should succeed
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        // Unify iterator arg (binds e = Effectful)
-        assert!(s.unify(&actual_iter, &iter_ty, Covariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::io());
-
-        // Now unify callback: Fn{effect:Pure} vs Fn{effect:e(=Effectful)}
-        let actual_cb = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::Bool),
-
-            captures: vec![],
-            effect: Effect::pure(),
-        };
-        let expected_cb = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::Bool),
-
-            captures: vec![],
-            effect: e,
-        };
-        assert!(
-            s.unify(&actual_cb, &expected_cb, Covariant).is_ok(),
-            "Pure callback should be accepted where Effectful expected (covariant)"
-        );
-    }
-
-    #[test]
-    fn hof_effectful_callback_pure_iterator_rejected() {
-        // Simulate: filter(Iterator<Int, Pure>, Fn(Int→Bool, effect:Effectful))
-        // Shared E: binds to Pure from iterator, then Effectful from callback
-        // Covariant: Effectful ≤ Pure → should FAIL
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let iter_ty = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        let actual_iter = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        assert!(s.unify(&actual_iter, &iter_ty, Covariant).is_ok());
-
-        let actual_cb = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::Bool),
-
-            captures: vec![],
-            effect: Effect::io(),
-        };
-        let expected_cb = Ty::Fn {
-            params: vec![tp(Ty::Int)],
-            ret: Box::new(Ty::Bool),
-
-            captures: vec![],
-            effect: e,
-        };
-        // Effectful callback with Pure iterator → Effectful ≤ Pure in Covariant → Err
-        // Falls through to lub_or_err → promotes to Effectful
-        // This should succeed because lub promotes to Effectful
-        let result = s.unify(&actual_cb, &expected_cb, Covariant);
-        // This actually succeeds via lub_or_err (Fn effect → Effectful LUB)
-        assert!(
-            result.is_ok(),
-            "lub should promote to Effectful: {result:?}"
-        );
-    }
-
-    #[test]
-    fn effect_subtyping_invariant_rejects_mismatch() {
-        let mut s = TySubst::new();
-        let a = Ty::Iterator(Box::new(Ty::Int), Effect::pure());
-        let b = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        assert!(
-            s.unify(&a, &b, Invariant).is_err(),
-            "Invariant should reject Pure vs Effectful"
-        );
-    }
-
-    // ================================================================
-    // Builtin soundness: 4 iterable types (List, Deque, Iterator, Sequence)
-    // ================================================================
-    //
-    // Verify that builtin signatures produce correct types and that
-    // type mismatches are properly rejected. Tests use TySubst to
-    // simulate overload resolution.
-
-    use crate::builtins::test_support::try_builtin;
-
-    // -- map: should accept Iterator and Sequence, return correct type --
-
-    #[test]
-    fn builtin_map_on_iterator_returns_iterator() {
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "map",
-            &[
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Ty::Fn {
-                    params: vec![tp(Ty::Int)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
-            ],
-        );
-        assert!(matches!(ret, Ok(Ty::Iterator(_, ref e)) if e.is_pure()));
-    }
-
-    #[test]
-    fn builtin_map_on_sequence_returns_iterator() {
-        // map on Sequence breaks identity → returns Iterator (not Sequence)
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "map",
-            &[
-                Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()),
-                Ty::Fn {
-                    params: vec![tp(Ty::Int)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
-            ],
-        );
-        assert!(matches!(ret, Ok(Ty::Iterator(_, ref e)) if e.is_pure()));
-    }
-
-    #[test]
-    fn builtin_map_on_list_coerces_to_iterator() {
-        // List ≤ Iterator coercion allows map on List
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "map",
-            &[
-                Ty::List(Box::new(Ty::Int)),
-                Ty::Fn {
-                    params: vec![tp(Ty::Int)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
-            ],
-        )
-        .unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, ref e) if e.is_pure()));
-    }
-
-    // -- take/skip: Sequence preserves identity, Iterator stays Iterator --
-
-    #[test]
-    fn builtin_take_on_sequence_returns_sequence_same_identity() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "take_seq",
-            &[Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure()), Ty::Int],
-        )
-        .unwrap();
-        match ret {
-            Ty::Sequence(_, ret_o, ref e) if e.is_pure() => {
-                assert_eq!(
-                    s.resolve(&ret_o),
-                    s.resolve(&o),
-                    "identity must be preserved"
-                );
-            }
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn builtin_take_on_iterator_returns_iterator() {
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "take",
-            &[Ty::Iterator(Box::new(Ty::Int), Effect::pure()), Ty::Int],
-        )
-        .unwrap();
-        assert!(matches!(ret, Ty::Iterator(_, ref e) if e.is_pure()));
-    }
-
-    #[test]
-    fn builtin_skip_on_sequence_preserves_identity() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "skip_seq",
-            &[Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure()), Ty::Int],
-        )
-        .unwrap();
-        match ret {
-            Ty::Sequence(_, ret_o, _) => {
-                assert_eq!(s.resolve(&ret_o), s.resolve(&o));
-            }
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
-
-    // -- chain: Sequence + Iterator → Sequence (same identity) --
-
-    #[test]
-    fn builtin_chain_on_sequence_with_iterator() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "chain_seq",
-            &[
-                Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure()),
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-            ],
-        )
-        .unwrap();
-        match ret {
-            Ty::Sequence(_, ret_o, _) => {
-                assert_eq!(
-                    s.resolve(&ret_o),
-                    s.resolve(&o),
-                    "chain must preserve identity"
-                );
-            }
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
-
-    // -- collect: Iterator → List, Sequence → Deque (same identity) --
-
-    #[test]
-    fn builtin_collect_iterator_returns_list() {
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "collect",
-            &[Ty::Iterator(Box::new(Ty::Int), Effect::pure())],
-        )
-        .unwrap();
-        assert!(matches!(ret, Ty::List(_)));
-    }
-
-    #[test]
-    fn builtin_collect_on_sequence_coerces_to_iterator() {
-        // CollectSeq removed — Sequence coerces to Iterator, then Iterator collect applies.
-        // Result is List (not Deque — identity lost via coercion).
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "collect",
-            &[Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure())],
-        )
-        .unwrap();
-        assert!(
-            matches!(ret, Ty::List(_)),
-            "collect on Sequence should return List (via Iterator coercion), got {ret:?}"
-        );
-    }
-
-    #[test]
-    fn builtin_filter_on_sequence_coerces_to_iterator() {
-        // FilterSeq removed — Sequence coerces to Iterator, then Iterator filter applies.
-        // Result is Iterator (not Sequence — identity lost).
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "filter",
-            &[
-                Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()),
-                Ty::Fn {
-                    params: vec![tp(Ty::Int)],
-                    ret: Box::new(Ty::Bool),
-
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
-            ],
-        )
-        .unwrap();
-        assert!(
-            matches!(ret, Ty::Iterator(..)),
-            "filter on Sequence should return Iterator (identity lost), got {ret:?}"
-        );
-    }
-
-    // -- Effect propagation through HOF --
-
-    #[test]
-    fn builtin_map_effectful_callback_propagates() {
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "map",
-            &[
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Ty::Fn {
-                    params: vec![tp(Ty::Int)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: Effect::io(),
-                },
-            ],
-        )
-        .unwrap();
-        match ret {
-            Ty::Iterator(_, e) => {
-                assert_eq!(e, Effect::io(), "effectful callback should propagate")
-            }
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-
-    // -- Deque coerces to Sequence for take/skip/chain --
-
-    #[test]
-    fn builtin_take_on_deque_coerces_to_sequence() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "take_seq",
-            &[Ty::Deque(Box::new(Ty::Int), Box::new(o.clone())), Ty::Int],
-        )
-        .unwrap();
-        // Deque ≤ Sequence coercion, then take preserves identity
-        match ret {
-            Ty::Sequence(_, ret_o, _) => {
-                assert_eq!(s.resolve(&ret_o), s.resolve(&o));
-            }
-            other => panic!("expected Sequence (from Deque coercion), got {other:?}"),
-        }
-    }
-
-    // -- Type mismatch: wrong element type --
-
-    #[test]
-    fn builtin_map_element_type_mismatch_fails() {
-        let mut s = TySubst::new();
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "map",
-            &[
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-                Ty::Fn {
-                    params: vec![tp(Ty::String)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
-            ],
-        );
-        assert!(ret.is_err(), "map with wrong element type should fail");
-    }
-
-    // -- Sequence-specific: flatten/flat_map return Iterator --
-
-    #[test]
-    fn builtin_flatten_on_sequence_returns_iterator() {
-        let mut s = TySubst::new();
-        let o = s.alloc_identity(false);
-        let ret = try_builtin(
-            &Interner::new(),
-            &mut s,
-            "flatten",
-            &[Ty::Sequence(
-                Box::new(Ty::List(Box::new(Ty::Int))),
-                Box::new(o),
-                Effect::pure(),
-            )],
-        )
-        .unwrap();
-        assert!(
-            matches!(ret, Ty::Iterator(_, _)),
-            "flatten on Sequence should return Iterator, got {ret:?}"
-        );
-    }
-
     // -- Sequence effect variable tests --
-
-    #[test]
-    fn sequence_effect_var_binds_pure() {
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let o = s.fresh_param();
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), e.clone());
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        assert!(s.unify(&seq, &pure_seq, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::pure());
-    }
-
-    #[test]
-    fn sequence_effect_var_binds_effectful() {
-        let mut s = TySubst::new();
-        let e = s.fresh_effect_var();
-        let o = s.fresh_param();
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), e.clone());
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        assert!(s.unify(&seq, &eff_seq, Invariant).is_ok());
-        assert_eq!(s.resolve_effect(&e), Effect::io());
-    }
-
-    #[test]
-    fn sequence_pure_to_effectful_covariant() {
-        // Pure Sequence ≤ Effectful Sequence (covariant)
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::pure());
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        assert!(
-            s.unify(&pure_seq, &eff_seq, Covariant).is_ok(),
-            "Pure ≤ Effectful in covariant should succeed"
-        );
-    }
-
-    #[test]
-    fn sequence_effectful_to_pure_covariant_fails() {
-        // Effectful Sequence → Pure Sequence (covariant) should fail
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let eff_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o.clone()), Effect::io());
-        let pure_seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure());
-        // This may go through lub_or_err which promotes to Effectful,
-        // or fail if polarity prevents it. Just check it doesn't panic.
-        let _ = s.unify(&eff_seq, &pure_seq, Covariant);
-    }
-
-    #[test]
-    fn sequence_to_iterator_coercion_propagates_effect_var() {
-        // Sequence<Int, O, Effectful> coerces to Iterator<Int, E> where E is a variable
-        // E should bind to Effectful after coercion
-        let mut s = TySubst::new();
-        let o = s.fresh_param();
-        let seq = Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::io());
-        let e = s.fresh_effect_var();
-        let iter = Ty::Iterator(Box::new(Ty::Int), e.clone());
-        assert!(s.unify(&seq, &iter, Covariant).is_ok());
-        assert_eq!(
-            s.resolve_effect(&e),
-            Effect::io(),
-            "Sequence effect should propagate to Iterator"
-        );
-    }
 
     // ================================================================
     // instantiate
@@ -6030,97 +4760,6 @@ mod tests {
             Ty::Fn { params, ret, .. } => {
                 assert!(matches!(&params[0].ty, Ty::Param { token: p, .. } if p.id() == 1));
                 assert!(matches!(ret.as_ref(), Ty::Param { token: p, .. } if p.id() == 1));
-            }
-            _ => panic!("expected Fn"),
-        }
-    }
-
-    #[test]
-    fn instantiate_remaps_effect_and_identity_vars() {
-        let mut sig_subst = TySubst::new();
-        let t = sig_subst.fresh_param();
-        let e = sig_subst.fresh_effect_var(); // Effect::Var(0)
-        let o = sig_subst.alloc_identity(true); // Identity::Fresh(0)
-        let sig = Ty::Sequence(Box::new(t), Box::new(o), e);
-
-        let mut inference = TySubst::new();
-        // Burn some ids.
-        let _ = inference.fresh_param();
-        let _ = inference.fresh_effect_var();
-        let _ = inference.alloc_identity(false);
-        let inst = inference.instantiate(&sig);
-
-        match &inst {
-            Ty::Sequence(inner, new_o, new_e) => {
-                assert!(matches!(inner.as_ref(), Ty::Param { token: p, .. } if p.id() == 1));
-                assert!(matches!(new_e, Effect::Var(1)));
-                // Fresh identity should be remapped to Concrete with id from inference's counter
-                assert!(matches!(new_o.as_ref(), Ty::Identity(Identity::Concrete(_))));
-            }
-            _ => panic!("expected Sequence"),
-        }
-    }
-
-    #[test]
-    fn instantiate_same_param_maps_to_same_fresh() {
-        // filter: (Iterator<T, E>, Fn(T) → Bool) → Iterator<T, E>
-        let mut sig_subst = TySubst::new();
-        let t = sig_subst.fresh_param();
-        let e = sig_subst.fresh_effect_var();
-        let sig = Ty::Fn {
-            params: vec![
-                tp(Ty::Iterator(Box::new(t.clone()), e.clone())),
-                tp(Ty::Fn {
-                    params: vec![tp(t.clone())],
-                    ret: Box::new(Ty::Bool),
-                    captures: vec![],
-                    effect: e.clone(),
-                }),
-            ],
-            ret: Box::new(Ty::Iterator(Box::new(t), e)),
-            captures: vec![],
-            effect: Effect::pure(),
-        };
-
-        let mut inference = TySubst::new();
-        let inst = inference.instantiate(&sig);
-
-        // All occurrences of the original Param(0) should map to the same new Param.
-        // All occurrences of Effect::Var(0) should map to the same new Effect::Var.
-        match &inst {
-            Ty::Fn { params, ret, .. } => {
-                // First param: Iterator<NewT, NewE>
-                let (new_t_id, new_e_id) = match &params[0].ty {
-                    Ty::Iterator(inner, Effect::Var(eid)) => match inner.as_ref() {
-                        Ty::Param { token: p, .. } => (p.id(), *eid),
-                        _ => panic!("expected Param"),
-                    },
-                    _ => panic!("expected Iterator"),
-                };
-                // Second param: Fn(NewT) → Bool with same effect
-                match &params[1].ty {
-                    Ty::Fn {
-                        params: fp,
-                        effect: Effect::Var(eid),
-                        ..
-                    } => {
-                        assert!(
-                            matches!(&fp[0].ty, Ty::Param{ token: p, ..} if p.id() == new_t_id)
-                        );
-                        assert_eq!(*eid, new_e_id);
-                    }
-                    _ => panic!("expected Fn"),
-                }
-                // Return: Iterator<NewT, NewE>
-                match ret.as_ref() {
-                    Ty::Iterator(inner, Effect::Var(eid)) => {
-                        assert!(
-                            matches!(inner.as_ref(), Ty::Param{token: p, ..} if p.id() == new_t_id)
-                        );
-                        assert_eq!(*eid, new_e_id);
-                    }
-                    _ => panic!("expected Iterator"),
-                }
             }
             _ => panic!("expected Fn"),
         }

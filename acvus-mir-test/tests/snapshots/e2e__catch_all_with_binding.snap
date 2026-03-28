@@ -8,27 +8,28 @@ expression: ir
   T2 = "guest"
 
 === main ===
-     0 │   r0 = context_project @role
-     1 │   r1 = context_load r0
-     3 │ L2:
-     4 │   r2 = test r1 == "admin"
-     5 │   jump_if r2 then L3 else L1
-     6 │ L3:
-     9 │   r3 = T0 + T1
-    10 │   jump L0(r3, r4)
-    11 │ L1:
-    15 │   r5 = T0 + T0
-    16 │   r6 = r5 + T2
-    17 │   jump L0(r6, T2)
-    18 │ L0(r7: String, r8: String):  ; merge_of L2
-    19 │   r9 = T0 + r7
-    20 │   return r9
+     0 │   r0 = undef
+     1 │   r1 = context_project @role
+     2 │   r2 = context_load r1
+     4 │ L2:
+     5 │   r3 = test r2 == "admin"
+     6 │   jump_if r3 then L3 else L1
+     7 │ L3:
+    10 │   r4 = T0 + T1
+    11 │   jump L0(r4, r0)
+    12 │ L1:
+    16 │   r5 = T0 + T0
+    17 │   r6 = r5 + T2
+    18 │   jump L0(r6, T2)
+    19 │ L0(r7: String, r8: String):  ; merge_of L2
+    20 │   r9 = T0 + r7
+    21 │   return r9
 
-    ; r0 (@role) : String
-    ; r1 (v1) : String
-    ; r2 (v5) : Bool
-    ; r3 (v8) : String
-    ; r4 (v17) : String
+    ; r0 (v17) : String
+    ; r1 (@role) : String
+    ; r2 (v1) : String
+    ; r3 (v5) : Bool
+    ; r4 (v8) : String
     ; r5 (v12) : String
     ; r6 (v14) : String
     ; r7 (v15) : String

@@ -1,54 +1,59 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1260
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     5 │   r2 = T0 + T0
-     6 │   r3 = poison
-     7 │   r4 = closure L0 [10 (r5)]
-     8 │   r6 = poison
-     9 │   r7 = poison
-    11 │   r8 = r2 + T0
-    12 │   r9 = poison
-    13 │   r10 = poison
-    14 │   r11 = r8 + r10
-    15 │   return r11
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @items
+     3 │   r3 = context_load r2
+     7 │   r4 = T0 + T0
+     8 │   r5 = call #0(r3)
+     9 │   r6 = closure L0 [10 (r7)]
+    10 │   r8 = call #1(r5, r6)
+    11 │   r9 = call #2(r8)
+    13 │   r10 = r4 + T0
+    14 │   r11 = call #3(r9)
+    15 │   r12 = call #4(r11)
+    16 │   r13 = r10 + r12
+    17 │   return r13
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (v5) : String
-    ; r3 (iter(...)) : Iterator<Int>
-    ; r4 (v10) : Fn(Int) -> Bool
-    ; r5 (v3) : Int
-    ; r6 (filter(...)) : Iterator<Int>
-    ; r7 (collect(...)) : List<Int>
-    ; r8 (v14) : String
-    ; r9 (len(...)) : Int
-    ; r10 (to_string(...)) : String
-    ; r11 (v18) : String
-    ; r12 (@items) : List<Int>
-    ; r13 (v20) : Int
-    ; r14 (offset) : Int
-    ; r15 (x) : List<Int>
-    ; r16 (v4) : String
-    ; r17 (v7) : List<Int>
-    ; r18 (v2) : String
-    ; r19 (v13) : String
-    ; r20 (v19) : List<Int>
+    ; r0 (v19) : List<Int>
+    ; r1 (v20) : Int
+    ; r2 (@items) : List<Int>
+    ; r3 (v1) : List<Int>
+    ; r4 (v5) : String
+    ; r5 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (v10) : Fn(Int) -> Bool
+    ; r7 (v3) : Int
+    ; r8 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r9 (collect(...)) : List<Int>
+    ; r10 (v14) : String
+    ; r11 (len(...)) : Int
+    ; r12 (to_string(...)) : String
+    ; r13 (v18) : String
+    ; r14 (@items) : List<Int>
+    ; r15 (offset) : Int
+    ; r16 (x) : List<Int>
+    ; r17 (v4) : String
+    ; r18 (v7) : List<Int>
+    ; r19 (v2) : String
+    ; r20 (v13) : String
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
-     0 │   r0 = r1 > r2
-     1 │   return r0
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = r3 > r4
+     3 │   return r2
 
-    ; r0 (v4) : Bool
-    ; r1 (v1) : Int
-    ; r2 (v0) : Int
-    ; r3 (offset) : Int
-    ; r4 (v5) : Int
-    ; r5 (v6) : Int
+    ; r0 (v5) : Int
+    ; r1 (v6) : Int
+    ; r2 (v4) : Bool
+    ; r3 (v1) : Int
+    ; r4 (v0) : Int
+    ; r5 (offset) : Int
     ; r6 (i) : Int

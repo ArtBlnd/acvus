@@ -60,10 +60,11 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
         | InstKind::Cast { dst, .. }
-        | InstKind::IterStep { dst, .. }
+        | InstKind::ListStep { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Eval { dst, .. }
-        | InstKind::Poison { dst } => Some(*dst),
+        | InstKind::Poison { dst }
+        | InstKind::Undef { dst } => Some(*dst),
 
         // These don't define a new Val
         InstKind::VarStore { .. }
@@ -82,7 +83,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
-        InstKind::IterStep { iter_dst, .. } => vec![*iter_dst],
+        InstKind::ListStep { index_dst, .. } => vec![*index_dst],
         _ => vec![],
     }
 }

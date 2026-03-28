@@ -430,16 +430,18 @@ fn remap_inst(
         },
 
         // Iterator
-        InstKind::IterStep {
+        InstKind::ListStep {
             dst,
-            iter_src,
-            iter_dst,
+            list,
+            index_src,
+            index_dst,
             done,
             done_args,
-        } => InstKind::IterStep {
+        } => InstKind::ListStep {
             dst: r(*dst),
-            iter_src: r(*iter_src),
-            iter_dst: r(*iter_dst),
+            list: r(*list),
+            index_src: r(*index_src),
+            index_dst: r(*index_dst),
             done: rl(*done),
             done_args: done_args.iter().map(|v| r(*v)).collect(),
         },
@@ -497,8 +499,9 @@ fn remap_inst(
             kind: *kind,
         },
 
-        // Poison
+        // Poison / Undef
         InstKind::Poison { dst } => InstKind::Poison { dst: r(*dst) },
+        InstKind::Undef { dst } => InstKind::Undef { dst: r(*dst) },
     }
 }
 

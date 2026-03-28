@@ -6,51 +6,52 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     5 │   r2 = T0 + T0
-     6 │   r3 = cast ListToIterator r1
-     8 │   jump L0(r3, T0, r4, 0 (r5))
-     9 │ L0(r6: Iterator<Int>, r7: String, r8: Int, r9: Int):
-    10 │   iter_step r10, r11 = r6 else L1(r7)
-    11 │ L3:
-    14 │   r12 = T0 + T0
-    15 │   r13 = r7 + r12
-    16 │   jump L0(r11, r13, r10, r10)
-    17 │ L1(r14: String):
-    18 │   jump L2(r14)
-    19 │ L2(r15: String):
-    20 │   r16 = r2 + r15
-    21 │   r17 = poison
-    22 │   r18 = r16 + r17
-    23 │   return r18
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @items
+     3 │   r3 = context_load r2
+     7 │   r4 = T0 + T0
+    10 │   jump L0(0 (r5), T0, r0, 0 (r6))
+    11 │ L0(r7: Int, r8: String, r9: Int, r10: Int):
+    12 │   list_step r11, r12 = r3[r7] else L1(r8)
+    13 │ L3:
+    16 │   r13 = T0 + T0
+    17 │   r14 = r8 + r13
+    18 │   jump L0(r12, r14, r11, r11)
+    19 │ L1(r15: String):
+    20 │   jump L2(r15)
+    21 │ L2(r16: String):
+    22 │   r17 = r4 + r16
+    23 │   r18 = call #0(r10)
+    24 │   r19 = r17 + r18
+    25 │   return r19
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (v5) : String
-    ; r3 (v8) : Iterator<Int>
-    ; r4 (v25) : Int
-    ; r5 (v3) : Int
-    ; r6 (v10) : Iterator<Int>
-    ; r7 (v11) : String
-    ; r8 (v27) : Int
-    ; r9 (v28) : Int
-    ; r10 (x) : Int
-    ; r11 (v13) : Iterator<Int>
-    ; r12 (v17) : String
-    ; r13 (v18) : String
-    ; r14 (v19) : String
-    ; r15 (v20) : String
-    ; r16 (v21) : String
-    ; r17 (to_string(...)) : String
-    ; r18 (v24) : String
-    ; r19 (last) : Int
-    ; r20 (@items) : List<Int>
-    ; r21 (v9) : String
-    ; r22 (v14) : String
-    ; r23 (x) : Int
-    ; r24 (v2) : String
-    ; r25 (v4) : String
-    ; r26 (v26) : Int
+    ; r0 (v25) : Int
+    ; r1 (v26) : Int
+    ; r2 (@items) : List<Int>
+    ; r3 (v1) : List<Int>
+    ; r4 (v5) : String
+    ; r5 (v8) : Int
+    ; r6 (v3) : Int
+    ; r7 (v10) : Int
+    ; r8 (v11) : String
+    ; r9 (v27) : Int
+    ; r10 (v28) : Int
+    ; r11 (x) : Int
+    ; r12 (v13) : Int
+    ; r13 (v17) : String
+    ; r14 (v18) : String
+    ; r15 (v19) : String
+    ; r16 (v20) : String
+    ; r17 (v21) : String
+    ; r18 (to_string(...)) : String
+    ; r19 (v24) : String
+    ; r20 (last) : Int
+    ; r21 (@items) : List<Int>
+    ; r22 (v9) : String
+    ; r23 (v14) : String
+    ; r24 (x) : Int
+    ; r25 (v2) : String
+    ; r26 (v4) : String
     ; r27 (v7) : List<Int>
     ; r28 (v16) : String

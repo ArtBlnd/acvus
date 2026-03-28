@@ -8,10 +8,11 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::graph::QualifiedRef;
+use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 
-fn user_defined_ty(id: UserDefinedId) -> Ty {
+fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
@@ -19,8 +20,8 @@ fn user_defined_ty(id: UserDefinedId) -> Ty {
     }
 }
 
-/// Newtype for `chrono::DateTime<Utc>` — carries its `UserDefinedId`.
-struct Dt(chrono::DateTime<chrono::Utc>, UserDefinedId);
+/// Newtype for `chrono::DateTime<Utc>` — carries its `QualifiedRef`.
+struct Dt(chrono::DateTime<chrono::Utc>, QualifiedRef);
 
 impl FromValue for Dt {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
@@ -111,16 +112,15 @@ fn h_timestamp(
 
 /// Build the datetime ExternRegistry.
 /// Registers the `DateTime` UserDefined type into `type_registry`.
-pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
-    let id = UserDefinedId::alloc();
+pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> ExternRegistry {
+    let qref = QualifiedRef::root(interner.intern("DateTime"));
     type_registry.register(UserDefinedDecl {
-        id,
-        name: "DateTime".into(),
+        qref,
         type_params: vec![],
         effect_params: vec![],
     });
 
-    let ty = user_defined_ty(id);
+    let ty = user_defined_ty(qref);
     ExternRegistry::new(move |interner| {
         let mut fns = Vec::new();
 
@@ -129,7 +129,7 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
         fns.push(
             ExternFnBuilder::new("now", sig_io(interner, vec![], ty.clone()))
                 .handler(move |_interner: &Interner, (): (), Uses(()): Uses<()>| {
-                    Ok((Dt(chrono::Utc::now(), id), Defs(())))
+                    Ok((Dt(chrono::Utc::now(), qref), Defs(())))
                 }),
         );
 
@@ -156,7 +156,7 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                                 "parse_date: invalid input '{s}' with format '{fmt}': {e}"
                             )
                         });
-                    Ok((Dt(dt, id), Defs(())))
+                    Ok((Dt(dt, qref), Defs(())))
                 },
             ),
             // timestamp(dt) -> Int  (Unix epoch seconds)
@@ -174,7 +174,7 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 move |_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
                     let dt = chrono::DateTime::from_timestamp(epoch, 0)
                         .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
-                    Ok((Dt(dt, id), Defs(())))
+                    Ok((Dt(dt, qref), Defs(())))
                 },
             ),
             // add_days(dt, n) -> DateTime
@@ -186,7 +186,7 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 move |_interner: &Interner,
                       (Dt(dt, _), n): (Dt, i64),
                       Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::days(n), id), Defs(())))
+                    Ok((Dt(dt + chrono::Duration::days(n), qref), Defs(())))
                 },
             ),
             // add_hours(dt, n) -> DateTime
@@ -198,7 +198,7 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
                 move |_interner: &Interner,
                       (Dt(dt, _), n): (Dt, i64),
                       Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::hours(n), id), Defs(())))
+                    Ok((Dt(dt + chrono::Duration::hours(n), qref), Defs(())))
                 },
             ),
         ]);
@@ -216,7 +216,7 @@ mod tests {
     fn registry_produces_functions() {
         let i = Interner::new();
         let mut tr = TypeRegistry::new();
-        let reg = datetime_registry(&mut tr);
+        let reg = datetime_registry(&i, &mut tr);
         let registered = reg.register(&i);
         // 6 pure functions + now() on non-wasm targets.
         assert!(registered.functions.len() >= 6);

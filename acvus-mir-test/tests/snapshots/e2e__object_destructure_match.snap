@@ -7,49 +7,51 @@ expression: ir
   T1 = "none"
 
 === main ===
-     0 │   r0 = context_project @user
-     1 │   r1 = context_load r0
-     3 │ L2:
-     5 │   r2 = test has_key(r1, "name")
-     6 │   r3 = r1.name
-     8 │   r4 = true (r5) && true (r6)
-     9 │   r7 = test has_key(r1, "age")
-    10 │   r8 = r1.age
-    12 │   r9 = r4 && true (r10)
-    13 │   jump_if r9 then L3 else L1
-    14 │ L3:
-    15 │   r11 = r1.name
-    16 │   r12 = r1.age
-    18 │   r13 = T0 + r11
-    19 │   r14 = poison
-    20 │   r15 = r13 + r14
-    21 │   jump L0(r15, r11, r12)
-    22 │ L1:
-    25 │   r16 = T0 + T1
-    26 │   jump L0(r16, r17, r18)
-    27 │ L0(r19: String, r20: String, r21: Int):  ; merge_of L2
-    28 │   r22 = T0 + r19
-    29 │   return r22
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @user
+     3 │   r3 = context_load r2
+     5 │ L2:
+     7 │   r4 = test has_key(r3, "name")
+     8 │   r5 = r3.name
+    10 │   r6 = true (r7) && true (r8)
+    11 │   r9 = test has_key(r3, "age")
+    12 │   r10 = r3.age
+    14 │   r11 = r6 && true (r12)
+    15 │   jump_if r11 then L3 else L1
+    16 │ L3:
+    17 │   r13 = r3.name
+    18 │   r14 = r3.age
+    20 │   r15 = T0 + r13
+    21 │   r16 = call #0(r14)
+    22 │   r17 = r15 + r16
+    23 │   jump L0(r17, r13, r14)
+    24 │ L1:
+    27 │   r18 = T0 + T1
+    28 │   jump L0(r18, r0, r1)
+    29 │ L0(r19: String, r20: String, r21: Int):  ; merge_of L2
+    30 │   r22 = T0 + r19
+    31 │   return r22
 
-    ; r0 (@user) : {age: Int, email: String, name: String}
-    ; r1 (v1) : {age: Int, email: String, name: String}
-    ; r2 (v6) : Bool
-    ; r3 (v7) : String
-    ; r4 (v9) : Bool
-    ; r5 (v5) : Bool
-    ; r6 (v8) : Bool
-    ; r7 (v10) : Bool
-    ; r8 (v11) : Int
-    ; r9 (v13) : Bool
-    ; r10 (v12) : Bool
-    ; r11 (name) : String
-    ; r12 (age) : Int
-    ; r13 (v18) : String
-    ; r14 (to_string(...)) : String
-    ; r15 (v21) : String
-    ; r16 (v24) : String
-    ; r17 (v27) : String
-    ; r18 (v28) : Int
+    ; r0 (v27) : String
+    ; r1 (v28) : Int
+    ; r2 (@user) : {age: Int, email: String, name: String}
+    ; r3 (v1) : {age: Int, email: String, name: String}
+    ; r4 (v6) : Bool
+    ; r5 (v7) : String
+    ; r6 (v9) : Bool
+    ; r7 (v5) : Bool
+    ; r8 (v8) : Bool
+    ; r9 (v10) : Bool
+    ; r10 (v11) : Int
+    ; r11 (v13) : Bool
+    ; r12 (v12) : Bool
+    ; r13 (name) : String
+    ; r14 (age) : Int
+    ; r15 (v18) : String
+    ; r16 (to_string(...)) : String
+    ; r17 (v21) : String
+    ; r18 (v24) : String
     ; r19 (v25) : String
     ; r20 (v29) : String
     ; r21 (v30) : Int

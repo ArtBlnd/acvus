@@ -156,13 +156,14 @@ impl<'a> TransferFunction<AbstractValue> for ValueDomainTransfer<'a> {
             | InstKind::Cast { dst, .. }
             | InstKind::Spawn { dst, .. }
             | InstKind::Eval { dst, .. }
-            | InstKind::Poison { dst } => {
+            | InstKind::Poison { dst }
+            | InstKind::Undef { dst } => {
                 state.set(*dst, AbstractValue::Top);
             }
 
-            InstKind::IterStep { dst, iter_dst, .. } => {
+            InstKind::ListStep { dst, index_dst, .. } => {
                 state.set(*dst, AbstractValue::Top);
-                state.set(*iter_dst, AbstractValue::Top);
+                state.set(*index_dst, AbstractValue::Top);
             }
 
             InstKind::BinOp { dst, .. } => {

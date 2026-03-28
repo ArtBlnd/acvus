@@ -33,7 +33,7 @@ pub fn run(body: &mut MirBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
     // Step 2: Run SSABuilder + patch PHIs (only if there are writes + merge points).
     let var_subst = if !ssa_info.written_contexts.is_empty() || !ssa_info.written_vars.is_empty() {
         let preds = cfg.predecessors();
-        let (phi_insertions, var_subst) = run_ssa_builder(
+        let (phi_insertions, var_subst, undef_defs) = run_ssa_builder(
             &cfg,
             &preds,
             &ssa_info,
@@ -42,6 +42,17 @@ pub fn run(body: &mut MirBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
         );
         if !phi_insertions.is_empty() {
             patch_instructions(body, &cfg, &phi_insertions, &ssa_info);
+        }
+        // Emit Undef instructions at the start of the entry block for SSA initial values.
+        if !undef_defs.is_empty() {
+            let undef_insts: Vec<Inst> = undef_defs
+                .into_iter()
+                .map(|dst| Inst {
+                    span: acvus_ast::Span { start: 0, end: 0 },
+                    kind: InstKind::Undef { dst },
+                })
+                .collect();
+            body.insts.splice(0..0, undef_insts);
         }
         var_subst
     } else {
@@ -254,7 +265,7 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         }
     };
     match kind {
-        InstKind::Const { .. } | InstKind::Nop | InstKind::Poison { .. } => {}
+        InstKind::Const { .. } | InstKind::Nop | InstKind::Poison { .. } | InstKind::Undef { .. } => {}
         InstKind::ContextProject { .. } => {}
         InstKind::ContextLoad { src, .. } => s(src),
         InstKind::ContextStore { dst, value } => {
@@ -323,12 +334,14 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::ListSlice { list, .. } => s(list),
         InstKind::ObjectGet { object, .. } => s(object),
         InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(&s),
-        InstKind::IterStep {
-            iter_src,
+        InstKind::ListStep {
+            list,
+            index_src,
             done_args,
             ..
         } => {
-            s(iter_src);
+            s(list);
+            s(index_src);
             done_args.iter_mut().for_each(&s);
         }
         InstKind::MakeVariant { payload, .. } => {
@@ -502,7 +515,7 @@ fn run_ssa_builder(
     ssa_info: &SsaInfo,
     val_factory: &mut acvus_utils::LocalFactory<ValueId>,
     val_types: &mut FxHashMap<ValueId, Ty>,
-) -> (Vec<crate::ssa::PhiInsertion>, FxHashMap<ValueId, ValueId>) {
+) -> (Vec<crate::ssa::PhiInsertion>, FxHashMap<ValueId, ValueId>, Vec<ValueId>) {
     let mut ssa = SSABuilder::new();
 
     let block_label = |bi: BlockIdx| -> Label {
@@ -535,24 +548,39 @@ fn run_ssa_builder(
     ssa.seal_block(ENTRY_BLOCK, &mut || val_factory.next());
 
     // Define initial values in entry block.
+    let mut undef_defs: Vec<ValueId> = Vec::new();
+
     // Context entry defs (from ContextLoad in entry region).
     for (&ctx_id, &val) in &ssa_info.entry_ctx_defs {
         ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), val);
     }
+    // Written contexts without entry defs need undef initial value.
+    // These are write-only contexts (first operation is ContextStore, no prior ContextLoad).
+    for &ctx_id in &ssa_info.written_contexts {
+        if !ssa_info.entry_ctx_defs.contains_key(&ctx_id) {
+            let undef_val = val_factory.next();
+            if let Some(ty) = ssa_info.ctx_types.get(&ctx_id) {
+                val_types.insert(undef_val, ty.clone());
+            }
+            ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), undef_val);
+            undef_defs.push(undef_val);
+        }
+    }
+
     // Param entry defs (from ParamLoad in entry region).
     for (name, &val) in &ssa_info.entry_param_defs {
         ssa.define(ENTRY_BLOCK, SsaVar::Local(*name), val);
     }
-    // Written vars without entry defs need a bottom/poison definition
-    // so the SSA builder can resolve use_var at merge points.
+    // Written vars without entry defs need undef initial value.
     // These are variables first defined inside a block (e.g., loop iterator bindings).
     for &name in &ssa_info.written_vars {
         if !ssa_info.entry_param_defs.contains_key(&name) {
-            let poison = val_factory.next();
+            let undef_val = val_factory.next();
             if let Some(ty) = ssa_info.var_types.get(&name) {
-                val_types.insert(poison, ty.clone());
+                val_types.insert(undef_val, ty.clone());
             }
-            ssa.define(ENTRY_BLOCK, SsaVar::Local(name), poison);
+            ssa.define(ENTRY_BLOCK, SsaVar::Local(name), undef_val);
+            undef_defs.push(undef_val);
         }
     }
 
@@ -639,7 +667,7 @@ fn run_ssa_builder(
         }
     }
 
-    (ssa.finish(), var_subst)
+    (ssa.finish(), var_subst, undef_defs)
 }
 
 // ── Step 3: Patch instructions ──────────────────────────────────────
@@ -689,7 +717,7 @@ fn patch_instructions(
                 else_label,
                 ..
             } => merge_labels.contains(then_label) || merge_labels.contains(else_label),
-            Terminator::IterStep { done, .. } => merge_labels.contains(done),
+            Terminator::ListStep { done, .. } => merge_labels.contains(done),
             _ => false,
         };
         if jumps_to_merge {
@@ -917,19 +945,6 @@ mod tests {
     }
 
     #[test]
-    fn iter_no_write_no_phi() {
-        let i = Interner::new();
-        let (mut module, _) = compile_template(
-            &i,
-            r#"{{ x in @items }}{{ x | to_string }}{{/}}"#,
-            &[("items", Ty::List(Box::new(Ty::String)))],
-        )
-        .unwrap();
-        run(&mut module.main, &no_fn_types());
-        assert_eq!(count_context_stores(&module.main), 0);
-    }
-
-    #[test]
     fn straight_line_write_preserved() {
         let i = Interner::new();
         let (mut module, _) = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
@@ -978,7 +993,7 @@ mod tests {
 
     #[test]
     fn script_nested_loop_phi() {
-        // Nested loop must not panic in SSA pass (regression: IterStep CFG terminator).
+        // Nested loop must not panic in SSA pass (regression: ListStep CFG terminator).
         let i = Interner::new();
         let (module, _) = compile_script(
             &i,

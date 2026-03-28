@@ -3,53 +3,54 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @data
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @sum
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @data
      3 │   r3 = context_load r2
-     5 │   r4 = test has_key(r1, "items")
-     6 │   r5 = r1.items
-     8 │   r6 = true (r7) && true (r8)
-     9 │   jump_if r6 then L0 else L1(r3, r9, r10)
-    10 │ L0:
-    11 │   r11 = r1.items
-    12 │   r12 = cast ListToIterator r11
-    13 │   jump L2(r12, r3, r9)
-    14 │ L2(r13: Iterator<Int>, r14: Int, r15: Int):
-    15 │   r16 = context_project @sum
-    16 │   ctx_store r16 = r14
-    17 │   iter_step r17, r18 = r13 else L3()
-    18 │ L4:
-    19 │   r19 = context_project @sum
-    20 │   r20 = context_load r19
-    21 │   r21 = r20 + r17
-    22 │   jump L2(r18, r21, r17)
-    23 │ L3:
-    24 │   jump L1(r14, r15, r11)
-    25 │ L1(r22: Int, r23: Int, r24: List<Int>):
-    26 │   r25 = context_project @sum
-    27 │   ctx_store r25 = r22
-    28 │   return r22
+     4 │   r4 = context_project @sum
+     5 │   r5 = context_load r4
+     7 │   r6 = test has_key(r3, "items")
+     8 │   r7 = r3.items
+    10 │   r8 = true (r9) && true (r10)
+    11 │   jump_if r8 then L0 else L1(r5, r0, r1)
+    12 │ L0:
+    13 │   r11 = r3.items
+    15 │   jump L2(0 (r12), r5, r0)
+    16 │ L2(r13: Int, r14: Int, r15: Int):
+    17 │   r16 = context_project @sum
+    18 │   ctx_store r16 = r14
+    19 │   list_step r17, r18 = r11[r13] else L3()
+    20 │ L4:
+    21 │   r19 = context_project @sum
+    22 │   r20 = context_load r19
+    23 │   r21 = r20 + r17
+    24 │   jump L2(r18, r21, r17)
+    25 │ L3:
+    26 │   jump L1(r14, r15, r11)
+    27 │ L1(r22: Int, r23: Int, r24: List<Int>):
+    28 │   r25 = context_project @sum
+    29 │   ctx_store r25 = r22
+    30 │   return r22
 
-    ; r0 (@data) : {items: List<Int>}
-    ; r1 (v1) : {items: List<Int>}
-    ; r2 (@sum) : Int
-    ; r3 (v3) : Int
-    ; r4 (v7) : Bool
-    ; r5 (v8) : List<Int>
-    ; r6 (v10) : Bool
-    ; r7 (v6) : Bool
-    ; r8 (v9) : Bool
-    ; r9 (v24) : Int
-    ; r10 (v25) : List<Int>
+    ; r0 (v24) : Int
+    ; r1 (v25) : List<Int>
+    ; r2 (@data) : {items: List<Int>}
+    ; r3 (v1) : {items: List<Int>}
+    ; r4 (@sum) : Int
+    ; r5 (v3) : Int
+    ; r6 (v7) : Bool
+    ; r7 (v8) : List<Int>
+    ; r8 (v10) : Bool
+    ; r9 (v6) : Bool
+    ; r10 (v9) : Bool
     ; r11 (items) : List<Int>
-    ; r12 (v13) : Iterator<Int>
-    ; r13 (v14) : Iterator<Int>
+    ; r12 (v13) : Int
+    ; r13 (v14) : Int
     ; r14 (v26) : Int
     ; r15 (v27) : Int
     ; r16 (v32) : Int
     ; r17 (x) : Int
-    ; r18 (v16) : Iterator<Int>
+    ; r18 (v16) : Int
     ; r19 (@sum) : Int
     ; r20 (v18) : Int
     ; r21 (v20) : Int

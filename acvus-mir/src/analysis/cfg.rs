@@ -18,8 +18,8 @@ pub enum Terminator {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
-    /// IterStep: fallthrough if element available, jump to `done` if exhausted.
-    IterStep {
+    /// ListStep: fallthrough if element available, jump to `done` if exhausted.
+    ListStep {
         done: Label,
         done_args: Vec<ValueId>,
     },
@@ -106,7 +106,7 @@ impl Cfg {
                         merge_of: current_merge_of.take(),
                     });
                 }
-                InstKind::IterStep {
+                InstKind::ListStep {
                     done, done_args, ..
                 } => {
                     inst_indices.push(i);
@@ -114,7 +114,7 @@ impl Cfg {
                         label: label.take(),
                         params: std::mem::take(&mut params),
                         inst_indices: std::mem::take(&mut inst_indices),
-                        terminator: Terminator::IterStep {
+                        terminator: Terminator::ListStep {
                             done: *done,
                             done_args: done_args.clone(),
                         },
@@ -191,7 +191,7 @@ impl Cfg {
                     succs.push(bi);
                 }
             }
-            Terminator::IterStep { done, .. } => {
+            Terminator::ListStep { done, .. } => {
                 // Fallthrough (element available) + done branch (exhausted).
                 let next = idx.0 + 1;
                 if next < self.blocks.len() {
@@ -222,8 +222,8 @@ mod tests {
 
     #[test]
     fn iter_step_is_terminator() {
-        // IterStep must split the block — the block containing IterStep should
-        // have an IterStep terminator, not Fallthrough.
+        // ListStep must split the block — the block containing ListStep should
+        // have a ListStep terminator, not Fallthrough.
         let i = Interner::new();
         let (module, _) = compile_script(
             &i,
@@ -235,13 +235,13 @@ mod tests {
         let has_iter_term = cfg
             .blocks
             .iter()
-            .any(|b| matches!(b.terminator, Terminator::IterStep { .. }));
-        assert!(has_iter_term, "IterStep should be a CFG terminator");
+            .any(|b| matches!(b.terminator, Terminator::ListStep { .. }));
+        assert!(has_iter_term, "ListStep should be a CFG terminator");
     }
 
     #[test]
     fn iter_step_done_branch_has_predecessor() {
-        // The done-label of IterStep must appear as a successor, so it has a predecessor.
+        // The done-label of ListStep must appear as a successor, so it has a predecessor.
         let i = Interner::new();
         let (module, _) = compile_script(
             &i,

@@ -8,7 +8,7 @@ use acvus_interpreter::builtins::build_builtins;
 use acvus_interpreter::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::graph::*;
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -19,7 +19,7 @@ async fn run_ext(
     context: FxHashMap<Astr, Value>,
     registries: Vec<ExternRegistry>,
 ) -> Value {
-    run_ext_with_registry(interner, source, context, registries, Freeze::default()).await
+    run_ext_with_registry(interner, source, context, registries, TypeRegistry::new()).await
 }
 
 /// Compile + execute with a custom TypeRegistry (for ExternCast tests).
@@ -28,7 +28,7 @@ async fn run_ext_with_registry(
     source: &str,
     context: FxHashMap<Astr, Value>,
     registries: Vec<ExternRegistry>,
-    type_registry: Freeze<TypeRegistry>,
+    mut type_registry: TypeRegistry,
 ) -> Value {
     let context_types: FxHashMap<Astr, Ty> = context
         .iter()
@@ -36,12 +36,7 @@ async fn run_ext_with_registry(
         .collect();
 
     // Register all ext functions (stdlib + caller-provided).
-    let mut all_registries = vec![
-        string_registry(),
-        conversion_registry(),
-        list_registry(),
-        option_registry(),
-    ];
+    let mut all_registries = std_registries(interner, &mut type_registry);
     all_registries.extend(registries);
     let registered: Vec<Registered> = all_registries
         .into_iter()
@@ -82,7 +77,7 @@ async fn run_ext_with_registry(
 
     // Compile.
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), type_registry);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::new(type_registry));
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
@@ -178,7 +173,7 @@ async fn regex_match_true() {
         &i,
         r#"re = regex("\\d+"); regex_match(re, "abc123")"#,
         c,
-        vec![regex_registry(&mut tr)],
+        vec![regex_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::Bool(true));
@@ -192,7 +187,7 @@ async fn regex_match_false() {
         &i,
         r#"re = regex("\\d+"); regex_match(re, "abc")"#,
         FxHashMap::default(),
-        vec![regex_registry(&mut tr)],
+        vec![regex_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::Bool(false));
@@ -206,7 +201,7 @@ async fn regex_find_all_collect() {
         &i,
         r#"re = regex("\\d+"); regex_find_all(re, "a1b22c333") | collect"#,
         FxHashMap::default(),
-        vec![regex_registry(&mut tr)],
+        vec![regex_registry(&i, &mut tr)],
     )
     .await;
     let Value::List(items) = result else {
@@ -226,7 +221,7 @@ async fn regex_replace() {
         &i,
         r#"re = regex("\\s+"); regex_replace("hello   world", re, " ")"#,
         FxHashMap::default(),
-        vec![regex_registry(&mut tr)],
+        vec![regex_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::string("hello world"));
@@ -240,7 +235,7 @@ async fn regex_split_collect() {
         &i,
         r#"re = regex("[,;]\\s*"); regex_split(re, "a, b;c") | collect"#,
         FxHashMap::default(),
-        vec![regex_registry(&mut tr)],
+        vec![regex_registry(&i, &mut tr)],
     )
     .await;
     let Value::List(items) = result else {
@@ -295,7 +290,7 @@ async fn datetime_format_from_timestamp() {
         &i,
         r#"dt = from_timestamp(1704067200); format_date(dt, "%Y-%m-%d")"#,
         FxHashMap::default(),
-        vec![datetime_registry(&mut tr)],
+        vec![datetime_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::string("2024-01-01"));
@@ -309,7 +304,7 @@ async fn datetime_timestamp_roundtrip() {
         &i,
         r#"dt = from_timestamp(1704067200); timestamp(dt)"#,
         FxHashMap::default(),
-        vec![datetime_registry(&mut tr)],
+        vec![datetime_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::Int(1704067200));
@@ -323,7 +318,7 @@ async fn datetime_add_days() {
         &i,
         r#"dt = from_timestamp(1704067200); dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d")"#,
         FxHashMap::default(),
-        vec![datetime_registry(&mut tr)],
+        vec![datetime_registry(&i, &mut tr)],
     )
     .await;
     assert_eq!(result, Value::string("2024-01-02"));
@@ -337,7 +332,7 @@ async fn datetime_parse_and_format() {
         &i,
         r#"dt = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S"); format_date(dt, "%m/%d/%Y")"#,
         FxHashMap::default(),
-        vec![datetime_registry(&mut tr)],
+        vec![datetime_registry(&i, &mut tr)],
     ).await;
     assert_eq!(result, Value::string("06/15/2024"));
 }
@@ -354,7 +349,7 @@ async fn mixed_regex_and_encoding() {
         &i,
         r#"base64_encode("hello") + " " + to_string(regex_match(regex("\\d+"), "abc123"))"#,
         FxHashMap::default(),
-        vec![regex_registry(&mut tr), encoding_registry()],
+        vec![regex_registry(&i, &mut tr), encoding_registry()],
     )
     .await;
     assert_eq!(result, Value::string("aGVsbG8= true"));
@@ -388,17 +383,16 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
 /// - ExternFn "to_int" → MyNum → Int (extracts inner value)
 /// - CastRule: MyNum → Int (fn = to_int)
 /// - ExternFn "double" → Int → Int (doubles the value)
-fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
-    let my_num_id = UserDefinedId::alloc();
+fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
+    let my_num_qref = QualifiedRef::root(interner.intern("MyNum"));
     tr.register(UserDefinedDecl {
-        id: my_num_id,
-        name: "MyNum".into(),
+        qref: my_num_qref,
         type_params: vec![],
         effect_params: vec![],
     });
 
     let my_num_ty = Ty::UserDefined {
-        id: my_num_id,
+        id: my_num_qref,
         type_args: vec![],
         effect_args: vec![],
     };
@@ -412,7 +406,7 @@ fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
             ExternFnBuilder::new("make_num", sig(interner, vec![], ty_clone.clone()))
                 .handler(move |_interner: &acvus_utils::Interner, (): (), Uses(()): Uses<()>| {
                     Ok((
-                        Value::opaque(OpaqueValue::new(my_num_id, 42i64)),
+                        Value::opaque(OpaqueValue::new(my_num_qref, 42i64)),
                         Defs(()),
                     ))
                 }),
@@ -454,15 +448,10 @@ fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
 async fn extern_cast_auto_coercion() {
     let i = Interner::new();
     let mut tr = TypeRegistry::new();
-    let registries = extern_cast_setup(&mut tr);
+    let registries = extern_cast_setup(&i, &mut tr);
 
-    // Register stdlib + test registries.
-    let mut all_registries = vec![
-        string_registry(),
-        conversion_registry(),
-        list_registry(),
-        option_registry(),
-    ];
+    // Register stdlib + test registries into the same TypeRegistry.
+    let mut all_registries = std_registries(&i, &mut tr);
     all_registries.extend(registries);
     let registered: Vec<Registered> = all_registries
         .into_iter()
@@ -477,9 +466,9 @@ async fn extern_cast_auto_coercion() {
         .unwrap()
         .qref;
 
-    let my_num_id = tr.iter().next().unwrap().0;
+    let my_num_qref = QualifiedRef::root(i.intern("MyNum"));
     let my_num_ty = Ty::UserDefined {
-        id: *my_num_id,
+        id: my_num_qref,
         type_args: vec![],
         effect_args: vec![],
     };

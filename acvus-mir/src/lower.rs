@@ -313,66 +313,72 @@ impl<'a> Lowerer<'a> {
         let source_reg = self.materialize(source_raw, span);
 
         let elem_ty = self.iterable_elem_type(source_reg);
-        let iter_ty = Ty::Iterator(Box::new(elem_ty.clone()), Effect::pure());
-        let cast_kind = match self.body.val_types.get(&source_reg) {
-            Some(Ty::Deque(..)) => CastKind::DequeToIterator,
-            Some(Ty::List(_)) => CastKind::ListToIterator,
-            Some(Ty::Range) => CastKind::RangeToIterator,
-            _ => CastKind::DequeToIterator,
+
+        // Convert source to List if needed (Deque→List, Range→List).
+        let list_reg = match self.body.val_types.get(&source_reg) {
+            Some(Ty::List(_)) => source_reg,
+            Some(Ty::Deque(..)) => {
+                let cast_dst = self.alloc_val();
+                self.set_val_type(cast_dst, Ty::List(Box::new(elem_ty.clone())));
+                self.emit_inst(span, InstKind::Cast { dst: cast_dst, src: source_reg, kind: CastKind::DequeToList });
+                cast_dst
+            }
+            Some(Ty::Range) => {
+                let cast_dst = self.alloc_val();
+                self.set_val_type(cast_dst, Ty::List(Box::new(Ty::Int)));
+                self.emit_inst(span, InstKind::Cast { dst: cast_dst, src: source_reg, kind: CastKind::RangeToList });
+                cast_dst
+            }
+            _ => source_reg,
         };
 
-        let cast_dst = self.alloc_val();
-        self.set_val_type(cast_dst, iter_ty.clone());
-        self.emit_inst(
-            span,
-            InstKind::Cast {
-                dst: cast_dst,
-                src: source_reg,
-                kind: cast_kind,
-            },
-        );
+        // Initial index = 0.
+        let zero = self.alloc_val();
+        self.set_val_type(zero, Ty::Int);
+        self.emit_inst(span, InstKind::Const { dst: zero, value: Literal::Int(0) });
 
         let loop_label = self.alloc_label();
         let end_label = self.alloc_label();
 
-        // Jump to loop with initial iterator.
+        // Jump to loop with initial index.
         self.emit_inst(
             span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![cast_dst],
+                args: vec![zero],
             },
         );
 
-        // Loop header — receives iterator as block param.
-        let iter_param = self.alloc_val();
-        self.set_val_type(iter_param, iter_ty.clone());
+        // Loop header — receives index as block param.
+        let index_param = self.alloc_val();
+        self.set_val_type(index_param, Ty::Int);
         self.emit_inst(
             span,
             InstKind::BlockLabel {
                 label: loop_label,
-                params: vec![iter_param],
+                params: vec![index_param],
                 merge_of: None,
             },
         );
 
-        // Pull one element — jumps to end if exhausted.
+        // ListStep — if index >= len, jump to end; else dst = list[index].
         let value_reg = self.alloc_val();
         self.set_val_type(value_reg, elem_ty);
-        let rest_iter = self.alloc_val();
-        self.set_val_type(rest_iter, iter_ty);
+        let next_index = self.alloc_val();
+        self.set_val_type(next_index, Ty::Int);
         self.emit_inst(
             span,
-            InstKind::IterStep {
+            InstKind::ListStep {
                 dst: value_reg,
-                iter_src: iter_param,
-                iter_dst: rest_iter,
+                list: list_reg,
+                index_src: index_param,
+                index_dst: next_index,
                 done: end_label,
                 done_args: vec![],
             },
         );
 
-        // Explicit body label after IterStep (IterStep is a terminator in CFG).
+        // Body label after ListStep (ListStep is a terminator in CFG).
         let body_label = self.alloc_label();
         self.emit_label(span, body_label);
 
@@ -384,12 +390,12 @@ impl<'a> Lowerer<'a> {
         }
         self.pop_scope();
 
-        // Jump back to loop.
+        // Jump back to loop with next index.
         self.emit_inst(
             span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![rest_iter],
+                args: vec![next_index],
             },
         );
 
@@ -1526,27 +1532,29 @@ impl<'a> Lowerer<'a> {
         let source_raw = self.lower_expr(&ib.source);
         let source_reg = self.materialize(source_raw, ib.span);
 
-        // Determine element type and CastKind from the source type.
+        // Determine element type and convert source to List if needed.
         let elem_ty = self.iterable_elem_type(source_reg);
-        let iter_ty = Ty::Iterator(Box::new(elem_ty.clone()), Effect::pure());
-        let cast_kind = match self.body.val_types.get(&source_reg) {
-            Some(Ty::Deque(..)) => CastKind::DequeToIterator,
-            Some(Ty::List(_)) => CastKind::ListToIterator,
-            Some(Ty::Range) => CastKind::RangeToIterator,
-            _ => CastKind::DequeToIterator, // fallback — type checker should prevent this
+        let list_reg = match self.body.val_types.get(&source_reg) {
+            Some(Ty::List(_)) => source_reg,
+            Some(Ty::Deque(..)) => {
+                let cast_dst = self.alloc_val();
+                self.set_val_type(cast_dst, Ty::List(Box::new(elem_ty.clone())));
+                self.emit_inst(ib.span, InstKind::Cast { dst: cast_dst, src: source_reg, kind: CastKind::DequeToList });
+                cast_dst
+            }
+            Some(Ty::Range) => {
+                let cast_dst = self.alloc_val();
+                self.set_val_type(cast_dst, Ty::List(Box::new(Ty::Int)));
+                self.emit_inst(ib.span, InstKind::Cast { dst: cast_dst, src: source_reg, kind: CastKind::RangeToList });
+                cast_dst
+            }
+            _ => source_reg,
         };
 
-        // Cast source → Iterator.
-        let cast_dst = self.alloc_val();
-        self.set_val_type(cast_dst, iter_ty.clone());
-        self.emit_inst(
-            ib.span,
-            InstKind::Cast {
-                dst: cast_dst,
-                src: source_reg,
-                kind: cast_kind,
-            },
-        );
+        // Initial index = 0.
+        let zero = self.alloc_val();
+        self.set_val_type(zero, Ty::Int);
+        self.emit_inst(ib.span, InstKind::Const { dst: zero, value: Literal::Int(0) });
 
         let loop_label = self.alloc_label();
         let catch_all_label = self.alloc_label();
@@ -1555,46 +1563,47 @@ impl<'a> Lowerer<'a> {
         // Initial accumulator: empty string.
         let init_acc = self.emit_empty_string(ib.span);
 
-        // Jump to loop with initial iterator + accumulator.
+        // Jump to loop with initial index + accumulator.
         self.emit_inst(
             ib.span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![cast_dst, init_acc],
+                args: vec![zero, init_acc],
             },
         );
 
-        // Loop header — receives iterator + accumulator as block params.
-        let iter_param = self.alloc_val();
-        self.set_val_type(iter_param, iter_ty.clone());
+        // Loop header — receives index + accumulator as block params.
+        let index_param = self.alloc_val();
+        self.set_val_type(index_param, Ty::Int);
         let acc_param = self.alloc_val();
         self.set_val_type(acc_param, Ty::String);
         self.emit_inst(
             ib.span,
             InstKind::BlockLabel {
                 label: loop_label,
-                params: vec![iter_param, acc_param],
+                params: vec![index_param, acc_param],
                 merge_of: None,
             },
         );
 
-        // Pull one element — jumps to catch_all if exhausted.
+        // ListStep — if index >= len, jump to catch_all; else dst = list[index].
         let value_reg = self.alloc_val();
         self.set_val_type(value_reg, elem_ty);
-        let rest_iter = self.alloc_val();
-        self.set_val_type(rest_iter, iter_ty);
+        let next_index = self.alloc_val();
+        self.set_val_type(next_index, Ty::Int);
         self.emit_inst(
             ib.span,
-            InstKind::IterStep {
+            InstKind::ListStep {
                 dst: value_reg,
-                iter_src: iter_param,
-                iter_dst: rest_iter,
+                list: list_reg,
+                index_src: index_param,
+                index_dst: next_index,
                 done: catch_all_label,
                 done_args: vec![acc_param],
             },
         );
 
-        // Explicit body label after IterStep (IterStep is a terminator in CFG).
+        // Body label after ListStep (ListStep is a terminator in CFG).
         let body_label = self.alloc_label();
         self.emit_label(ib.span, body_label);
 
@@ -1611,12 +1620,12 @@ impl<'a> Lowerer<'a> {
 
         self.pop_scope();
 
-        // Jump back to loop with rest iterator + new accumulator.
+        // Jump back to loop with next index + new accumulator.
         self.emit_inst(
             ib.span,
             InstKind::Jump {
                 label: loop_label,
-                args: vec![rest_iter, new_acc],
+                args: vec![next_index, new_acc],
             },
         );
 

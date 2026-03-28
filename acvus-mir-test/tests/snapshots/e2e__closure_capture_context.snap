@@ -1,53 +1,56 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 855
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @threshold
-     3 │   r3 = context_load r2
-     5 │   r4 = poison
-     6 │   r5 = closure L0 []
-     7 │   r6 = poison
-     8 │   r7 = poison
-    10 │   r8 = T0 + T0
-    11 │   r9 = poison
-    12 │   r10 = poison
-    13 │   r11 = r8 + r10
-    14 │   return r11
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @threshold
+     4 │   r4 = context_load r3
+     6 │   r5 = call #0(r2)
+     7 │   r6 = closure L0 []
+     8 │   r7 = call #1(r5, r6)
+     9 │   r8 = call #2(r7)
+    11 │   r9 = T0 + T0
+    12 │   r10 = call #3(r8)
+    13 │   r11 = call #4(r10)
+    14 │   r12 = r9 + r11
+    15 │   return r12
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@threshold) : Int
-    ; r3 (v3) : Int
-    ; r4 (iter(...)) : Iterator<Int>
-    ; r5 (v8) : Fn(Int) -> Bool
-    ; r6 (filter(...)) : Iterator<Int>
-    ; r7 (collect(...)) : List<Int>
-    ; r8 (v12) : String
-    ; r9 (len(...)) : Int
-    ; r10 (to_string(...)) : String
-    ; r11 (v16) : String
-    ; r12 (v11) : String
-    ; r13 (v6) : List<Int>
-    ; r14 (v17) : List<Int>
+    ; r0 (v17) : List<Int>
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (@threshold) : Int
+    ; r4 (v3) : Int
+    ; r5 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (v8) : Fn(Int) -> Bool
+    ; r7 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r8 (collect(...)) : List<Int>
+    ; r9 (v12) : String
+    ; r10 (len(...)) : Int
+    ; r11 (to_string(...)) : String
+    ; r12 (v16) : String
+    ; r13 (v11) : String
+    ; r14 (v6) : List<Int>
     ; r15 (v4) : String
     ; r16 (x) : List<Int>
     ; r17 (@items) : List<Int>
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = context_project @threshold
-     1 │   r1 = context_load r0
-     2 │   r2 = r3 > r1
-     3 │   return r2
+     0 │   r0 = undef
+     1 │   r1 = context_project @threshold
+     2 │   r2 = context_load r1
+     3 │   r3 = r4 > r2
+     4 │   return r3
 
-    ; r0 (@threshold) : Int
-    ; r1 (v3) : Int
-    ; r2 (v4) : Bool
-    ; r3 (v0) : Int
-    ; r4 (i) : Int
-    ; r5 (v5) : Int
+    ; r0 (v5) : Int
+    ; r1 (@threshold) : Int
+    ; r2 (v3) : Int
+    ; r3 (v4) : Bool
+    ; r4 (v0) : Int
+    ; r5 (i) : Int

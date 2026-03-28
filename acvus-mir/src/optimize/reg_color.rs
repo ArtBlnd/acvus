@@ -166,11 +166,12 @@ fn for_each_def(kind: &InstKind, mut f: impl FnMut(ValueId)) {
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
         | InstKind::Cast { dst, .. }
-        | InstKind::Poison { dst, .. } => f(*dst),
+        | InstKind::Poison { dst, .. }
+        | InstKind::Undef { dst } => f(*dst),
 
-        InstKind::IterStep { dst, iter_dst, .. } => {
+        InstKind::ListStep { dst, index_dst, .. } => {
             f(*dst);
-            f(*iter_dst);
+            f(*index_dst);
         }
         InstKind::BlockLabel { params, .. } => {
             for &p in params {
@@ -204,7 +205,8 @@ fn for_each_use(kind: &InstKind, mut f: impl FnMut(ValueId)) {
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
-        | InstKind::Poison { .. } => {}
+        | InstKind::Poison { .. }
+        | InstKind::Undef { .. } => {}
 
         InstKind::ContextLoad { src, .. } => f(*src),
         InstKind::ContextStore { dst, value } => {
@@ -257,12 +259,14 @@ fn for_each_use(kind: &InstKind, mut f: impl FnMut(ValueId)) {
         InstKind::ListSlice { list, .. } => f(*list),
         InstKind::ObjectGet { object, .. } => f(*object),
         InstKind::MakeClosure { captures, .. } => captures.iter().for_each(|v| f(*v)),
-        InstKind::IterStep {
-            iter_src,
+        InstKind::ListStep {
+            list,
+            index_src,
             done_args,
             ..
         } => {
-            f(*iter_src);
+            f(*list);
+            f(*index_src);
             done_args.iter().for_each(|v| f(*v));
         }
         InstKind::MakeVariant { payload, .. } => {
@@ -420,16 +424,18 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             captures.iter_mut().for_each(&r);
         }
-        InstKind::IterStep {
+        InstKind::ListStep {
             dst,
-            iter_src,
-            iter_dst,
+            list,
+            index_src,
+            index_dst,
             done_args,
             ..
         } => {
             r(dst);
-            r(iter_src);
-            r(iter_dst);
+            r(list);
+            r(index_src);
+            r(index_dst);
             done_args.iter_mut().for_each(&r);
         }
         InstKind::MakeVariant { dst, payload, .. } => {
@@ -466,6 +472,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(src);
         }
         InstKind::Poison { dst, .. } => r(dst),
+        InstKind::Undef { dst } => r(dst),
         InstKind::Nop => {}
     }
 }

@@ -6,57 +6,58 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @users
-     1 │   r1 = context_load r0
-     3 │   r2 = cast ListToIterator r1
-     5 │   jump L0(r2, T0, r3, r4, r5)
-     6 │ L0(r6: Iterator<{name: String, posts: List<{title: String}>}>, r7: String, r8: String, r9: List<{title: String}>, r10: String):
-     7 │   iter_step r11, r12 = r6 else L1(r7)
-     8 │ L3:
-     9 │   r13 = r11.name
-    10 │   r14 = r11.posts
-    12 │   r15 = cast ListToIterator r14
-    14 │   jump L4(r15, T0, r10)
-    15 │ L4(r16: Iterator<{title: String}>, r17: String, r18: String):
-    16 │   iter_step r19, r20 = r16 else L5(r17)
-    17 │ L7:
-    18 │   r21 = r19.title
-    20 │   r22 = T0 + r21
-    21 │   r23 = r17 + r22
-    22 │   jump L4(r20, r23, r21)
-    23 │ L5(r24: String):
-    24 │   jump L6(r24)
-    25 │ L6(r25: String):
-    26 │   r26 = T0 + r25
-    27 │   r27 = r7 + r26
-    28 │   jump L0(r12, r27, r13, r14, r18)
-    29 │ L1(r28: String):
-    30 │   jump L2(r28)
-    31 │ L2(r29: String):
-    32 │   r30 = T0 + r29
-    33 │   return r30
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = undef
+     3 │   r3 = context_project @users
+     4 │   r4 = context_load r3
+     8 │   jump L0(0 (r5), T0, r0, r1, r2)
+     9 │ L0(r6: Int, r7: String, r8: String, r9: List<{title: String}>, r10: String):
+    10 │   list_step r11, r12 = r4[r6] else L1(r7)
+    11 │ L3:
+    12 │   r13 = r11.name
+    13 │   r14 = r11.posts
+    17 │   jump L4(0 (r15), T0, r10)
+    18 │ L4(r16: Int, r17: String, r18: String):
+    19 │   list_step r19, r20 = r14[r16] else L5(r17)
+    20 │ L7:
+    21 │   r21 = r19.title
+    23 │   r22 = T0 + r21
+    24 │   r23 = r17 + r22
+    25 │   jump L4(r20, r23, r21)
+    26 │ L5(r24: String):
+    27 │   jump L6(r24)
+    28 │ L6(r25: String):
+    29 │   r26 = T0 + r25
+    30 │   r27 = r7 + r26
+    31 │   jump L0(r12, r27, r13, r14, r18)
+    32 │ L1(r28: String):
+    33 │   jump L2(r28)
+    34 │ L2(r29: String):
+    35 │   r30 = T0 + r29
+    36 │   return r30
 
-    ; r0 (@users) : List<{name: String, posts: List<{title: String}>}>
-    ; r1 (v1) : List<{name: String, posts: List<{title: String}>}>
-    ; r2 (v5) : Iterator<{name: String, posts: List<{title: String}>}>
-    ; r3 (v33) : String
-    ; r4 (v34) : List<{title: String}>
-    ; r5 (v35) : String
-    ; r6 (v7) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r0 (v33) : String
+    ; r1 (v34) : List<{title: String}>
+    ; r2 (v35) : String
+    ; r3 (@users) : List<{name: String, posts: List<{title: String}>}>
+    ; r4 (v1) : List<{name: String, posts: List<{title: String}>}>
+    ; r5 (v5) : Int
+    ; r6 (v7) : Int
     ; r7 (v8) : String
     ; r8 (v36) : String
     ; r9 (v38) : List<{title: String}>
     ; r10 (v40) : String
     ; r11 (v9) : {name: String, posts: List<{title: String}>}
-    ; r12 (v10) : Iterator<{name: String, posts: List<{title: String}>}>
+    ; r12 (v10) : Int
     ; r13 (name) : String
     ; r14 (posts) : List<{title: String}>
-    ; r15 (v15) : Iterator<{title: String}>
-    ; r16 (v17) : Iterator<{title: String}>
+    ; r15 (v15) : Int
+    ; r16 (v17) : Int
     ; r17 (v18) : String
     ; r18 (v41) : String
     ; r19 (v19) : {title: String}
-    ; r20 (v20) : Iterator<{title: String}>
+    ; r20 (v20) : Int
     ; r21 (title) : String
     ; r22 (v24) : String
     ; r23 (v25) : String

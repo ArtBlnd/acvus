@@ -3,52 +3,52 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @product
-     3 │   r3 = context_load r2
-     4 │   r4 = context_project @sum
-     5 │   r5 = context_load r4
-     6 │   r6 = cast ListToIterator r1
-     7 │   jump L0(r6, r5, r3, r7)
-     8 │ L0(r8: Iterator<Int>, r9: Int, r10: Int, r11: Int):
-     9 │   r12 = context_project @sum
-    10 │   ctx_store r12 = r9
-    11 │   r13 = context_project @product
-    12 │   ctx_store r13 = r10
-    13 │   iter_step r14, r15 = r8 else L1()
-    14 │ L2:
-    15 │   r16 = context_project @sum
-    16 │   r17 = context_load r16
-    17 │   r18 = r17 + r14
-    18 │   r19 = context_project @product
-    19 │   r20 = context_load r19
-    20 │   r21 = r20 * r14
-    21 │   jump L0(r15, r18, r21, r14)
-    22 │ L1:
-    23 │   r22 = context_project @sum
-    24 │   r23 = context_load r22
-    25 │   r24 = context_project @product
-    26 │   r25 = context_load r24
-    27 │   r26 = r23 + r25
-    28 │   return r26
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @product
+     4 │   r4 = context_load r3
+     5 │   r5 = context_project @sum
+     6 │   r6 = context_load r5
+     8 │   jump L0(0 (r7), r6, r4, r0)
+     9 │ L0(r8: Int, r9: Int, r10: Int, r11: Int):
+    10 │   r12 = context_project @sum
+    11 │   ctx_store r12 = r9
+    12 │   r13 = context_project @product
+    13 │   ctx_store r13 = r10
+    14 │   list_step r14, r15 = r2[r8] else L1()
+    15 │ L2:
+    16 │   r16 = context_project @sum
+    17 │   r17 = context_load r16
+    18 │   r18 = r17 + r14
+    19 │   r19 = context_project @product
+    20 │   r20 = context_load r19
+    21 │   r21 = r20 * r14
+    22 │   jump L0(r15, r18, r21, r14)
+    23 │ L1:
+    24 │   r22 = context_project @sum
+    25 │   r23 = context_load r22
+    26 │   r24 = context_project @product
+    27 │   r25 = context_load r24
+    28 │   r26 = r23 + r25
+    29 │   return r26
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@product) : Int
-    ; r3 (v3) : Int
-    ; r4 (@sum) : Int
-    ; r5 (v5) : Int
-    ; r6 (v8) : Iterator<Int>
-    ; r7 (v27) : Int
-    ; r8 (v9) : Iterator<Int>
+    ; r0 (v27) : Int
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (@product) : Int
+    ; r4 (v3) : Int
+    ; r5 (@sum) : Int
+    ; r6 (v5) : Int
+    ; r7 (v8) : Int
+    ; r8 (v9) : Int
     ; r9 (v28) : Int
     ; r10 (v29) : Int
     ; r11 (v30) : Int
     ; r12 (v31) : Int
     ; r13 (v32) : Int
     ; r14 (x) : Int
-    ; r15 (v11) : Iterator<Int>
+    ; r15 (v11) : Int
     ; r16 (@sum) : Int
     ; r17 (v13) : Int
     ; r18 (v15) : Int

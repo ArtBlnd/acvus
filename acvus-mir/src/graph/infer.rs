@@ -1420,57 +1420,8 @@ mod tests {
 
     // ── Parameter effect union tests ────────────────────────────────
 
-    #[test]
-    fn effect_param_effectful_iterator_propagates() {
-        // Function takes an effectful iterator param → function is effectful.
-        let i = Interner::new();
-        let ctx_x = QualifiedRef::root(i.intern("effect_x"));
-        let iter_effect = Effect::Resolved(EffectSet {
-            reads: [EffectTarget::Context(ctx_x)].into_iter().collect(),
-            ..Default::default()
-        });
-        let (graph, ids) = make_multi_graph(
-            &i,
-            // takes an iterator param, returns element
-            &[(
-                "consumer",
-                "$_0",
-                Some(vec![Ty::Iterator(Box::new(Ty::Int), iter_effect)]),
-            )],
-            &[],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-
-        let effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "function should inherit effectful iterator param's reads"
-        );
-    }
-
-    #[test]
-    fn effect_param_pure_iterator_no_effect() {
-        // Function takes a pure iterator param → no param effect contribution.
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[(
-                "processor",
-                "$_0",
-                Some(vec![Ty::Iterator(Box::new(Ty::Int), Effect::pure())]),
-            )],
-            &[],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-
-        let effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(
-            effect.is_pure(),
-            "pure iterator param should not make function effectful"
-        );
-    }
+    // Iterator/Sequence param effect propagation tests migrated to acvus-mir-test
+    // (requires UserDefined types with effect_args + TypeRegistry).
 
     #[test]
     fn effect_param_effectful_fn_propagates() {
@@ -2138,23 +2089,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// C9: Function returning list.
-    #[test]
-    fn inter_fn_list_return() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("make_list", "[1, 2, 3]", Some(vec![]), Constraint::Inferred),
-                ("main", "make_list() | len", None, Constraint::Inferred),
-            ],
-            &[],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
-    }
+    // inter_fn_list_return: migrated to acvus-mir-test (depends on ExternFn `len`)
 
     /// C10: Function accepting and returning String.
     #[test]
@@ -2246,23 +2181,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// C14: Function that calls builtin and local function together.
-    #[test]
-    fn inter_fn_mixed_builtin_and_local() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("make_num", "42", Some(vec![]), Constraint::Inferred),
-                ("main", "make_num() | to_string", None, Constraint::Inferred),
-            ],
-            &[],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
-    }
+    // inter_fn_mixed_builtin_and_local: migrated to acvus-mir-test (depends on ExternFn `to_string`)
 
     /// C15: Function result used as argument to another function.
     #[test]
@@ -2726,73 +2645,11 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// E7: Function result piped through builtin chain.
-    #[test]
-    fn inter_fn_pipe_through_builtins() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("make_list", "[1, 2, 3]", Some(vec![]), Constraint::Inferred),
-                (
-                    "main",
-                    "make_list() | iter | map(|x| -> x + 1) | collect | len",
-                    None,
-                    Constraint::Inferred,
-                ),
-            ],
-            &[],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
-    }
+    // inter_fn_pipe_through_builtins: migrated to acvus-mir-test (depends on ExternFn `iter`, `map`, `collect`, `len`)
 
-    /// E8: Function with effectful iterator return type.
-    #[test]
-    fn inter_fn_effectful_return() {
-        let i = Interner::new();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("get_iter", "@src", Some(vec![]), Constraint::Inferred),
-                ("main", "get_iter() | collect", None, Constraint::Inferred),
-            ],
-            &[("src", eff_iter)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        assert_eq!(
-            tail_type(&result, main_id).unwrap(),
-            Ty::List(Box::new(Ty::Int))
-        );
-    }
+    // inter_fn_effectful_return: migrated to acvus-mir-test (depends on ExternFn `collect`)
 
-    /// E9: Function returning Option type.
-    #[test]
-    fn inter_fn_option_return() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                (
-                    "maybe_first",
-                    "@items | iter | first",
-                    Some(vec![]),
-                    Constraint::Inferred,
-                ),
-                ("main", "maybe_first() | unwrap", None, Constraint::Inferred),
-            ],
-            &[("items", Ty::List(Box::new(Ty::Int)))],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
-    }
+    // inter_fn_option_return: migrated to acvus-mir-test (depends on ExternFn `iter`, `first`, `unwrap`)
 
     /// E10: Three functions forming a pipeline.
     #[test]
@@ -3091,30 +2948,7 @@ mod tests {
         }
     }
 
-    /// B10: Chain through effectful function — effect must propagate transitively.
-    #[test]
-    fn boundary_transitive_effect_propagation() {
-        let i = Interner::new();
-        let eff_iter = Ty::Iterator(Box::new(Ty::Int), Effect::io());
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                (
-                    "consume_iter",
-                    "@src | collect",
-                    Some(vec![]),
-                    Constraint::Inferred,
-                ),
-                ("use_it", "consume_iter()", None, Constraint::Inferred),
-            ],
-            &[("src", eff_iter)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let use_id = ids[1].1;
-        let use_effect = &result.outcomes[&use_id].meta().effect;
-        assert!(!use_effect.is_pure(), "transitive effect must propagate");
-    }
+    // boundary_transitive_effect_propagation: migrated to acvus-mir-test (depends on ExternFn `collect`)
 
     // ── body_effect (reads / writes) tests ─────────────────────────
 
@@ -3500,26 +3334,7 @@ mod tests {
         assert_eq!(result.all_params[0].name, QualifiedRef::root(i.intern("x")));
     }
 
-    /// Context inside lambda — still extracted.
-    #[test]
-    fn context_extract_in_lambda() {
-        let i = Interner::new();
-        let graph = make_graph_with_ctx(
-            &i,
-            "@items | map(|x| -> x + @offset) | collect",
-            &[("items", Ty::List(Box::new(Ty::Int))), ("offset", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-
-        let fid = graph.functions[0].qref;
-        let effect = &result.outcomes[&fid].meta().effect;
-        let qref = QualifiedRef::root(i.intern("offset"));
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(qref)),
-            "lambda context read should be tracked"
-        );
-    }
+    // context_extract_in_lambda: migrated to acvus-mir-test (depends on ExternFn `map`, `collect`)
 
     // -- Complete/Incomplete boundary --
 

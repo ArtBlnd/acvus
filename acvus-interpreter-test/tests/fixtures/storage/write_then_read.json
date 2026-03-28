@@ -1,4 +1,4 @@
 {
-  "template": "{{ $x = 42 }}{{ $x | to_string }}",
+  "template": "{{ x = 42 }}{{ x | to_string }}",
   "expected": "42"
 }

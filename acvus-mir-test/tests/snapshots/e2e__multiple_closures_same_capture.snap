@@ -1,67 +1,71 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1176
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @offset
-     3 │   r3 = context_load r2
-     5 │   r4 = poison
-     6 │   r5 = closure L0 []
-     7 │   r6 = poison
-     8 │   r7 = closure L1 []
-     9 │   r8 = poison
-    10 │   r9 = poison
-    12 │   r10 = T0 + T0
-    13 │   r11 = poison
-    14 │   r12 = poison
-    15 │   r13 = r10 + r12
-    16 │   return r13
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @offset
+     4 │   r4 = context_load r3
+     6 │   r5 = call #0(r2)
+     7 │   r6 = closure L0 []
+     8 │   r7 = call #1(r5, r6)
+     9 │   r8 = closure L1 []
+    10 │   r9 = call #2(r7, r8)
+    11 │   r10 = call #3(r9)
+    13 │   r11 = T0 + T0
+    14 │   r12 = call #4(r10)
+    15 │   r13 = call #5(r12)
+    16 │   r14 = r11 + r13
+    17 │   return r14
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@offset) : Int
-    ; r3 (v3) : Int
-    ; r4 (iter(...)) : Iterator<Int>
-    ; r5 (v8) : Fn(Int) -> Int
-    ; r6 (map(...)) : Iterator<Int>
-    ; r7 (v10) : Fn(Int) -> Bool
-    ; r8 (filter(...)) : Iterator<Int>
-    ; r9 (collect(...)) : List<Int>
-    ; r10 (v14) : String
-    ; r11 (len(...)) : Int
-    ; r12 (to_string(...)) : String
-    ; r13 (v18) : String
-    ; r14 (v6) : List<Int>
-    ; r15 (v4) : String
-    ; r16 (x) : List<Int>
-    ; r17 (v13) : String
-    ; r18 (@items) : List<Int>
-    ; r19 (v19) : List<Int>
+    ; r0 (v19) : List<Int>
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (@offset) : Int
+    ; r4 (v3) : Int
+    ; r5 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (v8) : Fn(Int) -> Int
+    ; r7 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r8 (v10) : Fn(Int) -> Bool
+    ; r9 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (v14) : String
+    ; r12 (len(...)) : Int
+    ; r13 (to_string(...)) : String
+    ; r14 (v18) : String
+    ; r15 (v6) : List<Int>
+    ; r16 (v4) : String
+    ; r17 (x) : List<Int>
+    ; r18 (v13) : String
+    ; r19 (@items) : List<Int>
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = context_project @offset
-     1 │   r1 = context_load r0
-     2 │   r2 = r3 + r1
-     3 │   return r2
+     0 │   r0 = undef
+     1 │   r1 = context_project @offset
+     2 │   r2 = context_load r1
+     3 │   r3 = r4 + r2
+     4 │   return r3
 
-    ; r0 (@offset) : Int
-    ; r1 (v3) : Int
-    ; r2 (v4) : Int
-    ; r3 (v0) : Int
-    ; r4 (i) : Int
-    ; r5 (v5) : Int
+    ; r0 (v5) : Int
+    ; r1 (@offset) : Int
+    ; r2 (v3) : Int
+    ; r3 (v4) : Int
+    ; r4 (v0) : Int
+    ; r5 (i) : Int
 
 === closure L1 (ValueId(0)) ===
-     1 │   r0 = r1 > 0 (r2)
-     2 │   return r0
+     0 │   r0 = undef
+     2 │   r1 = r2 > 0 (r3)
+     3 │   return r1
 
-    ; r0 (v3) : Bool
-    ; r1 (v0) : Int
-    ; r2 (v2) : Int
-    ; r3 (i) : Int
-    ; r4 (v4) : Int
+    ; r0 (v4) : Int
+    ; r1 (v3) : Bool
+    ; r2 (v0) : Int
+    ; r3 (v2) : Int
+    ; r4 (i) : Int

@@ -6,28 +6,29 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @a
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @b
-     3 │   r3 = context_load r2
-     5 │   r4 = r1 > r3
-     7 │   r5 = T0 + T0
-     8 │   r6 = poison
-     9 │   r7 = r5 + r6
-    10 │   return r7
+     0 │   r0 = undef
+     1 │   r1 = context_project @a
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @b
+     4 │   r4 = context_load r3
+     6 │   r5 = r2 > r4
+     8 │   r6 = T0 + T0
+     9 │   r7 = call #0(r5)
+    10 │   r8 = r6 + r7
+    11 │   return r8
 
-    ; r0 (@a) : Int
-    ; r1 (v1) : Int
-    ; r2 (@b) : Int
-    ; r3 (v3) : Int
-    ; r4 (v9) : Bool
-    ; r5 (v11) : String
-    ; r6 (to_string(...)) : String
-    ; r7 (v14) : String
-    ; r8 (v6) : Int
-    ; r9 (x) : Bool
-    ; r10 (v4) : String
-    ; r11 (v15) : Bool
+    ; r0 (v15) : Bool
+    ; r1 (@a) : Int
+    ; r2 (v1) : Int
+    ; r3 (@b) : Int
+    ; r4 (v3) : Int
+    ; r5 (v9) : Bool
+    ; r6 (v11) : String
+    ; r7 (to_string(...)) : String
+    ; r8 (v14) : String
+    ; r9 (v6) : Int
+    ; r10 (x) : Bool
+    ; r11 (v4) : String
     ; r12 (@b) : Int
     ; r13 (v10) : String
     ; r14 (@a) : Int

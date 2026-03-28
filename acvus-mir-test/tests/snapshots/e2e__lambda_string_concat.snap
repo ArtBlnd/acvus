@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1322
 expression: ir
 ---
 === literals ===
@@ -8,38 +9,40 @@ expression: ir
   T2 = "!"
 
 === main ===
-     0 │   r0 = context_project @names
-     1 │   r1 = context_load r0
-     3 │   r2 = poison
-     4 │   r3 = closure L0 []
-     5 │   r4 = poison
-     7 │   r5 = T0 + T0
-     9 │   r6 = poison
-    10 │   r7 = r5 + r6
-    11 │   return r7
+     0 │   r0 = undef
+     1 │   r1 = context_project @names
+     2 │   r2 = context_load r1
+     4 │   r3 = call #0(r2)
+     5 │   r4 = closure L0 []
+     6 │   r5 = call #1(r3, r4)
+     8 │   r6 = T0 + T0
+    10 │   r7 = call #2(r5, T1)
+    11 │   r8 = r6 + r7
+    12 │   return r8
 
-    ; r0 (@names) : List<String>
-    ; r1 (v1) : List<String>
-    ; r2 (iter(...)) : Iterator<String>
-    ; r3 (v6) : Fn(String) -> String
-    ; r4 (map(...)) : Iterator<String>
-    ; r5 (v9) : String
-    ; r6 (join(...)) : String
-    ; r7 (v13) : String
-    ; r8 (v11) : String
-    ; r9 (@names) : List<String>
-    ; r10 (v14) : Iterator<String>
+    ; r0 (v14) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r1 (@names) : List<String>
+    ; r2 (v1) : List<String>
+    ; r3 (iter(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r4 (v6) : Fn(String) -> String
+    ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (v9) : String
+    ; r7 (join(...)) : String
+    ; r8 (v13) : String
+    ; r9 (v11) : String
+    ; r10 (@names) : List<String>
     ; r11 (v4) : List<String>
-    ; r12 (x) : Iterator<String>
+    ; r12 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
     ; r13 (v2) : String
     ; r14 (v8) : String
 
 === closure L0 (ValueId(0)) ===
-     1 │   r0 = r1 + T2
-     2 │   return r0
+     0 │   r0 = undef
+     2 │   r1 = r2 + T2
+     3 │   return r1
 
-    ; r0 (v3) : String
-    ; r1 (v0) : String
-    ; r2 (n) : String
-    ; r3 (v4) : String
+    ; r0 (v4) : String
+    ; r1 (v3) : String
+    ; r2 (v0) : String
+    ; r3 (n) : String
     ; r4 (v2) : String

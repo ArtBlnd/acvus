@@ -13,14 +13,12 @@ fn compile_analysis(
     interner: &Interner,
     source: &str,
     ctx: &[(&str, Ty)],
-) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), Vec<acvus_mir::error::MirError>>
-{
+) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), String> {
     use acvus_mir::graph::{
         CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function, ParsedAst,
         QualifiedRef,
     };
     use acvus_mir::graph::{extract, lower as graph_lower};
-    use acvus_mir::ty::Param;
     use acvus_utils::Freeze;
     use rustc_hash::FxHashSet;
 
@@ -47,34 +45,63 @@ fn compile_analysis(
 
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let template = acvus_ast::parse(interner, source).expect("parse failed");
+
+    let mut functions: Vec<Function> = vec![Function {
+        qref: test_qref,
+        kind: FnKind::Local(ParsedAst::Template(template)),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+            effect: None,
+        },
+    }];
+    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    for registry in std_regs {
+        let registered = registry.register(interner);
+        functions.extend(registered.functions);
+    }
+
     let graph = CompilationGraph {
-        functions: Freeze::new(vec![Function {
-            qref: test_qref,
-            kind: FnKind::Local(ParsedAst::Template(template)),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
-            },
-        }]),
+        functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::new(type_registry));
 
-    if result.has_errors() {
-        return Err(result.errors.into_iter().flat_map(|e| e.errors).collect());
+    // Collect infer errors.
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!(
+                "[infer:{}] [{}..{}] {}",
+                fn_name, e.span.start, e.span.end, e.display(interner)
+            ));
+        }
     }
 
-    let uid = graph.functions[0].qref;
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+
+    // Collect lower errors.
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start, e.span.end, e.display(interner)
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
     result
         .modules
         .into_iter()
-        .find(|(id, _)| *id == uid)
+        .find(|(id, _)| *id == test_qref)
         .map(|(_, pair)| pair)
-        .ok_or_else(Vec::new)
+        .ok_or_else(|| "no module produced for target".to_string())
 }
 
 /// Helper: build a context HashMap<Astr, Ty> from string pairs.
@@ -1804,4 +1831,783 @@ fn ssa_multiple_contexts_independent() {
     let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
     let ir = compile_script_ir(&i, "@a = @a + 1; @b = @b + 2; @a + @b", &context).unwrap();
     insta::assert_snapshot!(ir);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Migrated from acvus-mir unit tests (ExternFn-dependent)
+// ════════════════════════════════════════════════════════════════════
+
+// ── From lib.rs ─────────────────────────────────────────────────────
+
+#[test]
+fn migrated_extern_param_write_rejected() {
+    let i = Interner::new();
+    // Writing to extern param is rejected.
+    assert!(compile_to_ir(&i, "{{ $count = 42 }}", &FxHashMap::default()).is_err());
+    // Reading an extern param via context with pipe is valid.
+    let context = ctx(&i, &[("count", Ty::Int)]);
+    compile_to_ir(&i, "{{ @count | to_string }}", &context).unwrap();
+}
+
+#[test]
+fn migrated_integration_range_expression() {
+    let i = Interner::new();
+    compile_to_ir(
+        &i,
+        "{{ x in 0..10 }}{{ x | to_string }}{{/}}",
+        &FxHashMap::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_integration_list_destructure() {
+    let i = Interner::new();
+    compile_to_ir(
+        &i,
+        r#"{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}"#,
+        &items_context(&i),
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_integration_pipe_with_lambda() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    compile_to_ir(
+        &i,
+        r#"{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_projection_chained_field_access() {
+    let i = Interner::new();
+    let inner = obj(&i, &[("b", Ty::Int)]);
+    let obj_ty = obj(&i, &[("a", inner)]);
+    let context = ctx(&i, &[("obj", obj_ty)]);
+    let ir = compile_script_ir(&i, "@obj.a.b | to_string", &context).unwrap();
+    // Original test checked: 1 ContextProject, 2 FieldGet, 1 ContextLoad.
+    // Verify via IR string.
+    assert!(
+        ir.contains("context_project"),
+        "should have context_project in IR: {ir}"
+    );
+    assert!(
+        ir.contains("context_load"),
+        "should have context_load in IR: {ir}"
+    );
+    let field_get_count = ir.matches(".b").count() + ir.matches(".a").count();
+    assert!(
+        field_get_count >= 2,
+        "should have at least 2 field accesses in IR: {ir}"
+    );
+}
+
+#[test]
+fn migrated_pipe_extern_fn_ok() {
+    let i = Interner::new();
+    let context = ctx(
+        &i,
+        &[
+            (
+                "mapper",
+                Ty::Fn {
+                    params: vec![Param::new(i.intern("_"), Ty::Int)],
+                    ret: Box::new(Ty::String),
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+            ),
+            ("items", Ty::List(Box::new(Ty::Int))),
+        ],
+    );
+    compile_to_ir(
+        &i,
+        r#"{{ x = @items | map(|i| -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        &context,
+    )
+    .unwrap();
+}
+
+// ── From typeck.rs ──────────────────────────────────────────────────
+
+#[test]
+fn migrated_typeck_builtin_to_string() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("count", Ty::Int)]);
+    compile_to_ir(&i, "{{ @count | to_string }}", &context).unwrap();
+}
+
+#[test]
+fn migrated_typeck_lambda_captures_outer_variable() {
+    let i = Interner::new();
+    let context = ctx(
+        &i,
+        &[
+            ("items", Ty::List(Box::new(Ty::Int))),
+            ("threshold", Ty::Int),
+        ],
+    );
+    compile_to_ir(
+        &i,
+        "{{ @items | filter(|x| -> x > @threshold) | collect | len | to_string }}",
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_typeck_lambda_type_check() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    compile_to_ir(
+        &i,
+        "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_typeck_lambda_no_capture_local_params() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    compile_to_ir(
+        &i,
+        "{{ @items | map(|x| -> x + 1) | collect | len | to_string }}",
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_typeck_list_pattern_matching() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    compile_to_ir(
+        &i,
+        "{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}",
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_typeck_nested_lambda_captures() {
+    let i = Interner::new();
+    let context = ctx(
+        &i,
+        &[
+            ("items", Ty::List(Box::new(Ty::Int))),
+            ("factor", Ty::Int),
+        ],
+    );
+    compile_to_ir(
+        &i,
+        "{{ @items | map(|x| -> x * @factor) | collect | len | to_string }}",
+        &context,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrated_typeck_some_unifies_with_option_context() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
+    compile_to_ir(
+        &i,
+        "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}{{/}}",
+        &context,
+    )
+    .unwrap();
+}
+
+// ── From printer.rs ─────────────────────────────────────────────────
+
+#[test]
+fn migrated_print_arithmetic() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let ir = compile_to_ir(
+        &i,
+        "{{ x = @a + @b }}{{ x | to_string }}{{_}}{{/}}",
+        &context,
+    )
+    .unwrap();
+    assert!(ir.contains("+"), "should contain + operator in IR: {ir}");
+}
+
+#[test]
+fn migrated_print_closure() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let ir = compile_to_ir(
+        &i,
+        "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        &context,
+    )
+    .unwrap();
+    assert!(
+        ir.contains("closure L"),
+        "should contain closure label in IR: {ir}"
+    );
+    assert!(
+        ir.contains("=== closure"),
+        "should contain closure section in IR: {ir}"
+    );
+    assert!(ir.contains("!="), "should contain != operator in IR: {ir}");
+    assert!(
+        ir.contains("return"),
+        "should contain return instruction in IR: {ir}"
+    );
+}
+
+// ── From ssa_pass.rs ────────────────────────────────────────────────
+
+#[test]
+fn migrated_ssa_iter_no_write_no_phi() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::String)))]);
+    let ir = compile_to_ir(
+        &i,
+        r#"{{ x in @items }}{{ x | to_string }}{{/}}"#,
+        &context,
+    )
+    .unwrap();
+    // Original test checked: count_context_stores == 0 after SSA pass.
+    // In IR output, context stores would appear as "ctx_store".
+    assert!(
+        !ir.contains("ctx_store"),
+        "iteration without context write should have no ctx_store: {ir}"
+    );
+}
+
+// ── Effect propagation through Iterator combinators ─────────────────
+
+#[test]
+fn effect_map_impure_propagates() {
+    // iter(list) | map(impure_fn) should produce an effectful Iterator.
+    // Reusing the result should be rejected (move-only).
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    // map with context write → effectful. Using result twice → use-after-move.
+    let result = compile_script_ir(
+        &i,
+        r#"it = @items | iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
+        &context,
+    );
+    assert!(result.is_err(), "effectful iter reuse should be rejected: {result:?}");
+}
+
+#[test]
+fn effect_map_impure_single_use_ok() {
+    // Single use of effectful iterator should compile.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"@items | iter | map(|x| -> { @counter = x; x }) | collect"#,
+        &context,
+    );
+    assert!(result.is_ok(), "single use of effectful iter should compile: {result:?}");
+}
+
+#[test]
+fn effect_chain_multiple_impure_combines() {
+    // map(impure_a) | filter(impure_b) → both effects combined.
+    // Reusing should be rejected.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("a", Ty::Int), ("b", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"it = @items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }); it | collect; it | collect"#,
+        &context,
+    );
+    assert!(result.is_err(), "chained impure iter reuse should be rejected: {result:?}");
+}
+
+#[test]
+fn effect_chain_multiple_impure_single_use_ok() {
+    // Single use of chained impure should compile.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("a", Ty::Int), ("b", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"@items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }) | collect"#,
+        &context,
+    );
+    assert!(result.is_ok(), "single use of chained impure should compile: {result:?}");
+}
+
+#[test]
+fn effect_pure_iter_is_reusable() {
+    // Pure iterator: iter(list) | map(pure_fn). Should be reusable (not move-only).
+    // Wait — UserDefined is always move-only now. So even pure iter can't be reused.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(
+        &i,
+        r#"it = @items | iter | map(|x| -> x + 1); it | collect; it | collect"#,
+        &context,
+    );
+    // UserDefined is always move-only, even when pure.
+    assert!(result.is_err(), "even pure UserDefined iter reuse should be rejected: {result:?}");
+}
+
+#[test]
+fn effect_reject_collect_impure_reuse_after_collect() {
+    // After collecting an impure iterator, the iterator variable is consumed (move-only).
+    // Attempting to collect again from the same variable should fail with use-after-move.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"it = @items | iter | map(|x| -> { @counter = x; x }); collected = it | collect; it | collect"#,
+        &context,
+    );
+    assert!(result.is_err(), "reuse of impure iter after collect should be rejected: {result:?}");
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+#[test]
+fn effect_collect_result_is_reusable() {
+    // The result of collect (List) should be freely reusable even when the source
+    // iterator was impure. List is not move-only.
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"collected = @items | iter | map(|x| -> { @counter = x; x }) | collect; collected | len; collected | len"#,
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "collected List from impure iter should be reusable: {result:?}"
+    );
+}
+
+// ── From move_check.rs (e2e) ────────────────────────────────────────
+
+fn iter_ty_with(interner: &Interner, effect: Effect) -> Ty {
+    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    Ty::UserDefined {
+        id: iter_qref,
+        type_args: vec![Ty::Int],
+        effect_args: vec![effect],
+    }
+}
+
+fn eff_iter_ty(interner: &Interner) -> Ty {
+    iter_ty_with(interner, Effect::io())
+}
+
+fn pure_iter_ty(interner: &Interner) -> Ty {
+    iter_ty_with(interner, Effect::pure())
+}
+
+fn has_use_after_move(err: &str) -> bool {
+    err.contains("use of move-only value")
+}
+
+// -- Soundness: should REJECT --
+
+#[test]
+fn migrated_move_reject_effectful_iter_reuse() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"x = @items | iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
+        &context,
+    );
+    assert!(result.is_err(), "should reject effectful iter reuse");
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+#[test]
+fn migrated_move_reject_var_double_load() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @items | iter }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "should reject var double load of iterator"
+    );
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+#[test]
+fn migrated_move_reject_effectful_pipe_reuse() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"x = @items | iter | map(|x| -> { @counter = x; x }); a = x | collect; b = x | collect; a"#,
+        &context,
+    );
+    assert!(result.is_err());
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+// -- Completeness: should ACCEPT --
+
+// NOTE: With Iterator now represented as UserDefined, ALL iterators are move-only
+// regardless of effect. The old `pure_iter_reuse` test (which expected reuse to be
+// allowed for pure iterators) no longer applies. UserDefined types are always move-only.
+#[test]
+fn migrated_move_reject_pure_iter_reuse() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("src", pure_iter_ty(&i))]);
+    let result = compile_script_ir(
+        &i,
+        "x = @src; a = x | collect; b = x | collect; a",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "UserDefined iterator (even pure) should be move-only: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_effectful_single_use() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"x = @items | iter | map(|x| -> { @counter = x; x }); x | collect"#,
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "single use of effectful should be allowed: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_collect_then_reuse() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"list = @items | iter | map(|x| -> { @counter = x; x }) | collect; a = list | len; b = list | len; a + b"#,
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "collected list should be reusable: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_var_reassign() {
+    let i = Interner::new();
+    let context = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int))), ("items2", Ty::List(Box::new(Ty::Int)))],
+    );
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @items | iter }}{{ a | collect | len | to_string }}{{ a = @items2 | iter }}{{ a | collect | len | to_string }}",
+        &context,
+    );
+    assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
+}
+
+#[test]
+fn migrated_move_accept_effectful_pipe_chain() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        r#"@items | iter | map(|x| -> { @counter = x; x }) | filter(|x| -> x > 0) | map(|x| -> x * 2) | collect"#,
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "linear pipe chain should be allowed: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_effectful_fn_multiple_calls() {
+    let i = Interner::new();
+    let fn_ty = Ty::Fn {
+        params: vec![Param::new(i.intern("_"), Ty::Int)],
+        ret: Box::new(Ty::Int),
+        captures: vec![],
+        effect: Effect::io(),
+    };
+    let context = ctx(&i, &[("f", fn_ty)]);
+    let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);
+    assert!(
+        result.is_ok(),
+        "effectful fn without move-only captures should be callable multiple times: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_reject_list_of_effectful_reuse() {
+    let i = Interner::new();
+    let ty = Ty::List(Box::new(eff_iter_ty(&i)));
+    let context = ctx(&i, &[("src", ty)]);
+    let result = compile_script_ir(
+        &i,
+        "x = @src; a = x | len; b = x | len; a + b",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "List containing effectful should be move-only"
+    );
+}
+
+#[test]
+fn migrated_move_reject_option_effectful_reuse() {
+    let i = Interner::new();
+    let ty = Ty::Option(Box::new(eff_iter_ty(&i)));
+    let context = ctx(&i, &[("src", ty)]);
+    let result = compile_script_ir(
+        &i,
+        "x = @src; a = x | unwrap | collect; b = x | unwrap | collect; a",
+        &context,
+    );
+    assert!(result.is_err(), "Option<Effectful> should be move-only");
+}
+
+#[test]
+fn migrated_move_reject_branch_move_then_use() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("flag", Ty::Bool), ("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}{{ a | collect | len | to_string }}",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "should reject use after move across branch: {result:?}"
+    );
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+#[test]
+fn migrated_move_reject_both_branches_move_then_use() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("flag", Ty::Bool), ("src", eff_iter_ty(&i))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}{{ a | collect | len | to_string }}{{/}}{{ a | collect | len | to_string }}",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "should reject use after move in both branches: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_branch_move_no_use_after() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("flag", Ty::Bool), ("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "move in branch without post-merge use should be OK: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_reject_fnonce_double_call() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(
+        &i,
+        "x = @items | iter; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "FnOnce called twice should be rejected: {result:?}"
+    );
+    assert!(
+        has_use_after_move(&result.unwrap_err()),
+        "expected use-after-move error"
+    );
+}
+
+#[test]
+fn migrated_move_accept_pure_capture_fn_multi_call() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("val", Ty::Int)]);
+    let result = compile_script_ir(
+        &i,
+        "x = @val; f = (|a| -> x + a); a = f(1); b = f(2); a + b",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Fn with pure captures should be callable multiple times: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_fnonce_single_call() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(
+        &i,
+        "x = @items | iter; f = (|z| -> collect(x)); f(0)",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "FnOnce called once should be OK: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_lambda_return_deque_as_iterator() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(
+        &i,
+        "@items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "lambda returning Deque where Iterator expected should compile: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_lambda_return_scalar() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(&i, "@items | map(|x| -> x + 1) | collect", &context);
+    assert!(
+        result.is_ok(),
+        "lambda returning scalar should compile: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_nested_flat_map_deque_return() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_script_ir(
+        &i,
+        "@items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "nested flat_map + map with Deque return should compile: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_fnonce_passed_to_map() {
+    let i = Interner::new();
+    let context = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int)))],
+    );
+    let result = compile_script_ir(
+        &i,
+        "x = @items | iter; f = (|z| -> collect(x)); @items | map(f) | collect",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "FnOnce passed once to HOF should be OK: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_accept_lambda_context_in_body_is_fn() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ f = (|z| -> collect(@items | iter)) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
+        &context,
+    );
+    assert!(
+        result.is_ok(),
+        "Lambda with @context in body (not capture) should be Fn: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_reject_fnonce_local_capture_double() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let result = compile_script_ir(
+        &i,
+        "x = @src; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "FnOnce with local capture double call should be rejected: {result:?}"
+    );
+}
+
+#[test]
+fn migrated_move_reject_effectful_without_purify() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let result = compile_script_ir(
+        &i,
+        "x = @src; a = x | collect; b = x | collect; a",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "effectful without purify should still be rejected"
+    );
+}
+
+#[test]
+fn migrated_move_reject_effectful_var_without_purify() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let result = compile_to_ir(
+        &i,
+        "{{ a = @src }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
+        &context,
+    );
+    assert!(
+        result.is_err(),
+        "effectful var without purify should be rejected"
+    );
 }

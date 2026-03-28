@@ -1,45 +1,48 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1415
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @users
-     1 │   r1 = context_load r0
-     3 │   r2 = poison
-     4 │   r3 = closure L0 []
-     5 │   r4 = poison
-     6 │   r5 = poison
-     8 │   r6 = T0 + T0
-     9 │   r7 = poison
-    10 │   r8 = poison
-    11 │   r9 = r6 + r8
-    12 │   return r9
+     0 │   r0 = undef
+     1 │   r1 = context_project @users
+     2 │   r2 = context_load r1
+     4 │   r3 = call #0(r2)
+     5 │   r4 = closure L0 []
+     6 │   r5 = call #1(r3, r4)
+     7 │   r6 = call #2(r5)
+     9 │   r7 = T0 + T0
+    10 │   r8 = call #3(r6)
+    11 │   r9 = call #4(r8)
+    12 │   r10 = r7 + r9
+    13 │   return r10
 
-    ; r0 (@users) : List<{active: Bool, name: String}>
-    ; r1 (v1) : List<{active: Bool, name: String}>
-    ; r2 (iter(...)) : Iterator<{active: Bool, name: String}>
-    ; r3 (v6) : Fn({active: Bool, name: String}) -> Bool
-    ; r4 (filter(...)) : Iterator<{active: Bool, name: String}>
-    ; r5 (collect(...)) : List<{active: Bool, name: String}>
-    ; r6 (v10) : String
-    ; r7 (len(...)) : Int
-    ; r8 (to_string(...)) : String
-    ; r9 (v14) : String
-    ; r10 (x) : List<{active: Bool, name: String}>
-    ; r11 (@users) : List<{active: Bool, name: String}>
-    ; r12 (v9) : String
-    ; r13 (v4) : List<{active: Bool, name: String}>
-    ; r14 (v15) : List<{active: Bool, name: String}>
+    ; r0 (v15) : List<{active: Bool, name: String}>
+    ; r1 (@users) : List<{active: Bool, name: String}>
+    ; r2 (v1) : List<{active: Bool, name: String}>
+    ; r3 (iter(...)) : Iterator<{active: Bool, name: String}, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r4 (v6) : Fn({active: Bool, name: String}) -> Bool
+    ; r5 (filter(...)) : Iterator<{active: Bool, name: String}, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (collect(...)) : List<{active: Bool, name: String}>
+    ; r7 (v10) : String
+    ; r8 (len(...)) : Int
+    ; r9 (to_string(...)) : String
+    ; r10 (v14) : String
+    ; r11 (x) : List<{active: Bool, name: String}>
+    ; r12 (@users) : List<{active: Bool, name: String}>
+    ; r13 (v9) : String
+    ; r14 (v4) : List<{active: Bool, name: String}>
     ; r15 (v2) : String
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = r1.active
-     1 │   return r0
+     0 │   r0 = undef
+     1 │   r1 = r2.active
+     2 │   return r1
 
-    ; r0 (active) : Bool
-    ; r1 (v0) : {active: Bool, name: String}
-    ; r2 (v3) : {active: Bool, name: String}
+    ; r0 (v3) : {active: Bool, name: String}
+    ; r1 (active) : Bool
+    ; r2 (v0) : {active: Bool, name: String}
     ; r3 (u) : {active: Bool, name: String}

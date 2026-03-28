@@ -580,18 +580,20 @@ fn write_body(
             )?,
 
             // Iteration
-            InstKind::IterStep {
+            InstKind::ListStep {
                 dst,
-                iter_src,
-                iter_dst,
+                list,
+                index_src,
+                index_dst,
                 done,
                 done_args,
             } => writeln!(
                 f,
-                "iter_step {}, {} = {} else {}({})",
+                "list_step {}, {} = {}[{}] else {}({})",
                 vn.fmt_val(*dst),
-                vn.fmt_val(*iter_dst),
-                vn.fmt_use(*iter_src, &consts, &texts),
+                vn.fmt_val(*index_dst),
+                vn.fmt_use(*list, &consts, &texts),
+                vn.fmt_use(*index_src, &consts, &texts),
                 fmt_label(*done),
                 vn.fmt_uses(done_args, &consts, &texts)
             )?,
@@ -678,6 +680,7 @@ fn write_body(
                 kind,
                 vn.fmt_use(*src, &consts, &texts)
             )?,
+            InstKind::Undef { dst } => writeln!(f, "{} = undef", vn.fmt_val(*dst))?,
             InstKind::Poison { dst } => writeln!(f, "{} = poison", vn.fmt_val(*dst))?,
         }
     }
@@ -834,7 +837,7 @@ mod tests {
     use crate::ty::{Effect, Param, Ty};
     use acvus_utils::Interner;
 
-    fn compile_and_dump(
+    fn compile_and_dump_ctx(
         source: &str,
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
@@ -843,15 +846,13 @@ mod tests {
             .iter()
             .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
             .collect();
-        let (module, _) =
-            crate::test::compile_template(interner, source, &ctx).expect("compile failed");
-        dump(interner, &module)
+        crate::test::compile_and_dump(interner, source, &ctx)
     }
 
     #[test]
     fn print_text_only() {
         let interner = Interner::new();
-        let out = compile_and_dump("hello world", &FxHashMap::default(), &interner);
+        let out = crate::test::compile_and_dump(&interner, "hello world", &[]);
         assert!(out.contains("=== literals ==="));
         assert!(out.contains("\"hello world\""));
         assert!(out.contains("return"));
@@ -860,33 +861,16 @@ mod tests {
     #[test]
     fn print_string_emit() {
         let interner = Interner::new();
-        let out = compile_and_dump(r#"{{ "hello" }}"#, &FxHashMap::default(), &interner);
+        let out = crate::test::compile_and_dump(&interner, r#"{{ "hello" }}"#, &[]);
         assert!(out.contains("\"hello\""));
         assert!(out.contains("return"));
-    }
-
-    #[test]
-    fn print_arithmetic() {
-        let interner = Interner::new();
-        let context = FxHashMap::from_iter([
-            (interner.intern("a"), Ty::Int),
-            (interner.intern("b"), Ty::Int),
-        ]);
-        let out = compile_and_dump(
-            "{{ x = @a + @b }}{{ x | to_string }}{{_}}{{/}}",
-            &context,
-            &interner,
-        );
-        assert!(out.contains("+"));
-        // to_string is a builtin — requires Phase 2 (builtin → graph Function) to
-        // appear as a FunctionCall. For now, just check arithmetic works.
     }
 
     #[test]
     fn print_match_block() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
-        let out = compile_and_dump(
+        let out = compile_and_dump_ctx(
             r#"{{ true = @name == "test" }}matched{{/}}"#,
             &context,
             &interner,
@@ -894,22 +878,6 @@ mod tests {
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
-    }
-
-    #[test]
-    fn print_closure() {
-        let interner = Interner::new();
-        let context =
-            FxHashMap::from_iter([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let out = compile_and_dump(
-            "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
-            &context,
-            &interner,
-        );
-        assert!(out.contains("closure L"));
-        assert!(out.contains("=== closure"));
-        assert!(out.contains("!="));
-        assert!(out.contains("return"));
     }
 
     #[test]
@@ -924,7 +892,7 @@ mod tests {
                 effect: Effect::pure(),
             },
         )]);
-        let out = compile_and_dump("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);
+        let out = compile_and_dump_ctx("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);
         assert!(
             out.contains("call"),
             "expected call instruction, got:\n{out}"
@@ -941,7 +909,7 @@ mod tests {
                 (interner.intern("age"), Ty::Int),
             ])),
         )]);
-        let out = compile_and_dump("{{ @user.name }}", &context, &interner);
+        let out = compile_and_dump_ctx("{{ @user.name }}", &context, &interner);
         assert!(out.contains(".name"));
     }
 
@@ -962,19 +930,19 @@ mod tests {
                 Ty::String,
             )])))),
         )]);
-        let out = compile_and_dump(
+        let out = compile_and_dump_ctx(
             r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
             &context,
             &interner,
         );
         assert!(out.contains("=== main ==="));
-        assert!(out.contains("iter_step"));
+        assert!(out.contains("list_step"));
     }
 
     #[test]
     fn print_text_dedup() {
         let interner = Interner::new();
-        let out = compile_and_dump(
+        let out = compile_and_dump_ctx(
             r#"{{ "hello" }}{{ "hello" }}"#,
             &FxHashMap::default(),
             &interner,

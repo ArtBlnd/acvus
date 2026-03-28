@@ -3,39 +3,39 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @result
-     3 │   r3 = context_load r2
-     4 │   r4 = cast ListToIterator r1
-     5 │   jump L0(r4, r3, r5)
-     6 │ L0(r6: Iterator<Int>, r7: String, r8: Int):
-     7 │   r9 = context_project @result
-     8 │   ctx_store r9 = r7
-     9 │   iter_step r10, r11 = r6 else L1()
-    10 │ L2:
-    11 │   r12 = context_project @result
-    12 │   r13 = context_load r12
-    13 │   r14 = poison
-    14 │   r15 = r13 + r14
-    15 │   jump L0(r11, r15, r10)
-    16 │ L1:
-    17 │   r16 = context_project @result
-    18 │   r17 = context_load r16
-    19 │   return r17
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @result
+     4 │   r4 = context_load r3
+     6 │   jump L0(0 (r5), r4, r0)
+     7 │ L0(r6: Int, r7: String, r8: Int):
+     8 │   r9 = context_project @result
+     9 │   ctx_store r9 = r7
+    10 │   list_step r10, r11 = r2[r6] else L1()
+    11 │ L2:
+    12 │   r12 = context_project @result
+    13 │   r13 = context_load r12
+    14 │   r14 = call #0(r10)
+    15 │   r15 = r13 + r14
+    16 │   jump L0(r11, r15, r10)
+    17 │ L1:
+    18 │   r16 = context_project @result
+    19 │   r17 = context_load r16
+    20 │   return r17
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (@result) : String
-    ; r3 (v3) : String
-    ; r4 (v6) : Iterator<Int>
-    ; r5 (v18) : Int
-    ; r6 (v7) : Iterator<Int>
+    ; r0 (v18) : Int
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (@result) : String
+    ; r4 (v3) : String
+    ; r5 (v6) : Int
+    ; r6 (v7) : Int
     ; r7 (v19) : String
     ; r8 (v20) : Int
     ; r9 (v21) : String
     ; r10 (x) : Int
-    ; r11 (v9) : Iterator<Int>
+    ; r11 (v9) : Int
     ; r12 (@result) : String
     ; r13 (v11) : String
     ; r14 (to_string(...)) : String

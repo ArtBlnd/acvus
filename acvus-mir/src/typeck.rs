@@ -1823,9 +1823,7 @@ pub(crate) fn contains_var(ty: &Ty) -> bool {
         Ty::Error(_) => false,
         Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => false,
         Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => contains_var(inner),
-        Ty::Iterator(inner, _) | Ty::Sequence(inner, _, _) | Ty::Handle(inner, _) => {
-            contains_var(inner)
-        }
+        Ty::Handle(inner, _) => contains_var(inner),
         Ty::Object(fields) => fields.values().any(contains_var),
         Ty::Tuple(elems) => elems.iter().any(contains_var),
         Ty::Fn { params, ret, .. } => {
@@ -1864,14 +1862,14 @@ fn op_str(op: BinOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::UserDefinedId;
+    use crate::graph::types::QualifiedRef;
 
     /// Test helper: create a `Param` with name "_".
     fn p(i: &Interner, ty: Ty) -> Param {
         Param::new(i.intern("_"), ty)
     }
 
-    fn check(source: &str) -> Result<TypeMap, Vec<MirError>> {
+    fn check(source: &str) -> Result<TypeMap, String> {
         let interner = Interner::new();
         check_with_interner(source, &FxHashMap::default(), &interner)
     }
@@ -1880,7 +1878,7 @@ mod tests {
         source: &str,
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
-    ) -> Result<TypeMap, Vec<MirError>> {
+    ) -> Result<TypeMap, String> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut subst = TySubst::new();
         // Convert Astr-keyed context map to QualifiedRef-keyed (root namespace).
@@ -1893,13 +1891,18 @@ mod tests {
             functions: crate::builtins::builtin_fn_types(interner),
         };
         let checker = TypeChecker::new(interner, &env, &mut subst);
-        let resolution = checker.check_template(&template)?;
+        let resolution = checker.check_template(&template).map_err(|errs| {
+            errs.iter()
+                .map(|e| format!("[typeck] [{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
         Ok(resolution.type_map)
     }
 
     #[test]
     fn literal_string_emit() {
-        assert!(check("{{ \"hello\" }}").is_ok());
+        check("{{ \"hello\" }}").unwrap();
     }
 
     #[test]
@@ -1925,7 +1928,7 @@ mod tests {
     #[test]
     fn range_bounds_int() {
         let src = "{{ x = 0..10 }}{{_}}{{/}}";
-        assert!(check(src).is_ok());
+        check(src).unwrap();
     }
 
     #[test]
@@ -1939,7 +1942,7 @@ mod tests {
         // Catch-all is optional — match blocks without {{_}} should type-check fine.
         let src = "{{ x = 42 }}hello{{/}}";
         let result = check(src);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -1947,7 +1950,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let src = "{{ @name }}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     #[test]
@@ -1960,10 +1963,10 @@ mod tests {
     #[test]
     fn extern_param_write_rejected() {
         let src = "{{ $count = 42 }}";
-        let errs = check(src).unwrap_err();
+        let err = check(src).expect_err("should reject extern param write");
         assert!(
-            errs.iter()
-                .any(|e| matches!(&e.kind, MirErrorKind::ExternParamAssign(_)))
+            err.contains("$count"),
+            "expected ExternParamAssign error, got: {err}"
         );
     }
 
@@ -1980,15 +1983,7 @@ mod tests {
             },
         )]);
         let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
-    }
-
-    #[test]
-    fn builtin_to_string() {
-        let i = Interner::new();
-        let context = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
-        let src = "{{ @count | to_string }}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     #[test]
@@ -2002,7 +1997,7 @@ mod tests {
             ])),
         )]);
         let src = "{{ @user.name }}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     #[test]
@@ -2022,25 +2017,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
         let src = "{{ x = @name }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
-    }
-
-    #[test]
-    fn list_pattern_matching() {
-        let i = Interner::new();
-        let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src = "{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
-    }
-
-    #[test]
-    fn lambda_type_check() {
-        let i = Interner::new();
-        let context = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src =
-            "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}";
-        let result = check_with_interner(src, &context, &i);
-        assert!(result.is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     // ── Variant (Option) ────────────────────────────────────────────
@@ -2048,13 +2025,13 @@ mod tests {
     #[test]
     fn some_int_is_option_int() {
         let src = "{{ x = Some(42) }}{{_}}{{/}}";
-        assert!(check(src).is_ok());
+        check(src).unwrap();
     }
 
     #[test]
     fn none_is_option() {
         let src = "{{ x = None }}{{_}}{{/}}";
-        assert!(check(src).is_ok());
+        check(src).unwrap();
     }
 
     #[test]
@@ -2062,7 +2039,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::String)))]);
         let src = "{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     #[test]
@@ -2070,16 +2047,7 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ None = @opt }}none{{_}}has value{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
-    }
-
-    #[test]
-    fn some_unifies_with_option_context() {
-        let i = Interner::new();
-        let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
-        // match Some(v) against Option<Int> → v : Int
-        let src = "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &context, &i).is_ok());
+        check_with_interner(src, &context, &i).unwrap();
     }
 
     #[test]
@@ -2114,7 +2082,7 @@ mod tests {
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = r#"{{ @my_fn("hello") }}"#;
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2123,11 +2091,8 @@ mod tests {
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ f = @my_fn }}{{_}}{{/}}";
-        let result = check_with_interner(src, &ctx, &i);
-        assert!(
-            result.is_ok(),
-            "bare reference to extern fn should be allowed (Lazy tier): {result:?}"
-        );
+        check_with_interner(src, &ctx, &i)
+            .expect("bare reference to extern fn should be allowed (Lazy tier)");
     }
 
     #[test]
@@ -2136,7 +2101,7 @@ mod tests {
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = r#"{{ "hello" | @my_fn }}"#;
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2153,7 +2118,7 @@ mod tests {
             },
         )]);
         let src = r#"{{ "hello" | @my_fn(42) }}"#;
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2162,7 +2127,7 @@ mod tests {
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ @name }}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     // ── 3-tier purity: Lazy context load tests ──
@@ -2173,34 +2138,11 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
         let src = "{{ x = @items }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
-    #[test]
-    fn lazy_iterator_context_load_ok() {
-        // @it : Iterator<Int> — Lazy tier, allowed in non-call position.
-        let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(
-            i.intern("it"),
-            Ty::Iterator(Box::new(Ty::Int), Effect::pure()),
-        )]);
-        let src = "{{ x = @it }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
-    }
-
-    #[test]
-    fn lazy_sequence_context_load_ok() {
-        // @seq : Sequence<Int, O> — Lazy tier, allowed.
-        let i = Interner::new();
-        let mut subst = TySubst::new();
-        let o = subst.alloc_identity(false);
-        let ctx = FxHashMap::from_iter([(
-            i.intern("seq"),
-            Ty::Sequence(Box::new(Ty::Int), Box::new(o), Effect::pure()),
-        )]);
-        let src = "{{ x = @seq }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
-    }
+    // Iterator/Sequence context load tests migrated to acvus-mir-test
+    // (requires TypeRegistry + Interner for UserDefined construction).
 
     #[test]
     fn lazy_option_context_load_ok() {
@@ -2208,7 +2150,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ x = @opt }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2217,7 +2159,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String]))]);
         let src = "{{ x = @pair }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2229,7 +2171,7 @@ mod tests {
             Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)])),
         )]);
         let src = "{{ x = @obj }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2246,7 +2188,7 @@ mod tests {
             },
         )]);
         let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2263,7 +2205,7 @@ mod tests {
             })),
         )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     // ── Unpure context load tests (UserDefined — must be rejected) ──
@@ -2275,19 +2217,17 @@ mod tests {
         let ctx = FxHashMap::from_iter([(
             i.intern("conn"),
             Ty::UserDefined {
-                id: UserDefinedId::alloc(),
+                id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
                 effect_args: vec![],
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
-        let result = check_with_interner(src, &ctx, &i);
-        assert!(result.is_err(), "UserDefined context load should be rejected");
-        let errors = result.unwrap_err();
+        let err = check_with_interner(src, &ctx, &i)
+            .expect_err("UserDefined context load should be rejected");
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(&e.kind, MirErrorKind::NonPureContextLoad { .. }))
+            err.contains("non-pure") || err.contains("NonPure"),
+            "expected NonPureContextLoad error, got: {err}"
         );
     }
 
@@ -2297,7 +2237,7 @@ mod tests {
         // Arguments are checked with allow_non_pure=false.
         let i = Interner::new();
         let conn_ty = Ty::UserDefined {
-            id: UserDefinedId::alloc(),
+            id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
             effect_args: vec![],
         };
@@ -2325,7 +2265,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
         let src = "{{ x = @count }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2333,43 +2273,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
         let src = "{{ x = @msg }}{{_}}{{/}}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
-    // ── Lambda captures type tracking tests ──
-
-    #[test]
-    fn lambda_captures_outer_variable() {
-        // Lambda capturing an outer value should have captures tracked.
-        let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
-            (i.intern("threshold"), Ty::Int),
-        ]);
-        // threshold is captured by the lambda
-        let src = "{{ @items | filter(|x| -> x > @threshold) | collect | len | to_string }}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
-    }
-
-    #[test]
-    fn lambda_no_capture_local_params() {
-        // Lambda params are local, not captures.
-        let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
-        let src = "{{ @items | map(|x| -> x + 1) | collect | len | to_string }}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
-    }
-
-    #[test]
-    fn nested_lambda_captures() {
-        // Nested lambdas: inner captures from outer lambda's scope.
-        let i = Interner::new();
-        let ctx = FxHashMap::from_iter([
-            (i.intern("items"), Ty::List(Box::new(Ty::Int))),
-            (i.intern("factor"), Ty::Int),
-        ]);
-        // Inner lambda captures @factor from context (not from outer lambda scope).
-        let src = "{{ @items | map(|x| -> x * @factor) | collect | len | to_string }}";
-        assert!(check_with_interner(src, &ctx, &i).is_ok());
-    }
 }

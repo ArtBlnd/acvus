@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use crate::graph::QualifiedRef;
-use crate::ty::{Effect, Ty};
+use crate::ty::Ty;
 
 acvus_utils::declare_local_id!(pub ValueId);
 
@@ -23,16 +23,8 @@ pub struct Inst {
 pub enum CastKind {
     /// `Deque<T, O> → List<T>` — origin erased, container preserved.
     DequeToList,
-    /// `List<T> → Iterator<T, Pure>` — lazy iteration.
-    ListToIterator,
-    /// `Deque<T, O> → Iterator<T, Pure>` — direct consumption.
-    DequeToIterator,
-    /// `Deque<T, O> → Sequence<T, O, Pure>` — origin preserved.
-    DequeToSequence,
-    /// `Sequence<T, O, E> → Iterator<T, E>` — origin erased.
-    SequenceToIterator,
-    /// `Range → Iterator<Int, Pure>` — materialise range into lazy iterator.
-    RangeToIterator,
+    /// `Range → List<Int>` — materialise range into list.
+    RangeToList,
     /// ExternCast — coercion performed by a registered pure ExternFn.
     Extern(QualifiedRef),
 }
@@ -44,11 +36,6 @@ impl CastKind {
     pub fn between(from: &Ty, to: &Ty) -> Option<CastKind> {
         match (from, to) {
             (Ty::Deque(..), Ty::List(_)) => Some(CastKind::DequeToList),
-            (Ty::List(_), Ty::Iterator(..)) => Some(CastKind::ListToIterator),
-            (Ty::Deque(..), Ty::Iterator(..)) => Some(CastKind::DequeToIterator),
-            (Ty::Deque(..), Ty::Sequence(..)) => Some(CastKind::DequeToSequence),
-            (Ty::Sequence(..), Ty::Iterator(..)) => Some(CastKind::SequenceToIterator),
-            (Ty::Range, Ty::Iterator(..)) => Some(CastKind::RangeToIterator),
             _ => None,
         }
     }
@@ -59,21 +46,7 @@ impl CastKind {
     pub fn result_ty(&self, src_ty: &Ty) -> Ty {
         match (self, src_ty) {
             (CastKind::DequeToList, Ty::Deque(elem, _)) => Ty::List(elem.clone()),
-            (CastKind::ListToIterator, Ty::List(elem)) => {
-                Ty::Iterator(elem.clone(), Effect::pure())
-            }
-            (CastKind::DequeToIterator, Ty::Deque(elem, _)) => {
-                Ty::Iterator(elem.clone(), Effect::pure())
-            }
-            (CastKind::DequeToSequence, Ty::Deque(elem, identity)) => {
-                Ty::Sequence(elem.clone(), identity.clone(), Effect::pure())
-            }
-            (CastKind::SequenceToIterator, Ty::Sequence(elem, _, e)) => {
-                Ty::Iterator(elem.clone(), e.clone())
-            }
-            (CastKind::RangeToIterator, Ty::Range) => {
-                Ty::Iterator(Box::new(Ty::Int), Effect::pure())
-            }
+            (CastKind::RangeToList, Ty::Range) => Ty::List(Box::new(Ty::Int)),
             _ => panic!("CastKind::result_ty: {self:?} incompatible with {src_ty:?}"),
         }
     }
@@ -260,15 +233,16 @@ pub enum InstKind {
         captures: Vec<ValueId>,
     },
 
-    /// Pull one element from an iterator (SSA-clean).
+    /// Index-based iteration over List/Deque.
     ///
-    /// Consumes `iter_src`, produces element in `dst` and rest iterator in `iter_dst`.
-    /// If exhausted, jumps to `done` with `done_args`. Replaces the old
-    /// IterStep + TestVariant + JumpIf + UnwrapVariant + TupleIndex chain.
-    IterStep {
+    /// If `index_src >= len(list)`, jumps to `done` with `done_args`.
+    /// Otherwise, `dst = list[index_src]`, `index_dst = index_src + 1`.
+    /// List is borrowed (not consumed). Index is a plain Int.
+    ListStep {
         dst: ValueId,
-        iter_src: ValueId,
-        iter_dst: ValueId,
+        list: ValueId,
+        index_src: ValueId,
+        index_dst: ValueId,
         done: Label,
         done_args: Vec<ValueId>,
     },
@@ -311,6 +285,12 @@ pub enum InstKind {
         else_args: Vec<ValueId>,
     },
     Return(ValueId),
+    /// Undefined value — valid to move/copy, UB to read as a concrete value.
+    /// Used as initial value for SSA variables that are defined inside loops
+    /// (iteration bindings, write-only contexts).
+    Undef {
+        dst: ValueId,
+    },
     Nop,
 
     /// Explicit type coercion — inserted by the lowerer when the type checker

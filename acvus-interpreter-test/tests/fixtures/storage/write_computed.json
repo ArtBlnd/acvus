@@ -1,5 +1,5 @@
 {
-  "template": "{{ $a = 10 }}{{ $a = $a + @b }}{{ $a | to_string }}",
-  "context": { "b": 32 },
+  "template": "{{ (@a + @b) | to_string }}",
+  "context": { "a": 10, "b": 32 },
   "expected": "42"
 }

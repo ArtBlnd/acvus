@@ -2,4 +2,4 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-no module produced
+[infer:test] [3..9] no field `foo` on type Int

@@ -1,5 +1,5 @@
 {
-  "template": "{{ $sum = 0 }}{{ x in @items }}{{ $sum = $sum + x }}{{/}}{{ $sum | to_string }}",
+  "template": "{{ result = @items | iter | fold(0, |acc, x| -> acc + x) }}{{ result | to_string }}",
   "context": { "items": [1, 2, 3] },
   "expected": "6"
 }

@@ -7,52 +7,54 @@ expression: ir
   T1 = "empty"
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     3 │ L2:
-     4 │   r2 = test len(r1) >= 2
-     5 │   jump_if r2 then L3 else L4
-     6 │ L3:
-     7 │   r3 = r1[0]
-     9 │   r4 = r2 && true (r5)
-    10 │   r6 = r1[1]
-    12 │   r7 = r4 && true (r8)
-    13 │   jump L5(r7)
-    14 │ L4:
-    16 │   jump L5(false (r9))
-    17 │ L5(r10: Bool):
-    18 │   jump_if r10 then L6 else L1
-    19 │ L6:
-    20 │   r11 = r1[0]
-    21 │   r12 = r1[1]
-    23 │   r13 = poison
-    24 │   r14 = T0 + r13
-    25 │   jump L0(r14, r11, r12)
-    26 │ L1:
-    29 │   r15 = T0 + T1
-    30 │   jump L0(r15, r16, r17)
-    31 │ L0(r18: String, r19: Int, r20: Int):  ; merge_of L2
-    32 │   r21 = T0 + r18
-    33 │   return r21
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @items
+     3 │   r3 = context_load r2
+     5 │ L2:
+     6 │   r4 = test len(r3) >= 2
+     7 │   jump_if r4 then L3 else L4
+     8 │ L3:
+     9 │   r5 = r3[0]
+    11 │   r6 = r4 && true (r7)
+    12 │   r8 = r3[1]
+    14 │   r9 = r6 && true (r10)
+    15 │   jump L5(r9)
+    16 │ L4:
+    18 │   jump L5(false (r11))
+    19 │ L5(r12: Bool):
+    20 │   jump_if r12 then L6 else L1
+    21 │ L6:
+    22 │   r13 = r3[0]
+    23 │   r14 = r3[1]
+    25 │   r15 = call #0(r13)
+    26 │   r16 = T0 + r15
+    27 │   jump L0(r16, r13, r14)
+    28 │ L1:
+    31 │   r17 = T0 + T1
+    32 │   jump L0(r17, r0, r1)
+    33 │ L0(r18: String, r19: Int, r20: Int):  ; merge_of L2
+    34 │   r21 = T0 + r18
+    35 │   return r21
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (v5) : Bool
-    ; r3 (v6) : Int
-    ; r4 (v8) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v9) : Int
-    ; r7 (v11) : Bool
-    ; r8 (v10) : Bool
-    ; r9 (v13) : Bool
-    ; r10 (v12) : Bool
-    ; r11 (a) : Int
-    ; r12 (b) : Int
-    ; r13 (to_string(...)) : String
-    ; r14 (v19) : String
-    ; r15 (v22) : String
-    ; r16 (v25) : Int
-    ; r17 (v26) : Int
+    ; r0 (v25) : Int
+    ; r1 (v26) : Int
+    ; r2 (@items) : List<Int>
+    ; r3 (v1) : List<Int>
+    ; r4 (v5) : Bool
+    ; r5 (v6) : Int
+    ; r6 (v8) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (v9) : Int
+    ; r9 (v11) : Bool
+    ; r10 (v10) : Bool
+    ; r11 (v13) : Bool
+    ; r12 (v12) : Bool
+    ; r13 (a) : Int
+    ; r14 (b) : Int
+    ; r15 (to_string(...)) : String
+    ; r16 (v19) : String
+    ; r17 (v22) : String
     ; r18 (v23) : String
     ; r19 (v29) : Int
     ; r20 (v30) : Int

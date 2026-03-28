@@ -3,25 +3,26 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @data
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @out
-     3 │   r3 = context_load r2
-     5 │   r4 = r1 + 1 (r5)
-     6 │   r6 = context_project @out
-     7 │   ctx_store r6 = r4
-     8 │   return r4
+     0 │   r0 = undef
+     1 │   r1 = context_project @data
+     2 │   r2 = context_load r1
+     3 │   r3 = context_project @out
+     4 │   r4 = context_load r3
+     6 │   r5 = r2 + 1 (r6)
+     7 │   r7 = context_project @out
+     8 │   ctx_store r7 = r5
+     9 │   return r5
 
-    ; r0 (@data) : Int
-    ; r1 (v1) : Int
-    ; r2 (@out) : Int
-    ; r3 (v3) : Int
-    ; r4 (v8) : Int
-    ; r5 (v7) : Int
-    ; r6 (v9) : Int
-    ; r7 (v11) : Int
-    ; r8 (@out) : Int
-    ; r9 (x) : Int
+    ; r0 (v12) : Int
+    ; r1 (@data) : Int
+    ; r2 (v1) : Int
+    ; r3 (@out) : Int
+    ; r4 (v3) : Int
+    ; r5 (v8) : Int
+    ; r6 (v7) : Int
+    ; r7 (v9) : Int
+    ; r8 (v11) : Int
+    ; r9 (@out) : Int
     ; r10 (x) : Int
-    ; r11 (v12) : Int
+    ; r11 (x) : Int
     ; r12 (@data) : Int

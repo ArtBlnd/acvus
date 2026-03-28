@@ -208,7 +208,7 @@ fn compute_reach(
                     }
                 }
             }
-            Terminator::IterStep { done, .. } => {
+            Terminator::ListStep { done, .. } => {
                 // Fallthrough.
                 let next = idx + 1;
                 if next < n && block_reach > reach[next] {

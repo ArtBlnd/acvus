@@ -2,4 +2,4 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-no module produced
+[infer:test] [0..22] pattern type Int incompatible with source type String

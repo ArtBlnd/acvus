@@ -6,39 +6,41 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @pair
-     1 │   r1 = context_load r0
-     3 │ L2:
-     5 │   r2 = r1.0
-     7 │   r3 = true (r4) && true (r5)
-     8 │   r6 = r1.1
-    10 │   r7 = r3 && true (r8)
-    11 │   jump_if r7 then L3 else L1
-    12 │ L3:
-    13 │   r9 = r1.0
-    14 │   r10 = r1.1
-    16 │   r11 = T0 + r9
-    17 │   jump L0(r11, r9, r10)
-    18 │ L1:
-    20 │   jump L0(T0, r12, r13)
-    21 │ L0(r14: String, r15: String, r16: Int):  ; merge_of L2
-    22 │   r17 = T0 + r14
-    23 │   return r17
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @pair
+     3 │   r3 = context_load r2
+     5 │ L2:
+     7 │   r4 = r3.0
+     9 │   r5 = true (r6) && true (r7)
+    10 │   r8 = r3.1
+    12 │   r9 = r5 && true (r10)
+    13 │   jump_if r9 then L3 else L1
+    14 │ L3:
+    15 │   r11 = r3.0
+    16 │   r12 = r3.1
+    18 │   r13 = T0 + r11
+    19 │   jump L0(r13, r11, r12)
+    20 │ L1:
+    22 │   jump L0(T0, r0, r1)
+    23 │ L0(r14: String, r15: String, r16: Int):  ; merge_of L2
+    24 │   r17 = T0 + r14
+    25 │   return r17
 
-    ; r0 (@pair) : (String, Int)
-    ; r1 (v1) : (String, Int)
-    ; r2 (v6) : String
-    ; r3 (v8) : Bool
-    ; r4 (v5) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v9) : Int
-    ; r7 (v11) : Bool
-    ; r8 (v10) : Bool
-    ; r9 (name) : String
-    ; r10 (age) : Int
-    ; r11 (v16) : String
-    ; r12 (v20) : String
-    ; r13 (v21) : Int
+    ; r0 (v20) : String
+    ; r1 (v21) : Int
+    ; r2 (@pair) : (String, Int)
+    ; r3 (v1) : (String, Int)
+    ; r4 (v6) : String
+    ; r5 (v8) : Bool
+    ; r6 (v5) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (v9) : Int
+    ; r9 (v11) : Bool
+    ; r10 (v10) : Bool
+    ; r11 (name) : String
+    ; r12 (age) : Int
+    ; r13 (v16) : String
     ; r14 (v18) : String
     ; r15 (v22) : String
     ; r16 (v23) : Int

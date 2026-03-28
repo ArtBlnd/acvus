@@ -113,7 +113,8 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         | InstKind::ParamLoad { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
-        | InstKind::Poison { .. } => {}
+        | InstKind::Poison { .. }
+        | InstKind::Undef { .. } => {}
 
         // ContextProject has no ValueId uses (ctx is a QualifiedRef, not a ValueId).
         InstKind::ContextProject { .. } => {}
@@ -220,12 +221,14 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::Cast { src, .. } => remap_val(src, remap),
 
-        InstKind::IterStep {
-            iter_src,
+        InstKind::ListStep {
+            list,
+            index_src,
             done_args,
             ..
         } => {
-            remap_val(iter_src, remap);
+            remap_val(list, remap);
+            remap_val(index_src, remap);
             remap_vec(done_args, remap);
         }
 

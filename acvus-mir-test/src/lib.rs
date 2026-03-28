@@ -1,9 +1,60 @@
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
+use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{Param, Ty};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
+
+/// Run extract → infer → lower, collecting errors from all passes.
+fn run_pipeline(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    target: QualifiedRef,
+) -> Result<MirModule, String> {
+    run_pipeline_with_registry(interner, graph, target, acvus_mir::ty::TypeRegistry::new())
+}
+
+fn run_pipeline_with_registry(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    target: QualifiedRef,
+    type_registry: acvus_mir::ty::TypeRegistry,
+) -> Result<MirModule, String> {
+    let ext = extract::extract(interner, graph);
+    let inf = infer::infer(interner, graph, &ext, &FxHashMap::default(), Freeze::new(type_registry));
+
+    // Collect infer errors.
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!(
+                "[infer:{}] [{}..{}] {}",
+                fn_name, e.span.start, e.span.end, e.display(interner)
+            ));
+        }
+    }
+
+    let result = graph_lower::lower(interner, graph, &ext, &inf);
+
+    // Collect lower errors.
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start, e.span.end, e.display(interner)
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    result
+        .module(target)
+        .cloned()
+        .ok_or_else(|| "no module produced for target".to_string())
+}
 
 /// Parse a template and compile to MIR via the graph pipeline, returning the printed IR.
 pub fn compile_to_ir(
@@ -46,13 +97,9 @@ pub fn compile_to_ir_with(
             effect: None,
         },
     }];
-    // Register stdlib ExternFn registries (string, conversion, list, option).
-    for registry in [
-        acvus_ext::string_registry(),
-        acvus_ext::conversion_registry(),
-        acvus_ext::list_registry(),
-        acvus_ext::option_registry(),
-    ] {
+    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    for registry in std_regs {
         let registered = registry.register(interner);
         functions.extend(registered.functions);
     }
@@ -61,23 +108,8 @@ pub fn compile_to_ir_with(
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
     };
-    let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
-    if result.has_errors() {
-        let errs: Vec<String> = result
-            .errors
-            .iter()
-            .flat_map(|e| e.errors.iter())
-            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
-            .collect();
-        return Err(errs.join("\n"));
-    }
-    let uid = graph.functions[0].qref;
-    let module = result
-        .module(uid)
-        .ok_or_else(|| "no module produced".to_string())?;
-    Ok(dump_with(interner, module))
+    let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
+    Ok(dump_with(interner, &module))
 }
 
 /// Shorthand: compile with empty context.
@@ -129,33 +161,25 @@ pub fn compile_script_ir(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
+    let mut functions = vec![Function {
+        qref: test_qref,
+        kind: FnKind::Local(ParsedAst::Script(ast)),
+        constraint: FnConstraint {
+            signature: None,
+            output: Constraint::Inferred,
+            effect: None,
+        },
+    }];
+    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    for registry in std_regs {
+        let registered = registry.register(interner);
+        functions.extend(registered.functions);
+    }
     let graph = CompilationGraph {
-        functions: Freeze::new(vec![Function {
-            qref: test_qref,
-            kind: FnKind::Local(ParsedAst::Script(ast)),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
-            },
-        }]),
+        functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
     };
-    let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
-    if result.has_errors() {
-        let errs: Vec<String> = result
-            .errors
-            .iter()
-            .flat_map(|e| e.errors.iter())
-            .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
-            .collect();
-        return Err(errs.join("\n"));
-    }
-    let uid = graph.functions[0].qref;
-    let module = result
-        .module(uid)
-        .ok_or_else(|| "no module produced".to_string())?;
-    Ok(dump_with(interner, module))
+    let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
+    Ok(dump_with(interner, &module))
 }

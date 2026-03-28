@@ -3,56 +3,56 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_project @matrix
-     1 │   r1 = context_load r0
-     2 │   r2 = context_project @sum
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @matrix
      3 │   r3 = context_load r2
-     4 │   r4 = cast ListToIterator r1
-     5 │   jump L0(r4, r3, r5, r6)
-     6 │ L0(r7: Iterator<List<Int>>, r8: Int, r9: Int, r10: List<Int>):
-     7 │   r11 = context_project @sum
-     8 │   ctx_store r11 = r8
-     9 │   iter_step r12, r13 = r7 else L1()
-    10 │ L2:
-    11 │   r14 = cast ListToIterator r12
-    12 │   jump L3(r14, r8, r9)
-    13 │ L3(r15: Iterator<Int>, r16: Int, r17: Int):
-    14 │   r18 = context_project @sum
-    15 │   ctx_store r18 = r16
-    16 │   iter_step r19, r20 = r15 else L4()
-    17 │ L5:
-    18 │   r21 = context_project @sum
-    19 │   r22 = context_load r21
-    20 │   r23 = r22 + r19
-    21 │   jump L3(r20, r23, r19)
-    22 │ L4:
-    23 │   jump L0(r13, r16, r17, r12)
-    24 │ L1:
-    25 │   r24 = context_project @sum
-    26 │   r25 = context_load r24
-    27 │   return r25
+     4 │   r4 = context_project @sum
+     5 │   r5 = context_load r4
+     7 │   jump L0(0 (r6), r5, r0, r1)
+     8 │ L0(r7: Int, r8: Int, r9: Int, r10: List<Int>):
+     9 │   r11 = context_project @sum
+    10 │   ctx_store r11 = r8
+    11 │   list_step r12, r13 = r3[r7] else L1()
+    12 │ L2:
+    14 │   jump L3(0 (r14), r8, r9)
+    15 │ L3(r15: Int, r16: Int, r17: Int):
+    16 │   r18 = context_project @sum
+    17 │   ctx_store r18 = r16
+    18 │   list_step r19, r20 = r12[r15] else L4()
+    19 │ L5:
+    20 │   r21 = context_project @sum
+    21 │   r22 = context_load r21
+    22 │   r23 = r22 + r19
+    23 │   jump L3(r20, r23, r19)
+    24 │ L4:
+    25 │   jump L0(r13, r16, r17, r12)
+    26 │ L1:
+    27 │   r24 = context_project @sum
+    28 │   r25 = context_load r24
+    29 │   return r25
 
-    ; r0 (@matrix) : List<List<Int>>
-    ; r1 (v1) : List<List<Int>>
-    ; r2 (@sum) : Int
-    ; r3 (v3) : Int
-    ; r4 (v6) : Iterator<List<Int>>
-    ; r5 (v22) : Int
-    ; r6 (v23) : List<Int>
-    ; r7 (v7) : Iterator<List<Int>>
+    ; r0 (v22) : Int
+    ; r1 (v23) : List<Int>
+    ; r2 (@matrix) : List<List<Int>>
+    ; r3 (v1) : List<List<Int>>
+    ; r4 (@sum) : Int
+    ; r5 (v3) : Int
+    ; r6 (v6) : Int
+    ; r7 (v7) : Int
     ; r8 (v24) : Int
     ; r9 (v26) : Int
     ; r10 (v28) : List<Int>
     ; r11 (v30) : Int
     ; r12 (row) : List<Int>
-    ; r13 (v9) : Iterator<List<Int>>
-    ; r14 (v11) : Iterator<Int>
-    ; r15 (v12) : Iterator<Int>
+    ; r13 (v9) : Int
+    ; r14 (v11) : Int
+    ; r15 (v12) : Int
     ; r16 (v25) : Int
     ; r17 (v27) : Int
     ; r18 (v31) : Int
     ; r19 (x) : Int
-    ; r20 (v14) : Iterator<Int>
+    ; r20 (v14) : Int
     ; r21 (@sum) : Int
     ; r22 (v16) : Int
     ; r23 (v18) : Int

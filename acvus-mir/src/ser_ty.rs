@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectSet, EffectTarget, Identity, IdentityId, TokenId, Ty, UserDefinedId};
+use crate::ty::{Effect, EffectSet, EffectTarget, Identity, IdentityId, TokenId, Ty};
 
 // ── Serializable Effect (mirrors ty::Effect without Astr) ────────────
 
@@ -165,7 +165,7 @@ pub enum SerTy {
         effect: SerEffect,
     },
     UserDefined {
-        id: UserDefinedId,
+        id: SerQualifiedRef,
         type_args: Vec<SerTy>,
         effect_args: Vec<SerEffect>,
     },
@@ -175,15 +175,6 @@ pub enum SerTy {
     Enum {
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
-    },
-    Iterator {
-        elem: Box<SerTy>,
-        effect: SerEffect,
-    },
-    Sequence {
-        elem: Box<SerTy>,
-        identity: Box<SerTy>,
-        effect: SerEffect,
     },
     Deque {
         elem: Box<SerTy>,
@@ -231,7 +222,7 @@ impl Ty {
                 type_args,
                 effect_args,
             } => SerTy::UserDefined {
-                id: *id,
+                id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| e.to_ser(interner)).collect(),
             },
@@ -249,15 +240,6 @@ impl Ty {
                         )
                     })
                     .collect(),
-            },
-            Ty::Iterator(elem, effect) => SerTy::Iterator {
-                elem: Box::new(elem.to_ser(interner)),
-                effect: effect.to_ser(interner),
-            },
-            Ty::Sequence(elem, identity, effect) => SerTy::Sequence {
-                elem: Box::new(elem.to_ser(interner)),
-                identity: Box::new(identity.to_ser(interner)),
-                effect: effect.to_ser(interner),
             },
             Ty::Deque(elem, identity) => SerTy::Deque {
                 elem: Box::new(elem.to_ser(interner)),
@@ -314,7 +296,7 @@ impl SerTy {
                 type_args,
                 effect_args,
             } => Ty::UserDefined {
-                id: *id,
+                id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| e.to_effect(interner)).collect(),
             },
@@ -331,18 +313,6 @@ impl SerTy {
                     })
                     .collect(),
             },
-            SerTy::Iterator { elem, effect } => {
-                Ty::Iterator(Box::new(elem.to_ty(interner)), effect.to_effect(interner))
-            }
-            SerTy::Sequence {
-                elem,
-                identity,
-                effect,
-            } => Ty::Sequence(
-                Box::new(elem.to_ty(interner)),
-                Box::new(identity.to_ty(interner)),
-                effect.to_effect(interner),
-            ),
             SerTy::Deque { elem, identity } => {
                 Ty::Deque(Box::new(elem.to_ty(interner)), Box::new(identity.to_ty(interner)))
             }

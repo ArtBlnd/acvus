@@ -7,34 +7,34 @@ expression: ir
   T1 = "empty"
 
 === main ===
-     0 │   r0 = context_project @items
-     1 │   r1 = context_load r0
-     3 │   r2 = cast ListToIterator r1
-     5 │   jump L0(r2, T0, r3)
-     6 │ L0(r4: Iterator<Int>, r5: String, r6: Int):
-     7 │   iter_step r7, r8 = r4 else L1(r5)
-     8 │ L3:
-    10 │   r9 = poison
-    11 │   r10 = T0 + r9
-    12 │   r11 = r5 + r10
-    13 │   jump L0(r8, r11, r7)
-    14 │ L1(r12: String):
-    17 │   r13 = T0 + T1
-    18 │   r14 = r12 + r13
-    19 │   jump L2(r14)
-    20 │ L2(r15: String):
-    21 │   r16 = T0 + r15
-    22 │   return r16
+     0 │   r0 = undef
+     1 │   r1 = context_project @items
+     2 │   r2 = context_load r1
+     6 │   jump L0(0 (r3), T0, r0)
+     7 │ L0(r4: Int, r5: String, r6: Int):
+     8 │   list_step r7, r8 = r2[r4] else L1(r5)
+     9 │ L3:
+    11 │   r9 = call #0(r7)
+    12 │   r10 = T0 + r9
+    13 │   r11 = r5 + r10
+    14 │   jump L0(r8, r11, r7)
+    15 │ L1(r12: String):
+    18 │   r13 = T0 + T1
+    19 │   r14 = r12 + r13
+    20 │   jump L2(r14)
+    21 │ L2(r15: String):
+    22 │   r16 = T0 + r15
+    23 │   return r16
 
-    ; r0 (@items) : List<Int>
-    ; r1 (v1) : List<Int>
-    ; r2 (v5) : Iterator<Int>
-    ; r3 (v23) : Int
-    ; r4 (v7) : Iterator<Int>
+    ; r0 (v23) : Int
+    ; r1 (@items) : List<Int>
+    ; r2 (v1) : List<Int>
+    ; r3 (v5) : Int
+    ; r4 (v7) : Int
     ; r5 (v8) : String
     ; r6 (v24) : Int
     ; r7 (x) : Int
-    ; r8 (v10) : Iterator<Int>
+    ; r8 (v10) : Int
     ; r9 (to_string(...)) : String
     ; r10 (v14) : String
     ; r11 (v15) : String

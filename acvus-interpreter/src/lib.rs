@@ -1,7 +1,7 @@
 pub mod blob;
 pub mod blob_journal;
 pub mod builtins;
-mod error;
+pub mod error;
 pub mod executor;
 pub mod extern_fn;
 mod interpreter;
@@ -17,7 +17,7 @@ pub use extern_fn::{
 };
 pub use interpreter::{
     Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Executable, Interpreter, InterpreterContext,
-    SyncBuiltinFn,
+    SyncBuiltinFn, exec_next,
 };
 pub use iter::{IterHandle, SequenceChain};
 pub use journal::{ContextOverlay, ContextWrite, EntryLifecycle, EntryMut, EntryRef, Journal};

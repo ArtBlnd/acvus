@@ -1,5 +1,5 @@
 {
-  "template": "{{ $sum = 0 }}{{ row in @matrix }}{{ x in row }}{{ $sum = $sum + x }}{{/}}{{/}}{{ $sum | to_string }}",
+  "template": "{{ result = @matrix | iter | flatten | fold(0, |acc, x| -> acc + x) }}{{ result | to_string }}",
   "context": {
     "matrix": [[1, 2], [3, 4], [5, 6]]
   },

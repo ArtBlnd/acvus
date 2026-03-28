@@ -23,23 +23,15 @@ pub struct CompileResult {
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
 }
 
-/// Standard ExternFn registries for the interpreter runtime stdlib.
-fn stdlib_registries() -> Vec<ExternRegistry> {
-    vec![
-        acvus_ext::string_registry(),
-        acvus_ext::conversion_registry(),
-        acvus_ext::list_registry(),
-        acvus_ext::option_registry(),
-    ]
-}
-
 fn compile(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
-    compile_source_with_externs(interner, ast, context_types, stdlib_registries())
+    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
 fn compile_script(
@@ -48,7 +40,9 @@ fn compile_script(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    compile_source_with_externs(interner, ast, context_types, stdlib_registries())
+    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
 pub fn compile_source_with_externs(
@@ -56,6 +50,7 @@ pub fn compile_source_with_externs(
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
     extern_registries: Vec<ExternRegistry>,
+    type_registry: acvus_mir::ty::TypeRegistry,
 ) -> CompileResult {
     let contexts: Vec<Context> = context_types
         .iter()
@@ -98,39 +93,32 @@ pub fn compile_source_with_externs(
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
-    // Check extract produced refs for entry.
-    if !ext.fn_refs.contains_key(&entry_qref) {
-        panic!(
-            "extract: no fn_refs for '{}'. parsed={}, fn_refs keys: {:?}",
-            interner.resolve(entry_qref.name),
-            ext.parsed.contains_key(&entry_qref),
-            ext.fn_refs.keys().map(|q| interner.resolve(q.name)).collect::<Vec<_>>(),
-        );
+    let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::new(type_registry));
+
+    // Collect all errors: infer (unresolved functions) + lower.
+    let mut all_errors: Vec<String> = Vec::new();
+
+    // Report infer-level errors (unresolved functions).
+    for (qref, outcome) in &inf.outcomes {
+        if let acvus_mir::graph::infer::FnInferOutcome::Incomplete { errors, .. } = outcome {
+            if !errors.is_empty() {
+                let fn_name = interner.resolve(qref.name);
+                for e in errors {
+                    all_errors.push(format!("[{fn_name}] {}", e.display(interner)));
+                }
+            }
+        }
     }
-    // Check infer produced resolution for entry.
-    if inf.try_resolution(entry_qref).is_none() {
-        let outcome = inf.outcomes.get(&entry_qref);
-        panic!(
-            "infer: no resolution for '{}', outcome: {:?}",
-            interner.resolve(entry_qref.name),
-            outcome,
-        );
-    }
+
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
-    // Always dump errors for debugging.
-    let errs: Vec<String> = result
-        .errors
-        .iter()
-        .flat_map(|e| e.errors.iter())
-        .map(|e| format!("{}", e.display(interner)))
-        .collect();
-    if !errs.is_empty() {
-        eprintln!("compile errors: {}", errs.join("; "));
+    // Report lower-level errors.
+    for e in result.errors.iter().flat_map(|e| e.errors.iter()) {
+        all_errors.push(format!("{}", e.display(interner)));
     }
-    if result.has_errors() {
-        panic!("compile failed: {}", errs.join("; "));
+
+    if !all_errors.is_empty() {
+        panic!("compile failed:\n  {}", all_errors.join("\n  "));
     }
 
     // Collect all modules as Executable::Module.
@@ -139,13 +127,6 @@ pub fn compile_source_with_externs(
         .into_iter()
         .map(|(qref, (module, _hints))| (qref, Executable::Module(module)))
         .collect();
-
-    assert!(
-        modules.contains_key(&entry_qref),
-        "entry function '{}' not in modules (modules: {:?})",
-        interner.resolve(entry_qref.name),
-        modules.keys().map(|q| interner.resolve(q.name)).collect::<Vec<_>>(),
-    );
 
     // Build context qref → name mapping.
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
@@ -293,6 +274,7 @@ pub async fn run_script_with_externs(
         ast,
         &context_types,
         extern_registries,
+        acvus_mir::ty::TypeRegistry::new(),
     );
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);

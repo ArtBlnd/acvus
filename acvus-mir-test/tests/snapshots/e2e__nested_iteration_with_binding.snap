@@ -6,51 +6,51 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = context_project @matrix
-     1 │   r1 = context_load r0
-     3 │   r2 = cast ListToIterator r1
-     5 │   jump L0(r2, T0, r3, r4)
-     6 │ L0(r5: Iterator<List<Int>>, r6: String, r7: Int, r8: List<Int>):
-     7 │   iter_step r9, r10 = r5 else L1(r6)
-     8 │ L3:
-    10 │   r11 = cast ListToIterator r9
-    12 │   jump L4(r11, T0, r7)
-    13 │ L4(r12: Iterator<Int>, r13: String, r14: Int):
-    14 │   iter_step r15, r16 = r12 else L5(r13)
-    15 │ L7:
-    17 │   r17 = poison
-    18 │   r18 = T0 + r17
-    19 │   r19 = r13 + r18
-    20 │   jump L4(r16, r19, r15)
-    21 │ L5(r20: String):
-    22 │   jump L6(r20)
-    23 │ L6(r21: String):
-    24 │   r22 = T0 + r21
-    25 │   r23 = r6 + r22
-    26 │   jump L0(r10, r23, r14, r9)
-    27 │ L1(r24: String):
-    28 │   jump L2(r24)
-    29 │ L2(r25: String):
-    30 │   r26 = T0 + r25
-    31 │   return r26
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = context_project @matrix
+     3 │   r3 = context_load r2
+     7 │   jump L0(0 (r4), T0, r0, r1)
+     8 │ L0(r5: Int, r6: String, r7: Int, r8: List<Int>):
+     9 │   list_step r9, r10 = r3[r5] else L1(r6)
+    10 │ L3:
+    14 │   jump L4(0 (r11), T0, r7)
+    15 │ L4(r12: Int, r13: String, r14: Int):
+    16 │   list_step r15, r16 = r9[r12] else L5(r13)
+    17 │ L7:
+    19 │   r17 = call #0(r15)
+    20 │   r18 = T0 + r17
+    21 │   r19 = r13 + r18
+    22 │   jump L4(r16, r19, r15)
+    23 │ L5(r20: String):
+    24 │   jump L6(r20)
+    25 │ L6(r21: String):
+    26 │   r22 = T0 + r21
+    27 │   r23 = r6 + r22
+    28 │   jump L0(r10, r23, r14, r9)
+    29 │ L1(r24: String):
+    30 │   jump L2(r24)
+    31 │ L2(r25: String):
+    32 │   r26 = T0 + r25
+    33 │   return r26
 
-    ; r0 (@matrix) : List<List<Int>>
-    ; r1 (v1) : List<List<Int>>
-    ; r2 (v5) : Iterator<List<Int>>
-    ; r3 (v31) : Int
-    ; r4 (v32) : List<Int>
-    ; r5 (v7) : Iterator<List<Int>>
+    ; r0 (v31) : Int
+    ; r1 (v32) : List<Int>
+    ; r2 (@matrix) : List<List<Int>>
+    ; r3 (v1) : List<List<Int>>
+    ; r4 (v5) : Int
+    ; r5 (v7) : Int
     ; r6 (v8) : String
     ; r7 (v33) : Int
     ; r8 (v35) : List<Int>
     ; r9 (row) : List<Int>
-    ; r10 (v10) : Iterator<List<Int>>
-    ; r11 (v13) : Iterator<Int>
-    ; r12 (v15) : Iterator<Int>
+    ; r10 (v10) : Int
+    ; r11 (v13) : Int
+    ; r12 (v15) : Int
     ; r13 (v16) : String
     ; r14 (v34) : Int
     ; r15 (x) : Int
-    ; r16 (v18) : Iterator<Int>
+    ; r16 (v18) : Int
     ; r17 (to_string(...)) : String
     ; r18 (v22) : String
     ; r19 (v23) : String
