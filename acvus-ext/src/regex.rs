@@ -2,10 +2,11 @@
 
 use acvus_interpreter::iter::IterHandle;
 use acvus_interpreter::{
-    Defs, ExternFn, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses, Value,
-    ValueKind,
+    Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
+    Value, ValueKind,
 };
-use acvus_mir::ty::{Effect, Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::graph::{Constraint, FnConstraint, Signature};
+use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: UserDefinedId) -> Ty {
@@ -48,6 +49,26 @@ impl IntoValue for Re {
     }
 }
 
+// ── Constraint builders ─────────────────────────────────────────────
+
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::pure(),
+        }),
+        effect: None,
+    }
+}
+
 /// Build the regex ExternRegistry.
 /// Registers the `Regex` UserDefined type into `type_registry`.
 pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
@@ -60,132 +81,144 @@ pub fn regex_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
     });
 
     let ty = user_defined_ty(id);
-    ExternRegistry::new(move |_interner| {
+    ExternRegistry::new(move |interner| {
         vec![
             // regex(pattern) -> Regex
-            ExternFn::build("regex")
-                .params(vec![Ty::String])
-                .ret(ty.clone())
-                .pure()
-                .handler(
-                    move |_interner: &Interner, (pattern,): (String,), Uses(()): Uses<()>| {
-                        let re = regex::Regex::new(&pattern)
-                            .unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"));
-                        Ok((Re(re, id), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "regex",
+                sig(interner, vec![Ty::String], ty.clone()),
+            )
+            .handler(
+                move |_interner: &Interner, (pattern,): (String,), Uses(()): Uses<()>| {
+                    let re = regex::Regex::new(&pattern)
+                        .unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"));
+                    Ok((Re(re, id), Defs(())))
+                },
+            ),
             // regex_match(re, text) -> Bool
-            ExternFn::build("regex_match")
-                .params(vec![ty.clone(), Ty::String])
-                .ret(Ty::Bool)
-                .pure()
-                .handler(
-                    |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
-                        Ok((re.is_match(&text), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "regex_match",
+                sig(interner, vec![ty.clone(), Ty::String], Ty::Bool),
+            )
+            .handler(
+                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                    Ok((re.is_match(&text), Defs(())))
+                },
+            ),
             // regex_find(re, text) -> Option<String>
-            ExternFn::build("regex_find")
-                .params(vec![ty.clone(), Ty::String])
-                .ret(Ty::String) // TODO: proper Option<String> return type
-                .pure()
-                .handler(
-                    |interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
-                        let result = match re.find(&text) {
-                            Some(m) => Value::some(interner, Value::string(m.as_str())),
-                            None => Value::none(interner),
-                        };
-                        Ok((result, Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "regex_find",
+                sig(interner, vec![ty.clone(), Ty::String], Ty::String), // TODO: proper Option<String> return type
+            )
+            .handler(
+                |interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                    let result = match re.find(&text) {
+                        Some(m) => Value::some(interner, Value::string(m.as_str())),
+                        None => Value::none(interner),
+                    };
+                    Ok((result, Defs(())))
+                },
+            ),
             // regex_find_all(re, text) -> Iterator<String, SelfModifying>
-            ExternFn::build("regex_find_all")
-                .params(vec![ty.clone(), Ty::String])
-                .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
-                .pure()
-                .handler(
-                    |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
-                        let mut start = 0;
-                        let iter = Value::iterator(IterHandle::from_fn(
-                            Effect::self_modifying(),
-                            move || {
-                                let m = re.find_at(&text, start)?;
-                                start = m.end();
-                                Some(Value::string(m.as_str()))
-                            },
-                        ));
-                        Ok((iter, Defs(())))
-                    },
+            ExternFnBuilder::new(
+                "regex_find_all",
+                sig(
+                    interner,
+                    vec![ty.clone(), Ty::String],
+                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
                 ),
+            )
+            .handler(
+                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                    let mut start = 0;
+                    let iter = Value::iterator(IterHandle::from_fn(
+                        Effect::self_modifying(),
+                        move || {
+                            let m = re.find_at(&text, start)?;
+                            start = m.end();
+                            Some(Value::string(m.as_str()))
+                        },
+                    ));
+                    Ok((iter, Defs(())))
+                },
+            ),
             // regex_replace(text, re, replacement) -> String
-            ExternFn::build("regex_replace")
-                .params(vec![Ty::String, ty.clone(), Ty::String])
-                .ret(Ty::String)
-                .pure()
-                .handler(
-                    |_interner: &Interner,
-                     (text, Re(re, _), rep): (String, Re, String),
-                     Uses(()): Uses<()>| {
-                        Ok((re.replace_all(&text, rep.as_str()).into_owned(), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "regex_replace",
+                sig(interner, vec![Ty::String, ty.clone(), Ty::String], Ty::String),
+            )
+            .handler(
+                |_interner: &Interner,
+                 (text, Re(re, _), rep): (String, Re, String),
+                 Uses(()): Uses<()>| {
+                    Ok((re.replace_all(&text, rep.as_str()).into_owned(), Defs(())))
+                },
+            ),
             // regex_split(re, text) -> Iterator<String, SelfModifying>
-            ExternFn::build("regex_split")
-                .params(vec![ty.clone(), Ty::String])
-                .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
-                .pure()
-                .handler(
-                    |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
-                        let mut last_end = 0;
-                        let mut done = false;
-                        let iter = Value::iterator(IterHandle::from_fn(
-                            Effect::self_modifying(),
-                            move || {
-                                if done {
-                                    return None;
-                                }
-                                match re.find_at(&text, last_end) {
-                                    Some(m) => {
-                                        let segment = &text[last_end..m.start()];
-                                        last_end = m.end();
-                                        Some(Value::string(segment))
-                                    }
-                                    None => {
-                                        done = true;
-                                        Some(Value::string(&text[last_end..]))
-                                    }
-                                }
-                            },
-                        ));
-                        Ok((iter, Defs(())))
-                    },
+            ExternFnBuilder::new(
+                "regex_split",
+                sig(
+                    interner,
+                    vec![ty.clone(), Ty::String],
+                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
                 ),
+            )
+            .handler(
+                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                    let mut last_end = 0;
+                    let mut done = false;
+                    let iter = Value::iterator(IterHandle::from_fn(
+                        Effect::self_modifying(),
+                        move || {
+                            if done {
+                                return None;
+                            }
+                            match re.find_at(&text, last_end) {
+                                Some(m) => {
+                                    let segment = &text[last_end..m.start()];
+                                    last_end = m.end();
+                                    Some(Value::string(segment))
+                                }
+                                None => {
+                                    done = true;
+                                    Some(Value::string(&text[last_end..]))
+                                }
+                            }
+                        },
+                    ));
+                    Ok((iter, Defs(())))
+                },
+            ),
             // regex_extract(text, re) -> Iterator<String, SelfModifying>  (capture group 1)
-            ExternFn::build("regex_extract")
-                .params(vec![Ty::String, ty.clone()])
-                .ret(Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()))
-                .pure()
-                .handler(
-                    |_interner: &Interner,
-                     (text, Re(re, _)): (String, Re),
-                     Uses(()): Uses<()>| {
-                        let mut start = 0;
-                        let iter = Value::iterator(IterHandle::from_fn(
-                            Effect::self_modifying(),
-                            move || {
-                                loop {
-                                    let caps = re.captures_at(&text, start)?;
-                                    let full = caps.get(0)?;
-                                    start = full.end();
-                                    if let Some(group1) = caps.get(1) {
-                                        return Some(Value::string(group1.as_str()));
-                                    }
-                                }
-                            },
-                        ));
-                        Ok((iter, Defs(())))
-                    },
+            ExternFnBuilder::new(
+                "regex_extract",
+                sig(
+                    interner,
+                    vec![Ty::String, ty.clone()],
+                    Ty::Iterator(Box::new(Ty::String), Effect::self_modifying()),
                 ),
+            )
+            .handler(
+                |_interner: &Interner,
+                 (text, Re(re, _)): (String, Re),
+                 Uses(()): Uses<()>| {
+                    let mut start = 0;
+                    let iter = Value::iterator(IterHandle::from_fn(
+                        Effect::self_modifying(),
+                        move || {
+                            loop {
+                                let caps = re.captures_at(&text, start)?;
+                                let full = caps.get(0)?;
+                                start = full.end();
+                                if let Some(group1) = caps.get(1) {
+                                    return Some(Value::string(group1.as_str()));
+                                }
+                            }
+                        },
+                    ));
+                    Ok((iter, Defs(())))
+                },
+            ),
         ]
     })
 }

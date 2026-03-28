@@ -2,8 +2,9 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFn, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::ty::Ty;
+use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_mir::graph::{Constraint, FnConstraint, Signature};
+use acvus_mir::ty::{Effect, Param, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -175,11 +176,26 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
 
         let fetch = Arc::clone(&fetch);
 
+        let params = vec![Ty::List(Box::new(input_msg_ty)), config_ty];
+        let ret = Ty::List(Box::new(msg_elem_ty));
+        let named: Vec<Param> = params
+            .into_iter()
+            .enumerate()
+            .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+            .collect();
+        let constraint = FnConstraint {
+            signature: Some(Signature { params: named.clone() }),
+            output: Constraint::Exact(Ty::Fn {
+                params: named,
+                ret: Box::new(ret),
+                captures: vec![],
+                effect: Effect::io(),
+            }),
+            effect: None,
+        };
+
         vec![
-            ExternFn::build("anthropic")
-                .params(vec![Ty::List(Box::new(input_msg_ty)), config_ty])
-                .ret(Ty::List(Box::new(msg_elem_ty)))
-                .io()
+            ExternFnBuilder::new("anthropic", constraint)
                 .handler_async(
                     move |interner: Interner,
                           (messages_val, config_val): (Value, Value),

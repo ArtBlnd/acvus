@@ -2,7 +2,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::graph::types::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
-use crate::ty::{Effect, Param, ParamConstraint, Ty, TySubst};
+use crate::ty::{Effect, Param, Ty, TySubst};
 
 /// Shorthand: build a `Param` with a positional dummy name `_0`, `_1`, …
 fn p(interner: &Interner, idx: usize, ty: Ty) -> Param {
@@ -53,20 +53,6 @@ fn sig_map(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
 
 fn sig_pmap(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     sig_map(interner, s)
-}
-
-fn sig_to_string(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param_constrained(ParamConstraint::scalar());
-    (vec![t], Ty::String)
-}
-
-fn sig_to_float(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::Int], Ty::Float)
-}
-
-fn sig_to_int(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param_constrained(ParamConstraint::scalar());
-    (vec![t], Ty::Int)
 }
 
 fn sig_find(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -143,16 +129,6 @@ fn sig_all(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     sig_any(interner, s)
 }
 
-fn sig_len(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param();
-    (vec![Ty::List(Box::new(t))], Ty::Int)
-}
-
-fn sig_reverse(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param();
-    (vec![Ty::List(Box::new(t.clone()))], Ty::List(Box::new(t)))
-}
-
 fn sig_flatten_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_param();
     let e = s.fresh_effect_var();
@@ -173,14 +149,6 @@ fn sig_join_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     )
 }
 
-fn sig_char_to_int(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String], Ty::Int)
-}
-
-fn sig_int_to_char(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::Int], Ty::String)
-}
-
 fn sig_contains_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_param();
     let e = s.fresh_effect_var();
@@ -188,55 +156,6 @@ fn sig_contains_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
         vec![Ty::Iterator(Box::new(t.clone()), e.clone()), t],
         Ty::Bool,
     )
-}
-
-fn sig_contains_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::String], Ty::Bool)
-}
-
-fn sig_substring(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::Int, Ty::Int], Ty::String)
-}
-
-fn sig_len_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String], Ty::Int)
-}
-
-fn sig_to_bytes(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String], Ty::bytes())
-}
-
-fn sig_to_utf8(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::bytes()], Ty::Option(Box::new(Ty::String)))
-}
-
-fn sig_to_utf8_lossy(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::bytes()], Ty::String)
-}
-
-fn sig_str_to_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String], Ty::String)
-}
-
-fn sig_replace_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::String, Ty::String], Ty::String)
-}
-
-fn sig_split_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::String], Ty::List(Box::new(Ty::String)))
-}
-
-fn sig_str_str_to_bool(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::String], Ty::Bool)
-}
-
-fn sig_repeat_str(_interner: &Interner, _s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    (vec![Ty::String, Ty::Int], Ty::String)
-}
-
-fn sig_unwrap(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param();
-    (vec![Ty::Option(Box::new(t.clone()))], t)
 }
 
 fn sig_next(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
@@ -280,11 +199,6 @@ fn sig_last_iter(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
         vec![Ty::Iterator(Box::new(t.clone()), e.clone())],
         Ty::Option(Box::new(t)),
     )
-}
-
-fn sig_unwrap_or(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
-    let t = s.fresh_param();
-    (vec![Ty::Option(Box::new(t.clone())), t.clone()], t)
 }
 
 // ---------------------------------------------------------------------------
@@ -479,15 +393,6 @@ pub fn standard_builtins(interner: &Interner) -> Vec<Function> {
         make_builtin(interner, "fold", sig_fold),
         make_builtin(interner, "any", sig_any),
         make_builtin(interner, "all", sig_all),
-        // Conversions
-        make_builtin(interner, "to_string", sig_to_string),
-        make_builtin(interner, "to_float", sig_to_float),
-        make_builtin(interner, "to_int", sig_to_int),
-        make_builtin(interner, "char_to_int", sig_char_to_int),
-        make_builtin(interner, "int_to_char", sig_int_to_char),
-        // List ops
-        make_builtin(interner, "len", sig_len),
-        make_builtin(interner, "reverse", sig_reverse),
         // flatten / flat_map
         make_builtin(interner, "flatten", sig_flatten_iter),
         make_builtin(interner, "flat_map", sig_flat_map),
@@ -500,26 +405,6 @@ pub fn standard_builtins(interner: &Interner) -> Vec<Function> {
         make_builtin(interner, "contains", sig_contains_iter),
         make_builtin(interner, "first", sig_first_iter),
         make_builtin(interner, "last", sig_last_iter),
-        // String ops
-        make_builtin(interner, "contains_str", sig_contains_str),
-        make_builtin(interner, "substring", sig_substring),
-        make_builtin(interner, "len_str", sig_len_str),
-        make_builtin(interner, "to_bytes", sig_to_bytes),
-        make_builtin(interner, "to_utf8", sig_to_utf8),
-        make_builtin(interner, "to_utf8_lossy", sig_to_utf8_lossy),
-        make_builtin(interner, "trim", sig_str_to_str),
-        make_builtin(interner, "trim_start", sig_str_to_str),
-        make_builtin(interner, "trim_end", sig_str_to_str),
-        make_builtin(interner, "upper", sig_str_to_str),
-        make_builtin(interner, "lower", sig_str_to_str),
-        make_builtin(interner, "replace_str", sig_replace_str),
-        make_builtin(interner, "split_str", sig_split_str),
-        make_builtin(interner, "starts_with_str", sig_str_str_to_bool),
-        make_builtin(interner, "ends_with_str", sig_str_str_to_bool),
-        make_builtin(interner, "repeat_str", sig_repeat_str),
-        // Option ops
-        make_builtin(interner, "unwrap", sig_unwrap),
-        make_builtin(interner, "unwrap_or", sig_unwrap_or),
         // Iterator/Sequence next
         make_builtin(interner, "next_seq", sig_next_seq),
         make_builtin(interner, "next", sig_next),
@@ -573,21 +458,12 @@ pub(crate) mod test_support {
             "fold" => Some(sig_fold),
             "any" => Some(sig_any),
             "all" => Some(sig_all),
-            "to_string" => Some(sig_to_string),
-            "to_float" => Some(sig_to_float),
-            "to_int" => Some(sig_to_int),
-            "char_to_int" => Some(sig_char_to_int),
-            "int_to_char" => Some(sig_int_to_char),
-            "len" => Some(sig_len),
-            "reverse" => Some(sig_reverse),
             "flatten" => Some(sig_flatten_iter),
             "flat_map" => Some(sig_flat_map),
             "join" => Some(sig_join_iter),
             "contains" => Some(sig_contains_iter),
             "first" => Some(sig_first_iter),
             "last" => Some(sig_last_iter),
-            "unwrap" => Some(sig_unwrap),
-            "unwrap_or" => Some(sig_unwrap_or),
             "iter" => Some(sig_iter),
             "rev_iter" => Some(sig_rev_iter),
             "collect" => Some(sig_collect),

@@ -46,6 +46,16 @@ pub fn compile_to_ir_with(
             effect: None,
         },
     }];
+    // Register stdlib ExternFn registries (string, conversion, list, option).
+    for registry in [
+        acvus_ext::string_registry(),
+        acvus_ext::conversion_registry(),
+        acvus_ext::list_registry(),
+        acvus_ext::option_registry(),
+    ] {
+        let registered = registry.register(interner);
+        functions.extend(registered.functions);
+    }
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

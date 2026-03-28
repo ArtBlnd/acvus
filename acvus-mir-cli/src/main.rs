@@ -167,6 +167,16 @@ fn main() {
 
     let fn_qref = QualifiedRef::root(interner.intern("main"));
     let mut functions = acvus_mir::builtins::standard_builtins(&interner);
+    // Register stdlib ExternFn registries.
+    for registry in [
+        acvus_ext::string_registry(),
+        acvus_ext::conversion_registry(),
+        acvus_ext::list_registry(),
+        acvus_ext::option_registry(),
+    ] {
+        let registered = registry.register(&interner);
+        functions.extend(registered.functions);
+    }
     functions.push(Function {
         qref: fn_qref,
         kind: FnKind::Local(parsed_ast),

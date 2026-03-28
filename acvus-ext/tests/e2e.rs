@@ -8,7 +8,7 @@ use acvus_interpreter::builtins::build_builtins;
 use acvus_interpreter::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::graph::*;
-use acvus_mir::ty::{CastRule, Effect, Ty, TySubst, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl, UserDefinedId};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -35,8 +35,15 @@ async fn run_ext_with_registry(
         .map(|(k, v)| (*k, infer_value_ty(v)))
         .collect();
 
-    // Register all ext functions — alloc FunctionIds.
-    let registered: Vec<Registered> = registries
+    // Register all ext functions (stdlib + caller-provided).
+    let mut all_registries = vec![
+        string_registry(),
+        conversion_registry(),
+        list_registry(),
+        option_registry(),
+    ];
+    all_registries.extend(registries);
+    let registered: Vec<Registered> = all_registries
         .into_iter()
         .map(|r| r.register(interner))
         .collect();
@@ -357,6 +364,24 @@ async fn mixed_regex_and_encoding() {
 //  ExternCast — coercion via registered CastRule
 // ═══════════════════════════════════════════════════════════════════════
 
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::pure(),
+        }),
+        effect: None,
+    }
+}
+
 /// Build a test setup for ExternCast:
 /// - UserDefined "MyNum" (no type params)
 /// - ExternFn "make_num" → returns MyNum wrapping 42
@@ -381,13 +406,10 @@ fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
     // We need to register ExternFns first to get FunctionIds, then register CastRule.
     // Use ExternRegistry for the ExternFns, then find to_int's FunctionId.
     let ty_clone = my_num_ty.clone();
-    let reg = ExternRegistry::new(move |_interner| {
+    let reg = ExternRegistry::new(move |interner| {
         vec![
             // make_num() → MyNum (wrapping 42)
-            ExternFn::build("make_num")
-                .params(vec![])
-                .ret(ty_clone.clone())
-                .pure()
+            ExternFnBuilder::new("make_num", sig(interner, vec![], ty_clone.clone()))
                 .handler(move |_interner: &acvus_utils::Interner, (): (), Uses(()): Uses<()>| {
                     Ok((
                         Value::opaque(OpaqueValue::new(my_num_id, 42i64)),
@@ -395,10 +417,7 @@ fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
                     ))
                 }),
             // to_int(MyNum) → Int
-            ExternFn::build("to_int")
-                .params(vec![ty_clone.clone()])
-                .ret(Ty::Int)
-                .pure()
+            ExternFnBuilder::new("to_int", sig(interner, vec![ty_clone.clone()], Ty::Int))
                 .handler(|_interner: &acvus_utils::Interner, (v,): (Value,), Uses(()): Uses<()>| {
                     match v {
                         Value::Opaque(o) => {
@@ -409,10 +428,7 @@ fn extern_cast_setup(tr: &mut TypeRegistry) -> Vec<ExternRegistry> {
                     }
                 }),
             // double(Int) → Int
-            ExternFn::build("double")
-                .params(vec![Ty::Int])
-                .ret(Ty::Int)
-                .pure()
+            ExternFnBuilder::new("double", sig(interner, vec![Ty::Int], Ty::Int))
                 .handler(|_interner: &acvus_utils::Interner, (n,): (i64,), Uses(()): Uses<()>| {
                     Ok((n * 2, Defs(())))
                 }),
@@ -440,16 +456,23 @@ async fn extern_cast_auto_coercion() {
     let mut tr = TypeRegistry::new();
     let registries = extern_cast_setup(&mut tr);
 
-    // Register to get FunctionIds.
-    let registered: Vec<Registered> = registries
+    // Register stdlib + test registries.
+    let mut all_registries = vec![
+        string_registry(),
+        conversion_registry(),
+        list_registry(),
+        option_registry(),
+    ];
+    all_registries.extend(registries);
+    let registered: Vec<Registered> = all_registries
         .into_iter()
         .map(|r| r.register(&i))
         .collect();
 
     // Find to_int's QualifiedRef for the CastRule.
-    let to_int_qref = registered[0]
-        .functions
+    let to_int_qref = registered
         .iter()
+        .flat_map(|r| r.functions.iter())
         .find(|f| i.resolve(f.qref.name) == "to_int")
         .unwrap()
         .qref;

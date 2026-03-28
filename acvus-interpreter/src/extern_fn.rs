@@ -10,10 +10,7 @@
 //! and return **ret** (return value) and **defs** (context writes).
 //!
 //! ```ignore
-//! ExternFn::build("llm_call")
-//!     .params(vec![Ty::String])
-//!     .ret(Ty::String)
-//!     .io()
+//! ExternFnBuilder::new("llm_call", constraint)
 //!     .handler(|interner, (prompt,): (String,), Uses((history,)): Uses<(Vec<Value>,)>| {
 //!         let new_history = /* ... */;
 //!         Ok(("result".into(), Defs((new_history,))))
@@ -27,8 +24,8 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, TokenId, Ty};
+use acvus_mir::graph::{FnConstraint, FnKind, Function, QualifiedRef};
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -158,113 +155,28 @@ enum HandlerKind {
 
 // ── ExternFn ────────────────────────────────────────────────────────
 
-/// A fully-specified external function: signature + handler.
+/// A fully-specified external function: constraint + handler.
 pub struct ExternFn {
     pub name: String,
-    pub params: Vec<Ty>,
-    pub ret: Ty,
-    pub effect: Effect,
+    pub constraint: FnConstraint,
     handler_kind: HandlerKind,
-}
-
-impl ExternFn {
-    /// Start building an ExternFn.
-    pub fn build(name: impl Into<String>) -> ExternFnBuilder {
-        ExternFnBuilder::new(name)
-    }
 }
 
 /// Builder for constructing an ExternFn.
 pub struct ExternFnBuilder {
     name: String,
-    params: Vec<Ty>,
-    ret: Ty,
-    effect: Effect,
+    constraint: FnConstraint,
 }
 
 impl ExternFnBuilder {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, constraint: FnConstraint) -> Self {
         Self {
             name: name.into(),
-            params: Vec::new(),
-            ret: Ty::Unit,
-            effect: Effect::pure(),
+            constraint,
         }
     }
 
-    pub fn params(mut self, params: Vec<Ty>) -> Self {
-        self.params = params;
-        self
-    }
-
-    pub fn ret(mut self, ty: Ty) -> Self {
-        self.ret = ty;
-        self
-    }
-
-    pub fn pure(mut self) -> Self {
-        self.effect = Effect::pure();
-        self
-    }
-
-    pub fn io(mut self) -> Self {
-        self.effect = Effect::io();
-        self
-    }
-
-    /// Set a fine-grained effect (specific context reads/writes).
-    pub fn effect(mut self, effect: Effect) -> Self {
-        self.effect = effect;
-        self
-    }
-
-    /// Add a Token read to the effect set.
-    /// Token targets are NOT SSA-compatible — functions sharing the same
-    /// Token must execute sequentially.
-    pub fn reads_token(mut self, token: TokenId) -> Self {
-        let set = match &mut self.effect {
-            Effect::Resolved(set) => set,
-            Effect::Var(_) => {
-                self.effect = Effect::Resolved(EffectSet::default());
-                match &mut self.effect {
-                    Effect::Resolved(set) => set,
-                    _ => unreachable!(),
-                }
-            }
-        };
-        set.reads.insert(EffectTarget::Token(token));
-        self
-    }
-
-    /// Add a Token write to the effect set.
-    /// Token targets are NOT SSA-compatible — functions sharing the same
-    /// Token must execute sequentially.
-    pub fn writes_token(mut self, token: TokenId) -> Self {
-        let set = match &mut self.effect {
-            Effect::Resolved(set) => set,
-            Effect::Var(_) => {
-                self.effect = Effect::Resolved(EffectSet::default());
-                match &mut self.effect {
-                    Effect::Resolved(set) => set,
-                    _ => unreachable!(),
-                }
-            }
-        };
-        set.writes.insert(EffectTarget::Token(token));
-        self
-    }
-
     /// Register a sync type-safe handler with explicit `Uses` and `Defs`.
-    ///
-    /// ```ignore
-    /// ExternFn::build("add")
-    ///     .params(vec![Ty::Int, Ty::Int])
-    ///     .ret(Ty::Int)
-    ///     .pure()
-    ///     .handler(|_interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
-    ///         Ok((a + b, Defs(())))
-    ///     });
-    /// ```
     pub fn handler<A, U, R, D, F>(self, f: F) -> ExternFn
     where
         F: Fn(&Interner, A, Uses<U>) -> Result<(R, Defs<D>), RuntimeError> + Send + Sync + 'static,
@@ -275,28 +187,12 @@ impl ExternFnBuilder {
     {
         ExternFn {
             name: self.name,
-            params: self.params,
-            ret: self.ret,
-            effect: self.effect,
+            constraint: self.constraint,
             handler_kind: HandlerKind::Extern(into_sync_extern_handler(f)),
         }
     }
 
     /// Register an async type-safe handler with explicit `Uses` and `Defs`.
-    ///
-    /// Interner is owned (cheap Arc clone) — no lifetime issues across await.
-    /// No interpreter access — use `BuiltinHandler` for that.
-    ///
-    /// ```ignore
-    /// ExternFn::build("fetch")
-    ///     .params(vec![Ty::String])
-    ///     .ret(Ty::String)
-    ///     .io()
-    ///     .handler_async(|interner, (url,): (String,), Uses(())| async move {
-    ///         let body = reqwest::get(&url).await?.text().await?;
-    ///         Ok((body, Defs(())))
-    ///     });
-    /// ```
     pub fn handler_async<A, U, R, D, F, Fut>(self, f: F) -> ExternFn
     where
         F: Fn(Interner, A, Uses<U>) -> Fut + Send + Sync + 'static,
@@ -308,9 +204,7 @@ impl ExternFnBuilder {
     {
         ExternFn {
             name: self.name,
-            params: self.params,
-            ret: self.ret,
-            effect: self.effect,
+            constraint: self.constraint,
             handler_kind: HandlerKind::Extern(into_async_extern_handler(f)),
         }
     }
@@ -319,9 +213,7 @@ impl ExternFnBuilder {
     pub fn sync_handler(self, f: SyncBuiltinFn) -> ExternFn {
         ExternFn {
             name: self.name,
-            params: self.params,
-            ret: self.ret,
-            effect: self.effect,
+            constraint: self.constraint,
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Sync(f)),
         }
     }
@@ -330,9 +222,7 @@ impl ExternFnBuilder {
     pub fn async_handler(self, f: AsyncBuiltinFn) -> ExternFn {
         ExternFn {
             name: self.name,
-            params: self.params,
-            ret: self.ret,
-            effect: self.effect,
+            constraint: self.constraint,
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Async(f)),
         }
     }
@@ -373,28 +263,10 @@ impl ExternRegistry {
             let name = interner.intern(&f.name);
             let qref = QualifiedRef::root(name);
 
-            // Build Ty::Fn for the graph.
-            let params: Vec<Param> = f
-                .params
-                .iter()
-                .enumerate()
-                .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty.clone()))
-                .collect();
-            let fn_ty = Ty::Fn {
-                params,
-                ret: Box::new(f.ret),
-                captures: vec![],
-                effect: f.effect,
-            };
-
             functions.push(Function {
                 qref,
                 kind: FnKind::Extern,
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Exact(fn_ty),
-                    effect: None,
-                },
+                constraint: f.constraint,
             });
 
             match f.handler_kind {
@@ -415,9 +287,29 @@ impl ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acvus_mir::graph::{Constraint, Signature};
+    use acvus_mir::ty::{Effect, Param};
 
     fn interner() -> Interner {
         Interner::new()
+    }
+
+    fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+        let named: Vec<Param> = params
+            .into_iter()
+            .enumerate()
+            .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+            .collect();
+        FnConstraint {
+            signature: Some(Signature { params: named.clone() }),
+            output: Constraint::Exact(Ty::Fn {
+                params: named,
+                ret: Box::new(ret),
+                captures: vec![],
+                effect: Effect::pure(),
+            }),
+            effect: None,
+        }
     }
 
     // ── Pure handler, no context ──────────────────────────────────
@@ -566,10 +458,8 @@ mod tests {
 
     #[test]
     fn builder_creates_extern_fn() {
-        let ext = ExternFn::build("add")
-            .params(vec![Ty::Int, Ty::Int])
-            .ret(Ty::Int)
-            .pure()
+        let i = interner();
+        let ext = ExternFnBuilder::new("add", sig(&i, vec![Ty::Int, Ty::Int], Ty::Int))
             .handler(
                 |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
                     Ok((a + b, Defs(())))
@@ -584,12 +474,9 @@ mod tests {
 
     #[test]
     fn registry_produces_extern_executable() {
-        let registry = ExternRegistry::new(|_interner| {
+        let registry = ExternRegistry::new(|interner| {
             vec![
-                ExternFn::build("add")
-                    .params(vec![Ty::Int, Ty::Int])
-                    .ret(Ty::Int)
-                    .pure()
+                ExternFnBuilder::new("add", sig(interner, vec![Ty::Int, Ty::Int], Ty::Int))
                     .handler(
                         |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
                             Ok((a + b, Defs(())))

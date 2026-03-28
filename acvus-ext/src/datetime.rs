@@ -1,13 +1,14 @@
 //! DateTime extension functions via ExternRegistry.
 //!
 //! Provides UserDefined<DateTime> with formatting and parsing.
-//! All functions are pure — DateTime is immutable.
+//! All functions except `now()` are pure — DateTime is immutable.
 
 use acvus_interpreter::{
-    Defs, ExternFn, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses, Value,
-    ValueKind,
+    Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
+    Value, ValueKind,
 };
-use acvus_mir::ty::{Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
+use acvus_mir::graph::{Constraint, FnConstraint, Signature};
+use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl, UserDefinedId};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: UserDefinedId) -> Ty {
@@ -52,6 +53,62 @@ impl IntoValue for Dt {
     }
 }
 
+// ── Constraint builders ─────────────────────────────────────────────
+
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::pure(),
+        }),
+        effect: None,
+    }
+}
+
+fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::io(),
+        }),
+        effect: None,
+    }
+}
+
+// ── Handlers ────────────────────────────────────────────────────────
+
+fn h_format_date(
+    _interner: &Interner,
+    (Dt(dt, _), fmt): (Dt, String),
+    Uses(()): Uses<()>,
+) -> Result<(String, Defs<()>), RuntimeError> {
+    Ok((dt.format(&fmt).to_string(), Defs(())))
+}
+
+fn h_timestamp(
+    _interner: &Interner,
+    (Dt(dt, _),): (Dt,),
+    Uses(()): Uses<()>,
+) -> Result<(i64, Defs<()>), RuntimeError> {
+    Ok((dt.timestamp(), Defs(())))
+}
+
 /// Build the datetime ExternRegistry.
 /// Registers the `DateTime` UserDefined type into `type_registry`.
 pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
@@ -64,16 +121,13 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
     });
 
     let ty = user_defined_ty(id);
-    ExternRegistry::new(move |_interner| {
+    ExternRegistry::new(move |interner| {
         let mut fns = Vec::new();
 
         // now() -> DateTime  (not available on wasm — requires system clock)
         #[cfg(not(target_arch = "wasm32"))]
         fns.push(
-            ExternFn::build("now")
-                .params(vec![])
-                .ret(ty.clone())
-                .io()
+            ExternFnBuilder::new("now", sig_io(interner, vec![], ty.clone()))
                 .handler(move |_interner: &Interner, (): (), Uses(()): Uses<()>| {
                     Ok((Dt(chrono::Utc::now(), id), Defs(())))
                 }),
@@ -81,82 +135,72 @@ pub fn datetime_registry(type_registry: &mut TypeRegistry) -> ExternRegistry {
 
         fns.extend([
             // format_date(dt, fmt) -> String
-            ExternFn::build("format_date")
-                .params(vec![ty.clone(), Ty::String])
-                .ret(Ty::String)
-                .pure()
-                .handler(
-                    |_interner: &Interner,
-                     (Dt(dt, _), fmt): (Dt, String),
-                     Uses(()): Uses<()>| {
-                        Ok((dt.format(&fmt).to_string(), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "format_date",
+                sig(interner, vec![ty.clone(), Ty::String], Ty::String),
+            )
+            .handler(h_format_date),
             // parse_date(s, fmt) -> DateTime
-            ExternFn::build("parse_date")
-                .params(vec![Ty::String, Ty::String])
-                .ret(ty.clone())
-                .pure()
-                .handler(
-                    move |_interner: &Interner,
-                          (s, fmt): (String, String),
-                          Uses(()): Uses<()>| {
-                        let dt = chrono::NaiveDateTime::parse_from_str(&s, &fmt)
-                            .map(|ndt| ndt.and_utc())
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "parse_date: invalid input '{s}' with format '{fmt}': {e}"
-                                )
-                            });
-                        Ok((Dt(dt, id), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "parse_date",
+                sig(interner, vec![Ty::String, Ty::String], ty.clone()),
+            )
+            .handler(
+                move |_interner: &Interner,
+                      (s, fmt): (String, String),
+                      Uses(()): Uses<()>| {
+                    let dt = chrono::NaiveDateTime::parse_from_str(&s, &fmt)
+                        .map(|ndt| ndt.and_utc())
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "parse_date: invalid input '{s}' with format '{fmt}': {e}"
+                            )
+                        });
+                    Ok((Dt(dt, id), Defs(())))
+                },
+            ),
             // timestamp(dt) -> Int  (Unix epoch seconds)
-            ExternFn::build("timestamp")
-                .params(vec![ty.clone()])
-                .ret(Ty::Int)
-                .pure()
-                .handler(
-                    |_interner: &Interner, (Dt(dt, _),): (Dt,), Uses(()): Uses<()>| {
-                        Ok((dt.timestamp(), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "timestamp",
+                sig(interner, vec![ty.clone()], Ty::Int),
+            )
+            .handler(h_timestamp),
             // from_timestamp(epoch) -> DateTime
-            ExternFn::build("from_timestamp")
-                .params(vec![Ty::Int])
-                .ret(ty.clone())
-                .pure()
-                .handler(
-                    move |_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
-                        let dt = chrono::DateTime::from_timestamp(epoch, 0)
-                            .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
-                        Ok((Dt(dt, id), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "from_timestamp",
+                sig(interner, vec![Ty::Int], ty.clone()),
+            )
+            .handler(
+                move |_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
+                    let dt = chrono::DateTime::from_timestamp(epoch, 0)
+                        .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
+                    Ok((Dt(dt, id), Defs(())))
+                },
+            ),
             // add_days(dt, n) -> DateTime
-            ExternFn::build("add_days")
-                .params(vec![ty.clone(), Ty::Int])
-                .ret(ty.clone())
-                .pure()
-                .handler(
-                    move |_interner: &Interner,
-                          (Dt(dt, _), n): (Dt, i64),
-                          Uses(()): Uses<()>| {
-                        Ok((Dt(dt + chrono::Duration::days(n), id), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "add_days",
+                sig(interner, vec![ty.clone(), Ty::Int], ty.clone()),
+            )
+            .handler(
+                move |_interner: &Interner,
+                      (Dt(dt, _), n): (Dt, i64),
+                      Uses(()): Uses<()>| {
+                    Ok((Dt(dt + chrono::Duration::days(n), id), Defs(())))
+                },
+            ),
             // add_hours(dt, n) -> DateTime
-            ExternFn::build("add_hours")
-                .params(vec![ty.clone(), Ty::Int])
-                .ret(ty.clone())
-                .pure()
-                .handler(
-                    move |_interner: &Interner,
-                          (Dt(dt, _), n): (Dt, i64),
-                          Uses(()): Uses<()>| {
-                        Ok((Dt(dt + chrono::Duration::hours(n), id), Defs(())))
-                    },
-                ),
+            ExternFnBuilder::new(
+                "add_hours",
+                sig(interner, vec![ty.clone(), Ty::Int], ty.clone()),
+            )
+            .handler(
+                move |_interner: &Interner,
+                      (Dt(dt, _), n): (Dt, i64),
+                      Uses(()): Uses<()>| {
+                    Ok((Dt(dt + chrono::Duration::hours(n), id), Defs(())))
+                },
+            ),
         ]);
 
         fns

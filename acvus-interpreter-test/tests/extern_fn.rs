@@ -2,13 +2,49 @@
 
 use std::collections::BTreeSet;
 
-use acvus_interpreter::{Defs, Executable, ExternFn, ExternRegistry, Uses, Value};
+use acvus_interpreter::{Defs, Executable, ExternFnBuilder, ExternRegistry, Uses, Value};
 use acvus_interpreter_test::*;
-use acvus_mir::graph::QualifiedRef;
+use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Ty, TypeRegistry};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, Ty, TypeRegistry};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
+
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::pure(),
+        }),
+        effect: None,
+    }
+}
+
+fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect,
+        }),
+        effect: None,
+    }
+}
 
 fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, Value> {
     entries
@@ -27,10 +63,7 @@ async fn extern_pure_add() {
 
     let registry = ExternRegistry::new(|interner| {
         vec![
-            ExternFn::build("ext_add")
-                .params(vec![Ty::Int, Ty::Int])
-                .ret(Ty::Int)
-                .pure()
+            ExternFnBuilder::new("ext_add", sig(interner, vec![Ty::Int, Ty::Int], Ty::Int))
                 .handler(
                     |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
                         Ok((a + b, Defs(())))
@@ -48,12 +81,9 @@ async fn extern_pure_add() {
 async fn extern_pure_string_transform() {
     let i = Interner::new();
 
-    let registry = ExternRegistry::new(|_interner| {
+    let registry = ExternRegistry::new(|interner| {
         vec![
-            ExternFn::build("shout")
-                .params(vec![Ty::String])
-                .ret(Ty::String)
-                .pure()
+            ExternFnBuilder::new("shout", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
                     |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
                         Ok((s.to_uppercase(), Defs(())))
@@ -78,15 +108,17 @@ async fn extern_reads_context() {
     let registry = ExternRegistry::new(|interner| {
         let qref = QualifiedRef::root(interner.intern("offset"));
         vec![
-            ExternFn::build("add_offset")
-                .params(vec![Ty::Int])
-                .ret(Ty::Int)
-                .effect(Effect::Resolved(EffectSet {
+            ExternFnBuilder::new("add_offset", sig_effect(
+                interner,
+                vec![Ty::Int],
+                Ty::Int,
+                Effect::Resolved(EffectSet {
                     reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::new(),
                     io: false,
                     self_modifying: false,
-                }))
+                }),
+            ))
                 .handler(
                     |_interner: &Interner, (x,): (i64,), Uses((offset,)): Uses<(i64,)>| {
                         Ok((x + offset, Defs(())))
@@ -111,15 +143,17 @@ async fn extern_writes_context() {
     let registry = ExternRegistry::new(|interner| {
         let qref = QualifiedRef::root(interner.intern("counter"));
         vec![
-            ExternFn::build("increment")
-                .params(vec![])
-                .ret(Ty::Unit)
-                .effect(Effect::Resolved(EffectSet {
+            ExternFnBuilder::new("increment", sig_effect(
+                interner,
+                vec![],
+                Ty::Unit,
+                Effect::Resolved(EffectSet {
                     reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
-                }))
+                }),
+            ))
                 .handler(
                     |_interner: &Interner, (): (), Uses((count,)): Uses<(i64,)>| {
                         Ok(((), Defs((count + 1,))))
@@ -145,15 +179,17 @@ async fn extern_reads_and_writes_context() {
     let registry = ExternRegistry::new(|interner| {
         let qref = QualifiedRef::root(interner.intern("history"));
         vec![
-            ExternFn::build("record")
-                .params(vec![Ty::Int])
-                .ret(Ty::Int)
-                .effect(Effect::Resolved(EffectSet {
+            ExternFnBuilder::new("record", sig_effect(
+                interner,
+                vec![Ty::Int],
+                Ty::Int,
+                Effect::Resolved(EffectSet {
                     reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
-                }))
+                }),
+            ))
                 .handler(
                     |_interner: &Interner,
                      (item,): (Value,),
@@ -187,15 +223,17 @@ async fn extern_multiple_calls_sequential() {
     let registry = ExternRegistry::new(|interner| {
         let qref = QualifiedRef::root(interner.intern("acc"));
         vec![
-            ExternFn::build("add_to_acc")
-                .params(vec![Ty::Int])
-                .ret(Ty::Unit)
-                .effect(Effect::Resolved(EffectSet {
+            ExternFnBuilder::new("add_to_acc", sig_effect(
+                interner,
+                vec![Ty::Int],
+                Ty::Unit,
+                Effect::Resolved(EffectSet {
                     reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
-                }))
+                }),
+            ))
                 .handler(
                     |_interner: &Interner, (x,): (i64,), Uses((acc,)): Uses<(i64,)>| {
                         Ok(((), Defs((acc + x,))))
@@ -224,12 +262,9 @@ async fn extern_captures_environment() {
     let i = Interner::new();
     let secret = 7i64;
 
-    let registry = ExternRegistry::new(move |_interner| {
+    let registry = ExternRegistry::new(move |interner| {
         vec![
-            ExternFn::build("multiply_secret")
-                .params(vec![Ty::Int])
-                .ret(Ty::Int)
-                .pure()
+            ExternFnBuilder::new("multiply_secret", sig(interner, vec![Ty::Int], Ty::Int))
                 .handler(
                     move |_interner: &Interner, (x,): (i64,), Uses(()): Uses<()>| {
                         Ok((x * secret, Defs(())))
@@ -303,15 +338,17 @@ fn ir_function_call_has_context_bindings() {
     let registry = ExternRegistry::new(|interner| {
         let qref = QualifiedRef::root(interner.intern("counter"));
         vec![
-            ExternFn::build("bump")
-                .params(vec![])
-                .ret(Ty::Unit)
-                .effect(Effect::Resolved(EffectSet {
+            ExternFnBuilder::new("bump", sig_effect(
+                interner,
+                vec![],
+                Ty::Unit,
+                Effect::Resolved(EffectSet {
                     reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
-                }))
+                }),
+            ))
                 .handler(|_interner: &Interner, (): (), Uses((n,)): Uses<(i64,)>| {
                     Ok(((), Defs((n + 1,))))
                 }),
@@ -389,12 +426,9 @@ fn ir_function_call_has_context_bindings() {
 fn ir_pure_function_call_no_context_bindings() {
     let i = Interner::new();
 
-    let registry = ExternRegistry::new(|_interner| {
+    let registry = ExternRegistry::new(|interner| {
         vec![
-            ExternFn::build("double")
-                .params(vec![Ty::Int])
-                .ret(Ty::Int)
-                .pure()
+            ExternFnBuilder::new("double", sig(interner, vec![Ty::Int], Ty::Int))
                 .handler(|_interner: &Interner, (x,): (i64,), Uses(()): Uses<()>| {
                     Ok((x * 2, Defs(())))
                 }),

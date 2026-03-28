@@ -2,20 +2,36 @@
 //!
 //! Provides base64 and URL encoding/decoding. All pure.
 
-use acvus_interpreter::{Defs, ExternFn, ExternRegistry, Uses};
-use acvus_mir::ty::Ty;
+use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, Uses};
+use acvus_mir::graph::{Constraint, FnConstraint, Signature};
+use acvus_mir::ty::{Effect, Param, Ty};
 use acvus_utils::Interner;
 
 use base64::Engine;
 
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
+    let named: Vec<Param> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    FnConstraint {
+        signature: Some(Signature { params: named.clone() }),
+        output: Constraint::Exact(Ty::Fn {
+            params: named,
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::pure(),
+        }),
+        effect: None,
+    }
+}
+
 pub fn encoding_registry() -> ExternRegistry {
-    ExternRegistry::new(|_interner| {
+    ExternRegistry::new(|interner| {
         vec![
             // base64_encode(s) -> String
-            ExternFn::build("base64_encode")
-                .params(vec![Ty::String])
-                .ret(Ty::String)
-                .pure()
+            ExternFnBuilder::new("base64_encode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
                     |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
                         Ok((
@@ -25,10 +41,7 @@ pub fn encoding_registry() -> ExternRegistry {
                     },
                 ),
             // base64_decode(s) -> String
-            ExternFn::build("base64_decode")
-                .params(vec![Ty::String])
-                .ret(Ty::String)
-                .pure()
+            ExternFnBuilder::new("base64_decode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
                     |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
                         let bytes = base64::engine::general_purpose::STANDARD
@@ -40,10 +53,7 @@ pub fn encoding_registry() -> ExternRegistry {
                     },
                 ),
             // url_encode(s) -> String
-            ExternFn::build("url_encode")
-                .params(vec![Ty::String])
-                .ret(Ty::String)
-                .pure()
+            ExternFnBuilder::new("url_encode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
                     |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
                         let encoded = percent_encoding::utf8_percent_encode(
@@ -55,10 +65,7 @@ pub fn encoding_registry() -> ExternRegistry {
                     },
                 ),
             // url_decode(s) -> String
-            ExternFn::build("url_decode")
-                .params(vec![Ty::String])
-                .ret(Ty::String)
-                .pure()
+            ExternFnBuilder::new("url_decode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
                     |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
                         let decoded = percent_encoding::percent_decode_str(&s)
