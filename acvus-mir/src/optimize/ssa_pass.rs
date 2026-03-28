@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::cfg::{BlockIdx, Cfg, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, Label, MirBody, ValueId};
-use crate::ssa::{ENTRY_BLOCK, SSABuilder, SsaVar};
+use super::ssa::{ENTRY_BLOCK, SSABuilder, SsaVar};
 use crate::ty::{Effect, Ty};
 
 /// Run the SSA context pass on a MirBody.
@@ -515,7 +515,7 @@ fn run_ssa_builder(
     ssa_info: &SsaInfo,
     val_factory: &mut acvus_utils::LocalFactory<ValueId>,
     val_types: &mut FxHashMap<ValueId, Ty>,
-) -> (Vec<crate::ssa::PhiInsertion>, FxHashMap<ValueId, ValueId>, Vec<ValueId>) {
+) -> (Vec<super::ssa::PhiInsertion>, FxHashMap<ValueId, ValueId>, Vec<ValueId>) {
     let mut ssa = SSABuilder::new();
 
     let block_label = |bi: BlockIdx| -> Label {
@@ -675,11 +675,11 @@ fn run_ssa_builder(
 fn patch_instructions(
     body: &mut MirBody,
     cfg: &Cfg,
-    phi_insertions: &[crate::ssa::PhiInsertion],
+    phi_insertions: &[super::ssa::PhiInsertion],
     ssa_info: &SsaInfo,
 ) {
     // PHI lookup tables.
-    let mut block_phis: BTreeMap<Label, Vec<&crate::ssa::PhiInsertion>> = BTreeMap::default();
+    let mut block_phis: BTreeMap<Label, Vec<&super::ssa::PhiInsertion>> = BTreeMap::default();
     for phi in phi_insertions {
         block_phis.entry(phi.block).or_default().push(phi);
     }

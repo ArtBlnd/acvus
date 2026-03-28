@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::graph::QualifiedRef;
 use crate::hints::HintTable;
 use crate::ir::{Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, ValOrigin, ValueId};
-use crate::ty::{Effect, Ty};
+use crate::ty::{Ty};
 use crate::typeck::{CoercionMap, TypeMap};
 
 pub struct Lowerer<'a> {

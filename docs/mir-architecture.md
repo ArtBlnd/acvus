@@ -2,7 +2,7 @@
 
 ## What is this?
 
-acvus is not a general-purpose programming language. It is not trying to replace Rust, C, Java, or any systems/application language. It is a **script and template language** — the kind you embed in a larger system to let users write business logic, data transformations, and LLM orchestration without touching the host codebase.
+acvus is not a general-purpose programming language. It is a **script and template language** — the kind you embed in a larger system to let users write business logic, data transformations, and LLM orchestration without touching the host codebase.
 
 The difference is that acvus takes this role seriously. Instead of a loosely-typed interpreter with string-based extension points (like most embedded scripting), it has a full compiler backend with type inference, effect tracking, and SSA-based IR. The goal is simple: **scripts and templates should be safe, fast, and pleasant to write** — with the same rigor that systems languages apply to systems code.
 
@@ -24,211 +24,247 @@ A single expression like `@users | filter(active) | map(name) | join(", ")` comp
 
 ---
 
-## The Pipeline
+## The Pipeline and Why It's Split This Way
 
 ```
-source → extract → infer → resolve → lower → SSA → validate → MirModule
+source -> extract -> infer -> lower -> optimize -> MirModule
 ```
 
-Each phase has a single responsibility and a clear contract with the next:
+The pipeline is split into four phases not because it's architecturally elegant, but because **the LSP needs to cut into the middle**. When a user edits a script, the system re-runs only the phases invalidated — not the entire compilation.
 
-**Extract** parses source and discovers what external state (contexts) the code references, distinguishing reads from writes by tracing projection chains through the IR.
+**Extract** parses source and discovers context references. This is cached by source hash — same source, skip re-parsing.
 
-**Infer** is where "use first, define later" happens. The code references contexts (`@data`, `@config`) that may not have known types yet. Instead of erroring, the inferencer assigns type variables and propagates constraints from usage. If `@data | map(f)` appears, the system concludes `@data` must be iterable. If `@config.threshold + 1` appears, `@config` must have an integer `threshold` field. These constraints flow outward — the host system must eventually provide types that satisfy them. Inter-function inference uses Tarjan's SCC algorithm so mutually recursive functions are solved simultaneously.
+**Infer** resolves all types via constraint propagation. Inter-function inference uses Tarjan's SCC algorithm so mutually recursive functions are solved simultaneously. Infer results are cached per-SCC with **early cutoff** — if a function's type didn't change after re-inference, its callers don't need re-inference. Most edits touch one SCC, so recompilation is O(changed) not O(total).
 
-**Resolve** finalizes all types with no remaining variables. Every expression has a concrete type. Every effect is resolved. This is the point of no return — if types don't work out, errors are reported here.
+**Lower** translates typed AST to MIR instructions. Context mutations (`@x = ...`) become `ContextProject`/`ContextStore` pairs — not yet SSA. This is deliberate: lowering produces a "pre-SSA" IR that's easy to generate from AST, and the SSA pass in optimize handles the hard part (PHI insertion, dead store elimination).
 
-**Lower** translates the typed AST to MIR instructions in SSA form. Context variables (which can be mutated across branches and loops) are promoted to SSA via a Cranelift-style mem2reg pass that inserts PHI nodes at merge points.
+**Optimize** is the final phase. Two passes:
+- **Pass 1** (cross-module): SSA promotion per module, then inlining across modules. Inline must see all modules because it resolves cross-function calls and devirtualizes closures.
+- **Pass 2** (per-module): SpawnSplit → Reorder → SSA → RegColor → Validate. This is a `PassManager` pipeline with typed dependencies — each pass declares what it needs, and topological sort ensures correct ordering.
 
-**Validate** runs two passes: type checking (operand types match instruction contracts) and move checking (move-only values like IO handles are consumed exactly once).
+### Why not separate "resolve" and "lower"?
+
+Early designs had a separate resolve phase that finalized all types. This was removed — infer now produces fully resolved types directly. The separate phase added complexity without buying anything: there was no meaningful cache boundary between "almost resolved" and "fully resolved". If inference succeeds, types are complete.
+
+### Why validate at the end, not after lower?
+
+Validation runs after all optimizations, not after lowering. The reasoning: optimizations (inline, reorder, SSA) transform the IR in ways that could theoretically break invariants. Validating the *final* IR catches bugs in the optimizer itself. If we validated early and skipped post-optimization validation, an optimizer bug could produce unsound IR silently.
 
 ---
 
-## Type System Highlights
+## Effect System: Why Two Kinds of Effect Target
 
-### Structural Types, No Declarations
+Every function tracks what it reads, writes, whether it does IO, and whether it's self-modifying. The key design decision is **two kinds of effect targets**:
 
-Objects are structurally typed. `{ name: "Alice", age: 30 }` has type `{ name: String, age: Int }`. A function that accesses `.name` accepts any object with a `name` field — width subtyping, inferred automatically.
+**Context (`@name`)** — SSA-compatible. The compiler converts context reads/writes into SSA value flow (`context_uses`/`context_defs` on function calls). After SSA, there's no mutable state — just values flowing through block parameters. This means context ordering is handled entirely by SSA data dependencies. No special ordering logic needed.
 
-Enums are open — writing `Color::Red` and `Color::Blue` in different places unifies into `Enum { Color: { Red, Blue } }`. No upfront declaration needed.
+**Token (`TokenId`)** — NOT SSA-compatible. Tokens represent external shared state (database connections, file handles) that can't be converted to value flow. Functions sharing the same Token must execute sequentially. The reorder pass preserves Token ordering explicitly.
 
-### Constraint-Based Generics Without Traits
+### Why this split matters
 
-A function's parameter constraints are inferred from how the parameter is used:
+Without the Context/Token distinction, we'd have two bad options:
+1. Treat everything as Token → no automatic parallelization of context-using functions
+2. Treat everything as SSA-compatible → unsound for external shared state
 
-```
-fn process(x) { x | to_string | length }
-```
+The split gives us the best of both: contexts (the common case in templates/scripts) get full SSA treatment and automatic parallelization, while tokens (rare, for external IO) get correct sequential ordering.
 
-The compiler infers: `x` must support `to_string` (constraining it to `{ Int, Float, String, Bool, ... }`) and the result must support `length`. No generic syntax, no trait bounds, no `where` clauses.
+### What we guarantee
 
-When two constrained types unify, their constraint sets are **intersected**. This is sound and complete for the closed builtin set, and extends naturally when plugins register new functions.
+- If a function is marked pure, it truly has no side effects.
+- Effects propagate transitively — if `f` calls `g` which reads `@users`, then `f` reads `@users`.
+- Functions sharing a Token are never reordered relative to each other.
 
-### Origin Tracking for Deques
+### What we don't guarantee
 
-Deques carry an *origin* tag that prevents accidentally mixing data from different sources. `append(@history, item)` preserves the origin — you can't accidentally `extend` one deque with another's data without explicit coercion. This is tracked at the type level and enforced at compile time.
-
-### Six Explicit Coercions
-
-Subtype conversions are never implicit in the IR. The type checker identifies where coercion is needed and the lowerer inserts explicit `Cast` instructions: `Deque→List`, `List→Iterator`, `Deque→Iterator`, `Deque→Sequence`, `Sequence→Iterator`, `Range→Iterator`. Every conversion is visible and auditable.
-
----
-
-## Effect System
-
-Every function has an `EffectSet`:
-
-```
-reads:          which contexts are read
-writes:         which contexts are written
-io:             whether opaque IO occurs
-self_modifying: whether internal state changes (e.g., iterator cursor advance)
-```
-
-Effects **propagate transitively** — if `f` calls `g` which reads `@users`, then `f` also reads `@users`. This is computed automatically during inference.
-
-**Why this matters:**
-
-1. **Automatic parallelization.** Two functions that read different contexts and write nothing can execute in parallel. The rescheduler (planned) uses effect analysis to find independent IO operations and convert sequential code to `spawn`/`eval` pairs.
-
-2. **Incremental recompilation.** When source changes, the compiler checks if the function's *type and effect signature* changed. If not, downstream dependents don't need recompilation (early cutoff).
-
-3. **Scheduling.** The orchestration layer uses effects to determine execution order. Read-read is safe to parallelize. Write-read must be serialized. This is decided at compile time, not runtime.
-
-4. **Move semantics.** An effectful iterator is move-only — you can't clone it because advancing the cursor is a side effect. The move checker enforces this statically.
+- **Optimal parallelism.** The reorder pass uses a greedy topological sort with priority heuristics (spawn early, eval late). It doesn't solve for globally optimal scheduling — that would require solving an NP-hard problem for marginal gain in typical template/script workloads.
+- **Effect inference across plugin boundaries.** If a plugin function lies about its effects (claims pure but does IO), the system has no way to catch this. Plugin authors must be honest. This is a conscious trade-off: verifying plugin effects would require sandboxing or formal verification, neither of which is practical for an embedded scripting language.
 
 ---
 
-## SSA Form for Mutable Context
+## Automatic IO Parallelization: The 2-Month Bet
 
-Context variables (`@name`) can be mutated in branches and loops:
+This is the centerpiece optimization. The insight: in template/script workloads, the bottleneck is almost always IO (API calls, database queries), not computation. If we can automatically parallelize independent IO operations, users get massive speedups without changing their code.
 
-```
-x in @items {
-    @sum = @sum + x;
-    @product = @product * x;
-};
-```
+### How it works
 
-The MIR uses a projection model (similar to LLVM's alloca + mem2reg):
+1. **Spawn split** — IO function calls are split into `Spawn` (pure, creates a `Handle`) + `Eval` (effectful, forces the Handle). This is the key insight: scheduling work is pure, only forcing the result is effectful.
 
-1. `ContextProject` creates a reference to a context slot
-2. `ContextStore` writes through the reference
-3. The SSA pass promotes these to PHI nodes at loop headers and branch merge points
-4. After SSA, context mutations become pure value flow — no mutable state in the IR
+2. **Reorder** — Within each basic block, instructions are topologically sorted by dependencies (SSA use-def + Token ordering). Priority: Spawn = schedule earliest, Eval = schedule latest, everything else = original order. This naturally clusters Spawns at the top and defers Evals.
 
-This means the MIR is genuinely functional after SSA — all "mutation" is expressed as new values flowing through block parameters.
+3. **SSA re-run** — After reorder, SSA eliminates dead code introduced by splitting and reordering.
 
----
+### Spawn/Eval effect rules
 
-## Concurrency Model
+| Situation | Spawn | Eval |
+|---|---|---|
+| Token present | Token-effectful | Token-effectful |
+| No token (Context only) | Pure | Context-effectful |
+| IO only | Pure | IO-effectful |
 
-```
-Spawn { dst, callee, args, context_uses }   // Pure: schedule work, get Handle
-Eval  { dst, src, context_defs }            // Effectful: force Handle, get result
-```
+### Why split into two passes (spawn_split + reorder)?
 
-`Spawn` is pure — it creates a `Handle<T, E>` without executing anything. `Eval` is where effects actually happen. This separation means:
+We considered a single pass that does both. Splitting is better because:
+- **spawn_split is trivial** — scan for IO calls, replace in-place. No analysis needed.
+- **reorder is complex** — builds dependency graph, topological sort with priorities. Keeping it separate makes it testable independently.
+- **Composability** — reorder works on any instruction sequence, not just spawn/eval pairs. Future optimizations (computation reordering, loop-invariant code motion) can reuse it.
 
-- Multiple spawns can be issued before any eval (pipelining)
-- The runtime decides whether to execute sequentially or in parallel
-- Handles are move-only — they must be evaluated exactly once (enforced by move checker)
-- **Deadlock is impossible** — the effect system ensures no circular dependencies between spawned computations
+### What we don't do
+
+- **Cross-block reordering.** Reorder works within basic blocks only. Moving instructions across branches requires more sophisticated analysis (code motion) that isn't justified for the common case.
+- **Speculative execution.** We don't spawn IO that might not be needed (e.g., inside an if-branch). Only unconditionally-reached IO calls are split. This is conservative but safe.
+- **CPU-heavy parallelization.** The `cpu_heavy` effect is planned but not implemented. IO parallelism covers 95%+ of the value for template/script workloads.
 
 ---
 
-## Iterator System
+## SSA: Why Cranelift-Style, Not LLVM-Style
 
-Iterators are lazy and SSA-clean:
+The SSA pass uses a Cranelift-style `SSABuilder` rather than LLVM's dominance-frontier-based approach. The reason: **block parameters instead of PHI nodes**.
 
-```
-IterStep { dst, iter_src, iter_dst, done, done_args }
-```
+In LLVM's model, PHI nodes are special instructions at block entry that select values based on which predecessor you came from. This requires knowing predecessors at PHI creation time and makes instruction rewriting fragile.
 
-One instruction pulls an element, produces the rest iterator as a new value (SSA rebinding), and branches to `done` if exhausted. This is a proper CFG terminator with two successors — the SSA pass handles it like any other branch.
+In Cranelift's model, blocks take parameters (like function parameters), and jumps pass arguments. `Jump { label: L0, args: [v1, v2] }` → `BlockLabel { label: L0, params: [v3, v4] }`. This is:
+- **Simpler to construct** — no need to track predecessors during construction
+- **Simpler to transform** — inlining just remaps args, no PHI surgery
+- **Naturally SSA** — block params are definitions, jump args are uses, standard use-def chain
 
-Effectful iterators (e.g., from regex `find_all`) carry `self_modifying` in their effect, making them move-only. Pure iterators (from list conversion) are freely copyable.
+### Write-back model for contexts
 
-The `pmap` builtin marks chunks for parallel execution. On native targets with LLVM, pure `pmap` over scalars could theoretically compile to SIMD.
+Context mutations inside branches pose a problem: after a branch merges, which value does `@x` have? The SSA pass handles this with a write-back model:
+- Branch-internal `ContextStore`s are removed (the stores are converted to SSA value flow)
+- A single write-back `ContextStore` is inserted after the merge block
+- Local variables (`VarLoad`/`VarStore`) don't need write-back — they exist only in SSA form
 
----
+### What this means for the optimizer
 
-## Incremental Compilation
-
-The pipeline is split into four phases (extract → infer → resolve → lower) not because it's architecturally elegant, but because **the LSP needs to cut into the middle**. When a user edits a script in their editor, the system re-runs only the phases that are invalidated — not the entire compilation. This is the primary reason for the phase separation.
-
-The `IncrementalGraph` manages caching at each phase boundary:
-
-- **Extract cache**: keyed by source hash. Same source = skip re-parsing.
-- **Infer cache**: per-SCC. If a function's inferred type didn't change, don't re-infer its callers (**early cutoff**).
-- **Resolve cache**: per-function. Invalid only when infer results change.
-
-On source edit: re-extract the changed function → check if its call edges changed → if SCC structure unchanged, only re-infer the affected SCC and propagate dirty marks forward. Most edits touch one SCC, so recompilation is O(changed) not O(total).
-
-The LSP is a thin wrapper over `IncrementalGraph` — it maps document IDs to functions and delegates everything else. **LSP diagnostics and build errors are identical because they run the exact same pipeline, the exact same code, the exact same `IncrementalGraph`.** There is no separate "LSP mode" or "analysis mode" that could diverge from the real compiler.
+After SSA, the IR is genuinely functional — all "mutation" is expressed as new values flowing through block parameters. This makes analysis and transformation straightforward: liveness, register allocation, reordering all operate on standard SSA use-def chains with no aliasing concerns.
 
 ---
 
-## Plugin System (ExternFn)
+## Inlining: Why Devirtualize Before Inline
 
-External functions are registered with their type signature, effect classification, and runtime handler in a single declaration:
+The inliner runs devirtualization as part of its pass: if an `Indirect` callee traces back to a single `MakeClosure` (not through a PHI/block parameter), the closure body is inlined directly with captures prepended to args.
+
+### Why not a separate devirt pass?
+
+Devirtualization and inlining share the same machinery — both need to trace value definitions, remap ValueIds, and splice instruction sequences. A separate pass would duplicate this work. More importantly, devirt decisions depend on the inline context: a closure might be worth devirtualizing only if the call site is also being inlined.
+
+### What we don't devirtualize
+
+- **PHI-sourced closures.** If a closure value comes from a block parameter (meaning it could be one of multiple closures depending on which branch was taken), we leave it as an indirect call. Sound devirt would require splitting the call site, which isn't justified for the common case.
+- **Recursive closures.** Detected via SCC analysis. Inlining recursive calls would diverge.
+
+---
+
+## Register Coloring: Why Liveness-Based
+
+Register coloring compacts ValueId allocation by reusing slots for values with non-overlapping lifetimes. The key decision: **CFG-aware liveness analysis** rather than flat linear scan.
+
+### Why CFG-aware?
+
+The original implementation used flat instruction-order liveness (scan instructions linearly, track first def and last use). This broke for multi-block programs: a value defined in block A and used in block B had its interval underestimated because the flat scan didn't account for the control flow path between blocks.
+
+The fix: backward dataflow liveness analysis over the CFG. This correctly handles:
+- **Cross-block liveness** — values live across block boundaries
+- **Loop back-edges** — loop-carried values stay live through the entire loop
+- **Terminator uses** — values used in `Jump`/`JumpIf` args (which aren't in the instruction array)
+
+### Type-compatible slot reuse
+
+Slots are only reused if the types match. This isn't strictly necessary for correctness (the interpreter could use untyped slots), but it preserves type information through `val_types` and makes the output IR easier to validate and debug.
+
+### What we don't do
+
+- **Graph coloring.** Linear scan is O(n log n) and produces results within 5-10% of optimal for the straight-line code typical in templates/scripts. Full graph coloring (Chaitin's algorithm) would add complexity for marginal benefit.
+- **Spilling.** We always have enough "registers" (ValueIds are virtual). There's no physical register limit to spill for.
+
+---
+
+## Type System Decisions
+
+### Why structural typing, not nominal
+
+Templates and scripts are glue code — they receive data from external systems and transform it. Requiring users to declare types would defeat the purpose. Structural typing means `{ name: String }` works regardless of where the object came from. The compiler infers the minimum structural requirements from usage.
+
+### Why open enums
+
+In an embedded scripting context, the set of valid enum variants isn't always known at compile time (plugins can extend it). Open enums — where writing `Color::Red` automatically declares the variant — eliminate the declaration burden while still providing tag-based pattern matching.
+
+### Why Identity tracking for deques
+
+Deques (mutable lists) carry an origin tag to prevent accidentally mixing data from different sources. Without this, `extend(@history, @other_history)` would silently succeed even if the two histories have incompatible semantics. The origin system makes this a compile-time error unless explicitly coerced.
+
+### Constraint-based generics: what we gain and lose
+
+**Gain:** No trait declarations, no type class instances, no `where` clauses. Users write code and constraints are inferred. This is ideal for a scripting language where users shouldn't think about type theory.
+
+**Lose:** Error messages for constraint violations can be confusing — "this value doesn't support operation X" is less clear than "type T doesn't implement trait Y". We accept this trade-off because the target audience writes short scripts, not library code.
+
+---
+
+## The Pass System: Why Typed Dependencies
+
+The `PassManager` uses Rust's type system to enforce pass ordering:
 
 ```rust
-ExternFn::build("format_date")
-    .params(vec![opaque_ty(), Ty::String])
-    .ret(Ty::String)
-    .pure()
-    .sync_handler(|args, _| { /* implementation */ })
+impl TransformPass for ReorderPass {
+    type Required<'a> = (&'a FnTypes, &'a TransformMarker<SpawnSplitPass>);
+}
 ```
 
-This is simultaneously:
-- A **type declaration** (the compiler knows the signature)
-- An **effect declaration** (`.pure()` / `.io()`)
-- A **runtime handler** (the interpreter knows how to call it)
+This means ReorderPass can only run after SpawnSplitPass. The dependency is enforced at compile time — you literally can't construct a PassManager with a missing dependency. Kahn's algorithm topologically sorts at construction time; cycles are detected and panic.
 
-Adding a plugin **extends the type system**. A new function that accepts `Ty::Param` with constraints expands the set of valid generic programs. The type checker doesn't need to be modified — it just sees a wider function environment.
+### Why not just a fixed list?
 
----
+A fixed list works today but doesn't compose. When adding a new pass, you'd need to find the right insertion point in the list and hope you got the ordering right. With typed dependencies, adding a new pass is:
+1. Declare what it needs
+2. Add it to the Chain
+3. If dependencies are wrong, it won't compile
 
-## Validation
+### External dependency injection
 
-Two complementary passes ensure MIR soundness:
-
-**Type checking** validates every instruction's operands match expected types. A `BinOp(+)` with `String` left and `Int` right is caught here, not at runtime.
-
-**Move checking** tracks liveness of move-only values. `Handle<T, E>` must be consumed by exactly one `Eval`. Using it twice, or not at all, is a compile-time error. This extends transitively — a closure capturing a move-only value becomes move-only itself (FnOnce semantics).
+`FnTypes` (the function type table) is injected into `PassContext` before the pipeline runs. This avoids threading function types through every pass signature and makes the pipeline reusable across different compilation contexts.
 
 ---
 
-## Analysis Infrastructure
+## Incremental Compilation: Why SCC-Based
 
-The MIR ships with a generic dataflow framework (forward analysis with semilattice + transfer functions) and an abstract value domain supporting:
+The `IncrementalGraph` caches inference results per Strongly Connected Component, not per function. The reason: mutually recursive functions must be inferred together (their types depend on each other). Caching per-function would either miss cross-function constraints or require re-inferring the entire group anyway.
 
-- **Interval analysis** for integers (with graduated widening)
-- **Constant propagation** for all scalar types
-- **Branch elimination** when conditions are statically determined
-- **Variant tracking** for enum tag refinement after pattern matching
+**Early cutoff** is the key optimization: if re-inferring an SCC produces the same types as before, none of its callers need re-inference. In practice, most edits (changing a string literal, adding a field access) don't change the function's type signature, so re-inference stops at the edited SCC.
 
-These analyses power the **reachable context analysis**, which classifies each context load as *eager* (always needed), *lazy* (conditionally needed), or *pruned* (dead code). This informs the runtime about which contexts to prefetch.
+### LSP integration
+
+The LSP is a thin wrapper over `IncrementalGraph`. **LSP diagnostics and build errors are identical because they run the exact same pipeline, the exact same code.** There is no separate "LSP mode" that could diverge from the real compiler. This was a deliberate choice — maintaining two analysis paths is a guaranteed source of bugs.
 
 ---
 
-## What This Enables
+## Validation: Soundness and Completeness
 
-**Write sequentially, execute in parallel.** Users write straightforward sequential code. The effect system identifies independent operations. The rescheduler (planned) automatically introduces parallelism where safe.
+### What we check
 
-**One source, multiple targets.** The same MIR can be interpreted (development), compiled to wasm (browser), or lowered to native (production). Full SSA with alias tracking means LLVM-quality optimization is theoretically achievable.
+**Type checking** — Every instruction's operands match expected types. Arity, constructor shape, materiality (functions can't be stored to context — they're ephemeral).
 
-**Portable computation.** Since all mutable state is explicit (contexts) and effects are tracked, a computation can be serialized mid-execution and resumed on a different machine. Context snapshot + MirModule = portable.
+**Move checking** — Move-only values (`Handle<T, E>`, self-modifying iterators) are consumed exactly once. Use-after-move and unused handles are compile errors. Propagates transitively: a closure capturing a move-only value is itself move-only.
 
-**Type-safe plugin ecosystem.** External functions participate in type inference and effect tracking on equal footing with builtins. The type system grows with the ecosystem, not against it.
+### What we guarantee
+
+- If validation passes, the IR is well-typed and move-safe.
+- Validation runs after all optimizations — it catches optimizer bugs, not just user bugs.
+
+### What we don't guarantee
+
+- **Runtime safety.** Integer overflow, out-of-bounds access, and division by zero are not caught at compile time. These would require full dependent types or abstract interpretation on every code path, which is overkill for a scripting language.
+- **Termination.** Recursive functions and infinite loops are allowed. We detect recursion (SCC analysis) but don't prevent it.
+- **Plugin correctness.** If a plugin's handler doesn't match its declared type/effect, runtime errors will occur. The compiler trusts plugin declarations.
 
 ---
 
 ## Key Invariants
 
-1. **Types are complete.** No unresolved type variables survive past resolve. Every value in lowered MIR has a concrete type.
+1. **Types are complete.** No unresolved type variables survive past inference. Every value in lowered MIR has a concrete type.
 2. **Effects are sound.** If a function is marked pure, it truly has no side effects. The system never over-promises.
 3. **Moves are checked.** Move-only values are consumed exactly once. Use-after-move is a compile error.
 4. **Output is deterministic.** Same source always produces the same MIR, regardless of hash map ordering or global state.
 5. **Single source of truth.** Value types live in `val_types`, not duplicated in instruction fields. Context identity is the qualified name, not an opaque ID.
+6. **Token ordering is preserved.** Functions sharing the same Token are never reordered relative to each other. SSA never lifts Tokens into value flow.
+7. **Validation is final.** Type check and move check verify the IR after all optimizations. If they pass, the output is sound.

@@ -9,8 +9,6 @@ pub mod optimize;
 pub mod pass;
 pub mod printer;
 pub mod ser_ty;
-pub mod ssa;
-pub mod ssa_pass;
 pub mod ty;
 pub mod typeck;
 pub mod validate;

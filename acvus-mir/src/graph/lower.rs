@@ -120,9 +120,9 @@ pub fn lower(
         };
 
         // SSA pass: promote context/local variables to SSA form.
-        crate::ssa_pass::run(&mut module.main, &fn_type_map);
+        crate::optimize::ssa_pass::run(&mut module.main, &fn_type_map);
         for closure in module.closures.values_mut() {
-            crate::ssa_pass::run(closure, &fn_type_map);
+            crate::optimize::ssa_pass::run(closure, &fn_type_map);
         }
 
         let validation_errors = crate::validate::validate(&module, &fn_type_map);

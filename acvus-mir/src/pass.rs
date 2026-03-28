@@ -234,8 +234,17 @@ where
         Self { passes, order }
     }
 
-    pub fn run(&self, mut module: MirModule) -> (MirModule, PassContext) {
-        let mut ctx = PassContext::new();
+    pub fn run(&self, module: MirModule) -> (MirModule, PassContext) {
+        self.run_with_context(module, PassContext::new())
+    }
+
+    /// Run all passes with a pre-populated PassContext.
+    /// Use this to inject external dependencies (e.g. FnTypes).
+    pub fn run_with_context(
+        &self,
+        mut module: MirModule,
+        mut ctx: PassContext,
+    ) -> (MirModule, PassContext) {
         for &analysis_id in &self.order {
             self.passes.run_targeted(analysis_id, &mut module, &mut ctx);
         }
