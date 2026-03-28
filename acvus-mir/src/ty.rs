@@ -6,6 +6,26 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::types::QualifiedRef;
 
+// ── Effect target (Context vs Token) ────────────────────────────────
+
+acvus_utils::declare_id!(pub TokenId);
+
+/// Distinguishes SSA-compatible context refs from external shared-state tokens.
+///
+/// - `Context(QualifiedRef)` — SSA-compatible. Compiler may convert to
+///   `context_uses`/`context_defs` on Spawn/Eval/FunctionCall.
+/// - `Token(TokenId)` — NOT SSA-compatible. Functions sharing the same
+///   Token must execute sequentially; the compiler must never lift a Token
+///   into SSA context_uses/context_defs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EffectTarget {
+    /// Context — SSA-compatible. Compiler can optimize (Spawn/Eval).
+    Context(QualifiedRef),
+    /// Token — NOT SSA-compatible. External shared state.
+    /// Functions sharing the same Token must execute sequentially.
+    Token(TokenId),
+}
+
 /// A named, typed function parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
@@ -140,8 +160,8 @@ pub enum Materiality {
 /// Pure = all fields empty/false. No separate variant needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct EffectSet {
-    pub reads: BTreeSet<QualifiedRef>,
-    pub writes: BTreeSet<QualifiedRef>,
+    pub reads: BTreeSet<EffectTarget>,
+    pub writes: BTreeSet<EffectTarget>,
     pub io: bool,
     /// Value is consumed/mutated on use (e.g. Iterator cursor advance).
     /// Propagates through combinators: map(self_mod_iter, f) → self_mod.
@@ -193,10 +213,10 @@ impl fmt::Display for EffectSet {
 /// `Any` allows all contexts, `Only(set)` restricts to the given set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectBound {
-    /// Any context access allowed.
+    /// Any context/token access allowed.
     Any,
-    /// Only the specified contexts allowed.
-    Only(BTreeSet<QualifiedRef>),
+    /// Only the specified targets allowed.
+    Only(BTreeSet<EffectTarget>),
 }
 
 /// Constraint on a function's effect — the upper bound of what it may do.
@@ -5486,8 +5506,8 @@ mod tests {
         use crate::graph::types::QualifiedRef;
         use acvus_utils::Interner;
 
-        fn ctx(interner: &Interner, n: usize) -> QualifiedRef {
-            QualifiedRef::root(interner.intern(&format!("ctx_{n}")))
+        fn ctx(interner: &Interner, n: usize) -> EffectTarget {
+            EffectTarget::Context(QualifiedRef::root(interner.intern(&format!("ctx_{n}"))))
         }
 
         #[test]

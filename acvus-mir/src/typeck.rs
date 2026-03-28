@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
-use crate::ty::{Effect, Materiality, Param, Polarity, Ty, TySubst, TypeEnv};
+use crate::ty::{Effect, EffectTarget, Materiality, Param, Polarity, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
 
 /// Maps each AST node id to its inferred type.
@@ -417,14 +417,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
     /// Record a context read in the body effect.
     fn record_context_read(&mut self, qref: QualifiedRef) {
         if let Effect::Resolved(ref mut set) = self.body_effect {
-            set.reads.insert(qref);
+            set.reads.insert(EffectTarget::Context(qref));
         }
     }
 
     /// Record a context write in the body effect.
     fn record_context_write(&mut self, qref: QualifiedRef) {
         if let Effect::Resolved(ref mut set) = self.body_effect {
-            set.writes.insert(qref);
+            set.writes.insert(EffectTarget::Context(qref));
         }
     }
 

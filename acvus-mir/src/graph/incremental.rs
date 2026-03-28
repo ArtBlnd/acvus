@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
-use crate::ty::{EffectSet, Ty};
+use crate::ty::{EffectSet, EffectTarget, Ty};
 
 use super::extract::{ExtractResult, FnRefs, ParsedSource, extract_one};
 use super::infer::{InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
@@ -579,19 +579,21 @@ impl IncrementalGraph {
                 let Some(extract_entry) = self.extract_cache.get(&fid) else {
                     continue;
                 };
-                let reads: std::collections::BTreeSet<QualifiedRef> = extract_entry
+                let reads = extract_entry
                     .refs
                     .context_reads
                     .iter()
                     .filter(|r| known_ctx_names.contains(&r.name))
                     .copied()
+                    .map(EffectTarget::Context)
                     .collect();
-                let writes: std::collections::BTreeSet<QualifiedRef> = extract_entry
+                let writes = extract_entry
                     .refs
                     .context_writes
                     .iter()
                     .filter(|r| known_ctx_names.contains(&r.name))
                     .copied()
+                    .map(EffectTarget::Context)
                     .collect();
                 if let Some(meta) = scc_result.fn_metas.get_mut(&fid) {
                     meta.effect = EffectSet {

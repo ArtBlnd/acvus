@@ -207,10 +207,15 @@ fn forward_context_values(
 }
 
 /// Extract reads/writes QualifiedRefs from a function's type effect.
+///
+/// Only `EffectTarget::Context` refs are returned — `Token` targets are NOT
+/// SSA-compatible and must never be converted to context_uses/context_defs.
 fn extract_effect_refs(
     fn_types: &FxHashMap<FunctionId, Ty>,
     fn_id: &FunctionId,
 ) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
+    use crate::ty::EffectTarget;
+
     let ty = fn_types.get(fn_id)?;
     let Ty::Fn {
         effect: Effect::Resolved(eff),
@@ -219,13 +224,26 @@ fn extract_effect_refs(
     else {
         return None;
     };
-    if eff.reads.is_empty() && eff.writes.is_empty() {
+    let reads: Vec<QualifiedRef> = eff
+        .reads
+        .iter()
+        .filter_map(|t| match t {
+            EffectTarget::Context(qref) => Some(*qref),
+            EffectTarget::Token(_) => None,
+        })
+        .collect();
+    let writes: Vec<QualifiedRef> = eff
+        .writes
+        .iter()
+        .filter_map(|t| match t {
+            EffectTarget::Context(qref) => Some(*qref),
+            EffectTarget::Token(_) => None,
+        })
+        .collect();
+    if reads.is_empty() && writes.is_empty() {
         return None;
     }
-    Some((
-        eff.reads.iter().cloned().collect(),
-        eff.writes.iter().cloned().collect(),
-    ))
+    Some((reads, writes))
 }
 
 /// Apply value substitutions to an instruction's operands.
@@ -806,7 +824,7 @@ fn apply_var_subst(body: &mut MirBody, var_subst: &FxHashMap<ValueId, ValueId>) 
 mod tests {
     use super::*;
     use crate::test::{compile_script, compile_template};
-    use crate::ty::{EffectSet, Ty};
+    use crate::ty::{EffectSet, EffectTarget, Ty};
     use acvus_utils::Interner;
     use std::collections::BTreeSet;
 
@@ -1015,8 +1033,8 @@ mod tests {
                 ret: Box::new(Ty::Int),
                 captures: vec![],
                 effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
-                    writes: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }),
@@ -1171,7 +1189,7 @@ mod tests {
                 captures: vec![],
                 effect: Effect::Resolved(EffectSet {
                     reads: BTreeSet::new(),
-                    writes: BTreeSet::from([qref]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }),
@@ -1258,5 +1276,317 @@ mod tests {
         .unwrap();
         // Both loops write @sum — SSA pass must handle this.
         assert!(count_context_stores(&module.main) >= 1);
+    }
+
+    // ── Token/Context soundness tests ──────────────────────────────
+
+    use crate::ty::TokenId;
+
+    /// Token read must NOT appear in context_uses after SSA pass.
+    #[test]
+    fn token_read_not_in_context_uses() {
+        let interner = Interner::new();
+        let ctx_name = interner.intern("ctx");
+        let qref = QualifiedRef::root(ctx_name);
+        let token = TokenId::alloc();
+        let callee_id = FunctionId::alloc();
+
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::from([
+                        EffectTarget::Context(qref),
+                        EffectTarget::Token(token),
+                    ]),
+                    writes: BTreeSet::new(),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        let v1 = body.val_factory.next();
+        let v2 = body.val_factory.next();
+        body.val_types.insert(v0, Ty::Int);
+        body.val_types.insert(v1, Ty::Int);
+        body.val_types.insert(v2, Ty::Int);
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v2),
+        });
+
+        run(&mut body, &fn_types);
+
+        // context_uses should have exactly 1 entry (the Context), NOT 2.
+        for inst in &body.insts {
+            if let InstKind::FunctionCall {
+                callee: Callee::Direct(ref fid),
+                ref context_uses,
+                ..
+            } = inst.kind
+            {
+                if fid == &callee_id {
+                    assert_eq!(
+                        context_uses.len(),
+                        1,
+                        "Token must NOT appear in context_uses; only Context should"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Token write must NOT appear in context_defs after SSA pass.
+    #[test]
+    fn token_write_not_in_context_defs() {
+        let interner = Interner::new();
+        let ctx_name = interner.intern("ctx");
+        let qref = QualifiedRef::root(ctx_name);
+        let token = TokenId::alloc();
+        let callee_id = FunctionId::alloc();
+
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Unit),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::new(),
+                    writes: BTreeSet::from([
+                        EffectTarget::Context(qref),
+                        EffectTarget::Token(token),
+                    ]),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        let v1 = body.val_factory.next();
+        let v2 = body.val_factory.next();
+        body.val_types.insert(v0, Ty::Int);
+        body.val_types.insert(v1, Ty::Int);
+        body.val_types.insert(v2, Ty::Unit);
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v2),
+        });
+
+        run(&mut body, &fn_types);
+
+        for inst in &body.insts {
+            if let InstKind::FunctionCall {
+                callee: Callee::Direct(ref fid),
+                ref context_defs,
+                ..
+            } = inst.kind
+            {
+                if fid == &callee_id {
+                    assert_eq!(
+                        context_defs.len(),
+                        1,
+                        "Token must NOT appear in context_defs; only Context should"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mixed Context + Token: only Context appears in SSA uses/defs.
+    #[test]
+    fn mixed_context_and_token_only_context_in_ssa() {
+        let interner = Interner::new();
+        let ctx_name = interner.intern("ctx");
+        let qref = QualifiedRef::root(ctx_name);
+        let token = TokenId::alloc();
+        let callee_id = FunctionId::alloc();
+
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            callee_id,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::from([
+                        EffectTarget::Context(qref),
+                        EffectTarget::Token(token),
+                    ]),
+                    writes: BTreeSet::from([
+                        EffectTarget::Context(qref),
+                        EffectTarget::Token(token),
+                    ]),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        let mut body = MirBody::new();
+        let v0 = body.val_factory.next();
+        let v1 = body.val_factory.next();
+        let v2 = body.val_factory.next();
+        body.val_types.insert(v0, Ty::Int);
+        body.val_types.insert(v1, Ty::Int);
+        body.val_types.insert(v2, Ty::Int);
+
+        let span = acvus_ast::Span::ZERO;
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: v2,
+                callee: Callee::Direct(callee_id),
+                args: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
+            },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v2),
+        });
+
+        run(&mut body, &fn_types);
+
+        for inst in &body.insts {
+            if let InstKind::FunctionCall {
+                callee: Callee::Direct(ref fid),
+                ref context_uses,
+                ref context_defs,
+                ..
+            } = inst.kind
+            {
+                if fid == &callee_id {
+                    assert_eq!(
+                        context_uses.len(),
+                        1,
+                        "only Context(@ctx) should be in context_uses, not Token"
+                    );
+                    assert_eq!(
+                        context_defs.len(),
+                        1,
+                        "only Context(@ctx) should be in context_defs, not Token"
+                    );
+                    // Verify the actual QualifiedRef is correct.
+                    assert_eq!(context_uses[0].0, qref);
+                    assert_eq!(context_defs[0].0, qref);
+                }
+            }
+        }
+    }
+
+    /// EffectSet union preserves both Context and Token targets.
+    #[test]
+    fn effect_set_union_preserves_context_and_token() {
+        let interner = Interner::new();
+        let qref = QualifiedRef::root(interner.intern("ctx"));
+        let token = TokenId::alloc();
+
+        let a = EffectSet {
+            reads: BTreeSet::from([EffectTarget::Context(qref)]),
+            ..Default::default()
+        };
+        let b = EffectSet {
+            reads: BTreeSet::from([EffectTarget::Token(token)]),
+            ..Default::default()
+        };
+        let u = a.union(&b);
+        assert_eq!(u.reads.len(), 2, "union should contain both Context and Token");
+        assert!(u.reads.contains(&EffectTarget::Context(qref)));
+        assert!(u.reads.contains(&EffectTarget::Token(token)));
+    }
+
+    /// extract_effect_refs filters Token targets out.
+    #[test]
+    fn extract_effect_refs_filters_tokens() {
+        let interner = Interner::new();
+        let qref = QualifiedRef::root(interner.intern("ctx"));
+        let token = TokenId::alloc();
+        let fid = FunctionId::alloc();
+
+        let mut fn_types = FxHashMap::default();
+        fn_types.insert(
+            fid,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads: BTreeSet::from([
+                        EffectTarget::Context(qref),
+                        EffectTarget::Token(token),
+                    ]),
+                    writes: BTreeSet::from([EffectTarget::Token(token)]),
+                    io: false,
+                    self_modifying: false,
+                }),
+            },
+        );
+
+        let result = extract_effect_refs(&fn_types, &fid);
+        let (reads, writes) = result.unwrap();
+        assert_eq!(reads.len(), 1, "only Context should be in reads");
+        assert_eq!(reads[0], qref);
+        assert!(writes.is_empty(), "Token-only writes should yield empty");
     }
 }

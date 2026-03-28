@@ -6,7 +6,7 @@ use acvus_interpreter::{Defs, Executable, ExternFn, ExternRegistry, Uses, Value}
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Effect, EffectSet, Ty};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -82,7 +82,7 @@ async fn extern_reads_context() {
                 .params(vec![Ty::Int])
                 .ret(Ty::Int)
                 .effect(Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
                     writes: BTreeSet::new(),
                     io: false,
                     self_modifying: false,
@@ -115,8 +115,8 @@ async fn extern_writes_context() {
                 .params(vec![])
                 .ret(Ty::Unit)
                 .effect(Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
-                    writes: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }))
@@ -149,8 +149,8 @@ async fn extern_reads_and_writes_context() {
                 .params(vec![Ty::Int])
                 .ret(Ty::Int)
                 .effect(Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
-                    writes: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }))
@@ -191,8 +191,8 @@ async fn extern_multiple_calls_sequential() {
                 .params(vec![Ty::Int])
                 .ret(Ty::Unit)
                 .effect(Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
-                    writes: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }))
@@ -305,8 +305,8 @@ fn ir_function_call_has_context_bindings() {
                 .params(vec![])
                 .ret(Ty::Unit)
                 .effect(Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([qref]),
-                    writes: BTreeSet::from([qref]),
+                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     io: false,
                     self_modifying: false,
                 }))

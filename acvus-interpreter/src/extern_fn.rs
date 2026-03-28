@@ -28,7 +28,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, FunctionId};
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, TokenId, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -215,6 +215,42 @@ impl ExternFnBuilder {
     /// Set a fine-grained effect (specific context reads/writes).
     pub fn effect(mut self, effect: Effect) -> Self {
         self.effect = effect;
+        self
+    }
+
+    /// Add a Token read to the effect set.
+    /// Token targets are NOT SSA-compatible — functions sharing the same
+    /// Token must execute sequentially.
+    pub fn reads_token(mut self, token: TokenId) -> Self {
+        let set = match &mut self.effect {
+            Effect::Resolved(set) => set,
+            Effect::Var(_) => {
+                self.effect = Effect::Resolved(EffectSet::default());
+                match &mut self.effect {
+                    Effect::Resolved(set) => set,
+                    _ => unreachable!(),
+                }
+            }
+        };
+        set.reads.insert(EffectTarget::Token(token));
+        self
+    }
+
+    /// Add a Token write to the effect set.
+    /// Token targets are NOT SSA-compatible — functions sharing the same
+    /// Token must execute sequentially.
+    pub fn writes_token(mut self, token: TokenId) -> Self {
+        let set = match &mut self.effect {
+            Effect::Resolved(set) => set,
+            Effect::Var(_) => {
+                self.effect = Effect::Resolved(EffectSet::default());
+                match &mut self.effect {
+                    Effect::Resolved(set) => set,
+                    _ => unreachable!(),
+                }
+            }
+        };
+        set.writes.insert(EffectTarget::Token(token));
         self
     }
 

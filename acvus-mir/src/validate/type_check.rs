@@ -13,7 +13,7 @@
 
 use crate::graph::FunctionId;
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
-use crate::ty::{Effect, EffectSet, Origin, Ty};
+use crate::ty::{Effect, EffectSet, EffectTarget, Origin, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalIdOps;
 use rustc_hash::FxHashMap;
@@ -257,6 +257,13 @@ impl<'a> CheckCtx<'a> {
             } => Some(eff),
             _ => None,
         }
+    }
+
+    /// Count only Context targets in a set (Token targets are not SSA-compatible).
+    fn context_target_count(set: &std::collections::BTreeSet<EffectTarget>) -> usize {
+        set.iter()
+            .filter(|t| matches!(t, EffectTarget::Context(_)))
+            .count()
     }
 
     fn check_body(&mut self, body: &MirBody, errors: &mut Vec<ValidationError>) {
@@ -989,26 +996,28 @@ impl<'a> CheckCtx<'a> {
                         // Empty is valid: pre-SSA IR or contexts not in source scope
                         // — interpreter dual-path fallback handles this.
                         if let Some(eff) = self.callee_effect(fn_id) {
-                            if !context_uses.is_empty() && context_uses.len() != eff.reads.len() {
+                            let ctx_reads = Self::context_target_count(&eff.reads);
+                            let ctx_writes = Self::context_target_count(&eff.writes);
+                            if !context_uses.is_empty() && context_uses.len() != ctx_reads {
                                 errors.push(ValidationError {
                                     scope: self.scope_name.clone(),
                                     inst_index: pc,
                                     span,
                                     kind: ValidationErrorKind::ArityMismatch {
                                         inst_name: "FunctionCall(Direct) context_uses".to_string(),
-                                        expected: eff.reads.len(),
+                                        expected: ctx_reads,
                                         got: context_uses.len(),
                                     },
                                 });
                             }
-                            if !context_defs.is_empty() && context_defs.len() != eff.writes.len() {
+                            if !context_defs.is_empty() && context_defs.len() != ctx_writes {
                                 errors.push(ValidationError {
                                     scope: self.scope_name.clone(),
                                     inst_index: pc,
                                     span,
                                     kind: ValidationErrorKind::ArityMismatch {
                                         inst_name: "FunctionCall(Direct) context_defs".to_string(),
-                                        expected: eff.writes.len(),
+                                        expected: ctx_writes,
                                         got: context_defs.len(),
                                     },
                                 });
@@ -1071,14 +1080,15 @@ impl<'a> CheckCtx<'a> {
                         // Verify context_uses count matches callee's effect reads.
                         // Only when SSA pass has populated them (non-empty).
                         if let Some(eff) = self.callee_effect(fn_id) {
-                            if !context_uses.is_empty() && context_uses.len() != eff.reads.len() {
+                            let ctx_reads = Self::context_target_count(&eff.reads);
+                            if !context_uses.is_empty() && context_uses.len() != ctx_reads {
                                 errors.push(ValidationError {
                                     scope: self.scope_name.clone(),
                                     inst_index: pc,
                                     span,
                                     kind: ValidationErrorKind::ArityMismatch {
                                         inst_name: "Spawn(Direct) context_uses".to_string(),
-                                        expected: eff.reads.len(),
+                                        expected: ctx_reads,
                                         got: context_uses.len(),
                                     },
                                 });

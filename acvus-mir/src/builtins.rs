@@ -375,6 +375,15 @@ fn sig_skip(interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     sig_take(interner, s)
 }
 
+fn sig_pchain(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
+    let t = s.fresh_param();
+    let e = s.fresh_effect_var();
+    (
+        vec![Ty::List(Box::new(Ty::Iterator(Box::new(t.clone()), e.clone())))],
+        Ty::Iterator(Box::new(t), e),
+    )
+}
+
 fn sig_chain(_interner: &Interner, s: &mut TySubst) -> (Vec<Ty>, Ty) {
     let t = s.fresh_param();
     let e = s.fresh_effect_var();
@@ -466,6 +475,7 @@ pub fn standard_builtins(interner: &Interner) -> Vec<Function> {
         make_builtin(interner, "filter", sig_filter),
         make_builtin(interner, "map", sig_map),
         make_builtin(interner, "pmap", sig_pmap),
+        make_builtin(interner, "pchain", sig_pchain),
         make_builtin(interner, "find", sig_find),
         make_builtin(interner, "reduce", sig_reduce),
         make_builtin(interner, "fold", sig_fold),
@@ -591,6 +601,7 @@ pub(crate) mod test_support {
             "skip" => Some(sig_skip),
             "chain_seq" => Some(sig_chain_seq),
             "chain" => Some(sig_chain),
+            "pchain" => Some(sig_pchain),
             "append" => Some(sig_append),
             "extend" => Some(sig_extend),
             "consume" => Some(sig_consume),

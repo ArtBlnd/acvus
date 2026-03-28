@@ -38,6 +38,7 @@ fn script_placeholder_substitution() {
 
     // Create an Expr to substitute: literal 42
     let replacement = acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::Int(42),
         span: acvus_ast::Span::ZERO,
     };
@@ -67,10 +68,12 @@ fn script_multiple_placeholders() {
     let interner = acvus_utils::Interner::new();
 
     let a = acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::Int(10),
         span: acvus_ast::Span::ZERO,
     };
     let b = acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::Int(20),
         span: acvus_ast::Span::ZERO,
     };
@@ -105,6 +108,7 @@ fn script_placeholder_with_context() {
     let interner = acvus_utils::Interner::new();
 
     let result = acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::String("hello".into()),
         span: acvus_ast::Span::ZERO,
     };
@@ -130,6 +134,7 @@ fn template_with_placeholder() {
     let interner = acvus_utils::Interner::new();
 
     let value = acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::Int(99),
         span: acvus_ast::Span::ZERO,
     };
@@ -143,6 +148,7 @@ fn template_with_placeholder() {
 
 fn int_expr(n: i64) -> acvus_ast::Expr {
     acvus_ast::Expr::Literal {
+        id: acvus_ast::AstId::alloc(),
         value: acvus_ast::Literal::Int(n),
         span: acvus_ast::Span::ZERO,
     }
@@ -150,6 +156,7 @@ fn int_expr(n: i64) -> acvus_ast::Expr {
 
 fn ident_expr(interner: &acvus_utils::Interner, name: &str) -> acvus_ast::Expr {
     acvus_ast::Expr::Ident {
+        id: acvus_ast::AstId::alloc(),
         name: interner.intern(name),
         ref_kind: acvus_ast::RefKind::Value,
         span: acvus_ast::Span::ZERO,

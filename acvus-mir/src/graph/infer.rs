@@ -1047,6 +1047,7 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
+    use crate::ty::EffectTarget;
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -1260,8 +1261,8 @@ mod tests {
         let effect = &result.outcomes[&fid].meta().effect;
         let ctx_x = QualifiedRef::root(i.intern("x"));
         let ctx_y = QualifiedRef::root(i.intern("y"));
-        assert!(effect.reads.contains(&ctx_x), "should have @x in reads");
-        assert!(effect.reads.contains(&ctx_y), "should have @y in reads");
+        assert!(effect.reads.contains(&EffectTarget::Context(ctx_x)), "should have @x in reads");
+        assert!(effect.reads.contains(&EffectTarget::Context(ctx_y)), "should have @y in reads");
         assert!(effect.writes.is_empty(), "read-only should have no writes");
     }
 
@@ -1279,9 +1280,9 @@ mod tests {
         let fid = ids[0].1;
         let effect = &result.outcomes[&fid].meta().effect;
         let ctx_x = QualifiedRef::root(i.intern("x"));
-        assert!(effect.writes.contains(&ctx_x), "should have @x in writes");
+        assert!(effect.writes.contains(&EffectTarget::Context(ctx_x)), "should have @x in writes");
         assert!(
-            effect.reads.contains(&ctx_x),
+            effect.reads.contains(&EffectTarget::Context(ctx_x)),
             "should also have @x in reads (tail)"
         );
     }
@@ -1313,12 +1314,12 @@ mod tests {
 
         // get_x directly reads @x
         let get_x_effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(get_x_effect.reads.contains(&ctx_x));
+        assert!(get_x_effect.reads.contains(&EffectTarget::Context(ctx_x)));
 
         // main calls get_x → transitive read of @x
         let main_effect = &result.outcomes[&ids[1].1].meta().effect;
         assert!(
-            main_effect.reads.contains(&ctx_x),
+            main_effect.reads.contains(&EffectTarget::Context(ctx_x)),
             "caller should transitively inherit callee's reads"
         );
     }
@@ -1343,7 +1344,7 @@ mod tests {
         for (_, fid) in &ids {
             let effect = &result.outcomes[fid].meta().effect;
             assert!(
-                effect.reads.contains(&ctx_x),
+                effect.reads.contains(&EffectTarget::Context(ctx_x)),
                 "transitive chain should propagate reads"
             );
         }
@@ -1368,7 +1369,7 @@ mod tests {
         // main calls pure_fn (not read_x) → should NOT have @x
         let main_effect = &result.outcomes[&ids[2].1].meta().effect;
         assert!(
-            !main_effect.reads.contains(&ctx_x),
+            !main_effect.reads.contains(&EffectTarget::Context(ctx_x)),
             "should not have false transitive reads"
         );
         assert!(main_effect.is_pure());
@@ -1397,16 +1398,16 @@ mod tests {
         // After fixpoint: both should have reads = {@x, @y}.
         let a_effect = &result.outcomes[&ids[0].1].meta().effect;
         let b_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(a_effect.reads.contains(&ctx_x), "a should read @x (direct)");
+        assert!(a_effect.reads.contains(&EffectTarget::Context(ctx_x)), "a should read @x (direct)");
         assert!(
-            a_effect.reads.contains(&ctx_y),
+            a_effect.reads.contains(&EffectTarget::Context(ctx_y)),
             "a should read @y (transitive from b)"
         );
         assert!(
-            b_effect.reads.contains(&ctx_x),
+            b_effect.reads.contains(&EffectTarget::Context(ctx_x)),
             "b should read @x (transitive from a)"
         );
-        assert!(b_effect.reads.contains(&ctx_y), "b should read @y (direct)");
+        assert!(b_effect.reads.contains(&EffectTarget::Context(ctx_y)), "b should read @y (direct)");
     }
 
     #[test]
@@ -1427,8 +1428,8 @@ mod tests {
 
         // writer writes @x → caller should transitively inherit
         let caller_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(caller_effect.writes.contains(&ctx_x), "transitive write");
-        assert!(caller_effect.reads.contains(&ctx_x), "transitive read");
+        assert!(caller_effect.writes.contains(&EffectTarget::Context(ctx_x)), "transitive write");
+        assert!(caller_effect.reads.contains(&EffectTarget::Context(ctx_x)), "transitive read");
     }
 
     // ── Parameter effect union tests ────────────────────────────────
@@ -1439,7 +1440,7 @@ mod tests {
         let i = Interner::new();
         let ctx_x = QualifiedRef::root(i.intern("effect_x"));
         let iter_effect = Effect::Resolved(EffectSet {
-            reads: [ctx_x].into_iter().collect(),
+            reads: [EffectTarget::Context(ctx_x)].into_iter().collect(),
             ..Default::default()
         });
         let (graph, ids) = make_multi_graph(
@@ -1457,7 +1458,7 @@ mod tests {
 
         let effect = &result.outcomes[&ids[0].1].meta().effect;
         assert!(
-            effect.reads.contains(&ctx_x),
+            effect.reads.contains(&EffectTarget::Context(ctx_x)),
             "function should inherit effectful iterator param's reads"
         );
     }
@@ -1491,7 +1492,7 @@ mod tests {
         let i = Interner::new();
         let ctx_y = QualifiedRef::root(i.intern("effect_y"));
         let fn_effect = Effect::Resolved(EffectSet {
-            writes: [ctx_y].into_iter().collect(),
+            writes: [EffectTarget::Context(ctx_y)].into_iter().collect(),
             ..Default::default()
         });
         let (graph, ids) = make_multi_graph(
@@ -1513,7 +1514,7 @@ mod tests {
 
         let effect = &result.outcomes[&ids[0].1].meta().effect;
         assert!(
-            effect.writes.contains(&ctx_y),
+            effect.writes.contains(&EffectTarget::Context(ctx_y)),
             "function should inherit effectful Fn param's writes"
         );
     }
@@ -1525,7 +1526,7 @@ mod tests {
         let i = Interner::new();
         let ctx_b = QualifiedRef::root(i.intern("effect_b"));
         let fn_effect = Effect::Resolved(EffectSet {
-            writes: [ctx_b].into_iter().collect(),
+            writes: [EffectTarget::Context(ctx_b)].into_iter().collect(),
             ..Default::default()
         });
         let (graph, ids) = make_multi_graph(
@@ -1553,11 +1554,11 @@ mod tests {
         let ctx_a = QualifiedRef::root(i.intern("a"));
         let caller_effect = &result.outcomes[&ids[2].1].meta().effect;
         assert!(
-            caller_effect.reads.contains(&ctx_a),
+            caller_effect.reads.contains(&EffectTarget::Context(ctx_a)),
             "transitive read of @a from read_a"
         );
         assert!(
-            caller_effect.writes.contains(&ctx_b),
+            caller_effect.writes.contains(&EffectTarget::Context(ctx_b)),
             "param Fn's write of @b from use_fn"
         );
     }
@@ -1579,7 +1580,7 @@ mod tests {
                         ret: Box::new(Ty::Int),
                         captures: vec![],
                         effect: Effect::Resolved(EffectSet {
-                            reads: [ctx_x].into_iter().collect(),
+                            reads: [EffectTarget::Context(ctx_x)].into_iter().collect(),
                             ..Default::default()
                         }),
                     }]),
@@ -1592,7 +1593,7 @@ mod tests {
                         ret: Box::new(Ty::Int),
                         captures: vec![],
                         effect: Effect::Resolved(EffectSet {
-                            writes: [ctx_y].into_iter().collect(),
+                            writes: [EffectTarget::Context(ctx_y)].into_iter().collect(),
                             ..Default::default()
                         }),
                     }]),
@@ -1607,11 +1608,11 @@ mod tests {
 
         // fn_a has param effect reads @x
         let fn_a_effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(fn_a_effect.reads.contains(&ctx_x), "fn_a param's read");
+        assert!(fn_a_effect.reads.contains(&EffectTarget::Context(ctx_x)), "fn_a param's read");
 
         // fn_b has param effect writes @y
         let fn_b_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(fn_b_effect.writes.contains(&ctx_y), "fn_b param's write");
+        assert!(fn_b_effect.writes.contains(&EffectTarget::Context(ctx_y)), "fn_b param's write");
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -3083,7 +3084,7 @@ mod tests {
         assert!(
             set_effect
                 .writes
-                .contains(&QualifiedRef::root(i.intern("x"))),
+                .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
             "writes should contain @x"
         );
     }
@@ -3174,13 +3175,13 @@ mod tests {
             assert!(
                 effect_set
                     .reads
-                    .contains(&QualifiedRef::root(i.intern("x"))),
+                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
                 "should track @x read"
             );
             assert!(
                 effect_set
                     .reads
-                    .contains(&QualifiedRef::root(i.intern("y"))),
+                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("y")))),
                 "should track @y read"
             );
             assert!(
@@ -3207,13 +3208,13 @@ mod tests {
             assert!(
                 effect_set
                     .writes
-                    .contains(&QualifiedRef::root(i.intern("x"))),
+                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
                 "should track @x write"
             );
             assert!(
                 effect_set
                     .reads
-                    .contains(&QualifiedRef::root(i.intern("x"))),
+                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
                 "should also track @x read from tail"
             );
         }
@@ -3258,7 +3259,7 @@ mod tests {
             assert!(
                 effect_set
                     .reads
-                    .contains(&QualifiedRef::root(i.intern("x")))
+                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x"))))
             );
         }
         let main_id = ids[1].1;
@@ -3385,7 +3386,7 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref)])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
             io: false,
             self_modifying: false,
@@ -3402,7 +3403,7 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref)])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
             io: false,
             self_modifying: false,
@@ -3425,8 +3426,8 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
-            writes: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref)])),
+            writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref)])),
             io: false,
             self_modifying: false,
         };
@@ -3442,8 +3443,8 @@ mod tests {
         let i = Interner::new();
         let qref_x = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([qref_x])),
-            writes: EffectBound::Only(std::collections::BTreeSet::from([qref_x])),
+            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref_x)])),
+            writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(qref_x)])),
             io: false,
             self_modifying: false,
         };
@@ -3523,8 +3524,8 @@ mod tests {
         let fid = graph.functions[0].id;
         let effect = &result.outcomes[&fid].meta().effect;
         let qref = QualifiedRef::root(i.intern("x"));
-        assert!(effect.writes.contains(&qref), "should track context write");
-        assert!(effect.reads.contains(&qref), "should track context read");
+        assert!(effect.writes.contains(&EffectTarget::Context(qref)), "should track context write");
+        assert!(effect.reads.contains(&EffectTarget::Context(qref)), "should track context read");
     }
 
     /// Context inside nested block — still extracted.
@@ -3555,7 +3556,7 @@ mod tests {
         let effect = &result.outcomes[&fid].meta().effect;
         let qref = QualifiedRef::root(i.intern("offset"));
         assert!(
-            effect.reads.contains(&qref),
+            effect.reads.contains(&EffectTarget::Context(qref)),
             "lambda context read should be tracked"
         );
     }
@@ -3828,7 +3829,7 @@ mod tests {
         let effect = &result.outcomes[&caller_id].meta().effect;
         let qref = QualifiedRef::root(i.intern("x"));
         assert!(
-            effect.reads.contains(&qref),
+            effect.reads.contains(&EffectTarget::Context(qref)),
             "caller should inherit callee's context read in transitive effect"
         );
     }
@@ -3849,7 +3850,7 @@ mod tests {
         let effect = &result.outcomes[&caller_id].meta().effect;
         let qref = QualifiedRef::root(i.intern("x"));
         assert!(
-            effect.writes.contains(&qref),
+            effect.writes.contains(&EffectTarget::Context(qref)),
             "caller should inherit callee's context write in transitive effect"
         );
     }
@@ -3871,7 +3872,7 @@ mod tests {
         let effect = &result.outcomes[&top_id].meta().effect;
         let qref = QualifiedRef::root(i.intern("x"));
         assert!(
-            effect.reads.contains(&qref),
+            effect.reads.contains(&EffectTarget::Context(qref)),
             "top-level caller should inherit transitive effect through chain"
         );
     }

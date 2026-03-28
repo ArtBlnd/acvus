@@ -15,7 +15,7 @@ use acvus_utils::Interner;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::QualifiedRef;
-use crate::ty::{Effect, EffectSet, Origin, Ty};
+use crate::ty::{Effect, EffectSet, EffectTarget, Origin, TokenId, Ty};
 
 // ── Serializable Effect (mirrors ty::Effect without Astr) ────────────
 
@@ -29,10 +29,17 @@ pub enum SerEffect {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SerEffectSet {
-    pub reads: Vec<SerQualifiedRef>,
-    pub writes: Vec<SerQualifiedRef>,
+    pub reads: Vec<SerEffectTarget>,
+    pub writes: Vec<SerEffectTarget>,
     pub io: bool,
     pub self_modifying: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SerEffectTarget {
+    Context(SerQualifiedRef),
+    Token { id: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,15 +48,35 @@ pub struct SerQualifiedRef {
     pub name: String,
 }
 
+fn target_to_ser(t: &EffectTarget, interner: &Interner) -> SerEffectTarget {
+    match t {
+        EffectTarget::Context(qref) => SerEffectTarget::Context(qref_to_ser(qref, interner)),
+        EffectTarget::Token(tid) => SerEffectTarget::Token { id: tid.index() },
+    }
+}
+
+fn ser_to_target(t: &SerEffectTarget, interner: &Interner) -> EffectTarget {
+    match t {
+        SerEffectTarget::Context(qref) => EffectTarget::Context(ser_to_qref(qref, interner)),
+        SerEffectTarget::Token { id } => {
+            // TokenId deserialization: we need to re-create with the same index.
+            // Since TokenId is opaque with alloc(), we use a deterministic mapping.
+            // For now, allocate fresh — the caller must ensure round-trip consistency.
+            let _ = id;
+            EffectTarget::Token(TokenId::alloc())
+        }
+    }
+}
+
 impl Effect {
     pub fn to_ser(&self, interner: &Interner) -> SerEffect {
         match self {
             Effect::Resolved(set) => SerEffect::Resolved(SerEffectSet {
-                reads: set.reads.iter().map(|r| qref_to_ser(r, interner)).collect(),
+                reads: set.reads.iter().map(|r| target_to_ser(r, interner)).collect(),
                 writes: set
                     .writes
                     .iter()
-                    .map(|r| qref_to_ser(r, interner))
+                    .map(|r| target_to_ser(r, interner))
                     .collect(),
                 io: set.io,
                 self_modifying: set.self_modifying,
@@ -63,11 +90,11 @@ impl SerEffect {
     pub fn to_effect(&self, interner: &Interner) -> Effect {
         match self {
             SerEffect::Resolved(set) => Effect::Resolved(EffectSet {
-                reads: set.reads.iter().map(|r| ser_to_qref(r, interner)).collect(),
+                reads: set.reads.iter().map(|r| ser_to_target(r, interner)).collect(),
                 writes: set
                     .writes
                     .iter()
-                    .map(|r| ser_to_qref(r, interner))
+                    .map(|r| ser_to_target(r, interner))
                     .collect(),
                 io: set.io,
                 self_modifying: set.self_modifying,

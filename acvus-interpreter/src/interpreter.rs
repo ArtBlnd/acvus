@@ -297,6 +297,10 @@ impl Interpreter {
         };
         eff.reads
             .iter()
+            .filter_map(|t| match t {
+                acvus_mir::ty::EffectTarget::Context(qref) => Some(qref),
+                acvus_mir::ty::EffectTarget::Token(_) => None,
+            })
             .map(|qref| {
                 let key = self.resolve_context_key(qref)?;
                 self.overlay
@@ -346,7 +350,11 @@ impl Interpreter {
         else {
             return Ok(());
         };
-        for (qref, def_value) in eff.writes.iter().zip(defs) {
+        for (target, def_value) in eff.writes.iter().zip(defs) {
+            let qref = match target {
+                acvus_mir::ty::EffectTarget::Context(qref) => qref,
+                acvus_mir::ty::EffectTarget::Token(_) => continue,
+            };
             let key = self.resolve_context_key(qref)?;
             self.overlay.apply_field(&key, &[], def_value);
         }
