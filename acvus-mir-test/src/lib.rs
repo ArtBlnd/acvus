@@ -33,13 +33,13 @@ pub fn compile_to_ir_with(
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast = match acvus_ast::parse(interner, source) {
+        Ok(ast) => ast,
+        Err(e) => return Err(format!("parse error: {e:?}")),
+    };
     let mut functions = vec![Function {
         qref: test_qref,
-        kind: FnKind::Local(SourceCode {
-            name: test_qref,
-            source: interner.intern(source),
-            kind: SourceKind::Template,
-        }),
+        kind: FnKind::Local(ParsedAst::Template(ast)),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
@@ -115,14 +115,14 @@ pub fn compile_script_ir(
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast = match acvus_ast::parse_script(interner, source) {
+        Ok(ast) => ast,
+        Err(e) => return Err(format!("parse error: {e:?}")),
+    };
     let graph = CompilationGraph {
         functions: Freeze::new(vec![Function {
             qref: test_qref,
-            kind: FnKind::Local(SourceCode {
-                name: test_qref,
-                source: interner.intern(source),
-                kind: SourceKind::Script,
-            }),
+            kind: FnKind::Local(ParsedAst::Script(ast)),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,

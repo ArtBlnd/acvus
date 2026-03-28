@@ -147,11 +147,9 @@ mod tests {
                 let qref = QualifiedRef::root(interner.intern(name));
                 Function {
                     qref,
-                    kind: FnKind::Local(SourceCode {
-                        name: qref,
-                        source: interner.intern(source),
-                        kind: SourceKind::Script,
-                    }),
+                    kind: FnKind::Local(ParsedAst::Script(
+                        acvus_ast::parse_script(interner, source).expect("parse"),
+                    )),
                     constraint: FnConstraint {
                         signature: None,
                         output: Constraint::Inferred,

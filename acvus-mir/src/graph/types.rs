@@ -2,6 +2,8 @@
 //!
 //! Functions and Contexts are identified by `QualifiedRef` (namespace + name).
 //! No opaque IDs — the name IS the identity.
+//!
+//! MIR receives **parsed ASTs**, not source strings. Parsing happens outside.
 
 use acvus_utils::Freeze;
 
@@ -14,21 +16,6 @@ acvus_utils::declare_id!(pub ScopeId);
 
 // Re-export from acvus-utils.
 pub use acvus_utils::QualifiedRef;
-
-// ── Source ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    Script,
-    Template,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceCode {
-    pub name: QualifiedRef,
-    pub source: acvus_utils::Astr,
-    pub kind: SourceKind,
-}
 
 // ── Constraint ───────────────────────────────────────────────────────
 
@@ -71,16 +58,14 @@ pub struct FnConstraint {
 
 #[derive(Debug, Clone)]
 pub enum FnKind {
-    /// Has source code. Graph engine typechecks and compiles.
-    Local(SourceCode),
-    /// Has pre-parsed AST. Skips parsing — used by lowerer-generated code.
-    LocalAst(ParsedAst),
+    /// Has a parsed AST. MIR typechecks and compiles.
+    Local(ParsedAst),
     /// Black box. Runtime provides the value.
     /// Effect information lives in the function's type (`Ty::Fn { effect }`).
     Extern,
 }
 
-/// Pre-parsed AST for lowerer-generated functions.
+/// Parsed AST for local functions.
 #[derive(Debug, Clone)]
 pub enum ParsedAst {
     Script(acvus_ast::Script),

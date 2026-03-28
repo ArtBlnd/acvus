@@ -18,14 +18,11 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
+    let template = acvus_ast::parse(interner, source).expect("parse failed");
     let graph = CompilationGraph {
         functions: Freeze::new(vec![Function {
             qref: test_qref,
-            kind: FnKind::Local(SourceCode {
-                name: test_qref,
-                source: interner.intern(source),
-                kind: SourceKind::Template,
-            }),
+            kind: FnKind::Local(ParsedAst::Template(template)),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
@@ -53,7 +50,7 @@ fn lsp_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<Stri
     for (name, ty) in ctx {
         session.add_context(name, None, Constraint::Exact(ty.clone()));
     }
-    let doc = session.open("test", source, SourceKind::Template, None);
+    let doc = session.open("test", source, None);
     let mut errs: Vec<String> = session
         .diagnostics(doc)
         .into_iter()
@@ -101,7 +98,7 @@ fn incremental_update_fixes_error() {
     session.add_context("x", None, Constraint::Exact(Ty::Int));
 
     // Start with emit type error: Int not emittable in template.
-    let doc = session.open("test", "{{ @x }}", SourceKind::Template, None);
+    let doc = session.open("test", "{{ @x }}", None);
     let errs = session.diagnostics(doc);
     assert!(
         !errs.is_empty(),
@@ -125,7 +122,7 @@ fn incremental_update_introduces_error() {
     session.add_context("name", None, Constraint::Exact(Ty::String));
 
     // Start correct.
-    let doc = session.open("test", "hello {{ @name }}", SourceKind::Template, None);
+    let doc = session.open("test", "hello {{ @name }}", None);
     assert!(session.diagnostics(doc).is_empty());
 
     // Break it: unknown builtin.
@@ -144,7 +141,7 @@ fn namespace_context_isolation() {
 
 
     // Root function sees @global.
-    let doc_root = session.open("root_fn", "{{ @global }}", SourceKind::Template, None);
+    let doc_root = session.open("root_fn", "{{ @global }}", None);
     assert!(
         session.diagnostics(doc_root).is_empty(),
         "root should see @global"

@@ -12,8 +12,7 @@
 use acvus_ast::{AstId, Expr, Literal, ObjectExprField, RefKind, Script, Span};
 use acvus_mir::graph::{
     CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function,
-    ParsedAst, QualifiedRef, Signature, SourceCode,
-    SourceKind,
+    ParsedAst, QualifiedRef, Signature,
 };
 use acvus_mir::ty::{EffectConstraint, Ty};
 use acvus_utils::{Astr, Freeze, Interner};
@@ -231,9 +230,13 @@ fn bind(interner: &Interner, name: &str, expr: Expr) -> acvus_ast::Stmt {
 // ── Block lowering ─────────────────────────────────────────────────
 
 fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> Function {
-    let kind = match block.mode {
-        BlockMode::Script => SourceKind::Script,
-        BlockMode::Template => SourceKind::Template,
+    let parsed_ast = match block.mode {
+        BlockMode::Script => ParsedAst::Script(
+            acvus_ast::parse_script(interner, &block.source).expect("parse error"),
+        ),
+        BlockMode::Template => ParsedAst::Template(
+            acvus_ast::parse(interner, &block.source).expect("parse error"),
+        ),
     };
     let output = match block.mode {
         BlockMode::Template => Constraint::Exact(Ty::String),
@@ -243,11 +246,7 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> Function {
     let qref = QualifiedRef::qualified(ns_name, interner.intern(&block.name));
     Function {
         qref,
-        kind: FnKind::Local(SourceCode {
-            name: qref,
-            source: interner.intern(&block.source),
-            kind,
-        }),
+        kind: FnKind::Local(parsed_ast),
         constraint: FnConstraint {
             signature: Some(Signature { params: vec![] }),
             output,
@@ -336,7 +335,7 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
     let qref = QualifiedRef::qualified(ns_name, interner.intern(&llm.name));
     let function = Function {
         qref,
-        kind: FnKind::LocalAst(ParsedAst::Script(ast)),
+        kind: FnKind::Local(ParsedAst::Script(ast)),
         constraint: FnConstraint {
             signature: Some(Signature { params: vec![] }),
             output: Constraint::Inferred,
@@ -415,11 +414,9 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
             let qref = QualifiedRef::qualified(ns_name, interner.intern(name));
             let func = Function {
                 qref,
-                kind: FnKind::Local(SourceCode {
-                    name: qref,
-                    source: interner.intern(source),
-                    kind: SourceKind::Template,
-                }),
+                kind: FnKind::Local(ParsedAst::Template(
+                    acvus_ast::parse(interner, source).expect("parse error"),
+                )),
                 constraint: FnConstraint {
                     signature: Some(Signature { params: vec![] }),
                     output: Constraint::Exact(Ty::String),
@@ -450,11 +447,9 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
             let tpl_qref = QualifiedRef::qualified(ns_name, interner.intern(&tpl_name));
             let tpl_func = Function {
                 qref: tpl_qref,
-                kind: FnKind::Local(SourceCode {
-                    name: tpl_qref,
-                    source: interner.intern(template),
-                    kind: SourceKind::Template,
-                }),
+                kind: FnKind::Local(ParsedAst::Template(
+                    acvus_ast::parse(interner, template).expect("parse error"),
+                )),
                 constraint: FnConstraint {
                     signature: None, // param discovered by Infer via $bind
                     output: Constraint::Exact(Ty::String),
@@ -488,7 +483,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                         let history_qref = QualifiedRef::qualified(ns_name, interner.intern(&history_name));
                         functions.push(Function {
                             qref: history_qref,
-                            kind: FnKind::LocalAst(ParsedAst::Script(ast)),
+                            kind: FnKind::Local(ParsedAst::Script(ast)),
                             constraint: FnConstraint {
                                 signature: Some(Signature { params: vec![] }),
                                 output: Constraint::Inferred,
@@ -529,7 +524,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                         let live_qref = QualifiedRef::qualified(ns_name, interner.intern(&live_name));
                         functions.push(Function {
                             qref: live_qref,
-                            kind: FnKind::LocalAst(ParsedAst::Script(ast)),
+                            kind: FnKind::Local(ParsedAst::Script(ast)),
                             constraint: FnConstraint {
                                 signature: Some(Signature { params: vec![] }),
                                 output: Constraint::Inferred,
@@ -634,7 +629,7 @@ mod tests {
         assert_eq!(output.graph.functions.len(), 2);
         let llm_func = &output.graph.functions[1];
         assert_eq!(i.resolve(llm_func.qref.name), "chat");
-        assert!(matches!(llm_func.kind, FnKind::LocalAst(ParsedAst::Script(_))));
+        assert!(matches!(llm_func.kind, FnKind::Local(ParsedAst::Script(_))));
 
         // Ref-only messages → no span entries, no field errors
         assert!(output.span_map.entries.is_empty());
@@ -740,8 +735,8 @@ mod tests {
         assert_eq!(i.resolve(output.graph.functions[2].qref.name), "messages_live");
 
         // history and live are LocalAst
-        assert!(matches!(output.graph.functions[1].kind, FnKind::LocalAst(_)));
-        assert!(matches!(output.graph.functions[2].kind, FnKind::LocalAst(_)));
+        assert!(matches!(output.graph.functions[1].kind, FnKind::Local(ParsedAst::Script(_))));
+        assert!(matches!(output.graph.functions[2].kind, FnKind::Local(ParsedAst::Script(_))));
     }
 
     #[test]
@@ -883,7 +878,7 @@ mod tests {
 
         // Function still produced (with poison for bad content)
         assert_eq!(output.graph.functions.len(), 1);
-        assert!(matches!(output.graph.functions[0].kind, FnKind::LocalAst(_)));
+        assert!(matches!(output.graph.functions[0].kind, FnKind::Local(ParsedAst::Script(_))));
     }
 
     /// field_errors carry correct item_name.

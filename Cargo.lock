@@ -18,6 +18,7 @@ dependencies = [
 name = "acvus-ext"
 version = "0.1.0"
 dependencies = [
+ "acvus-ast",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
@@ -88,6 +89,7 @@ dependencies = [
 name = "acvus-lsp"
 version = "0.1.0"
 dependencies = [
+ "acvus-ast",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
@@ -121,6 +123,7 @@ dependencies = [
 name = "acvus-mir-cli"
 version = "0.1.0"
 dependencies = [
+ "acvus-ast",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",

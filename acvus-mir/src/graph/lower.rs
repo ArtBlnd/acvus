@@ -175,11 +175,9 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: fn_qref,
-                kind: FnKind::Local(SourceCode {
-                    name: fn_qref,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,

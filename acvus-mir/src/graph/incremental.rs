@@ -17,7 +17,6 @@ use super::types::*;
 // ── Cached entries ──────────────────────────────────────────────────
 
 struct ExtractEntry {
-    source_hash: u64,
     refs: FnRefs,
     parsed: ParsedSource,
 }
@@ -132,13 +131,12 @@ impl IncrementalGraph {
 
     // ── Source update (main incremental entry point) ────────────────
 
-    pub fn update_source(&mut self, qref: QualifiedRef, source: Astr) {
+    pub fn update_ast(&mut self, qref: QualifiedRef, ast: ParsedAst) {
         let Some(func) = self.functions.get_mut(&qref) else {
             return;
         };
         match &mut func.kind {
-            FnKind::Local(src) => src.source = source,
-            FnKind::LocalAst(_) => return, // AST functions are not updated via source string
+            FnKind::Local(existing) => *existing = ast,
             FnKind::Extern => return,
         }
 
@@ -282,19 +280,6 @@ impl IncrementalGraph {
             return;
         };
 
-        // Check source hash for early skip.
-        let source_hash = if let FnKind::Local(src) = &func.kind {
-            hash_astr(src.source)
-        } else {
-            return;
-        };
-
-        if let Some(entry) = self.extract_cache.get(&qref)
-            && entry.source_hash == source_hash
-        {
-            return; // No change.
-        }
-
         // Run extract.
         if let Some((refs, parsed)) = extract_one(&self.interner, func) {
             // Update call edges.
@@ -315,11 +300,7 @@ impl IncrementalGraph {
 
             self.extract_cache.insert(
                 qref,
-                ExtractEntry {
-                    source_hash,
-                    refs,
-                    parsed,
-                },
+                ExtractEntry { refs, parsed },
             );
         } else {
             // Parse failed — clear caches.
@@ -702,9 +683,3 @@ impl IncrementalGraph {
     }
 }
 
-fn hash_astr(s: Astr) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
-}

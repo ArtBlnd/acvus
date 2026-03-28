@@ -18,7 +18,7 @@ use crate::ty::Ty;
 fn make_graph(
     interner: &Interner,
     source: &str,
-    kind: SourceKind,
+    is_template: bool,
     ctx: &[(&str, Ty)],
 ) -> (CompilationGraph, QualifiedRef) {
     let contexts = ctx
@@ -29,14 +29,15 @@ fn make_graph(
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
+    let parsed = if is_template {
+        ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse"))
+    } else {
+        ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"))
+    };
     let mut functions = crate::builtins::standard_builtins(interner);
     functions.push(Function {
         qref: test_qref,
-        kind: FnKind::Local(SourceCode {
-            name: test_qref,
-            source: interner.intern(source),
-            kind,
-        }),
+        kind: FnKind::Local(parsed),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
@@ -75,7 +76,7 @@ pub fn compile_template(
     source: &str,
     ctx: &[(&str, Ty)],
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let (graph, target) = make_graph(interner, source, SourceKind::Template, ctx);
+    let (graph, target) = make_graph(interner, source, true, ctx);
     run_pipeline(interner, &graph, target)
 }
 
@@ -85,6 +86,6 @@ pub fn compile_script(
     source: &str,
     ctx: &[(&str, Ty)],
 ) -> Result<(MirModule, HintTable), Vec<MirError>> {
-    let (graph, target) = make_graph(interner, source, SourceKind::Script, ctx);
+    let (graph, target) = make_graph(interner, source, false, ctx);
     run_pipeline(interner, &graph, target)
 }

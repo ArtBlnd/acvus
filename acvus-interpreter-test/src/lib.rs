@@ -28,23 +28,23 @@ fn compile(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
-    compile_source(interner, source, context_types, SourceKind::Template)
+    let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
+    compile_source_with_externs(interner, ast, context_types, vec![])
 }
 
-fn compile_source(
+fn compile_script(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
-    kind: SourceKind,
 ) -> CompileResult {
-    compile_source_with_externs(interner, source, context_types, kind, vec![])
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
+    compile_source_with_externs(interner, ast, context_types, vec![])
 }
 
 pub fn compile_source_with_externs(
     interner: &Interner,
-    source: &str,
+    ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
-    kind: SourceKind,
     extern_registries: Vec<ExternRegistry>,
 ) -> CompileResult {
     let contexts: Vec<Context> = context_types
@@ -59,11 +59,7 @@ pub fn compile_source_with_externs(
     let mut functions = acvus_mir::builtins::standard_builtins(interner);
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(SourceCode {
-            name: entry_qref,
-            source: interner.intern(source),
-            kind,
-        }),
+        kind: FnKind::Local(ast),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
@@ -215,7 +211,7 @@ pub async fn run_script(
     let context_types: FxHashMap<Astr, Ty> =
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
-    let cr = compile_source(interner, source, &context_types, SourceKind::Script);
+    let cr = compile_script(interner, source, &context_types);
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;
@@ -252,11 +248,11 @@ pub async fn run_script_with_externs(
     let context_types: FxHashMap<Astr, Ty> =
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let cr = compile_source_with_externs(
         interner,
-        source,
+        ast,
         &context_types,
-        SourceKind::Script,
         extern_registries,
     );
 

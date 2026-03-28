@@ -172,7 +172,7 @@ fn build_call_graph(
     let name_to_id: FxHashMap<Astr, QualifiedRef> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_)))
         .map(|f| (f.qref.name, f.qref))
         .collect();
 
@@ -652,7 +652,7 @@ pub fn infer(
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_)))
         .map(|f| (f.qref, f))
         .collect();
 
@@ -662,7 +662,7 @@ pub fn infer(
     let local_ids: Vec<QualifiedRef> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_)))
         .map(|f| f.qref)
         .collect();
     let sccs = tarjan_scc(&local_ids, &call_graph);
@@ -1056,11 +1056,9 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Local(SourceCode {
-                    name: qref,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
@@ -1087,11 +1085,9 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Local(SourceCode {
-                    name: qref,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
@@ -1211,11 +1207,9 @@ mod tests {
             });
             functions.push(Function {
                 qref: fid,
-                kind: FnKind::Local(SourceCode {
-                    name: fid,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: sig,
                     output: Constraint::Inferred,
@@ -1629,11 +1623,9 @@ mod tests {
         let qref = QualifiedRef::root(interner.intern("test"));
         functions.push(Function {
             qref,
-            kind: FnKind::Local(SourceCode {
-                name: qref,
-                source: interner.intern(source),
-                kind: SourceKind::Script,
-            }),
+            kind: FnKind::Local(ParsedAst::Script(
+                acvus_ast::parse_script(interner, source).expect("parse"),
+            )),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
@@ -1655,7 +1647,7 @@ mod tests {
             .functions
             .iter()
             .rev()
-            .find(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
+            .find(|f| matches!(f.kind, FnKind::Local(_)))
             .expect("no local function")
             .qref
     }
@@ -1684,11 +1676,9 @@ mod tests {
             ids.push((aname, fid));
             functions.push(Function {
                 qref: fid,
-                kind: FnKind::Local(SourceCode {
-                    name: fid,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: sig.as_ref().map(|params| Signature {
                         params: params
@@ -1744,11 +1734,9 @@ mod tests {
             ids.push((aname, fid));
             functions.push(Function {
                 qref: fid,
-                kind: FnKind::Local(SourceCode {
-                    name: fid,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: sig.as_ref().map(|params| Signature {
                         params: params
@@ -1843,11 +1831,9 @@ mod tests {
         let fid = QualifiedRef::root(interner.intern("test"));
         functions.push(Function {
             qref: fid,
-            kind: FnKind::Local(SourceCode {
-                name: fid,
-                source: interner.intern(source),
-                kind: SourceKind::Script,
-            }),
+            kind: FnKind::Local(ParsedAst::Script(
+                acvus_ast::parse_script(interner, source).expect("parse"),
+            )),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
@@ -3564,11 +3550,9 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: test_qref,
-                kind: FnKind::Local(SourceCode {
-                    name: test_qref,
-                    source: i.intern("@x + 1"),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(&i, "@x + 1").expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,
@@ -3865,11 +3849,9 @@ mod tests {
         let reader_id = QualifiedRef::root(i.intern("reader"));
         functions.push(Function {
             qref: reader_id,
-            kind: FnKind::Local(SourceCode {
-                name: reader_id,
-                source: i.intern("@x"),
-                kind: SourceKind::Script,
-            }),
+            kind: FnKind::Local(ParsedAst::Script(
+                acvus_ast::parse_script(&i, "@x").expect("parse"),
+            )),
             constraint: FnConstraint {
                 signature: Some(Signature { params: vec![] }),
                 output: Constraint::Inferred,
@@ -3879,11 +3861,9 @@ mod tests {
         let caller_id = QualifiedRef::root(i.intern("caller"));
         functions.push(Function {
             qref: caller_id,
-            kind: FnKind::Local(SourceCode {
-                name: caller_id,
-                source: i.intern("reader()"),
-                kind: SourceKind::Script,
-            }),
+            kind: FnKind::Local(ParsedAst::Script(
+                acvus_ast::parse_script(&i, "reader()").expect("parse"),
+            )),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,

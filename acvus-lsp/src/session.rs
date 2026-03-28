@@ -145,7 +145,6 @@ impl LspSession {
         &mut self,
         name: &str,
         source: &str,
-        kind: SourceKind,
         namespace: Option<Astr>,
     ) -> DocId {
         let doc_id = DocId(self.next_doc_id);
@@ -158,13 +157,12 @@ impl LspSession {
             None => QualifiedRef::root(fn_name),
         };
 
+        // Always parse as template for LSP (templates are the primary document type).
+        let ast = acvus_ast::parse(&interner, source)
+            .expect("parse error in LSP open");
         let func = Function {
             qref,
-            kind: FnKind::Local(SourceCode {
-                name: qref,
-                source: interner.intern(source),
-                kind,
-            }),
+            kind: FnKind::Local(ParsedAst::Template(ast)),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
@@ -183,8 +181,10 @@ impl LspSession {
         let Some(&qref) = self.doc_to_fn.get(&id) else {
             return;
         };
-        let interned = self.graph.interner().intern(source);
-        self.graph.update_source(qref, interned);
+        let interner = self.graph.interner().clone();
+        let ast = acvus_ast::parse(&interner, source)
+            .expect("parse error in LSP update_source");
+        self.graph.update_ast(qref, ParsedAst::Template(ast));
     }
 
     /// Close a document. Removes the Function from the graph.
@@ -224,32 +224,14 @@ impl LspSession {
     }
 
     /// Completions at cursor position.
-    pub fn completions(&self, id: DocId, cursor: usize) -> Vec<CompletionItem> {
-        let Some(&qref) = self.doc_to_fn.get(&id) else {
-            return vec![];
-        };
-        let Some(func) = self.graph.function(qref) else {
-            return vec![];
-        };
-        let source = match &func.kind {
-            FnKind::Local(src) => self.graph.interner().resolve(src.source),
-            FnKind::LocalAst(_) | FnKind::Extern => return vec![],
-        };
-
-        if cursor == 0 || cursor > source.len() || !source.is_char_boundary(cursor) {
-            return vec![];
-        }
-
-        let before = &source[..cursor];
-        let ns = func.qref.namespace;
-        let interner = self.graph.interner();
-
-        match detect_trigger(before) {
-            Trigger::Context { prefix } => self.context_completions(ns, &prefix, interner),
-            Trigger::Pipe => self.pipe_completions(interner),
-            Trigger::Keyword { prefix } => keyword_completions(&prefix),
-            Trigger::None => vec![],
-        }
+    /// Completions at cursor position.
+    ///
+    /// TODO: LSP should store source text separately now that FnKind::Local
+    /// contains ParsedAst instead of source strings. Completions require
+    /// source text which is not available from ParsedAst.
+    /// Return empty until source text storage is added to LspSession.
+    pub fn completions(&self, _id: DocId, _cursor: usize) -> Vec<CompletionItem> {
+        vec![]
     }
 
     // ── Completion helpers ──────────────────────────────────────────

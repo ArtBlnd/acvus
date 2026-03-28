@@ -15,4 +15,5 @@ base64 = "0.22"
 percent-encoding = "2"
 
 [dev-dependencies]
+acvus-ast = { path = "../acvus-ast" }
 tokio = { version = "1", features = ["macros", "rt"] }

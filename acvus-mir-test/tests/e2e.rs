@@ -16,8 +16,8 @@ fn compile_analysis(
 ) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), Vec<acvus_mir::error::MirError>>
 {
     use acvus_mir::graph::{
-        CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function, QualifiedRef,
-        SourceCode, SourceKind,
+        CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function, ParsedAst,
+        QualifiedRef,
     };
     use acvus_mir::graph::{extract, lower as graph_lower};
     use acvus_mir::ty::Param;
@@ -46,14 +46,11 @@ fn compile_analysis(
     }
 
     let test_qref = QualifiedRef::root(interner.intern("test"));
+    let template = acvus_ast::parse(interner, source).expect("parse failed");
     let graph = CompilationGraph {
         functions: Freeze::new(vec![Function {
             qref: test_qref,
-            kind: FnKind::Local(SourceCode {
-                name: test_qref,
-                source: interner.intern(source),
-                kind: SourceKind::Template,
-            }),
+            kind: FnKind::Local(ParsedAst::Template(template)),
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,

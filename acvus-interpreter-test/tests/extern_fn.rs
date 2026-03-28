@@ -321,11 +321,11 @@ fn ir_function_call_has_context_bindings() {
     let context_types: FxHashMap<acvus_utils::Astr, Ty> =
         FxHashMap::from_iter([(i.intern("counter"), Ty::Int)]);
 
+    let source = "bump(); @counter";
     let cr = compile_source_with_externs(
         &i,
-        "bump(); @counter",
+        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error")),
         &context_types,
-        acvus_mir::graph::SourceKind::Script,
         vec![registry],
     );
 
@@ -403,11 +403,11 @@ fn ir_pure_function_call_no_context_bindings() {
 
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = FxHashMap::default();
 
+    let source = "double(21)";
     let cr = compile_source_with_externs(
         &i,
-        "double(21)",
+        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error")),
         &context_types,
-        acvus_mir::graph::SourceKind::Script,
         vec![registry],
     );
 

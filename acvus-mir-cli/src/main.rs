@@ -147,21 +147,29 @@ fn main() {
         });
     }
 
-    let source_kind = if is_script {
-        SourceKind::Script
+    let parsed_ast = if is_script {
+        ParsedAst::Script(
+            acvus_ast::parse_script(&interner, &source)
+                .unwrap_or_else(|e| {
+                    eprintln!("error: parse failed: {e:?}");
+                    process::exit(1);
+                }),
+        )
     } else {
-        SourceKind::Template
+        ParsedAst::Template(
+            acvus_ast::parse(&interner, &source)
+                .unwrap_or_else(|e| {
+                    eprintln!("error: parse failed: {e:?}");
+                    process::exit(1);
+                }),
+        )
     };
 
     let fn_qref = QualifiedRef::root(interner.intern("main"));
     let mut functions = acvus_mir::builtins::standard_builtins(&interner);
     functions.push(Function {
         qref: fn_qref,
-        kind: FnKind::Local(SourceCode {
-            name: fn_qref,
-            source: interner.intern(&source),
-            kind: source_kind,
-        }),
+        kind: FnKind::Local(parsed_ast),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,

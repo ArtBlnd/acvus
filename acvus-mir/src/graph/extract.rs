@@ -44,37 +44,20 @@ pub enum ParsedSource {
 // ── Per-function extraction ──────────────────────────────────────────
 
 /// Extract information from a single local function.
-/// Returns None if the function is not Local/LocalAst or fails to parse.
+/// Returns None if the function is Extern.
 pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, ParsedSource)> {
-    // Step 1: Parse AST and extract context names.
+    // Step 1: Extract context names from the AST.
     let (context_names, parsed_source) = match &func.kind {
-        FnKind::Local(source) => {
-            let source_str = interner.resolve(source.source);
-            match source.kind {
-                SourceKind::Script => {
-                    let script = acvus_ast::parse_script(interner, source_str).ok()?;
-                    let names = acvus_ast::extract_script_context_refs(&script);
-                    (names, ParsedSource::Script(script))
-                }
-                SourceKind::Template => {
-                    let template = acvus_ast::parse(interner, source_str).ok()?;
-                    let names = acvus_ast::extract_template_context_refs(&template);
-                    (names, ParsedSource::Template(template))
-                }
+        FnKind::Local(ast) => match ast {
+            ParsedAst::Script(script) => {
+                let names = acvus_ast::extract_script_context_refs(script);
+                (names, ParsedSource::Script(script.clone()))
             }
-        }
-        FnKind::LocalAst(ast) => {
-            match ast {
-                ParsedAst::Script(script) => {
-                    let names = acvus_ast::extract_script_context_refs(script);
-                    (names, ParsedSource::Script(script.clone()))
-                }
-                ParsedAst::Template(template) => {
-                    let names = acvus_ast::extract_template_context_refs(template);
-                    (names, ParsedSource::Template(template.clone()))
-                }
+            ParsedAst::Template(template) => {
+                let names = acvus_ast::extract_template_context_refs(template);
+                (names, ParsedSource::Template(template.clone()))
             }
-        }
+        },
         FnKind::Extern => return None,
     };
 
@@ -241,11 +224,9 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: fn_qref,
-                kind: FnKind::Local(SourceCode {
-                    name: fn_qref,
-                    source: interner.intern(source),
-                    kind: SourceKind::Script,
-                }),
+                kind: FnKind::Local(ParsedAst::Script(
+                    acvus_ast::parse_script(interner, source).expect("parse"),
+                )),
                 constraint: FnConstraint {
                     signature: None,
                     output: Constraint::Inferred,

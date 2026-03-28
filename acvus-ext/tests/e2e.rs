@@ -58,11 +58,9 @@ async fn run_ext_with_registry(
     }
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(SourceCode {
-            name: entry_qref,
-            source: interner.intern(source),
-            kind: SourceKind::Script,
-        }),
+        kind: FnKind::Local(ParsedAst::Script(
+            acvus_ast::parse_script(interner, source).expect("parse"),
+        )),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
@@ -478,13 +476,10 @@ async fn extern_cast_auto_coercion() {
     for reg in &registered {
         functions.extend(reg.functions.iter().cloned());
     }
+    let ast = acvus_ast::parse_script(&i, "double(make_num())").expect("parse error");
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(SourceCode {
-            name: entry_qref,
-            source: i.intern("double(make_num())"),
-            kind: SourceKind::Script,
-        }),
+        kind: FnKind::Local(ParsedAst::Script(ast)),
         constraint: FnConstraint {
             signature: None,
             output: Constraint::Inferred,
