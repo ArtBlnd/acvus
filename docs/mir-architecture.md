@@ -81,7 +81,7 @@ The split gives us the best of both: contexts (the common case in templates/scri
 
 ---
 
-## Automatic IO Parallelization: The 2-Month Bet
+## Automatic IO Parallelization
 
 This is the centerpiece optimization. The insight: in template/script workloads, the bottleneck is almost always IO (API calls, database queries), not computation. If we can automatically parallelize independent IO operations, users get massive speedups without changing their code.
 
