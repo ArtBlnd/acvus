@@ -106,17 +106,16 @@ impl ContextOverlay {
                 ContextWrite::Set { key, value } => {
                     self.cache.insert(key.clone(), value.clone());
                 }
-                ContextWrite::FieldPatch {
-                    key,
-                    path,
-                    value,
-                } => {
-                    let existing = self.cache.get(key.as_str())
+                ContextWrite::FieldPatch { key, path, value } => {
+                    let existing = self
+                        .cache
+                        .get(key.as_str())
                         .or_else(|| self.base.get(key))
                         .cloned()
                         .unwrap_or(Value::Unit);
                     let path_strs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
-                    let updated = deep_set_field(&self.interner, existing, &path_strs, value.clone());
+                    let updated =
+                        deep_set_field(&self.interner, existing, &path_strs, value.clone());
                     self.cache.insert(key.clone(), updated);
                 }
                 ContextWrite::DequeDiff { key, .. } => {
@@ -146,7 +145,9 @@ impl EntryMut for ContextOverlay {
             });
         } else {
             // Deep-set: read existing object, update nested field, write back.
-            let existing = self.cache.get(key)
+            let existing = self
+                .cache
+                .get(key)
                 .or_else(|| self.base.get(key))
                 .cloned()
                 .unwrap_or(Value::Unit);

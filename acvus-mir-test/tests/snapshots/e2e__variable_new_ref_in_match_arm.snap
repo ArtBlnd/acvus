@@ -25,7 +25,7 @@ expression: ir
     23 │   r9 = r8 + r7
     24 │   return r9
 
-    ; r0 (@role) : <error>
+    ; r0 (@role) : String
     ; r1 (v1) : String
     ; r2 (v5) : String
     ; r3 (v8) : Bool

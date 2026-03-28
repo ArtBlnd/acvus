@@ -100,7 +100,9 @@ pub fn compile_source_with_externs(
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
-        let errs: Vec<String> = result.errors.iter()
+        let errs: Vec<String> = result
+            .errors
+            .iter()
             .flat_map(|e| e.errors.iter())
             .map(|e| format!("{}", e.display(interner)))
             .collect();
@@ -108,24 +110,31 @@ pub fn compile_source_with_externs(
     }
 
     // Collect all modules as Executable::Module.
-    let modules: FxHashMap<FunctionId, Executable> = result.modules
+    let modules: FxHashMap<FunctionId, Executable> = result
+        .modules
         .into_iter()
         .map(|(id, (module, _hints))| (id, Executable::Module(module)))
         .collect();
 
     // Build context id → name mapping.
-    let context_names: FxHashMap<QualifiedRef, Astr> = graph.contexts
+    let context_names: FxHashMap<QualifiedRef, Astr> = graph
+        .contexts
         .iter()
         .map(|ctx| (ctx.qualified_ref(), ctx.name))
         .collect();
 
     // Build builtin name → id mapping from the same graph functions.
-    let builtin_ids: FxHashMap<Astr, FunctionId> = graph.functions
-        .iter()
-        .map(|f| (f.name, f.id))
-        .collect();
+    let builtin_ids: FxHashMap<Astr, FunctionId> =
+        graph.functions.iter().map(|f| (f.name, f.id)).collect();
 
-    CompileResult { entry_id, modules, context_names, builtin_ids, fn_types, extern_executables }
+    CompileResult {
+        entry_id,
+        modules,
+        context_names,
+        builtin_ids,
+        fn_types,
+        extern_executables,
+    }
 }
 
 /// Build builtin id mapping from the graph functions.
@@ -143,15 +152,9 @@ fn builtin_id_map(
 }
 
 /// Parse + compile + execute a template, returning the output string.
-pub async fn run(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, Value>,
-) -> String {
-    let context_types: FxHashMap<Astr, Ty> = context
-        .iter()
-        .map(|(k, v)| (*k, infer_ty(v)))
-        .collect();
+pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Value>) -> String {
+    let context_types: FxHashMap<Astr, Ty> =
+        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let cr = compile(interner, source, &context_types);
 
@@ -213,10 +216,8 @@ pub async fn run_script(
     source: &str,
     context: FxHashMap<Astr, Value>,
 ) -> Value {
-    let context_types: FxHashMap<Astr, Ty> = context
-        .iter()
-        .map(|(k, v)| (*k, infer_ty(v)))
-        .collect();
+    let context_types: FxHashMap<Astr, Ty> =
+        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let cr = compile_source(interner, source, &context_types, SourceKind::Script);
 
@@ -252,10 +253,8 @@ pub async fn run_script_with_externs(
     context: FxHashMap<Astr, Value>,
     extern_registries: Vec<ExternRegistry>,
 ) -> ExecResult {
-    let context_types: FxHashMap<Astr, Ty> = context
-        .iter()
-        .map(|(k, v)| (*k, infer_ty(v)))
-        .collect();
+    let context_types: FxHashMap<Astr, Ty> =
+        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let cr = compile_source_with_externs(
         interner,
@@ -265,8 +264,7 @@ pub async fn run_script_with_externs(
         extern_registries,
     );
 
-    let builtin_handlers =
-        acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
+    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;
     for (id, handler) in builtin_handlers {
         functions.insert(id, Executable::Builtin(handler));
@@ -295,8 +293,11 @@ pub async fn run_script_with_externs(
 pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
     match v {
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() { Value::Int(i) }
-            else { Value::Float(n.as_f64().unwrap()) }
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap())
+            }
         }
         serde_json::Value::String(s) => Value::string(s.as_str()),
         serde_json::Value::Bool(b) => Value::Bool(*b),
@@ -304,11 +305,12 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
         serde_json::Value::Array(items) => {
             Value::list(items.iter().map(|v| value_from_json(interner, v)).collect())
         }
-        serde_json::Value::Object(fields) => {
-            Value::object(fields.iter()
+        serde_json::Value::Object(fields) => Value::object(
+            fields
+                .iter()
                 .map(|(k, v)| (interner.intern(k), value_from_json(interner, v)))
-                .collect())
-        }
+                .collect(),
+        ),
     }
 }
 
@@ -326,9 +328,7 @@ fn infer_ty(v: &Value) -> Ty {
             Ty::List(Box::new(elem))
         }
         Value::Object(fields) => {
-            let field_types = fields.iter()
-                .map(|(k, v)| (*k, infer_ty(v)))
-                .collect();
+            let field_types = fields.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
             Ty::Object(field_types)
         }
         _ => Ty::Unit,
@@ -374,11 +374,10 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
         .ok_or_else(|| format!("{}: missing 'expected'", path.display()))?;
 
     let context: FxHashMap<Astr, Value> = match fixture.get("context") {
-        Some(serde_json::Value::Object(fields)) => {
-            fields.iter()
-                .map(|(k, v)| (interner.intern(k), value_from_json(&interner, v)))
-                .collect()
-        }
+        Some(serde_json::Value::Object(fields)) => fields
+            .iter()
+            .map(|(k, v)| (interner.intern(k), value_from_json(&interner, v)))
+            .collect(),
         Some(_) => return Err(format!("{}: 'context' must be an object", path.display())),
         None => FxHashMap::default(),
     };

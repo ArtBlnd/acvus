@@ -59,9 +59,7 @@ impl ValidationError {
                 )
             }
             ValidationErrorKind::NotMaterializable { ty } => {
-                format!(
-                    "cannot store non-materializable type to context: {ty:?}"
-                )
+                format!("cannot store non-materializable type to context: {ty:?}")
             }
         };
 

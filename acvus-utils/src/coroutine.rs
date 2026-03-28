@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use Future;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -46,9 +46,12 @@ impl<V, K: Send + 'static> YieldHandle<V, K> {
 
     /// Request a context value. Panics if not found.
     pub async fn request_context(&self, key: K) -> V
-    where K: Copy + Send + Unpin, V: Unpin,
+    where
+        K: Copy + Send + Unpin,
+        V: Unpin,
     {
-        self.try_request_context(key).await
+        self.try_request_context(key)
+            .await
             .unwrap_or_else(|| panic!("context not found for key"))
     }
 

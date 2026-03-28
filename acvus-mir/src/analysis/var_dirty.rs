@@ -352,8 +352,8 @@ mod tests {
                 dst: v0,
                 callee: Callee::Direct(FunctionId::alloc()),
                 args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
             }),
             // VarStore("user", v0)
             inst(InstKind::VarStore {
@@ -468,8 +468,8 @@ mod tests {
                 dst: v2,
                 callee: Callee::Direct(FunctionId::alloc()),
                 args: vec![v1],
-                    context_uses: vec![],
-                    context_defs: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
             }),
             inst(InstKind::MakeObject {
                 dst: v3,

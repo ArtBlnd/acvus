@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{
-    ContextOverlay, Executable, Interpreter, InterpreterContext,
-    SequentialExecutor, Value,
+    ContextOverlay, Executable, Interpreter, InterpreterContext, SequentialExecutor, Value,
 };
-use acvus_mir::graph::{QualifiedRef, FunctionId};
+use acvus_mir::graph::{FunctionId, QualifiedRef};
 use acvus_mir::ir::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Interner, LocalFactory};
@@ -19,7 +18,10 @@ fn alloc_n(factory: &mut LocalFactory<ValueId>, n: usize) -> Vec<ValueId> {
 }
 
 fn inst(kind: InstKind) -> Inst {
-    Inst { span: acvus_ast::Span::ZERO, kind }
+    Inst {
+        span: acvus_ast::Span::ZERO,
+        kind,
+    }
 }
 
 fn empty_overlay() -> ContextOverlay {
@@ -51,8 +53,16 @@ async fn spawn_eval_basic() {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=param, v1=const(1), v2=result
         let insts = vec![
-            inst(InstKind::Const { dst: vids[1], value: acvus_ast::Literal::Int(1) }),
-            inst(InstKind::BinOp { dst: vids[2], op: acvus_ast::BinOp::Add, left: vids[0], right: vids[1] }),
+            inst(InstKind::Const {
+                dst: vids[1],
+                value: acvus_ast::Literal::Int(1),
+            }),
+            inst(InstKind::BinOp {
+                dst: vids[2],
+                op: acvus_ast::BinOp::Add,
+                left: vids[0],
+                right: vids[1],
+            }),
             inst(InstKind::Return(vids[2])),
         ];
         MirModule {
@@ -74,7 +84,10 @@ async fn spawn_eval_basic() {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=const(41), v1=handle, v2=result
         let insts = vec![
-            inst(InstKind::Const { dst: vids[0], value: acvus_ast::Literal::Int(41) }),
+            inst(InstKind::Const {
+                dst: vids[0],
+                value: acvus_ast::Literal::Int(41),
+            }),
             inst(InstKind::Spawn {
                 dst: vids[1],
                 callee: Callee::Direct(callee_id),
@@ -131,10 +144,22 @@ async fn spawn_eval_context_defs() {
         let vids = alloc_n(&mut f, 3);
         // v0=project(ctx), v1=const(99), v2=const(0) for return
         let insts = vec![
-            inst(InstKind::ContextProject { dst: vids[0], ctx: ctx_id }),
-            inst(InstKind::Const { dst: vids[1], value: acvus_ast::Literal::Int(99) }),
-            inst(InstKind::ContextStore { dst: vids[0], value: vids[1] }),
-            inst(InstKind::Const { dst: vids[2], value: acvus_ast::Literal::Int(0) }),
+            inst(InstKind::ContextProject {
+                dst: vids[0],
+                ctx: ctx_id,
+            }),
+            inst(InstKind::Const {
+                dst: vids[1],
+                value: acvus_ast::Literal::Int(99),
+            }),
+            inst(InstKind::ContextStore {
+                dst: vids[0],
+                value: vids[1],
+            }),
+            inst(InstKind::Const {
+                dst: vids[2],
+                value: acvus_ast::Literal::Int(0),
+            }),
             inst(InstKind::Return(vids[2])),
         ];
         MirModule {
@@ -171,7 +196,10 @@ async fn spawn_eval_context_defs() {
             }),
             // Now vids[2] is the new SSA name for ctx_id.
             // ContextLoad reads from overlay using projection_map[vids[2]] → ctx_id.
-            inst(InstKind::ContextLoad { dst: vids[3], src: vids[2] }),
+            inst(InstKind::ContextLoad {
+                dst: vids[3],
+                src: vids[2],
+            }),
             inst(InstKind::Return(vids[3])),
         ];
         MirModule {
@@ -195,8 +223,7 @@ async fn spawn_eval_context_defs() {
     let mut context_names = FxHashMap::default();
     context_names.insert(ctx_id, ctx_name);
 
-    let shared = make_context(&interner, functions)
-        .with_context_names(context_names);
+    let shared = make_context(&interner, functions).with_context_names(context_names);
     let overlay = empty_overlay();
     let mut interp = Interpreter::new(shared, entry_id, overlay);
     let result = interp.execute().await.expect("execution failed");
@@ -218,7 +245,12 @@ async fn spawn_eval_multi_args() {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=param0, v1=param1, v2=result
         let insts = vec![
-            inst(InstKind::BinOp { dst: vids[2], op: acvus_ast::BinOp::Add, left: vids[0], right: vids[1] }),
+            inst(InstKind::BinOp {
+                dst: vids[2],
+                op: acvus_ast::BinOp::Add,
+                left: vids[0],
+                right: vids[1],
+            }),
             inst(InstKind::Return(vids[2])),
         ];
         MirModule {
@@ -240,8 +272,14 @@ async fn spawn_eval_multi_args() {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 4); // v0=10, v1=32, v2=handle, v3=result
         let insts = vec![
-            inst(InstKind::Const { dst: vids[0], value: acvus_ast::Literal::Int(10) }),
-            inst(InstKind::Const { dst: vids[1], value: acvus_ast::Literal::Int(32) }),
+            inst(InstKind::Const {
+                dst: vids[0],
+                value: acvus_ast::Literal::Int(10),
+            }),
+            inst(InstKind::Const {
+                dst: vids[1],
+                value: acvus_ast::Literal::Int(32),
+            }),
             inst(InstKind::Spawn {
                 dst: vids[2],
                 callee: Callee::Direct(callee_id),

@@ -1,7 +1,7 @@
 use acvus_orchestration::{
-    AnthropicSpec, ExpressionSpec, Execution, GoogleAISpec, GoogleAICacheSpec,
-    MaxTokens, MessageSpec, NodeKind, FnParam, NodeSpec, OpenAICompatibleSpec,
-    Persistency, PlainSpec, Strategy, ThinkingConfig, TokenBudget, ToolBinding, ToolParamInfo,
+    AnthropicSpec, Execution, ExpressionSpec, FnParam, GoogleAICacheSpec, GoogleAISpec, MaxTokens,
+    MessageSpec, NodeKind, NodeSpec, OpenAICompatibleSpec, Persistency, PlainSpec, Strategy,
+    ThinkingConfig, TokenBudget, ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
 use rust_decimal::Decimal;
@@ -192,8 +192,12 @@ pub(crate) struct TokenBudgetConfig {
 pub(crate) enum PersistencyConfig {
     #[default]
     Ephemeral,
-    Sequence { bind: String },
-    Patch { bind: String },
+    Sequence {
+        bind: String,
+    },
+    Patch {
+        bind: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -228,7 +232,8 @@ pub(crate) fn convert_node(
             messages,
             tools,
         } => {
-            let provider_cfg = providers.get(provider)
+            let provider_cfg = providers
+                .get(provider)
                 .ok_or_else(|| format!("node '{}': unknown provider '{provider}'", cfg.name))?;
             let endpoint = provider_cfg.endpoint.clone();
             let api_key = provider_cfg.api_key.clone();
@@ -267,10 +272,19 @@ pub(crate) fn convert_node(
                     name: t.name.clone(),
                     description: t.description.clone(),
                     node: t.node.clone(),
-                    params: t.params.iter().map(|p| (p.name.clone(), ToolParamInfo {
-                        ty: p.ty.clone(),
-                        description: p.description.clone(),
-                    })).collect(),
+                    params: t
+                        .params
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.name.clone(),
+                                ToolParamInfo {
+                                    ty: p.ty.clone(),
+                                    description: p.description.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
                 })
                 .collect();
 
@@ -340,27 +354,34 @@ pub(crate) fn convert_node(
         }),
         NodeKindConfig::Iterator { sources, unordered } => {
             NodeKind::Iterator(acvus_orchestration::IteratorSpec {
-                sources: sources.iter().map(|s| {
-                    acvus_orchestration::IteratorSource {
+                sources: sources
+                    .iter()
+                    .map(|s| acvus_orchestration::IteratorSource {
                         name: s.name.clone(),
                         expr: interner.intern(&s.expr),
-                        entries: s.entries.iter().map(|e| {
-                            acvus_orchestration::IteratorEntry {
+                        entries: s
+                            .entries
+                            .iter()
+                            .map(|e| acvus_orchestration::IteratorEntry {
                                 condition: e.condition.as_ref().map(|c| interner.intern(c)),
                                 transform: match &e.transform {
                                     TransformConfig::Template { source } => {
-                                        acvus_orchestration::SourceTransform::Template(interner.intern(source))
+                                        acvus_orchestration::SourceTransform::Template(
+                                            interner.intern(source),
+                                        )
                                     }
                                     TransformConfig::Script { source } => {
-                                        acvus_orchestration::SourceTransform::Script(interner.intern(source))
+                                        acvus_orchestration::SourceTransform::Script(
+                                            interner.intern(source),
+                                        )
                                     }
                                 },
-                            }
-                        }).collect(),
+                            })
+                            .collect(),
                         start: s.start.as_ref().map(|v| interner.intern(v)),
                         end: s.end.as_ref().map(|v| interner.intern(v)),
-                    }
-                }).collect(),
+                    })
+                    .collect(),
                 unordered: *unordered,
             })
         }
@@ -373,8 +394,12 @@ pub(crate) fn convert_node(
 
     let persistency = match &cfg.strategy.persistency {
         PersistencyConfig::Ephemeral => Persistency::Ephemeral,
-        PersistencyConfig::Sequence { bind } => Persistency::Sequence { bind: interner.intern(bind) },
-        PersistencyConfig::Patch { bind } => Persistency::Patch { bind: interner.intern(bind) },
+        PersistencyConfig::Sequence { bind } => Persistency::Sequence {
+            bind: interner.intern(bind),
+        },
+        PersistencyConfig::Patch { bind } => Persistency::Patch {
+            bind: interner.intern(bind),
+        },
     };
 
     Ok(NodeSpec {
@@ -383,9 +408,17 @@ pub(crate) fn convert_node(
         strategy: Strategy {
             execution,
             persistency,
-            initial_value: cfg.strategy.initial_value.as_ref().map(|s| interner.intern(s)),
+            initial_value: cfg
+                .strategy
+                .initial_value
+                .as_ref()
+                .map(|s| interner.intern(s)),
             retry: cfg.strategy.retry,
-            assert: cfg.strategy.assert_script.as_ref().map(|s| interner.intern(s)),
+            assert: cfg
+                .strategy
+                .assert_script
+                .as_ref()
+                .map(|s| interner.intern(s)),
         },
         is_function: cfg.is_function,
         fn_params: cfg

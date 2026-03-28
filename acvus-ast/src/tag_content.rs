@@ -57,6 +57,7 @@ pub fn build_list(
         }
     }
     Ok(Expr::List {
+        id: AstId::alloc(),
         head,
         rest,
         tail,
@@ -69,34 +70,39 @@ pub fn build_list(
 /// Group → multiple params, Paren(Ident) → 1 param.
 pub fn expr_to_lambda(interner: &Interner, params_expr: Expr, body: Expr, span: Span) -> Expr {
     let params = match params_expr {
-        Expr::Ident { name, span, .. } => vec![LambdaParam { name, span }],
+        Expr::Ident { name, span, .. } => vec![LambdaParam { id: AstId::alloc(), name, span }],
         Expr::Tuple { elements, .. } => elements
             .into_iter()
             .map(|elem| match elem {
-                TupleElem::Expr(Expr::Ident { name, span, .. }) => LambdaParam { name, span },
+                TupleElem::Expr(Expr::Ident { name, span, .. }) => LambdaParam { id: AstId::alloc(), name, span },
                 TupleElem::Expr(other) => LambdaParam {
+                    id: AstId::alloc(),
                     name: interner.intern(&format!("<invalid:{:?}>", other.span())),
                     span: other.span(),
                 },
                 TupleElem::Wildcard(span) => LambdaParam {
+                    id: AstId::alloc(),
                     name: interner.intern("<invalid:wildcard>"),
                     span,
                 },
             })
             .collect(),
         Expr::Paren { inner, .. } => match *inner {
-            Expr::Ident { name, span, .. } => vec![LambdaParam { name, span }],
+            Expr::Ident { name, span, .. } => vec![LambdaParam { id: AstId::alloc(), name, span }],
             other => vec![LambdaParam {
+                id: AstId::alloc(),
                 name: interner.intern(&format!("<invalid:{:?}>", other.span())),
                 span: other.span(),
             }],
         },
         other => vec![LambdaParam {
+            id: AstId::alloc(),
             name: interner.intern(&format!("<invalid:{:?}>", other.span())),
             span: other.span(),
         }],
     };
     Expr::Lambda {
+        id: AstId::alloc(),
         params,
         body: Box::new(body),
         span,

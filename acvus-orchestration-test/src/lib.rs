@@ -3,10 +3,9 @@ use std::sync::Arc;
 use acvus_interpreter::{RuntimeError, TypedValue, ValueKind};
 use acvus_mir::graph::Id;
 use acvus_orchestration::{
+    EntryMut, Execution, ExpressionSpec, Fetch, HttpRequest, Journal, NodeGraph, NodeKind,
+    NodeSpec, Persistency, ResolveError, ResolveState, Resolved, Resolver, Strategy, TreeJournal,
     build_dag, compile_nodes, compute_external_context_env,
-    EntryMut, Execution, ExpressionSpec,
-    Fetch, HttpRequest, Journal, NodeGraph, NodeKind, NodeSpec, Persistency,
-    ResolveError, ResolveState, Resolved, Resolver, Strategy, TreeJournal,
 };
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -32,7 +31,10 @@ pub struct NodeBuilder {
 
 impl NodeBuilder {
     pub fn new(interner: Interner) -> Self {
-        Self { interner, specs: Vec::new() }
+        Self {
+            interner,
+            specs: Vec::new(),
+        }
     }
 
     /// Add an Expression node (ephemeral, no persist).
@@ -172,7 +174,8 @@ impl NodeBuilder {
             env.registry.system().clone(),
             FxHashMap::default(), // scoped
             env.registry.user().clone(),
-        ).expect("registry construction should not conflict");
+        )
+        .expect("registry construction should not conflict");
 
         // Compile nodes (lower + compile + assemble in one step).
         let fetch = Arc::new(DummyFetch);
@@ -218,7 +221,11 @@ impl BuiltGraph {
             graph: &self.graph,
             resolver: &|_name: Astr| async { Resolved::Once(TypedValue::unit()) },
             extern_handler: &|_name: Astr, _args: Vec<TypedValue>| async {
-                Err(RuntimeError::unexpected_type("extern", &[], ValueKind::Unit))
+                Err(RuntimeError::unexpected_type(
+                    "extern",
+                    &[],
+                    ValueKind::Unit,
+                ))
             },
             interner: &self.interner,
             rdeps: &[],
@@ -230,7 +237,9 @@ impl BuiltGraph {
             turn_context: FxHashMap::default(),
         };
 
-        resolver.resolve_node(node_id, &mut state, FxHashMap::default(), false).await?;
+        resolver
+            .resolve_node(node_id, &mut state, FxHashMap::default(), false)
+            .await?;
 
         // Return the value from turn_context or storage.
         if let Some(v) = state.turn_context.get(&name_astr) {
@@ -261,7 +270,11 @@ impl BuiltGraph {
             graph: &self.graph,
             resolver: &|_name: Astr| async { Resolved::Once(TypedValue::unit()) },
             extern_handler: &|_name: Astr, _args: Vec<TypedValue>| async {
-                Err(RuntimeError::unexpected_type("extern", &[], ValueKind::Unit))
+                Err(RuntimeError::unexpected_type(
+                    "extern",
+                    &[],
+                    ValueKind::Unit,
+                ))
             },
             interner: &self.interner,
             rdeps: &[],
@@ -275,9 +288,11 @@ impl BuiltGraph {
             let mut state = ResolveState {
                 entry,
                 turn_context: FxHashMap::default(),
-                };
+            };
 
-            resolver.resolve_node(node_id, &mut state, FxHashMap::default(), false).await?;
+            resolver
+                .resolve_node(node_id, &mut state, FxHashMap::default(), false)
+                .await?;
 
             // Capture value.
             if let Some(v) = state.turn_context.get(&name_astr) {
@@ -290,8 +305,7 @@ impl BuiltGraph {
             }
 
             // Advance to next turn.
-            entry = state.entry.next().await
-                .expect("next turn failed");
+            entry = state.entry.next().await.expect("next turn failed");
         }
 
         last_value.ok_or_else(|| panic!("node {name:?} produced no value after {turns} turns"))
@@ -313,9 +327,11 @@ impl BuiltGraph {
     /// If this differs from output_ty, downstream nodes will generate wrong casts.
     pub fn registry_ty(&self, name: &str) -> Option<acvus_mir::ty::Ty> {
         let name_astr = self.interner.intern(name);
-        self.context_registry.system().get(&name_astr).cloned()
+        self.context_registry
+            .system()
+            .get(&name_astr)
+            .cloned()
             .or_else(|| self.context_registry.scoped().get(&name_astr).cloned())
             .or_else(|| self.context_registry.user().get(&name_astr).cloned())
     }
 }
-

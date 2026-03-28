@@ -11,19 +11,19 @@ expression: ir
      5 │   jump_if r4 then L0 else L1(r3)
      6 │ L0:
      8 │   jump L1(1 (r5))
-     9 │ L1(r6: <error>):
+     9 │ L1(r6: Int):
     10 │   r7 = context_project @x
     11 │   ctx_store r7 = r6
     12 │   return r6
 
-    ; r0 (@cond) : <error>
+    ; r0 (@cond) : Int
     ; r1 (v1) : Int
-    ; r2 (@x) : <error>
+    ; r2 (@x) : Int
     ; r3 (v3) : Int
     ; r4 (v6) : Bool
     ; r5 (v7) : Int
-    ; r6 (v11) : <error>
-    ; r7 (v12) : <error>
+    ; r6 (v11) : Int
+    ; r7 (v12) : Int
     ; r8 (v10) : Int
     ; r9 (@x) : Int
     ; r10 (v5) : Int

@@ -23,7 +23,7 @@ expression: ir
     17 │   r14 = T0 + r13
     18 │   return r14
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (v5) : Iterator<Int>
     ; r3 (v19) : Int

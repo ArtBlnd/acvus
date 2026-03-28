@@ -31,7 +31,7 @@ expression: ir
     30 │   r27 = T0 + r23
     31 │   return r27
 
-    ; r0 (@data) : <error>
+    ; r0 (@data) : ((Int, Int), String)
     ; r1 (v1) : ((Int, Int), String)
     ; r2 (v6) : (Int, Int)
     ; r3 (v8) : Int

@@ -1,4 +1,3 @@
-
 use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;

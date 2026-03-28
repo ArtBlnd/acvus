@@ -18,7 +18,7 @@ expression: ir
     11 │   r9 = r6 + r8
     12 │   return r9
 
-    ; r0 (@vals) : <error>
+    ; r0 (@vals) : List<Float>
     ; r1 (v1) : List<Float>
     ; r2 (iter(...)) : Iterator<Float>
     ; r3 (v6) : Fn(Float) -> Float

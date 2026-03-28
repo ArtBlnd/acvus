@@ -258,10 +258,11 @@ impl Interpreter {
 
     /// Resolve context name for a QualifiedRef. Returns owned String to avoid borrow conflicts.
     fn resolve_context_key(&self, qref: &QualifiedRef) -> Result<String, RuntimeError> {
-        let name = self.shared.context_names.get(qref)
-            .ok_or_else(|| RuntimeError::internal(format!(
-                "no context name for {qref:?}"
-            )))?;
+        let name = self
+            .shared
+            .context_names
+            .get(qref)
+            .ok_or_else(|| RuntimeError::internal(format!("no context name for {qref:?}")))?;
         Ok(self.shared.interner.resolve(*name).to_string())
     }
 
@@ -273,7 +274,10 @@ impl Interpreter {
         frame: &Frame,
     ) -> Result<Vec<Value>, RuntimeError> {
         if !context_uses.is_empty() {
-            Ok(context_uses.iter().map(|(_, vid)| frame.share(*vid)).collect())
+            Ok(context_uses
+                .iter()
+                .map(|(_, vid)| frame.share(*vid))
+                .collect())
         } else {
             self.collect_uses_from_type(fn_id)
         }
@@ -284,7 +288,11 @@ impl Interpreter {
         let Some(fn_ty) = self.shared.fn_types.get(fn_id) else {
             return Ok(vec![]);
         };
-        let Ty::Fn { effect: Effect::Resolved(eff), .. } = fn_ty else {
+        let Ty::Fn {
+            effect: Effect::Resolved(eff),
+            ..
+        } = fn_ty
+        else {
             return Ok(vec![]);
         };
         eff.reads
@@ -294,9 +302,7 @@ impl Interpreter {
                 self.overlay
                     .get(&key)
                     .cloned()
-                    .ok_or_else(|| RuntimeError::internal(format!(
-                        "undefined context '{key}'"
-                    )))
+                    .ok_or_else(|| RuntimeError::internal(format!("undefined context '{key}'")))
             })
             .collect()
     }
@@ -325,11 +331,19 @@ impl Interpreter {
     }
 
     /// Fallback: apply context defs from function type (overlay path, no SSA hint).
-    fn apply_defs_from_type(&mut self, fn_id: &FunctionId, defs: Vec<Value>) -> Result<(), RuntimeError> {
+    fn apply_defs_from_type(
+        &mut self,
+        fn_id: &FunctionId,
+        defs: Vec<Value>,
+    ) -> Result<(), RuntimeError> {
         let Some(fn_ty) = self.shared.fn_types.get(fn_id) else {
             return Ok(());
         };
-        let Ty::Fn { effect: Effect::Resolved(eff), .. } = fn_ty else {
+        let Ty::Fn {
+            effect: Effect::Resolved(eff),
+            ..
+        } = fn_ty
+        else {
             return Ok(());
         };
         for (qref, def_value) in eff.writes.iter().zip(defs) {
@@ -375,10 +389,17 @@ impl Interpreter {
         let value = self.execute_function(&entry, &args).await?;
         let overlay = std::mem::replace(
             &mut self.overlay,
-            ContextOverlay::new(Arc::new(std::collections::HashMap::new()), self.shared.interner.clone()),
+            ContextOverlay::new(
+                Arc::new(std::collections::HashMap::new()),
+                self.shared.interner.clone(),
+            ),
         );
         let writes = overlay.into_patches();
-        Ok(ExecResult { value, writes, defs: Vec::new() })
+        Ok(ExecResult {
+            value,
+            writes,
+            defs: Vec::new(),
+        })
     }
 
     /// Execute a specific function by FunctionId with explicit args.
@@ -483,10 +504,7 @@ impl Interpreter {
                     .variables
                     .get(name)
                     .unwrap_or_else(|| {
-                        panic!(
-                            "undefined param ${}",
-                            self.shared.interner.resolve(*name)
-                        )
+                        panic!("undefined param ${}", self.shared.interner.resolve(*name))
                     })
                     .share();
                 frame.set(*dst, val);
@@ -748,8 +766,7 @@ impl Interpreter {
             } => {
                 let result = match callee {
                     Callee::Direct(id) => {
-                        let is_extern =
-                            matches!(self.function(id), Executable::Extern(_));
+                        let is_extern = matches!(self.function(id), Executable::Extern(_));
                         if is_extern {
                             let handler = match self.function(id) {
                                 Executable::Extern(h) => h.clone(),
@@ -770,8 +787,11 @@ impl Interpreter {
                             };
 
                             self.apply_context_defs(
-                                context_defs, id, output.defs,
-                                frame, projection_map,
+                                context_defs,
+                                id,
+                                output.defs,
+                                frame,
+                                projection_map,
                             )?;
 
                             output.rets.into_iter().next().unwrap_or(Value::Unit)
@@ -821,8 +841,7 @@ impl Interpreter {
                 };
                 let is_extern = matches!(self.function(&callee_id), Executable::Extern(_));
                 let handle = if is_extern {
-                    let spawn_args: Vec<Value> =
-                        args.iter().map(|a| frame.share(*a)).collect();
+                    let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
                     let uses = self.collect_context_uses(context_uses, &callee_id, &frame)?;
                     let handler = match self.function(&callee_id) {
                         Executable::Extern(h) => h.clone(),
@@ -856,8 +875,7 @@ impl Interpreter {
                     }
                 } else {
                     // Existing path: fork interpreter for Module/Builtin.
-                    let spawn_args: Vec<Value> =
-                        args.iter().map(|a| frame.share(*a)).collect();
+                    let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
                     let child = self.fork(callee_id, spawn_args);
                     self.shared.executor.spawn_interpreter(child)
                 };
@@ -882,9 +900,7 @@ impl Interpreter {
                 // ExternFn path: apply defs to overlay via context_defs mapping.
                 let defs = result.defs;
                 let defs_count = defs.len();
-                for ((ctx_id, vid), def_value) in
-                    context_defs.iter().zip(defs)
-                {
+                for ((ctx_id, vid), def_value) in context_defs.iter().zip(defs) {
                     let key = self.resolve_context_key(ctx_id)?;
                     let for_overlay = def_value.share();
                     frame.set(*vid, def_value);

@@ -11,7 +11,7 @@ expression: ir
      5 │   r5 = context_load r4
      6 │   r6 = cast ListToIterator r1
      7 │   jump L0(r6, r5, r7)
-     8 │ L0(r8: Iterator<Int>, r9: <error>, r10: Int):
+     8 │ L0(r8: Iterator<Int>, r9: Int, r10: Int):
      9 │   r11 = context_project @sum
     10 │   ctx_store r11 = r9
     11 │   iter_step r12, r13 = r8 else L1()
@@ -25,7 +25,7 @@ expression: ir
     19 │   r18 = context_load r17
     20 │   r19 = cast ListToIterator r18
     21 │   jump L3(r19, r9, r20)
-    22 │ L3(r21: Iterator<Int>, r22: <error>, r23: Int):
+    22 │ L3(r21: Iterator<Int>, r22: Int, r23: Int):
     23 │   r24 = context_project @sum
     24 │   ctx_store r24 = r22
     25 │   iter_step r25, r26 = r21 else L4()
@@ -39,18 +39,18 @@ expression: ir
     33 │   r31 = context_load r30
     34 │   return r31
 
-    ; r0 (@a) : <error>
+    ; r0 (@a) : List<Int>
     ; r1 (v1) : List<Int>
-    ; r2 (@b) : <error>
+    ; r2 (@b) : List<Int>
     ; r3 (v3) : List<Int>
-    ; r4 (@sum) : <error>
+    ; r4 (@sum) : Int
     ; r5 (v5) : Int
     ; r6 (v8) : Iterator<Int>
     ; r7 (v30) : Int
     ; r8 (v9) : Iterator<Int>
-    ; r9 (v32) : <error>
+    ; r9 (v32) : Int
     ; r10 (v33) : Int
-    ; r11 (v38) : <error>
+    ; r11 (v38) : Int
     ; r12 (x) : Int
     ; r13 (v11) : Iterator<Int>
     ; r14 (@sum) : Int
@@ -61,9 +61,9 @@ expression: ir
     ; r19 (v19) : Iterator<Int>
     ; r20 (v31) : Int
     ; r21 (v20) : Iterator<Int>
-    ; r22 (v35) : <error>
+    ; r22 (v35) : Int
     ; r23 (v37) : Int
-    ; r24 (v39) : <error>
+    ; r24 (v39) : Int
     ; r25 (y) : Int
     ; r26 (v22) : Iterator<Int>
     ; r27 (@sum) : Int

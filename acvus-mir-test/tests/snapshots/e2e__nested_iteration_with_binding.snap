@@ -34,7 +34,7 @@ expression: ir
     30 │   r26 = T0 + r25
     31 │   return r26
 
-    ; r0 (@matrix) : <error>
+    ; r0 (@matrix) : List<List<Int>>
     ; r1 (v1) : List<List<Int>>
     ; r2 (v5) : Iterator<List<Int>>
     ; r3 (v31) : Int

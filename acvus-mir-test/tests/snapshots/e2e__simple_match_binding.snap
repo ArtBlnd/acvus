@@ -12,7 +12,7 @@ expression: ir
      5 │   r3 = r2 + r1
      6 │   return r3
 
-    ; r0 (@name) : <error>
+    ; r0 (@name) : String
     ; r1 (v1) : String
     ; r2 (v6) : String
     ; r3 (v8) : String

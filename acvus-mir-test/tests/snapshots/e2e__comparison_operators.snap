@@ -16,9 +16,9 @@ expression: ir
      9 │   r7 = r5 + r6
     10 │   return r7
 
-    ; r0 (@a) : <error>
+    ; r0 (@a) : Int
     ; r1 (v1) : Int
-    ; r2 (@b) : <error>
+    ; r2 (@b) : Int
     ; r3 (v3) : Int
     ; r4 (v9) : Bool
     ; r5 (v11) : String

@@ -15,29 +15,34 @@ fn init() {
     tracing_wasm::set_as_global_default();
 }
 
-use acvus_mir::ir::{InstKind};
 use acvus_mir::analysis::reachable_context::KnownValue;
+use acvus_mir::ir::InstKind;
 use acvus_mir::ty::{Effect, FnKind, Ty};
 use acvus_utils::{Astr, Interner};
-use rustc_hash::{FxHashMap};
+use rustc_hash::FxHashMap;
 use tsify::Ts;
 use tsify::Tsify;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
+use wasm_bindgen::prelude::*;
 
-use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry, RegistryConflictError};
+use acvus_mir::context_registry::{
+    ContextTypeRegistry, PartialContextTypeRegistry, RegistryConflictError,
+};
 use schema::*;
 
 /// Compile-time context types for asset extern functions.
 pub(crate) fn asset_context_types(interner: &Interner) -> FxHashMap<Astr, Ty> {
     let mut types = FxHashMap::default();
-    types.insert(interner.intern("asset_url"), Ty::Fn {
-        params: vec![Ty::String],
-        ret: Box::new(Ty::Option(Box::new(Ty::String))),
-        kind: FnKind::Extern,
-        captures: vec![],
-        effect: Effect::Pure,
-    });
+    types.insert(
+        interner.intern("asset_url"),
+        Ty::Fn {
+            params: vec![Ty::String],
+            ret: Box::new(Ty::Option(Box::new(Ty::String))),
+            kind: FnKind::Extern,
+            captures: vec![],
+            effect: Effect::Pure,
+        },
+    );
     types
 }
 
@@ -50,7 +55,6 @@ pub(crate) fn build_registry(
     extern_fns.extend(asset_context_types(interner));
     PartialContextTypeRegistry::new(extern_fns, FxHashMap::default(), user_types)
 }
-
 
 /// Try to compile a short script and extract a known value (literal or variant).
 /// Returns None if the script is not a simple constant expression.
@@ -68,7 +72,13 @@ pub(crate) fn try_extract_known(
         .with_analysis_mode();
     let (type_map, builtin_map, coercion_map, _tail) =
         checker.check_script_with_hint(&script, None).ok()?;
-    let lowerer = acvus_mir::lower::Lowerer::new(interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(registry.merged()));
+    let lowerer = acvus_mir::lower::Lowerer::new(
+        interner,
+        type_map,
+        builtin_map,
+        coercion_map,
+        acvus_mir::build_context_ids(registry.merged()),
+    );
     let (module, _hints) = lowerer.lower_script(&script);
     // Look for a Const or MakeVariant instruction in the main body
     for inst in &module.main.insts {
@@ -76,8 +86,13 @@ pub(crate) fn try_extract_known(
             InstKind::Const { value, .. } => {
                 return Some(KnownValue::Literal(value.clone()));
             }
-            InstKind::MakeVariant { tag, payload: None, .. } => {
-                return Some(KnownValue::Variant { tag: *tag, payload: None });
+            InstKind::MakeVariant {
+                tag, payload: None, ..
+            } => {
+                return Some(KnownValue::Variant {
+                    tag: *tag,
+                    payload: None,
+                });
             }
             _ => {}
         }
@@ -86,7 +101,10 @@ pub(crate) fn try_extract_known(
 }
 
 /// Convert a map of `name -> TypeDesc` into `HashMap<Astr, Ty>`.
-pub(crate) fn convert_context_types(interner: &Interner, raw: &FxHashMap<String, TypeDesc>) -> FxHashMap<Astr, Ty> {
+pub(crate) fn convert_context_types(
+    interner: &Interner,
+    raw: &FxHashMap<String, TypeDesc>,
+) -> FxHashMap<Astr, Ty> {
     raw.iter()
         .map(|(k, v)| (interner.intern(k), desc_to_ty(interner, v)))
         .collect()
@@ -114,10 +132,15 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                 ok: false,
                 errors: vec![EngineError::general(
                     error::ErrorCategory::Type,
-                    format!("context type conflict: @{key_name} exists in both {} and {} tier", e.tier_a, e.tier_b),
+                    format!(
+                        "context type conflict: @{key_name} exists in both {} and {} tier",
+                        e.tier_a, e.tier_b
+                    ),
                 )],
                 value: None,
-            }.into_ts()?.js_value());
+            }
+            .into_ts()?
+            .js_value());
         }
     };
     let full_reg = registry.to_full();
@@ -131,13 +154,16 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                         ok: false,
                         errors: vec![EngineError::from_parse(&e)],
                         value: None,
-                    }.into_ts()?.js_value());
+                    }
+                    .into_ts()?
+                    .js_value());
                 }
             };
             {
                 let mut subst = acvus_mir::ty::TySubst::new();
-                let checker = acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
-                    .with_analysis_mode();
+                let checker =
+                    acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
+                        .with_analysis_mode();
                 let (type_map, builtin_map, coercion_map) = match checker.check_template(&ast) {
                     Ok(r) => r,
                     Err(errs) => {
@@ -145,10 +171,18 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                             ok: false,
                             errors: EngineError::from_mir_errors(&errs, &interner),
                             value: None,
-                        }.into_ts()?.js_value());
+                        }
+                        .into_ts()?
+                        .js_value());
                     }
                 };
-                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(full_reg.merged()));
+                let lowerer = acvus_mir::lower::Lowerer::new(
+                    &interner,
+                    type_map,
+                    builtin_map,
+                    coercion_map,
+                    acvus_mir::build_context_ids(full_reg.merged()),
+                );
                 let (module, _) = lowerer.lower_template(&ast);
                 module
             }
@@ -161,24 +195,36 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
                         ok: false,
                         errors: vec![EngineError::from_parse(&e)],
                         value: None,
-                    }.into_ts()?.js_value());
+                    }
+                    .into_ts()?
+                    .js_value());
                 }
             };
             {
                 let mut subst = acvus_mir::ty::TySubst::new();
-                let checker = acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
-                    .with_analysis_mode();
-                let (type_map, builtin_map, coercion_map, _tail) = match checker.check_script_with_hint(&script, None) {
-                    Ok(r) => r,
-                    Err(errs) => {
-                        return Ok(EvaluateResult {
-                            ok: false,
-                            errors: EngineError::from_mir_errors(&errs, &interner),
-                            value: None,
-                        }.into_ts()?.js_value());
-                    }
-                };
-                let lowerer = acvus_mir::lower::Lowerer::new(&interner, type_map, builtin_map, coercion_map, acvus_mir::build_context_ids(full_reg.merged()));
+                let checker =
+                    acvus_mir::typeck::TypeChecker::new(&interner, full_reg.merged(), &mut subst)
+                        .with_analysis_mode();
+                let (type_map, builtin_map, coercion_map, _tail) =
+                    match checker.check_script_with_hint(&script, None) {
+                        Ok(r) => r,
+                        Err(errs) => {
+                            return Ok(EvaluateResult {
+                                ok: false,
+                                errors: EngineError::from_mir_errors(&errs, &interner),
+                                value: None,
+                            }
+                            .into_ts()?
+                            .js_value());
+                        }
+                    };
+                let lowerer = acvus_mir::lower::Lowerer::new(
+                    &interner,
+                    type_map,
+                    builtin_map,
+                    coercion_map,
+                    acvus_mir::build_context_ids(full_reg.merged()),
+                );
                 let (module, _) = lowerer.lower_script(&script);
                 module
             }
@@ -187,14 +233,18 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
 
     // Build context values — use the same merged context types used for compilation.
     let name_to_id = acvus_mir::build_context_ids(full_reg.merged());
-    let ctx: FxHashMap<acvus_mir::graph::Id, acvus_interpreter::TypedValue> = options.context
+    let ctx: FxHashMap<acvus_mir::graph::Id, acvus_interpreter::TypedValue> = options
+        .context
         .into_iter()
         .filter_map(|(k, v)| {
             let ty = jcv_to_ty(&interner, &v);
             let cv: acvus_interpreter::ConcreteValue = v.into();
             let astr = interner.intern(&k);
             let id = name_to_id.get(&astr).copied()?;
-            Some((id, acvus_interpreter::TypedValue::from_concrete(&cv, &interner, ty)))
+            Some((
+                id,
+                acvus_interpreter::TypedValue::from_concrete(&cv, &interner, ty),
+            ))
         })
         .collect();
 
@@ -213,7 +263,11 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
             JsConcreteValue::String { v: output }
         }
         Mode::Script => {
-            assert!(emits.len() <= 1, "script emitted {} values, expected at most 1", emits.len());
+            assert!(
+                emits.len() <= 1,
+                "script emitted {} values, expected at most 1",
+                emits.len()
+            );
             match emits.into_iter().next() {
                 Some(tv) => tv.to_concrete(&interner).into(),
                 None => JsConcreteValue::Unit,
@@ -225,7 +279,9 @@ pub async fn evaluate(options: Ts<EvaluateOptions>) -> Result<JsValue, JsError> 
         ok: true,
         errors: vec![],
         value: Some(result_value),
-    }.into_ts()?.js_value())
+    }
+    .into_ts()?
+    .js_value())
 }
 
 fn jcv_to_ty(interner: &Interner, v: &JsConcreteValue) -> Ty {
@@ -260,14 +316,21 @@ fn jcv_to_ty(interner: &Interner, v: &JsConcreteValue) -> Ty {
                 interner.intern(tag),
                 payload.as_ref().map(|p| Box::new(jcv_to_ty(interner, p))),
             );
-            Ty::Enum { name: interner.intern(tag), variants }
+            Ty::Enum {
+                name: interner.intern(tag),
+                variants,
+            }
         }
         JsConcreteValue::Sequence { items } => {
             let elem_ty = items
                 .first()
                 .map(|i| jcv_to_ty(interner, i))
                 .unwrap_or_else(Ty::error);
-            Ty::Sequence(Box::new(elem_ty), acvus_mir::ty::Origin::Concrete(0), acvus_mir::ty::Effect::Pure)
+            Ty::Sequence(
+                Box::new(elem_ty),
+                acvus_mir::ty::Origin::Concrete(0),
+                acvus_mir::ty::Effect::Pure,
+            )
         }
     }
 }
@@ -288,25 +351,49 @@ mod tests {
     #[test]
     fn test_ty_to_desc_primitives() {
         let interner = test_interner();
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Int)), r#"{"kind":"primitive","name":"int"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Float)), r#"{"kind":"primitive","name":"float"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::String)), r#"{"kind":"primitive","name":"string"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Bool)), r#"{"kind":"primitive","name":"bool"}"#);
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::Int)),
+            r#"{"kind":"primitive","name":"int"}"#
+        );
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::Float)),
+            r#"{"kind":"primitive","name":"float"}"#
+        );
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::String)),
+            r#"{"kind":"primitive","name":"string"}"#
+        );
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::Bool)),
+            r#"{"kind":"primitive","name":"bool"}"#
+        );
     }
 
     #[test]
     fn test_ty_to_desc_unsupported() {
         let interner = test_interner();
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::Var(acvus_mir::ty::TyVar(0)))), r#"{"kind":"unsupported","raw":"?"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::error())), r#"{"kind":"unsupported","raw":"?"}"#);
-        assert_eq!(desc_json(&ty_to_desc(&interner, &Ty::error())), r#"{"kind":"unsupported","raw":"?"}"#);
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::Var(acvus_mir::ty::TyVar(0)))),
+            r#"{"kind":"unsupported","raw":"?"}"#
+        );
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::error())),
+            r#"{"kind":"unsupported","raw":"?"}"#
+        );
+        assert_eq!(
+            desc_json(&ty_to_desc(&interner, &Ty::error())),
+            r#"{"kind":"unsupported","raw":"?"}"#
+        );
     }
 
     #[test]
     fn test_ty_to_desc_list() {
         let interner = test_interner();
         let desc = ty_to_desc(&interner, &Ty::List(Box::new(Ty::String)));
-        assert_eq!(desc_json(&desc), r#"{"kind":"list","elem":{"kind":"primitive","name":"string"}}"#);
+        assert_eq!(
+            desc_json(&desc),
+            r#"{"kind":"list","elem":{"kind":"primitive","name":"string"}}"#
+        );
     }
 
     #[test]
@@ -336,15 +423,24 @@ mod tests {
         variants.insert(interner.intern("Ok"), Some(Box::new(Ty::Int)));
         variants.insert(interner.intern("Err"), Some(Box::new(Ty::String)));
         variants.insert(interner.intern("None"), None);
-        let enum_ty = Ty::Enum { name: interner.intern("Result"), variants };
+        let enum_ty = Ty::Enum {
+            name: interner.intern("Result"),
+            variants,
+        };
         let desc = ty_to_desc(&interner, &enum_ty);
         let roundtripped = desc_to_ty(&interner, &desc);
         match &roundtripped {
             Ty::Enum { name, variants } => {
                 assert_eq!(interner.resolve(*name), "Result");
                 assert_eq!(variants.len(), 3);
-                assert_eq!(*variants.get(&interner.intern("Ok")).unwrap(), Some(Box::new(Ty::Int)));
-                assert_eq!(*variants.get(&interner.intern("Err")).unwrap(), Some(Box::new(Ty::String)));
+                assert_eq!(
+                    *variants.get(&interner.intern("Ok")).unwrap(),
+                    Some(Box::new(Ty::Int))
+                );
+                assert_eq!(
+                    *variants.get(&interner.intern("Err")).unwrap(),
+                    Some(Box::new(Ty::String))
+                );
                 assert_eq!(*variants.get(&interner.intern("None")).unwrap(), None);
             }
             _ => panic!("expected Enum, got {roundtripped:?}"),

@@ -22,7 +22,7 @@ expression: ir
     18 │   r11 = T0 + r9
     19 │   return r11
 
-    ; r0 (@pair) : <error>
+    ; r0 (@pair) : (String, Int)
     ; r1 (v1) : (String, Int)
     ; r2 (v6) : String
     ; r3 (v8) : Bool

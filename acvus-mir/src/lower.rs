@@ -1,5 +1,5 @@
 use acvus_ast::{
-    BinOp, Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
+    AstId, BinOp, Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node, ObjectExprField,
     ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
     TuplePatternElem,
 };
@@ -20,8 +20,8 @@ pub struct Lowerer<'a> {
     scopes: Vec<FxHashMap<Astr, Ty>>,
     /// Type map from type checker.
     type_map: TypeMap,
-    /// Coercion map from type checker (expr_span → CastKind).
-    coercion_lookup: FxHashMap<Span, CastKind>,
+    /// Coercion map from type checker (expr AstId → CastKind).
+    coercion_lookup: FxHashMap<AstId, CastKind>,
     /// Closures produced during lowering.
     closures: FxHashMap<Label, MirBody>,
     /// Global closure label counter — shared across nesting levels to prevent
@@ -73,21 +73,25 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
     nodes
         .iter()
         .map(|node| match node {
-            Node::Text { value, span } => Node::Text {
+            Node::Text { value, span, .. } => Node::Text {
+                id: acvus_ast::AstId::alloc(),
                 value: adjust_text_indent(value, modifier),
                 span: *span,
             },
             Node::MatchBlock(mb) => Node::MatchBlock(MatchBlock {
+                id: acvus_ast::AstId::alloc(),
                 arms: mb
                     .arms
                     .iter()
                     .map(|arm| acvus_ast::MatchArm {
+                        id: acvus_ast::AstId::alloc(),
                         pattern: arm.pattern.clone(),
                         body: apply_indent_to_nodes(&arm.body, modifier),
                         tag_span: arm.tag_span,
                     })
                     .collect(),
                 catch_all: mb.catch_all.as_ref().map(|ca| acvus_ast::CatchAll {
+                    id: acvus_ast::AstId::alloc(),
                     body: apply_indent_to_nodes(&ca.body, modifier),
                     tag_span: ca.tag_span,
                 }),
@@ -96,10 +100,12 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
                 span: mb.span,
             }),
             Node::IterBlock(ib) => Node::IterBlock(acvus_ast::IterBlock {
+                id: acvus_ast::AstId::alloc(),
                 pattern: ib.pattern.clone(),
                 source: ib.source.clone(),
                 body: apply_indent_to_nodes(&ib.body, modifier),
                 catch_all: ib.catch_all.as_ref().map(|ca| acvus_ast::CatchAll {
+                    id: acvus_ast::AstId::alloc(),
                     body: apply_indent_to_nodes(&ca.body, modifier),
                     tag_span: ca.tag_span,
                 }),
@@ -119,7 +125,7 @@ impl<'a> Lowerer<'a> {
         context_ids: Freeze<FxHashMap<QualifiedRef, Ty>>,
         function_ids: Freeze<FxHashMap<Astr, (FunctionId, Ty)>>,
     ) -> Self {
-        let coercion_lookup: FxHashMap<Span, CastKind> = coercion_map.into_iter().collect();
+        let coercion_lookup: FxHashMap<AstId, CastKind> = coercion_map.into_iter().collect();
         // Pre-inject function names into the initial scope.
         let initial_scope = FxHashMap::default();
         Self {
@@ -149,7 +155,8 @@ impl<'a> Lowerer<'a> {
         entries.sort_by_key(|(qref, _)| self.interner.resolve(qref.name).to_string());
 
         for (qref, ty) in entries {
-            let proj = self.alloc_typed(span);
+            let proj = self.alloc_val();
+            self.set_val_type(proj, ty.clone());
             self.set_origin(proj, ValOrigin::Context(qref.name));
             self.emit_inst(
                 span,
@@ -192,14 +199,25 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Bind { name, expr, span } => {
+            Stmt::Bind { name, expr, span, .. } => {
                 let val = self.lower_expr(expr);
-                let ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
-                self.emit_inst(*span, InstKind::VarStore { name: *name, src: val });
+                let ty = self
+                    .body
+                    .val_types
+                    .get(&val)
+                    .cloned()
+                    .unwrap_or(Ty::error());
+                self.emit_inst(
+                    *span,
+                    InstKind::VarStore {
+                        name: *name,
+                        src: val,
+                    },
+                );
                 self.define_var(*name, ty);
             }
-            Stmt::ContextStore { name, expr, span } => {
-                self.lower_context_store(*name, expr, *span);  // name is QualifiedRef
+            Stmt::ContextStore { name, expr, span, .. } => {
+                self.lower_context_store(*name, expr, *span); // name is QualifiedRef
             }
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
@@ -209,6 +227,7 @@ impl<'a> Lowerer<'a> {
                 source,
                 body,
                 span,
+                ..
             } => {
                 self.lower_stmt_match_bind(pattern, source, body, *span);
             }
@@ -217,6 +236,7 @@ impl<'a> Lowerer<'a> {
                 source,
                 body,
                 span,
+                ..
             } => {
                 self.lower_stmt_iterate(pattern, source, body, *span);
             }
@@ -236,7 +256,10 @@ impl<'a> Lowerer<'a> {
     ) {
         let source_reg = self.lower_expr(source);
 
-        let is_irrefutable = matches!(pattern, Pattern::Binding { .. } | Pattern::ContextBind { .. });
+        let is_irrefutable = matches!(
+            pattern,
+            Pattern::Binding { .. } | Pattern::ContextBind { .. }
+        );
 
         if is_irrefutable {
             // No branching needed — just bind and execute body.
@@ -393,7 +416,9 @@ impl<'a> Lowerer<'a> {
     /// If it's already a value, return as-is.
     fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
         if self.projections.remove(&val) {
-            let dst = self.alloc_typed(span);
+            let dst = self.alloc_val();
+            let ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
+            self.set_val_type(dst, ty);
             self.emit_inst(span, InstKind::ContextLoad { dst, src: val });
             dst
         } else {
@@ -476,7 +501,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn is_defined(&self, name: Astr) -> bool {
-        self.scopes.iter().rev().any(|scope| scope.contains_key(&name))
+        self.scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(&name))
     }
 
     fn var_type(&self, name: Astr) -> Ty {
@@ -547,16 +575,16 @@ impl<'a> Lowerer<'a> {
         );
     }
 
-    /// Allocate a new value with type inferred from span.
-    fn alloc_typed(&mut self, span: Span) -> ValueId {
+    /// Allocate a new value with type inferred from AST id.
+    fn alloc_typed(&mut self, id: AstId) -> ValueId {
         let dst = self.alloc_val();
-        self.set_val_type(dst, self.type_of_span(span));
+        self.set_val_type(dst, self.type_of_id(id));
         dst
     }
 
-    /// Allocate a new value with type inferred from span and origin set to Expr.
-    fn alloc_expr(&mut self, span: Span) -> ValueId {
-        let dst = self.alloc_typed(span);
+    /// Allocate a new value with type inferred from AST id and origin set to Expr.
+    fn alloc_expr(&mut self, id: AstId) -> ValueId {
+        let dst = self.alloc_typed(id);
         self.set_origin(dst, ValOrigin::Expr);
         dst
     }
@@ -634,8 +662,8 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    fn type_of_span(&self, span: Span) -> Ty {
-        self.type_map.get(&span).cloned().unwrap_or(Ty::error())
+    fn type_of_id(&self, id: AstId) -> Ty {
+        self.type_map.get(&id).cloned().unwrap_or(Ty::error())
     }
 
     // --- Node lowering ---
@@ -653,7 +681,7 @@ impl<'a> Lowerer<'a> {
     /// Lower a single template node, returning a String-typed ValueId.
     fn lower_node(&mut self, node: &Node, parent_span: Span) -> ValueId {
         match node {
-            Node::Text { value, span } => {
+            Node::Text { value, span, .. } => {
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::String);
                 self.set_origin(dst, ValOrigin::Expr);
@@ -703,9 +731,9 @@ impl<'a> Lowerer<'a> {
 
     /// If the coercion map indicates this span needs a cast, emit a Cast
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
-    fn maybe_cast(&mut self, span: Span, val: ValueId) -> ValueId {
+    fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
         let val = self.materialize(val, span);
-        if let Some(&kind) = self.coercion_lookup.get(&span) {
+        if let Some(&kind) = self.coercion_lookup.get(&id) {
             let src_ty = self
                 .body
                 .val_types
@@ -735,7 +763,7 @@ impl<'a> Lowerer<'a> {
     /// If the result is a projection, it is materialized via ContextLoad.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
-        let val = self.maybe_cast(expr.span(), val);
+        let val = self.maybe_cast(expr.id(), expr.span(), val);
         self.ensure_loaded(expr.span(), val)
     }
 
@@ -743,13 +771,13 @@ impl<'a> Lowerer<'a> {
     /// Used by FieldAccess and ContextStore where projection must be maintained.
     fn lower_expr_projectable(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
-        self.maybe_cast(expr.span(), val)
+        self.maybe_cast(expr.id(), expr.span(), val)
     }
 
     fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {
         match expr {
-            Expr::Literal { value, span } => {
-                let dst = self.alloc_expr(*span);
+            Expr::Literal { id, value, span } => {
+                let dst = self.alloc_expr(*id);
                 self.emit_inst(
                     *span,
                     InstKind::Const {
@@ -760,8 +788,8 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::ContextRef { name: qref, span } => {
-                let dst = self.alloc_typed(*span);
+            Expr::ContextRef { id, name: qref, span } => {
+                let dst = self.alloc_typed(*id);
                 self.set_origin(dst, ValOrigin::Context(qref.name));
                 self.emit_inst(*span, InstKind::ContextProject { dst, ctx: *qref });
                 self.mark_projection(dst);
@@ -769,12 +797,13 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::Ident {
+                id,
                 name,
                 ref_kind,
                 span,
             } => match ref_kind {
                 RefKind::ExternParam => {
-                    let dst = self.alloc_typed(*span);
+                    let dst = self.alloc_typed(*id);
                     self.set_origin(dst, ValOrigin::ExternParam(*name));
                     self.emit_inst(*span, InstKind::ParamLoad { dst, name: *name });
                     dst
@@ -796,6 +825,7 @@ impl<'a> Lowerer<'a> {
             },
 
             Expr::BinaryOp {
+                id,
                 left,
                 op,
                 right,
@@ -803,7 +833,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
-                let dst = self.alloc_expr(*span);
+                let dst = self.alloc_expr(*id);
                 self.emit_inst(
                     *span,
                     InstKind::BinOp {
@@ -816,9 +846,9 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::UnaryOp { op, operand, span } => {
+            Expr::UnaryOp { id, op, operand, span } => {
                 let o = self.lower_expr(operand);
-                let dst = self.alloc_expr(*span);
+                let dst = self.alloc_expr(*id);
                 self.emit_inst(
                     *span,
                     InstKind::UnaryOp {
@@ -831,6 +861,7 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::FieldAccess {
+                id,
                 object,
                 field,
                 span,
@@ -838,7 +869,7 @@ impl<'a> Lowerer<'a> {
                 let obj = self.lower_expr_projectable(object);
                 let is_proj = self.is_projection(obj);
                 let dst = self.alloc_val();
-                self.set_val_type(dst, self.type_of_span(*span));
+                self.set_val_type(dst, self.type_of_id(*id));
                 self.set_origin(dst, ValOrigin::Field(obj, *field));
                 self.emit_inst(
                     *span,
@@ -855,23 +886,23 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::FuncCall { func, args, span } => self.lower_func_call(func, args, None, *span),
+            Expr::FuncCall { id, func, args, span } => self.lower_func_call(func, args, None, *id, *span),
 
-            Expr::Pipe { left, right, span } => {
+            Expr::Pipe { id, left, right, span } => {
                 // Desugar: `a | f(b, c)` → `f(a, b, c)`, `a | f` → `f(a)`
                 match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
-                        self.lower_func_call(func, args, Some(left), *span)
+                        self.lower_func_call(func, args, Some(left), *id, *span)
                     }
                     Expr::Ident {
                         ref_kind: RefKind::Value,
                         ..
-                    } => self.lower_func_call(right, &[], Some(left), *span),
+                    } => self.lower_func_call(right, &[], Some(left), *id, *span),
                     _ => {
                         // Fallback: evaluate both sides, call as indirect.
                         let l = self.lower_expr(left);
                         let r = self.lower_expr(right);
-                        let dst = self.alloc_typed(*span);
+                        let dst = self.alloc_typed(expr.id());
                         self.emit_inst(
                             *span,
                             InstKind::FunctionCall {
@@ -887,7 +918,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
-            Expr::Lambda { params, body, span } => {
+            Expr::Lambda { id, params, body, span } => {
                 // Capture analysis: find free variables in body.
                 let param_names: FxHashSet<Astr> = params.iter().map(|p| p.name).collect();
                 let free_vars = self.free_vars_in_expr(body, &param_names);
@@ -895,8 +926,8 @@ impl<'a> Lowerer<'a> {
                 // Emit VarLoad for each captured variable (snapshot current value).
                 let capture_regs: Vec<ValueId> = free_vars
                     .iter()
-                    .map(|(name, var_span)| {
-                        let dst = self.alloc_typed(*var_span);
+                    .map(|(name, var_id, var_span)| {
+                        let dst = self.alloc_typed(*var_id);
                         self.set_origin(dst, ValOrigin::Named(*name));
                         self.emit_inst(*var_span, InstKind::VarLoad { dst, name: *name });
                         dst
@@ -911,10 +942,11 @@ impl<'a> Lowerer<'a> {
 
                 // Captures become the first registers.
                 let mut closure_capture_regs = Vec::new();
-                for (i, (name, _)) in free_vars.iter().enumerate() {
+                for (i, (name, _, _)) in free_vars.iter().enumerate() {
                     let reg = sub_body.val_factory.next();
                     closure_capture_regs.push(reg);
-                    let cap_ty = capture_regs.get(i)
+                    let cap_ty = capture_regs
+                        .get(i)
                         .and_then(|r| self.body.val_types.get(r))
                         .cloned()
                         .unwrap_or(Ty::error());
@@ -927,7 +959,7 @@ impl<'a> Lowerer<'a> {
                 for p in params.iter() {
                     let reg = sub_body.val_factory.next();
                     closure_param_regs.push(reg);
-                    let ty = self.type_of_span(p.span);
+                    let ty = self.type_of_id(p.id);
                     sub_scopes[0].insert(p.name, ty.clone());
                     sub_body.val_types.insert(reg, ty);
                 }
@@ -939,12 +971,24 @@ impl<'a> Lowerer<'a> {
                 let saved_projections = std::mem::take(&mut self.projections);
 
                 // Emit VarStore for captures so VarLoad in body can find them.
-                for ((name, _), capture_reg) in free_vars.iter().zip(closure_capture_regs.iter()) {
-                    self.emit_inst(*span, InstKind::VarStore { name: *name, src: *capture_reg });
+                for ((name, _, _), capture_reg) in free_vars.iter().zip(closure_capture_regs.iter()) {
+                    self.emit_inst(
+                        *span,
+                        InstKind::VarStore {
+                            name: *name,
+                            src: *capture_reg,
+                        },
+                    );
                 }
                 // Emit VarStore for params.
                 for (p, param_reg) in params.iter().zip(closure_param_regs.iter()) {
-                    self.emit_inst(p.span, InstKind::VarStore { name: p.name, src: *param_reg });
+                    self.emit_inst(
+                        p.span,
+                        InstKind::VarStore {
+                            name: p.name,
+                            src: *param_reg,
+                        },
+                    );
                 }
 
                 // lower_expr calls maybe_cast(body.span(), val) which will
@@ -965,13 +1009,12 @@ impl<'a> Lowerer<'a> {
 
                 closure_body_mir.capture_regs = closure_capture_regs;
                 closure_body_mir.param_regs = closure_param_regs;
-                self.closures
-                    .insert(closure_label, closure_body_mir);
+                self.closures.insert(closure_label, closure_body_mir);
 
                 // Allocate dst with Fn type. If a return-site Cast was inserted,
                 // update the Fn's ret to match the actual (cast) return type.
                 let dst = self.alloc_val();
-                let mut fn_ty = self.type_of_span(*span);
+                let mut fn_ty = self.type_of_id(*id);
                 if let Ty::Fn { ref mut ret, .. } = fn_ty {
                     **ret = actual_ret_ty;
                 }
@@ -990,6 +1033,7 @@ impl<'a> Lowerer<'a> {
             Expr::Paren { inner, .. } => self.lower_expr(inner),
 
             Expr::List {
+                id,
                 head,
                 rest: _,
                 tail,
@@ -1000,12 +1044,12 @@ impl<'a> Lowerer<'a> {
                     .chain(tail.iter())
                     .map(|e| self.lower_expr(e))
                     .collect();
-                let dst = self.alloc_typed(*span);
+                let dst = self.alloc_typed(*id);
                 self.emit_inst(*span, InstKind::MakeDeque { dst, elements });
                 dst
             }
 
-            Expr::Object { fields, span } => {
+            Expr::Object { id, fields, span } => {
                 let field_regs = fields
                     .iter()
                     .map(|ObjectExprField { key, value, .. }| {
@@ -1013,7 +1057,7 @@ impl<'a> Lowerer<'a> {
                         (*key, r)
                     })
                     .collect();
-                let dst = self.alloc_typed(*span);
+                let dst = self.alloc_typed(*id);
                 self.emit_inst(
                     *span,
                     InstKind::MakeObject {
@@ -1029,6 +1073,7 @@ impl<'a> Lowerer<'a> {
                 end,
                 kind,
                 span,
+                ..
             } => {
                 let s = self.lower_expr(start);
                 let e = self.lower_expr(end);
@@ -1046,7 +1091,7 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::Tuple { elements, span } => {
+            Expr::Tuple { id, elements, span } => {
                 let elem_vals: Vec<ValueId> = elements
                     .iter()
                     .map(|elem| match elem {
@@ -1065,7 +1110,7 @@ impl<'a> Lowerer<'a> {
                         }
                     })
                     .collect();
-                let dst = self.alloc_typed(*span);
+                let dst = self.alloc_typed(*id);
                 self.emit_inst(
                     *span,
                     InstKind::MakeTuple {
@@ -1076,7 +1121,7 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::Group { elements, span } => {
+            Expr::Group { elements, span, .. } => {
                 // Should not appear outside lambda params. Lower last element.
                 let Some(last) = elements.last() else {
                     let dst = self.alloc_val();
@@ -1094,10 +1139,10 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::Variant {
-                tag, payload, span, ..
+                id, tag, payload, span, ..
             } => {
                 let payload_val = payload.as_ref().map(|e| self.lower_expr(e));
-                let dst = self.alloc_expr(*span);
+                let dst = self.alloc_expr(*id);
                 self.emit_inst(
                     *span,
                     InstKind::MakeVariant {
@@ -1121,10 +1166,17 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_context_store(&mut self, qref: QualifiedRef, value_expr: &Expr, span: Span) -> ValueId {
+    fn lower_context_store(
+        &mut self,
+        qref: QualifiedRef,
+        value_expr: &Expr,
+        span: Span,
+    ) -> ValueId {
         let val = self.lower_expr(value_expr);
         let ctx_id = qref;
-        let proj = self.alloc_typed(span);
+        let proj = self.alloc_val();
+        let val_ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
+        self.set_val_type(proj, val_ty);
         self.emit_inst(
             span,
             InstKind::ContextProject {
@@ -1147,6 +1199,7 @@ impl<'a> Lowerer<'a> {
         func: &Expr,
         args: &[Expr],
         pipe_left: Option<&Box<Expr>>,
+        call_id: AstId,
         call_span: Span,
     ) -> ValueId {
         let mut arg_regs: Vec<ValueId> =
@@ -1159,7 +1212,7 @@ impl<'a> Lowerer<'a> {
             let val = self.lower_expr(a);
             arg_regs.push(self.materialize(val, call_span));
         }
-        let dst = self.alloc_typed(call_span);
+        let dst = self.alloc_typed(call_id);
 
         // @fn_name(args) — context-based function call.
         if let Expr::ContextRef { name: qref, .. } = func {
@@ -1181,7 +1234,13 @@ impl<'a> Lowerer<'a> {
         }
 
         // Named function call (Ident).
-        if let Expr::Ident { name, ref_kind, span: ident_span, .. } = func {
+        if let Expr::Ident {
+            name,
+            ref_kind,
+            span: ident_span,
+            ..
+        } = func
+        {
             match ref_kind {
                 // fn_name(args) — named call
                 RefKind::Value => {
@@ -1209,7 +1268,13 @@ impl<'a> Lowerer<'a> {
                         let closure_ty = self.var_type(*name);
                         self.set_val_type(closure_reg, closure_ty);
                         self.set_origin(closure_reg, ValOrigin::Named(*name));
-                        self.emit_inst(*ident_span, InstKind::VarLoad { dst: closure_reg, name: *name });
+                        self.emit_inst(
+                            *ident_span,
+                            InstKind::VarLoad {
+                                dst: closure_reg,
+                                name: *name,
+                            },
+                        );
                         self.emit_inst(
                             call_span,
                             InstKind::FunctionCall {
@@ -1256,10 +1321,13 @@ impl<'a> Lowerer<'a> {
             && let Pattern::ContextBind {
                 name: qref,
                 span: pat_span,
+                ..
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
-            let proj = self.alloc_typed(*pat_span);
+            let proj = self.alloc_val();
+            let src_ty = self.body.val_types.get(&src).cloned().unwrap_or(Ty::error());
+            self.set_val_type(proj, src_ty);
             self.emit_inst(
                 *pat_span,
                 InstKind::ContextProject {
@@ -1284,6 +1352,7 @@ impl<'a> Lowerer<'a> {
                 name,
                 ref_kind,
                 span: pat_span,
+                ..
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
@@ -1295,7 +1364,12 @@ impl<'a> Lowerer<'a> {
                     return dst;
                 }
                 RefKind::Value => {
-                    let ty = self.body.val_types.get(&src).cloned().unwrap_or(Ty::error());
+                    let ty = self
+                        .body
+                        .val_types
+                        .get(&src)
+                        .cloned()
+                        .unwrap_or(Ty::error());
                     self.emit_inst(*pat_span, InstKind::VarStore { name: *name, src });
                     self.define_var(*name, ty);
                 }
@@ -1797,7 +1871,9 @@ impl<'a> Lowerer<'a> {
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                let proj = self.alloc_typed(span);
+                let proj = self.alloc_val();
+                let src_ty = self.body.val_types.get(&src_reg).cloned().unwrap_or(Ty::error());
+                self.set_val_type(proj, src_ty);
                 self.emit_inst(
                     span,
                     InstKind::ContextProject {
@@ -1819,8 +1895,19 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 self.set_origin(src_reg, ValOrigin::Named(*name));
-                let ty = self.body.val_types.get(&src_reg).cloned().unwrap_or(Ty::error());
-                self.emit_inst(span, InstKind::VarStore { name: *name, src: src_reg });
+                let ty = self
+                    .body
+                    .val_types
+                    .get(&src_reg)
+                    .cloned()
+                    .unwrap_or(Ty::error());
+                self.emit_inst(
+                    span,
+                    InstKind::VarStore {
+                        name: *name,
+                        src: src_reg,
+                    },
+                );
                 self.define_var(*name, ty);
             }
             Pattern::Binding {
@@ -1913,7 +2000,7 @@ impl<'a> Lowerer<'a> {
 
     // --- Free variable analysis ---
 
-    fn free_vars_in_expr(&self, expr: &Expr, bound: &FxHashSet<Astr>) -> Vec<(Astr, Span)> {
+    fn free_vars_in_expr(&self, expr: &Expr, bound: &FxHashSet<Astr>) -> Vec<(Astr, AstId, Span)> {
         let mut free = Vec::new();
         let mut seen = FxHashSet::default();
         self.collect_free_vars(expr, bound, &mut free, &mut seen);
@@ -1924,7 +2011,7 @@ impl<'a> Lowerer<'a> {
         &self,
         stmts: &[Stmt],
         bound: &mut FxHashSet<Astr>,
-        free: &mut Vec<(Astr, Span)>,
+        free: &mut Vec<(Astr, AstId, Span)>,
         seen: &mut FxHashSet<Astr>,
     ) {
         for stmt in stmts {
@@ -1949,11 +2036,12 @@ impl<'a> Lowerer<'a> {
         &self,
         expr: &Expr,
         bound: &FxHashSet<Astr>,
-        free: &mut Vec<(Astr, Span)>,
+        free: &mut Vec<(Astr, AstId, Span)>,
         seen: &mut FxHashSet<Astr>,
     ) {
         match expr {
             Expr::Ident {
+                id,
                 name,
                 ref_kind: RefKind::Value,
                 span,
@@ -1963,7 +2051,7 @@ impl<'a> Lowerer<'a> {
                 }
                 if self.is_defined(*name) {
                     seen.insert(*name);
-                    free.push((*name, *span));
+                    free.push((*name, *id, *span));
                 }
             }
             // ExternParam/context refs resolve at runtime — no capture needed.

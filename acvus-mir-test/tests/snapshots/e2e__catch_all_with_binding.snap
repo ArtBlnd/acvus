@@ -24,7 +24,7 @@ expression: ir
     19 │   r9 = T0 + r7
     20 │   return r9
 
-    ; r0 (@role) : <error>
+    ; r0 (@role) : String
     ; r1 (v1) : String
     ; r2 (v5) : Bool
     ; r3 (v8) : String

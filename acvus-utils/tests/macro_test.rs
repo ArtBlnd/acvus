@@ -51,7 +51,10 @@ fn script_placeholder_substitution() {
         acvus_ast::Expr::BinaryOp { left, op, .. } => {
             assert_eq!(*op, acvus_ast::BinOp::Add);
             match left.as_ref() {
-                acvus_ast::Expr::Literal { value: acvus_ast::Literal::Int(42), .. } => {}
+                acvus_ast::Expr::Literal {
+                    value: acvus_ast::Literal::Int(42),
+                    ..
+                } => {}
                 other => panic!("expected Literal(42), got {other:?}"),
             }
         }
@@ -79,11 +82,17 @@ fn script_multiple_placeholders() {
     match tail.as_ref() {
         acvus_ast::Expr::BinaryOp { left, right, .. } => {
             match left.as_ref() {
-                acvus_ast::Expr::Literal { value: acvus_ast::Literal::Int(10), .. } => {}
+                acvus_ast::Expr::Literal {
+                    value: acvus_ast::Literal::Int(10),
+                    ..
+                } => {}
                 other => panic!("expected Literal(10), got {other:?}"),
             }
             match right.as_ref() {
-                acvus_ast::Expr::Literal { value: acvus_ast::Literal::Int(20), .. } => {}
+                acvus_ast::Expr::Literal {
+                    value: acvus_ast::Literal::Int(20),
+                    ..
+                } => {}
                 other => panic!("expected Literal(20), got {other:?}"),
             }
         }
@@ -160,9 +169,14 @@ fn flatten_pipe(expr: &acvus_ast::Expr) -> Vec<&acvus_ast::Expr> {
 }
 
 /// Flatten a left-associative binary op chain (same op) into a vec of operand expressions.
-fn flatten_binop<'a>(expr: &'a acvus_ast::Expr, target_op: acvus_ast::BinOp) -> Vec<&'a acvus_ast::Expr> {
+fn flatten_binop<'a>(
+    expr: &'a acvus_ast::Expr,
+    target_op: acvus_ast::BinOp,
+) -> Vec<&'a acvus_ast::Expr> {
     match expr {
-        acvus_ast::Expr::BinaryOp { left, op, right, .. } if *op == target_op => {
+        acvus_ast::Expr::BinaryOp {
+            left, op, right, ..
+        } if *op == target_op => {
             let mut parts = flatten_binop(left, target_op);
             parts.push(right);
             parts
@@ -173,7 +187,10 @@ fn flatten_binop<'a>(expr: &'a acvus_ast::Expr, target_op: acvus_ast::BinOp) -> 
 
 fn assert_int(expr: &acvus_ast::Expr, expected: i64) {
     match expr {
-        acvus_ast::Expr::Literal { value: acvus_ast::Literal::Int(n), .. } => {
+        acvus_ast::Expr::Literal {
+            value: acvus_ast::Literal::Int(n),
+            ..
+        } => {
             assert_eq!(*n, expected, "expected Int({expected}), got Int({n})");
         }
         other => panic!("expected Int({expected}), got {other:?}"),
@@ -200,7 +217,9 @@ fn splice_list_elements() {
     let tail = script.tail.as_ref().unwrap();
 
     match tail.as_ref() {
-        acvus_ast::Expr::List { head, rest, tail, .. } => {
+        acvus_ast::Expr::List {
+            head, rest, tail, ..
+        } => {
             assert!(rest.is_none());
             assert!(tail.is_empty());
             assert_eq!(head.len(), 5);
@@ -283,7 +302,9 @@ fn splice_empty_vec() {
     let tail = script.tail.as_ref().unwrap();
 
     match tail.as_ref() {
-        acvus_ast::Expr::List { head, rest, tail, .. } => {
+        acvus_ast::Expr::List {
+            head, rest, tail, ..
+        } => {
             assert!(rest.is_none());
             assert!(tail.is_empty());
             assert_eq!(head.len(), 1);
@@ -356,10 +377,9 @@ fn splice_pipe_roundtrip() {
     assert_eq!(manual_stages.len(), splice_stages.len());
     for (m, s) in manual_stages.iter().zip(splice_stages.iter()) {
         match (m, s) {
-            (
-                acvus_ast::Expr::Ident { name: mn, .. },
-                acvus_ast::Expr::Ident { name: sn, .. },
-            ) => assert_eq!(mn, sn),
+            (acvus_ast::Expr::Ident { name: mn, .. }, acvus_ast::Expr::Ident { name: sn, .. }) => {
+                assert_eq!(mn, sn)
+            }
             _ => panic!("stage mismatch: {m:?} vs {s:?}"),
         }
     }

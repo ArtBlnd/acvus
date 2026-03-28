@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_interpreter::*;
 use acvus_interpreter::builtins::build_builtins;
+use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::Ty;
@@ -74,7 +74,9 @@ async fn run_ext(
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
-        let errs: Vec<String> = result.errors.iter()
+        let errs: Vec<String> = result
+            .errors
+            .iter()
             .flat_map(|e| e.errors.iter())
             .map(|e| format!("{}", e.display(interner)))
             .collect();
@@ -82,15 +84,14 @@ async fn run_ext(
     }
 
     // Build runtime functions: modules + builtins + ext handlers.
-    let mut exec_fns: FxHashMap<FunctionId, Executable> = result.modules
+    let mut exec_fns: FxHashMap<FunctionId, Executable> = result
+        .modules
         .into_iter()
         .map(|(id, (module, _))| (id, Executable::Module(module)))
         .collect();
 
-    let builtin_ids: FxHashMap<Astr, FunctionId> = graph.functions
-        .iter()
-        .map(|f| (f.name, f.id))
-        .collect();
+    let builtin_ids: FxHashMap<Astr, FunctionId> =
+        graph.functions.iter().map(|f| (f.name, f.id)).collect();
     for (id, handler) in build_builtins(&builtin_ids, interner) {
         exec_fns.insert(id, Executable::Builtin(handler));
     }
@@ -99,7 +100,8 @@ async fn run_ext(
     }
 
     // Execute.
-    let context_names: FxHashMap<QualifiedRef, Astr> = graph.contexts
+    let context_names: FxHashMap<QualifiedRef, Astr> = graph
+        .contexts
         .iter()
         .map(|ctx| (ctx.qualified_ref(), ctx.name))
         .collect();
@@ -109,8 +111,8 @@ async fn run_ext(
         .collect();
 
     let executor = Arc::new(SequentialExecutor);
-    let shared = InterpreterContext::new(interner, exec_fns, executor)
-        .with_context_names(context_names);
+    let shared =
+        InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
     let overlay = ContextOverlay::new(Arc::new(snapshot), interner.clone());
     let mut interp = Interpreter::new(shared, entry_id, overlay);
     interp.execute().await.expect("execution failed").value
@@ -129,16 +131,22 @@ fn infer_value_ty(v: &Value) -> Ty {
             let elem = items.first().map(infer_value_ty).unwrap_or(Ty::Int);
             Ty::List(Box::new(elem))
         }
-        Value::Object(fields) => {
-            Ty::Object(fields.iter().map(|(k, v)| (*k, infer_value_ty(v))).collect())
-        }
+        Value::Object(fields) => Ty::Object(
+            fields
+                .iter()
+                .map(|(k, v)| (*k, infer_value_ty(v)))
+                .collect(),
+        ),
         Value::Opaque(o) => Ty::Opaque(o.type_name.to_string()),
         _ => Ty::Unit,
     }
 }
 
 fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<Astr, Value> {
-    entries.iter().map(|(name, val)| (i.intern(name), val.clone())).collect()
+    entries
+        .iter()
+        .map(|(name, val)| (i.intern(name), val.clone()))
+        .collect()
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -154,7 +162,8 @@ async fn regex_match_true() {
         r#"re = regex("\\d+"); regex_match(re, "abc123")"#,
         c,
         vec![regex_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::Bool(true));
 }
 
@@ -166,7 +175,8 @@ async fn regex_match_false() {
         r#"re = regex("\\d+"); regex_match(re, "abc")"#,
         FxHashMap::default(),
         vec![regex_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::Bool(false));
 }
 
@@ -178,8 +188,11 @@ async fn regex_find_all_collect() {
         r#"re = regex("\\d+"); regex_find_all(re, "a1b22c333") | collect"#,
         FxHashMap::default(),
         vec![regex_registry()],
-    ).await;
-    let Value::List(items) = result else { panic!("expected List") };
+    )
+    .await;
+    let Value::List(items) = result else {
+        panic!("expected List")
+    };
     assert_eq!(items.len(), 3);
     assert_eq!(items[0], Value::string("1"));
     assert_eq!(items[1], Value::string("22"));
@@ -194,7 +207,8 @@ async fn regex_replace() {
         r#"re = regex("\\s+"); regex_replace("hello   world", re, " ")"#,
         FxHashMap::default(),
         vec![regex_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("hello world"));
 }
 
@@ -206,13 +220,15 @@ async fn regex_split_collect() {
         r#"re = regex("[,;]\\s*"); regex_split(re, "a, b;c") | collect"#,
         FxHashMap::default(),
         vec![regex_registry()],
-    ).await;
-    let Value::List(items) = result else { panic!("expected List") };
-    assert_eq!(*items, vec![
-        Value::string("a"),
-        Value::string("b"),
-        Value::string("c"),
-    ]);
+    )
+    .await;
+    let Value::List(items) = result else {
+        panic!("expected List")
+    };
+    assert_eq!(
+        *items,
+        vec![Value::string("a"), Value::string("b"), Value::string("c"),]
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -227,7 +243,8 @@ async fn base64_roundtrip() {
         r#"base64_decode(base64_encode("hello world"))"#,
         FxHashMap::default(),
         vec![encoding_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("hello world"));
 }
 
@@ -239,7 +256,8 @@ async fn url_roundtrip() {
         r#"url_decode(url_encode("hello world&foo=bar"))"#,
         FxHashMap::default(),
         vec![encoding_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("hello world&foo=bar"));
 }
 
@@ -256,7 +274,8 @@ async fn datetime_format_from_timestamp() {
         r#"dt = from_timestamp(1704067200); format_date(dt, "%Y-%m-%d")"#,
         FxHashMap::default(),
         vec![datetime_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("2024-01-01"));
 }
 
@@ -268,7 +287,8 @@ async fn datetime_timestamp_roundtrip() {
         r#"dt = from_timestamp(1704067200); timestamp(dt)"#,
         FxHashMap::default(),
         vec![datetime_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::Int(1704067200));
 }
 
@@ -280,7 +300,8 @@ async fn datetime_add_days() {
         r#"dt = from_timestamp(1704067200); dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d")"#,
         FxHashMap::default(),
         vec![datetime_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("2024-01-02"));
 }
 
@@ -308,6 +329,7 @@ async fn mixed_regex_and_encoding() {
         r#"base64_encode("hello") + " " + to_string(regex_match(regex("\\d+"), "abc123"))"#,
         FxHashMap::default(),
         vec![regex_registry(), encoding_registry()],
-    ).await;
+    )
+    .await;
     assert_eq!(result, Value::string("aGVsbG8= true"));
 }

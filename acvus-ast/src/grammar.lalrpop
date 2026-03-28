@@ -67,13 +67,14 @@ extern {
 
 pub Script: Script = {
     <l:@L> <stmts:ScriptStmt*> <tail:Expr?> <r:@R> =>
-        Script { stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
+        Script { id: AstId::alloc(), stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
 };
 
 ScriptStmt: Stmt = {
     // match-bind (if-let): pattern = source { body };
     <l:@L> <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptStmt*> "}" ";" <r:@R> =>?
         Ok(Stmt::MatchBind {
+            id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
             source: rhs,
             body,
@@ -82,6 +83,7 @@ ScriptStmt: Stmt = {
     // iterate (for): pattern in source { body };
     <l:@L> <lhs:Expr> "in" <rhs:Expr> "{" <body:ScriptStmt*> "}" ";" <r:@R> =>?
         Ok(Stmt::Iterate {
+            id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
             source: rhs,
             body,
@@ -92,9 +94,9 @@ ScriptStmt: Stmt = {
         let span = Span::new(l, r);
         match &lhs {
             Expr::Ident { name, ref_kind: RefKind::Value, .. } =>
-                Ok(Stmt::Bind { name: *name, expr: rhs, span }),
+                Ok(Stmt::Bind { id: AstId::alloc(), name: *name, expr: rhs, span }),
             Expr::ContextRef { name, .. } =>
-                Ok(Stmt::ContextStore { name: *name, expr: rhs, span }),
+                Ok(Stmt::ContextStore { id: AstId::alloc(), name: *name, expr: rhs, span }),
             _ => Err(lalrpop_util::ParseError::User {
                 error: ParseError { kind: ParseErrorKind::InvalidAssignTarget, span },
             }),
@@ -120,10 +122,11 @@ pub TagContent: TagContent = {
 
 // ── Expressions (precedence climbing) ──────────────────────────────────
 
-Expr: Expr = {
+pub Expr: Expr = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
     <l:@L> "|" <params:CommaSep<LambdaParamRule>> "|" "->" <body:Expr> <r:@R> =>
         Expr::Lambda {
+            id: AstId::alloc(),
             params,
             body: Box::new(body),
             span: Span::new(l, r),
@@ -135,6 +138,7 @@ Expr: Expr = {
 PipeExpr: Expr = {
     <l:@L> <left:PipeExpr> "|" <right:OrExpr> <r:@R> =>
         Expr::Pipe {
+            id: AstId::alloc(),
             left: Box::new(left),
             right: Box::new(right),
             span: Span::new(l, r),
@@ -143,77 +147,77 @@ PipeExpr: Expr = {
 };
 
 LambdaParamRule: LambdaParam = {
-    <l:@L> <name:"ident"> <r:@R> => LambdaParam { name, span: Span::new(l, r) },
+    <l:@L> <name:"ident"> <r:@R> => LambdaParam { id: AstId::alloc(), name, span: Span::new(l, r) },
 };
 
 // Logical Or: left-associative
 OrExpr: Expr = {
     <l:@L> <left:OrExpr> "||" <right:AndExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
     AndExpr,
 };
 
 // Logical And: left-associative
 AndExpr: Expr = {
     <l:@L> <left:AndExpr> "&&" <right:CompExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
     CompExpr,
 };
 
 // Comparison: ==, !=, <, >, <=, >=
 CompExpr: Expr = {
     <l:@L> <left:CompExpr> "==" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr> "!=" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr> "<" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr> ">" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr> "<=" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr> ">=" <right:RangeExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
     RangeExpr,
 };
 
 // Range: 0..10, 0..=10, 0=..10 (non-associative)
 RangeExpr: Expr = {
     <l:@L> <start:AddExpr> ".." <end:AddExpr> <r:@R> =>
-        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::Exclusive, span: Span::new(l, r) },
+        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::Exclusive, span: Span::new(l, r) },
     <l:@L> <start:AddExpr> "..=" <end:AddExpr> <r:@R> =>
-        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::InclusiveEnd, span: Span::new(l, r) },
+        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::InclusiveEnd, span: Span::new(l, r) },
     <l:@L> <start:AddExpr> "=.." <end:AddExpr> <r:@R> =>
-        Expr::Range { start: Box::new(start), end: Box::new(end), kind: RangeKind::ExclusiveStart, span: Span::new(l, r) },
+        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::ExclusiveStart, span: Span::new(l, r) },
     AddExpr,
 };
 
 // Add/Sub: left-associative
 AddExpr: Expr = {
     <l:@L> <left:AddExpr> "+" <right:MulExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:AddExpr> "-" <right:MulExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span: Span::new(l, r) },
     MulExpr,
 };
 
 // Mul/Div: left-associative
 MulExpr: Expr = {
     <l:@L> <left:MulExpr> "*" <right:UnaryExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:MulExpr> "/" <right:UnaryExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:MulExpr> "%" <right:UnaryExpr> <r:@R> =>
-        Expr::BinaryOp { left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
+        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
     UnaryExpr,
 };
 
 // Unary: -x, !x
 UnaryExpr: Expr = {
     <l:@L> "-" <e:UnaryExpr> <r:@R> =>
-        Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
+        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
     <l:@L> "!" <e:UnaryExpr> <r:@R> =>
-        Expr::UnaryOp { op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
+        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
     QualifiedExpr,
 };
 
@@ -221,46 +225,46 @@ UnaryExpr: Expr = {
 QualifiedExpr: Expr = {
     // Qualified variant with payload: Enum::Tag(expr)
     <l:@L> <ename:"ident"> "::" <tag:"ident"> "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { enum_name: Some(ename), tag, payload: Some(Box::new(inner)), span: Span::new(l, r) },
+        Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: Some(Box::new(inner)), span: Span::new(l, r) },
     // Qualified variant without payload: Enum::Tag
     <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
-        Expr::Variant { enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) },
+        Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) },
     PostfixExpr,
 };
 
 // Postfix: field access `.field` and function call `f(args)`
 PostfixExpr: Expr = {
     <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
-        Expr::FieldAccess { object: Box::new(obj), field: f, span: Span::new(l, r) },
+        Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
     <l:@L> <func:PostfixExpr> "(" <args:CommaSep<Expr>> ")" <r:@R> =>
-        Expr::FuncCall { func: Box::new(func), args, span: Span::new(l, r) },
+        Expr::FuncCall { id: AstId::alloc(), func: Box::new(func), args, span: Span::new(l, r) },
     PrimaryExpr,
 };
 
 // Primary expressions
 PrimaryExpr: Expr = {
     <l:@L> <name:"ident"> <r:@R> =>
-        Expr::Ident { name, ref_kind: RefKind::Value, span: Span::new(l, r) },
+        Expr::Ident { id: AstId::alloc(), name, ref_kind: RefKind::Value, span: Span::new(l, r) },
     <l:@L> <name:"$ref"> <r:@R> =>
-        Expr::Ident { name, ref_kind: RefKind::ExternParam, span: Span::new(l, r) },
+        Expr::Ident { id: AstId::alloc(), name, ref_kind: RefKind::ExternParam, span: Span::new(l, r) },
     <l:@L> <name:"@ref"> <r:@R> =>
-        Expr::ContextRef { name: QualifiedRef::root(name), span: Span::new(l, r) },
+        Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span: Span::new(l, r) },
     <l:@L> <n:"int"> <r:@R> =>
-        Expr::Literal { value: Literal::Int(n), span: Span::new(l, r) },
+        Expr::Literal { id: AstId::alloc(), value: Literal::Int(n), span: Span::new(l, r) },
     <l:@L> <n:"float"> <r:@R> =>
-        Expr::Literal { value: Literal::Float(n), span: Span::new(l, r) },
+        Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) },
     <l:@L> <s:"string"> <r:@R> =>
-        Expr::Literal { value: Literal::String(s), span: Span::new(l, r) },
+        Expr::Literal { id: AstId::alloc(), value: Literal::String(s), span: Span::new(l, r) },
     <l:@L> "true" <r:@R> =>
-        Expr::Literal { value: Literal::Bool(true), span: Span::new(l, r) },
+        Expr::Literal { id: AstId::alloc(), value: Literal::Bool(true), span: Span::new(l, r) },
     <l:@L> "false" <r:@R> =>
-        Expr::Literal { value: Literal::Bool(false), span: Span::new(l, r) },
+        Expr::Literal { id: AstId::alloc(), value: Literal::Bool(false), span: Span::new(l, r) },
 
     // Variant constructors: Some(expr) and None
     <l:@L> "Some" "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { enum_name: None, tag: interner.intern("Some"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
+        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Some"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
     <l:@L> "None" <r:@R> =>
-        Expr::Variant { enum_name: None, tag: interner.intern("None"), payload: None, span: Span::new(l, r) },
+        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("None"), payload: None, span: Span::new(l, r) },
 
     // Parenthesized expression or tuple
     <l:@L> "(" <items:CommaSep<TupleElemRule>> ")" <r:@R> => {
@@ -268,11 +272,11 @@ PrimaryExpr: Expr = {
         // Single non-wildcard element → Paren (grouping)
         if items.len() == 1 {
             match items.into_iter().next().unwrap() {
-                TupleElem::Expr(e) => Expr::Paren { inner: Box::new(e), span },
-                TupleElem::Wildcard(_) => Expr::Tuple { elements: vec![TupleElem::Wildcard(span)], span },
+                TupleElem::Expr(e) => Expr::Paren { id: AstId::alloc(), inner: Box::new(e), span },
+                TupleElem::Wildcard(_) => Expr::Tuple { id: AstId::alloc(), elements: vec![TupleElem::Wildcard(span)], span },
             }
         } else {
-            Expr::Tuple { elements: items, span }
+            Expr::Tuple { id: AstId::alloc(), elements: items, span }
         }
     },
 
@@ -282,14 +286,14 @@ PrimaryExpr: Expr = {
 
     // Block expression with statements: { stmt; stmt; expr }
     <l:@L> "{" <stmts:ScriptStmt+> <tail:Expr> "}" <r:@R> =>
-        Expr::Block { stmts, tail: Box::new(tail), span: Span::new(l, r) },
+        Expr::Block { id: AstId::alloc(), stmts, tail: Box::new(tail), span: Span::new(l, r) },
     // Block expression with single expression: { expr }
     <l:@L> "{" <tail:Expr> "}" <r:@R> =>
-        Expr::Block { stmts: vec![], tail: Box::new(tail), span: Span::new(l, r) },
+        Expr::Block { id: AstId::alloc(), stmts: vec![], tail: Box::new(tail), span: Span::new(l, r) },
 
     // Object literal: { field1, $field2, } — trailing comma required (empty {} allowed)
     <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>
-        Expr::Object { fields, span: Span::new(l, r) },
+        Expr::Object { id: AstId::alloc(), fields, span: Span::new(l, r) },
 
     // Format string: "hello {{ name }}, age {{ age | to_string }}"
     // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)
@@ -298,21 +302,21 @@ PrimaryExpr: Expr = {
 
         // Start text segment (span = start token position)
         if !start.is_empty() {
-            parts.push(Expr::Literal { value: Literal::String(start), span: Span::new(sl, sr) });
+            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(start), span: Span::new(sl, sr) });
         }
         parts.push(first);
 
         // Mid text + expr pairs (each mid has its own span)
         for (mid_span, mid, expr) in rest {
             if !mid.is_empty() {
-                parts.push(Expr::Literal { value: Literal::String(mid), span: mid_span });
+                parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(mid), span: mid_span });
             }
             parts.push(expr);
         }
 
         // End text segment (span = end token position)
         if !end.is_empty() {
-            parts.push(Expr::Literal { value: Literal::String(end), span: Span::new(el, er) });
+            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(end), span: Span::new(el, er) });
         }
 
         // Fold into BinOp::Add chain
@@ -321,6 +325,7 @@ PrimaryExpr: Expr = {
         for part in iter {
             let merged = acc.span().merge(part.span());
             acc = Expr::BinaryOp {
+                id: AstId::alloc(),
                 left: Box::new(acc),
                 op: BinOp::Add,
                 right: Box::new(part),
@@ -351,28 +356,31 @@ ListElem: ListElem = {
 // Object field: `key: expr`, or shorthand `name`, `$name`, `@name`
 ObjectField: ObjectExprField = {
     <l:@L> <key:"ident"> ":" <value:Expr> <r:@R> =>
-        ObjectExprField { key, value, span: Span::new(l, r) },
+        ObjectExprField { id: AstId::alloc(), key, value, span: Span::new(l, r) },
     <l:@L> <name:"ident"> <r:@R> => {
         let span = Span::new(l, r);
         ObjectExprField {
+            id: AstId::alloc(),
             key: name,
-            value: Expr::Ident { name, ref_kind: RefKind::Value, span },
+            value: Expr::Ident { id: AstId::alloc(), name, ref_kind: RefKind::Value, span },
             span,
         }
     },
     <l:@L> <name:"$ref"> <r:@R> => {
         let span = Span::new(l, r);
         ObjectExprField {
+            id: AstId::alloc(),
             key: name,
-            value: Expr::Ident { name, ref_kind: RefKind::ExternParam, span },
+            value: Expr::Ident { id: AstId::alloc(), name, ref_kind: RefKind::ExternParam, span },
             span,
         }
     },
     <l:@L> <name:"@ref"> <r:@R> => {
         let span = Span::new(l, r);
         ObjectExprField {
+            id: AstId::alloc(),
             key: name,
-            value: Expr::ContextRef { name: QualifiedRef::root(name), span },
+            value: Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span },
             span,
         }
     },

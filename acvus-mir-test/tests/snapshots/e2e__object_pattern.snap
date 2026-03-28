@@ -27,7 +27,7 @@ expression: ir
     24 │   r19 = T0 + r16
     25 │   return r19
 
-    ; r0 (@user) : <error>
+    ; r0 (@user) : {age: Int, email: String, name: String}
     ; r1 (v1) : {age: Int, email: String, name: String}
     ; r2 (v6) : Bool
     ; r3 (v7) : String

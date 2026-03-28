@@ -100,7 +100,10 @@ pub struct InferResult {
 
 impl InferResult {
     /// Get the checked resolution for a function, if complete.
-    pub fn try_resolution(&self, id: FunctionId) -> Option<&crate::typeck::TypeResolution<crate::typeck::Checked>> {
+    pub fn try_resolution(
+        &self,
+        id: FunctionId,
+    ) -> Option<&crate::typeck::TypeResolution<crate::typeck::Checked>> {
         self.outcomes.get(&id)?.resolution()
     }
 
@@ -116,19 +119,22 @@ impl InferResult {
 
     /// Whether any function has errors.
     pub fn has_errors(&self) -> bool {
-        self.outcomes.values().any(|o| matches!(o, FnInferOutcome::Incomplete { errors, .. } if !errors.is_empty()))
+        self.outcomes
+            .values()
+            .any(|o| matches!(o, FnInferOutcome::Incomplete { errors, .. } if !errors.is_empty()))
     }
 
     /// Collect all errors across all functions.
     pub fn errors(&self) -> Vec<(FunctionId, &[crate::error::MirError])> {
-        self.outcomes.iter().filter_map(|(&id, o)| {
-            match o {
+        self.outcomes
+            .iter()
+            .filter_map(|(&id, o)| match o {
                 FnInferOutcome::Incomplete { errors, .. } if !errors.is_empty() => {
                     Some((id, errors.as_slice()))
                 }
                 _ => None,
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 
@@ -166,15 +172,15 @@ fn build_call_graph(
     let name_to_id: FxHashMap<Astr, FunctionId> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
         .map(|f| (f.name, f.id))
         .collect();
 
     let mut edges: FxHashMap<FunctionId, Vec<FunctionId>> = FxHashMap::default();
     for func in graph.functions.iter() {
-        let FnKind::Local(_) = &func.kind else {
+        if matches!(func.kind, FnKind::Extern) {
             continue;
-        };
+        }
         let Some(parsed) = extract.parsed.get(&func.id) else {
             continue;
         };
@@ -601,9 +607,13 @@ pub fn infer(
     // Direct effects per function, collected from typeck body_effect.
     let mut fn_direct_effects: FxHashMap<FunctionId, EffectSet> = FxHashMap::default();
     // Typeck results per function — stored for check_completeness after SCC completes.
-    let mut fn_unchecked: FxHashMap<FunctionId, crate::typeck::TypeResolution<crate::typeck::Unchecked>> = FxHashMap::default();
+    let mut fn_unchecked: FxHashMap<
+        FunctionId,
+        crate::typeck::TypeResolution<crate::typeck::Unchecked>,
+    > = FxHashMap::default();
     // Typeck errors per function (from analysis mode).
-    let mut fn_typeck_errors: FxHashMap<FunctionId, Vec<crate::error::MirError>> = FxHashMap::default();
+    let mut fn_typeck_errors: FxHashMap<FunctionId, Vec<crate::error::MirError>> =
+        FxHashMap::default();
 
     // Resolved function types — populated as SCCs complete.
     let mut resolved_fn_types: FxHashMap<Astr, Ty> = crate::builtins::builtin_fn_types(interner);
@@ -641,7 +651,7 @@ pub fn infer(
     let fn_by_id: FxHashMap<FunctionId, &Function> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
         .map(|f| (f.id, f))
         .collect();
 
@@ -651,7 +661,7 @@ pub fn infer(
     let local_ids: Vec<FunctionId> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
         .map(|f| f.id)
         .collect();
     let sccs = tarjan_scc(&local_ids, &call_graph);
@@ -863,10 +873,7 @@ pub fn infer(
 
     // Seed with direct effects + parameter-carried effects.
     for &fid in &local_ids {
-        let mut effect = fn_direct_effects
-            .get(&fid)
-            .cloned()
-            .unwrap_or_default();
+        let mut effect = fn_direct_effects.get(&fid).cloned().unwrap_or_default();
 
         if let Some(meta) = fn_metas.get(&fid) {
             for param in &meta.params {
@@ -928,35 +935,44 @@ pub fn infer(
         // If typeck failed, this function is Incomplete.
         if let Some(errors) = fn_typeck_errors.remove(&fid) {
             let unknown_contexts = fn_params.get(&fid).cloned().unwrap_or_default();
-            outcomes.insert(fid, FnInferOutcome::Incomplete {
-                unknown_contexts,
-                unknown_extern_params: vec![],
-                meta,
-                errors,
-            });
+            outcomes.insert(
+                fid,
+                FnInferOutcome::Incomplete {
+                    unknown_contexts,
+                    unknown_extern_params: vec![],
+                    meta,
+                    errors,
+                },
+            );
             continue;
         }
 
         // If no unchecked resolution (e.g., skipped function), Incomplete.
         let Some(unchecked) = fn_unchecked.remove(&fid) else {
-            outcomes.insert(fid, FnInferOutcome::Incomplete {
-                unknown_contexts: fn_params.get(&fid).cloned().unwrap_or_default(),
-                unknown_extern_params: vec![],
-                meta,
-                errors: vec![],
-            });
+            outcomes.insert(
+                fid,
+                FnInferOutcome::Incomplete {
+                    unknown_contexts: fn_params.get(&fid).cloned().unwrap_or_default(),
+                    unknown_extern_params: vec![],
+                    meta,
+                    errors: vec![],
+                },
+            );
             continue;
         };
 
         // If this function references undeclared contexts, it's Incomplete.
         let unknown_ctxs = fn_params.get(&fid).cloned().unwrap_or_default();
         if !unknown_ctxs.is_empty() {
-            outcomes.insert(fid, FnInferOutcome::Incomplete {
-                unknown_contexts: unknown_ctxs,
-                unknown_extern_params: unchecked.extern_params.clone(),
-                meta,
-                errors: vec![],
-            });
+            outcomes.insert(
+                fid,
+                FnInferOutcome::Incomplete {
+                    unknown_contexts: unknown_ctxs,
+                    unknown_extern_params: unchecked.extern_params.clone(),
+                    meta,
+                    errors: vec![],
+                },
+            );
             continue;
         }
 
@@ -967,32 +983,46 @@ pub fn infer(
                 let func = fn_by_id.get(&fid);
                 if let Some(func) = func {
                     if let Some(ref allowed) = func.constraint.effect {
-                        if let Err(err) = crate::typeck::check_effect_constraint(&checked.body_effect, allowed) {
-                            outcomes.insert(fid, FnInferOutcome::Incomplete {
-                                unknown_contexts: fn_params.get(&fid).cloned().unwrap_or_default(),
-                                unknown_extern_params: checked.extern_params.clone(),
-                                meta,
-                                errors: vec![err],
-                            });
+                        if let Err(err) =
+                            crate::typeck::check_effect_constraint(&checked.body_effect, allowed)
+                        {
+                            outcomes.insert(
+                                fid,
+                                FnInferOutcome::Incomplete {
+                                    unknown_contexts: fn_params
+                                        .get(&fid)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    unknown_extern_params: checked.extern_params.clone(),
+                                    meta,
+                                    errors: vec![err],
+                                },
+                            );
                             continue;
                         }
                     }
                 }
 
                 let tail_ty = checked.tail_ty.clone();
-                outcomes.insert(fid, FnInferOutcome::Complete {
-                    resolution: checked,
-                    tail_ty,
-                    meta,
-                });
+                outcomes.insert(
+                    fid,
+                    FnInferOutcome::Complete {
+                        resolution: checked,
+                        tail_ty,
+                        meta,
+                    },
+                );
             }
             Err(errors) => {
-                outcomes.insert(fid, FnInferOutcome::Incomplete {
-                    unknown_contexts: fn_params.get(&fid).cloned().unwrap_or_default(),
-                    unknown_extern_params: vec![],
-                    meta,
-                    errors,
-                });
+                outcomes.insert(
+                    fid,
+                    FnInferOutcome::Incomplete {
+                        unknown_contexts: fn_params.get(&fid).cloned().unwrap_or_default(),
+                        unknown_extern_params: vec![],
+                        meta,
+                        errors,
+                    },
+                );
             }
         }
     }
@@ -1635,7 +1665,7 @@ mod tests {
             .functions
             .iter()
             .rev()
-            .find(|f| matches!(f.kind, FnKind::Local(_)))
+            .find(|f| matches!(f.kind, FnKind::Local(_) | FnKind::LocalAst(_)))
             .expect("no local function")
             .id
     }
@@ -1788,12 +1818,7 @@ mod tests {
         result.outcomes.get(&id)?.tail_ty().cloned()
     }
 
-    fn make_extern_fn(
-        interner: &Interner,
-        name: &str,
-        params: Vec<Ty>,
-        ret: Ty,
-    ) -> Function {
+    fn make_extern_fn(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> Function {
         let named_params: Vec<crate::ty::Param> = params
             .into_iter()
             .enumerate()
@@ -1824,7 +1849,7 @@ mod tests {
         interner: &Interner,
         source: &str,
         ctx: &[(&str, Ty)],
-        effect: EffectSet,
+        effect: crate::ty::EffectConstraint,
     ) -> (InferResult, FunctionId) {
         let contexts: Vec<Context> = ctx
             .iter()
@@ -1873,10 +1898,14 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
-        assert!(!result.has_errors(), "errors: {:?}", error_strings(&i, &result));
+        assert!(
+            !result.has_errors(),
+            "errors: {:?}",
+            error_strings(&i, &result)
+        );
         let uid = last_local_id(&graph);
         assert!(result.try_resolution(uid).is_some());
-        assert_eq!(tail_type(&result,uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1886,9 +1915,13 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
-        assert!(!result.has_errors(), "errors: {:?}", error_strings(&i, &result));
+        assert!(
+            !result.has_errors(),
+            "errors: {:?}",
+            error_strings(&i, &result)
+        );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result,uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1900,9 +1933,13 @@ mod tests {
         user.insert(QualifiedRef::root(i.intern("x")), Ty::Int);
         let result = infer(&i, &graph, &ext, &user);
 
-        assert!(!result.has_errors(), "errors: {:?}", error_strings(&i, &result));
+        assert!(
+            !result.has_errors(),
+            "errors: {:?}",
+            error_strings(&i, &result)
+        );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result,uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1912,9 +1949,13 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
-        assert!(!result.has_errors(), "errors: {:?}", error_strings(&i, &result));
+        assert!(
+            !result.has_errors(),
+            "errors: {:?}",
+            error_strings(&i, &result)
+        );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result,uid).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::String);
     }
 
     #[test]
@@ -1925,9 +1966,13 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
-        assert!(!result.has_errors(), "errors: {:?}", error_strings(&i, &result));
+        assert!(
+            !result.has_errors(),
+            "errors: {:?}",
+            error_strings(&i, &result)
+        );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result,uid).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::String);
     }
 
     // -- Soundness: type errors detected --
@@ -1977,7 +2022,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C2: A calls B, B returns String.
@@ -1995,7 +2040,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     /// C3: Multi-arg function call.
@@ -2018,7 +2063,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C4: Chain of calls — A calls B, B calls C.
@@ -2047,7 +2092,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[2].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C5: Function uses context and is called by another function.
@@ -2065,7 +2110,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C6: Function with declared Exact output type.
@@ -2088,7 +2133,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     /// C7: Caller uses return value in arithmetic.
@@ -2106,7 +2151,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C8: Pipe syntax — value | fn.
@@ -2129,7 +2174,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C9: Function returning list.
@@ -2147,7 +2192,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C10: Function accepting and returning String.
@@ -2170,7 +2215,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     /// C11: Multiple callers of the same function.
@@ -2193,8 +2238,8 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result,ids[1].1).unwrap(), Ty::Int);
-        assert_eq!(tail_type(&result,ids[2].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[2].1).unwrap(), Ty::Int);
     }
 
     /// C12: Calling function with bool return.
@@ -2217,7 +2262,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Bool);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Bool);
     }
 
     /// C13: Deep call chain — A → B → C → D.
@@ -2237,7 +2282,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C14: Function that calls builtin and local function together.
@@ -2255,7 +2300,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     /// C15: Function result used as argument to another function.
@@ -2278,7 +2323,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C16: Mutual recursion — A calls B, B calls A.
@@ -2307,7 +2352,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[2].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Bool);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Bool);
     }
 
     /// C17: Self-recursion.
@@ -2330,7 +2375,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// C18: Function with float params and return.
@@ -2353,7 +2398,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Float);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Float);
     }
 
     // ── Soundness: invalid calls should be rejected ─────────────────
@@ -2465,7 +2510,7 @@ mod tests {
         );
         let main_id = ids[1].1;
         if !result.has_errors() {
-            assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+            assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
         }
     }
 
@@ -2616,7 +2661,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E2: Same name as builtin — local should shadow or coexist?
@@ -2655,7 +2700,7 @@ mod tests {
             "forward reference should resolve: {errs:?}"
         );
         let main_id = ids[0].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E4: Two functions reading the same context.
@@ -2674,7 +2719,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[2].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E5: Function calling itself with Exact type annotation (base case).
@@ -2697,7 +2742,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E6: Diamond dependency — A calls B and C, both call D.
@@ -2717,7 +2762,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E7: Function result piped through builtin chain.
@@ -2740,7 +2785,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E8: Function with effectful iterator return type.
@@ -2760,7 +2805,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
         assert_eq!(
-            tail_type(&result,main_id).unwrap(),
+            tail_type(&result, main_id).unwrap(),
             Ty::List(Box::new(Ty::Int))
         );
     }
@@ -2785,7 +2830,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E10: Three functions forming a pipeline.
@@ -2825,7 +2870,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// E11: All local functions are callers — no inter-function calls.
@@ -2842,8 +2887,8 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result,ids[0].1).unwrap(), Ty::Int);
-        assert_eq!(tail_type(&result,ids[1].1).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::String);
     }
 
     /// E12: Function with object return type used with field access.
@@ -2871,7 +2916,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -3107,10 +3152,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let use_id = ids[1].1;
         let use_effect = &result.outcomes[&use_id].meta().effect;
-        assert!(
-            !use_effect.is_pure(),
-            "transitive effect must propagate"
-        );
+        assert!(!use_effect.is_pure(), "transitive effect must propagate");
     }
 
     // ── body_effect (reads / writes) tests ─────────────────────────
@@ -3213,7 +3255,11 @@ mod tests {
         let get_x_id = ids[0].1;
         if let Some(resolution) = result.try_resolution(get_x_id) {
             let effect_set = extract_effect_set(resolution);
-            assert!(effect_set.reads.contains(&QualifiedRef::root(i.intern("x"))));
+            assert!(
+                effect_set
+                    .reads
+                    .contains(&QualifiedRef::root(i.intern("x")))
+            );
         }
         let main_id = ids[1].1;
         if let Some(resolution) = result.try_resolution(main_id) {
@@ -3241,7 +3287,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "extern call should resolve: {errs:?}");
         let main_id = ids[0].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
     /// Extern function with wrong argument type should error.
@@ -3275,7 +3321,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[0].1;
-        assert_eq!(tail_type(&result,main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
     /// Multiple extern functions can be registered and called.
@@ -3295,17 +3341,19 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result,ids[0].1).unwrap(), Ty::Int);
-        assert_eq!(tail_type(&result,ids[1].1).unwrap(), Ty::String);
+        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::String);
     }
 
     // ── Effect constraint tests ──────────────────────────────────────
+
+    use crate::ty::{EffectBound, EffectConstraint};
 
     /// Pure function with pure constraint: should pass.
     #[test]
     fn effect_constraint_pure_passes() {
         let i = Interner::new();
-        let (result, fid) = infer_with_effect(&i, "1 + 2", &[], EffectSet::default());
+        let (result, fid) = infer_with_effect(&i, "1 + 2", &[], EffectConstraint::pure());
         let errs = error_strings(&i, &result);
         assert!(
             errs.is_empty(),
@@ -3318,31 +3366,29 @@ mod tests {
     #[test]
     fn effect_constraint_context_read_rejected_by_pure() {
         let i = Interner::new();
-        let (result, _fid) = infer_with_effect(
-            &i,
-            "@x + 1",
-            &[("x", Ty::Int)],
-            EffectSet::default(),
-        );
+        let (result, _fid) =
+            infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], EffectConstraint::pure());
         let errs = error_strings(&i, &result);
         assert!(
             !errs.is_empty(),
             "context read should violate pure constraint"
         );
-        assert!(errs.iter().any(|e| e.contains("effect constraint violated")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("effect constraint violated"))
+        );
     }
 
     /// Context-reading function with read-allowed constraint: should pass.
     #[test]
     fn effect_constraint_context_read_passes() {
         let i = Interner::new();
-        let qref = QualifiedRef {
-            name: i.intern("x"),
-            namespace: None,
-        };
-        let allowed = EffectSet {
-            reads: std::collections::BTreeSet::from([qref]),
-            ..EffectSet::default()
+        let qref = QualifiedRef::root(i.intern("x"));
+        let allowed = EffectConstraint {
+            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            writes: EffectBound::Only(std::collections::BTreeSet::new()),
+            io: false,
+            self_modifying: false,
         };
         let (result, fid) = infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3354,47 +3400,37 @@ mod tests {
     #[test]
     fn effect_constraint_context_write_rejected_by_read_only() {
         let i = Interner::new();
-        let qref = QualifiedRef {
-            name: i.intern("x"),
-            namespace: None,
+        let qref = QualifiedRef::root(i.intern("x"));
+        let allowed = EffectConstraint {
+            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            writes: EffectBound::Only(std::collections::BTreeSet::new()),
+            io: false,
+            self_modifying: false,
         };
-        let allowed = EffectSet {
-            reads: std::collections::BTreeSet::from([qref]),
-            ..EffectSet::default()
-        };
-        let (result, _fid) = infer_with_effect(
-            &i,
-            "@x = 42; @x",
-            &[("x", Ty::Int)],
-            allowed,
-        );
+        let (result, _fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
         assert!(
             !errs.is_empty(),
             "context write should violate read-only constraint"
         );
-        assert!(errs.iter().any(|e| e.contains("effect constraint violated")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("effect constraint violated"))
+        );
     }
 
     /// Context-writing function with write-allowed constraint: should pass.
     #[test]
     fn effect_constraint_context_write_passes() {
         let i = Interner::new();
-        let qref = QualifiedRef {
-            name: i.intern("x"),
-            namespace: None,
+        let qref = QualifiedRef::root(i.intern("x"));
+        let allowed = EffectConstraint {
+            reads: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            writes: EffectBound::Only(std::collections::BTreeSet::from([qref])),
+            io: false,
+            self_modifying: false,
         };
-        let allowed = EffectSet {
-            reads: std::collections::BTreeSet::from([qref]),
-            writes: std::collections::BTreeSet::from([qref]),
-            ..EffectSet::default()
-        };
-        let (result, fid) = infer_with_effect(
-            &i,
-            "@x = 42; @x",
-            &[("x", Ty::Int)],
-            allowed,
-        );
+        let (result, fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "write should be allowed: {errs:?}");
         assert!(result.try_resolution(fid).is_some());
@@ -3404,14 +3440,12 @@ mod tests {
     #[test]
     fn effect_constraint_write_to_unknown_rejected() {
         let i = Interner::new();
-        let qref_x = QualifiedRef {
-            name: i.intern("x"),
-            namespace: None,
-        };
-        let allowed = EffectSet {
-            reads: std::collections::BTreeSet::from([qref_x]),
-            writes: std::collections::BTreeSet::from([qref_x]),
-            ..EffectSet::default()
+        let qref_x = QualifiedRef::root(i.intern("x"));
+        let allowed = EffectConstraint {
+            reads: EffectBound::Only(std::collections::BTreeSet::from([qref_x])),
+            writes: EffectBound::Only(std::collections::BTreeSet::from([qref_x])),
+            io: false,
+            self_modifying: false,
         };
         let (result, _fid) = infer_with_effect(
             &i,
@@ -3420,11 +3454,11 @@ mod tests {
             allowed,
         );
         let errs = error_strings(&i, &result);
+        assert!(!errs.is_empty(), "write to @y should violate constraint");
         assert!(
-            !errs.is_empty(),
-            "write to @y should violate constraint"
+            errs.iter()
+                .any(|e| e.contains("effect constraint violated"))
         );
-        assert!(errs.iter().any(|e| e.contains("effect constraint violated")));
     }
 
     /// No effect constraint (None): should always pass regardless of effects.
@@ -3520,7 +3554,10 @@ mod tests {
         let fid = graph.functions[0].id;
         let effect = &result.outcomes[&fid].meta().effect;
         let qref = QualifiedRef::root(i.intern("offset"));
-        assert!(effect.reads.contains(&qref), "lambda context read should be tracked");
+        assert!(
+            effect.reads.contains(&qref),
+            "lambda context read should be tracked"
+        );
     }
 
     // -- Complete/Incomplete boundary --
@@ -3534,7 +3571,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
         let fid = graph.functions[0].id;
-        assert!(result.outcomes[&fid].is_complete(), "declared Exact context should be Complete");
+        assert!(
+            result.outcomes[&fid].is_complete(),
+            "declared Exact context should be Complete"
+        );
     }
 
     /// Declared Inferred context → Complete (type inferred via fresh var).
@@ -3569,7 +3609,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
         let fid = graph.functions[0].id;
-        assert!(result.outcomes[&fid].is_complete(), "Inferred context should still be Complete");
+        assert!(
+            result.outcomes[&fid].is_complete(),
+            "Inferred context should still be Complete"
+        );
         // The inferred type should be Int (from @x + 1).
         let qref = QualifiedRef::root(i.intern("x"));
         assert_eq!(*result.context_type(&qref).unwrap(), Ty::Int);
@@ -3585,7 +3628,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
         let fid = graph.functions[0].id;
-        assert!(!result.outcomes[&fid].is_complete(), "undeclared context should be Incomplete");
+        assert!(
+            !result.outcomes[&fid].is_complete(),
+            "undeclared context should be Incomplete"
+        );
     }
 
     /// User-provided context type → Complete.
@@ -3599,7 +3645,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &user);
 
         let fid = graph.functions[0].id;
-        assert!(result.outcomes[&fid].is_complete(), "user-provided context should be Complete");
+        assert!(
+            result.outcomes[&fid].is_complete(),
+            "user-provided context should be Complete"
+        );
     }
 
     // -- Soundness: type mismatch detected --
@@ -3614,7 +3663,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
         let fid = graph.functions[0].id;
-        assert!(!result.outcomes[&fid].is_complete(), "type mismatch should be Incomplete");
+        assert!(
+            !result.outcomes[&fid].is_complete(),
+            "type mismatch should be Incomplete"
+        );
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -3627,7 +3679,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred)],
+            &[(
+                "test",
+                "$x + 1",
+                Some(vec![("x", Ty::Int)]),
+                Constraint::Inferred,
+            )],
             &[],
         );
         let fid = ids[0].1;
@@ -3643,7 +3700,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "$x + $y", Some(vec![("x", Ty::Int), ("y", Ty::Int)]), Constraint::Inferred)],
+            &[(
+                "test",
+                "$x + $y",
+                Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                Constraint::Inferred,
+            )],
             &[],
         );
         let fid = ids[0].1;
@@ -3660,7 +3722,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), Constraint::Inferred)],
+            &[(
+                "test",
+                "$x + 1",
+                Some(vec![("x", Ty::Int)]),
+                Constraint::Inferred,
+            )],
             &[],
         );
         let fid = ids[0].1;
@@ -3674,7 +3741,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", r#"$x + "hello""#, Some(vec![("x", Ty::String)]), Constraint::Inferred)],
+            &[(
+                "test",
+                r#"$x + "hello""#,
+                Some(vec![("x", Ty::String)]),
+                Constraint::Inferred,
+            )],
             &[],
         );
         let fid = ids[0].1;
@@ -3696,7 +3768,10 @@ mod tests {
             &[],
         );
         let fid = ids[0].1;
-        assert!(result.outcomes[&fid].is_complete(), "matching Exact output should be Complete");
+        assert!(
+            result.outcomes[&fid].is_complete(),
+            "matching Exact output should be Complete"
+        );
     }
 
     /// Exact output constraint violated → Incomplete.
@@ -3705,7 +3780,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", r#""hello""#, Some(vec![]), Constraint::Exact(Ty::Int))],
+            &[(
+                "test",
+                r#""hello""#,
+                Some(vec![]),
+                Constraint::Exact(Ty::Int),
+            )],
             &[],
         );
         let fid = ids[0].1;
@@ -3840,7 +3920,7 @@ mod tests {
             constraint: FnConstraint {
                 signature: None,
                 output: Constraint::Inferred,
-                effect: Some(EffectSet::default()), // pure constraint
+                effect: Some(crate::ty::EffectConstraint::pure()), // pure constraint
             },
         });
         let graph = CompilationGraph {
@@ -3852,7 +3932,10 @@ mod tests {
         let result = infer(&i, &graph, &ext, &FxHashMap::default());
 
         // reader should be Complete (no constraint).
-        assert!(result.outcomes[&reader_id].is_complete(), "reader has no constraint");
+        assert!(
+            result.outcomes[&reader_id].is_complete(),
+            "reader has no constraint"
+        );
         // caller should be Incomplete — transitive read violates pure.
         assert!(
             !result.outcomes[&caller_id].is_complete(),

@@ -56,9 +56,9 @@ pub fn lower(
     let mut errors = Vec::new();
 
     for func in graph.functions.iter() {
-        let FnKind::Local(_source) = &func.kind else {
+        if matches!(func.kind, FnKind::Extern) {
             continue;
-        };
+        }
         let Some(parsed) = extract.parsed.get(&func.id) else {
             continue;
         };
@@ -75,7 +75,10 @@ pub fn lower(
                 .iter()
                 .chain(refs.context_writes.iter())
                 .map(|&qref| {
-                    let ty = infer_result.context_type(&qref).cloned().unwrap_or(Ty::error());
+                    let ty = infer_result
+                        .context_type(&qref)
+                        .cloned()
+                        .unwrap_or(Ty::error());
                     (qref, ty)
                 })
                 .collect(),

@@ -39,10 +39,7 @@ pub trait Executor: Send + Sync {
     ) -> HandleValue;
 
     /// Force a handle to completion and return its result.
-    fn eval(
-        &self,
-        handle: HandleValue,
-    ) -> BoxFuture<'_, Result<ExecResult, RuntimeError>>;
+    fn eval(&self, handle: HandleValue) -> BoxFuture<'_, Result<ExecResult, RuntimeError>>;
 }
 
 // ── SequentialExecutor ───────────────────────────────────────────────
@@ -50,7 +47,9 @@ pub trait Executor: Send + Sync {
 /// Tag types for HandleValue dispatch in SequentialExecutor.
 struct DeferredInterpreter(Interpreter);
 struct DeferredBlocking(Box<dyn FnOnce() -> Result<ExecResult, RuntimeError> + Send + Sync>);
-struct DeferredAsync(SyncWrapper<Pin<Box<dyn Future<Output = Result<ExecResult, RuntimeError>> + Send>>>);
+struct DeferredAsync(
+    SyncWrapper<Pin<Box<dyn Future<Output = Result<ExecResult, RuntimeError>> + Send>>>,
+);
 
 /// Simplest executor — spawn stores the computation, eval runs it immediately.
 /// No parallelism. Good for testing and deterministic execution.
@@ -75,10 +74,7 @@ impl Executor for SequentialExecutor {
         HandleValue::new(DeferredAsync(SyncWrapper::new(f)))
     }
 
-    fn eval(
-        &self,
-        handle: HandleValue,
-    ) -> BoxFuture<'_, Result<ExecResult, RuntimeError>> {
+    fn eval(&self, handle: HandleValue) -> BoxFuture<'_, Result<ExecResult, RuntimeError>> {
         Box::pin(async move {
             // Try each deferred type via try_downcast chain.
             let handle = match handle.try_downcast::<DeferredInterpreter>() {

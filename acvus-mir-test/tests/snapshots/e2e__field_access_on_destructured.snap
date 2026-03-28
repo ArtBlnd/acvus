@@ -23,7 +23,7 @@ expression: ir
     19 │   r12 = T0 + r10
     20 │   return r12
 
-    ; r0 (@pair) : <error>
+    ; r0 (@pair) : ({name: String}, Int)
     ; r1 (v1) : ({name: String}, Int)
     ; r2 (v6) : {name: String}
     ; r3 (v8) : Bool

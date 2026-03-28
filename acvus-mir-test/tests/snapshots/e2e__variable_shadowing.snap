@@ -14,7 +14,7 @@ expression: ir
      8 │   r4 = r3 + r1
      9 │   return r4
 
-    ; r0 (@name) : <error>
+    ; r0 (@name) : String
     ; r1 (v1) : String
     ; r2 (v5) : String
     ; r3 (v9) : String

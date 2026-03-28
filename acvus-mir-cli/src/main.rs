@@ -63,10 +63,7 @@ fn main() {
     let raw_args: Vec<String> = env::args().collect();
 
     let is_script = raw_args.iter().any(|a| a == "--script");
-    let args: Vec<&String> = raw_args
-        .iter()
-        .filter(|a| !a.starts_with("--"))
-        .collect();
+    let args: Vec<&String> = raw_args.iter().filter(|a| !a.starts_with("--")).collect();
 
     if args.len() < 2 || raw_args.iter().any(|a| a == "--help" || a == "-h") {
         eprintln!("Usage: acvus-mir-cli [--script] <source-file> [context.json]");
@@ -191,7 +188,9 @@ fn main() {
             for e in &le.errors {
                 eprintln!(
                     "error [{}..{}]: {}",
-                    e.span.start, e.span.end, e.display(&interner)
+                    e.span.start,
+                    e.span.end,
+                    e.display(&interner)
                 );
             }
         }

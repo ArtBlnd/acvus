@@ -30,7 +30,7 @@ expression: ir
     25 │   r8 = T0 + r7
     26 │   return r8
 
-    ; r0 (@role) : <error>
+    ; r0 (@role) : String
     ; r1 (v1) : String
     ; r2 (v5) : Bool
     ; r3 (v8) : String

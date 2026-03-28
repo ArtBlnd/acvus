@@ -17,7 +17,7 @@ expression: ir
     10 │   r7 = r5 + r6
     11 │   return r7
 
-    ; r0 (@users) : <error>
+    ; r0 (@users) : List<{address: {city: String}}>
     ; r1 (v1) : List<{address: {city: String}}>
     ; r2 (iter(...)) : Iterator<{address: {city: String}}>
     ; r3 (v6) : Fn({address: {city: String}}) -> String

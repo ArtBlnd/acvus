@@ -37,7 +37,7 @@ expression: ir
     33 │   r10 = T0 + r9
     34 │   return r10
 
-    ; r0 (@score) : <error>
+    ; r0 (@score) : Int
     ; r1 (v1) : Int
     ; r2 (v5) : Bool
     ; r3 (v8) : String

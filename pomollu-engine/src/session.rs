@@ -3,16 +3,13 @@ use std::sync::Arc;
 use acvus_interpreter::{IntoValue, TypedValue, Value};
 use acvus_mir::context_registry::ContextTypeRegistry;
 use acvus_mir::ty::Ty;
-use acvus_orchestration::{
-    BlobStore, BlobStoreJournal, EntryRef, Journal,
-    Resolved,
-};
+use acvus_orchestration::{BlobStore, BlobStoreJournal, EntryRef, Journal, Resolved};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 use tsify::Tsify;
 use uuid::Uuid;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::build_registry;
@@ -52,9 +49,12 @@ async fn dispatch_extern(
     let name_str = interner.resolve(name);
     match name_str {
         "asset_url" => {
-            let Value::Pure(acvus_interpreter::PureValue::String(ref path)) = *args[0].value() else {
+            let Value::Pure(acvus_interpreter::PureValue::String(ref path)) = *args[0].value()
+            else {
                 return Err(acvus_interpreter::RuntimeError::unexpected_type(
-                    "asset_url", &[acvus_interpreter::ValueKind::String], args[0].value().kind(),
+                    "asset_url",
+                    &[acvus_interpreter::ValueKind::String],
+                    args[0].value().kind(),
                 ));
             };
             acvus_interpreter::set_interner_ctx(interner);
@@ -99,10 +99,7 @@ impl ChatSession {
     ///
     /// If IndexedDB already has state for `session_id`, the session is resumed.
     /// Otherwise a fresh session is created.
-    pub async fn create(
-        config_json: &str,
-        session_id: &str,
-    ) -> Result<ChatSession, JsValue> {
+    pub async fn create(config_json: &str, session_id: &str) -> Result<ChatSession, JsValue> {
         let interner = Interner::new();
 
         let cfg: SessionConfig =
@@ -137,21 +134,8 @@ impl ChatSession {
         })?;
 
         // Compute external context env for runtime type resolution.
-        let env = acvus_orchestration::compute_external_context_env(
-            &interner, &specs, registry.clone(),
-        ).map_err(|errs| {
-            let msg = errs
-                .iter()
-                .map(|e| e.display(&interner).to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            JsValue::from_str(&msg)
-        })?;
-        let compile_registry = env.registry.without_scoped();
-
-        let fetch = Arc::new(WebFetch);
-        let compiled =
-            acvus_orchestration::compile_nodes(&interner, &specs, registry, fetch)
+        let env =
+            acvus_orchestration::compute_external_context_env(&interner, &specs, registry.clone())
                 .map_err(|errs| {
                     let msg = errs
                         .iter()
@@ -160,12 +144,24 @@ impl ChatSession {
                         .join("\n");
                     JsValue::from_str(&msg)
                 })?;
+        let compile_registry = env.registry.without_scoped();
 
+        let fetch = Arc::new(WebFetch);
+        let compiled = acvus_orchestration::compile_nodes(&interner, &specs, registry, fetch)
+            .map_err(|errs| {
+                let msg = errs
+                    .iter()
+                    .map(|e| e.display(&interner).to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                JsValue::from_str(&msg)
+            })?;
 
         // Open IDB store and journal
         let session_id_owned = session_id.to_string();
         let store = IdbBlobStore::open(session_id_owned.clone()).await;
-        let (journal, cursor) = match BlobStoreJournal::open(store, interner.clone()).await
+        let (journal, cursor) = match BlobStoreJournal::open(store, interner.clone())
+            .await
             .map_err(|e| JsError::new(&format!("journal open: {e}")))?
         {
             Some(journal) => {
@@ -176,7 +172,8 @@ impl ChatSession {
             }
             None => {
                 let store = IdbBlobStore::open(session_id_owned).await;
-                BlobStoreJournal::new(store, interner.clone()).await
+                BlobStoreJournal::new(store, interner.clone())
+                    .await
                     .map_err(|e| JsError::new(&format!("journal new: {e}")))?
             }
         };
@@ -187,15 +184,10 @@ impl ChatSession {
             None => None,
         };
 
-        let engine = acvus_chat::ChatEngine::new(
-            compiled,
-            journal,
-            cursor,
-            &cfg.entrypoint,
-            &interner,
-        )
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let engine =
+            acvus_chat::ChatEngine::new(compiled, journal, cursor, &cfg.entrypoint, &interner)
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         let entrypoint_name = cfg.entrypoint.clone();
 
@@ -267,7 +259,9 @@ impl ChatSession {
             move |name: Astr, args: Vec<acvus_interpreter::TypedValue>| {
                 let interner = interner.clone();
                 let asset_store = asset_store.clone();
-                UnsafeSend(async move { dispatch_extern(&interner, &asset_store, name, args).await })
+                UnsafeSend(
+                    async move { dispatch_extern(&interner, &asset_store, name, args).await },
+                )
             }
         };
 
@@ -316,7 +310,9 @@ impl ChatSession {
             move |name: Astr, args: Vec<acvus_interpreter::TypedValue>| {
                 let interner = interner.clone();
                 let asset_store = asset_store.clone();
-                UnsafeSend(async move { dispatch_extern(&interner, &asset_store, name, args).await })
+                UnsafeSend(
+                    async move { dispatch_extern(&interner, &asset_store, name, args).await },
+                )
             }
         };
 
@@ -345,7 +341,9 @@ impl ChatSession {
 
     /// Current turn count.
     pub async fn turn_count(&self) -> Result<usize, JsError> {
-        self.engine.history_len().await
+        self.engine
+            .history_len()
+            .await
             .map_err(|e| JsError::new(&format!("turn_count: {e}")))
     }
 }
@@ -385,7 +383,11 @@ impl ChatSession {
         if !self.engine.journal.contains(uuid) {
             return Err(JsError::new("entry not found in history tree"));
         }
-        let entry = self.engine.journal.entry(uuid).await
+        let entry = self
+            .engine
+            .journal
+            .entry(uuid)
+            .await
             .map_err(|e| JsError::new(&e.to_string()))?;
         let view = crate::history::StorageView {
             cursor: uuid.to_string(),
@@ -405,7 +407,11 @@ impl ChatSession {
     /// Get visible state at the current cursor.
     pub async fn visible_state(&self) -> Result<JsValue, JsError> {
         let cursor = self.engine.cursor;
-        let entry = self.engine.journal.entry(cursor).await
+        let entry = self
+            .engine
+            .journal
+            .entry(cursor)
+            .await
             .map_err(|e| JsError::new(&e.to_string()))?;
         let view = crate::history::StorageView {
             cursor: cursor.to_string(),

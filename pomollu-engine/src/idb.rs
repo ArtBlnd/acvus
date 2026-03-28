@@ -32,15 +32,14 @@ async fn idb_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
     let promise = Promise::new(&mut |resolve, reject| {
         let resolve2 = resolve.clone();
         let request_ref = request.clone();
-        let on_success =
-            Closure::once(move |_: JsValue| match request_ref.result() {
-                Ok(val) => {
-                    let _ = resolve2.call1(&JsValue::NULL, &val);
-                }
-                Err(e) => {
-                    let _ = reject.call1(&JsValue::NULL, &e);
-                }
-            });
+        let on_success = Closure::once(move |_: JsValue| match request_ref.result() {
+            Ok(val) => {
+                let _ = resolve2.call1(&JsValue::NULL, &val);
+            }
+            Err(e) => {
+                let _ = reject.call1(&JsValue::NULL, &e);
+            }
+        });
         request.set_onsuccess(Some(on_success.as_ref().unchecked_ref()));
         on_success.forget();
 
@@ -127,9 +126,7 @@ impl IdbBlobStore {
             open_req.set_onupgradeneeded(Some(on_upgrade.as_ref().unchecked_ref()));
             on_upgrade.forget();
 
-            let db_val = idb_request(&open_req)
-                .await
-                .expect("failed to open IDB");
+            let db_val = idb_request(&open_req).await.expect("failed to open IDB");
             let db: IdbDatabase = db_val.unchecked_into();
             db
         })
@@ -174,9 +171,7 @@ impl BlobStore for IdbBlobStore {
             let (_tx, store) = self.blob_store(IdbTransactionMode::Readwrite);
             let arr = Uint8Array::from(data.as_slice());
             let key = JsValue::from_str(&hex_key);
-            let req = store
-                .put_with_key(&arr, &key)
-                .expect("put_with_key");
+            let req = store.put_with_key(&arr, &key).expect("put_with_key");
             idb_request(&req).await.expect("put request failed");
         })
         .await;
@@ -426,7 +421,10 @@ impl IdbAssetStore {
         })
         .await;
 
-        Self { db, db_name: db_name_clone }
+        Self {
+            db,
+            db_name: db_name_clone,
+        }
     }
 
     pub fn db_name(&self) -> &str {
@@ -475,8 +473,7 @@ impl IdbAssetStore {
             if result.is_undefined() || result.is_null() {
                 0
             } else {
-                result.as_f64()
-                    .expect("IDB version must be a number") as i64
+                result.as_f64().expect("IDB version must be a number") as i64
             }
         })
         .await

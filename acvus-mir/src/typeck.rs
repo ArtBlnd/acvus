@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use acvus_ast::{
-    BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
+    AstId, BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Interner};
@@ -10,15 +10,15 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
-use crate::ty::{Effect, Param, Polarity, Materiality, Ty, TySubst, TypeEnv};
+use crate::ty::{Effect, Materiality, Param, Polarity, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
 
-/// Maps each AST Span to its inferred type.
-pub type TypeMap = FxHashMap<Span, Ty>;
+/// Maps each AST node id to its inferred type.
+pub type TypeMap = FxHashMap<AstId, Ty>;
 
-/// Maps expression spans to the coercion needed at that point.
+/// Maps expression AST ids to the coercion needed at that point.
 /// Produced by the type checker, consumed by the lowerer.
-pub type CoercionMap = Vec<(Span, CastKind)>;
+pub type CoercionMap = Vec<(AstId, CastKind)>;
 
 // ── TypeResolution: boundary between TypeChecker and Lowerer ──────────
 
@@ -94,7 +94,7 @@ pub fn check_completeness(
     let type_map = resolution
         .type_map
         .into_iter()
-        .map(|(span, ty)| (span, subst.resolve(&ty)))
+        .map(|(id, ty)| (id, subst.resolve(&ty)))
         .collect();
     Ok(TypeResolution::new(
         type_map,
@@ -109,8 +109,10 @@ pub fn check_completeness(
 /// `allowed` is the upper bound: body must not exceed it.
 pub fn check_effect_constraint(
     body_effect: &Effect,
-    allowed: &crate::ty::EffectSet,
+    allowed: &crate::ty::EffectConstraint,
 ) -> Result<(), MirError> {
+    use crate::ty::EffectBound;
+
     let actual = match body_effect {
         Effect::Resolved(set) => set,
         // Unresolved effect variable — cannot verify, reject to be sound.
@@ -126,13 +128,23 @@ pub fn check_effect_constraint(
 
     let mut violations = Vec::new();
 
-    if !allowed.writes.is_superset(&actual.writes) {
-        let forbidden: Vec<_> = actual.writes.difference(&allowed.writes).collect();
-        violations.push(format!("writes to {:?}", forbidden));
+    match &allowed.reads {
+        EffectBound::Any => {} // all reads allowed
+        EffectBound::Only(allowed_reads) => {
+            if !allowed_reads.is_superset(&actual.reads) {
+                let forbidden: Vec<_> = actual.reads.difference(allowed_reads).collect();
+                violations.push(format!("reads from {:?}", forbidden));
+            }
+        }
     }
-    if !allowed.reads.is_superset(&actual.reads) {
-        let forbidden: Vec<_> = actual.reads.difference(&allowed.reads).collect();
-        violations.push(format!("reads from {:?}", forbidden));
+    match &allowed.writes {
+        EffectBound::Any => {} // all writes allowed
+        EffectBound::Only(allowed_writes) => {
+            if !allowed_writes.is_superset(&actual.writes) {
+                let forbidden: Vec<_> = actual.writes.difference(allowed_writes).collect();
+                violations.push(format!("writes to {:?}", forbidden));
+            }
+        }
     }
     if actual.io && !allowed.io {
         violations.push("performs IO".to_string());
@@ -186,11 +198,11 @@ pub struct TypeChecker<'a, 's> {
     /// Nested lambdas push onto this stack; lookups record captures in ALL
     /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
-    /// Maps lambda expression span → body expression span.
+    /// Maps lambda expression AstId → body expression AstId.
     /// Used by `detect_fn_ret_coercion` to register coercions on the
-    /// correct span (body, not lambda) so the lowerer's `maybe_cast`
+    /// correct id (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
-    lambda_body_spans: FxHashMap<Span, Span>,
+    lambda_body_ids: FxHashMap<AstId, AstId>,
     /// Top-level body effect. Tracks reads/writes as QualifiedRef, io, and self_modifying.
     /// Starts as pure (empty EffectSet); updated as context access and effectful calls occur.
     body_effect: Effect,
@@ -218,7 +230,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             errors: Vec::new(),
             analysis_mode: false,
             lambda_stack: Vec::new(),
-            lambda_body_spans: FxHashMap::default(),
+            lambda_body_ids: FxHashMap::default(),
             body_effect: Effect::pure(),
             declared_param_types: Vec::new(),
             next_declared_param: 0,
@@ -267,9 +279,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let resolved: TypeMap = self
             .type_map
             .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .map(|(id, ty)| (*id, self.subst.resolve(ty)))
             .collect();
-        let extern_params: Vec<(Astr, Ty)> = self.param_types
+        let extern_params: Vec<(Astr, Ty)> = self
+            .param_types
             .iter()
             .map(|(name, ty)| (*name, self.subst.resolve(ty)))
             .collect();
@@ -295,7 +308,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let tail_ty = if let Some(tail) = &script.tail {
             let ty = self.check_expr(false, tail);
             if let Some(expected) = expected_tail
-                && self.unify_covariant(&ty, expected, tail.span()).is_err()
+                && self.unify_covariant(&ty, expected, Some(tail.id())).is_err()
             {
                 let resolved = self.subst.resolve(&ty);
                 let expected_resolved = self.subst.resolve(expected);
@@ -317,9 +330,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let resolved: TypeMap = self
             .type_map
             .iter()
-            .map(|(span, ty)| (*span, self.subst.resolve(ty)))
+            .map(|(id, ty)| (*id, self.subst.resolve(ty)))
             .collect();
-        let extern_params: Vec<(Astr, Ty)> = self.param_types
+        let extern_params: Vec<(Astr, Ty)> = self
+            .param_types
             .iter()
             .map(|(name, ty)| (*name, self.subst.resolve(ty)))
             .collect();
@@ -339,14 +353,16 @@ impl<'a, 's> TypeChecker<'a, 's> {
         &mut self,
         value_ty: &Ty,
         expected_ty: &Ty,
-        span: Span,
+        coerce_id: Option<AstId>,
     ) -> Result<(), (Ty, Ty)> {
         let result = self.subst.unify(value_ty, expected_ty, Polarity::Covariant);
         if result.is_ok() {
-            let resolved_val = self.subst.resolve(value_ty);
-            let resolved_exp = self.subst.resolve(expected_ty);
-            if let Some(kind) = CastKind::between(&resolved_val, &resolved_exp) {
-                self.coercion_map.push((span, kind));
+            if let Some(id) = coerce_id {
+                let resolved_val = self.subst.resolve(value_ty);
+                let resolved_exp = self.subst.resolve(expected_ty);
+                if let Some(kind) = CastKind::between(&resolved_val, &resolved_exp) {
+                    self.coercion_map.push((id, kind));
+                }
             }
         }
         result
@@ -388,13 +404,13 @@ impl<'a, 's> TypeChecker<'a, 's> {
         self.errors.push(MirError { kind, span });
     }
 
-    fn record(&mut self, span: Span, ty: Ty) {
-        self.type_map.insert(span, ty);
+    fn record(&mut self, id: AstId, ty: Ty) {
+        self.type_map.insert(id, ty);
     }
 
-    /// Record the type at a span and return it.
-    fn record_ret(&mut self, span: Span, ty: Ty) -> Ty {
-        self.record(span, ty.clone());
+    /// Record the type at an AST id and return it.
+    fn record_ret(&mut self, id: AstId, ty: Ty) -> Ty {
+        self.record(id, ty.clone());
         ty
     }
 
@@ -441,6 +457,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         func: &str,
         arg_types: &[Ty],
         arg_spans: &[Span],
+        arg_ids: &[AstId],
         param_tys: &[Ty],
         call_span: Span,
     ) -> bool {
@@ -457,7 +474,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
         }
         for (i, (at, pt)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
             let span = arg_spans.get(i).copied().unwrap_or(call_span);
-            if self.unify_covariant(at, pt, span).is_err() {
+            let coerce_id = arg_ids.get(i).copied();
+            if self.unify_covariant(at, pt, coerce_id).is_err() {
                 self.error(
                     MirErrorKind::UnificationFailure {
                         expected: self.subst.resolve(pt),
@@ -469,9 +487,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
             // Detect Fn return-type coercion: when arg is a lambda whose
             // return type was coerced (e.g. Deque → Iterator), register the
-            // coercion on the lambda body expression's span so the lowerer
+            // coercion on the lambda body expression's id so the lowerer
             // can insert a Cast at the return site.
-            self.detect_fn_ret_coercion(at, pt, span);
+            if let Some(&arg_id) = arg_ids.get(i) {
+                self.detect_fn_ret_coercion(at, pt, arg_id);
+            }
         }
         true
     }
@@ -479,7 +499,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     /// If `arg_ty` and `param_ty` are both `Fn` and their resolved return
     /// types require a Cast, look up the lambda body span from the type_map
     /// and register the coercion there.
-    fn detect_fn_ret_coercion(&mut self, arg_ty: &Ty, param_ty: &Ty, lambda_span: Span) {
+    fn detect_fn_ret_coercion(&mut self, arg_ty: &Ty, param_ty: &Ty, lambda_id: AstId) {
         let resolved_arg = self.subst.resolve(arg_ty);
         let resolved_param = self.subst.resolve(param_ty);
         let (Ty::Fn { ret: arg_ret, .. }, Ty::Fn { ret: param_ret, .. }) =
@@ -492,8 +512,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
             // expression span). This way the lowerer's `lower_expr(body)` →
             // `maybe_cast(body.span(), val)` naturally picks it up and inserts
             // a Cast before Return.
-            if let Some(&body_span) = self.lambda_body_spans.get(&lambda_span) {
-                self.coercion_map.push((body_span, kind));
+            if let Some(&body_id) = self.lambda_body_ids.get(&lambda_id) {
+                self.coercion_map.push((body_id, kind));
             }
         }
     }
@@ -507,13 +527,13 @@ impl<'a, 's> TypeChecker<'a, 's> {
     fn check_node(&mut self, node: &Node) {
         match node {
             Node::Text { .. } | Node::Comment { .. } => {}
-            Node::InlineExpr { expr, span } => {
+            Node::InlineExpr { expr, span, .. } => {
                 let ty = self.check_expr(false, expr);
                 let resolved = self.subst.resolve(&ty);
                 match &resolved {
                     Ty::String | Ty::Error(_) => {}
                     Ty::Param { .. } => {
-                        if self.unify_covariant(&ty, &Ty::String, *span).is_err() {
+                        if self.unify_covariant(&ty, &Ty::String, Some(expr.id())).is_err() {
                             self.error(MirErrorKind::EmitNotString { actual: resolved }, *span);
                         }
                     }
@@ -528,12 +548,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
         match stmt {
-            acvus_ast::Stmt::Bind { name, expr, span } => {
+            acvus_ast::Stmt::Bind { id, name, expr, span } => {
                 let ty = self.check_expr(false, expr);
                 self.define_var(*name, ty.clone());
-                self.record(*span, ty);
+                self.record(*id, ty);
             }
-            acvus_ast::Stmt::ContextStore { name, expr, span } => {
+            acvus_ast::Stmt::ContextStore { id, name, expr, span } => {
                 let ty = self.check_expr(false, expr);
                 self.record_context_write(*name);
                 let ctx_ty = self
@@ -551,7 +571,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         *span,
                     );
                 }
-                self.record(*span, ty);
+                self.record(*id, ty);
             }
             acvus_ast::Stmt::Expr(expr) => {
                 self.check_expr(false, expr);
@@ -561,6 +581,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 source,
                 body,
                 span,
+                ..
             } => {
                 let source_ty = self.check_expr(false, source);
                 let resolved_source = self.subst.resolve(&source_ty);
@@ -576,6 +597,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 source,
                 body,
                 span,
+                ..
             } => {
                 let source_ty = self.check_expr(false, source);
                 let resolved = self.subst.resolve(&source_ty);
@@ -701,7 +723,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     fn check_expr(&mut self, allow_non_pure: bool, expr: &Expr) -> Ty {
         match expr {
-            Expr::Literal { value, span } => {
+            Expr::Literal { id, value, span } => {
                 let ty = match value {
                     Literal::Int(_) => Ty::Int,
                     Literal::Float(_) => Ty::Float,
@@ -717,7 +739,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             let first_ty = self.literal_ty(&elems[0]);
                             for elem in &elems[1..] {
                                 let elem_ty = self.literal_ty(elem);
-                                if self.unify_covariant(&elem_ty, &first_ty, *span).is_err() {
+                                if self.unify_covariant(&elem_ty, &first_ty, Some(*id)).is_err() {
                                     self.error(
                                         MirErrorKind::HeterogeneousList {
                                             expected: self.subst.resolve(&first_ty),
@@ -732,10 +754,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         }
                     }
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::ContextRef { name: qref, span } => {
+            Expr::ContextRef { id, name: qref, span } => {
                 let ty = self.resolve_context_type(*qref, *span);
                 self.record_context_read(*qref);
                 let ty = if !allow_non_pure
@@ -754,10 +776,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 } else {
                     ty
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::Ident {
+                id,
                 name,
                 ref_kind,
                 span,
@@ -769,13 +792,15 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             if self.analysis_mode {
                                 // In analysis mode, unknown $params are inferred.
                                 // Use declared type from Signature if available.
-                                let ty = if self.next_declared_param < self.declared_param_types.len() {
-                                    let t = self.declared_param_types[self.next_declared_param].clone();
-                                    self.next_declared_param += 1;
-                                    t
-                                } else {
-                                    self.subst.fresh_param()
-                                };
+                                let ty =
+                                    if self.next_declared_param < self.declared_param_types.len() {
+                                        let t = self.declared_param_types[self.next_declared_param]
+                                            .clone();
+                                        self.next_declared_param += 1;
+                                        t
+                                    } else {
+                                        self.subst.fresh_param()
+                                    };
                                 self.param_types.insert(*name, ty.clone());
                                 ty
                             } else {
@@ -805,10 +830,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         }
                     },
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::BinaryOp {
+                id,
                 left,
                 op,
                 right,
@@ -834,7 +860,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         | BinOp::Shr => Ty::error(),
                         _ => Ty::Bool,
                     };
-                    return self.record_ret(*span, ty);
+                    return self.record_ret(*id, ty);
                 }
 
                 let ty = match op {
@@ -846,7 +872,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                 self.subst.resolve(&rt),
                                 *span,
                             );
-                            return self.record_ret(*span, Ty::error());
+                            return self.record_ret(*id, Ty::error());
                         }
                         let rl = self.subst.resolve(&lt);
                         match &rl {
@@ -865,8 +891,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         Ty::Bool
                     }
                     BinOp::And | BinOp::Or => {
-                        let lok = self.unify_covariant(&lt, &Ty::Bool, *span).is_ok();
-                        let rok = self.unify_covariant(&rt, &Ty::Bool, *span).is_ok();
+                        let lok = self.unify_covariant(&lt, &Ty::Bool, None).is_ok();
+                        let rok = self.unify_covariant(&rt, &Ty::Bool, None).is_ok();
                         if !lok || !rok {
                             self.binop_error(
                                 op_str(*op),
@@ -878,8 +904,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         Ty::Bool
                     }
                     BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                        let lok = self.unify_covariant(&lt, &Ty::Int, *span).is_ok();
-                        let rok = self.unify_covariant(&rt, &Ty::Int, *span).is_ok();
+                        let lok = self.unify_covariant(&lt, &Ty::Int, None).is_ok();
+                        let rok = self.unify_covariant(&rt, &Ty::Int, None).is_ok();
                         if !lok || !rok {
                             self.binop_error(
                                 op_str(*op),
@@ -907,10 +933,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         Ty::Bool
                     }
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::UnaryOp { op, operand, span } => {
+            Expr::UnaryOp { id, op, operand, span } => {
                 let ot = self.check_expr(false, operand);
                 let ot = self.subst.resolve(&ot);
 
@@ -920,7 +946,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         acvus_ast::UnaryOp::Neg => Ty::error(),
                         acvus_ast::UnaryOp::Not => Ty::Bool,
                     };
-                    return self.record_ret(*span, ty);
+                    return self.record_ret(*id, ty);
                 }
 
                 let ty = match op {
@@ -937,17 +963,18 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         match &ot {
                             Ty::Bool => {}
                             Ty::Param { .. } => {
-                                let _ = self.unify_covariant(&ot, &Ty::Bool, *span);
+                                let _ = self.unify_covariant(&ot, &Ty::Bool, None);
                             }
                             _ => self.binop_error("!", ot, Ty::error(), *span),
                         }
                         Ty::Bool
                     }
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::FieldAccess {
+                id,
                 object,
                 field,
                 span,
@@ -1008,15 +1035,15 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         Ty::error()
                     }
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::FuncCall { func, args, span } => {
+            Expr::FuncCall { id, func, args, span } => {
                 let ty = self.check_func_call(func, args, None, *span);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Pipe { left, right, span } => {
+            Expr::Pipe { id, left, right, span } => {
                 // Desugar: `a | f(b, c)` → `f(a, b, c)`
                 // `a | f` → `f(a)`
                 let pipe_left = Some(left.as_ref());
@@ -1028,25 +1055,23 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         ref_kind: RefKind::Value,
                         ..
                     }
-                    | Expr::ContextRef { .. } => {
-                        self.check_func_call(right, &[], pipe_left, *span)
-                    }
+                    | Expr::ContextRef { .. } => self.check_func_call(right, &[], pipe_left, *span),
                     _ => {
                         let lt = self.check_expr(false, left);
                         let rt = self.check_expr(false, right);
-                        self.check_callable(&rt, &[], &Some(lt), Some(left.span()), *span)
+                        self.check_callable(&rt, &[], &Some(lt), Some(left.span()), Some(left.id()), *span)
                     }
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Lambda { params, body, span } => {
+            Expr::Lambda { id, params, body, span } => {
                 self.push_scope();
                 let mut param_types = Vec::new();
                 for p in params {
                     let pt = self.subst.fresh_param();
                     self.define_var(p.name, pt.clone());
-                    self.record(p.span, pt.clone());
+                    self.record(p.id, pt.clone());
                     param_types.push(Param::new(p.name, pt));
                 }
 
@@ -1070,7 +1095,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 // Record body span so detect_fn_ret_coercion can register
                 // return-site coercions on the correct expression.
-                self.lambda_body_spans.insert(*span, body.span());
+                self.lambda_body_ids.insert(*id, body.id());
 
                 self.pop_scope();
                 let ty = Ty::Fn {
@@ -1079,15 +1104,16 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     captures: capture_types,
                     effect,
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Paren { inner, span } => {
+            Expr::Paren { id, inner, span } => {
                 let ty = self.check_expr(false, inner);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::List {
+                id,
                 head,
                 rest,
                 tail,
@@ -1100,7 +1126,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     let elem = self.subst.fresh_param();
                     let origin = self.subst.fresh_concrete_origin();
                     let ty = Ty::Deque(Box::new(elem), origin);
-                    return self.record_ret(*span, ty);
+                    return self.record_ret(*id, ty);
                 }
 
                 let elem_ty = match all_elems.first() {
@@ -1110,7 +1136,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 for elem in all_elems.iter().skip(1) {
                     let et = self.check_expr(false, elem);
-                    if self.unify_covariant(&et, &elem_ty, *span).is_err() {
+                    if self.unify_covariant(&et, &elem_ty, None).is_err() {
                         self.error(
                             MirErrorKind::HeterogeneousList {
                                 expected: self.subst.resolve(&elem_ty),
@@ -1123,20 +1149,21 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 let origin = self.subst.fresh_concrete_origin();
                 let ty = Ty::Deque(Box::new(self.subst.resolve(&elem_ty)), origin);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Object { fields, span } => {
+            Expr::Object { id, fields, span } => {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(false, value);
                     field_types.insert(*key, ft);
                 }
                 let ty = Ty::Object(field_types);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::Range {
+                id,
                 start,
                 end,
                 kind: _,
@@ -1152,10 +1179,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 if !matches!(&et, Ty::Int | Ty::Error(_)) {
                     self.error(MirErrorKind::RangeBoundsNotInt { actual: et }, *span);
                 }
-                self.record_ret(*span, Ty::Range)
+                self.record_ret(*id, Ty::Range)
             }
 
-            Expr::Tuple { elements, span } => {
+            Expr::Tuple { id, elements, span } => {
                 let elem_types: Vec<Ty> = elements
                     .iter()
                     .map(|elem| match elem {
@@ -1164,23 +1191,24 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     })
                     .collect();
                 let ty = Ty::Tuple(elem_types);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Group { elements, span } => {
+            Expr::Group { id, elements, span } => {
                 // Group is only valid as lambda param list (handled by parser).
                 let Some(last) = elements.last() else {
-                    self.record(*span, Ty::Unit);
+                    self.record(*id, Ty::Unit);
                     return Ty::Unit;
                 };
                 for e in &elements[..elements.len() - 1] {
                     self.check_expr(false, e);
                 }
                 let ty = self.check_expr(false, last);
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
             Expr::Variant {
+                id,
                 enum_name: ast_enum_name,
                 tag,
                 payload,
@@ -1204,7 +1232,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             };
                             let inner_ty = self.check_expr(false, inner_expr);
                             if self
-                                .unify_covariant(&type_params[*idx], &inner_ty, *span)
+                                .unify_covariant(&type_params[*idx], &inner_ty, None)
                                 .is_err()
                             {
                                 self.error(
@@ -1221,7 +1249,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     // Builtin Option → Ty::Option
                     let inner = self.subst.resolve(&type_params[0]);
                     let ty = Ty::Option(Box::new(inner));
-                    return self.record_ret(*span, ty);
+                    return self.record_ret(*id, ty);
                 }
 
                 // Structural enum: requires qualified name (A::B).
@@ -1250,17 +1278,17 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     name: *enum_name,
                     variants,
                 };
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
 
-            Expr::Block { stmts, tail, span } => {
+            Expr::Block { id, stmts, tail, span } => {
                 self.push_scope();
                 for stmt in stmts {
                     self.check_stmt(stmt);
                 }
                 let ty = self.check_expr(false, tail);
                 self.pop_scope();
-                self.record_ret(*span, ty)
+                self.record_ret(*id, ty)
             }
         }
     }
@@ -1287,7 +1315,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
             let ft = self.check_expr(true, func);
             let resolved = self.subst.resolve(&ft);
             let pipe_left_span = pipe_left.map(|e| e.span());
-            return self.check_callable(&resolved, args, &pipe_ty, pipe_left_span, call_span);
+            let pipe_left_id = pipe_left.map(|e| e.id());
+            return self.check_callable(&resolved, args, &pipe_ty, pipe_left_span, pipe_left_id, call_span);
         };
 
         // Check named functions (builtins, externs, user-defined).
@@ -1303,6 +1332,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 .map(|e| e.span())
                 .chain(args.iter().map(|a| a.span()))
                 .collect();
+            let arg_ids: Vec<AstId> = pipe_left
+                .iter()
+                .map(|e| e.id())
+                .chain(args.iter().map(|a| a.id()))
+                .collect();
 
             let fn_ty = self.subst.instantiate(fn_sig);
             match &fn_ty {
@@ -1314,7 +1348,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 } => {
                     self.propagate_call_effect(effect.clone());
                     let tys: Vec<Ty> = param_tys.iter().map(|p| p.ty.clone()).collect();
-                    if !self.check_args(name_str, &arg_types, &arg_spans, &tys, call_span) {
+                    if !self.check_args(name_str, &arg_types, &arg_spans, &arg_ids, &tys, call_span) {
                         return Ty::error();
                     }
                     return self.subst.resolve(ret);
@@ -1333,7 +1367,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
         if let Some(var_ty) = self.lookup_var(*name) {
             let resolved = self.subst.resolve(&var_ty);
             let pipe_left_span = pipe_left.map(|e| e.span());
-            return self.check_callable(&resolved, args, &pipe_ty, pipe_left_span, call_span);
+            let pipe_left_id = pipe_left.map(|e| e.id());
+            return self.check_callable(&resolved, args, &pipe_ty, pipe_left_span, pipe_left_id, call_span);
         }
 
         self.error(
@@ -1369,6 +1404,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         args: &[Expr],
         pipe_ty: &Option<Ty>,
         pipe_left_span: Option<Span>,
+        pipe_left_id: Option<AstId>,
         call_span: Span,
     ) -> Ty {
         // Early exit for non-callable types.
@@ -1399,6 +1435,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .copied()
             .chain(args.iter().map(|a| a.span()))
             .collect();
+        let arg_ids: Vec<AstId> = pipe_left_id
+            .iter()
+            .copied()
+            .chain(args.iter().map(|a| a.id()))
+            .collect();
 
         match func_ty {
             Ty::Fn {
@@ -1410,7 +1451,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 // Propagate effect to enclosing scope (lambda or top-level body).
                 self.propagate_call_effect(effect.clone());
                 let tys: Vec<Ty> = params.iter().map(|p| p.ty.clone()).collect();
-                if !self.check_args("<closure>", &arg_types, &arg_spans, &tys, call_span) {
+                if !self.check_args("<closure>", &arg_types, &arg_spans, &arg_ids, &tys, call_span) {
                     return Ty::error();
                 }
                 self.subst.resolve(ret)
@@ -1427,7 +1468,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     captures: vec![],
                     effect: Effect::pure(),
                 };
-                if self.unify_covariant(func_ty, &fn_ty, call_span).is_err() {
+                if self.unify_covariant(func_ty, &fn_ty, None).is_err() {
                     self.error(
                         MirErrorKind::UndefinedFunction("<expr>".to_string()),
                         call_span,
@@ -1469,13 +1510,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Pattern::Binding {
                 name,
                 ref_kind,
-                span: _,
+                ..
             } => match ref_kind {
                 RefKind::ExternParam => {
                     self.error(
-                        MirErrorKind::ExternParamAssign(
-                            self.interner.resolve(*name).to_string(),
-                        ),
+                        MirErrorKind::ExternParamAssign(self.interner.resolve(*name).to_string()),
                         span,
                     );
                 }
@@ -1487,7 +1526,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value);
                 if self
-                    .unify_covariant(&source_resolved, &pat_ty, span)
+                    .unify_covariant(&source_resolved, &pat_ty, None)
                     .is_err()
                 {
                     self.error(
@@ -1510,7 +1549,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         let var = self.subst.fresh_param();
                         let origin = self.subst.fresh_concrete_origin();
                         let list_ty = Ty::Deque(Box::new(var.clone()), origin);
-                        if self.unify_covariant(source_ty, &list_ty, span).is_err() {
+                        if self.unify_covariant(source_ty, &list_ty, None).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
                                     pattern_ty: list_ty,
@@ -1539,7 +1578,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         .map(|f| (f.key, self.subst.fresh_param()))
                         .collect();
                     let obj_ty = Ty::Object(field_vars.clone());
-                    if self.unify_covariant(source_ty, &obj_ty, span).is_err() {
+                    if self.unify_covariant(source_ty, &obj_ty, None).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
                                 pattern_ty: obj_ty,
@@ -1575,7 +1614,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             } => {
                 // Range pattern matches Int source.
                 if self
-                    .unify_covariant(&source_resolved, &Ty::Int, span)
+                    .unify_covariant(&source_resolved, &Ty::Int, None)
                     .is_err()
                 {
                     self.error(
@@ -1603,7 +1642,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         let vars: Vec<Ty> =
                             elements.iter().map(|_| self.subst.fresh_param()).collect();
                         let tuple_ty = Ty::Tuple(vars.clone());
-                        if self.unify_covariant(source_ty, &tuple_ty, span).is_err() {
+                        if self.unify_covariant(source_ty, &tuple_ty, None).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
                                     pattern_ty: tuple_ty,
@@ -1636,7 +1675,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 {
                     let enum_ty = Ty::Option(Box::new(self.subst.resolve(&type_params[0])));
                     if self
-                        .unify_covariant(&source_resolved, &enum_ty, span)
+                        .unify_covariant(&source_resolved, &enum_ty, None)
                         .is_err()
                     {
                         self.error(
@@ -1684,7 +1723,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 };
                 // Unify against the original (unresolved) source_ty so that
                 // find_leaf_var can trace the Var chain and rebind the merged type.
-                if self.unify_covariant(source_ty, &enum_ty, span).is_err() {
+                if self.unify_covariant(source_ty, &enum_ty, None).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: enum_ty,
@@ -1915,7 +1954,10 @@ mod tests {
     fn extern_param_write_rejected() {
         let src = "{{ $count = 42 }}";
         let errs = check(src).unwrap_err();
-        assert!(errs.iter().any(|e| matches!(&e.kind, MirErrorKind::ExternParamAssign(_))));
+        assert!(
+            errs.iter()
+                .any(|e| matches!(&e.kind, MirErrorKind::ExternParamAssign(_)))
+        );
     }
 
     #[test]

@@ -12,9 +12,7 @@ use acvus_utils::Interner;
 /// 2.1 C: Integer literal evaluates correctly.
 #[tokio::test]
 async fn expr_literal_int() {
-    let g = NodeBuilder::new(Interner::new())
-        .expr("x", "42")
-        .build();
+    let g = NodeBuilder::new(Interner::new()).expr("x", "42").build();
     let val = g.resolve_once("x").await.unwrap();
     assert!(matches!(val.value(), Value::Pure(PureValue::Int(42))));
 }
@@ -32,9 +30,7 @@ async fn expr_literal_string() {
 /// 2.1 C: Boolean literal evaluates correctly.
 #[tokio::test]
 async fn expr_literal_bool() {
-    let g = NodeBuilder::new(Interner::new())
-        .expr("x", "true")
-        .build();
+    let g = NodeBuilder::new(Interner::new()).expr("x", "true").build();
     let val = g.resolve_once("x").await.unwrap();
     assert!(matches!(val.value(), Value::Pure(PureValue::Bool(true))));
 }
@@ -147,12 +143,14 @@ async fn bind_to_string_changes_output_type() {
     // body = 42 (Int), bind = @raw | to_string → "42" (String)
     assert!(
         matches!(val.value(), Value::Pure(PureValue::String(s)) if s == "42"),
-        "expected String \"42\", got {:?}", val.value()
+        "expected String \"42\", got {:?}",
+        val.value()
     );
     // Also verify the TYPE is String, not Int.
     assert!(
         matches!(val.ty(), acvus_mir::ty::Ty::String),
-        "output_ty should be String after to_string bind, got {:?}", val.ty()
+        "output_ty should be String after to_string bind, got {:?}",
+        val.ty()
     );
 }
 
@@ -169,7 +167,8 @@ async fn bind_chained_transforms() {
     // 42 → "42"
     assert!(
         matches!(val.value(), Value::Pure(PureValue::String(s)) if s == "42"),
-        "expected String \"42\", got {:?}", val.value()
+        "expected String \"42\", got {:?}",
+        val.value()
     );
 }
 
@@ -178,9 +177,7 @@ async fn bind_chained_transforms() {
 /// 1.7 C: Ephemeral node without bind — raw type is the output type.
 #[tokio::test]
 async fn no_bind_raw_type_is_output() {
-    let g = NodeBuilder::new(Interner::new())
-        .expr("x", "42")
-        .build();
+    let g = NodeBuilder::new(Interner::new()).expr("x", "42").build();
     let val = g.resolve_once("x").await.unwrap();
     assert!(matches!(val.value(), Value::Pure(PureValue::Int(42))));
     assert!(matches!(val.ty(), acvus_mir::ty::Ty::Int));
@@ -206,9 +203,9 @@ async fn sequence_bind_registry_ty_matches_output_ty_not_raw() {
     let g = NodeBuilder::new(Interner::new())
         .sequence(
             "history",
-            "[1, 2, 3]",                        // body: Deque<Int>
-            "@self | chain(@raw | iter)",        // bind: Sequence<Int>
-            "[]",                                // initial: empty → Sequence
+            "[1, 2, 3]",                  // body: Deque<Int>
+            "@self | chain(@raw | iter)", // bind: Sequence<Int>
+            "[]",                         // initial: empty → Sequence
         )
         .build();
 
@@ -216,12 +213,14 @@ async fn sequence_bind_registry_ty_matches_output_ty_not_raw() {
     let output_ty = g.output_ty("history");
     assert!(
         matches!(&output_ty, Ty::Sequence(..)),
-        "output_ty should be Sequence, got {:?}", output_ty
+        "output_ty should be Sequence, got {:?}",
+        output_ty
     );
 
     // registry_ty (what @history looks like to OTHER nodes).
     // THIS IS THE BUG: registry still has List<Int> from Phase 1.
-    let registry_ty = g.registry_ty("history")
+    let registry_ty = g
+        .registry_ty("history")
         .expect("history should be in the registry");
     assert!(
         matches!(&registry_ty, Ty::Sequence(..)),
@@ -236,25 +235,23 @@ async fn sequence_bind_registry_ty_matches_output_ty_not_raw() {
 #[tokio::test]
 async fn sequence_bind_output_ty_is_sequence_when_inferred() {
     let g = NodeBuilder::new(Interner::new())
-        .sequence(
-            "history",
-            "[1, 2, 3]",
-            "@self | chain(@raw | iter)",
-            "[]",
-        )
+        .sequence("history", "[1, 2, 3]", "@self | chain(@raw | iter)", "[]")
         .build();
 
     let output_ty = g.output_ty("history");
     assert!(
         matches!(&output_ty, acvus_mir::ty::Ty::Sequence(..)),
-        "output_ty should be Sequence, got {:?}", output_ty
+        "output_ty should be Sequence, got {:?}",
+        output_ty
     );
 
-    let registry_ty = g.registry_ty("history")
+    let registry_ty = g
+        .registry_ty("history")
         .expect("history should be in the registry");
     assert!(
         matches!(&registry_ty, acvus_mir::ty::Ty::Sequence(..)),
-        "registry_ty should be Sequence, got {:?}", registry_ty
+        "registry_ty should be Sequence, got {:?}",
+        registry_ty
     );
 }
 
@@ -264,15 +261,17 @@ async fn sequence_bind_execution_produces_sequence() {
     let g = NodeBuilder::new(Interner::new())
         .sequence(
             "history",
-            "[10, 20]",                          // body: List<Int>
-            "@self | chain(@raw | iter)",         // bind: append raw items to self
-            "[]",                                 // initial: empty
+            "[10, 20]",                   // body: List<Int>
+            "@self | chain(@raw | iter)", // bind: append raw items to self
+            "[]",                         // initial: empty
         )
         .build();
 
     let val = g.resolve_once("history").await.unwrap();
     // After turn 1: initial [] + chain([10,20]) → Sequence [10, 20]
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("history");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("history");
     let items: Vec<_> = sc.origin().as_slice().to_vec();
     assert_eq!(items, vec![Value::int(10), Value::int(20)]);
 }
@@ -285,12 +284,7 @@ async fn sequence_bind_execution_produces_sequence() {
 async fn sequence_bind_e2e_consumer_sees_sequence_type() {
     use acvus_mir::ty::Ty;
     let g = NodeBuilder::new(Interner::new())
-        .sequence(
-            "history",
-            "[1, 2, 3]",
-            "@self | chain(@raw | iter)",
-            "[]",
-        )
+        .sequence("history", "[1, 2, 3]", "@self | chain(@raw | iter)", "[]")
         // Consumer coerces @history to an iterator — works for Sequence.
         .expr("consumer", "@history | collect | len")
         .build();
@@ -299,7 +293,8 @@ async fn sequence_bind_e2e_consumer_sees_sequence_type() {
     // collect [1,2,3] → List, len → 3
     assert!(
         matches!(val.value(), Value::Pure(PureValue::Int(3))),
-        "expected 3, got {:?}", val.value()
+        "expected 3, got {:?}",
+        val.value()
     );
 }
 
@@ -383,7 +378,8 @@ async fn patch_counter_10_turns() {
     let val = g.resolve_turns("counter", 10).await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::Int(10))),
-        "counter after 10 turns should be 10, got {:?}", val.value()
+        "counter after 10 turns should be 10, got {:?}",
+        val.value()
     );
 }
 
@@ -400,7 +396,9 @@ async fn sequence_first_turn_stores_items() {
         .sequence("log", "[1, 2, 3]", "@self | chain(@raw | iter)", "[]")
         .build();
     let val = g.resolve_once("log").await.unwrap();
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(
         sc.origin().as_slice(),
         &[Value::int(1), Value::int(2), Value::int(3)]
@@ -420,7 +418,9 @@ async fn sequence_multi_turn_append() {
         .build();
     // After 3 turns: [99, 99, 99]
     let val = g.resolve_turns("log", 3).await.unwrap();
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(
         sc.origin().as_slice(),
         &[Value::int(99), Value::int(99), Value::int(99)]
@@ -458,7 +458,8 @@ async fn initial_value_is_first_self() {
     let val = g.resolve_once("x").await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::Int(100))),
-        "first @self should be initial_value=100, got {:?}", val.value()
+        "first @self should be initial_value=100, got {:?}",
+        val.value()
     );
 }
 
@@ -481,7 +482,9 @@ async fn mixed_sequence_and_patch_coexist() {
     assert!(matches!(counter.value(), Value::Pure(PureValue::Int(3))));
 
     let log = g.resolve_turns("log", 3).await.unwrap();
-    let sc = log.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = log
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(
         sc.origin().as_slice(),
         &[Value::int(1), Value::int(1), Value::int(1)]
@@ -524,7 +527,9 @@ async fn mixed_multi_turn_3_turns() {
     // Turn 2: @n=2, log body=[2], bind=[1]|chain([2]) → [1,2]
     // Turn 3: @n=3, log body=[3], bind=[1,2]|chain([3]) → [1,2,3]
     let log = g.resolve_turns("log", 3).await.unwrap();
-    let sc = log.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = log
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(
         sc.origin().as_slice(),
         &[Value::int(1), Value::int(2), Value::int(3)]
@@ -549,9 +554,7 @@ async fn error_type_mismatch_caught_at_compile() {
 /// 9.1 C: Adding Int + Int compiles and runs fine (completeness pair).
 #[tokio::test]
 async fn int_plus_int_compiles_ok() {
-    let g = NodeBuilder::new(Interner::new())
-        .expr("x", "1 + 2")
-        .build();
+    let g = NodeBuilder::new(Interner::new()).expr("x", "1 + 2").build();
     let val = g.resolve_once("x").await.unwrap();
     assert!(matches!(val.value(), Value::Pure(PureValue::Int(3))));
 }
@@ -572,7 +575,8 @@ async fn patch_bind_type_change_allowed() {
     let val = g.resolve_once("x").await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::String(s)) if s == "42"),
-        "bind changed type Int→String, got {:?}", val.value()
+        "bind changed type Int→String, got {:?}",
+        val.value()
     );
 }
 
@@ -609,12 +613,10 @@ async fn scope_persistent_without_initial_value_fails() {
     let bind = i.intern("@raw");
     let specs = vec![acvus_orchestration::NodeSpec {
         name: i.intern("x"),
-        kind: acvus_orchestration::NodeKind::Expression(
-            acvus_orchestration::ExpressionSpec {
-                source: "42".to_string(),
-                output_ty: None,
-            },
-        ),
+        kind: acvus_orchestration::NodeKind::Expression(acvus_orchestration::ExpressionSpec {
+            source: "42".to_string(),
+            output_ty: None,
+        }),
         strategy: acvus_orchestration::Strategy {
             execution: acvus_orchestration::Execution::OncePerTurn,
             persistency: acvus_orchestration::Persistency::Patch { bind },
@@ -630,7 +632,10 @@ async fn scope_persistent_without_initial_value_fails() {
     );
     let fetch = std::sync::Arc::new(acvus_orchestration::http::NoopFetch);
     let result = acvus_orchestration::compile_nodes(&i, &specs, registry, fetch);
-    assert!(result.is_err(), "Patch without initial_value should be compile error");
+    assert!(
+        result.is_err(),
+        "Patch without initial_value should be compile error"
+    );
 }
 
 // =========================================================================
@@ -675,7 +680,8 @@ async fn dep_self_reference_across_turns() {
     let val = g.resolve_turns("x", 3).await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::Int(8))),
-        "1→2→4→8, got {:?}", val.value()
+        "1→2→4→8, got {:?}",
+        val.value()
     );
 }
 
@@ -701,7 +707,9 @@ async fn sequence_5_turn_history() {
         .sequence("log", "[1]", "@self | chain(@raw | iter)", "[]")
         .build();
     let val = g.resolve_turns("log", 5).await.unwrap();
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     let expected: Vec<_> = (0..5).map(|_| Value::int(1)).collect();
     assert_eq!(sc.origin().as_slice(), &expected[..]);
 }
@@ -722,7 +730,8 @@ async fn patch_string_accumulation() {
     let val = g.resolve_turns("msg", 3).await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::String(s)) if s == "xxx"),
-        "expected \"xxx\", got {:?}", val.value()
+        "expected \"xxx\", got {:?}",
+        val.value()
     );
 }
 
@@ -755,7 +764,9 @@ async fn mixed_patch_feeds_sequence() {
     let n = g.resolve_turns("n", 1).await.unwrap();
     assert!(matches!(n.value(), Value::Pure(PureValue::Int(1))));
     let log = g.resolve_turns("log", 1).await.unwrap();
-    let sc = log.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = log
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(sc.origin().as_slice(), &[Value::int(1)]);
 }
 
@@ -777,7 +788,9 @@ async fn effect_sequence_pure_persist_succeeds() {
         .sequence("log", "[1]", "@self | chain(@raw | iter)", "[]")
         .build();
     let val = g.resolve_once("log").await.unwrap();
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(sc.origin().as_slice(), &[Value::int(1)]);
 }
 
@@ -802,7 +815,9 @@ async fn effect_pure_subtype_of_effectful() {
         .sequence("log", "[1, 2]", "@self | chain(@raw | iter)", "[]")
         .build();
     let val = g.resolve_once("log").await.unwrap();
-    let sc = val.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc = val
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(sc.origin().as_slice(), &[Value::int(1), Value::int(2)]);
 }
 
@@ -810,15 +825,19 @@ async fn effect_pure_subtype_of_effectful() {
 /// The stored Sequence must have Pure effect for persistence to be valid.
 #[tokio::test]
 async fn effect_sequence_output_ty_is_pure() {
-    use acvus_mir::ty::{Ty, Effect};
+    use acvus_mir::ty::{Effect, Ty};
     let g = NodeBuilder::new(Interner::new())
         .sequence("log", "[1]", "@self | chain(@raw | iter)", "[]")
         .build();
     let ty = g.output_ty("log");
     match &ty {
         Ty::Sequence(_, _, effect) => {
-            assert_eq!(*effect, Effect::Pure,
-                "Sequence output_ty effect should be Pure for persistence, got {:?}", effect);
+            assert_eq!(
+                *effect,
+                Effect::Pure,
+                "Sequence output_ty effect should be Pure for persistence, got {:?}",
+                effect
+            );
         }
         other => panic!("expected Sequence type, got {:?}", other),
     }
@@ -828,7 +847,7 @@ async fn effect_sequence_output_ty_is_pure() {
 /// Persistence requires storable types, and Sequence<T, O, Effectful> is not storable.
 #[tokio::test]
 async fn effect_effectful_sequence_cannot_persist() {
-    use acvus_mir::ty::{Ty, Effect, Origin};
+    use acvus_mir::ty::{Effect, Origin, Ty};
     let result = NodeBuilder::new(Interner::new())
         .sequence_with_raw_ty(
             "log",
@@ -839,14 +858,16 @@ async fn effect_effectful_sequence_cannot_persist() {
             Ty::Iterator(Box::new(Ty::Int), Effect::Effectful),
         )
         .try_build();
-    assert!(result.is_err(),
-        "Effectful Sequence should not be persistable — expected compile error");
+    assert!(
+        result.is_err(),
+        "Effectful Sequence should not be persistable — expected compile error"
+    );
 }
 
 /// 14 C: Multi-turn Sequence retains Pure effect across turns.
 #[tokio::test]
 async fn effect_sequence_stays_pure_across_turns() {
-    use acvus_mir::ty::{Ty, Effect};
+    use acvus_mir::ty::{Effect, Ty};
     let g = NodeBuilder::new(Interner::new())
         .sequence("log", "[1]", "@self | chain(@raw | iter)", "[]")
         .build();
@@ -854,8 +875,12 @@ async fn effect_sequence_stays_pure_across_turns() {
     let val = g.resolve_turns("log", 3).await.unwrap();
     match val.ty() {
         Ty::Sequence(_, _, effect) => {
-            assert_eq!(*effect, Effect::Pure,
-                "Sequence should remain Pure after 3 turns, got {:?}", effect);
+            assert_eq!(
+                *effect,
+                Effect::Pure,
+                "Sequence should remain Pure after 3 turns, got {:?}",
+                effect
+            );
         }
         other => panic!("expected Sequence type, got {:?}", other),
     }
@@ -909,7 +934,10 @@ async fn expr_pipe_undefined_function_fails() {
     let result = NodeBuilder::new(Interner::new())
         .expr("x", "42 | nonexistent_function")
         .try_build();
-    assert!(result.is_err(), "pipe to undefined function should be a compile error");
+    assert!(
+        result.is_err(),
+        "pipe to undefined function should be a compile error"
+    );
 }
 
 /// 2.4 S: Pipe chain where second function is undefined.
@@ -919,7 +947,10 @@ async fn expr_pipe_chain_undefined_second_fails() {
     let result = NodeBuilder::new(Interner::new())
         .expr("x", "42 | to_string | bogus")
         .try_build();
-    assert!(result.is_err(), "pipe to undefined second function should be a compile error");
+    assert!(
+        result.is_err(),
+        "pipe to undefined second function should be a compile error"
+    );
 }
 
 // =========================================================================
@@ -932,9 +963,17 @@ async fn expr_pipe_chain_undefined_second_fails() {
 #[tokio::test]
 async fn sequence_wrong_initial_type_fails() {
     let result = NodeBuilder::new(Interner::new())
-        .sequence("log", "[1, 2, 3]", "@self | chain(@raw | iter)", r#""not a list""#)
+        .sequence(
+            "log",
+            "[1, 2, 3]",
+            "@self | chain(@raw | iter)",
+            r#""not a list""#,
+        )
         .try_build();
-    assert!(result.is_err(), "Sequence with String initial should be a compile error");
+    assert!(
+        result.is_err(),
+        "Sequence with String initial should be a compile error"
+    );
 }
 
 /// 4.1 S: Sequence with Int initial instead of empty list.
@@ -944,7 +983,10 @@ async fn sequence_int_initial_type_fails() {
     let result = NodeBuilder::new(Interner::new())
         .sequence("log", "[1, 2, 3]", "@self | chain(@raw | iter)", "42")
         .try_build();
-    assert!(result.is_err(), "Sequence with Int initial should be a compile error");
+    assert!(
+        result.is_err(),
+        "Sequence with Int initial should be a compile error"
+    );
 }
 
 /// 4.2 S: Each resolve_turns call is independent (fresh journal).
@@ -958,12 +1000,16 @@ async fn sequence_independent_resolve_turns_no_leak() {
 
     // First call: 1 turn → [99]
     let val1 = g.resolve_turns("log", 1).await.unwrap();
-    let sc1 = val1.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc1 = val1
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(sc1.origin().as_slice(), &[Value::int(99)]);
 
     // Second call: 1 turn → should also be [99], not [99, 99]
     let val2 = g.resolve_turns("log", 1).await.unwrap();
-    let sc2 = val2.value().expect_ref::<acvus_interpreter::SequenceChain>("log");
+    let sc2 = val2
+        .value()
+        .expect_ref::<acvus_interpreter::SequenceChain>("log");
     assert_eq!(
         sc2.origin().as_slice(),
         &[Value::int(99)],
@@ -1022,8 +1068,8 @@ async fn dep_undefined_in_bind_fails() {
 async fn dep_fan_out_independent_values() {
     let g = NodeBuilder::new(Interner::new())
         .expr("a", "10")
-        .patch("b", "@a", "@self + @raw", "0")   // accumulates: turn 1 → 10
-        .patch("c", "@a", "@self * @raw", "1")    // multiplies: turn 1 → 10
+        .patch("b", "@a", "@self + @raw", "0") // accumulates: turn 1 → 10
+        .patch("c", "@a", "@self * @raw", "1") // multiplies: turn 1 → 10
         .build();
 
     // After 2 turns:
@@ -1033,11 +1079,13 @@ async fn dep_fan_out_independent_values() {
     let c = g.resolve_turns("c", 2).await.unwrap();
     assert!(
         matches!(b.value(), Value::Pure(PureValue::Int(20))),
-        "b should be 20, got {:?}", b.value()
+        "b should be 20, got {:?}",
+        b.value()
     );
     assert!(
         matches!(c.value(), Value::Pure(PureValue::Int(100))),
-        "c should be 100, got {:?}", c.value()
+        "c should be 100, got {:?}",
+        c.value()
     );
 }
 
@@ -1065,7 +1113,10 @@ async fn dep_3_node_cycle_detected() {
         .expr("b", "@a")
         .expr("c", "@b")
         .try_build();
-    assert!(result.is_err(), "3-node cycle should be caught at compile time");
+    assert!(
+        result.is_err(),
+        "3-node cycle should be caught at compile time"
+    );
 }
 
 // =========================================================================
@@ -1080,7 +1131,10 @@ async fn patch_bind_incompatible_initial_type_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "42", "@self + @raw", r#""not_an_int""#)
         .try_build();
-    assert!(result.is_err(), "String initial + Int body in bind should be compile error");
+    assert!(
+        result.is_err(),
+        "String initial + Int body in bind should be compile error"
+    );
 }
 
 /// 10.1 C: Patch bind with compatible initial type compiles fine.
@@ -1101,7 +1155,10 @@ async fn patch_body_type_mismatch_bind_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", r#""hello""#, "@self + @raw", "0")
         .try_build();
-    assert!(result.is_err(), "String body + Int initial in bind should be compile error");
+    assert!(
+        result.is_err(),
+        "String body + Int initial in bind should be compile error"
+    );
 }
 
 // =========================================================================
@@ -1136,7 +1193,10 @@ async fn patch_self_type_mismatch_in_bind_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "1", "@self + @raw", r#""hello""#)
         .try_build();
-    assert!(result.is_err(), "String @self + Int @raw in bind should be compile error");
+    assert!(
+        result.is_err(),
+        "String @self + Int @raw in bind should be compile error"
+    );
 }
 
 /// 3.6 S: Patch String concatenation with Int body fails.
@@ -1147,7 +1207,10 @@ async fn patch_string_concat_with_int_body_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("msg", "42", "@self + @raw", r#""""#)
         .try_build();
-    assert!(result.is_err(), "String @self + Int @raw in bind should be compile error");
+    assert!(
+        result.is_err(),
+        "String @self + Int @raw in bind should be compile error"
+    );
 }
 
 // =========================================================================
@@ -1161,7 +1224,10 @@ async fn bind_undefined_function_fails() {
     let result = NodeBuilder::new(Interner::new())
         .patch("x", "42", "@raw | nonexistent", "0")
         .try_build();
-    assert!(result.is_err(), "bind with undefined function should be compile error");
+    assert!(
+        result.is_err(),
+        "bind with undefined function should be compile error"
+    );
 }
 
 /// 1.2 S: Bind type mismatch — initial type doesn't match bind result.
@@ -1194,7 +1260,8 @@ async fn string_plus_string_compiles_ok() {
     let val = g.resolve_once("x").await.unwrap();
     assert!(
         matches!(val.value(), Value::Pure(PureValue::String(s)) if s == "hello world"),
-        "expected \"hello world\", got {:?}", val.value()
+        "expected \"hello world\", got {:?}",
+        val.value()
     );
 }
 
@@ -1220,7 +1287,10 @@ async fn scope_self_in_ephemeral_fails() {
     let result = NodeBuilder::new(Interner::new())
         .expr("x", "@self + 1")
         .try_build();
-    assert!(result.is_err(), "@self in ephemeral Expression should be compile error");
+    assert!(
+        result.is_err(),
+        "@self in ephemeral Expression should be compile error"
+    );
 }
 
 /// 12.4 C: @self in persistent Patch node compiles fine.
@@ -1262,7 +1332,10 @@ async fn debug_sequence_types() {
     let compiled = graph.compile(&interner);
 
     let entrypoint_id = node_metas[0].entrypoint_id;
-    eprintln!("entrypoint unit_output: {:?}", compiled.unit_outputs.get(&entrypoint_id));
+    eprintln!(
+        "entrypoint unit_output: {:?}",
+        compiled.unit_outputs.get(&entrypoint_id)
+    );
 }
 
 #[tokio::test]
@@ -1291,9 +1364,20 @@ async fn debug_scc_membership() {
     let (graph, node_metas) = acvus_orchestration::lower::lower(&interner, &[spec], &registry);
 
     // Check which units are in the graph
-    eprintln!("units: {:?}", graph.units.iter().map(|u| (u.id, u.body.is_some(), u.output_binding)).collect::<Vec<_>>());
+    eprintln!(
+        "units: {:?}",
+        graph
+            .units
+            .iter()
+            .map(|u| (u.id, u.body.is_some(), u.output_binding))
+            .collect::<Vec<_>>()
+    );
 
     let resolved = graph.resolve(&interner);
     let entrypoint_id = node_metas[0].entrypoint_id;
-    eprintln!("entrypoint({:?}) output: {:?}", entrypoint_id, resolved.unit_outputs.get(&entrypoint_id));
+    eprintln!(
+        "entrypoint({:?}) output: {:?}",
+        entrypoint_id,
+        resolved.unit_outputs.get(&entrypoint_id)
+    );
 }

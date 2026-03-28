@@ -60,8 +60,8 @@ fn convert_message(m: &Message) -> schema::RequestMessage {
 // ── Response parsing ────────────────────────────────────────────────
 
 fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
-    let resp: schema::Response = serde_json::from_value(json)
-        .map_err(|e| RequestError::ResponseParse {
+    let resp: schema::Response =
+        serde_json::from_value(json).map_err(|e| RequestError::ResponseParse {
             detail: e.to_string(),
         })?;
 
@@ -175,98 +175,100 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
 
         let fetch = Arc::clone(&fetch);
 
-        vec![ExternFn::build("anthropic")
-            .params(vec![Ty::List(Box::new(input_msg_ty)), config_ty])
-            .ret(Ty::List(Box::new(msg_elem_ty)))
-            .io()
-            .handler_async(
-                move |interner: Interner,
-                      (messages_val, config_val): (Value, Value),
-                      Uses(()): Uses<()>| {
-                    let fetch = Arc::clone(&fetch);
-                    async move {
-                        // Extract messages from Value::List
-                        let messages_list = match &messages_val {
-                            Value::List(l) => l.as_slice(),
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "anthropic: expected List for messages, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
-                        let messages =
-                            values_to_messages(messages_list, &interner, "anthropic")?;
+        vec![
+            ExternFn::build("anthropic")
+                .params(vec![Ty::List(Box::new(input_msg_ty)), config_ty])
+                .ret(Ty::List(Box::new(msg_elem_ty)))
+                .io()
+                .handler_async(
+                    move |interner: Interner,
+                          (messages_val, config_val): (Value, Value),
+                          Uses(()): Uses<()>| {
+                        let fetch = Arc::clone(&fetch);
+                        async move {
+                            // Extract messages from Value::List
+                            let messages_list = match &messages_val {
+                                Value::List(l) => l.as_slice(),
+                                other => {
+                                    return Err(RuntimeError::fetch(format!(
+                                        "anthropic: expected List for messages, got {:?}",
+                                        other.kind()
+                                    )));
+                                }
+                            };
+                            let messages =
+                                values_to_messages(messages_list, &interner, "anthropic")?;
 
-                        // Split system message (first "system" role -> system param)
-                        let (system, rest) = split_system(&messages);
+                            // Split system message (first "system" role -> system param)
+                            let (system, rest) = split_system(&messages);
 
-                        // Extract config from Value::Object
-                        let config_obj = match &config_val {
-                            Value::Object(o) => o,
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "anthropic: expected Object for config, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
+                            // Extract config from Value::Object
+                            let config_obj = match &config_val {
+                                Value::Object(o) => o,
+                                other => {
+                                    return Err(RuntimeError::fetch(format!(
+                                        "anthropic: expected Object for config, got {:?}",
+                                        other.kind()
+                                    )));
+                                }
+                            };
 
-                        let endpoint =
-                            obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
-                                RuntimeError::fetch("anthropic: missing 'endpoint' in config")
+                            let endpoint =
+                                obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
+                                    RuntimeError::fetch("anthropic: missing 'endpoint' in config")
+                                })?;
+                            let api_key =
+                                obj_get_str(config_obj, api_key_key).ok_or_else(|| {
+                                    RuntimeError::fetch("anthropic: missing 'api_key' in config")
+                                })?;
+                            let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
+                                RuntimeError::fetch("anthropic: missing 'model' in config")
                             })?;
-                        let api_key =
-                            obj_get_str(config_obj, api_key_key).ok_or_else(|| {
-                                RuntimeError::fetch("anthropic: missing 'api_key' in config")
-                            })?;
-                        let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
-                            RuntimeError::fetch("anthropic: missing 'model' in config")
-                        })?;
-                        let max_tokens =
-                            obj_get_u32(config_obj, max_tokens_key).unwrap_or(DEFAULT_MAX_TOKENS);
-                        let temperature = obj_get_decimal(config_obj, temperature_key);
+                            let max_tokens = obj_get_u32(config_obj, max_tokens_key)
+                                .unwrap_or(DEFAULT_MAX_TOKENS);
+                            let temperature = obj_get_decimal(config_obj, temperature_key);
 
-                        // Build schema::Request
-                        let request_body = schema::Request {
-                            model,
-                            messages: rest.iter().map(|m| convert_message(m)).collect(),
-                            max_tokens,
-                            system,
-                            tools: None,
-                            temperature,
-                            top_p: None,
-                            top_k: None,
-                            thinking: None,
-                        };
+                            // Build schema::Request
+                            let request_body = schema::Request {
+                                model,
+                                messages: rest.iter().map(|m| convert_message(m)).collect(),
+                                max_tokens,
+                                system,
+                                tools: None,
+                                temperature,
+                                top_p: None,
+                                top_k: None,
+                                thinking: None,
+                            };
 
-                        let http_request = HttpRequest {
-                            url: endpoint,
-                            headers: vec![
-                                ("x-api-key".into(), api_key),
-                                ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
-                                ("Content-Type".into(), "application/json".into()),
-                            ],
-                            body: serde_json::to_value(&request_body).map_err(|e| {
-                                RuntimeError::fetch(format!(
-                                    "anthropic: serialization failed: {e}"
-                                ))
-                            })?,
-                        };
+                            let http_request = HttpRequest {
+                                url: endpoint,
+                                headers: vec![
+                                    ("x-api-key".into(), api_key),
+                                    ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
+                                    ("Content-Type".into(), "application/json".into()),
+                                ],
+                                body: serde_json::to_value(&request_body).map_err(|e| {
+                                    RuntimeError::fetch(format!(
+                                        "anthropic: serialization failed: {e}"
+                                    ))
+                                })?,
+                            };
 
-                        let response_json = fetch
-                            .fetch(&http_request)
-                            .await
-                            .map_err(RuntimeError::fetch)?;
+                            let response_json = fetch
+                                .fetch(&http_request)
+                                .await
+                                .map_err(RuntimeError::fetch)?;
 
-                        let (response, _usage) = parse_response(response_json)
-                            .map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                            let (response, _usage) = parse_response(response_json)
+                                .map_err(|e| RuntimeError::fetch(e.to_string()))?;
 
-                        let result = response_to_value(&response, &interner);
-                        Ok((result, Defs(())))
-                    }
-                },
-            )]
+                            let result = response_to_value(&response, &interner);
+                            Ok((result, Defs(())))
+                        }
+                    },
+                ),
+        ]
     })
 }
 

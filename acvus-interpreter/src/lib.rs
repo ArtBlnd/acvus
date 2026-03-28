@@ -21,4 +21,7 @@ pub use interpreter::{
 };
 pub use iter::{IterHandle, SequenceChain};
 pub use journal::{ContextOverlay, ContextWrite, EntryLifecycle, EntryMut, EntryRef, Journal};
-pub use value::{FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue, RangeValue, Value};
+pub use value::{
+    FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue, RangeValue,
+    Value,
+};

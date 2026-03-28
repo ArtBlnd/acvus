@@ -187,7 +187,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "context `@{name}` is read-only and cannot be assigned")
             }
             MirErrorKind::ExternParamAssign(name) => {
-                write!(f, "extern param `${name}` is immutable and cannot be assigned")
+                write!(
+                    f,
+                    "extern param `${name}` is immutable and cannot be assigned"
+                )
             }
             MirErrorKind::NonPureContextLoad { name, ty } => {
                 write!(

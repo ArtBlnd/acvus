@@ -9,7 +9,7 @@ expression: ir
      3 │   r3 = context_load r2
      4 │   r4 = cast ListToIterator r3
      5 │   jump L0(r4, r1, r5)
-     6 │ L0(r6: Iterator<Int>, r7: <error>, r8: Int):
+     6 │ L0(r6: Iterator<Int>, r7: Int, r8: Int):
      7 │   r9 = context_project @count
      8 │   ctx_store r9 = r7
      9 │   iter_step r10, r11 = r6 else L1()
@@ -21,7 +21,7 @@ expression: ir
     15 │   r14 = context_load r13
     17 │   r15 = r14 + 1 (r16)
     18 │   jump L4(r15)
-    19 │ L4(r17: <error>):
+    19 │ L4(r17: Int):
     20 │   r18 = context_project @count
     21 │   ctx_store r18 = r17
     22 │   jump L0(r11, r17, r10)
@@ -30,16 +30,16 @@ expression: ir
     25 │   r20 = context_load r19
     26 │   return r20
 
-    ; r0 (@count) : <error>
+    ; r0 (@count) : Int
     ; r1 (v1) : Int
-    ; r2 (@items) : <error>
+    ; r2 (@items) : List<Int>
     ; r3 (v3) : List<Int>
     ; r4 (v6) : Iterator<Int>
     ; r5 (v19) : Int
     ; r6 (v7) : Iterator<Int>
-    ; r7 (v20) : <error>
+    ; r7 (v20) : Int
     ; r8 (v22) : Int
-    ; r9 (v24) : <error>
+    ; r9 (v24) : Int
     ; r10 (x) : Int
     ; r11 (v9) : Iterator<Int>
     ; r12 (v11) : Bool
@@ -47,8 +47,8 @@ expression: ir
     ; r14 (v13) : Int
     ; r15 (v15) : Int
     ; r16 (v14) : Int
-    ; r17 (v21) : <error>
-    ; r18 (v25) : <error>
+    ; r17 (v21) : Int
+    ; r18 (v25) : Int
     ; r19 (@count) : Int
     ; r20 (v18) : Int
     ; r21 (@items) : List<Int>

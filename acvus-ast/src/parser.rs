@@ -3,12 +3,20 @@ use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::grammar::{ScriptParser, TagContentParser};
+use crate::grammar::{ExprParser, ScriptParser, TagContentParser};
 use crate::lexer::{ExprTokenizer, Segment, scan_template};
 use crate::span::Span;
 use crate::token::Token;
 
 use crate::tag_content::TagContent;
+
+/// Parse a single expression.
+pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
+    let tokenizer = ExprTokenizer::new(source, 0, interner);
+    ExprParser::new()
+        .parse(interner, tokenizer)
+        .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
+}
 
 /// Parse a script source string (standalone expressions with semicolons).
 pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseError> {
@@ -35,7 +43,7 @@ pub fn parse_template(interner: &Interner, source: &str) -> Result<Template, Par
         let last = node_span(body.last().unwrap());
         first.merge(last)
     };
-    Ok(Template { body, span })
+    Ok(Template { id: AstId::alloc(), body, span })
 }
 
 fn node_span(node: &Node) -> Span {
@@ -108,6 +116,7 @@ impl<'a> TreeBuilder<'a> {
                 }
                 Some(Segment::Text { value, span }) => {
                     let node = Node::Text {
+                        id: AstId::alloc(),
                         value: value.clone(),
                         span: *span,
                     };
@@ -116,6 +125,7 @@ impl<'a> TreeBuilder<'a> {
                 }
                 Some(Segment::Comment { value, span }) => {
                     let node = Node::Comment {
+                        id: AstId::alloc(),
                         value: value.clone(),
                         span: *span,
                     };
@@ -137,6 +147,7 @@ impl<'a> TreeBuilder<'a> {
                     match tag_content {
                         TagContent::Expr(expr) => {
                             nodes.push(Node::InlineExpr {
+                                id: AstId::alloc(),
                                 expr,
                                 span: tag_span,
                             });
@@ -162,10 +173,15 @@ impl<'a> TreeBuilder<'a> {
                         TagContent::Binding { lhs, rhs, .. } => {
                             let pattern = expr_to_pattern(&lhs)?;
                             // Bare binding (variable or storage) → body-less (no {{/}})
-                            if matches!(&pattern, Pattern::Binding { .. } | Pattern::ContextBind { .. }) {
+                            if matches!(
+                                &pattern,
+                                Pattern::Binding { .. } | Pattern::ContextBind { .. }
+                            ) {
                                 let match_block = MatchBlock {
+                                    id: AstId::alloc(),
                                     source: rhs,
                                     arms: vec![MatchArm {
+                                        id: AstId::alloc(),
                                         pattern,
                                         body: vec![],
                                         tag_span,
@@ -211,6 +227,7 @@ impl<'a> TreeBuilder<'a> {
                 match next {
                     BodyTerminator::CloseBlock(close_span, indent) => {
                         let catch_all = CatchAll {
+                            id: AstId::alloc(),
                             body: catch_body,
                             tag_span: catch_tag_span,
                         };
@@ -243,6 +260,7 @@ impl<'a> TreeBuilder<'a> {
 
         let span = Span::new(block_start, close_span.end);
         Ok(IterBlock {
+            id: AstId::alloc(),
             pattern,
             source,
             body,
@@ -265,6 +283,7 @@ impl<'a> TreeBuilder<'a> {
         // Build body for first arm (in_match = true to detect continuation arms)
         let (body, terminator) = self.build_body_until_terminator(true)?;
         arms.push(MatchArm {
+            id: AstId::alloc(),
             pattern: first_pattern,
             body,
             tag_span: first_tag_span,
@@ -276,6 +295,7 @@ impl<'a> TreeBuilder<'a> {
 
         let span = Span::new(block_start, close_span.end);
         Ok(MatchBlock {
+            id: AstId::alloc(),
             source: source_expr,
             arms,
             catch_all,
@@ -308,6 +328,7 @@ impl<'a> TreeBuilder<'a> {
                 match next_terminator {
                     BodyTerminator::CloseBlock(close_span, indent) => {
                         let catch_all = CatchAll {
+                            id: AstId::alloc(),
                             body: catch_body,
                             tag_span: catch_tag_span,
                         };
@@ -331,6 +352,7 @@ impl<'a> TreeBuilder<'a> {
                 let pattern = expr_to_pattern(&expr)?;
                 let (body, next_terminator) = self.build_body_until_terminator(true)?;
                 arms.push(MatchArm {
+                    id: AstId::alloc(),
                     pattern,
                     body,
                     tag_span,
@@ -423,16 +445,20 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             name,
             ref_kind,
             span,
+            ..
         } => Ok(Pattern::Binding {
+            id: AstId::alloc(),
             name: *name,
             ref_kind: *ref_kind,
             span: *span,
         }),
-        Expr::ContextRef { name, span } => Ok(Pattern::ContextBind {
+        Expr::ContextRef { name, span, .. } => Ok(Pattern::ContextBind {
+            id: AstId::alloc(),
             name: *name,
             span: *span,
         }),
-        Expr::Literal { value, span } => Ok(Pattern::Literal {
+        Expr::Literal { value, span, .. } => Ok(Pattern::Literal {
+            id: AstId::alloc(),
             value: value.clone(),
             span: *span,
         }),
@@ -441,10 +467,12 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             rest,
             tail,
             span,
+            ..
         } => {
             let head_pats: Result<Vec<_>, _> = head.iter().map(expr_to_pattern).collect();
             let tail_pats: Result<Vec<_>, _> = tail.iter().map(expr_to_pattern).collect();
             Ok(Pattern::List {
+                id: AstId::alloc(),
                 head: head_pats?,
                 rest: *rest,
                 tail: tail_pats?,
@@ -456,22 +484,25 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             end,
             kind,
             span,
+            ..
         } => {
             let start_pat = expr_to_pattern(start)?;
             let end_pat = expr_to_pattern(end)?;
             Ok(Pattern::Range {
+                id: AstId::alloc(),
                 start: Box::new(start_pat),
                 end: Box::new(end_pat),
                 kind: *kind,
                 span: *span,
             })
         }
-        Expr::Object { fields, span } => {
+        Expr::Object { fields, span, .. } => {
             let pattern_fields: Result<Vec<_>, _> = fields
                 .iter()
                 .map(|f| {
                     let pattern = expr_to_pattern(&f.value)?;
                     Ok(ObjectPatternField {
+                        id: AstId::alloc(),
                         key: f.key,
                         pattern,
                         span: f.span,
@@ -479,11 +510,12 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 })
                 .collect();
             Ok(Pattern::Object {
+                id: AstId::alloc(),
                 fields: pattern_fields?,
                 span: *span,
             })
         }
-        Expr::Tuple { elements, span } => {
+        Expr::Tuple { elements, span, .. } => {
             let elems: Result<Vec<_>, _> = elements
                 .iter()
                 .map(|elem| match elem {
@@ -495,6 +527,7 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 })
                 .collect();
             Ok(Pattern::Tuple {
+                id: AstId::alloc(),
                 elements: elems?,
                 span: *span,
             })
@@ -504,12 +537,14 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             tag,
             payload,
             span,
+            ..
         } => {
             let pat_payload = match payload {
                 Some(inner) => Some(Box::new(expr_to_pattern(inner)?)),
                 None => None,
             };
             Ok(Pattern::Variant {
+                id: AstId::alloc(),
                 enum_name: *enum_name,
                 tag: *tag,
                 payload: pat_payload,
@@ -1007,7 +1042,9 @@ mod tests {
         let interner = Interner::new();
         let s = parse_script(&interner, "@count = @count + 1; @count").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "count"));
+        assert!(
+            matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "count")
+        );
         assert!(s.tail.is_some());
     }
 
@@ -1016,7 +1053,9 @@ mod tests {
         let interner = Interner::new();
         let s = parse_script(&interner, "@x = 42;").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x"));
+        assert!(
+            matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x")
+        );
         assert!(s.tail.is_none());
     }
 
@@ -1026,7 +1065,9 @@ mod tests {
         let s = parse_script(&interner, "tmp = @x + 1; @x = tmp; @x").unwrap();
         assert_eq!(s.stmts.len(), 2);
         assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "tmp"));
-        assert!(matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x"));
+        assert!(
+            matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x")
+        );
         assert!(s.tail.is_some());
     }
 
@@ -1086,9 +1127,11 @@ mod tests {
     fn validate_variant_is_refutable() {
         let interner = Interner::new();
         let expr = Expr::Variant {
+            id: AstId::alloc(),
             enum_name: None,
             tag: interner.intern("Some"),
             payload: Some(Box::new(Expr::Ident {
+                id: AstId::alloc(),
                 name: interner.intern("x"),
                 ref_kind: RefKind::Value,
                 span: Span::new(0, 1),

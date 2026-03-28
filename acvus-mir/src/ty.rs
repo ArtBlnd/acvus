@@ -187,6 +187,50 @@ impl fmt::Display for EffectSet {
     }
 }
 
+// ── Effect constraint (upper bound) ─────────────────────────────────
+
+/// An upper bound on a set of context references.
+/// `Any` allows all contexts, `Only(set)` restricts to the given set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectBound {
+    /// Any context access allowed.
+    Any,
+    /// Only the specified contexts allowed.
+    Only(BTreeSet<QualifiedRef>),
+}
+
+/// Constraint on a function's effect — the upper bound of what it may do.
+/// Separate from `EffectSet` which represents *actual* observed effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectConstraint {
+    pub reads: EffectBound,
+    pub writes: EffectBound,
+    pub io: bool,
+    pub self_modifying: bool,
+}
+
+impl EffectConstraint {
+    /// Pure constraint — no effects allowed at all.
+    pub fn pure() -> Self {
+        Self {
+            reads: EffectBound::Only(BTreeSet::new()),
+            writes: EffectBound::Only(BTreeSet::new()),
+            io: false,
+            self_modifying: false,
+        }
+    }
+
+    /// Read-only constraint — any reads allowed, no writes, no IO.
+    pub fn read_only() -> Self {
+        Self {
+            reads: EffectBound::Any,
+            writes: EffectBound::Only(BTreeSet::new()),
+            io: false,
+            self_modifying: true,
+        }
+    }
+}
+
 /// Effect classification for functions and lazy computations.
 ///
 /// `Resolved(EffectSet)` contains concrete effect information.
@@ -371,7 +415,6 @@ impl Ty {
         }
     }
 
-
     /// Returns the purity tier of this type (shallow — does not recurse into containers).
     pub fn materiality(&self) -> Materiality {
         match self {
@@ -436,7 +479,11 @@ impl Ty {
             Ty::Enum { variants, .. } => variants
                 .values()
                 .all(|p| p.as_ref().is_none_or(|ty| ty.is_materializable())),
-            Ty::Iterator(_, _) | Ty::Sequence(_, _, _) | Ty::Handle(..) | Ty::Fn { .. } | Ty::Opaque(_) => false,
+            Ty::Iterator(_, _)
+            | Ty::Sequence(_, _, _)
+            | Ty::Handle(..)
+            | Ty::Fn { .. }
+            | Ty::Opaque(_) => false,
             Ty::Param { .. } | Ty::Error(_) => false,
         }
     }
@@ -3706,8 +3753,14 @@ mod tests {
     fn purity_containers_are_lazy() {
         let mut s = TySubst::new();
         let o = s.fresh_concrete_origin();
-        assert_eq!(Ty::List(Box::new(Ty::Int)).materiality(), Materiality::Composite);
-        assert_eq!(Ty::Deque(Box::new(Ty::Int), o).materiality(), Materiality::Composite);
+        assert_eq!(
+            Ty::List(Box::new(Ty::Int)).materiality(),
+            Materiality::Composite
+        );
+        assert_eq!(
+            Ty::Deque(Box::new(Ty::Int), o).materiality(),
+            Materiality::Composite
+        );
         assert_eq!(
             Ty::Iterator(Box::new(Ty::Int), Effect::pure()).materiality(),
             Materiality::Composite
@@ -3716,8 +3769,14 @@ mod tests {
             Ty::Sequence(Box::new(Ty::Int), o, Effect::pure()).materiality(),
             Materiality::Composite
         );
-        assert_eq!(Ty::Option(Box::new(Ty::Int)).materiality(), Materiality::Composite);
-        assert_eq!(Ty::Tuple(vec![Ty::Int]).materiality(), Materiality::Composite);
+        assert_eq!(
+            Ty::Option(Box::new(Ty::Int)).materiality(),
+            Materiality::Composite
+        );
+        assert_eq!(
+            Ty::Tuple(vec![Ty::Int]).materiality(),
+            Materiality::Composite
+        );
     }
 
     #[test]
@@ -3763,7 +3822,10 @@ mod tests {
 
     #[test]
     fn purity_opaque_is_unpure() {
-        assert_eq!(Ty::Opaque("HttpResponse".into()).materiality(), Materiality::Ephemeral);
+        assert_eq!(
+            Ty::Opaque("HttpResponse".into()).materiality(),
+            Materiality::Ephemeral
+        );
     }
 
     #[test]
@@ -3780,9 +3842,18 @@ mod tests {
         assert!(Materiality::Composite < Materiality::Ephemeral);
         assert!(Materiality::Concrete < Materiality::Ephemeral);
         // max() gives least-pure tier
-        assert_eq!(std::cmp::max(Materiality::Concrete, Materiality::Composite), Materiality::Composite);
-        assert_eq!(std::cmp::max(Materiality::Composite, Materiality::Ephemeral), Materiality::Ephemeral);
-        assert_eq!(std::cmp::max(Materiality::Concrete, Materiality::Ephemeral), Materiality::Ephemeral);
+        assert_eq!(
+            std::cmp::max(Materiality::Concrete, Materiality::Composite),
+            Materiality::Composite
+        );
+        assert_eq!(
+            std::cmp::max(Materiality::Composite, Materiality::Ephemeral),
+            Materiality::Ephemeral
+        );
+        assert_eq!(
+            std::cmp::max(Materiality::Concrete, Materiality::Ephemeral),
+            Materiality::Ephemeral
+        );
     }
 
     // ── is_pureable() transitive tests ─────────────────────────────────
@@ -4782,13 +4853,18 @@ mod tests {
     #[test]
     fn not_materializable_list_of_pure_iterator() {
         // List<Iterator<Int, Pure>> — Iterator is Ephemeral, so List containing it is not materializable.
-        assert!(!Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::pure()))).is_materializable());
+        assert!(
+            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::pure())))
+                .is_materializable()
+        );
     }
 
     #[test]
     fn not_storable_list_of_effectful_iterator() {
         // List<Iterator<Int, Effectful>> — effectful inner makes the whole thing non-storable
-        assert!(!Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_materializable());
+        assert!(
+            !Ty::List(Box::new(Ty::Iterator(Box::new(Ty::Int), Effect::io()))).is_materializable()
+        );
     }
 
     // ================================================================

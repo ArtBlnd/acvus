@@ -22,7 +22,12 @@ pub enum SubstValue {
 /// Substitute placeholder idents in a Script AST.
 pub fn substitute_script(script: Script, subs: &FxHashMap<Astr, SubstValue>) -> Script {
     Script {
-        stmts: script.stmts.into_iter().map(|s| sub_stmt(s, subs)).collect(),
+        id: AstId::alloc(),
+        stmts: script
+            .stmts
+            .into_iter()
+            .map(|s| sub_stmt(s, subs))
+            .collect(),
         tail: script.tail.map(|e| Box::new(sub_expr(*e, subs))),
         span: script.span,
     }
@@ -31,7 +36,12 @@ pub fn substitute_script(script: Script, subs: &FxHashMap<Astr, SubstValue>) -> 
 /// Substitute placeholder idents in a Template AST.
 pub fn substitute_template(template: Template, subs: &FxHashMap<Astr, SubstValue>) -> Template {
     Template {
-        body: template.body.into_iter().map(|n| sub_node(n, subs)).collect(),
+        id: AstId::alloc(),
+        body: template
+            .body
+            .into_iter()
+            .map(|n| sub_node(n, subs))
+            .collect(),
         span: template.span,
     }
 }
@@ -43,7 +53,11 @@ pub fn substitute_template(template: Template, subs: &FxHashMap<Astr, SubstValue
 /// Otherwise, recursively substitutes and returns a single-element vec.
 fn sub_expr_seq(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Vec<Expr> {
     match &expr {
-        Expr::Ident { name, ref_kind: RefKind::Value, .. } => match subs.get(name) {
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } => match subs.get(name) {
             Some(SubstValue::Splice(exprs)) => exprs.clone(),
             Some(SubstValue::Single(e)) => vec![e.clone()],
             None => vec![expr],
@@ -54,7 +68,11 @@ fn sub_expr_seq(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Vec<Expr> {
 
 fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
     match expr {
-        Expr::Ident { name, ref_kind: RefKind::Value, .. } => match subs.get(&name) {
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } => match subs.get(&name) {
             Some(SubstValue::Single(replacement)) => replacement.clone(),
             Some(SubstValue::Splice(_)) => panic!(
                 "splice placeholder in non-sequence context \
@@ -65,67 +83,109 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } => expr,
 
         // Binary chains: flatten same-op chain → splice → re-fold (left-associative).
-        Expr::BinaryOp { left, op, right, span } => {
+        Expr::BinaryOp {
+            left,
+            op,
+            right,
+            span,
+            ..
+        } => {
             let parts = flatten_binop(*left, *right, op);
-            let spliced: Vec<Expr> =
-                parts.into_iter().flat_map(|e| sub_expr_seq(e, subs)).collect();
+            let spliced: Vec<Expr> = parts
+                .into_iter()
+                .flat_map(|e| sub_expr_seq(e, subs))
+                .collect();
             fold_binop(spliced, op, span)
         }
 
-        Expr::UnaryOp { op, operand, span } => Expr::UnaryOp {
+        Expr::UnaryOp { op, operand, span, .. } => Expr::UnaryOp {
+            id: AstId::alloc(),
             op,
             operand: Box::new(sub_expr(*operand, subs)),
             span,
         },
-        Expr::FieldAccess { object, field, span } => Expr::FieldAccess {
+        Expr::FieldAccess {
+            object,
+            field,
+            span,
+            ..
+        } => Expr::FieldAccess {
+            id: AstId::alloc(),
             object: Box::new(sub_expr(*object, subs)),
             field,
             span,
         },
 
         // Function args: sequence context.
-        Expr::FuncCall { func, args, span } => Expr::FuncCall {
+        Expr::FuncCall { func, args, span, .. } => Expr::FuncCall {
+            id: AstId::alloc(),
             func: Box::new(sub_expr(*func, subs)),
-            args: args.into_iter().flat_map(|a| sub_expr_seq(a, subs)).collect(),
+            args: args
+                .into_iter()
+                .flat_map(|a| sub_expr_seq(a, subs))
+                .collect(),
             span,
         },
 
         // Pipe chains: flatten → splice → re-fold (left-associative).
-        Expr::Pipe { left, right, span } => {
+        Expr::Pipe { left, right, span, .. } => {
             let stages = flatten_pipe(*left, *right);
-            let spliced: Vec<Expr> =
-                stages.into_iter().flat_map(|e| sub_expr_seq(e, subs)).collect();
+            let spliced: Vec<Expr> = stages
+                .into_iter()
+                .flat_map(|e| sub_expr_seq(e, subs))
+                .collect();
             fold_pipe(spliced, span)
         }
 
-        Expr::Lambda { params, body, span } => Expr::Lambda {
+        Expr::Lambda { params, body, span, .. } => Expr::Lambda {
+            id: AstId::alloc(),
             params,
             body: Box::new(sub_expr(*body, subs)),
             span,
         },
-        Expr::Paren { inner, span } => Expr::Paren {
+        Expr::Paren { inner, span, .. } => Expr::Paren {
+            id: AstId::alloc(),
             inner: Box::new(sub_expr(*inner, subs)),
             span,
         },
 
         // List elements: sequence context (both head and tail).
-        Expr::List { head, rest, tail, span } => Expr::List {
-            head: head.into_iter().flat_map(|e| sub_expr_seq(e, subs)).collect(),
+        Expr::List {
+            head,
             rest,
-            tail: tail.into_iter().flat_map(|e| sub_expr_seq(e, subs)).collect(),
+            tail,
+            span,
+            ..
+        } => Expr::List {
+            id: AstId::alloc(),
+            head: head
+                .into_iter()
+                .flat_map(|e| sub_expr_seq(e, subs))
+                .collect(),
+            rest,
+            tail: tail
+                .into_iter()
+                .flat_map(|e| sub_expr_seq(e, subs))
+                .collect(),
             span,
         },
 
         // Group elements: sequence context.
-        Expr::Group { elements, span } => Expr::Group {
-            elements: elements.into_iter().flat_map(|e| sub_expr_seq(e, subs)).collect(),
+        Expr::Group { elements, span, .. } => Expr::Group {
+            id: AstId::alloc(),
+            elements: elements
+                .into_iter()
+                .flat_map(|e| sub_expr_seq(e, subs))
+                .collect(),
             span,
         },
 
-        Expr::Object { fields, span } => Expr::Object {
+        Expr::Object { fields, span, .. } => Expr::Object {
+            id: AstId::alloc(),
             fields: fields
                 .into_iter()
                 .map(|f| ObjectExprField {
+                    id: AstId::alloc(),
                     key: f.key,
                     value: sub_expr(f.value, subs),
                     span: f.span,
@@ -133,7 +193,14 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
                 .collect(),
             span,
         },
-        Expr::Range { start, end, kind, span } => Expr::Range {
+        Expr::Range {
+            start,
+            end,
+            kind,
+            span,
+            ..
+        } => Expr::Range {
+            id: AstId::alloc(),
             start: Box::new(sub_expr(*start, subs)),
             end: Box::new(sub_expr(*end, subs)),
             kind,
@@ -141,7 +208,8 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
         },
 
         // Tuple elements: sequence context.
-        Expr::Tuple { elements, span } => Expr::Tuple {
+        Expr::Tuple { elements, span, .. } => Expr::Tuple {
+            id: AstId::alloc(),
             elements: elements
                 .into_iter()
                 .flat_map(|e| match e {
@@ -155,12 +223,20 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             span,
         },
 
-        Expr::Block { stmts, tail, span } => Expr::Block {
+        Expr::Block { stmts, tail, span, .. } => Expr::Block {
+            id: AstId::alloc(),
             stmts: stmts.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             tail: Box::new(sub_expr(*tail, subs)),
             span,
         },
-        Expr::Variant { enum_name, tag, payload, span } => Expr::Variant {
+        Expr::Variant {
+            enum_name,
+            tag,
+            payload,
+            span,
+            ..
+        } => Expr::Variant {
+            id: AstId::alloc(),
             enum_name,
             tag,
             payload: payload.map(|p| Box::new(sub_expr(*p, subs))),
@@ -189,6 +265,7 @@ fn fold_pipe(stages: Vec<Expr>, span: Span) -> Expr {
     stages
         .into_iter()
         .reduce(|left, right| Expr::Pipe {
+            id: AstId::alloc(),
             left: Box::new(left),
             right: Box::new(right),
             span,
@@ -203,9 +280,9 @@ fn fold_pipe(stages: Vec<Expr>, span: Span) -> Expr {
 /// Only flattens nodes with the same operator; different-op nodes are preserved as-is.
 fn flatten_binop(left: Expr, right: Expr, target_op: BinOp) -> Vec<Expr> {
     let mut parts = match left {
-        Expr::BinaryOp { left, op, right, .. } if op == target_op => {
-            flatten_binop(*left, *right, target_op)
-        }
+        Expr::BinaryOp {
+            left, op, right, ..
+        } if op == target_op => flatten_binop(*left, *right, target_op),
         other => vec![other],
     };
     parts.push(right);
@@ -214,10 +291,14 @@ fn flatten_binop(left: Expr, right: Expr, target_op: BinOp) -> Vec<Expr> {
 
 /// Re-fold a sequence of operands into a left-associative binary op chain.
 fn fold_binop(parts: Vec<Expr>, op: BinOp, span: Span) -> Expr {
-    assert!(!parts.is_empty(), "splice produced empty binary operation chain");
+    assert!(
+        !parts.is_empty(),
+        "splice produced empty binary operation chain"
+    );
     parts
         .into_iter()
         .reduce(|left, right| Expr::BinaryOp {
+            id: AstId::alloc(),
             left: Box::new(left),
             op,
             right: Box::new(right),
@@ -230,24 +311,40 @@ fn fold_binop(parts: Vec<Expr>, op: BinOp, span: Span) -> Expr {
 
 fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
     match stmt {
-        Stmt::Bind { name, expr, span } => Stmt::Bind {
+        Stmt::Bind { name, expr, span, .. } => Stmt::Bind {
+            id: AstId::alloc(),
             name,
             expr: sub_expr(expr, subs),
             span,
         },
-        Stmt::ContextStore { name, expr, span } => Stmt::ContextStore {
+        Stmt::ContextStore { name, expr, span, .. } => Stmt::ContextStore {
+            id: AstId::alloc(),
             name,
             expr: sub_expr(expr, subs),
             span,
         },
         Stmt::Expr(expr) => Stmt::Expr(sub_expr(expr, subs)),
-        Stmt::MatchBind { pattern, source, body, span } => Stmt::MatchBind {
+        Stmt::MatchBind {
+            pattern,
+            source,
+            body,
+            span,
+            ..
+        } => Stmt::MatchBind {
+            id: AstId::alloc(),
             pattern,
             source: sub_expr(source, subs),
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             span,
         },
-        Stmt::Iterate { pattern, source, body, span } => Stmt::Iterate {
+        Stmt::Iterate {
+            pattern,
+            source,
+            body,
+            span,
+            ..
+        } => Stmt::Iterate {
+            id: AstId::alloc(),
             pattern,
             source: sub_expr(source, subs),
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
@@ -259,22 +356,26 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
 fn sub_node(node: Node, subs: &FxHashMap<Astr, SubstValue>) -> Node {
     match node {
         Node::Text { .. } | Node::Comment { .. } => node,
-        Node::InlineExpr { expr, span } => Node::InlineExpr {
+        Node::InlineExpr { expr, span, .. } => Node::InlineExpr {
+            id: AstId::alloc(),
             expr: sub_expr(expr, subs),
             span,
         },
         Node::MatchBlock(mb) => Node::MatchBlock(MatchBlock {
+            id: AstId::alloc(),
             source: sub_expr(mb.source, subs),
             arms: mb
                 .arms
                 .into_iter()
                 .map(|arm| MatchArm {
+                    id: AstId::alloc(),
                     pattern: arm.pattern,
                     body: arm.body.into_iter().map(|n| sub_node(n, subs)).collect(),
                     tag_span: arm.tag_span,
                 })
                 .collect(),
             catch_all: mb.catch_all.map(|ca| CatchAll {
+                id: AstId::alloc(),
                 body: ca.body.into_iter().map(|n| sub_node(n, subs)).collect(),
                 tag_span: ca.tag_span,
             }),
@@ -282,10 +383,12 @@ fn sub_node(node: Node, subs: &FxHashMap<Astr, SubstValue>) -> Node {
             span: mb.span,
         }),
         Node::IterBlock(ib) => Node::IterBlock(IterBlock {
+            id: AstId::alloc(),
             pattern: ib.pattern,
             source: sub_expr(ib.source, subs),
             body: ib.body.into_iter().map(|n| sub_node(n, subs)).collect(),
             catch_all: ib.catch_all.map(|ca| CatchAll {
+                id: AstId::alloc(),
                 body: ca.body.into_iter().map(|n| sub_node(n, subs)).collect(),
                 tag_span: ca.tag_span,
             }),
@@ -339,7 +442,12 @@ fn validate_splice_expr(
     errors: &mut Vec<(Astr, Span)>,
 ) {
     match expr {
-        Expr::Ident { name, ref_kind: RefKind::Value, span } => {
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            span,
+            ..
+        } => {
             if splice_names.contains(name) && !in_seq {
                 errors.push((*name, *span));
             }
@@ -423,11 +531,7 @@ fn validate_splice_expr(
     }
 }
 
-fn validate_splice_stmt(
-    stmt: &Stmt,
-    splice_names: &[Astr],
-    errors: &mut Vec<(Astr, Span)>,
-) {
+fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
     match stmt {
         Stmt::Bind { expr, .. } | Stmt::ContextStore { expr, .. } => {
             validate_splice_expr(expr, false, splice_names, errors);
@@ -450,11 +554,7 @@ fn validate_splice_stmt(
     }
 }
 
-fn validate_splice_node(
-    node: &Node,
-    splice_names: &[Astr],
-    errors: &mut Vec<(Astr, Span)>,
-) {
+fn validate_splice_node(node: &Node, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
     match node {
         Node::Text { .. } | Node::Comment { .. } => {}
         Node::InlineExpr { expr, .. } => {

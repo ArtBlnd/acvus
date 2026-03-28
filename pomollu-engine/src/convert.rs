@@ -1,6 +1,6 @@
 use acvus_orchestration::{
-    AnthropicSpec, ExpressionSpec, Execution, GoogleAISpec, MaxTokens, MessageSpec, NodeKind,
-    FnParam, NodeSpec, OpenAICompatibleSpec, Persistency, PlainSpec, Strategy, ThinkingConfig,
+    AnthropicSpec, Execution, ExpressionSpec, FnParam, GoogleAISpec, MaxTokens, MessageSpec,
+    NodeKind, NodeSpec, OpenAICompatibleSpec, Persistency, PlainSpec, Strategy, ThinkingConfig,
     TokenBudget, ToolBinding, ToolParamInfo,
 };
 use acvus_utils::Interner;
@@ -143,13 +143,21 @@ pub struct WebFnParam {
 pub enum WebPersistency {
     #[default]
     Ephemeral,
-    Sequence { bind: String },
-    Patch { bind: String },
+    Sequence {
+        bind: String,
+    },
+    Patch {
+        bind: String,
+    },
 }
 
 impl WebNode {
     pub fn into_node(&self, interner: &Interner) -> Result<NodeSpec, String> {
-        let initial_value = self.strategy.initial_value.as_ref().map(|s| interner.intern(s));
+        let initial_value = self
+            .strategy
+            .initial_value
+            .as_ref()
+            .map(|s| interner.intern(s));
 
         let kind = match &self.kind {
             WebNodeKind::Llm {
@@ -197,10 +205,15 @@ impl WebNode {
                         params: t
                             .params
                             .iter()
-                            .map(|p| (p.name.clone(), ToolParamInfo {
-                                ty: p.ty.clone(),
-                                description: p.description.clone(),
-                            }))
+                            .map(|p| {
+                                (
+                                    p.name.clone(),
+                                    ToolParamInfo {
+                                        ty: p.ty.clone(),
+                                        description: p.description.clone(),
+                                    },
+                                )
+                            })
                             .collect(),
                     })
                     .collect();
@@ -259,7 +272,9 @@ impl WebNode {
                 output_ty,
             } => NodeKind::Expression(ExpressionSpec {
                 source: expr_source.clone(),
-                output_ty: output_ty.as_ref().map(|desc| crate::schema::desc_to_ty(interner, desc)),
+                output_ty: output_ty
+                    .as_ref()
+                    .map(|desc| crate::schema::desc_to_ty(interner, desc)),
             }),
             WebNodeKind::Plain {} => NodeKind::Plain(PlainSpec {
                 source: String::new(),
@@ -273,8 +288,12 @@ impl WebNode {
 
         let persistency = match &self.strategy.persistency {
             WebPersistency::Ephemeral => Persistency::Ephemeral,
-            WebPersistency::Sequence { bind } => Persistency::Sequence { bind: interner.intern(bind) },
-            WebPersistency::Patch { bind } => Persistency::Patch { bind: interner.intern(bind) },
+            WebPersistency::Sequence { bind } => Persistency::Sequence {
+                bind: interner.intern(bind),
+            },
+            WebPersistency::Patch { bind } => Persistency::Patch {
+                bind: interner.intern(bind),
+            },
         };
 
         Ok(NodeSpec {

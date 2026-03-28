@@ -101,8 +101,14 @@ impl LspSession {
 
     pub fn remove_namespace(&mut self, id: NamespaceId) {
         // Remove docs bound to functions in this namespace.
-        let fn_ids: Vec<FunctionId> = self.fn_to_doc.keys()
-            .filter(|fid| self.graph.function(**fid).map_or(false, |f| f.namespace == Some(id)))
+        let fn_ids: Vec<FunctionId> = self
+            .fn_to_doc
+            .keys()
+            .filter(|fid| {
+                self.graph
+                    .function(**fid)
+                    .map_or(false, |f| f.namespace == Some(id))
+            })
             .copied()
             .collect();
         for fid in fn_ids {
@@ -204,7 +210,8 @@ impl LspSession {
             return vec![];
         };
         let interner = self.graph.interner();
-        self.graph.diagnostics(fn_id)
+        self.graph
+            .diagnostics(fn_id)
             .iter()
             .map(|e| mir_error_to_lsp(e, interner))
             .collect()
@@ -240,15 +247,9 @@ impl LspSession {
         let interner = self.graph.interner();
 
         match detect_trigger(before) {
-            Trigger::Context { prefix } => {
-                self.context_completions(ns, &prefix, interner)
-            }
-            Trigger::Pipe => {
-                self.pipe_completions(interner)
-            }
-            Trigger::Keyword { prefix } => {
-                keyword_completions(&prefix)
-            }
+            Trigger::Context { prefix } => self.context_completions(ns, &prefix, interner),
+            Trigger::Pipe => self.pipe_completions(interner),
+            Trigger::Keyword { prefix } => keyword_completions(&prefix),
             Trigger::None => vec![],
         }
     }
@@ -267,7 +268,9 @@ impl LspSession {
             let label = match ctx_ns {
                 None => format!("@{name_str}"),
                 Some(ns_id) => {
-                    let ns_name = self.graph.namespace(ns_id)
+                    let ns_name = self
+                        .graph
+                        .namespace(ns_id)
                         .map(|n| interner.resolve(n.name))
                         .unwrap_or("?");
                     format!("@{ns_name}:{name_str}")
@@ -328,7 +331,10 @@ fn detect_trigger(before: &str) -> Trigger {
     // @prefix or @ns:prefix
     if let Some(at_pos) = before.rfind('@') {
         let after_at = &before[at_pos + 1..];
-        if after_at.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ':') {
+        if after_at
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
+        {
             return Trigger::Context {
                 prefix: after_at.to_string(),
             };

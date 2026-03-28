@@ -18,7 +18,7 @@ expression: ir
     11 │   r9 = r6 + r8
     12 │   return r9
 
-    ; r0 (@users) : <error>
+    ; r0 (@users) : List<{active: Bool, name: String}>
     ; r1 (v1) : List<{active: Bool, name: String}>
     ; r2 (iter(...)) : Iterator<{active: Bool, name: String}>
     ; r3 (v6) : Fn({active: Bool, name: String}) -> Bool

@@ -9,8 +9,6 @@ members = [
     "acvus-mir-cli",
     "acvus-mir-test",
     "acvus-orchestration",
-    "acvus-chat",
-    "acvus-chat-cli",
     "acvus-ext",
     "acvus-ext-llm",
     "acvus-lsp",

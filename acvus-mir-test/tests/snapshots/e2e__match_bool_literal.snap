@@ -23,7 +23,7 @@ expression: ir
     17 │   r6 = T0 + r5
     18 │   return r6
 
-    ; r0 (@flag) : <error>
+    ; r0 (@flag) : Bool
     ; r1 (v1) : Bool
     ; r2 (v5) : Bool
     ; r3 (v8) : String

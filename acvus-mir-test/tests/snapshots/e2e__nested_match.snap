@@ -36,7 +36,7 @@ expression: ir
     32 │   r30 = T0 + r29
     33 │   return r30
 
-    ; r0 (@users) : <error>
+    ; r0 (@users) : List<{name: String, posts: List<{title: String}>}>
     ; r1 (v1) : List<{name: String, posts: List<{title: String}>}>
     ; r2 (v5) : Iterator<{name: String, posts: List<{title: String}>}>
     ; r3 (v33) : String

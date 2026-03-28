@@ -24,7 +24,7 @@ expression: ir
     18 │   r15 = T0 + r14
     19 │   return r15
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (reverse(...)) : List<Int>
     ; r3 (v6) : Iterator<Int>

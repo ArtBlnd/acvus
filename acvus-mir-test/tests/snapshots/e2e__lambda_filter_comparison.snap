@@ -18,7 +18,7 @@ expression: ir
     11 │   r9 = r6 + r8
     12 │   return r9
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (iter(...)) : Iterator<Int>
     ; r3 (v6) : Fn(Int) -> Bool

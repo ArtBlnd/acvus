@@ -38,9 +38,9 @@ expression: ir
     34 │   r14 = T0 + r13
     35 │   return r14
 
-    ; r0 (@level) : <error>
+    ; r0 (@level) : Int
     ; r1 (v1) : Int
-    ; r2 (@role) : <error>
+    ; r2 (@role) : String
     ; r3 (v3) : String
     ; r4 (v7) : Bool
     ; r5 (@level) : Int

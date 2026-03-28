@@ -32,7 +32,7 @@ expression: ir
     28 │   r15 = T0 + r13
     29 │   return r15
 
-    ; r0 (@users) : <error>
+    ; r0 (@users) : List<{name: String}>
     ; r1 (v1) : List<{name: String}>
     ; r2 (v5) : Bool
     ; r3 (v6) : {name: String}

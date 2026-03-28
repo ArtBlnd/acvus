@@ -12,7 +12,7 @@ expression: ir
      4 │   r3 = T0 + r2
      5 │   return r3
 
-    ; r0 (@user) : <error>
+    ; r0 (@user) : {age: Int, email: String, name: String}
     ; r1 (v1) : {age: Int, email: String, name: String}
     ; r2 (name) : String
     ; r3 (v6) : String

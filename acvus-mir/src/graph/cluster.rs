@@ -175,7 +175,11 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = cluster(&graph, &ext);
 
-        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("x"))));
+        assert!(
+            result
+                .mutable_contexts
+                .contains(&QualifiedRef::root(i.intern("x")))
+        );
     }
 
     #[test]
@@ -258,8 +262,16 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let result = cluster(&graph, &ext);
 
-        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("x"))));
-        assert!(result.mutable_contexts.contains(&QualifiedRef::root(i.intern("y"))));
+        assert!(
+            result
+                .mutable_contexts
+                .contains(&QualifiedRef::root(i.intern("x")))
+        );
+        assert!(
+            result
+                .mutable_contexts
+                .contains(&QualifiedRef::root(i.intern("y")))
+        );
         assert_eq!(result.mutable_orderings.len(), 2);
     }
 }

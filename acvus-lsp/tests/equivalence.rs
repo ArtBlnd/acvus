@@ -10,11 +10,14 @@ use rustc_hash::FxHashMap;
 
 /// Compile via batch pipeline, return error messages (sorted).
 fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<String> {
-    let contexts: Vec<Context> = ctx.iter().map(|(name, ty)| Context {
-        name: interner.intern(name),
-        namespace: None,
-        constraint: Constraint::Exact(ty.clone()),
-    }).collect();
+    let contexts: Vec<Context> = ctx
+        .iter()
+        .map(|(name, ty)| Context {
+            name: interner.intern(name),
+            namespace: None,
+            constraint: Constraint::Exact(ty.clone()),
+        })
+        .collect();
     let graph = CompilationGraph {
         namespaces: Freeze::new(vec![]),
         functions: Freeze::new(vec![Function {
@@ -54,7 +57,8 @@ fn lsp_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<Stri
         session.add_context(name, None, Constraint::Exact(ty.clone()));
     }
     let doc = session.open("test", source, SourceKind::Template, None);
-    let mut errs: Vec<String> = session.diagnostics(doc)
+    let mut errs: Vec<String> = session
+        .diagnostics(doc)
         .into_iter()
         .map(|e| e.message)
         .collect();
@@ -102,12 +106,19 @@ fn incremental_update_fixes_error() {
     // Start with emit type error: Int not emittable in template.
     let doc = session.open("test", "{{ @x }}", SourceKind::Template, None);
     let errs = session.diagnostics(doc);
-    assert!(!errs.is_empty(), "should have emit error for Int in template");
+    assert!(
+        !errs.is_empty(),
+        "should have emit error for Int in template"
+    );
 
     // Fix: pipe to_string.
     session.update_source(doc, "{{ @x | to_string }}");
     let errs = session.diagnostics(doc);
-    assert!(errs.is_empty(), "errors should be gone after fix, got: {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "errors should be gone after fix, got: {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -136,5 +147,8 @@ fn namespace_context_isolation() {
 
     // Root function sees @global.
     let doc_root = session.open("root_fn", "{{ @global }}", SourceKind::Template, None);
-    assert!(session.diagnostics(doc_root).is_empty(), "root should see @global");
+    assert!(
+        session.diagnostics(doc_root).is_empty(),
+        "root should see @global"
+    );
 }

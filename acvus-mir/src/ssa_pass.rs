@@ -33,8 +33,13 @@ pub fn run(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, Ty>) {
     // Step 2: Run SSABuilder + patch PHIs (only if there are writes + merge points).
     let var_subst = if !ssa_info.written_contexts.is_empty() || !ssa_info.written_vars.is_empty() {
         let preds = cfg.predecessors();
-        let (phi_insertions, var_subst) =
-            run_ssa_builder(&cfg, &preds, &ssa_info, &mut body.val_factory, &mut body.val_types);
+        let (phi_insertions, var_subst) = run_ssa_builder(
+            &cfg,
+            &preds,
+            &ssa_info,
+            &mut body.val_factory,
+            &mut body.val_types,
+        );
         if !phi_insertions.is_empty() {
             patch_instructions(body, &cfg, &phi_insertions, &ssa_info);
         }
@@ -69,7 +74,10 @@ pub fn run(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, Ty>) {
 ///
 /// Also eliminates the initial entry load if the context is never read
 /// before it's written (dead initial load).
-fn forward_context_values(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, Ty>) -> FxHashMap<ValueId, ValueId> {
+fn forward_context_values(
+    body: &mut MirBody,
+    fn_types: &FxHashMap<FunctionId, Ty>,
+) -> FxHashMap<ValueId, ValueId> {
     // Map: projection ValueId → QualifiedRef.
     let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     // Current known value per context (from entry load or store).
@@ -79,8 +87,11 @@ fn forward_context_values(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, T
     // Instructions to remove (dead loads + their preceding projects).
     let mut remove: FxHashSet<usize> = FxHashSet::default();
     // Deferred patches: (inst_index, new context_uses, new context_defs).
-    let mut call_patches: Vec<(usize, Vec<(QualifiedRef, ValueId)>, Vec<(QualifiedRef, ValueId)>)> =
-        Vec::new();
+    let mut call_patches: Vec<(
+        usize,
+        Vec<(QualifiedRef, ValueId)>,
+        Vec<(QualifiedRef, ValueId)>,
+    )> = Vec::new();
 
     for (i, inst) in body.insts.iter().enumerate() {
         match &inst.kind {
@@ -163,7 +174,10 @@ fn forward_context_values(body: &mut MirBody, fn_types: &FxHashMap<FunctionId, T
     }
 
     // Apply call patches (context_uses/context_defs population).
-    let patch_map: FxHashMap<usize, _> = call_patches.into_iter().map(|(i, u, d)| (i, (u, d))).collect();
+    let patch_map: FxHashMap<usize, _> = call_patches
+        .into_iter()
+        .map(|(i, u, d)| (i, (u, d)))
+        .collect();
 
     // Apply substitutions, patches, and remove dead instructions.
     let old_insts = std::mem::take(&mut body.insts);
@@ -198,7 +212,11 @@ fn extract_effect_refs(
     fn_id: &FunctionId,
 ) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
     let ty = fn_types.get(fn_id)?;
-    let Ty::Fn { effect: Effect::Resolved(eff), .. } = ty else {
+    let Ty::Fn {
+        effect: Effect::Resolved(eff),
+        ..
+    } = ty
+    else {
         return None;
     };
     if eff.reads.is_empty() && eff.writes.is_empty() {
@@ -324,10 +342,24 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
 /// A single SSA-relevant operation, recorded in instruction order.
 #[derive(Debug, Clone)]
 enum SsaOp {
-    CtxStore { inst_idx: usize, ctx: QualifiedRef, value: ValueId },
-    VarStore { inst_idx: usize, name: Astr, value: ValueId },
-    VarLoad { dst: ValueId, name: Astr },
-    ParamLoad { dst: ValueId, name: Astr },
+    CtxStore {
+        inst_idx: usize,
+        ctx: QualifiedRef,
+        value: ValueId,
+    },
+    VarStore {
+        inst_idx: usize,
+        name: Astr,
+        value: ValueId,
+    },
+    VarLoad {
+        dst: ValueId,
+        name: Astr,
+    },
+    ParamLoad {
+        dst: ValueId,
+        name: Astr,
+    },
 }
 
 /// Per-block operations in instruction order.
@@ -356,11 +388,7 @@ struct SsaInfo {
     block_ops: FxHashMap<BlockIdx, BlockOps>,
 }
 
-fn collect_ssa_info(
-    cfg: &Cfg,
-    insts: &[Inst],
-    val_types: &FxHashMap<ValueId, Ty>,
-) -> SsaInfo {
+fn collect_ssa_info(cfg: &Cfg, insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> SsaInfo {
     let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     let mut written_contexts = BTreeSet::default();
     let mut block_ops: FxHashMap<BlockIdx, BlockOps> = FxHashMap::default();
@@ -393,7 +421,11 @@ fn collect_ssa_info(
                 }
                 InstKind::ContextStore { dst, value } => {
                     if let Some(&ctx_id) = val_to_ctx.get(dst) {
-                        ops.ops.push(SsaOp::CtxStore { inst_idx: inst_i, ctx: ctx_id, value: *value });
+                        ops.ops.push(SsaOp::CtxStore {
+                            inst_idx: inst_i,
+                            ctx: ctx_id,
+                            value: *value,
+                        });
                         written_contexts.insert(ctx_id);
                     }
                 }
@@ -403,20 +435,30 @@ fn collect_ssa_info(
                     }
                 }
                 InstKind::VarStore { name, src } => {
-                    ops.ops.push(SsaOp::VarStore { inst_idx: inst_i, name: *name, value: *src });
+                    ops.ops.push(SsaOp::VarStore {
+                        inst_idx: inst_i,
+                        name: *name,
+                        value: *src,
+                    });
                     written_vars.insert(*name);
                     if let Some(ty) = val_types.get(src) {
                         var_types.entry(*name).or_insert_with(|| ty.clone());
                     }
                 }
                 InstKind::VarLoad { dst, name } => {
-                    ops.ops.push(SsaOp::VarLoad { dst: *dst, name: *name });
+                    ops.ops.push(SsaOp::VarLoad {
+                        dst: *dst,
+                        name: *name,
+                    });
                 }
                 InstKind::ParamLoad { dst, name } => {
                     if bi == 0 {
                         entry_param_defs.entry(*name).or_insert(*dst);
                     }
-                    ops.ops.push(SsaOp::ParamLoad { dst: *dst, name: *name });
+                    ops.ops.push(SsaOp::ParamLoad {
+                        dst: *dst,
+                        name: *name,
+                    });
                 }
                 _ => {}
             }
@@ -995,8 +1037,14 @@ mod tests {
         body.val_types.insert(v2, Ty::Int);
 
         let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v0, ctx: qref } });
-        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v1, src: v0 } });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+        });
         body.insts.push(Inst {
             span,
             kind: InstKind::FunctionCall {
@@ -1007,15 +1055,25 @@ mod tests {
                 context_defs: vec![],
             },
         });
-        body.insts.push(Inst { span, kind: InstKind::Return(v2) });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v2),
+        });
 
         run(&mut body, &fn_types);
 
         // Find the FunctionCall and verify context_uses/context_defs are populated.
-        let call_inst = body.insts.iter().find(|i| matches!(i.kind, InstKind::FunctionCall { .. }));
+        let call_inst = body
+            .insts
+            .iter()
+            .find(|i| matches!(i.kind, InstKind::FunctionCall { .. }));
         assert!(call_inst.is_some(), "FunctionCall should exist");
 
-        if let InstKind::FunctionCall { context_uses, context_defs, .. } = &call_inst.unwrap().kind
+        if let InstKind::FunctionCall {
+            context_uses,
+            context_defs,
+            ..
+        } = &call_inst.unwrap().kind
         {
             assert_eq!(context_uses.len(), 1, "should have 1 context use (@ctx)");
             assert_eq!(context_uses[0].0, qref, "use should be @ctx");
@@ -1025,8 +1083,10 @@ mod tests {
             assert_eq!(context_defs[0].0, qref, "def should be @ctx");
             // def ValueId should be a fresh value (not v0, v1, or v2).
             let def_val = context_defs[0].1;
-            assert!(def_val != v0 && def_val != v1 && def_val != v2,
-                "def should be a fresh SSA value, got {def_val:?}");
+            assert!(
+                def_val != v0 && def_val != v1 && def_val != v2,
+                "def should be a fresh SSA value, got {def_val:?}"
+            );
         } else {
             panic!("expected FunctionCall");
         }
@@ -1065,14 +1125,32 @@ mod tests {
                 context_defs: vec![],
             },
         });
-        body.insts.push(Inst { span, kind: InstKind::Return(v0) });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v0),
+        });
 
         run(&mut body, &fn_types);
 
-        let call_inst = body.insts.iter().find(|i| matches!(i.kind, InstKind::FunctionCall { .. })).unwrap();
-        if let InstKind::FunctionCall { context_uses, context_defs, .. } = &call_inst.kind {
-            assert!(context_uses.is_empty(), "pure function should have no context_uses");
-            assert!(context_defs.is_empty(), "pure function should have no context_defs");
+        let call_inst = body
+            .insts
+            .iter()
+            .find(|i| matches!(i.kind, InstKind::FunctionCall { .. }))
+            .unwrap();
+        if let InstKind::FunctionCall {
+            context_uses,
+            context_defs,
+            ..
+        } = &call_inst.kind
+        {
+            assert!(
+                context_uses.is_empty(),
+                "pure function should have no context_uses"
+            );
+            assert!(
+                context_defs.is_empty(),
+                "pure function should have no context_defs"
+            );
         }
     }
 
@@ -1117,8 +1195,14 @@ mod tests {
         }
 
         let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v0, ctx: qref } });
-        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v1, src: v0 } });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+        });
         body.insts.push(Inst {
             span,
             kind: InstKind::FunctionCall {
@@ -1129,19 +1213,33 @@ mod tests {
                 context_defs: vec![],
             },
         });
-        body.insts.push(Inst { span, kind: InstKind::ContextProject { dst: v3, ctx: qref } });
-        body.insts.push(Inst { span, kind: InstKind::ContextLoad { dst: v4, src: v3 } });
-        body.insts.push(Inst { span, kind: InstKind::Return(v4) });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextProject { dst: v3, ctx: qref },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::ContextLoad { dst: v4, src: v3 },
+        });
+        body.insts.push(Inst {
+            span,
+            kind: InstKind::Return(v4),
+        });
 
         run(&mut body, &fn_types);
 
         // The second ContextLoad (v4) should be eliminated — replaced by the def from the call.
-        let remaining_loads: Vec<_> = body.insts.iter()
+        let remaining_loads: Vec<_> = body
+            .insts
+            .iter()
             .filter(|i| matches!(i.kind, InstKind::ContextLoad { .. }))
             .collect();
         // Only the entry load should remain; the second should be forwarded.
-        assert_eq!(remaining_loads.len(), 1,
-            "second ContextLoad should be eliminated by forwarding from FunctionCall def");
+        assert_eq!(
+            remaining_loads.len(),
+            1,
+            "second ContextLoad should be eliminated by forwarding from FunctionCall def"
+        );
     }
 
     #[test]

@@ -2,9 +2,20 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use crate::span::Span;
 
+acvus_utils::declare_local_id!(pub AstId);
+
+impl AstId {
+    pub fn alloc() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// A parsed script (standalone expressions with semicolons).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Script {
+    pub id: AstId,
     pub stmts: Vec<Stmt>,
     pub tail: Option<Box<Expr>>,
     pub span: Span,
@@ -13,11 +24,22 @@ pub struct Script {
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Bind { name: Astr, expr: Expr, span: Span },
-    ContextStore { name: QualifiedRef, expr: Expr, span: Span },
+    Bind {
+        id: AstId,
+        name: Astr,
+        expr: Expr,
+        span: Span,
+    },
+    ContextStore {
+        id: AstId,
+        name: QualifiedRef,
+        expr: Expr,
+        span: Span,
+    },
     Expr(Expr),
     /// Match-bind (if-let): `pattern = source { body };`
     MatchBind {
+        id: AstId,
         pattern: Pattern,
         source: Expr,
         body: Vec<Stmt>,
@@ -25,6 +47,7 @@ pub enum Stmt {
     },
     /// Iteration (for): `pattern : source { body };`
     Iterate {
+        id: AstId,
         pattern: Pattern,
         source: Expr,
         body: Vec<Stmt>,
@@ -35,6 +58,7 @@ pub enum Stmt {
 /// A parsed template.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template {
+    pub id: AstId,
     pub body: Vec<Node>,
     pub span: Span,
 }
@@ -43,11 +67,11 @@ pub struct Template {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     /// Literal text outside `{{ }}`.
-    Text { value: String, span: Span },
+    Text { id: AstId, value: String, span: Span },
     /// A comment `{{-- ... --}}`.
-    Comment { value: String, span: Span },
+    Comment { id: AstId, value: String, span: Span },
     /// An inline expression `{{ expr }}` with no binding.
-    InlineExpr { expr: Expr, span: Span },
+    InlineExpr { id: AstId, expr: Expr, span: Span },
     /// A match block `{{ pattern = expr }} ... {{/}}`.
     /// Variable writes (`{{ $name = expr }}`) are also represented as a
     /// MatchBlock with a single arm whose pattern is
@@ -60,6 +84,7 @@ pub enum Node {
 /// A match block with one or more arms and optional catch-all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchBlock {
+    pub id: AstId,
     pub source: Expr,
     pub arms: Vec<MatchArm>,
     pub catch_all: Option<CatchAll>,
@@ -70,6 +95,7 @@ pub struct MatchBlock {
 /// A single arm in a match block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
+    pub id: AstId,
     pub pattern: Pattern,
     pub body: Vec<Node>,
     pub tag_span: Span,
@@ -78,6 +104,7 @@ pub struct MatchArm {
 /// An iteration block with a single irrefutable pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IterBlock {
+    pub id: AstId,
     pub pattern: Pattern,
     pub source: Expr,
     pub body: Vec<Node>,
@@ -89,6 +116,7 @@ pub struct IterBlock {
 /// The catch-all `{{_}}` arm.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchAll {
+    pub id: AstId,
     pub body: Vec<Node>,
     pub tag_span: Span,
 }
@@ -98,14 +126,16 @@ pub struct CatchAll {
 pub enum Expr {
     /// A reference: `name`, `$name`, or `@name`.
     Ident {
+        id: AstId,
         name: Astr,
         ref_kind: RefKind,
         span: Span,
     },
     /// A literal value.
-    Literal { value: Literal, span: Span },
+    Literal { id: AstId, value: Literal, span: Span },
     /// A binary operation: `a + b`.
     BinaryOp {
+        id: AstId,
         left: Box<Expr>,
         op: BinOp,
         right: Box<Expr>,
@@ -113,40 +143,46 @@ pub enum Expr {
     },
     /// A unary operation: `-x`, `!x`.
     UnaryOp {
+        id: AstId,
         op: UnaryOp,
         operand: Box<Expr>,
         span: Span,
     },
     /// Field access: `a.b`.
     FieldAccess {
+        id: AstId,
         object: Box<Expr>,
         field: Astr,
         span: Span,
     },
     /// Function call: `f(args)`.
     FuncCall {
+        id: AstId,
         func: Box<Expr>,
         args: Vec<Expr>,
         span: Span,
     },
     /// Pipe: `expr | func`.
     Pipe {
+        id: AstId,
         left: Box<Expr>,
         right: Box<Expr>,
         span: Span,
     },
     /// Lambda: `|x| -> expr` or `|x, y| -> expr`.
     Lambda {
+        id: AstId,
         params: Vec<LambdaParam>,
         body: Box<Expr>,
         span: Span,
     },
     /// Parenthesized expression: `(expr)`.
-    Paren { inner: Box<Expr>, span: Span },
+    Paren { id: AstId, inner: Box<Expr>, span: Span },
     /// A list: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
     /// `rest` is `Some` if `..` is present. `head` is before `..`, `tail` is after.
     /// If no `..`, all elements are in `head` and `tail` is empty.
     List {
+        id: AstId,
         head: Vec<Expr>,
         rest: Option<Span>,
         tail: Vec<Expr>,
@@ -154,14 +190,16 @@ pub enum Expr {
     },
     /// A group used for lambda parameter lists: `(a, b)`.
     /// This is a temporary node that only appears as the LHS of `->`.
-    Group { elements: Vec<Expr>, span: Span },
+    Group { id: AstId, elements: Vec<Expr>, span: Span },
     /// An object literal: `{ field1, $field2, field3 }`.
     Object {
+        id: AstId,
         fields: Vec<ObjectExprField>,
         span: Span,
     },
     /// A range: `0..10`, `0..=10`, `0=..10`.
     Range {
+        id: AstId,
         start: Box<Expr>,
         end: Box<Expr>,
         kind: RangeKind,
@@ -170,22 +208,22 @@ pub enum Expr {
     /// A tuple: `(a, b, c)` — 0 or 2+ elements.
     /// Elements can be expressions or wildcards `_`.
     Tuple {
+        id: AstId,
         elements: Vec<TupleElem>,
         span: Span,
     },
     /// A block expression: `{ stmt; stmt; expr }`.
     Block {
+        id: AstId,
         stmts: Vec<Stmt>,
         tail: Box<Expr>,
         span: Span,
     },
     /// A context reference: `@name`.
-    ContextRef {
-        name: QualifiedRef,
-        span: Span,
-    },
+    ContextRef { id: AstId, name: QualifiedRef, span: Span },
     /// A variant constructor: `Some(expr)`, `None`, or `Color::Red`.
     Variant {
+        id: AstId,
         enum_name: Option<Astr>,
         tag: Astr,
         payload: Option<Box<Expr>>,
@@ -201,6 +239,28 @@ pub enum TupleElem {
 }
 
 impl Expr {
+    pub fn id(&self) -> AstId {
+        match self {
+            Expr::Ident { id, .. }
+            | Expr::Literal { id, .. }
+            | Expr::BinaryOp { id, .. }
+            | Expr::UnaryOp { id, .. }
+            | Expr::FieldAccess { id, .. }
+            | Expr::FuncCall { id, .. }
+            | Expr::Pipe { id, .. }
+            | Expr::Lambda { id, .. }
+            | Expr::Paren { id, .. }
+            | Expr::List { id, .. }
+            | Expr::Group { id, .. }
+            | Expr::Object { id, .. }
+            | Expr::Range { id, .. }
+            | Expr::Tuple { id, .. }
+            | Expr::ContextRef { id, .. }
+            | Expr::Variant { id, .. }
+            | Expr::Block { id, .. } => *id,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Expr::Ident { span, .. }
@@ -227,6 +287,7 @@ impl Expr {
 /// A lambda parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LambdaParam {
+    pub id: AstId,
     pub name: Astr,
     pub span: Span,
 }
@@ -237,6 +298,7 @@ pub struct LambdaParam {
 /// Shorthand `{ @name }` → key="name", value=Ident("name", Context).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectExprField {
+    pub id: AstId,
     pub key: Astr,
     pub value: Expr,
     pub span: Span,
@@ -247,20 +309,19 @@ pub struct ObjectExprField {
 pub enum Pattern {
     /// A binding that captures a value: `item` or `$name`.
     Binding {
+        id: AstId,
         name: Astr,
         ref_kind: RefKind,
         span: Span,
     },
     /// A context binding: `@name`.
-    ContextBind {
-        name: QualifiedRef,
-        span: Span,
-    },
+    ContextBind { id: AstId, name: QualifiedRef, span: Span },
     /// A literal pattern that filters: `true`, `"admin"`, `42`.
-    Literal { value: Literal, span: Span },
+    Literal { id: AstId, value: Literal, span: Span },
     /// A list pattern: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
     /// Same structure as `Expr::List`: `head` before `..`, `tail` after.
     List {
+        id: AstId,
         head: Vec<Pattern>,
         rest: Option<Span>,
         tail: Vec<Pattern>,
@@ -268,11 +329,13 @@ pub enum Pattern {
     },
     /// An object pattern: `{ name, $value, status: "active" }`.
     Object {
+        id: AstId,
         fields: Vec<ObjectPatternField>,
         span: Span,
     },
     /// A range pattern: `0..10`, `0..=10`, `0=..10`.
     Range {
+        id: AstId,
         start: Box<Pattern>,
         end: Box<Pattern>,
         kind: RangeKind,
@@ -280,11 +343,13 @@ pub enum Pattern {
     },
     /// A tuple pattern: `(a, b, c)`.
     Tuple {
+        id: AstId,
         elements: Vec<TuplePatternElem>,
         span: Span,
     },
     /// A variant pattern: `Some(inner)`, `None`, or `Color::Red`.
     Variant {
+        id: AstId,
         enum_name: Option<Astr>,
         tag: Astr,
         payload: Option<Box<Pattern>>,
@@ -293,6 +358,19 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    pub fn id(&self) -> AstId {
+        match self {
+            Pattern::Binding { id, .. }
+            | Pattern::ContextBind { id, .. }
+            | Pattern::Literal { id, .. }
+            | Pattern::List { id, .. }
+            | Pattern::Object { id, .. }
+            | Pattern::Range { id, .. }
+            | Pattern::Tuple { id, .. }
+            | Pattern::Variant { id, .. } => *id,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Pattern::Binding { span, .. }
@@ -319,6 +397,7 @@ pub enum TuplePatternElem {
 /// A field in an object pattern: `{ key: pattern }` or shorthand `{ name }` / `{ $name }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectPatternField {
+    pub id: AstId,
     pub key: Astr,
     pub pattern: Pattern,
     pub span: Span,
@@ -413,12 +492,22 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
                 walk_expr(expr, refs);
             }
             Stmt::Expr(expr) => walk_expr(expr, refs),
-            Stmt::MatchBind { pattern, source, body, .. } => {
+            Stmt::MatchBind {
+                pattern,
+                source,
+                body,
+                ..
+            } => {
                 walk_pattern(pattern, refs);
                 walk_expr(source, refs);
                 walk_stmts(body, refs);
             }
-            Stmt::Iterate { pattern, source, body, .. } => {
+            Stmt::Iterate {
+                pattern,
+                source,
+                body,
+                ..
+            } => {
                 walk_pattern(pattern, refs);
                 walk_expr(source, refs);
                 walk_stmts(body, refs);
@@ -462,11 +551,17 @@ fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
 
 fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     match pattern {
-        Pattern::ContextBind { name, .. } => { refs.insert(*name); }
+        Pattern::ContextBind { name, .. } => {
+            refs.insert(*name);
+        }
         Pattern::Binding { .. } | Pattern::Literal { .. } => {}
         Pattern::List { head, tail, .. } => {
-            for p in head { walk_pattern(p, refs); }
-            for p in tail { walk_pattern(p, refs); }
+            for p in head {
+                walk_pattern(p, refs);
+            }
+            for p in tail {
+                walk_pattern(p, refs);
+            }
         }
         Pattern::Range { start, end, .. } => {
             walk_pattern(start, refs);
@@ -486,7 +581,9 @@ fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef
             }
         }
         Pattern::Variant { payload, .. } => {
-            if let Some(p) = payload { walk_pattern(p, refs); }
+            if let Some(p) = payload {
+                walk_pattern(p, refs);
+            }
         }
     }
 }
@@ -497,8 +594,13 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
             refs.insert(*name);
         }
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}
-        Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. }
-        | Expr::Range { start: left, end: right, .. } => {
+        Expr::BinaryOp { left, right, .. }
+        | Expr::Pipe { left, right, .. }
+        | Expr::Range {
+            start: left,
+            end: right,
+            ..
+        } => {
             walk_expr(left, refs);
             walk_expr(right, refs);
         }
@@ -508,22 +610,34 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
         Expr::FieldAccess { object, .. } => walk_expr(object, refs),
         Expr::FuncCall { func, args, .. } => {
             walk_expr(func, refs);
-            for arg in args { walk_expr(arg, refs); }
+            for arg in args {
+                walk_expr(arg, refs);
+            }
         }
         Expr::Lambda { body, .. } => walk_expr(body, refs),
         Expr::List { head, tail, .. } => {
-            for e in head { walk_expr(e, refs); }
-            for e in tail { walk_expr(e, refs); }
+            for e in head {
+                walk_expr(e, refs);
+            }
+            for e in tail {
+                walk_expr(e, refs);
+            }
         }
         Expr::Group { elements, .. } => {
-            for e in elements { walk_expr(e, refs); }
+            for e in elements {
+                walk_expr(e, refs);
+            }
         }
         Expr::Object { fields, .. } => {
-            for f in fields { walk_expr(&f.value, refs); }
+            for f in fields {
+                walk_expr(&f.value, refs);
+            }
         }
         Expr::Tuple { elements, .. } => {
             for e in elements {
-                if let TupleElem::Expr(expr) = e { walk_expr(expr, refs); }
+                if let TupleElem::Expr(expr) = e {
+                    walk_expr(expr, refs);
+                }
             }
         }
         Expr::Block { stmts, tail, .. } => {

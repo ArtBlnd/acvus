@@ -81,12 +81,9 @@ pub enum ExternHandler {
                     Vec<Value>,
                     Vec<Value>,
                     Interner,
-                ) -> Pin<
-                    Box<
-                        dyn Future<Output = Result<ExternOutput, RuntimeError>>
-                            + Send,
-                    >,
-                > + Send
+                )
+                    -> Pin<Box<dyn Future<Output = Result<ExternOutput, RuntimeError>> + Send>>
+                + Send
                 + Sync,
         >,
     ),
@@ -234,10 +231,7 @@ impl ExternFnBuilder {
     /// ```
     pub fn handler<A, U, R, D, F>(self, f: F) -> ExternFn
     where
-        F: Fn(&Interner, A, Uses<U>) -> Result<(R, Defs<D>), RuntimeError>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&Interner, A, Uses<U>) -> Result<(R, Defs<D>), RuntimeError> + Send + Sync + 'static,
         A: FromValues + 'static,
         U: FromValues + 'static,
         R: IntoValue + 'static,
@@ -270,9 +264,7 @@ impl ExternFnBuilder {
     pub fn handler_async<A, U, R, D, F, Fut>(self, f: F) -> ExternFn
     where
         F: Fn(Interner, A, Uses<U>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<(R, Defs<D>), RuntimeError>>
-            + Send
-            + 'static,
+        Fut: Future<Output = Result<(R, Defs<D>), RuntimeError>> + Send + 'static,
         A: FromValues + 'static,
         U: FromValues + 'static,
         R: IntoValue + 'static,
@@ -399,17 +391,13 @@ mod tests {
     #[test]
     fn sync_handler_pure_add() {
         let handler = into_sync_extern_handler(
-            |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
-                Ok((a + b, Defs(())))
-            },
+            |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| Ok((a + b, Defs(()))),
         );
         let interner = interner();
         let output = match &handler {
-            ExternHandler::Sync(f) => f(
-                vec![Value::Int(10), Value::Int(32)],
-                vec![],
-                &interner,
-            ).unwrap(),
+            ExternHandler::Sync(f) => {
+                f(vec![Value::Int(10), Value::Int(32)], vec![], &interner).unwrap()
+            }
             _ => panic!("expected sync"),
         };
         assert_eq!(output.rets.len(), 1);
@@ -431,9 +419,10 @@ mod tests {
         let output = match &handler {
             ExternHandler::Sync(f) => f(
                 vec![Value::Int(10)],
-                vec![Value::Int(100)],  // uses: offset = 100
+                vec![Value::Int(100)], // uses: offset = 100
                 &interner,
-            ).unwrap(),
+            )
+            .unwrap(),
             _ => panic!("expected sync"),
         };
         assert_eq!(output.rets[0], Value::Int(110));
@@ -446,9 +435,7 @@ mod tests {
     fn sync_handler_with_uses_and_defs() {
         // Handler reads history (uses), appends to it, returns new history (defs).
         let handler = into_sync_extern_handler(
-            |_interner: &Interner,
-             (msg,): (Value,),
-             Uses((history,)): Uses<(Vec<Value>,)>| {
+            |_interner: &Interner, (msg,): (Value,), Uses((history,)): Uses<(Vec<Value>,)>| {
                 let mut new_history = history;
                 new_history.push(msg);
                 let len = Value::Int(new_history.len() as i64);
@@ -461,10 +448,11 @@ mod tests {
         let initial_history = Value::list(vec![Value::Int(1), Value::Int(2)]);
         let output = match &handler {
             ExternHandler::Sync(f) => f(
-                vec![Value::Int(3)],          // args: msg = 3
-                vec![initial_history],        // uses: history = [1, 2]
+                vec![Value::Int(3)],   // args: msg = 3
+                vec![initial_history], // uses: history = [1, 2]
                 &interner,
-            ).unwrap(),
+            )
+            .unwrap(),
             _ => panic!("expected sync"),
         };
 
@@ -488,13 +476,10 @@ mod tests {
     #[test]
     fn sync_handler_multiple_defs() {
         // Handler writes two contexts.
-        let handler = into_sync_extern_handler(
-            |_interner: &Interner,
-             (): (),
-             Uses(()): Uses<()>| {
+        let handler =
+            into_sync_extern_handler(|_interner: &Interner, (): (), Uses(()): Uses<()>| {
                 Ok((Value::Unit, Defs((42i64, "hello".to_string()))))
-            },
-        );
+            });
         let interner = interner();
         let output = match &handler {
             ExternHandler::Sync(f) => f(vec![], vec![], &interner).unwrap(),
@@ -512,19 +497,14 @@ mod tests {
 
     #[test]
     fn from_value_type_mismatch() {
-        let handler = into_sync_extern_handler(
-            |_interner: &Interner, (x,): (i64,), Uses(()): Uses<()>| {
+        let handler =
+            into_sync_extern_handler(|_interner: &Interner, (x,): (i64,), Uses(()): Uses<()>| {
                 Ok((x, Defs(())))
-            },
-        );
+            });
         let interner = interner();
         // Pass String where i64 expected.
         let result = match &handler {
-            ExternHandler::Sync(f) => f(
-                vec![Value::string("not a number")],
-                vec![],
-                &interner,
-            ),
+            ExternHandler::Sync(f) => f(vec![Value::string("not a number")], vec![], &interner),
             _ => panic!("expected sync"),
         };
         assert!(result.is_err());
@@ -556,9 +536,11 @@ mod tests {
             .params(vec![Ty::Int, Ty::Int])
             .ret(Ty::Int)
             .pure()
-            .handler(|_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
-                Ok((a + b, Defs(())))
-            });
+            .handler(
+                |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
+                    Ok((a + b, Defs(())))
+                },
+            );
 
         assert_eq!(ext.name, "add");
         assert!(matches!(ext.handler_kind, HandlerKind::Extern(_)));
@@ -574,9 +556,11 @@ mod tests {
                     .params(vec![Ty::Int, Ty::Int])
                     .ret(Ty::Int)
                     .pure()
-                    .handler(|_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
-                        Ok((a + b, Defs(())))
-                    }),
+                    .handler(
+                        |_interner: &Interner, (a, b): (i64, i64), Uses(()): Uses<()>| {
+                            Ok((a + b, Defs(())))
+                        },
+                    ),
             ]
         });
 

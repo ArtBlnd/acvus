@@ -22,9 +22,9 @@ expression: ir
     15 │   r13 = r10 + r12
     16 │   return r13
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
-    ; r2 (@offset) : <error>
+    ; r2 (@offset) : Int
     ; r3 (v3) : Int
     ; r4 (iter(...)) : Iterator<Int>
     ; r5 (v8) : Fn(Int) -> Int

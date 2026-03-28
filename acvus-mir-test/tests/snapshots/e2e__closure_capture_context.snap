@@ -20,9 +20,9 @@ expression: ir
     13 │   r11 = r8 + r10
     14 │   return r11
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
-    ; r2 (@threshold) : <error>
+    ; r2 (@threshold) : Int
     ; r3 (v3) : Int
     ; r4 (iter(...)) : Iterator<Int>
     ; r5 (v8) : Fn(Int) -> Bool

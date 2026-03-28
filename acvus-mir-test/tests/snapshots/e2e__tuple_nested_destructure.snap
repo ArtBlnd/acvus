@@ -29,7 +29,7 @@ expression: ir
     27 │   r22 = T0 + r19
     28 │   return r22
 
-    ; r0 (@data) : <error>
+    ; r0 (@data) : (String, {x: Int})
     ; r1 (v1) : (String, {x: Int})
     ; r2 (v6) : String
     ; r3 (v8) : Bool

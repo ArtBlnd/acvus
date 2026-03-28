@@ -15,7 +15,7 @@ expression: ir
      7 │   r4 = r3 + T2
      8 │   return r4
 
-    ; r0 (@name) : <error>
+    ; r0 (@name) : String
     ; r1 (v1) : String
     ; r2 (v4) : String
     ; r3 (v7) : String

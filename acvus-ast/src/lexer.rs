@@ -297,7 +297,11 @@ impl<'input> Iterator for ExprTokenizer<'input> {
             }
             Ok(token) => Some(Ok((start, token, end))),
             Err(()) => {
-                let c = self.lexer.slice().chars().next()
+                let c = self
+                    .lexer
+                    .slice()
+                    .chars()
+                    .next()
                     .expect("lexer error token must contain at least one character");
                 Some(Err(ParseError::new(
                     ParseErrorKind::UnexpectedCharacter(c),
@@ -439,8 +443,9 @@ fn expand_format_string(
                         out.push_back(Ok((tok_start, token, tok_end)));
                     }
                     Err(()) => {
-                        let c = expr_str[span.start..].chars().next()
-                            .expect("interpolation lexer error must contain at least one character");
+                        let c = expr_str[span.start..].chars().next().expect(
+                            "interpolation lexer error must contain at least one character",
+                        );
                         out.push_back(Err(ParseError::new(
                             ParseErrorKind::UnexpectedCharacter(c),
                             Span::new(tok_start, tok_end),

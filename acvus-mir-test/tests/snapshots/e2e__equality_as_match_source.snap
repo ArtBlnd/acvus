@@ -26,9 +26,9 @@ expression: ir
     20 │   r9 = T0 + r8
     21 │   return r9
 
-    ; r0 (@a) : <error>
+    ; r0 (@a) : Int
     ; r1 (v1) : Int
-    ; r2 (@b) : <error>
+    ; r2 (@b) : Int
     ; r3 (v3) : Int
     ; r4 (v9) : Bool
     ; r5 (v10) : Bool

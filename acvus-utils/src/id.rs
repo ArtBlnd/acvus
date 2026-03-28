@@ -108,7 +108,10 @@ pub struct LocalFactory<I: LocalIdOps> {
 
 impl<I: LocalIdOps> LocalFactory<I> {
     pub fn new() -> Self {
-        Self { next: 0, _phantom: PhantomData }
+        Self {
+            next: 0,
+            _phantom: PhantomData,
+        }
     }
 
     /// Allocate the next sequential id.
@@ -181,6 +184,9 @@ impl<I: LocalIdOps, V: std::fmt::Debug> std::fmt::Debug for LocalVec<I, V> {
 
 impl<I: LocalIdOps, V: Clone> Clone for LocalVec<I, V> {
     fn clone(&self) -> Self {
-        Self { data: self.data.clone(), _phantom: PhantomData }
+        Self {
+            data: self.data.clone(),
+            _phantom: PhantomData,
+        }
     }
 }

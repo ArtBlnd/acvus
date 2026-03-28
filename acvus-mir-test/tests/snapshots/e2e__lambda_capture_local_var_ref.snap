@@ -19,7 +19,7 @@ expression: ir
     14 │   r11 = r8 + r10
     15 │   return r11
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (v5) : String
     ; r3 (iter(...)) : Iterator<Int>

@@ -68,7 +68,10 @@ pub enum ValidationErrorKind {
 // ---------------------------------------------------------------------------
 
 /// Check type consistency of the entire module.  Returns all errors found.
-pub fn check_types(module: &MirModule, fn_types: &FxHashMap<FunctionId, Ty>) -> Vec<ValidationError> {
+pub fn check_types(
+    module: &MirModule,
+    fn_types: &FxHashMap<FunctionId, Ty>,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let mut ctx = CheckCtx::new("main".to_string(), fn_types);
@@ -248,7 +251,10 @@ impl<'a> CheckCtx<'a> {
     fn callee_effect(&self, fn_id: &FunctionId) -> Option<&'a EffectSet> {
         let ty = self.fn_types.get(fn_id)?;
         match ty {
-            Ty::Fn { effect: Effect::Resolved(eff), .. } => Some(eff),
+            Ty::Fn {
+                effect: Effect::Resolved(eff),
+                ..
+            } => Some(eff),
             _ => None,
         }
     }
@@ -967,7 +973,13 @@ impl<'a> CheckCtx<'a> {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
             }
 
-            InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
+            InstKind::FunctionCall {
+                dst,
+                callee,
+                args,
+                context_uses,
+                context_defs,
+            } => {
                 match callee {
                     Callee::Direct(fn_id) => {
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
@@ -1049,7 +1061,10 @@ impl<'a> CheckCtx<'a> {
 
             // === Spawn / Eval ===
             InstKind::Spawn {
-                dst, callee, args, context_uses,
+                dst,
+                callee,
+                args,
+                context_uses,
             } => {
                 match callee {
                     Callee::Direct(fn_id) => {
@@ -1177,9 +1192,7 @@ impl<'a> CheckCtx<'a> {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
-                            kind: ValidationErrorKind::NotMaterializable {
-                                ty: ty.clone(),
-                            },
+                            kind: ValidationErrorKind::NotMaterializable { ty: ty.clone() },
                         });
                     }
                 }

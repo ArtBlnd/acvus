@@ -161,18 +161,43 @@ pub struct TreeView {
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[serde(tag = "t")]
 pub enum JsConcreteValue {
-    Int { v: i64 },
-    Float { v: f64 },
-    String { v: std::string::String },
-    Bool { v: bool },
+    Int {
+        v: i64,
+    },
+    Float {
+        v: f64,
+    },
+    String {
+        v: std::string::String,
+    },
+    Bool {
+        v: bool,
+    },
     Unit,
-    Range { start: i64, end: i64, inclusive: bool },
-    List { items: Vec<JsConcreteValue> },
-    Object { fields: Vec<(std::string::String, JsConcreteValue)> },
-    Tuple { items: Vec<JsConcreteValue> },
-    Byte { v: u8 },
-    Variant { tag: std::string::String, payload: Option<Box<JsConcreteValue>> },
-    Sequence { items: Vec<JsConcreteValue> },
+    Range {
+        start: i64,
+        end: i64,
+        inclusive: bool,
+    },
+    List {
+        items: Vec<JsConcreteValue>,
+    },
+    Object {
+        fields: Vec<(std::string::String, JsConcreteValue)>,
+    },
+    Tuple {
+        items: Vec<JsConcreteValue>,
+    },
+    Byte {
+        v: u8,
+    },
+    Variant {
+        tag: std::string::String,
+        payload: Option<Box<JsConcreteValue>>,
+    },
+    Sequence {
+        items: Vec<JsConcreteValue>,
+    },
 }
 
 impl From<acvus_interpreter::ConcreteValue> for JsConcreteValue {
@@ -184,7 +209,15 @@ impl From<acvus_interpreter::ConcreteValue> for JsConcreteValue {
             CV::String { v } => Self::String { v },
             CV::Bool { v } => Self::Bool { v },
             CV::Unit => Self::Unit,
-            CV::Range { start, end, inclusive } => Self::Range { start, end, inclusive },
+            CV::Range {
+                start,
+                end,
+                inclusive,
+            } => Self::Range {
+                start,
+                end,
+                inclusive,
+            },
             CV::List { items } => Self::List {
                 items: items.into_iter().map(Into::into).collect(),
             },
@@ -215,7 +248,15 @@ impl From<JsConcreteValue> for acvus_interpreter::ConcreteValue {
             JCV::String { v } => Self::String { v },
             JCV::Bool { v } => Self::Bool { v },
             JCV::Unit => Self::Unit,
-            JCV::Range { start, end, inclusive } => Self::Range { start, end, inclusive },
+            JCV::Range {
+                start,
+                end,
+                inclusive,
+            } => Self::Range {
+                start,
+                end,
+                inclusive,
+            },
             JCV::List { items } => Self::List {
                 items: items.into_iter().map(Into::into).collect(),
             },
@@ -253,11 +294,21 @@ pub enum TypeDesc {
     #[serde(rename = "list")]
     List { elem: Box<TypeDesc> },
     #[serde(rename = "deque")]
-    Deque { elem: Box<TypeDesc>, origin: TypeDescOrigin },
+    Deque {
+        elem: Box<TypeDesc>,
+        origin: TypeDescOrigin,
+    },
     #[serde(rename = "iterator")]
-    Iterator { elem: Box<TypeDesc>, effect: TypeDescEffect },
+    Iterator {
+        elem: Box<TypeDesc>,
+        effect: TypeDescEffect,
+    },
     #[serde(rename = "sequence")]
-    Sequence { elem: Box<TypeDesc>, origin: TypeDescOrigin, effect: TypeDescEffect },
+    Sequence {
+        elem: Box<TypeDesc>,
+        origin: TypeDescOrigin,
+        effect: TypeDescEffect,
+    },
     #[serde(rename = "tuple")]
     Tuple { items: Vec<TypeDesc> },
     #[serde(rename = "fn")]
@@ -334,9 +385,15 @@ fn desc_to_effect(desc: &TypeDescEffect) -> acvus_mir::ty::Effect {
 pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
     match ty {
         Ty::Int => TypeDesc::Primitive { name: "int".into() },
-        Ty::Float => TypeDesc::Primitive { name: "float".into() },
-        Ty::String => TypeDesc::Primitive { name: "string".into() },
-        Ty::Bool => TypeDesc::Primitive { name: "bool".into() },
+        Ty::Float => TypeDesc::Primitive {
+            name: "float".into(),
+        },
+        Ty::String => TypeDesc::Primitive {
+            name: "string".into(),
+        },
+        Ty::Bool => TypeDesc::Primitive {
+            name: "bool".into(),
+        },
         Ty::Unit => TypeDesc::Unit,
         Ty::Range => TypeDesc::Range,
         Ty::Byte => TypeDesc::Byte,
@@ -352,7 +409,9 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
                 })
                 .collect();
             desc_fields.sort_by(|a, b| a.name.cmp(&b.name));
-            TypeDesc::Object { fields: desc_fields }
+            TypeDesc::Object {
+                fields: desc_fields,
+            }
         }
         Ty::Enum { name, variants } => {
             let mut desc_variants: Vec<TypeDescVariant> = variants
@@ -399,7 +458,9 @@ pub fn ty_to_desc(interner: &Interner, ty: &Ty) -> TypeDesc {
             effect: effect_to_desc(effect),
         },
         Ty::Var(_) | Ty::Infer(_) | Ty::Error(_) => TypeDesc::Unsupported { raw: "?".into() },
-        Ty::Opaque(_) => TypeDesc::Unsupported { raw: "Opaque".into() },
+        Ty::Opaque(_) => TypeDesc::Unsupported {
+            raw: "Opaque".into(),
+        },
     }
 }
 
@@ -434,7 +495,9 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
                 .map(|v| {
                     let tag = interner.intern(&v.tag);
                     let payload = if v.has_payload {
-                        let ty = v.payload_type.as_ref()
+                        let ty = v
+                            .payload_type
+                            .as_ref()
                             .map(|pt| desc_to_ty(interner, pt))
                             .unwrap_or_else(Ty::error);
                         Some(Box::new(ty))
@@ -452,12 +515,20 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
         TypeDesc::Iterator { elem, effect } => {
             Ty::Iterator(Box::new(desc_to_ty(interner, elem)), desc_to_effect(effect))
         }
-        TypeDesc::Sequence { elem, origin, effect } => {
+        TypeDesc::Sequence {
+            elem,
+            origin,
+            effect,
+        } => {
             let o = match origin {
                 TypeDescOrigin::Concrete { id } => acvus_mir::ty::Origin::Concrete(*id),
                 TypeDescOrigin::Var { id } => acvus_mir::ty::Origin::Var(*id),
             };
-            Ty::Sequence(Box::new(desc_to_ty(interner, elem)), o, desc_to_effect(effect))
+            Ty::Sequence(
+                Box::new(desc_to_ty(interner, elem)),
+                o,
+                desc_to_effect(effect),
+            )
         }
         TypeDesc::Tuple { items } => {
             Ty::Tuple(items.iter().map(|t| desc_to_ty(interner, t)).collect())

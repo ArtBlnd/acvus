@@ -233,7 +233,9 @@ impl RuntimeError {
 
     pub fn internal(message: impl Into<std::string::String>) -> Self {
         Self {
-            kind: RuntimeErrorKind::Internal { message: message.into() },
+            kind: RuntimeErrorKind::Internal {
+                message: message.into(),
+            },
         }
     }
 }

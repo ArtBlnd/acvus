@@ -14,7 +14,7 @@ expression: ir
      8 │   r6 = r4 + r5
      9 │   return r6
 
-    ; r0 (@get_user) : <error>
+    ; r0 (@get_user) : Fn(Int) -> {age: Int, name: String}
     ; r1 (v1) : Fn(Int) -> {age: Int, name: String}
     ; r2 (<closure>(...)) : {age: Int, name: String}
     ; r3 (v3) : Int

@@ -23,7 +23,7 @@ expression: ir
     17 │   r14 = T0 + r13
     18 │   return r14
 
-    ; r0 (@pairs) : <error>
+    ; r0 (@pairs) : List<(String, Int)>
     ; r1 (v1) : List<(String, Int)>
     ; r2 (v5) : Iterator<(String, Int)>
     ; r3 (v19) : String

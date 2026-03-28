@@ -57,8 +57,7 @@ impl acvus_orchestration::Fetch for WebFetch {
             let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
             opts.set_body(&JsValue::from_str(&body_str));
 
-            let req =
-                Request::new_with_str_and_init(&url, &opts).map_err(|e| format!("{e:?}"))?;
+            let req = Request::new_with_str_and_init(&url, &opts).map_err(|e| format!("{e:?}"))?;
 
             let window = web_sys::window().ok_or("no window")?;
             let resp_val = JsFuture::from(window.fetch_with_request(&req))

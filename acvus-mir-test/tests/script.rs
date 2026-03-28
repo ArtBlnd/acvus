@@ -22,7 +22,10 @@ fn ctx(i: &Interner, entries: &[(&str, Ty)]) -> FxHashMap<acvus_utils::Astr, Ty>
 #[test]
 fn loop_simple_iteration() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)]);
+    let c = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
+    );
     let ir = compile_script_ir(&i, "x in @items { @sum = @sum + x; }; @sum", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -54,8 +57,7 @@ fn loop_context_write_phi() {
         &i,
         &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
     );
-    let ir =
-        compile_script_ir(&i, "x in @items { @count = @count + 1; }; @count", &c).unwrap();
+    let ir = compile_script_ir(&i, "x in @items { @count = @count + 1; }; @count", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -82,8 +84,7 @@ fn loop_with_function_call() {
 fn loop_range_iteration() {
     let i = Interner::new();
     let c = ctx(&i, &[("sum", Ty::Int)]);
-    let ir =
-        compile_script_ir(&i, "x in 0..10 { @sum = @sum + x; }; @sum", &c).unwrap();
+    let ir = compile_script_ir(&i, "x in 0..10 { @sum = @sum + x; }; @sum", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -117,12 +118,7 @@ fn branch_destructure_object() {
         (i.intern("age"), Ty::Int),
     ]));
     let c = ctx(&i, &[("user", obj_ty), ("out", Ty::String)]);
-    let ir = compile_script_ir(
-        &i,
-        "{ name, age, } = @user { @out = name; }; @out",
-        &c,
-    )
-    .unwrap();
+    let ir = compile_script_ir(&i, "{ name, age, } = @user { @out = name; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -130,12 +126,7 @@ fn branch_destructure_object() {
 fn branch_nested_match() {
     let i = Interner::new();
     let c = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int), ("out", Ty::Int)]);
-    let ir = compile_script_ir(
-        &i,
-        "x = @a { y = @b { @out = x + y; }; }; @out",
-        &c,
-    )
-    .unwrap();
+    let ir = compile_script_ir(&i, "x = @a { y = @b { @out = x + y; }; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -174,7 +165,10 @@ fn ssa_write_in_branch_phi() {
 fn ssa_write_in_loop_phi() {
     // Context write in loop — loop-carried PHI
     let i = Interner::new();
-    let c = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int))), ("acc", Ty::Int)]);
+    let c = ctx(
+        &i,
+        &[("items", Ty::List(Box::new(Ty::Int))), ("acc", Ty::Int)],
+    );
     let ir = compile_script_ir(&i, "x in @items { @acc = @acc + x; }; @acc", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -206,10 +200,7 @@ fn func_builtin_in_loop() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[
-            ("items", Ty::List(Box::new(Ty::Int))),
-            ("out", Ty::String),
-        ],
+        &[("items", Ty::List(Box::new(Ty::Int))), ("out", Ty::String)],
     );
     let ir = compile_script_ir(
         &i,
@@ -224,12 +215,7 @@ fn func_builtin_in_loop() {
 fn func_pipe_chain() {
     let i = Interner::new();
     let c = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_script_ir(
-        &i,
-        "@items | filter(|x| -> x > 0) | collect",
-        &c,
-    )
-    .unwrap();
+    let ir = compile_script_ir(&i, "@items | filter(|x| -> x > 0) | collect", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -251,10 +237,7 @@ fn combined_loop_with_branch() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[
-            ("items", Ty::List(Box::new(Ty::Int))),
-            ("count", Ty::Int),
-        ],
+        &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
     );
     let ir = compile_script_ir(
         &i,
@@ -312,9 +295,13 @@ fn combined_bind_then_iterate() {
     let c = ctx(
         &i,
         &[
-            ("data", Ty::Object(FxHashMap::from_iter([
-                (i.intern("items"), Ty::List(Box::new(Ty::Int))),
-            ]))),
+            (
+                "data",
+                Ty::Object(FxHashMap::from_iter([(
+                    i.intern("items"),
+                    Ty::List(Box::new(Ty::Int)),
+                )])),
+            ),
             ("sum", Ty::Int),
         ],
     );
@@ -367,5 +354,8 @@ fn reject_type_mismatch_context_store() {
     let i = Interner::new();
     let c = ctx(&i, &[("x", Ty::Int)]);
     let result = compile_script_ir(&i, r#"@x = "hello"; @x"#, &c);
-    assert!(result.is_err(), "expected error for type mismatch on context store");
+    assert!(
+        result.is_err(),
+        "expected error for type mismatch on context store"
+    );
 }

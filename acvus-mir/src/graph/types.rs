@@ -9,7 +9,7 @@
 use acvus_utils::Astr;
 use acvus_utils::Freeze;
 
-use crate::ty::{EffectSet, Ty};
+use crate::ty::{EffectConstraint, Ty};
 
 // ── Identifiers ─────────────────────────────────────────────────────
 
@@ -68,17 +68,26 @@ pub struct FnConstraint {
     pub signature: Option<Signature>,
     /// Output type constraint.
     pub output: Constraint,
-    /// Effect upper bound. `None` = no constraint.
-    pub effect: Option<EffectSet>,
+    /// Effect upper bound. `None` = no constraint (anything allowed).
+    pub effect: Option<EffectConstraint>,
 }
 
 #[derive(Debug, Clone)]
 pub enum FnKind {
     /// Has source code. Graph engine typechecks and compiles.
     Local(SourceCode),
+    /// Has pre-parsed AST. Skips parsing — used by lowerer-generated code.
+    LocalAst(ParsedAst),
     /// Black box. Runtime provides the value.
     /// Effect information lives in the function's type (`Ty::Fn { effect }`).
     Extern,
+}
+
+/// Pre-parsed AST for lowerer-generated functions.
+#[derive(Debug, Clone)]
+pub enum ParsedAst {
+    Script(acvus_ast::Script),
+    Template(acvus_ast::Template),
 }
 
 /// An executable entity in the graph.

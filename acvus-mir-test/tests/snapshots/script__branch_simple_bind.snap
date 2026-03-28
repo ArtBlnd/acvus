@@ -12,9 +12,9 @@ expression: ir
      7 │   ctx_store r6 = r4
      8 │   return r4
 
-    ; r0 (@data) : <error>
+    ; r0 (@data) : Int
     ; r1 (v1) : Int
-    ; r2 (@out) : <error>
+    ; r2 (@out) : Int
     ; r3 (v3) : Int
     ; r4 (v8) : Int
     ; r5 (v7) : Int

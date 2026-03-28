@@ -23,12 +23,15 @@ impl FromValue for Dt {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
         match value {
             Value::Opaque(o) => {
-                let dt = o.downcast_ref::<chrono::DateTime<chrono::Utc>>()
-                    .ok_or_else(|| RuntimeError::unexpected_type(
-                        "FromValue<Dt>",
-                        &[ValueKind::Opaque],
-                        ValueKind::Opaque,
-                    ))?;
+                let dt = o
+                    .downcast_ref::<chrono::DateTime<chrono::Utc>>()
+                    .ok_or_else(|| {
+                        RuntimeError::unexpected_type(
+                            "FromValue<Dt>",
+                            &[ValueKind::Opaque],
+                            ValueKind::Opaque,
+                        )
+                    })?;
                 Ok(Dt(*dt))
             }
             other => Err(RuntimeError::unexpected_type(
@@ -68,59 +71,68 @@ pub fn datetime_registry() -> ExternRegistry {
                 .params(vec![opaque_ty(), Ty::String])
                 .ret(Ty::String)
                 .pure()
-                .handler(|_interner: &Interner, (Dt(dt), fmt): (Dt, String), Uses(()): Uses<()>| {
-                    Ok((dt.format(&fmt).to_string(), Defs(())))
-                }),
-
+                .handler(
+                    |_interner: &Interner, (Dt(dt), fmt): (Dt, String), Uses(()): Uses<()>| {
+                        Ok((dt.format(&fmt).to_string(), Defs(())))
+                    },
+                ),
             // parse_date(s, fmt) -> DateTime
             ExternFn::build("parse_date")
                 .params(vec![Ty::String, Ty::String])
                 .ret(opaque_ty())
                 .pure()
-                .handler(|_interner: &Interner, (s, fmt): (String, String), Uses(()): Uses<()>| {
-                    let dt = chrono::NaiveDateTime::parse_from_str(&s, &fmt)
-                        .map(|ndt| ndt.and_utc())
-                        .unwrap_or_else(|e| panic!("parse_date: invalid input '{s}' with format '{fmt}': {e}"));
-                    Ok((Dt(dt), Defs(())))
-                }),
-
+                .handler(
+                    |_interner: &Interner, (s, fmt): (String, String), Uses(()): Uses<()>| {
+                        let dt = chrono::NaiveDateTime::parse_from_str(&s, &fmt)
+                            .map(|ndt| ndt.and_utc())
+                            .unwrap_or_else(|e| {
+                                panic!("parse_date: invalid input '{s}' with format '{fmt}': {e}")
+                            });
+                        Ok((Dt(dt), Defs(())))
+                    },
+                ),
             // timestamp(dt) -> Int  (Unix epoch seconds)
             ExternFn::build("timestamp")
                 .params(vec![opaque_ty()])
                 .ret(Ty::Int)
                 .pure()
-                .handler(|_interner: &Interner, (Dt(dt),): (Dt,), Uses(()): Uses<()>| {
-                    Ok((dt.timestamp(), Defs(())))
-                }),
-
+                .handler(
+                    |_interner: &Interner, (Dt(dt),): (Dt,), Uses(()): Uses<()>| {
+                        Ok((dt.timestamp(), Defs(())))
+                    },
+                ),
             // from_timestamp(epoch) -> DateTime
             ExternFn::build("from_timestamp")
                 .params(vec![Ty::Int])
                 .ret(opaque_ty())
                 .pure()
-                .handler(|_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
-                    let dt = chrono::DateTime::from_timestamp(epoch, 0)
-                        .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
-                    Ok((Dt(dt), Defs(())))
-                }),
-
+                .handler(
+                    |_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
+                        let dt = chrono::DateTime::from_timestamp(epoch, 0)
+                            .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
+                        Ok((Dt(dt), Defs(())))
+                    },
+                ),
             // add_days(dt, n) -> DateTime
             ExternFn::build("add_days")
                 .params(vec![opaque_ty(), Ty::Int])
                 .ret(opaque_ty())
                 .pure()
-                .handler(|_interner: &Interner, (Dt(dt), n): (Dt, i64), Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::days(n)), Defs(())))
-                }),
-
+                .handler(
+                    |_interner: &Interner, (Dt(dt), n): (Dt, i64), Uses(()): Uses<()>| {
+                        Ok((Dt(dt + chrono::Duration::days(n)), Defs(())))
+                    },
+                ),
             // add_hours(dt, n) -> DateTime
             ExternFn::build("add_hours")
                 .params(vec![opaque_ty(), Ty::Int])
                 .ret(opaque_ty())
                 .pure()
-                .handler(|_interner: &Interner, (Dt(dt), n): (Dt, i64), Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::hours(n)), Defs(())))
-                }),
+                .handler(
+                    |_interner: &Interner, (Dt(dt), n): (Dt, i64), Uses(()): Uses<()>| {
+                        Ok((Dt(dt + chrono::Duration::hours(n)), Defs(())))
+                    },
+                ),
         ]);
 
         fns

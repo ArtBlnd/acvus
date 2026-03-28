@@ -276,7 +276,13 @@ fn remap_inst(
             dst: r(*dst),
             id: *id,
         },
-        InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
+        InstKind::FunctionCall {
+            dst,
+            callee,
+            args,
+            context_uses,
+            context_defs,
+        } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
                 Callee::Indirect(v) => Callee::Indirect(r(*v)),

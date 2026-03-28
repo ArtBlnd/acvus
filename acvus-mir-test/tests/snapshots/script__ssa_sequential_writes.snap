@@ -13,7 +13,7 @@ expression: ir
     10 │   ctx_store r6 = 3 (r7)
     11 │   return 3 (r7)
 
-    ; r0 (@x) : <error>
+    ; r0 (@x) : Int
     ; r1 (v1) : Int
     ; r2 (v3) : Int
     ; r3 (v2) : Int

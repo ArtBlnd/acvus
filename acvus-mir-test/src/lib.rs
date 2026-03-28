@@ -1,5 +1,5 @@
-use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::graph::*;
+use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{Param, Ty};
 use acvus_utils::{Astr, Freeze, Interner};
@@ -21,14 +21,18 @@ pub fn compile_to_ir_with(
     context: &FxHashMap<Astr, Ty>,
     extern_fns: &[Function],
 ) -> Result<String, String> {
-    let ctx: Vec<(&str, Ty)> = context.iter()
+    let ctx: Vec<(&str, Ty)> = context
+        .iter()
         .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
         .collect();
-    let contexts: Vec<Context> = ctx.iter().map(|(name, ty)| Context {
-        name: interner.intern(name),
-        namespace: None,
-        constraint: Constraint::Exact(ty.clone()),
-    }).collect();
+    let contexts: Vec<Context> = ctx
+        .iter()
+        .map(|(name, ty)| Context {
+            name: interner.intern(name),
+            namespace: None,
+            constraint: Constraint::Exact(ty.clone()),
+        })
+        .collect();
     let mut functions = vec![Function {
         id: FunctionId::alloc(),
         name: interner.intern("test"),
@@ -54,14 +58,17 @@ pub fn compile_to_ir_with(
     let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     if result.has_errors() {
-        let errs: Vec<String> = result.errors.iter()
+        let errs: Vec<String> = result
+            .errors
+            .iter()
             .flat_map(|e| e.errors.iter())
             .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
             .collect();
         return Err(errs.join("\n"));
     }
     let uid = graph.functions[0].id;
-    let module = result.module(uid)
+    let module = result
+        .module(uid)
         .ok_or_else(|| "no module produced".to_string())?;
     Ok(dump_with(interner, module))
 }
@@ -103,7 +110,8 @@ pub fn compile_script_ir(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
-    let contexts: Vec<Context> = context.iter()
+    let contexts: Vec<Context> = context
+        .iter()
         .map(|(name, ty)| Context {
             name: *name,
             namespace: None,
@@ -133,14 +141,17 @@ pub fn compile_script_ir(
     let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default());
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     if result.has_errors() {
-        let errs: Vec<String> = result.errors.iter()
+        let errs: Vec<String> = result
+            .errors
+            .iter()
             .flat_map(|e| e.errors.iter())
             .map(|e| format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)))
             .collect();
         return Err(errs.join("\n"));
     }
     let uid = graph.functions[0].id;
-    let module = result.module(uid)
+    let module = result
+        .module(uid)
         .ok_or_else(|| "no module produced".to_string())?;
     Ok(dump_with(interner, module))
 }

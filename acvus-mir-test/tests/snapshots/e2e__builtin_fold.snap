@@ -15,7 +15,7 @@ expression: ir
      8 │   r6 = T0 + r5
      9 │   return r6
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (v5) : Iterator<Int>
     ; r3 (v7) : Fn(Int, Int) -> Int

@@ -6,8 +6,8 @@ use acvus_mir::ir::MirBody;
 use acvus_utils::{Astr, Interner, TrackedDeque};
 use rustc_hash::FxHashMap;
 
-pub use crate::iter::{IterHandle, SequenceChain};
 use crate::error::RuntimeError;
+pub use crate::iter::{IterHandle, SequenceChain};
 
 // ── Value ────────────────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
-use acvus_mir::{graph::infer, ty::{Effect, Param, Ty}};
-use acvus_mir::graph::{
-    Constraint, FnConstraint, FnKind, Function, FunctionId, Signature,
+use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, FunctionId, Signature};
+use acvus_mir::{
+    graph::infer,
+    ty::{Effect, Param, Ty},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Interner};
@@ -12,24 +13,29 @@ fn compile_analysis(
     interner: &Interner,
     source: &str,
     ctx: &[(&str, Ty)],
-) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), Vec<acvus_mir::error::MirError>> {
+) -> Result<(acvus_mir::ir::MirModule, acvus_mir::hints::HintTable), Vec<acvus_mir::error::MirError>>
+{
+    use acvus_mir::graph::{
+        CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function, FunctionId,
+        SourceCode, SourceKind,
+    };
     use acvus_mir::graph::{extract, lower as graph_lower};
-    use acvus_mir::graph::{CompilationGraph, Function, FunctionId, FnKind, SourceCode, SourceKind,
-                           FnConstraint, Constraint, Context};
     use acvus_mir::ty::Param;
     use acvus_utils::Freeze;
     use rustc_hash::FxHashSet;
 
     // Build contexts from declared types.
-    let mut contexts: Vec<Context> = ctx.iter().map(|(name, ty)| Context {
-        name: interner.intern(name),
-        namespace: None,
-        constraint: Constraint::Exact(ty.clone()),
-    }).collect();
+    let mut contexts: Vec<Context> = ctx
+        .iter()
+        .map(|(name, ty)| Context {
+            name: interner.intern(name),
+            namespace: None,
+            constraint: Constraint::Exact(ty.clone()),
+        })
+        .collect();
 
     // Discover context refs in source that aren't declared — add as Inferred.
-    let template = acvus_ast::parse(interner, source)
-        .expect("parse failed");
+    let template = acvus_ast::parse(interner, source).expect("parse failed");
     let declared: FxHashSet<Astr> = contexts.iter().map(|c| c.name).collect();
     for qref in acvus_ast::extract_template_context_refs(&template) {
         if !declared.contains(&qref.name) {
@@ -66,13 +72,13 @@ fn compile_analysis(
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
-        return Err(result.errors.into_iter()
-            .flat_map(|e| e.errors)
-            .collect());
+        return Err(result.errors.into_iter().flat_map(|e| e.errors).collect());
     }
 
     let uid = graph.functions[0].id;
-    result.modules.into_iter()
+    result
+        .modules
+        .into_iter()
         .find(|(id, _)| *id == uid)
         .map(|(_, pair)| pair)
         .ok_or_else(Vec::new)
@@ -134,12 +140,7 @@ fn mixed_text_and_expr() {
 fn context_read() {
     let i = Interner::new();
     let context = ctx(&i, &[("count", Ty::Int)]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ @count | to_string }}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @count | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -153,12 +154,7 @@ fn variable_write() {
 #[test]
 fn context_field_access() {
     let i = Interner::new();
-    let ir = compile_to_ir(
-        &i,
-        "{{ @user.name }}",
-        &user_context(&i),
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @user.name }}", &user_context(&i)).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -168,12 +164,7 @@ fn context_field_access() {
 fn arithmetic_to_string() {
     let i = Interner::new();
     let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ @a + @b | to_string }}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @a + @b | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -184,12 +175,7 @@ fn simple_match_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
     // Variable binding is body-less — defines x in current scope.
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ x = @name }}{{ x }}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ x = @name }}{{ x }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -410,12 +396,7 @@ fn tuple_expression() {
 fn tuple_pattern_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -423,12 +404,7 @@ fn tuple_pattern_binding() {
 fn tuple_pattern_wildcard() {
     let i = Interner::new();
     let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -490,11 +466,7 @@ fn error_emit_non_string() {
 #[test]
 fn error_undefined_context() {
     let i = Interner::new();
-    let result = compile_to_ir(
-        &i,
-        "{{ @unknown | to_string }}",
-        &FxHashMap::default(),
-    );
+    let result = compile_to_ir(&i, "{{ @unknown | to_string }}", &FxHashMap::default());
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -502,11 +474,7 @@ fn error_undefined_context() {
 #[test]
 fn error_undefined_variable() {
     let i = Interner::new();
-    let result = compile_to_ir(
-        &i,
-        "{{ x = unknown }}{{_}}{{/}}",
-        &FxHashMap::default(),
-    );
+    let result = compile_to_ir(&i, "{{ x = unknown }}{{_}}{{/}}", &FxHashMap::default());
     assert!(result.is_err());
 }
 
@@ -532,12 +500,7 @@ fn error_range_float_bounds() {
 fn iter_list_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ x in @items }}{{ x | to_string }}{{/}}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ x in @items }}{{ x | to_string }}{{/}}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -563,12 +526,7 @@ fn iter_tuple_destructure() {
             Ty::List(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int]))),
         )],
     );
-    let ir = compile_to_ir(
-        &i,
-        "{{ (a, _) in @pairs }}{{ a }}{{/}}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ (a, _) in @pairs }}{{ a }}{{/}}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -589,11 +547,7 @@ fn iter_with_catch_all() {
 fn error_iter_refutable_pattern() {
     let i = Interner::new();
     let context = ctx(&i, &[("roles", Ty::List(Box::new(Ty::String)))]);
-    let result = compile_to_ir(
-        &i,
-        r#"{{ "admin" in @roles }}...{{/}}"#,
-        &context,
-    );
+    let result = compile_to_ir(&i, r#"{{ "admin" in @roles }}...{{/}}"#, &context);
     assert!(result.is_err());
 }
 
@@ -601,11 +555,7 @@ fn error_iter_refutable_pattern() {
 fn error_iter_not_iterable() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
-    let result = compile_to_ir(
-        &i,
-        "{{ x in @name }}{{ x }}{{/}}",
-        &context,
-    );
+    let result = compile_to_ir(&i, "{{ x in @name }}{{ x }}{{/}}", &context);
     assert!(result.is_err());
 }
 
@@ -616,12 +566,7 @@ fn variable_new_ref_binding() {
     let i = Interner::new();
     // result is not in initial context — dynamically created via binding.
     let context = ctx(&i, &[("name", Ty::String)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ result = @name }}{{ result }}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ result = @name }}{{ result }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -867,12 +812,7 @@ fn deeply_nested_object_access() {
             ),
         )],
     );
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ @data.user.address.city }}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ @data.user.address.city }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1135,12 +1075,7 @@ fn field_access_on_destructured() {
             Ty::Tuple(vec![obj(&i, &[("name", Ty::String)]), Ty::Int]),
         )],
     );
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1396,11 +1331,7 @@ fn pipe_filter_then_map_field() {
 fn error_field_access_on_int() {
     let i = Interner::new();
     let context = ctx(&i, &[("n", Ty::Int)]);
-    let result = compile_to_ir(
-        &i,
-        "{{ @n.foo | to_string }}",
-        &context,
-    );
+    let result = compile_to_ir(&i, "{{ @n.foo | to_string }}", &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1412,11 +1343,7 @@ fn error_variable_write_type_mismatch() {
     let i = Interner::new();
     // Attempting to write to a context key (read-only).
     let context = ctx(&i, &[("count", Ty::Int)]);
-    let result = compile_to_ir(
-        &i,
-        r#"{{ @count = "hello" }}"#,
-        &context,
-    );
+    let result = compile_to_ir(&i, r#"{{ @count = "hello" }}"#, &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1442,12 +1369,7 @@ fn lambda_float_arithmetic() {
 fn match_bool_literal() {
     let i = Interner::new();
     let context = ctx(&i, &[("flag", Ty::Bool)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ true = @flag }}on{{_}}off{{/}}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ true = @flag }}on{{_}}off{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1480,18 +1402,19 @@ fn filter_object_field_equality() {
 #[test]
 fn extern_fn_object_return() {
     let i = Interner::new();
-    let context = ctx(&i, &[("get_user", Ty::Fn {
-        params: vec![Param::new(i.intern("_0"), Ty::Int)],
-        ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-        captures: vec![],
-        effect: Effect::pure(),
-    })]);
-    let ir = compile_to_ir(
+    let context = ctx(
         &i,
-        r#"{{ u = @get_user(1) }}{{ u.name }}"#,
-        &context,
-    )
-    .unwrap();
+        &[(
+            "get_user",
+            Ty::Fn {
+                params: vec![Param::new(i.intern("_0"), Ty::Int)],
+                ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+                captures: vec![],
+                effect: Effect::pure(),
+            },
+        )],
+    );
+    let ir = compile_to_ir(&i, r#"{{ u = @get_user(1) }}{{ u.name }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1501,12 +1424,7 @@ fn extern_fn_object_return() {
 fn builtin_len() {
     let i = Interner::new();
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ @items | len | to_string }}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @items | len | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1527,12 +1445,7 @@ fn builtin_reverse() {
 fn builtin_join() {
     let i = Interner::new();
     let context = ctx(&i, &[("names", Ty::List(Box::new(Ty::String)))]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ @names | join(", ") }}"#,
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, r#"{{ @names | join(", ") }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1540,12 +1453,7 @@ fn builtin_join() {
 fn builtin_contains() {
     let i = Interner::new();
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ @items | contains(3) | to_string }}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @items | contains(3) | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1605,12 +1513,7 @@ fn builtin_any() {
 fn builtin_all() {
     let i = Interner::new();
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ @items | all(|x| -> x > 0) | to_string }}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ @items | all(|x| -> x > 0) | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1649,24 +1552,15 @@ fn variant_some_pattern() {
 fn variant_none_pattern() {
     let i = Interner::new();
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ None = @opt }}none{{_}}has value{{/}}",
-        &context,
-    )
-    .unwrap();
+    let ir = compile_to_ir(&i, "{{ None = @opt }}none{{_}}has value{{/}}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn structural_enum_variant_merge() {
     let i = Interner::new();
-    let (module, _) = compile_analysis(
-        &i,
-        "{{ A::B = @a }}hi{{/}}{{ A::C = @a }}bye{{/}}",
-        &[],
-    )
-    .unwrap();
+    let (module, _) =
+        compile_analysis(&i, "{{ A::B = @a }}hi{{/}}{{ A::C = @a }}bye{{/}}", &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
     assert!(ir.contains("C"), "variant C missing from IR:\n{ir}");
@@ -1677,9 +1571,7 @@ fn structural_enum_variant_merge() {
 #[test]
 fn structural_enum_single_variant() {
     let i = Interner::new();
-    let (module, _) = compile_analysis(
-        &i, "{{ A::B = @a }}yes{{_}}no{{/}}", &[],
-    ).unwrap();
+    let (module, _) = compile_analysis(&i, "{{ A::B = @a }}yes{{_}}no{{/}}", &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
 }
@@ -1741,7 +1633,10 @@ fn structural_enum_name_mismatch_is_error() {
     let i = Interner::new();
     let src = "{{ X::A = @v }}a{{/}}{{ Y::B = @v }}b{{/}}";
     let result = compile_analysis(&i, src, &[]);
-    assert!(result.is_err(), "should fail: different enum names on same var");
+    assert!(
+        result.is_err(),
+        "should fail: different enum names on same var"
+    );
 }
 
 #[test]
@@ -1773,8 +1668,17 @@ fn structural_enum_payload_type_propagates_through_context() {
     variants.insert(i.intern("Err"), None);
     let src = r#"{{ R::Ok(v) = @r }}{{ v + 1 | to_string }}{{ R::Err = }}err{{_}}??{{/}}"#;
     let (module, _) = compile_analysis(
-        &i, src, &[("r", Ty::Enum { name: i.intern("R"), variants })],
-    ).unwrap();
+        &i,
+        src,
+        &[(
+            "r",
+            Ty::Enum {
+                name: i.intern("R"),
+                variants,
+            },
+        )],
+    )
+    .unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
     assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
@@ -1825,8 +1729,8 @@ fn pruned_context_keys_in_dead_catch_all() {
     // When Impersonation=NoPersona is known, catch_all is dead,
     // so @Pov should appear in partition.pruned.
     use acvus_mir::AnalysisPass;
+    use acvus_mir::analysis::reachable_context::{KnownValue, partition_context_keys};
     use acvus_mir::analysis::val_def::ValDefMapAnalysis;
-    use acvus_mir::analysis::reachable_context::{partition_context_keys, KnownValue};
     use acvus_mir::graph::QualifiedRef;
     use acvus_mir::ir::InstKind;
 
@@ -1841,7 +1745,9 @@ fn pruned_context_keys_in_dead_catch_all() {
     let mut name_to_qref: FxHashMap<&str, QualifiedRef> = FxHashMap::default();
     for inst in &module.main.insts {
         if let InstKind::ContextProject { dst, ctx, .. } = &inst.kind {
-            if let Some(acvus_mir::ir::ValOrigin::Context(name)) = module.main.debug.val_origins.get(dst) {
+            if let Some(acvus_mir::ir::ValOrigin::Context(name)) =
+                module.main.debug.val_origins.get(dst)
+            {
                 name_to_qref.insert(i.resolve(*name), *ctx);
             }
         }
@@ -1853,7 +1759,10 @@ fn pruned_context_keys_in_dead_catch_all() {
     let mut known = FxHashMap::default();
     known.insert(
         impersonation_id,
-        KnownValue::Variant { tag: i.intern("NoPersona"), payload: None },
+        KnownValue::Variant {
+            tag: i.intern("NoPersona"),
+            payload: None,
+        },
     );
     let partition = partition_context_keys(&module, &known, &val_def);
 

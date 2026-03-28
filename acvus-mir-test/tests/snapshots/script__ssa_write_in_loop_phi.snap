@@ -9,7 +9,7 @@ expression: ir
      3 │   r3 = context_load r2
      4 │   r4 = cast ListToIterator r3
      5 │   jump L0(r4, r1, r5)
-     6 │ L0(r6: Iterator<Int>, r7: <error>, r8: Int):
+     6 │ L0(r6: Iterator<Int>, r7: Int, r8: Int):
      7 │   r9 = context_project @acc
      8 │   ctx_store r9 = r7
      9 │   iter_step r10, r11 = r6 else L1()
@@ -23,16 +23,16 @@ expression: ir
     17 │   r16 = context_load r15
     18 │   return r16
 
-    ; r0 (@acc) : <error>
+    ; r0 (@acc) : Int
     ; r1 (v1) : Int
-    ; r2 (@items) : <error>
+    ; r2 (@items) : List<Int>
     ; r3 (v3) : List<Int>
     ; r4 (v6) : Iterator<Int>
     ; r5 (v17) : Int
     ; r6 (v7) : Iterator<Int>
-    ; r7 (v18) : <error>
+    ; r7 (v18) : Int
     ; r8 (v19) : Int
-    ; r9 (v20) : <error>
+    ; r9 (v20) : Int
     ; r10 (x) : Int
     ; r11 (v9) : Iterator<Int>
     ; r12 (@acc) : Int

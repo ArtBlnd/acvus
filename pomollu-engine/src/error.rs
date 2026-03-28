@@ -76,7 +76,10 @@ impl EngineError {
     pub fn from_orch(e: &OrchError, interner: &Interner) -> Vec<Self> {
         match &e.kind {
             OrchErrorKind::TemplateParse { .. } | OrchErrorKind::ScriptParse { .. } => {
-                vec![Self::general(ErrorCategory::Parse, e.display(interner).to_string())]
+                vec![Self::general(
+                    ErrorCategory::Parse,
+                    e.display(interner).to_string(),
+                )]
             }
             OrchErrorKind::TemplateCompile { errors, .. }
             | OrchErrorKind::ScriptCompile { errors, .. } => {
@@ -85,17 +88,25 @@ impl EngineError {
             OrchErrorKind::FuelExhausted
             | OrchErrorKind::ModelError(_)
             | OrchErrorKind::ToolNotFound(_) => {
-                vec![Self::general(ErrorCategory::Runtime, e.display(interner).to_string())]
+                vec![Self::general(
+                    ErrorCategory::Runtime,
+                    e.display(interner).to_string(),
+                )]
             }
             _ => {
                 // Config/DAG/structural errors → Type category
-                vec![Self::general(ErrorCategory::Type, e.display(interner).to_string())]
+                vec![Self::general(
+                    ErrorCategory::Type,
+                    e.display(interner).to_string(),
+                )]
             }
         }
     }
 
     pub fn from_orch_errors(errs: &[OrchError], interner: &Interner) -> Vec<Self> {
-        errs.iter().flat_map(|e| Self::from_orch(e, interner)).collect()
+        errs.iter()
+            .flat_map(|e| Self::from_orch(e, interner))
+            .collect()
     }
 
     pub fn from_lsp(category: ErrorCategory, message: &str, span: Option<(usize, usize)>) -> Self {

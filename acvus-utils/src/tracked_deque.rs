@@ -204,11 +204,9 @@ impl<T> TrackedDeque<T> {
     /// Panics if no checkpoint has been taken.
     pub fn diff(&self, origin: &Self) -> DequeDiff<'_, T> {
         assert_eq!(
-            self.checksum,
-            origin.checksum,
+            self.checksum, origin.checksum,
             "checksum mismatch: origin {:#x} vs self {:#x}",
-            origin.checksum,
-            self.checksum,
+            origin.checksum, self.checksum,
         );
         let cp = self
             .checkpoint
@@ -237,11 +235,9 @@ impl<T> TrackedDeque<T> {
         T: Clone,
     {
         assert_eq!(
-            self.checksum,
-            origin.checksum,
+            self.checksum, origin.checksum,
             "checksum mismatch: origin {:#x} vs self {:#x}",
-            origin.checksum,
-            self.checksum,
+            origin.checksum, self.checksum,
         );
         let cp = self
             .checkpoint
@@ -283,9 +279,7 @@ impl<T> TrackedDeque<T> {
         match &self.checkpoint {
             None => false,
             Some(cp) => {
-                self.head != cp.head
-                    || self.items.len() != cp.tail
-                    || cp.low_water_mark != cp.tail
+                self.head != cp.head || self.items.len() != cp.tail || cp.low_water_mark != cp.tail
             }
         }
     }

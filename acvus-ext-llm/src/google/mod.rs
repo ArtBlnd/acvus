@@ -62,14 +62,20 @@ fn convert_message(m: &Message) -> schema::Content {
 // ── Response parsing ────────────────────────────────────────────────
 
 fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
-    let resp: schema::Response = serde_json::from_value(json)
-        .map_err(|e| RequestError::ResponseParse {
+    let resp: schema::Response =
+        serde_json::from_value(json).map_err(|e| RequestError::ResponseParse {
             detail: e.to_string(),
         })?;
 
     let candidate = resp
         .candidates
-        .and_then(|mut c| if c.is_empty() { None } else { Some(c.remove(0)) })
+        .and_then(|mut c| {
+            if c.is_empty() {
+                None
+            } else {
+                Some(c.remove(0))
+            }
+        })
         .ok_or(RequestError::EmptyResponse)?;
 
     let usage = Usage {
@@ -213,117 +219,113 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
 
         let fetch = Arc::clone(&fetch);
 
-        vec![ExternFn::build("google_llm")
-            .params(vec![
-                Ty::List(Box::new(Ty::Object(
-                    [
-                        (role_key, Ty::String),
-                        (content_key, Ty::String),
-                    ]
-                    .into_iter()
-                    .collect(),
-                ))),
-                config_ty,
-            ])
-            .ret(msg_ty)
-            .io()
-            .handler_async(
-                move |interner: Interner,
-                      (messages, config): (Value, Value),
-                      Uses(()): Uses<()>| {
-                    let fetch = Arc::clone(&fetch);
-                    async move {
-                        let messages_list = match &messages {
-                            Value::List(l) => l.as_slice(),
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "google_llm: expected List for messages, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
-                        let msgs =
-                            values_to_messages(messages_list, &interner, "google_llm")?;
-                        let (system, rest) = split_system(&msgs);
+        vec![
+            ExternFn::build("google_llm")
+                .params(vec![
+                    Ty::List(Box::new(Ty::Object(
+                        [(role_key, Ty::String), (content_key, Ty::String)]
+                            .into_iter()
+                            .collect(),
+                    ))),
+                    config_ty,
+                ])
+                .ret(msg_ty)
+                .io()
+                .handler_async(
+                    move |interner: Interner,
+                          (messages, config): (Value, Value),
+                          Uses(()): Uses<()>| {
+                        let fetch = Arc::clone(&fetch);
+                        async move {
+                            let messages_list = match &messages {
+                                Value::List(l) => l.as_slice(),
+                                other => {
+                                    return Err(RuntimeError::fetch(format!(
+                                        "google_llm: expected List for messages, got {:?}",
+                                        other.kind()
+                                    )));
+                                }
+                            };
+                            let msgs = values_to_messages(messages_list, &interner, "google_llm")?;
+                            let (system, rest) = split_system(&msgs);
 
-                        let config_obj = match &config {
-                            Value::Object(o) => o,
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "google_llm: expected Object for config, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
+                            let config_obj = match &config {
+                                Value::Object(o) => o,
+                                other => {
+                                    return Err(RuntimeError::fetch(format!(
+                                        "google_llm: expected Object for config, got {:?}",
+                                        other.kind()
+                                    )));
+                                }
+                            };
 
-                        let endpoint =
-                            obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
-                                RuntimeError::fetch("google_llm: missing 'endpoint' in config")
+                            let endpoint =
+                                obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
+                                    RuntimeError::fetch("google_llm: missing 'endpoint' in config")
+                                })?;
+                            let api_key =
+                                obj_get_str(config_obj, api_key_key).ok_or_else(|| {
+                                    RuntimeError::fetch("google_llm: missing 'api_key' in config")
+                                })?;
+                            let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
+                                RuntimeError::fetch("google_llm: missing 'model' in config")
                             })?;
-                        let api_key =
-                            obj_get_str(config_obj, api_key_key).ok_or_else(|| {
-                                RuntimeError::fetch("google_llm: missing 'api_key' in config")
-                            })?;
-                        let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
-                            RuntimeError::fetch("google_llm: missing 'model' in config")
-                        })?;
-                        let temperature = obj_get_decimal(config_obj, temperature_key);
-                        let top_p = obj_get_decimal(config_obj, top_p_key);
-                        let top_k = obj_get_u32(config_obj, top_k_key);
-                        let max_tokens = obj_get_u32(config_obj, max_tokens_key);
+                            let temperature = obj_get_decimal(config_obj, temperature_key);
+                            let top_p = obj_get_decimal(config_obj, top_p_key);
+                            let top_k = obj_get_u32(config_obj, top_k_key);
+                            let max_tokens = obj_get_u32(config_obj, max_tokens_key);
 
-                        // Build the Gemini request body.
-                        let request_body = schema::Request {
-                            contents: rest.iter().map(|m| convert_message(m)).collect(),
-                            system_instruction: system.map(|s| schema::SystemInstruction {
-                                parts: vec![schema::TextPart { text: s }],
-                            }),
-                            tools: None,
-                            generation_config: Some(schema::GenerationConfig {
-                                temperature,
-                                top_p,
-                                top_k,
-                                max_output_tokens: max_tokens,
-                                thinking_config: None,
-                            }),
-                        };
+                            // Build the Gemini request body.
+                            let request_body = schema::Request {
+                                contents: rest.iter().map(|m| convert_message(m)).collect(),
+                                system_instruction: system.map(|s| schema::SystemInstruction {
+                                    parts: vec![schema::TextPart { text: s }],
+                                }),
+                                tools: None,
+                                generation_config: Some(schema::GenerationConfig {
+                                    temperature,
+                                    top_p,
+                                    top_k,
+                                    max_output_tokens: max_tokens,
+                                    thinking_config: None,
+                                }),
+                            };
 
-                        // API key goes in URL query param (not in header).
-                        let url = format!(
-                            "{}/models/{}:generateContent?key={}",
-                            endpoint, model, api_key
-                        );
+                            // API key goes in URL query param (not in header).
+                            let url = format!(
+                                "{}/models/{}:generateContent?key={}",
+                                endpoint, model, api_key
+                            );
 
-                        let body = serde_json::to_value(&request_body).map_err(|e| {
-                            acvus_interpreter::RuntimeError::fetch(format!(
-                                "google_llm: serialization failed: {e}"
-                            ))
-                        })?;
-
-                        let http_request = HttpRequest {
-                            url,
-                            // Content-Type only — no auth header (key is in URL).
-                            headers: vec![
-                                ("Content-Type".into(), "application/json".into()),
-                            ],
-                            body,
-                        };
-
-                        let response_json = fetch
-                            .fetch(&http_request)
-                            .await
-                            .map_err(acvus_interpreter::RuntimeError::fetch)?;
-
-                        let (response, _usage) = parse_response(response_json)
-                            .map_err(|e| {
-                                acvus_interpreter::RuntimeError::fetch(e.to_string())
+                            let body = serde_json::to_value(&request_body).map_err(|e| {
+                                acvus_interpreter::RuntimeError::fetch(format!(
+                                    "google_llm: serialization failed: {e}"
+                                ))
                             })?;
 
-                        let result = response_to_value(&response, &interner);
-                        Ok((result, Defs(())))
-                    }
-                },
-            )]
+                            let http_request = HttpRequest {
+                                url,
+                                // Content-Type only — no auth header (key is in URL).
+                                headers: vec![("Content-Type".into(), "application/json".into())],
+                                body,
+                            };
+
+                            let response_json = fetch
+                                .fetch(&http_request)
+                                .await
+                                .map_err(acvus_interpreter::RuntimeError::fetch)?;
+
+                            let (response, _usage) =
+                                parse_response(response_json).map_err(|e| {
+                                    acvus_interpreter::RuntimeError::fetch(e.to_string())
+                                })?;
+
+                            let result = response_to_value(&response, &interner);
+                            Ok((result, Defs(())))
+                        }
+                    },
+                ),
+        ]
     })
 }
 

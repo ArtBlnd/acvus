@@ -44,25 +44,38 @@ pub enum ParsedSource {
 // ── Per-function extraction ──────────────────────────────────────────
 
 /// Extract information from a single local function.
-/// Returns None if the function is not Local or fails to parse.
+/// Returns None if the function is not Local/LocalAst or fails to parse.
 pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, ParsedSource)> {
-    let FnKind::Local(source) = &func.kind else {
-        return None;
-    };
-    let source_str = interner.resolve(source.source);
-
     // Step 1: Parse AST and extract context names.
-    let (context_names, parsed_source) = match source.kind {
-        SourceKind::Script => {
-            let script = acvus_ast::parse_script(interner, source_str).ok()?;
-            let names = acvus_ast::extract_script_context_refs(&script);
-            (names, ParsedSource::Script(script))
+    let (context_names, parsed_source) = match &func.kind {
+        FnKind::Local(source) => {
+            let source_str = interner.resolve(source.source);
+            match source.kind {
+                SourceKind::Script => {
+                    let script = acvus_ast::parse_script(interner, source_str).ok()?;
+                    let names = acvus_ast::extract_script_context_refs(&script);
+                    (names, ParsedSource::Script(script))
+                }
+                SourceKind::Template => {
+                    let template = acvus_ast::parse(interner, source_str).ok()?;
+                    let names = acvus_ast::extract_template_context_refs(&template);
+                    (names, ParsedSource::Template(template))
+                }
+            }
         }
-        SourceKind::Template => {
-            let template = acvus_ast::parse(interner, source_str).ok()?;
-            let names = acvus_ast::extract_template_context_refs(&template);
-            (names, ParsedSource::Template(template))
+        FnKind::LocalAst(ast) => {
+            match ast {
+                ParsedAst::Script(script) => {
+                    let names = acvus_ast::extract_script_context_refs(script);
+                    (names, ParsedSource::Script(script.clone()))
+                }
+                ParsedAst::Template(template) => {
+                    let names = acvus_ast::extract_template_context_refs(template);
+                    (names, ParsedSource::Template(template.clone()))
+                }
+            }
         }
+        FnKind::Extern => return None,
     };
 
     // Step 2: Build QualifiedRef→Ty mapping for skeleton MIR.

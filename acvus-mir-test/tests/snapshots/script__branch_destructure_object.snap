@@ -18,14 +18,14 @@ expression: ir
     15 │   r15 = r3.name
     16 │   r16 = r3.age
     17 │   jump L1(r15, r15, r16)
-    18 │ L1(r17: <error>, r18: String, r19: Int):
+    18 │ L1(r17: String, r18: String, r19: Int):
     19 │   r20 = context_project @out
     20 │   ctx_store r20 = r17
     21 │   return r17
 
-    ; r0 (@out) : <error>
+    ; r0 (@out) : String
     ; r1 (v1) : String
-    ; r2 (@user) : <error>
+    ; r2 (@user) : {age: Int, name: String}
     ; r3 (v3) : {age: Int, name: String}
     ; r4 (v7) : Bool
     ; r5 (v8) : String
@@ -40,10 +40,10 @@ expression: ir
     ; r14 (v22) : Int
     ; r15 (name) : String
     ; r16 (age) : Int
-    ; r17 (v23) : <error>
+    ; r17 (v23) : String
     ; r18 (v24) : String
     ; r19 (v25) : Int
-    ; r20 (v26) : <error>
+    ; r20 (v26) : String
     ; r21 (name) : String
     ; r22 (@user) : {age: Int, name: String}
     ; r23 (v18) : String

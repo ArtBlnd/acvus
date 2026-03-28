@@ -14,7 +14,7 @@ expression: ir
      7 │   r5 = T0 + r4
      8 │   return r5
 
-    ; r0 (@items) : <error>
+    ; r0 (@items) : List<Int>
     ; r1 (v1) : List<Int>
     ; r2 (v5) : Iterator<Int>
     ; r3 (contains(...)) : Bool

@@ -11,9 +11,7 @@ use crate::error::MirError;
 use crate::ty::{EffectSet, Ty};
 
 use super::extract::{ExtractResult, FnRefs, ParsedSource, extract_one};
-use super::infer::{
-    InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
-};
+use super::infer::{InferredParam, SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
 use super::types::*;
 
 // ── Cached entries ──────────────────────────────────────────────────
@@ -161,6 +159,7 @@ impl IncrementalGraph {
         };
         match &mut func.kind {
             FnKind::Local(src) => src.source = source,
+            FnKind::LocalAst(_) => return, // AST functions are not updated via source string
             FnKind::Extern => return,
         }
 
@@ -357,7 +356,6 @@ impl IncrementalGraph {
             self.call_edges.remove(&id);
             self.remove_reverse_edges(id);
         }
-
     }
 
     fn remove_reverse_edges(&mut self, id: FunctionId) {
@@ -685,19 +683,27 @@ impl IncrementalGraph {
     /// Build a snapshot InferResult for compatibility with batch APIs.
     pub fn infer_result(&self) -> super::infer::InferResult {
         let mut fn_params: FxHashMap<FunctionId, Vec<InferredParam>> = FxHashMap::default();
-        let mut outcomes: FxHashMap<FunctionId, super::infer::FnInferOutcome> = FxHashMap::default();
+        let mut outcomes: FxHashMap<FunctionId, super::infer::FnInferOutcome> =
+            FxHashMap::default();
 
         for scc_result in self.infer_cache.iter().flatten() {
             fn_params.extend(scc_result.fn_params.clone());
             // Convert SccInferResult metas to Incomplete outcomes (temporary — incremental
             // does not yet run check_completeness; this will be reworked in Step 6).
             for (&fid, meta) in &scc_result.fn_metas {
-                outcomes.insert(fid, super::infer::FnInferOutcome::Incomplete {
-                    unknown_contexts: scc_result.fn_params.get(&fid).cloned().unwrap_or_default(),
-                    unknown_extern_params: vec![],
-                    meta: meta.clone(),
-                    errors: vec![],
-                });
+                outcomes.insert(
+                    fid,
+                    super::infer::FnInferOutcome::Incomplete {
+                        unknown_contexts: scc_result
+                            .fn_params
+                            .get(&fid)
+                            .cloned()
+                            .unwrap_or_default(),
+                        unknown_extern_params: vec![],
+                        meta: meta.clone(),
+                        errors: vec![],
+                    },
+                );
             }
         }
 

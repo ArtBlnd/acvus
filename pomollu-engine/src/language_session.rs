@@ -1,10 +1,10 @@
 use acvus_lsp::{DocId, LspError, LspErrorCategory, LspSession, ScriptMode};
-use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry};
 use acvus_mir::analysis::reachable_context::KnownValue;
+use acvus_mir::context_registry::{ContextTypeRegistry, PartialContextTypeRegistry};
 use rustc_hash::FxHashMap;
 use tsify::{Ts, Tsify};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
+use wasm_bindgen::prelude::*;
 
 use crate::convert::WebNode;
 use crate::error::{EngineError, ErrorCategory};
@@ -35,12 +35,7 @@ impl LanguageSession {
 
     /// Open a new document with source, mode, and scope (context types).
     /// Returns the document ID (u32).
-    pub fn open(
-        &mut self,
-        source: &str,
-        mode: &str,
-        scope: Ts<WasmScope>,
-    ) -> Result<u32, JsError> {
+    pub fn open(&mut self, source: &str, mode: &str, scope: Ts<WasmScope>) -> Result<u32, JsError> {
         let scope = scope.to_rust()?;
         let interner = self.inner.interner();
         let registry = self.build_scope(interner, &scope)?;
@@ -51,15 +46,12 @@ impl LanguageSession {
 
     /// Update a document's source. Invalidates caches.
     pub fn update_source(&mut self, doc_id: u32, source: &str) {
-        self.inner.update_source(DocId::from_raw(doc_id), source.to_string());
+        self.inner
+            .update_source(DocId::from_raw(doc_id), source.to_string());
     }
 
     /// Update a document's scope. Invalidates caches.
-    pub fn update_scope(
-        &mut self,
-        doc_id: u32,
-        scope: Ts<WasmScope>,
-    ) -> Result<(), JsError> {
+    pub fn update_scope(&mut self, doc_id: u32, scope: Ts<WasmScope>) -> Result<(), JsError> {
         let scope = scope.to_rust()?;
         let interner = self.inner.interner();
         let registry = self.build_scope(interner, &scope)?;
@@ -77,7 +69,8 @@ impl LanguageSession {
         let scope = scope.to_rust()?;
         let interner = self.inner.interner();
         let registry = self.build_scope(interner, &scope)?;
-        self.inner.update(DocId::from_raw(doc_id), source.to_string(), registry);
+        self.inner
+            .update(DocId::from_raw(doc_id), source.to_string(), registry);
         Ok(())
     }
 
@@ -105,7 +98,8 @@ impl LanguageSession {
             ("iteratorTmpl", Some(i)) => acvus_lsp::NodeField::IteratorTmpl(i),
             _ => return,
         };
-        self.inner.bind_doc_to_node(DocId::from_raw(doc_id), node_name, node_field);
+        self.inner
+            .bind_doc_to_node(DocId::from_raw(doc_id), node_name, node_field);
     }
 
     // -----------------------------------------------------------------------
@@ -150,18 +144,11 @@ impl LanguageSession {
             })
             .collect();
 
-        Ok(ContextKeysResult {
-            keys: result_keys,
-        }
-        .into_ts()?)
+        Ok(ContextKeysResult { keys: result_keys }.into_ts()?)
     }
 
     /// Get completions at cursor position.
-    pub fn completions(
-        &self,
-        doc_id: u32,
-        cursor: usize,
-    ) -> Result<Ts<CompletionResult>, JsError> {
+    pub fn completions(&self, doc_id: u32, cursor: usize) -> Result<Ts<CompletionResult>, JsError> {
         let items: Vec<CompletionItem> = self
             .inner
             .completions(DocId::from_raw(doc_id), cursor)
@@ -216,10 +203,11 @@ impl LanguageSession {
         {
             Ok(s) => s,
             Err(e) => {
-                return Ok(
-                    TypecheckNodesResult::fail(vec![EngineError::general(ErrorCategory::Parse, e)])
-                        .into_ts()?,
-                );
+                return Ok(TypecheckNodesResult::fail(vec![EngineError::general(
+                    ErrorCategory::Parse,
+                    e,
+                )])
+                .into_ts()?);
             }
         };
 

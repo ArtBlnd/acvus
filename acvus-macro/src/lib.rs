@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, LitStr};
+use syn::{LitStr, parse_macro_input};
 
 /// Placeholder info extracted from acvus source.
 struct Placeholder {
@@ -22,8 +22,7 @@ fn extract_placeholders(source: &str) -> (String, Vec<Placeholder>) {
 
     while i < bytes.len() {
         let sigil = bytes[i];
-        if (sigil == b'%' || sigil == b'*') && i + 1 < bytes.len() && is_ident_start(bytes[i + 1])
-        {
+        if (sigil == b'%' || sigil == b'*') && i + 1 < bytes.len() && is_ident_start(bytes[i + 1]) {
             let is_splice = sigil == b'*';
             let start = i;
             i += 1; // skip sigil

@@ -496,7 +496,13 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         // Calls — all args are consumed; indirect callee is also consumed
-        InstKind::FunctionCall { dst, callee, args, context_uses, context_defs } => {
+        InstKind::FunctionCall {
+            dst,
+            callee,
+            args,
+            context_uses,
+            context_defs,
+        } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
             }
@@ -839,8 +845,8 @@ mod tests {
                 dst: v1,
                 callee: Callee::Direct(FunctionId::alloc()),
                 args: vec![v0],
-                    context_uses: vec![],
-                    context_defs: vec![],
+                context_uses: vec![],
+                context_defs: vec![],
             })],
             val_types,
         );
@@ -1108,10 +1114,7 @@ mod tests {
                 "{{ a = @src }}{{ a | collect | len | to_string }}{{ a = @src2 }}{{ a | collect | len | to_string }}",
                 &[("src", eff_iter_ty()), ("src2", eff_iter_ty())],
             );
-            assert!(
-                result.is_ok(),
-                "reassigned var should be alive: {result:?}"
-            );
+            assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
         }
 
         /// C5: pure values are always copyable
