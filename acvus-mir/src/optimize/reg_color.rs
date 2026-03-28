@@ -1,9 +1,11 @@
 //! Register coloring — compact ValueId allocation by reusing dead slots.
 //!
-//! Computes liveness intervals for each ValueId, then performs a linear scan
-//! to assign the minimum number of physical slots. Rewrites all ValueIds
-//! in the MIR body in-place.
+//! Uses CFG-aware liveness analysis to compute accurate liveness intervals,
+//! then performs a linear scan to assign the minimum number of physical slots.
+//! Rewrites all ValueIds in the MIR body in-place.
 
+use crate::analysis::cfg::Cfg;
+use crate::analysis::liveness;
 use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
 use acvus_utils::LocalFactory;
 use rustc_hash::FxHashMap;
@@ -22,32 +24,19 @@ fn color_body(body: &mut MirBody) {
         return;
     }
 
-    // Step 1: Compute liveness intervals (def_pos, last_use_pos) for each ValueId.
-    let mut def_pos: FxHashMap<ValueId, usize> = FxHashMap::default();
-    let mut last_use: FxHashMap<ValueId, usize> = FxHashMap::default();
+    // Step 1: CFG-aware liveness analysis → accurate intervals.
+    let liveness = liveness::analyze(body);
+    let cfg = Cfg::build(&body.insts);
+    let mut intervals = liveness.intervals(&cfg, &body.insts);
 
-    // Params and captures are defined at position 0.
-    for &v in &body.param_regs {
-        def_pos.entry(v).or_insert(0);
-    }
-    for &v in &body.capture_regs {
-        def_pos.entry(v).or_insert(0);
-    }
-
-    for (i, inst) in body.insts.iter().enumerate() {
-        for_each_def(&inst.kind, |v| {
-            def_pos.entry(v).or_insert(i);
-        });
-        for_each_use(&inst.kind, |v| {
-            last_use.insert(v, i);
-        });
-    }
-
-    // Step 2: Build intervals sorted by def position.
-    let mut intervals: Vec<(ValueId, usize, usize)> = Vec::new();
-    for (&vid, &def) in &def_pos {
-        let end = last_use.get(&vid).copied().unwrap_or(def);
-        intervals.push((vid, def, end));
+    // Ensure param_regs and capture_regs have intervals even if unused.
+    // The caller writes into these slots, so they must exist in the remap.
+    let has_interval: rustc_hash::FxHashSet<ValueId> =
+        intervals.iter().map(|&(v, _, _)| v).collect();
+    for &v in body.param_regs.iter().chain(body.capture_regs.iter()) {
+        if !has_interval.contains(&v) {
+            intervals.push((v, 0, 0));
+        }
     }
     intervals.sort_by_key(|&(_, def, _)| def);
 
@@ -91,7 +80,7 @@ fn color_body(body: &mut MirBody) {
     }
 
     let num_slots = slot_free_at.len();
-    let old_count = def_pos.len();
+    let old_count = intervals.len();
     if num_slots >= old_count {
         return; // No improvement.
     }
@@ -131,164 +120,6 @@ fn color_body(body: &mut MirBody) {
 
     // Update val_factory.
     body.val_factory = new_factory;
-}
-
-// ── Helpers: extract defs and uses from an instruction ──────────────
-
-fn for_each_def(kind: &InstKind, mut f: impl FnMut(ValueId)) {
-    match kind {
-        InstKind::Const { dst, .. }
-        | InstKind::ContextProject { dst, .. }
-        | InstKind::ContextLoad { dst, .. }
-        | InstKind::VarLoad { dst, .. }
-        | InstKind::ParamLoad { dst, .. }
-        | InstKind::BinOp { dst, .. }
-        | InstKind::UnaryOp { dst, .. }
-        | InstKind::FieldGet { dst, .. }
-        | InstKind::LoadFunction { dst, .. }
-        | InstKind::FunctionCall { dst, .. }
-        | InstKind::Spawn { dst, .. }
-        | InstKind::MakeDeque { dst, .. }
-        | InstKind::MakeObject { dst, .. }
-        | InstKind::MakeRange { dst, .. }
-        | InstKind::MakeTuple { dst, .. }
-        | InstKind::TupleIndex { dst, .. }
-        | InstKind::TestLiteral { dst, .. }
-        | InstKind::TestListLen { dst, .. }
-        | InstKind::TestObjectKey { dst, .. }
-        | InstKind::TestRange { dst, .. }
-        | InstKind::ListIndex { dst, .. }
-        | InstKind::ListGet { dst, .. }
-        | InstKind::ListSlice { dst, .. }
-        | InstKind::ObjectGet { dst, .. }
-        | InstKind::MakeClosure { dst, .. }
-        | InstKind::MakeVariant { dst, .. }
-        | InstKind::TestVariant { dst, .. }
-        | InstKind::UnwrapVariant { dst, .. }
-        | InstKind::Cast { dst, .. }
-        | InstKind::Poison { dst, .. }
-        | InstKind::Undef { dst } => f(*dst),
-
-        InstKind::ListStep { dst, index_dst, .. } => {
-            f(*dst);
-            f(*index_dst);
-        }
-        InstKind::BlockLabel { params, .. } => {
-            for &p in params {
-                f(p);
-            }
-        }
-        InstKind::Eval {
-            dst, context_defs, ..
-        } => {
-            f(*dst);
-            for &(_, v) in context_defs {
-                f(v);
-            }
-        }
-
-        InstKind::ContextStore { .. }
-        | InstKind::VarStore { .. }
-        | InstKind::Jump { .. }
-        | InstKind::JumpIf { .. }
-        | InstKind::Return(_)
-        | InstKind::Nop => {}
-    }
-}
-
-fn for_each_use(kind: &InstKind, mut f: impl FnMut(ValueId)) {
-    match kind {
-        InstKind::Const { .. }
-        | InstKind::ContextProject { .. }
-        | InstKind::VarLoad { .. }
-        | InstKind::ParamLoad { .. }
-        | InstKind::LoadFunction { .. }
-        | InstKind::BlockLabel { .. }
-        | InstKind::Nop
-        | InstKind::Poison { .. }
-        | InstKind::Undef { .. } => {}
-
-        InstKind::ContextLoad { src, .. } => f(*src),
-        InstKind::ContextStore { dst, value } => {
-            f(*dst);
-            f(*value);
-        }
-        InstKind::VarStore { src, .. } => f(*src),
-        InstKind::BinOp { left, right, .. } => {
-            f(*left);
-            f(*right);
-        }
-        InstKind::UnaryOp { operand, .. } => f(*operand),
-        InstKind::FieldGet { object, .. } => f(*object),
-        InstKind::FunctionCall { callee, args, .. } => {
-            if let Callee::Indirect(v) = callee {
-                f(*v);
-            }
-            args.iter().for_each(|v| f(*v));
-        }
-        InstKind::Spawn {
-            callee,
-            args,
-            context_uses,
-            ..
-        } => {
-            if let Callee::Indirect(v) = callee {
-                f(*v);
-            }
-            args.iter().for_each(|v| f(*v));
-            context_uses.iter().for_each(|(_, v)| f(*v));
-        }
-        InstKind::Eval { src, .. } => f(*src),
-        InstKind::MakeDeque { elements, .. } => elements.iter().for_each(|v| f(*v)),
-        InstKind::MakeObject { fields, .. } => fields.iter().for_each(|(_, v)| f(*v)),
-        InstKind::MakeRange { start, end, .. } => {
-            f(*start);
-            f(*end);
-        }
-        InstKind::MakeTuple { elements, .. } => elements.iter().for_each(|v| f(*v)),
-        InstKind::TupleIndex { tuple, .. } => f(*tuple),
-        InstKind::TestLiteral { src, .. }
-        | InstKind::TestListLen { src, .. }
-        | InstKind::TestObjectKey { src, .. }
-        | InstKind::TestRange { src, .. } => f(*src),
-        InstKind::ListIndex { list, .. } => f(*list),
-        InstKind::ListGet { list, index, .. } => {
-            f(*list);
-            f(*index);
-        }
-        InstKind::ListSlice { list, .. } => f(*list),
-        InstKind::ObjectGet { object, .. } => f(*object),
-        InstKind::MakeClosure { captures, .. } => captures.iter().for_each(|v| f(*v)),
-        InstKind::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            f(*list);
-            f(*index_src);
-            done_args.iter().for_each(|v| f(*v));
-        }
-        InstKind::MakeVariant { payload, .. } => {
-            if let Some(v) = payload {
-                f(*v);
-            }
-        }
-        InstKind::TestVariant { src, .. } | InstKind::UnwrapVariant { src, .. } => f(*src),
-        InstKind::Cast { src, .. } => f(*src),
-        InstKind::Jump { args, .. } => args.iter().for_each(|v| f(*v)),
-        InstKind::JumpIf {
-            cond,
-            then_args,
-            else_args,
-            ..
-        } => {
-            f(*cond);
-            then_args.iter().for_each(|v| f(*v));
-            else_args.iter().for_each(|v| f(*v));
-        }
-        InstKind::Return(v) => f(*v),
-    }
 }
 
 fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
@@ -474,5 +305,538 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         InstKind::Poison { dst, .. } => r(dst),
         InstKind::Undef { dst } => r(dst),
         InstKind::Nop => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::*;
+    use crate::ty::Ty;
+    use acvus_utils::{LocalFactory, LocalIdOps};
+
+    fn v(n: usize) -> ValueId {
+        ValueId::from_raw(n)
+    }
+
+    fn make_body(insts: Vec<InstKind>) -> MirBody {
+        let mut factory = LocalFactory::<ValueId>::new();
+        for _ in 0..20 {
+            factory.next();
+        }
+        MirBody {
+            insts: insts
+                .into_iter()
+                .map(|kind| Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind,
+                })
+                .collect(),
+            val_types: FxHashMap::default(),
+            param_regs: Vec::new(),
+            capture_regs: Vec::new(),
+            debug: DebugInfo::new(),
+            val_factory: factory,
+            label_count: 0,
+        }
+    }
+
+    /// Collect all ValueIds that appear as defs in the body after coloring.
+    fn collect_defs(body: &MirBody) -> rustc_hash::FxHashSet<ValueId> {
+        use crate::analysis::inst_info;
+        let mut set = rustc_hash::FxHashSet::default();
+        for inst in &body.insts {
+            for d in inst_info::defs(&inst.kind) {
+                set.insert(d);
+            }
+        }
+        set
+    }
+
+    // ── Soundness: overlapping intervals must NOT share slots ────────
+
+    #[test]
+    fn overlapping_values_get_distinct_slots() {
+        // r0 = const 1; r1 = const 2; r2 = r0 + r1; return r2
+        // r0 and r1 are both live at instruction 2, must not share.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Int(2),
+            },
+            InstKind::BinOp {
+                dst: v(2),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(1),
+            },
+            InstKind::Return(v(2)),
+        ]);
+
+        color_body(&mut body);
+
+        // After coloring, the BinOp's left and right must be different.
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, right, .. } = &binop.kind {
+            assert_ne!(left, right, "overlapping values must have distinct slots");
+        }
+    }
+
+    #[test]
+    fn cross_block_value_not_clobbered() {
+        // Block 0: r0 = const 1; jump L0()
+        // Block 1 (L0): r1 = const 2; r2 = r0 + r1; return r2
+        // r0 is live across blocks — must not share slot with r1.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Int(2),
+            },
+            InstKind::BinOp {
+                dst: v(2),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(1),
+            },
+            InstKind::Return(v(2)),
+        ]);
+
+        color_body(&mut body);
+
+        // r0 and r1 are both live at the BinOp — must be distinct.
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, right, .. } = &binop.kind {
+            assert_ne!(left, right, "cross-block live value must not be clobbered");
+        }
+    }
+
+    #[test]
+    fn loop_param_not_clobbered_by_body() {
+        // Block 0: r0 = const 0; jump L0(r0)
+        // Block 1 (L0, params=[r1]):
+        //   r2 = r1 + r1
+        //   r3 = const true
+        //   jump_if r3 then L0(r2) else L1(r2)
+        // Block 2 (L1, params=[r4]): return r4
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(0),
+            },
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![v(0)],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![v(1)],
+                merge_of: None,
+            },
+            InstKind::BinOp {
+                dst: v(2),
+                op: acvus_ast::BinOp::Add,
+                left: v(1),
+                right: v(1),
+            },
+            InstKind::Const {
+                dst: v(3),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::JumpIf {
+                cond: v(3),
+                then_label: Label(0),
+                then_args: vec![v(2)],
+                else_label: Label(1),
+                else_args: vec![v(2)],
+            },
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![v(4)],
+                merge_of: None,
+            },
+            InstKind::Return(v(4)),
+        ]);
+
+        color_body(&mut body);
+
+        // The BinOp in the loop uses r1 (loop param) — it must be valid.
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, right, dst, .. } = &binop.kind {
+            assert_eq!(left, right, "loop param used as both operands");
+            assert_ne!(left, dst, "result must differ from operand");
+        }
+    }
+
+    #[test]
+    fn different_types_never_share() {
+        // r0 = const 1 (Int); r1 = r0 + r0; r2 = const true (Bool); return r2
+        // r0 is dead after r1. r2 is Bool. Even though intervals don't overlap,
+        // Int and Bool must not share.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Const {
+                dst: v(2),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::Return(v(2)),
+        ]);
+        body.val_types.insert(v(0), Ty::Int);
+        body.val_types.insert(v(1), Ty::Int);
+        body.val_types.insert(v(2), Ty::Bool);
+
+        color_body(&mut body);
+
+        // r2 (Bool) must not share with r0 (Int) even though r0 is dead.
+        let consts: Vec<_> = body
+            .insts
+            .iter()
+            .filter_map(|i| match &i.kind {
+                InstKind::Const { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(consts.len(), 2);
+        assert_ne!(consts[0], consts[1], "different types must not share slots");
+    }
+
+    #[test]
+    fn param_regs_remain_valid() {
+        // param r0; r1 = r0 + r0; return r1
+        let mut body = make_body(vec![
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Return(v(1)),
+        ]);
+        body.param_regs = vec![v(0)];
+
+        color_body(&mut body);
+
+        // param_regs[0] must reference a ValueId that exists in the body.
+        let defs = collect_defs(&body);
+        // param_regs aren't "defs" in instructions — they're implicit.
+        // But the BinOp must use the same ValueId as param_regs[0].
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, .. } = &binop.kind {
+            assert_eq!(
+                *left, body.param_regs[0],
+                "BinOp must reference the remapped param"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_regs_remain_valid() {
+        // capture r0; r1 = r0 + r0; return r1
+        let mut body = make_body(vec![
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Return(v(1)),
+        ]);
+        body.capture_regs = vec![v(0)];
+
+        color_body(&mut body);
+
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, .. } = &binop.kind {
+            assert_eq!(
+                *left, body.capture_regs[0],
+                "BinOp must reference the remapped capture"
+            );
+        }
+    }
+
+    #[test]
+    fn unused_param_still_has_slot() {
+        // param r0; r1 = const 42; return r1
+        // r0 is unused but must still get a valid slot.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Int(42),
+            },
+            InstKind::Return(v(1)),
+        ]);
+        body.param_regs = vec![v(0)];
+
+        color_body(&mut body);
+
+        // param_regs[0] must be a valid ValueId (from the factory range).
+        assert!(
+            body.param_regs[0].to_raw() < 20,
+            "unused param must still have a valid slot"
+        );
+    }
+
+    #[test]
+    fn branch_both_arms_correct() {
+        // r0 = const 1; r1 = const true
+        // jump_if r1 then L0(r0) else L1(r0)
+        // L0(r2): return r2
+        // L1(r3): return r3
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::JumpIf {
+                cond: v(1),
+                then_label: Label(0),
+                then_args: vec![v(0)],
+                else_label: Label(1),
+                else_args: vec![v(0)],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![v(2)],
+                merge_of: None,
+            },
+            InstKind::Return(v(2)),
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![v(3)],
+                merge_of: None,
+            },
+            InstKind::Return(v(3)),
+        ]);
+
+        color_body(&mut body);
+
+        // Both branch arms should receive the value from r0 via jump args.
+        // The JumpIf's then_args and else_args should reference the same slot as r0.
+        let jump_if = body.insts.iter().find(|i| matches!(i.kind, InstKind::JumpIf { .. })).unwrap();
+        if let InstKind::JumpIf { then_args, else_args, .. } = &jump_if.kind {
+            assert_eq!(then_args.len(), 1);
+            assert_eq!(else_args.len(), 1);
+            // Both branches receive the same value.
+            assert_eq!(then_args[0], else_args[0]);
+        }
+    }
+
+    // ── Completeness: non-overlapping intervals SHOULD share ────────
+
+    #[test]
+    fn non_overlapping_same_type_share_slot() {
+        // r0 = const 1; r1 = r0 + r0; r2 = const 2; r3 = r2 + r2; r4 = r1 + r3; return r4
+        // r0 dead after inst 1, r2 starts at inst 2 — same type → share.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Const {
+                dst: v(2),
+                value: acvus_ast::Literal::Int(2),
+            },
+            InstKind::BinOp {
+                dst: v(3),
+                op: acvus_ast::BinOp::Add,
+                left: v(2),
+                right: v(2),
+            },
+            InstKind::BinOp {
+                dst: v(4),
+                op: acvus_ast::BinOp::Add,
+                left: v(1),
+                right: v(3),
+            },
+            InstKind::Return(v(4)),
+        ]);
+
+        let original_defs = collect_defs(&body);
+        color_body(&mut body);
+        let colored_defs = collect_defs(&body);
+
+        // Must have fewer unique ValueIds after coloring.
+        assert!(
+            colored_defs.len() < original_defs.len(),
+            "non-overlapping values should be compacted: {} -> {}",
+            original_defs.len(),
+            colored_defs.len()
+        );
+    }
+
+    #[test]
+    fn dead_value_slot_reclaimed() {
+        // r0 = const 1; r1 = const 2; return r1
+        // r0 is completely dead — its slot should be reusable.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Int(2),
+            },
+            InstKind::Return(v(1)),
+        ]);
+
+        color_body(&mut body);
+
+        // With dead value reclaimed, we should have fewer slots.
+        // r0 is dead, r1 is live → could share the same slot.
+        let consts: Vec<_> = body
+            .insts
+            .iter()
+            .filter_map(|i| match &i.kind {
+                InstKind::Const { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .collect();
+        // r0 (dead) and r1 can share since r0 interval = [0,0], r1 starts at 1.
+        assert_eq!(consts[0], consts[1], "dead value slot should be reused");
+    }
+
+    // ── Edge cases ──────────────────────────────────────────────────
+
+    #[test]
+    fn empty_body_no_panic() {
+        let mut body = make_body(vec![]);
+        color_body(&mut body);
+        assert!(body.insts.is_empty());
+    }
+
+    #[test]
+    fn single_return_no_panic() {
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(0),
+            },
+            InstKind::Return(v(0)),
+        ]);
+        color_body(&mut body);
+
+        // Should still work — single value, no sharing possible.
+        let ret = body.insts.last().unwrap();
+        if let InstKind::Return(val) = &ret.kind {
+            let c = &body.insts[0];
+            if let InstKind::Const { dst, .. } = &c.kind {
+                assert_eq!(val, dst);
+            }
+        }
+    }
+
+    #[test]
+    fn val_types_remapped_correctly() {
+        // r0 = const 1 (Int); r1 = r0 + r0 (Int); return r1
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Return(v(1)),
+        ]);
+        body.val_types.insert(v(0), Ty::Int);
+        body.val_types.insert(v(1), Ty::Int);
+
+        color_body(&mut body);
+
+        // All val_types keys must reference ValueIds that exist in the colored body.
+        let defs = collect_defs(&body);
+        for (vid, _) in &body.val_types {
+            // val_types may include params/captures too, but for this test
+            // all typed values should be reachable as defs.
+            assert!(
+                defs.contains(vid) || body.param_regs.contains(vid) || body.capture_regs.contains(vid),
+                "val_types key {:?} not found in colored body",
+                vid
+            );
+        }
+    }
+
+    #[test]
+    fn val_factory_reflects_compacted_count() {
+        // r0 = const 1; r1 = r0+r0; r2 = const 2; r3 = r2+r2; r4 = r1+r3; return r4
+        // 5 original values → should compact.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::BinOp {
+                dst: v(1),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(0),
+            },
+            InstKind::Const {
+                dst: v(2),
+                value: acvus_ast::Literal::Int(2),
+            },
+            InstKind::BinOp {
+                dst: v(3),
+                op: acvus_ast::BinOp::Add,
+                left: v(2),
+                right: v(2),
+            },
+            InstKind::BinOp {
+                dst: v(4),
+                op: acvus_ast::BinOp::Add,
+                left: v(1),
+                right: v(3),
+            },
+            InstKind::Return(v(4)),
+        ]);
+
+        color_body(&mut body);
+
+        // val_factory.next() should return the next ID after the compacted count.
+        let next = body.val_factory.next();
+        assert!(
+            next.to_raw() < 5,
+            "factory should reflect compacted count, got {:?}",
+            next
+        );
     }
 }
