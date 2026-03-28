@@ -800,6 +800,143 @@ mod tests {
         }
     }
 
+    /// Regression: dead values in val_types must not overwrite live values' types
+    /// after reg_color compaction. A dead value's old ValueId can collide with
+    /// a compacted slot's new ValueId if carried over unconditionally.
+    #[test]
+    fn dead_val_types_do_not_overwrite_live_types() {
+        // r0 = const true (Bool); r1 = const "x" (String, dead — never used)
+        // r2 = const 1 (Int); r3 = r0; jump_if r3 then L0(r2) else L1(r2)
+        // L0(r4): return r4; L1(r5): return r5
+        //
+        // r1 (String) is dead. After compaction, its old ValueId might collide
+        // with a live value's new ValueId, overwriting Bool→String.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::String("x".into()),
+            },
+            InstKind::Const {
+                dst: v(2),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::JumpIf {
+                cond: v(0),
+                then_label: Label(0),
+                then_args: vec![v(2)],
+                else_label: Label(1),
+                else_args: vec![v(2)],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![v(3)],
+                merge_of: None,
+            },
+            InstKind::Return(v(3)),
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![v(4)],
+                merge_of: None,
+            },
+            InstKind::Return(v(4)),
+        ]);
+        body.val_types.insert(v(0), Ty::Bool);
+        body.val_types.insert(v(1), Ty::String);  // dead value
+        body.val_types.insert(v(2), Ty::Int);
+        body.val_types.insert(v(3), Ty::Int);
+        body.val_types.insert(v(4), Ty::Int);
+
+        color_body(&mut body);
+
+        // After coloring, the JumpIf cond must still have Bool type.
+        let jump_if = body.insts.iter().find(|i| matches!(i.kind, InstKind::JumpIf { .. })).unwrap();
+        if let InstKind::JumpIf { cond, .. } = &jump_if.kind {
+            let cond_ty = body.val_types.get(cond);
+            assert_eq!(
+                cond_ty,
+                Some(&Ty::Bool),
+                "dead value type must not overwrite live Bool type"
+            );
+        }
+    }
+
+    /// Regression: block params in blocks with empty inst_indices must get
+    /// correct liveness intervals (at the block's true position, not 0).
+    #[test]
+    fn empty_block_param_does_not_alias_early_value() {
+        // Block 0: r0 = const ""; r1 = const true; jump_if r1 then L0() else L1()
+        // Block 1 (L0): jump L2(r0)          ← empty inst_indices, param at real pos
+        // Block 2 (L1): jump L2(r0)          ← empty inst_indices
+        // Block 3 (L2, params=[r2]): r3 = r0 + r2; return r3
+        //
+        // r0 is live from 0 to the BinOp in L2. L2's param r2 must not share
+        // a slot with r0 even though L2's block has late position.
+        let mut body = make_body(vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::String("hello".into()),
+            },
+            InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::JumpIf {
+                cond: v(1),
+                then_label: Label(0),
+                then_args: vec![],
+                else_label: Label(1),
+                else_args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::Jump {
+                label: Label(2),
+                args: vec![v(0)],
+            },
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::Jump {
+                label: Label(2),
+                args: vec![v(0)],
+            },
+            InstKind::BlockLabel {
+                label: Label(2),
+                params: vec![v(2)],
+                merge_of: None,
+            },
+            InstKind::BinOp {
+                dst: v(3),
+                op: acvus_ast::BinOp::Add,
+                left: v(0),
+                right: v(2),
+            },
+            InstKind::Return(v(3)),
+        ]);
+        body.val_types.insert(v(0), Ty::String);
+        body.val_types.insert(v(1), Ty::Bool);
+        body.val_types.insert(v(2), Ty::String);
+        body.val_types.insert(v(3), Ty::String);
+
+        color_body(&mut body);
+
+        // The BinOp's left and right must be DIFFERENT registers
+        // (r0 and r2 are both live at the BinOp).
+        let binop = body.insts.iter().find(|i| matches!(i.kind, InstKind::BinOp { .. })).unwrap();
+        if let InstKind::BinOp { left, right, .. } = &binop.kind {
+            assert_ne!(left, right, "r0 and block param r2 must not share a slot — both live at BinOp");
+        }
+    }
+
     #[test]
     fn val_factory_reflects_compacted_count() {
         // r0 = const 1; r1 = r0+r0; r2 = const 2; r3 = r2+r2; r4 = r1+r3; return r4

@@ -313,6 +313,60 @@ mod tests {
         }));
     }
 
+    /// Regression: ListStep is a CFG terminator and must be classified as control flow.
+    #[test]
+    fn list_step_is_control_flow() {
+        let inst = InstKind::ListStep {
+            dst: v(0),
+            list: v(1),
+            index_src: v(2),
+            index_dst: v(3),
+            done: crate::ir::Label(0),
+            done_args: vec![],
+        };
+        assert!(is_control_flow(&inst), "ListStep must be control flow");
+    }
+
+    /// Regression: FunctionCall context_defs are defs (caller's new SSA values),
+    /// not uses. They must appear in defs() and NOT in uses().
+    #[test]
+    fn function_call_context_defs_are_defs_not_uses() {
+        let i = acvus_utils::Interner::new();
+        let qref = acvus_utils::QualifiedRef::root(i.intern("f"));
+        let inst = InstKind::FunctionCall {
+            dst: v(3),
+            callee: crate::ir::Callee::Direct(qref),
+            args: vec![v(0)],
+            context_uses: vec![],
+            context_defs: vec![(qref, v(4)), (qref, v(5))],
+        };
+        let d = defs(&inst);
+        assert!(d.contains(&v(3)), "dst must be in defs");
+        assert!(d.contains(&v(4)), "context_defs[0] must be in defs");
+        assert!(d.contains(&v(5)), "context_defs[1] must be in defs");
+        let u = uses(&inst);
+        assert!(!u.contains(&v(4)), "context_defs must NOT be in uses");
+        assert!(!u.contains(&v(5)), "context_defs must NOT be in uses");
+    }
+
+    /// Regression: Eval context_defs are defs, not uses.
+    #[test]
+    fn eval_context_defs_are_defs_not_uses() {
+        let i = acvus_utils::Interner::new();
+        let qref = acvus_utils::QualifiedRef::root(i.intern("f"));
+        let inst = InstKind::Eval {
+            dst: v(2),
+            src: v(1),
+            context_defs: vec![(qref, v(3))],
+        };
+        let d = defs(&inst);
+        assert!(d.contains(&v(2)), "dst must be in defs");
+        assert!(d.contains(&v(3)), "context_defs must be in defs");
+        let u = uses(&inst);
+        assert!(u.contains(&v(1)), "src must be in uses");
+        assert!(!u.contains(&v(3)), "context_defs must NOT be in uses");
+    }
+
     #[test]
     fn indirect_call_uses_callee_value() {
         let inst = InstKind::FunctionCall {
