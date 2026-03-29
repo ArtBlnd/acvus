@@ -413,7 +413,7 @@ fn process_inst(
         | InstKind::Undef { dst } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ContextLoad { dst, src } => {
+        InstKind::ContextLoad { dst, src, .. } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }

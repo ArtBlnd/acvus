@@ -17,49 +17,47 @@ expression: ir
      6 │   r4 = test r3 == "admin"
      7 │   jump_if r4 then L3 else L1
      8 │ L3:
-    10 │   r5 = context_project @level
-    11 │   r6 = context_load r5
-    12 │ L6:
-    13 │   r7 = test r6 in 1..10
-    14 │   jump_if r7 then L7 else L5
-    15 │ L7:
-    18 │   r8 = T0 + T1
-    19 │   jump L4(r8)
-    20 │ L5:
-    23 │   r9 = T0 + T2
-    24 │   jump L4(r9)
-    25 │ L4(r10: String):  ; merge_of L6
-    26 │   r11 = T0 + r10
-    27 │   jump L0(r11)
-    28 │ L1:
-    31 │   r12 = T0 + T3
-    32 │   jump L0(r12)
-    33 │ L0(r13: String):  ; merge_of L2
-    34 │   r14 = T0 + r13
-    35 │   return r14
+    10 │ L6:
+    11 │   r5 = test r1 in 1..10
+    12 │   jump_if r5 then L7 else L5
+    13 │ L7:
+    16 │   r6 = T0 + T1
+    17 │   jump L4(r6)
+    18 │ L5:
+    21 │   r7 = T0 + T2
+    22 │   jump L4(r7)
+    23 │ L4(r8: String):  ; merge_of L6
+    24 │   r9 = T0 + r8
+    25 │   jump L0(r9)
+    26 │ L1:
+    29 │   r10 = T0 + T3
+    30 │   jump L0(r10)
+    31 │ L0(r11: String):  ; merge_of L2
+    32 │   r12 = T0 + r11
+    33 │   return r12
 
     ; r0 (@level) : Int
     ; r1 (v2) : Int
     ; r2 (@role) : String
     ; r3 (v4) : String
     ; r4 (v8) : Bool
-    ; r5 (@level) : Int
-    ; r6 (v11) : Int
-    ; r7 (v12) : Bool
-    ; r8 (v15) : String
-    ; r9 (v18) : String
-    ; r10 (v19) : String
-    ; r11 (v20) : String
-    ; r12 (v23) : String
-    ; r13 (v24) : String
-    ; r14 (v25) : String
-    ; r15 (v22) : String
-    ; r16 (v14) : String
-    ; r17 (@role) : String
-    ; r18 (v9) : String
-    ; r19 (v17) : String
-    ; r20 (v7) : String
-    ; r21 (v21) : String
+    ; r5 (v12) : Bool
+    ; r6 (v15) : String
+    ; r7 (v18) : String
+    ; r8 (v19) : String
+    ; r9 (v20) : String
+    ; r10 (v23) : String
+    ; r11 (v24) : String
+    ; r12 (v25) : String
+    ; r13 (v22) : String
+    ; r14 (v11) : Int
+    ; r15 (v14) : String
+    ; r16 (@role) : String
+    ; r17 (v9) : String
+    ; r18 (v17) : String
+    ; r19 (v7) : String
+    ; r20 (v21) : String
+    ; r21 (@level) : Int
     ; r22 (v13) : String
     ; r23 (v5) : String
     ; r24 (v16) : String

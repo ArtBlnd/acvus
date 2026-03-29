@@ -14,15 +14,11 @@ expression: ir
      9 │   ctx_store r9 = r7
     10 │   list_step r10, r11 = r2[r6] else L1()
     11 │ L2:
-    12 │   r12 = context_project @result
-    13 │   r13 = context_load r12
-    14 │   r14 = call #0(r10)
-    15 │   r15 = r13 + r14
-    16 │   jump L0(r11, r15, r10)
-    17 │ L1:
-    18 │   r16 = context_project @result
-    19 │   r17 = context_load r16
-    20 │   return r17
+    12 │   r12 = call #0(r10)
+    13 │   r13 = r7 + r12
+    14 │   jump L0(r11, r13, r10)
+    15 │ L1:
+    16 │   return r7
 
     ; r0 (v19) : Int
     ; r1 (@items) : List<Int>
@@ -36,13 +32,13 @@ expression: ir
     ; r9 (v22) : String
     ; r10 (x) : Int
     ; r11 (v10) : Int
-    ; r12 (@result) : String
-    ; r13 (v12) : String
-    ; r14 (to_string(...)) : String
-    ; r15 (v15) : String
-    ; r16 (@result) : String
+    ; r12 (to_string(...)) : String
+    ; r13 (v15) : String
+    ; r14 (@result) : String
+    ; r15 (@result) : String
+    ; r16 (v6) : List<Int>
     ; r17 (v18) : String
-    ; r18 (v6) : List<Int>
-    ; r19 (@items) : List<Int>
-    ; r20 (x) : Int
+    ; r18 (@items) : List<Int>
+    ; r19 (x) : Int
+    ; r20 (v12) : String
     ; r21 (v16) : String

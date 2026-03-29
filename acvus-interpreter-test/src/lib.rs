@@ -110,7 +110,7 @@ pub fn compile_source_with_externs(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashSet::default());
 
     // Report lower-level errors.
     for e in result.errors.iter().flat_map(|e| e.errors.iter()) {

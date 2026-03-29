@@ -18,20 +18,12 @@ expression: ir
     13 │   ctx_store r13 = r10
     14 │   list_step r14, r15 = r2[r8] else L1()
     15 │ L2:
-    16 │   r16 = context_project @sum
-    17 │   r17 = context_load r16
-    18 │   r18 = r17 + r14
-    19 │   r19 = context_project @product
-    20 │   r20 = context_load r19
-    21 │   r21 = r20 * r14
-    22 │   jump L0(r15, r18, r21, r14)
-    23 │ L1:
-    24 │   r22 = context_project @sum
-    25 │   r23 = context_load r22
-    26 │   r24 = context_project @product
-    27 │   r25 = context_load r24
-    28 │   r26 = r23 + r25
-    29 │   return r26
+    16 │   r16 = r9 + r14
+    17 │   r17 = r10 * r14
+    18 │   jump L0(r15, r16, r17, r14)
+    19 │ L1:
+    20 │   r18 = r9 + r10
+    21 │   return r18
 
     ; r0 (v28) : Int
     ; r1 (@items) : List<Int>
@@ -49,20 +41,20 @@ expression: ir
     ; r13 (v33) : Int
     ; r14 (x) : Int
     ; r15 (v12) : Int
-    ; r16 (@sum) : Int
-    ; r17 (v14) : Int
-    ; r18 (v16) : Int
-    ; r19 (@product) : Int
-    ; r20 (v19) : Int
-    ; r21 (v21) : Int
-    ; r22 (@sum) : Int
-    ; r23 (v24) : Int
-    ; r24 (@product) : Int
-    ; r25 (v26) : Int
-    ; r26 (v27) : Int
-    ; r27 (v22) : Int
-    ; r28 (x) : Int
-    ; r29 (v17) : Int
-    ; r30 (x) : Int
-    ; r31 (v8) : List<Int>
-    ; r32 (@items) : List<Int>
+    ; r16 (v16) : Int
+    ; r17 (v21) : Int
+    ; r18 (v27) : Int
+    ; r19 (v22) : Int
+    ; r20 (@product) : Int
+    ; r21 (v14) : Int
+    ; r22 (x) : Int
+    ; r23 (v17) : Int
+    ; r24 (@sum) : Int
+    ; r25 (x) : Int
+    ; r26 (@product) : Int
+    ; r27 (v24) : Int
+    ; r28 (v8) : List<Int>
+    ; r29 (v26) : Int
+    ; r30 (@items) : List<Int>
+    ; r31 (@sum) : Int
+    ; r32 (v19) : Int

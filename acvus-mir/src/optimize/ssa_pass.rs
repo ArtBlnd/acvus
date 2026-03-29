@@ -203,7 +203,11 @@ fn forward_context_values(
                 InstKind::ContextProject { dst, ctx, .. } => {
                     st.val_to_ctx.insert(*dst, *ctx);
                 }
-                InstKind::ContextLoad { dst, src } => {
+                InstKind::ContextLoad { dst, src, volatile, .. } => {
+                    // Volatile loads must not be forwarded — they are externally observable.
+                    if *volatile {
+                        continue;
+                    }
                     let src_resolved = st.subst.get(src).copied().unwrap_or(*src);
                     if let Some(&ctx_id) = st.val_to_ctx.get(&src_resolved) {
                         if let Some(&known_val) = ctx_state.get(&ctx_id) {
@@ -228,7 +232,12 @@ fn forward_context_values(
                         st.val_to_ctx.insert(*dst, ctx_id);
                     }
                 }
-                InstKind::ContextStore { dst, value } => {
+                InstKind::ContextStore { dst, value, volatile, .. } => {
+                    // Volatile stores must not record into forwarding state —
+                    // subsequent loads must re-read the actual context.
+                    if *volatile {
+                        continue;
+                    }
                     let dst_resolved = st.subst.get(dst).copied().unwrap_or(*dst);
                     let value_resolved = st.subst.get(value).copied().unwrap_or(*value);
                     if let Some(&ctx_id) = st.val_to_ctx.get(&dst_resolved) {
@@ -389,7 +398,7 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::Const { .. } | InstKind::Nop | InstKind::Poison { .. } | InstKind::Undef { .. } => {}
         InstKind::ContextProject { .. } => {}
         InstKind::ContextLoad { src, .. } => s(src),
-        InstKind::ContextStore { dst, value } => {
+        InstKind::ContextStore { dst, value, .. } => {
             s(dst);
             s(value);
         }
@@ -598,13 +607,13 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
 
         for (ii, inst) in block.insts.iter().enumerate() {
             match &inst.kind {
-                InstKind::ContextProject { dst, ctx } => {
+                InstKind::ContextProject { dst, ctx, .. } => {
                     val_to_ctx.insert(*dst, *ctx);
                     if let Some(ty) = cfg.val_types.get(dst) {
                         ctx_types.entry(*ctx).or_insert_with(|| ty.clone());
                     }
                 }
-                InstKind::ContextLoad { dst, src } => {
+                InstKind::ContextLoad { dst, src, .. } => {
                     if let Some(&ctx_id) = val_to_ctx.get(src) {
                         // Entry block loads = initial definitions.
                         if bi == 0 {
@@ -612,7 +621,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                         }
                     }
                 }
-                InstKind::ContextStore { dst, value } => {
+                InstKind::ContextStore { dst, value, .. } => {
                     if let Some(&ctx_id) = val_to_ctx.get(dst) {
                         ops.ops.push(SsaOp::CtxStore {
                             block_idx: bi,
@@ -953,13 +962,14 @@ fn patch_instructions(
                 cfg.val_types.insert(proj, ty.clone());
                 write_back_insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
-                    kind: InstKind::ContextProject { dst: proj, ctx },
+                    kind: InstKind::ContextProject { dst: proj, ctx, volatile: false },
                 });
                 write_back_insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
                     kind: InstKind::ContextStore {
                         dst: proj,
                         value: phi.result,
+                        volatile: false,
                     },
                 });
             }
@@ -1264,11 +1274,11 @@ mod tests {
         let span = acvus_ast::Span::ZERO;
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+            kind: InstKind::ContextProject { dst: v0, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+            kind: InstKind::ContextLoad { dst: v1, src: v0 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1426,11 +1436,11 @@ mod tests {
         let span = acvus_ast::Span::ZERO;
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+            kind: InstKind::ContextProject { dst: v0, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+            kind: InstKind::ContextLoad { dst: v1, src: v0 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1444,11 +1454,11 @@ mod tests {
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v3, ctx: qref },
+            kind: InstKind::ContextProject { dst: v3, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v4, src: v3 },
+            kind: InstKind::ContextLoad { dst: v4, src: v3 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1535,11 +1545,11 @@ mod tests {
         let span = acvus_ast::Span::ZERO;
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+            kind: InstKind::ContextProject { dst: v0, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+            kind: InstKind::ContextLoad { dst: v1, src: v0 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1619,11 +1629,11 @@ mod tests {
         let span = acvus_ast::Span::ZERO;
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+            kind: InstKind::ContextProject { dst: v0, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+            kind: InstKind::ContextLoad { dst: v1, src: v0 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1705,11 +1715,11 @@ mod tests {
         let span = acvus_ast::Span::ZERO;
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextProject { dst: v0, ctx: qref },
+            kind: InstKind::ContextProject { dst: v0, ctx: qref , volatile: false },
         });
         body.insts.push(Inst {
             span,
-            kind: InstKind::ContextLoad { dst: v1, src: v0 },
+            kind: InstKind::ContextLoad { dst: v1, src: v0 , volatile: false },
         });
         body.insts.push(Inst {
             span,
@@ -1811,5 +1821,85 @@ mod tests {
         assert_eq!(reads.len(), 1, "only Context should be in reads");
         assert_eq!(reads[0], qref);
         assert!(writes.is_empty(), "Token-only writes should yield empty");
+    }
+
+    // ── Volatile context: forwarding must be skipped ──
+
+    fn count_context_loads(cfg_body: &CfgBody) -> usize {
+        cfg_body
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .filter(|i| matches!(&i.kind, InstKind::ContextLoad { .. }))
+            .count()
+    }
+
+    /// Build a minimal CfgBody with: ContextProject → ContextStore → ContextLoad → Return.
+    /// When volatile=false, SSA should forward the store value and eliminate the load.
+    /// When volatile=true, SSA must preserve the load.
+    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, Ty>) {
+        use acvus_utils::LocalFactory;
+        let interner = Interner::new();
+        let ctx_qref = QualifiedRef::root(interner.intern("history"));
+        let mut f = LocalFactory::<ValueId>::new();
+        let v: Vec<ValueId> = (0..5).map(|_| f.next()).collect();
+        // v0 = const 42
+        // v1 = context_project @history
+        // context_store v1, v0
+        // v2 = context_project @history  (for the load)
+        // v3 = context_load v2
+        // return v3
+        let insts = vec![
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::Const { dst: v[0], value: acvus_ast::Literal::Int(42) } },
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::ContextProject { dst: v[1], ctx: ctx_qref, volatile } },
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::ContextStore { dst: v[1], value: v[0], volatile } },
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::ContextProject { dst: v[2], ctx: ctx_qref, volatile } },
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::ContextLoad { dst: v[3], src: v[2], volatile } },
+            Inst { span: acvus_ast::Span::ZERO, kind: InstKind::Return(v[3]) },
+        ];
+        let mut val_types = FxHashMap::default();
+        for &vid in &v {
+            val_types.insert(vid, Ty::Int);
+        }
+        let body = MirBody {
+            insts,
+            val_types,
+            param_regs: Vec::new(),
+            capture_regs: Vec::new(),
+            debug: crate::ir::DebugInfo::new(),
+            val_factory: f,
+            label_count: 0,
+        };
+        (cfg::promote(body), no_fn_types())
+    }
+
+    #[test]
+    fn non_volatile_context_is_forwarded() {
+        let (mut cfg, fn_types) = make_store_then_load(false);
+        let loads_before = count_context_loads(&cfg);
+        run(&mut cfg, &fn_types);
+        let loads_after = count_context_loads(&cfg);
+        // Non-volatile: SSA should forward the store → load is eliminated.
+        assert!(
+            loads_after < loads_before,
+            "non-volatile context load should be forwarded (before={}, after={})",
+            loads_before,
+            loads_after
+        );
+    }
+
+    #[test]
+    fn volatile_context_not_forwarded() {
+        let (mut cfg, fn_types) = make_store_then_load(true);
+        let loads_before = count_context_loads(&cfg);
+        run(&mut cfg, &fn_types);
+        let loads_after = count_context_loads(&cfg);
+        // Volatile: SSA must NOT forward — load is preserved.
+        assert_eq!(
+            loads_before, loads_after,
+            "volatile context load must not be forwarded (before={}, after={})",
+            loads_before,
+            loads_after
+        );
     }
 }

@@ -92,7 +92,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
 
         // Single use
         InstKind::ContextLoad { src, .. } => smallvec![*src],
-        InstKind::ContextStore { dst, value } => smallvec![*dst, *value],
+        InstKind::ContextStore { dst, value, .. } => smallvec![*dst, *value],
         InstKind::VarStore { src, .. } => smallvec![*src],
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],

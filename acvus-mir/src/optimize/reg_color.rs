@@ -343,8 +343,8 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
     match kind {
         InstKind::Const { dst, .. } => r(dst),
         InstKind::ContextProject { dst, .. } => r(dst),
-        InstKind::ContextLoad { dst, src } => { r(dst); r(src); }
-        InstKind::ContextStore { dst, value } => { r(dst); r(value); }
+        InstKind::ContextLoad { dst, src, .. } => { r(dst); r(src); }
+        InstKind::ContextStore { dst, value, .. } => { r(dst); r(value); }
         InstKind::VarLoad { dst, .. } => r(dst),
         InstKind::ParamLoad { dst, .. } => r(dst),
         InstKind::VarStore { src, .. } => r(src),

@@ -1,3 +1,4 @@
+use acvus_mir::cfg;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
@@ -36,7 +37,7 @@ fn run_pipeline_with_registry(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf);
+    let result = graph_lower::lower(interner, graph, &ext, &inf, &FxHashSet::default());
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
@@ -70,15 +71,20 @@ fn run_pipeline_with_registry(
     }
 
     // Run SSA + validate (lower now outputs pre-SSA MIR).
-    acvus_mir::optimize::ssa_pass::run(&mut module.main, &fn_types);
+    // promote → ssa → demote per body (CfgBody transition).
+    let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
+    acvus_mir::optimize::ssa_pass::run(&mut cfg_main, &fn_types);
+    module.main = cfg::demote(cfg_main);
     for closure in module.closures.values_mut() {
-        acvus_mir::optimize::ssa_pass::run(closure, &fn_types);
+        let mut cfg_closure = cfg::promote(std::mem::take(closure));
+        acvus_mir::optimize::ssa_pass::run(&mut cfg_closure, &fn_types);
+        *closure = cfg::demote(cfg_closure);
     }
 
     let validation_errors = acvus_mir::validate::validate(&module, &fn_types);
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
-            .iter()
+            .iter() 
             .map(|e| format!("{:?}", e))
             .collect();
         return Err(msgs.join("\n"));
@@ -310,7 +316,7 @@ pub fn compile_inline_ir_with(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashSet::default());
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",

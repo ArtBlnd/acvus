@@ -116,8 +116,8 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
-            inst(InstKind::ContextLoad { dst: v1, src: v0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
+            inst(InstKind::ContextLoad { dst: v1, src: v0 , volatile: false }),
         ]);
         let result = super::build(&module);
         assert_eq!(result.0[&v0], 0); // ContextProject defines v0

@@ -14,14 +14,10 @@ expression: ir
     11 │   ctx_store r11 = r9
     12 │   list_step r12, r13 = r6[r8] else L1()
     13 │ L2:
-    14 │   r14 = context_project @sum
-    15 │   r15 = context_load r14
-    16 │   r16 = r15 + r12
-    17 │   jump L0(r13, r16, r12)
-    18 │ L1:
-    19 │   r17 = context_project @sum
-    20 │   r18 = context_load r17
-    21 │   return r18
+    14 │   r14 = r9 + r12
+    15 │   jump L0(r13, r14, r12)
+    16 │ L1:
+    17 │   return r9
 
     ; r0 (v18) : Int
     ; r1 (@sum) : Int
@@ -37,10 +33,10 @@ expression: ir
     ; r11 (v21) : Int
     ; r12 (x) : Int
     ; r13 (v10) : Int
-    ; r14 (@sum) : Int
-    ; r15 (v12) : Int
-    ; r16 (v14) : Int
-    ; r17 (@sum) : Int
-    ; r18 (v17) : Int
-    ; r19 (v15) : Int
-    ; r20 (x) : Int
+    ; r14 (v14) : Int
+    ; r15 (@sum) : Int
+    ; r16 (v17) : Int
+    ; r17 (v15) : Int
+    ; r18 (x) : Int
+    ; r19 (v12) : Int
+    ; r20 (@sum) : Int

@@ -246,16 +246,21 @@ fn write_body(
         match &inst.kind {
             // Constants -- all skipped above, unreachable here.
             InstKind::Const { .. } => unreachable!(),
-            InstKind::ContextProject { dst, ctx: qref, .. } => {
+            InstKind::ContextProject { dst, ctx: qref, volatile, .. } => {
                 let name = ctx_ref_to_name.get(qref).map(|s| s.as_str()).unwrap_or("?");
-                writeln!(f, "{} = context_project @{}", vn.fmt_val(*dst), name)?
+                let vol = if *volatile { " volatile" } else { "" };
+                writeln!(f, "{} = context_project @{}{}", vn.fmt_val(*dst), name, vol)?
             }
-            InstKind::ContextLoad { dst, src } => writeln!(
-                f,
-                "{} = context_load {}",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*src, &consts, &texts)
-            )?,
+            InstKind::ContextLoad { dst, src, volatile } => {
+                let vol = if *volatile { " volatile" } else { "" };
+                writeln!(
+                    f,
+                    "{} = context_load{} {}",
+                    vn.fmt_val(*dst),
+                    vol,
+                    vn.fmt_use(*src, &consts, &texts)
+                )?
+            }
             InstKind::VarLoad { dst, name } => writeln!(
                 f,
                 "{} = var_load {}",
@@ -274,12 +279,16 @@ fn write_body(
                 ctx.interner.resolve(*name),
                 vn.fmt_use(*src, &consts, &texts)
             )?,
-            InstKind::ContextStore { dst, value } => writeln!(
-                f,
-                "ctx_store {} = {}",
-                vn.fmt_use(*dst, &consts, &texts),
-                vn.fmt_use(*value, &consts, &texts)
-            )?,
+            InstKind::ContextStore { dst, value, volatile } => {
+                let vol = if *volatile { " volatile" } else { "" };
+                writeln!(
+                    f,
+                    "ctx_store{} {} = {}",
+                    vol,
+                    vn.fmt_use(*dst, &consts, &texts),
+                    vn.fmt_use(*value, &consts, &texts)
+                )?
+            }
 
             // Arithmetic / logic
             InstKind::BinOp {

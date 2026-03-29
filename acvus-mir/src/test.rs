@@ -4,7 +4,7 @@
 //! Real callers should use the graph phases directly.
 
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::*;
 use crate::graph::{extract, infer, lower as graph_lower};
@@ -73,7 +73,7 @@ fn run_pipeline(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf);
+    let result = graph_lower::lower(interner, graph, &ext, &inf, &FxHashSet::default());
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {

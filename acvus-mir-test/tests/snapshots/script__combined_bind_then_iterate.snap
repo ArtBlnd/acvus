@@ -21,16 +21,14 @@ expression: ir
     18 │   ctx_store r16 = r14
     19 │   list_step r17, r18 = r11[r13] else L3()
     20 │ L4:
-    21 │   r19 = context_project @sum
-    22 │   r20 = context_load r19
-    23 │   r21 = r20 + r17
-    24 │   jump L2(r18, r21, r17)
-    25 │ L3:
-    26 │   jump L1(r14, r15, r11)
-    27 │ L1(r22: Int, r23: Int, r24: List<Int>):
-    28 │   r25 = context_project @sum
-    29 │   ctx_store r25 = r22
-    30 │   return r22
+    21 │   r19 = r14 + r17
+    22 │   jump L2(r18, r19, r17)
+    23 │ L3:
+    24 │   jump L1(r14, r15, r11)
+    25 │ L1(r20: Int, r21: Int, r22: List<Int>):
+    26 │   r23 = context_project @sum
+    27 │   ctx_store r23 = r20
+    28 │   return r20
 
     ; r0 (v25) : Int
     ; r1 (v26) : List<Int>
@@ -48,20 +46,20 @@ expression: ir
     ; r13 (v15) : Int
     ; r14 (v27) : Int
     ; r15 (v28) : Int
-    ; r16 (v33) : Int
+    ; r16 (v34) : Int
     ; r17 (x) : Int
     ; r18 (v17) : Int
-    ; r19 (@sum) : Int
-    ; r20 (v19) : Int
-    ; r21 (v21) : Int
-    ; r22 (v30) : Int
-    ; r23 (v31) : Int
-    ; r24 (v32) : List<Int>
-    ; r25 (v34) : Int
-    ; r26 (v22) : Int
-    ; r27 (v6) : {items: List<Int>}
-    ; r28 (x) : Int
-    ; r29 (v24) : Int
-    ; r30 (@data) : {items: List<Int>}
-    ; r31 (@sum) : Int
-    ; r32 (items) : List<Int>
+    ; r19 (v21) : Int
+    ; r20 (v30) : Int
+    ; r21 (v31) : Int
+    ; r22 (v32) : List<Int>
+    ; r23 (v33) : Int
+    ; r24 (v22) : Int
+    ; r25 (v6) : {items: List<Int>}
+    ; r26 (x) : Int
+    ; r27 (@sum) : Int
+    ; r28 (v24) : Int
+    ; r29 (@data) : {items: List<Int>}
+    ; r30 (@sum) : Int
+    ; r31 (items) : List<Int>
+    ; r32 (v19) : Int

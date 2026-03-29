@@ -8,7 +8,7 @@ pub mod compile {
     use acvus_mir::hints::HintTable;
     use acvus_mir::ir::MirModule;
     use acvus_utils::{Freeze, Interner};
-    use rustc_hash::FxHashMap;
+    use rustc_hash::{FxHashMap, FxHashSet};
 
     use crate::lower::{self, FieldError, LowerOutput, SpanMap};
     use crate::spec::Namespace;
@@ -90,7 +90,7 @@ pub mod compile {
         let inf = infer::infer(interner, &lowered.graph, &ext, &FxHashMap::default(), Freeze::default());
 
         // Phase 3: Lower to MIR
-        let mir_result = graph_lower::lower(interner, &lowered.graph, &ext, &inf);
+        let mir_result = graph_lower::lower(interner, &lowered.graph, &ext, &inf, &FxHashSet::default());
 
         CompileResult {
             modules: mir_result.modules,

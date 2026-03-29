@@ -147,6 +147,7 @@ async fn spawn_eval_context_defs() {
             inst(InstKind::ContextProject {
                 dst: vids[0],
                 ctx: ctx_id,
+                volatile: false,
             }),
             inst(InstKind::Const {
                 dst: vids[1],
@@ -155,6 +156,7 @@ async fn spawn_eval_context_defs() {
             inst(InstKind::ContextStore {
                 dst: vids[0],
                 value: vids[1],
+                volatile: false,
             }),
             inst(InstKind::Const {
                 dst: vids[2],
@@ -199,6 +201,7 @@ async fn spawn_eval_context_defs() {
             inst(InstKind::ContextLoad {
                 dst: vids[3],
                 src: vids[2],
+                volatile: false,
             }),
             inst(InstKind::Return(vids[3])),
         ];

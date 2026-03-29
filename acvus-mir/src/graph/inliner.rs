@@ -297,17 +297,20 @@ fn remap_inst(
         },
 
         // Context
-        InstKind::ContextProject { dst, ctx } => InstKind::ContextProject {
+        InstKind::ContextProject { dst, ctx, volatile } => InstKind::ContextProject {
             dst: r(*dst),
             ctx: *ctx,
+            volatile: *volatile,
         },
-        InstKind::ContextLoad { dst, src } => InstKind::ContextLoad {
+        InstKind::ContextLoad { dst, src, volatile } => InstKind::ContextLoad {
             dst: r(*dst),
             src: r(*src),
+            volatile: *volatile,
         },
-        InstKind::ContextStore { dst, value } => InstKind::ContextStore {
+        InstKind::ContextStore { dst, value, volatile } => InstKind::ContextStore {
             dst: r(*dst),
             value: r(*value),
+            volatile: *volatile,
         },
 
         // Variables

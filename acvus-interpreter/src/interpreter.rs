@@ -442,7 +442,7 @@ async fn execute_inst(
             projection_map.insert(*dst, *ctx_ref);
             frame.set(*dst, Value::Unit);
         }
-        InstKind::ContextLoad { dst, src } => {
+        InstKind::ContextLoad { dst, src, .. } => {
             let ctx_id = projection_map[src];
             let name = ctx
                 .shared
@@ -457,7 +457,7 @@ async fn execute_inst(
                 .clone();
             frame.set(*dst, val);
         }
-        InstKind::ContextStore { dst, value } => {
+        InstKind::ContextStore { dst, value, .. } => {
             let ctx_id = projection_map[dst];
             let name = ctx
                 .shared

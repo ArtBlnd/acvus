@@ -319,8 +319,8 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
-            inst(InstKind::ContextProject { dst: v1, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
+            inst(InstKind::ContextProject { dst: v1, ctx: id1 , volatile: false }),
         ]);
         let needed = reachable_context_keys(&module, &FxHashMap::default());
         assert_eq!(needed, FxHashSet::from_iter([id0, id1]));
@@ -335,8 +335,8 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
-            inst(InstKind::ContextProject { dst: v1, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
+            inst(InstKind::ContextProject { dst: v1, ctx: id1 , volatile: false }),
         ]);
         let known =
             FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::String("alice".into())))]);
@@ -356,7 +356,7 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestLiteral {
                 dst: v1,
                 src: v0,
@@ -374,14 +374,14 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
             inst(InstKind::Return(v3)),
         ]);
 
@@ -406,7 +406,7 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestLiteral {
                 dst: v1,
                 src: v0,
@@ -424,14 +424,14 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
             inst(InstKind::Return(v3)),
         ]);
 
@@ -455,7 +455,7 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestLiteral {
                 dst: v1,
                 src: v0,
@@ -473,14 +473,14 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
             inst(InstKind::Return(v3)),
         ]);
 
@@ -504,7 +504,7 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestLiteral {
                 dst: v1,
                 src: v0,
@@ -522,7 +522,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(0),
                 args: vec![],
@@ -532,7 +532,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(0),
                 args: vec![],
@@ -564,7 +564,7 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestRange {
                 dst: v1,
                 src: v0,
@@ -584,14 +584,14 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Return(v2)),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
             inst(InstKind::Return(v3)),
         ]);
 
@@ -617,7 +617,7 @@ mod tests {
         let v4 = vf.next();
         let v5 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
             inst(InstKind::TestLiteral {
                 dst: v1,
                 src: v0,
@@ -635,7 +635,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -662,7 +662,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v4, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v4, ctx: id2 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -672,7 +672,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v5, ctx: id3 }),
+            inst(InstKind::ContextProject { dst: v5, ctx: id3 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -739,7 +739,7 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // %0 = ContextLoad "val"
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 // %1 = TestVariant(%0, "D")  -- D not in {A,B,C} -> always false
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -759,7 +759,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -770,7 +770,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -818,7 +818,7 @@ mod tests {
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 inst(InstKind::TestVariant {
                     dst: v1,
                     src: v0,
@@ -836,14 +836,14 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Return(v2)),
                 inst(InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
                 inst(InstKind::Return(v3)),
             ],
             val_types,
@@ -892,7 +892,7 @@ mod tests {
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 // TestVariant A
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -912,7 +912,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -941,7 +941,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v4, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v4, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -952,7 +952,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v5, ctx: id3 }),
+                inst(InstKind::ContextProject { dst: v5, ctx: id3 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1010,7 +1010,7 @@ mod tests {
 
         let module = make_module_with_types(
             vec![
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 // Test A
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -1030,7 +1030,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1059,7 +1059,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v4, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v4, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1070,7 +1070,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v5, ctx: id3 }),
+                inst(InstKind::ContextProject { dst: v5, ctx: id3 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1136,9 +1136,8 @@ mod tests {
                 // Eager load before any branch
                 inst(InstKind::ContextProject {
                     dst: v_pre,
-                    ctx: id10,
-                }),
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                    ctx: id10, volatile: false }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 inst(InstKind::TestVariant {
                     dst: v1,
                     src: v0,
@@ -1156,14 +1155,14 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Return(v2)),
                 inst(InstKind::BlockLabel {
                     label: Label(20),
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
                 inst(InstKind::Return(v3)),
             ],
             val_types,
@@ -1212,7 +1211,7 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // Entry: load scrutinee then jump to first test
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(1),
                     args: vec![],
@@ -1241,7 +1240,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1252,7 +1251,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1263,7 +1262,7 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(1)),
                 }),
-                inst(InstKind::ContextProject { dst: v4, ctx: id3 }),
+                inst(InstKind::ContextProject { dst: v4, ctx: id3 , volatile: false }),
                 inst(InstKind::Return(v4)),
             ],
             val_types,
@@ -1321,7 +1320,7 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // Entry: unknown branch -> the match is only conditionally reachable
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 inst(InstKind::TestLiteral {
                     dst: v1,
                     src: v0,
@@ -1340,7 +1339,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v10, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v10, ctx: id1 , volatile: false }),
                 inst(InstKind::TestVariant {
                     dst: v11,
                     src: v10,
@@ -1359,7 +1358,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v12, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v12, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1370,7 +1369,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v13, ctx: id3 }),
+                inst(InstKind::ContextProject { dst: v13, ctx: id3 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1381,7 +1380,7 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(1)),
                 }),
-                inst(InstKind::ContextProject { dst: v14, ctx: id4 }),
+                inst(InstKind::ContextProject { dst: v14, ctx: id4 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(50),
                     args: vec![],
@@ -1445,7 +1444,7 @@ mod tests {
         let module = make_module_with_types(
             vec![
                 // %0 = ContextLoad "Output"
-                inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
+                inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
                 // Test Normal
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -1465,7 +1464,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v2, ctx: id1 }),
+                inst(InstKind::ContextProject { dst: v2, ctx: id1 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1476,7 +1475,7 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::ContextProject { dst: v3, ctx: id2 }),
+                inst(InstKind::ContextProject { dst: v3, ctx: id2 , volatile: false }),
                 inst(InstKind::Jump {
                     label: Label(99),
                     args: vec![],
@@ -1487,7 +1486,7 @@ mod tests {
                     params: vec![],
                     merge_of: Some(Label(10)),
                 }),
-                inst(InstKind::ContextProject { dst: v4, ctx: id3 }),
+                inst(InstKind::ContextProject { dst: v4, ctx: id3 , volatile: false }),
             ],
             val_types,
         );
@@ -1536,8 +1535,8 @@ mod tests {
         let v12 = vf.next();
         let module = make_module(vec![
             // Pack two known context values into a tuple
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
-            inst(InstKind::ContextProject { dst: v1, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
+            inst(InstKind::ContextProject { dst: v1, ctx: id1 , volatile: false }),
             inst(InstKind::MakeTuple {
                 dst: v2,
                 elements: vec![v0, v1],
@@ -1567,7 +1566,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v10, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v10, ctx: id2 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -1596,7 +1595,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v11, ctx: id3 }),
+            inst(InstKind::ContextProject { dst: v11, ctx: id3 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -1607,7 +1606,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v12, ctx: id4 }),
+            inst(InstKind::ContextProject { dst: v12, ctx: id4 , volatile: false }),
             inst(InstKind::Jump {
                 label: Label(99),
                 args: vec![],
@@ -1650,8 +1649,8 @@ mod tests {
         let v5 = vf.next();
         let v6 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::ContextProject { dst: v0, ctx: id0 }),
-            inst(InstKind::ContextProject { dst: v1, ctx: id1 }),
+            inst(InstKind::ContextProject { dst: v0, ctx: id0 , volatile: false }),
+            inst(InstKind::ContextProject { dst: v1, ctx: id1 , volatile: false }),
             inst(InstKind::MakeTuple {
                 dst: v2,
                 elements: vec![v0, v1],
@@ -1682,7 +1681,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v5, ctx: id2 }),
+            inst(InstKind::ContextProject { dst: v5, ctx: id2 , volatile: false }),
             inst(InstKind::Return(v5)),
             // high arm -> live
             inst(InstKind::BlockLabel {
@@ -1690,7 +1689,7 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             }),
-            inst(InstKind::ContextProject { dst: v6, ctx: id3 }),
+            inst(InstKind::ContextProject { dst: v6, ctx: id3 , volatile: false }),
             inst(InstKind::Return(v6)),
         ]);
 

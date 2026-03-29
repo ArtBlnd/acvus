@@ -35,7 +35,7 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
                 state.set(*dst, val);
             }
 
-            InstKind::ContextLoad { dst, src } => {
+            InstKind::ContextLoad { dst, src, .. } => {
                 state.set(*dst, state.get(*src));
             }
 

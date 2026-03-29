@@ -17,27 +17,19 @@ expression: ir
     12 │   ctx_store r12 = r10
     13 │   list_step r13, r14 = r3[r9] else L1()
     14 │ L2:
-    15 │   r15 = context_project @sum
-    16 │   r16 = context_load r15
-    17 │   r17 = r16 + r13
-    18 │   jump L0(r14, r17, r13)
-    19 │ L1:
-    20 │   r18 = context_project @b
-    21 │   r19 = context_load r18
-    23 │   jump L3(0 (r20), r10, r1)
-    24 │ L3(r21: Int, r22: Int, r23: Int):
-    25 │   r24 = context_project @sum
-    26 │   ctx_store r24 = r22
-    27 │   list_step r25, r26 = r19[r21] else L4()
-    28 │ L5:
-    29 │   r27 = context_project @sum
-    30 │   r28 = context_load r27
-    31 │   r29 = r28 + r25
-    32 │   jump L3(r26, r29, r25)
-    33 │ L4:
-    34 │   r30 = context_project @sum
-    35 │   r31 = context_load r30
-    36 │   return r31
+    15 │   r15 = r10 + r13
+    16 │   jump L0(r14, r15, r13)
+    17 │ L1:
+    19 │   jump L3(0 (r16), r10, r1)
+    20 │ L3(r17: Int, r18: Int, r19: Int):
+    21 │   r20 = context_project @sum
+    22 │   ctx_store r20 = r18
+    23 │   list_step r21, r22 = r5[r17] else L4()
+    24 │ L5:
+    25 │   r23 = r18 + r21
+    26 │   jump L3(r22, r23, r21)
+    27 │ L4:
+    28 │   return r18
 
     ; r0 (v31) : Int
     ; r1 (v32) : Int
@@ -54,26 +46,26 @@ expression: ir
     ; r12 (v39) : Int
     ; r13 (x) : Int
     ; r14 (v12) : Int
-    ; r15 (@sum) : Int
-    ; r16 (v14) : Int
-    ; r17 (v16) : Int
-    ; r18 (@b) : List<Int>
-    ; r19 (v19) : List<Int>
-    ; r20 (v20) : Int
-    ; r21 (v21) : Int
-    ; r22 (v36) : Int
-    ; r23 (v38) : Int
-    ; r24 (v40) : Int
-    ; r25 (y) : Int
-    ; r26 (v23) : Int
-    ; r27 (@sum) : Int
-    ; r28 (v25) : Int
-    ; r29 (v27) : Int
-    ; r30 (@sum) : Int
-    ; r31 (v30) : Int
-    ; r32 (v28) : Int
-    ; r33 (v8) : List<Int>
-    ; r34 (v17) : Int
-    ; r35 (x) : Int
-    ; r36 (y) : Int
-    ; r37 (@a) : List<Int>
+    ; r15 (v16) : Int
+    ; r16 (v20) : Int
+    ; r17 (v21) : Int
+    ; r18 (v36) : Int
+    ; r19 (v38) : Int
+    ; r20 (v40) : Int
+    ; r21 (y) : Int
+    ; r22 (v23) : Int
+    ; r23 (v27) : Int
+    ; r24 (v25) : Int
+    ; r25 (v28) : Int
+    ; r26 (v8) : List<Int>
+    ; r27 (v30) : Int
+    ; r28 (v14) : Int
+    ; r29 (v17) : Int
+    ; r30 (x) : Int
+    ; r31 (@b) : List<Int>
+    ; r32 (@sum) : Int
+    ; r33 (y) : Int
+    ; r34 (@a) : List<Int>
+    ; r35 (@sum) : Int
+    ; r36 (@sum) : Int
+    ; r37 (v19) : List<Int>

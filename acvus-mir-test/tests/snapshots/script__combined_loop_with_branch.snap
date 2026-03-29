@@ -17,18 +17,14 @@ expression: ir
     12 │   r12 = test r10 == 0
     13 │   jump_if r12 then L3 else L4(r7)
     14 │ L3:
-    15 │   r13 = context_project @count
-    16 │   r14 = context_load r13
-    18 │   r15 = r14 + 1 (r16)
-    19 │   jump L4(r15)
-    20 │ L4(r17: Int):
-    21 │   r18 = context_project @count
-    22 │   ctx_store r18 = r17
-    23 │   jump L0(r11, r17, r10)
-    24 │ L1:
-    25 │   r19 = context_project @count
-    26 │   r20 = context_load r19
-    27 │   return r20
+    16 │   r13 = r7 + 1 (r14)
+    17 │   jump L4(r13)
+    18 │ L4(r15: Int):
+    19 │   r16 = context_project @count
+    20 │   ctx_store r16 = r15
+    21 │   jump L0(r11, r15, r10)
+    22 │ L1:
+    23 │   return r7
 
     ; r0 (v20) : Int
     ; r1 (@count) : Int
@@ -43,15 +39,15 @@ expression: ir
     ; r10 (x) : Int
     ; r11 (v10) : Int
     ; r12 (v12) : Bool
-    ; r13 (@count) : Int
-    ; r14 (v14) : Int
-    ; r15 (v16) : Int
-    ; r16 (v15) : Int
-    ; r17 (v22) : Int
-    ; r18 (v26) : Int
-    ; r19 (@count) : Int
-    ; r20 (v19) : Int
-    ; r21 (x) : Int
-    ; r22 (v6) : List<Int>
-    ; r23 (v17) : Int
-    ; r24 (@items) : List<Int>
+    ; r13 (v16) : Int
+    ; r14 (v15) : Int
+    ; r15 (v22) : Int
+    ; r16 (v26) : Int
+    ; r17 (x) : Int
+    ; r18 (v14) : Int
+    ; r19 (v6) : List<Int>
+    ; r20 (v17) : Int
+    ; r21 (@count) : Int
+    ; r22 (@count) : Int
+    ; r23 (@items) : List<Int>
+    ; r24 (v19) : Int

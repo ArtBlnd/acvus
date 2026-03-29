@@ -71,21 +71,28 @@ pub enum InstKind {
     /// Create a projection handle to a context. This is a Ref (path),
     /// not a value — use ContextLoad to materialize the value (copy).
     /// `ty` is the context's root type (like alloca's type in LLVM).
+    /// `volatile`: if true, loads/stores through this projection must not be
+    /// elided or forwarded by SSA — the context is externally observable.
     ContextProject {
         dst: ValueId,
         ctx: QualifiedRef,
+        volatile: bool,
     },
     /// Materialize a projection into a value (copy). Severs the store connection.
     /// `src` must be a projection (from ContextProject or FieldAccess on a projection).
+    /// `volatile`: inherited from the source projection.
     ContextLoad {
         dst: ValueId,
         src: ValueId,
+        volatile: bool,
     },
     /// Write a value through a projection.
     /// `dst` must be a projection (from ContextProject or FieldAccess on a projection).
+    /// `volatile`: inherited from the destination projection.
     ContextStore {
         dst: ValueId,
         value: ValueId,
+        volatile: bool,
     },
     VarLoad {
         dst: ValueId,

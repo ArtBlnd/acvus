@@ -77,6 +77,7 @@ pub fn extract_one(interner: &Interner, func: &Function) -> Option<(FnRefs, Pars
         Vec::new(),
         Freeze::new(context_ids),
         Freeze::new(FxHashMap::default()),
+        FxHashSet::default(),
     );
     let (module, _) = match &parsed_source {
         ParsedSource::Script(script) => lowerer.lower_script(script),

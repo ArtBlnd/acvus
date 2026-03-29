@@ -36,7 +36,10 @@ pub struct Lowerer<'a> {
     /// ValueIds that are projections (not yet materialized values).
     /// FieldAccess on a projection produces another projection.
     /// Use `ensure_loaded` to materialize.
-    projections: FxHashSet<ValueId>,
+    /// Value: whether the projection is volatile.
+    projections: FxHashMap<ValueId, bool>,
+    /// Contexts whose loads/stores must not be elided by SSA (externally observable).
+    volatile_contexts: FxHashSet<QualifiedRef>,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -124,6 +127,7 @@ impl<'a> Lowerer<'a> {
         coercion_map: CoercionMap,
         context_ids: Freeze<FxHashMap<QualifiedRef, Ty>>,
         function_ids: Freeze<FxHashMap<Astr, (QualifiedRef, Ty)>>,
+        volatile_contexts: FxHashSet<QualifiedRef>,
     ) -> Self {
         let coercion_lookup: FxHashMap<AstId, CastKind> = coercion_map.into_iter().collect();
         // Pre-inject function names into the initial scope.
@@ -139,7 +143,8 @@ impl<'a> Lowerer<'a> {
             hints: HintTable::new(),
             context_ids,
             function_ids,
-            projections: FxHashSet::default(),
+            projections: FxHashMap::default(),
+            volatile_contexts,
         }
     }
 
@@ -155,6 +160,7 @@ impl<'a> Lowerer<'a> {
         entries.sort_by_key(|(qref, _)| self.interner.resolve(qref.name).to_string());
 
         for (qref, ty) in entries {
+            let volatile = self.is_volatile_ctx(&qref);
             let proj = self.alloc_val();
             self.set_val_type(proj, ty.clone());
             self.set_origin(proj, ValOrigin::Context(qref.name));
@@ -163,9 +169,10 @@ impl<'a> Lowerer<'a> {
                 InstKind::ContextProject {
                     dst: proj,
                     ctx: qref,
+                    volatile,
                 },
             );
-            self.mark_projection(proj);
+            self.mark_projection(proj, volatile);
             let val = self.alloc_val();
             self.set_val_type(val, ty);
             self.emit_inst(
@@ -173,6 +180,7 @@ impl<'a> Lowerer<'a> {
                 InstKind::ContextLoad {
                     dst: val,
                     src: proj,
+                    volatile,
                 },
             );
         }
@@ -421,34 +429,38 @@ impl<'a> Lowerer<'a> {
     /// If `val` is a projection, materialize it into a value via ContextLoad.
     /// If it's already a value, return as-is.
     fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
-        if self.projections.remove(&val) {
+        if let Some(volatile) = self.projections.remove(&val) {
             let dst = self.alloc_val();
             let ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
             self.set_val_type(dst, ty);
-            self.emit_inst(span, InstKind::ContextLoad { dst, src: val });
+            self.emit_inst(span, InstKind::ContextLoad { dst, src: val, volatile });
             dst
         } else {
             val
         }
     }
 
-    /// Mark a ValueId as a projection.
-    fn mark_projection(&mut self, val: ValueId) {
-        self.projections.insert(val);
+    /// Mark a ValueId as a projection with its volatile flag.
+    fn mark_projection(&mut self, val: ValueId, volatile: bool) {
+        self.projections.insert(val, volatile);
     }
 
     fn is_projection(&self, val: ValueId) -> bool {
-        self.projections.contains(&val)
+        self.projections.contains_key(&val)
+    }
+
+    fn is_volatile_ctx(&self, ctx: &QualifiedRef) -> bool {
+        self.volatile_contexts.contains(ctx)
     }
 
     /// If val is a projection, emit ContextLoad to materialize it.
     /// Otherwise return val unchanged.
     fn materialize(&mut self, val: ValueId, span: Span) -> ValueId {
-        if self.is_projection(val) {
+        if let Some(&volatile) = self.projections.get(&val) {
             let dst = self.alloc_val();
             let ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::Unit);
             self.set_val_type(dst, ty);
-            self.emit_inst(span, InstKind::ContextLoad { dst, src: val });
+            self.emit_inst(span, InstKind::ContextLoad { dst, src: val, volatile });
             dst
         } else {
             val
@@ -825,10 +837,11 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::ContextRef { id, name: qref, span } => {
+                let volatile = self.is_volatile_ctx(qref);
                 let dst = self.alloc_typed(*id);
                 self.set_origin(dst, ValOrigin::Context(qref.name));
-                self.emit_inst(*span, InstKind::ContextProject { dst, ctx: *qref });
-                self.mark_projection(dst);
+                self.emit_inst(*span, InstKind::ContextProject { dst, ctx: *qref, volatile });
+                self.mark_projection(dst, volatile);
                 dst
             }
 
@@ -915,9 +928,9 @@ impl<'a> Lowerer<'a> {
                         field: *field,
                     },
                 );
-                // Projection propagates through field access.
-                if is_proj {
-                    self.mark_projection(dst);
+                // Projection propagates through field access (including volatile flag).
+                if let Some(&volatile) = self.projections.get(&obj) {
+                    self.mark_projection(dst, volatile);
                 }
                 dst
             }
@@ -1209,6 +1222,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let val = self.lower_expr(value_expr);
+        let volatile = self.is_volatile_ctx(&qref);
         let ctx_id = qref;
         let proj = self.alloc_val();
         let val_ty = self.body.val_types.get(&val).cloned().unwrap_or(Ty::error());
@@ -1218,6 +1232,7 @@ impl<'a> Lowerer<'a> {
             InstKind::ContextProject {
                 dst: proj,
                 ctx: ctx_id,
+                volatile,
             },
         );
         self.emit_inst(
@@ -1225,6 +1240,7 @@ impl<'a> Lowerer<'a> {
             InstKind::ContextStore {
                 dst: proj,
                 value: val,
+                volatile,
             },
         );
         val
@@ -1361,6 +1377,7 @@ impl<'a> Lowerer<'a> {
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
+            let volatile = self.is_volatile_ctx(qref);
             let proj = self.alloc_val();
             let src_ty = self.body.val_types.get(&src).cloned().unwrap_or(Ty::error());
             self.set_val_type(proj, src_ty);
@@ -1369,6 +1386,7 @@ impl<'a> Lowerer<'a> {
                 InstKind::ContextProject {
                     dst: proj,
                     ctx: *qref,
+                    volatile,
                 },
             );
             self.emit_inst(
@@ -1376,6 +1394,7 @@ impl<'a> Lowerer<'a> {
                 InstKind::ContextStore {
                     dst: proj,
                     value: src,
+                    volatile,
                 },
             );
             return self.emit_empty_string(mb.span);
@@ -1910,6 +1929,7 @@ impl<'a> Lowerer<'a> {
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
+                let volatile = self.is_volatile_ctx(qref);
                 let proj = self.alloc_val();
                 let src_ty = self.body.val_types.get(&src_reg).cloned().unwrap_or(Ty::error());
                 self.set_val_type(proj, src_ty);
@@ -1918,6 +1938,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::ContextProject {
                         dst: proj,
                         ctx: *qref,
+                        volatile,
                     },
                 );
                 self.emit_inst(
@@ -1925,6 +1946,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::ContextStore {
                         dst: proj,
                         value: src_reg,
+                        volatile,
                     },
                 );
             }

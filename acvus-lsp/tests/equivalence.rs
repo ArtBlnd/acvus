@@ -6,7 +6,7 @@ use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Compile via batch pipeline, return error messages (sorted).
 fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<String> {
@@ -34,7 +34,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(interner, &graph, &ext, &FxHashMap::default(), Freeze::default());
     let mut errs: Vec<String> = Vec::new();
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashSet::default());
     for le in &result.errors {
         for e in &le.errors {
             errs.push(format!("{}", e.display(interner)));
