@@ -3082,3 +3082,33 @@ fn destructure_projection_shadowing() {
     let ir = compile_script_ir(&i, "@x = 99; { @x, } = @a { @x = 42; }; @x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
+
+// ── Uninit check ────────────────────────────────────────────────────
+
+#[test]
+fn uninit_field_load_rejected() {
+    let i = Interner::new();
+    // @a is Inferred (not declared). Literal only has x, but .y access widens type.
+    // Value is missing field y → uninit error.
+    let result = compile_script_ir(&i, "@a = { x: 0, }; @a.y | to_string", &FxHashMap::default());
+    assert!(result.is_err(), "should catch uninit field access");
+    let err = result.unwrap_err();
+    assert!(err.contains("UninitError"), "error should be UninitError: {}", err);
+}
+
+#[test]
+fn init_field_load_passes() {
+    let i = Interner::new();
+    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)]))]);
+    // All fields present — should compile fine.
+    let ir = compile_script_ir(&i, "@a = { x: 42, }; @a.x", &context).unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn field_store_then_load_passes() {
+    let i = Interner::new();
+    // @a is Inferred. Literal missing y, but field store fills it in → should pass.
+    let ir = compile_script_ir(&i, "@a = { x: 0, }; @a.y = 1; @a.y | to_string", &FxHashMap::default()).unwrap();
+    insta::assert_snapshot!(ir);
+}

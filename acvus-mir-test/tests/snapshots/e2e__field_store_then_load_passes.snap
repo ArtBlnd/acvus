@@ -1,0 +1,31 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     1 │   r1 = object {x: 0 (r0)}
+     2 │   r2 = ref @a
+     3 │   store r2 = r1
+     5 │   r3 = ref @a
+     6 │   r4 = field_set r1.y = 1 (r5)
+     7 │   r6 = ref @a
+     8 │   store r6 = r4
+     9 │   r7 = ref @a
+    10 │   r8 = r4.y
+    11 │   r9 = call #0(r8)
+    12 │   return r9
+
+    ; r0 (v1) : Int
+    ; r1 (v2) : {x: Int}
+    ; r2 (@a) : Ref<{x: Int}>
+    ; r3 (v9) : Ref<{x: Int}>
+    ; r4 (v11) : {x: Int}
+    ; r5 (v4) : Int
+    ; r6 (v12) : Ref<{x: Int}>
+    ; r7 (v13) : Ref<{x: Int}>
+    ; r8 (v7) : ?5
+    ; r9 (to_string(...)) : String
+    ; r10 (v14) : {x: Int}
+    ; r11 (v10) : {x: Int}
+    ; r12 (@a.y) : Ref<?5>
+    ; r13 (@a) : Ref<Int>

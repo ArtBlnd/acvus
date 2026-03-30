@@ -71,6 +71,28 @@ fn run_pipeline_with_registry(
     // Use InferResult.fn_types (authoritative, frozen).
     let fn_types = &inf.fn_types;
 
+    // Init check: field-level definite assignment on CfgBody (pre-SROA).
+    {
+        let external_contexts: rustc_hash::FxHashSet<QualifiedRef> = graph
+            .contexts
+            .iter()
+            .map(|c| c.qref)
+            .collect();
+        let cfg_main = cfg::promote(std::mem::take(&mut module.main));
+        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, fn_types, &external_contexts);
+        module.main = cfg::demote(cfg_main);
+        if !init_errors.is_empty() {
+            let msgs: Vec<String> = init_errors
+                .iter()
+                .map(|e| format!(
+                    "UninitError: {:?} fields {:?} at [{},{}]",
+                    e.target, e.uninit_fields, e.span.start, e.span.end,
+                ))
+                .collect();
+            return Err(msgs.join("\n"));
+        }
+    }
+
     // SROA: decompose field Refs into identity Refs + FieldGet/FieldSet.
     acvus_mir::optimize::sroa::run_body(&mut module.main, &inf.context_types);
     for closure in module.closures.values_mut() {

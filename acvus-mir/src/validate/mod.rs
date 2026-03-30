@@ -1,3 +1,4 @@
+pub mod init_check;
 pub mod move_check;
 mod type_check;
 

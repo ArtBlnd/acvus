@@ -58,7 +58,7 @@ impl CastKind {
 /// not by name. This ensures uniqueness after inlining — different functions'
 /// local variables have different ValueIds even if they share the same name.
 /// Names are stored in DebugInfo for human readability.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefTarget {
     /// A local variable, identified by its storage slot ValueId.
     Var(ValueId),
