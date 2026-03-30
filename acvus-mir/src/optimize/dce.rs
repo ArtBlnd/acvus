@@ -14,7 +14,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::{CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, ValueId};
 use crate::ty::{Effect, Ty};
@@ -189,7 +189,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
             DefLoc::BlockParam(bi, pi) => {
                 // Block param is live → trace corresponding jump args from predecessors.
                 let block_label = cfg.blocks[bi].label;
-                for (pred_bi, pred_block) in cfg.blocks.iter().enumerate() {
+                for pred_block in cfg.blocks.iter() {
                     let pred_args: Option<&[ValueId]> = match &pred_block.terminator {
                         Terminator::Jump { label, args } if *label == block_label => {
                             Some(args)

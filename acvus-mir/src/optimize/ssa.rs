@@ -268,12 +268,7 @@ mod tests {
             id
         }
     }
-
-    /// Shorthand for test: allocate without specifying var (tests don't need types).
-    fn test_alloc(alloc: &mut impl FnMut(SsaVar) -> ValueId, var: SsaVar) -> ValueId {
-        alloc(var)
-    }
-
+    
     fn make_ctx(interner: &Interner, name: &str) -> SsaVar {
         SsaVar::Context(QualifiedRef::root(interner.intern(name)))
     }

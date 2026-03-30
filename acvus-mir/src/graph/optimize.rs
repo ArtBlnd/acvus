@@ -37,6 +37,26 @@ pub fn optimize(
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
+    optimize_inner(modules, fn_types, context_types, recursive_fns, false)
+}
+
+/// Optimize with untyped scalar register coloring (for kovac).
+pub fn optimize_untyped(
+    modules: FxHashMap<QualifiedRef, MirModule>,
+    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    context_types: &FxHashMap<QualifiedRef, Ty>,
+    recursive_fns: &FxHashSet<QualifiedRef>,
+) -> OptimizeResult {
+    optimize_inner(modules, fn_types, context_types, recursive_fns, true)
+}
+
+fn optimize_inner(
+    modules: FxHashMap<QualifiedRef, MirModule>,
+    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    context_types: &FxHashMap<QualifiedRef, Ty>,
+    recursive_fns: &FxHashSet<QualifiedRef>,
+    untyped_scalars: bool,
+) -> OptimizeResult {
     // ── Pass 1: SROA → SSA (per-module) → Inline (cross-module) ─────
 
     let mut ssa_modules = modules;
@@ -105,9 +125,9 @@ pub fn optimize(
                 }
             }
         }
-        run_pass2_body(&mut module.main, fn_types, context_types);
+        run_pass2_body(&mut module.main, fn_types, context_types, untyped_scalars);
         for closure in module.closures.values_mut() {
-            run_pass2_body(closure, fn_types, context_types);
+            run_pass2_body(closure, fn_types, context_types, untyped_scalars);
         }
 
         // Debug: check all ValueId types in final MirBody.
@@ -160,15 +180,16 @@ fn run_pass2_body(
     body: &mut crate::ir::MirBody,
     fn_types: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
+    untyped_scalars: bool,
 ) {
     optimize::sroa::run_body(body, context_types);
     let mut cfg = cfg::promote(std::mem::take(body));
-    run_pass2(&mut cfg, fn_types);
+    run_pass2(&mut cfg, fn_types, untyped_scalars);
     *body = cfg::demote(cfg);
 }
 
 /// Pass 2 pipeline on CfgBody: SpawnSplit → SSA → DSE → CodeMotion → Reorder → RegColor.
-fn run_pass2(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
+fn run_pass2(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>, untyped_scalars: bool) {
     debug_check_defs(cfg, "before pass2");
     optimize::spawn_split::run(cfg, fn_types);
     debug_check_defs(cfg, "after spawn_split");
@@ -240,7 +261,11 @@ fn run_pass2(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
             }
         }
     }
-    optimize::reg_color::color_body(cfg);
+    if untyped_scalars {
+        optimize::reg_color::color_body_untyped(cfg);
+    } else {
+        optimize::reg_color::color_body(cfg);
+    }
     debug_check_types(cfg, "after reg_color");
 }
 

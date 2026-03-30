@@ -113,108 +113,6 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
 
 }
 
-/// Fill types for all ValueIds that don't have one yet.
-/// Derives types from the instruction that defines them or from ssa_info.
-fn fill_ssa_types(cfg: &mut CfgBody, ssa_info: &SsaInfo) {
-    // 1. Block params are phi results — type from the variable.
-    //    Phi variable → type mapping comes from ssa_info.
-    //    We need to know which variable each block param corresponds to.
-    //    Block params are added in order by patch_instructions for each phi.
-    //    We can't easily recover the mapping here, so instead we scan
-    //    jump args: if a jump arg has a type but the target block param doesn't,
-    //    propagate.
-
-    // 2. Ref instructions: Ref<T> from ssa_info.ctx_types.
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref {
-                dst,
-                target: crate::ir::RefTarget::Context(ctx),
-                path,
-            } = &inst.kind
-                && path.is_empty()
-            {
-                if !cfg.val_types.contains_key(dst) {
-                    if let Some(ty) = ssa_info.ctx_types.get(ctx) {
-                        cfg.val_types.insert(*dst, Ty::Ref(Box::new(ty.clone()), false));
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Propagate types through jump args → block params.
-    //    If a jump sends value V to block B's param P, and V has a type but P doesn't,
-    //    assign P the type of V.
-    loop {
-        let mut changed = false;
-        for bi in 0..cfg.blocks.len() {
-            let term = cfg.blocks[bi].terminator.clone();
-            let targets: Vec<(Label, &[ValueId])> = match &term {
-                crate::cfg::Terminator::Jump { label, args } => vec![(*label, args)],
-                crate::cfg::Terminator::JumpIf {
-                    then_label, then_args, else_label, else_args, ..
-                } => vec![(*then_label, then_args), (*else_label, else_args)],
-                crate::cfg::Terminator::ListStep { done, done_args, .. } => {
-                    let mut v = vec![(*done, done_args.as_slice())];
-                    // Fallthrough to next block — no explicit args.
-                    v
-                }
-                _ => vec![],
-            };
-            for (label, args) in targets {
-                if let Some(&target_bi) = cfg.label_to_block.get(&label) {
-                    let params = &cfg.blocks[target_bi.0].params;
-                    for (arg, param) in args.iter().zip(params.iter()) {
-                        if !cfg.val_types.contains_key(param) {
-                            if let Some(ty) = cfg.val_types.get(arg) {
-                                cfg.val_types.insert(*param, ty.clone());
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    // 4. Any remaining untyped ValueIds in instructions: derive from context.
-    //    - Load dst: inner type of src's Ref<T>
-    //    - Store: no dst type needed (dst is Ref)
-    //    - Undef dst: try var_types/ctx_types from block context
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            match &inst.kind {
-                InstKind::Load { dst, src, .. } => {
-                    if !cfg.val_types.contains_key(dst) {
-                        if let Some(Ty::Ref(inner, _)) = cfg.val_types.get(src) {
-                            cfg.val_types.insert(*dst, *inner.clone());
-                        }
-                    }
-                }
-                InstKind::Undef { dst } => {
-                    // Undef is an SSA initial value. Derive type from block params
-                    // that use this undef (via jump args), or from ssa_info directly.
-                    // Since undef defs correspond to variables in ssa_info, try all.
-                    if !cfg.val_types.contains_key(dst) {
-                        // Try context types first, then variable types.
-                        let ty = ssa_info.ctx_types.values().next().cloned()
-                            .or_else(|| ssa_info.var_types.values().next().cloned());
-                        // Actually, we need the SPECIFIC variable's type.
-                        // Undef defs are created for variables in written_contexts + all_local_vars.
-                        // We can't easily recover which variable this undef belongs to.
-                        // Instead, propagate from jump args (step 3 above handles this).
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 /// Store-load forwarding for context variables, scoped by the dominator tree.
 ///
 /// Walks blocks in dominator-tree preorder (DFS), inheriting the context
@@ -1312,7 +1210,7 @@ fn patch_instructions(
     }
 
     // Add jump args to terminators of predecessor blocks.
-    for (bi, block) in cfg.blocks.iter_mut().enumerate() {
+    for block in cfg.blocks.iter_mut() {
         let pred_label = block.label;
 
         match &mut block.terminator {

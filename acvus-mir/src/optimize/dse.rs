@@ -12,7 +12,6 @@
 //! and Return (contexts are externally observable after return).
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
 use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};

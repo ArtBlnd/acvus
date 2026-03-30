@@ -33,7 +33,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 // ── Public API ─────────────────────────────────────────────────────
 
+/// Color with type-compatible slot reuse (default — typed interpreter).
 pub fn color_body(cfg: &mut CfgBody) {
+    color_body_inner(cfg, false);
+}
+
+/// Color with untyped scalar slot reuse (kovac — all scalars share slots).
+pub fn color_body_untyped(cfg: &mut CfgBody) {
+    color_body_inner(cfg, true);
+}
+
+fn color_body_inner(cfg: &mut CfgBody, untyped_scalars: bool) {
     if cfg.blocks.is_empty() {
         return;
     }
@@ -41,13 +51,18 @@ pub fn color_body(cfg: &mut CfgBody) {
     let liveness = liveness::analyze(cfg);
     let last_use = LastUseMap::build(cfg, &liveness);
 
-    let coloring = compute_coloring(cfg, &liveness, &last_use);
+    let coloring = compute_coloring(cfg, &liveness, &last_use, untyped_scalars);
 
     if !coloring.is_improvement() {
         return;
     }
 
     apply_coloring(cfg, &coloring);
+}
+
+/// Returns true for scalar types that can share register slots in untyped mode.
+fn is_scalar_ty(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Bool | Ty::Float | Ty::Unit)
 }
 
 // ── Coloring ───────────────────────────────────────────────────────
@@ -69,14 +84,28 @@ impl Coloring {
     }
 
     /// Assign the smallest available color with matching type.
-    fn assign(&mut self, live: &FxHashSet<u32>, val: ValueId, ty: Option<&Ty>) -> u32 {
+    /// If `untyped_scalars` is true, all scalar types (Int, Bool, Float, Unit)
+    /// are treated as compatible for slot reuse.
+    fn assign(
+        &mut self,
+        live: &FxHashSet<u32>,
+        val: ValueId,
+        ty: Option<&Ty>,
+        untyped_scalars: bool,
+    ) -> u32 {
         let color = (0u32..)
             .find(|&c| {
                 if live.contains(&c) {
                     return false;
                 }
                 match self.slot_types.get(c as usize) {
-                    Some(Some(slot_ty)) => ty == Some(slot_ty),
+                    Some(Some(slot_ty)) => {
+                        if untyped_scalars && is_scalar_ty(slot_ty) && ty.map_or(false, is_scalar_ty) {
+                            true
+                        } else {
+                            ty == Some(slot_ty)
+                        }
+                    }
                     Some(None) => ty.is_none(),
                     None => true, // New slot — any type.
                 }
@@ -111,18 +140,23 @@ impl Coloring {
 }
 
 /// Run greedy coloring over all blocks.
-fn compute_coloring(cfg: &CfgBody, liveness: &LivenessResult, last_use: &LastUseMap) -> Coloring {
+fn compute_coloring(
+    cfg: &CfgBody,
+    liveness: &LivenessResult,
+    last_use: &LastUseMap,
+    untyped_scalars: bool,
+) -> Coloring {
     let mut coloring = Coloring::new();
 
     // Params and captures are live simultaneously at entry — color them first.
     let mut entry_live = FxHashSet::default();
     for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
-        let c = coloring.assign(&entry_live, v, cfg.val_types.get(&v));
+        let c = coloring.assign(&entry_live, v, cfg.val_types.get(&v), untyped_scalars);
         entry_live.insert(c);
     }
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
-        let mut live = LiveColors::from_live_in(&liveness.live_in[bi], &coloring);
+        let mut live = LiveColors::from_live_in(&liveness.live_in[bi], &coloring, untyped_scalars);
 
         // Block params: defined at block entry.
         for &param in &block.params {
@@ -171,28 +205,38 @@ fn compute_coloring(cfg: &CfgBody, liveness: &LivenessResult, last_use: &LastUse
 // ── LiveColors ─────────────────────────────────────────────────────
 
 /// Set of colors (slots) currently occupied by live values.
-struct LiveColors(FxHashSet<u32>);
+struct LiveColors {
+    occupied: FxHashSet<u32>,
+    untyped_scalars: bool,
+}
 
 impl LiveColors {
     /// Initialize from a block's live_in set.
-    fn from_live_in(live_in: &FxHashSet<ValueId>, coloring: &Coloring) -> Self {
-        let colors = live_in
+    fn from_live_in(
+        live_in: &FxHashSet<ValueId>,
+        coloring: &Coloring,
+        untyped_scalars: bool,
+    ) -> Self {
+        let occupied = live_in
             .iter()
             .filter_map(|v| coloring.color_of(*v))
             .collect();
-        LiveColors(colors)
+        LiveColors {
+            occupied,
+            untyped_scalars,
+        }
     }
 
     /// Assign a color to a new definition and mark it live.
     fn define(&mut self, coloring: &mut Coloring, val: ValueId, ty: Option<&Ty>) {
-        let c = coloring.assign(&self.0, val, ty);
-        self.0.insert(c);
+        let c = coloring.assign(&self.occupied, val, ty, self.untyped_scalars);
+        self.occupied.insert(c);
     }
 
     /// Free a value's color (it died at this point).
     fn kill(&mut self, coloring: &Coloring, val: ValueId) {
         if let Some(c) = coloring.color_of(val) {
-            self.0.remove(&c);
+            self.occupied.remove(&c);
         }
     }
 }

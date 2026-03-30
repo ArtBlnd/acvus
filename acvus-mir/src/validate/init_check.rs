@@ -12,11 +12,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::dataflow::{forward_analysis, DataflowAnalysis, DataflowState};
 use crate::analysis::domain::SemiLattice;
-use crate::cfg::{CfgBody, Terminator};
+use crate::cfg::{CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use acvus_ast::Span;
-use crate::ty::{Param as TyParam, Ty};
+use crate::ty::{Ty};
 
 // ── Domain ──────────────────────────────────────────────────────────
 

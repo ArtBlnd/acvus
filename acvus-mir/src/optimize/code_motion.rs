@@ -353,36 +353,6 @@ fn token_ids_of(
 //    single-successor block if no in-block uses exist.
 
 /// Position of a use: (block_idx, instruction_index_within_block or TERMINATOR).
-#[derive(Debug, Clone, Copy)]
-struct UsePos {
-    block: usize,
-    /// Instruction index, or usize::MAX for terminator.
-    inst: usize,
-}
-
-const TERMINATOR_POS: usize = usize::MAX;
-
-/// Build a map: ValueId → list of use positions.
-fn build_use_map(cfg: &CfgBody) -> FxHashMap<ValueId, Vec<UsePos>> {
-    let mut map: FxHashMap<ValueId, Vec<UsePos>> = FxHashMap::default();
-
-    for (bi, block) in cfg.blocks.iter().enumerate() {
-        for (ii, inst) in block.insts.iter().enumerate() {
-            for u in inst_info::uses(&inst.kind) {
-                map.entry(u).or_default().push(UsePos { block: bi, inst: ii });
-            }
-        }
-        // Terminator uses.
-        for u in terminator_uses_vec(&block.terminator) {
-            map.entry(u)
-                .or_default()
-                .push(UsePos { block: bi, inst: TERMINATOR_POS });
-        }
-    }
-
-    map
-}
-
 fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
     use crate::cfg::Terminator;
     match term {

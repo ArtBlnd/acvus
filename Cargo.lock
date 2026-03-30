@@ -929,6 +929,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovac-interpreter"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-ext",
+ "acvus-mir",
+ "acvus-utils",
+ "rustc-hash",
+]
+
+[[package]]
 name = "lalrpop"
 version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
