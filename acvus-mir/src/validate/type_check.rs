@@ -187,6 +187,7 @@ fn literal_ty(lit: &Literal) -> Ty {
         // typechecker perspective depends on context.  We check dst type
         // via val_types instead of inferring from the literal.
         Literal::List(_) => Ty::error(), // skip — heterogeneous check not possible here
+        Literal::Unit => Ty::Unit,
     }
 }
 

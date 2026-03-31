@@ -66,6 +66,7 @@ fn fmt_literal(lit: &Literal) -> String {
         Literal::String(s) => format!("{s:?}"),
         Literal::Bool(b) => b.to_string(),
         Literal::Byte(b) => format!("0x{b:02x}"),
+        Literal::Unit => "()".to_string(),
         Literal::List(elems) => {
             let items: Vec<String> = elems.iter().map(fmt_literal).collect();
             format!("[{}]", items.join(", "))

@@ -1382,6 +1382,7 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Byte(b) => Value::Byte(*b),
         Literal::List(items) => Value::list(items.iter().map(literal_to_value).collect()),
+        Literal::Unit => Value::Unit,
     }
 }
 

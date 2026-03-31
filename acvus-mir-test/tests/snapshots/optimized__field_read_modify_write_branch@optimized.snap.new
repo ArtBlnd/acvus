@@ -1,0 +1,31 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+assertion_line: 101
+expression: opt
+---
+=== main ===
+     0 │   r0 = ref @stats
+     1 │   r1 = ref @stats
+     2 │   r2 = load r1
+     3 │   r3 = r2.count
+     5 │   r4 = r3 + 1 (r5)
+     6 │   r3 = r2.threshold
+     7 │   r6 = r4 > r3
+     8 │   r7 = test true (r6) == true
+    10 │   r8 = field_set r2.exceeded = true (r6)
+    11 │   jump_if r7 then L0 else L1(r2)
+    12 │ L0:
+    13 │   jump L1(r8)
+    14 │ L1(r2: {count: Int, exceeded: Bool, threshold: Int}):
+    15 │   store r0 = r2
+    16 │   return r2
+
+    ; r0 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
+    ; r1 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
+    ; r2 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r3 (threshold) : Int
+    ; r4 (v6) : Int
+    ; r5 (v5) : Int
+    ; r6 (v7) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (v9) : {count: Int, exceeded: Bool, threshold: Int}

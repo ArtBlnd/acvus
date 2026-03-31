@@ -599,6 +599,7 @@ pub enum Literal {
     Bool(bool),
     Byte(u8),
     List(Vec<Literal>),
+    Unit,
 }
 
 // ── AST walk: context reference extraction ──────────────────────────

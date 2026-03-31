@@ -1,0 +1,30 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+assertion_line: 269
+expression: opt
+---
+=== main ===
+     0 │   r0 = ref @state
+     1 │   r1 = load r0
+     2 │   r2 = r1.step
+     4 │   r3 = r2 + 1 (r4)
+     5 │   r5 = field_set r1.step = r3
+     6 │   r2 = r5.value
+     7 │   r4 = r5.multiplier
+     8 │   r3 = r2 * 1 (r4)
+     9 │   r1 = field_set r5.value = r3
+    10 │   r2 = r1.step
+    11 │   r4 = r1.max_steps
+    12 │   r6 = r2 >= 1 (r4)
+    13 │   r5 = field_set r1.done = r6
+    14 │   r0 = ref @state
+    15 │   store r0 = r5
+    16 │   return r5
+
+    ; r0 (@state) : Ref<{done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}>
+    ; r1 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r2 (step) : Int
+    ; r3 (v5) : Int
+    ; r4 (max_steps) : Int
+    ; r5 (v6) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r6 (v7) : Bool

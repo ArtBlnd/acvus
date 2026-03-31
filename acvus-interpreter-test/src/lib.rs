@@ -45,6 +45,18 @@ fn compile_script(
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
+fn compile_script_mode(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+) -> CompileResult {
+    let ast =
+        ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
+    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
+}
+
 pub fn compile_source_with_externs(
     interner: &Interner,
     ast: ParsedAst,
@@ -249,6 +261,42 @@ pub async fn run_script(
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let cr = compile_script(interner, source, &context_types);
+
+    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
+    let mut functions = cr.modules;
+    for (id, handler) in builtin_handlers {
+        functions.insert(id, Executable::Builtin(handler));
+    }
+    for (id, exec) in cr.extern_executables {
+        functions.insert(id, exec);
+    }
+
+    let snapshot: HashMap<String, Value> = context
+        .into_iter()
+        .map(|(k, v)| (interner.resolve(k).to_string(), v))
+        .collect();
+
+    let executor = Arc::new(SequentialExecutor);
+    let shared = InterpreterContext::new(interner, functions, executor)
+        .with_fn_types(cr.fn_types)
+        .with_context_names(cr.context_names);
+
+    let page = InMemoryContext::new(snapshot, interner.clone());
+    let mut interp = Interpreter::new(shared, cr.entry_qref, page);
+    let result = interp.execute().await.expect("execution failed");
+    result.value
+}
+
+/// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
+pub async fn run_script_mode(
+    interner: &Interner,
+    source: &str,
+    context: FxHashMap<Astr, Value>,
+) -> Value {
+    let context_types: FxHashMap<Astr, Ty> =
+        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
+
+    let cr = compile_script_mode(interner, source, &context_types);
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;

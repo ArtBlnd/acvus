@@ -903,6 +903,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Literal::String(_) => Ty::String,
                     Literal::Bool(_) => Ty::Bool,
                     Literal::Byte(_) => Ty::Byte,
+                    Literal::Unit => Ty::Unit,
                     Literal::List(elems) => {
                         if elems.is_empty() {
                             let elem = self.subst.fresh_param();
@@ -2128,6 +2129,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Literal::String(_) => Ty::String,
             Literal::Bool(_) => Ty::Bool,
             Literal::Byte(_) => Ty::Byte,
+            Literal::Unit => Ty::Unit,
             Literal::List(elems) => {
                 let origin = self.subst.alloc_identity(false);
                 match elems.first() {

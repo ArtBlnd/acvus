@@ -11,16 +11,15 @@ expression: ir
      8 │   store r3 = 1 (r4)
      9 │   jump L1
     10 │ L1:
-    11 │   r5 = tuple ()
-    12 │   r6 = ref x
-    13 │   r7 = load r6
-    14 │   return r7
+    12 │   r5 = ref x
+    13 │   r6 = load r5
+    14 │   return r6
 
     ; r0 (v3) : Ref<Int>
     ; r1 (v1) : Int
     ; r2 (v4) : Bool
     ; r3 (v6) : Ref<Int>
     ; r4 (v5) : Int
-    ; r5 (v7) : Unit
-    ; r6 (v8) : Ref<Int>
-    ; r7 (x) : Int
+    ; r5 (v8) : Ref<Int>
+    ; r6 (x) : Int
+    ; r7 (v7) : Unit

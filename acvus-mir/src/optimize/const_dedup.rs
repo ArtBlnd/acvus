@@ -12,6 +12,7 @@ enum LiteralKey {
     Bool(bool),
     Byte(u8),
     List(Vec<LiteralKey>),
+    Unit,
 }
 
 impl LiteralKey {
@@ -25,6 +26,7 @@ impl LiteralKey {
             Literal::List(elems) => {
                 LiteralKey::List(elems.iter().map(LiteralKey::from_literal).collect())
             }
+            Literal::Unit => LiteralKey::Unit,
         }
     }
 }

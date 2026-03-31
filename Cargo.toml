@@ -12,7 +12,6 @@ members = [
     "acvus-ext",
     "acvus-ext-llm",
     "acvus-lsp",
-    "acvus-orchestration-test",
     "pomollu-engine",
     "acvus-macro",
     "kovac-interpreter"

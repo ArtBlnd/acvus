@@ -1,0 +1,29 @@
+let honor = 0;
+let pass = 0;
+let fail = 0;
+let best = 0;
+
+for { name, score, } in @students {
+    if score >= 90 {
+        honor = honor + 1;
+        if score > best {
+            best = score;
+        };
+    } else if score >= 60 {
+        pass = pass + 1;
+    } else {
+        fail = fail + 1;
+    };
+}
+
+let passing_total = @students
+    | iter
+    | map(|s| -> s.score)
+    | filter(|s| -> s >= 60)
+    | fold(0, |acc, s| -> acc + s);
+
+if fail > 0 {
+    passing_total
+} else {
+    passing_total + best
+}

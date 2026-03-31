@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_interpreter::{
@@ -6,7 +5,6 @@ use acvus_interpreter::{
 };
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::*;
-use acvus_mir::ty::Ty;
 use acvus_utils::{Interner, LocalFactory};
 use rustc_hash::FxHashMap;
 

@@ -281,6 +281,7 @@ impl AbstractValue {
             Literal::Float(_) | Literal::Byte(_) | Literal::String(_) | Literal::List(_) => {
                 AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(lit.clone(), 1)))
             }
+            Literal::Unit => AbstractValue::Top,
         }
     }
 

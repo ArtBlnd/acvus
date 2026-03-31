@@ -345,6 +345,9 @@ impl<'a> Lowerer<'a> {
             Literal::List(_) => {
                 // TODO: list constants go to M bank
             }
+            Literal::Unit => {
+                // Unit is zero-sized; no register allocation needed.
+            }
         }
     }
 

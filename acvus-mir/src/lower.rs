@@ -1251,7 +1251,7 @@ impl<'a> Lowerer<'a> {
     fn emit_unit(&mut self, span: Span) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::Unit);
-        self.emit_inst(span, InstKind::MakeTuple { dst, elements: vec![] });
+        self.emit_inst(span, InstKind::Const { dst, value: Literal::Unit });
         dst
     }
 

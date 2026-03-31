@@ -166,20 +166,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "acvus-orchestration-test"
-version = "0.1.0"
-dependencies = [
- "acvus-interpreter",
- "acvus-mir",
- "acvus-orchestration",
- "acvus-utils",
- "rustc-hash",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "acvus-utils"
 version = "0.1.0"
 dependencies = [
