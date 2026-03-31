@@ -947,25 +947,40 @@ fn run_ssa_builder(
         }
     }
 
-    // Seal entry block AFTER loop header detection — if entry is a loop header,
-    // it must be sealed with other loop headers (deferred).
     // Typed alloc closure for SSA builder — every ValueId gets a type at birth.
     let mut typed_alloc = |var: SsaVar| -> ValueId {
         alloc_var_val(val_factory, val_types, var, ssa_info)
     };
 
+    // Seal ENTRY_BLOCK (virtual predecessor of block 0) unless block 0 is a loop header.
     if !loop_headers.contains(&BlockIdx(0)) {
         ssa.seal_block(ENTRY_BLOCK, &mut typed_alloc);
     }
 
-    // ── Process blocks: define stores in instruction order ──
+    // ── Single-pass: define and use in program order (Braun algorithm) ──
     //
-    // VarLoad/ParamLoad substitutions are deferred until all blocks are sealed,
-    // because use_var on an unsealed block returns a pending phi placeholder
-    // that may be resolved to a different value after sealing.
+    // For each block, process ops in instruction order:
+    //   - VarStore/CtxStore → ssa.define() (updates current_defs)
+    //   - VarLoad/ParamLoad → ssa.use_var() (reads current_defs or predecessor)
+    //
+    // This ensures a VarLoad BEFORE a VarStore for the same slot gets the
+    // predecessor's value (not the Store's value), because define() hasn't
+    // been called yet at that point. A VarLoad AFTER a VarStore correctly
+    // gets the stored value via current_defs (intra-block forwarding).
+    //
+    // Non-loop-header blocks are sealed BEFORE processing their ops,
+    // since all predecessors (earlier in block order) are already processed.
+    // Loop headers are sealed after all blocks (backedge sources come later).
+    let mut var_subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+
     for (bi, _) in blocks.iter().enumerate() {
         let block_idx = BlockIdx(bi);
         let label = block_label(block_idx);
+
+        // Seal non-loop-header blocks before processing (all predecessors done).
+        if bi > 0 && !loop_headers.contains(&block_idx) {
+            ssa.seal_block(label, &mut typed_alloc);
+        }
 
         if let Some(ops) = ssa_info.block_ops.get(&block_idx) {
             for op in &ops.ops {
@@ -976,61 +991,9 @@ fn run_ssa_builder(
                     SsaOp::VarStore { slot, value, .. } => {
                         ssa.define(label, SsaVar::Local(*slot), *value);
                     }
-                    // VarLoad/ParamLoad — deferred, see below.
-                    SsaOp::VarLoad { .. } | SsaOp::ParamLoad { .. } => {}
-                }
-            }
-        }
-
-        if bi > 0 && !loop_headers.contains(&block_idx) {
-            ssa.seal_block(label, &mut typed_alloc);
-        }
-    }
-
-    // ── Seal loop headers (deferred because backedge predecessors aren't known yet) ──
-    for &header in &loop_headers {
-        ssa.seal_block(block_label(header), &mut typed_alloc);
-    }
-
-    // ── Trigger PHIs at merge points (sorted for deterministic ValueId allocation) ──
-    let mut merge_blocks: Vec<_> = preds.iter().filter(|(_, p)| p.len() > 1).collect();
-    merge_blocks.sort_by_key(|(idx, _)| *idx);
-    for (block_idx, _) in merge_blocks {
-        {
-            let label = block_label(*block_idx);
-            for &ctx_id in &ssa_info.written_contexts {
-                let _ = ssa.use_var(label, SsaVar::Context(ctx_id), &mut typed_alloc);
-            }
-            for &name in &ssa_info.written_vars {
-                let _ = ssa.use_var(label, SsaVar::Local(name), &mut typed_alloc);
-            }
-        }
-    }
-
-    // ── Build var_subst: resolve VarLoad/ParamLoad to SSA values ──
-    //
-    // Two mechanisms:
-    //   1. Intra-block: VarStore in same block before VarLoad → direct forwarding.
-    //   2. Inter-block: use_var on sealed SSA builder → predecessor lookup.
-    let mut var_subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
-    for (bi, _) in blocks.iter().enumerate() {
-        let block_idx = BlockIdx(bi);
-        let label = block_label(block_idx);
-        // Track last VarStore value per slot within this block.
-        let mut intra_block: FxHashMap<ValueId, ValueId> = FxHashMap::default();
-
-        if let Some(ops) = ssa_info.block_ops.get(&block_idx) {
-            for op in &ops.ops {
-                match op {
-                    SsaOp::VarStore { slot, value, .. } => {
-                        intra_block.insert(*slot, *value);
-                    }
                     SsaOp::VarLoad { dst, slot } | SsaOp::ParamLoad { dst, slot } => {
-                        let ssa_val = if let Some(&local_val) = intra_block.get(slot) {
-                            local_val
-                        } else {
-                            ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc)
-                        };
+                        let ssa_val =
+                            ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc);
                         #[cfg(debug_assertions)]
                         if undef_defs.contains(&ssa_val) {
                             eprintln!(
@@ -1042,9 +1005,30 @@ fn run_ssa_builder(
                             var_subst.insert(*dst, ssa_val);
                         }
                     }
-                    _ => {}
                 }
             }
+        }
+    }
+
+    // ── Seal loop headers (deferred: backedge predecessors processed above) ──
+    for &header in &loop_headers {
+        ssa.seal_block(block_label(header), &mut typed_alloc);
+    }
+
+    // ── Trigger PHIs at merge points ──
+    //
+    // Explicitly request the merged value for every written variable at each
+    // merge block. This ensures PHI nodes exist even when the variable is not
+    // loaded at the merge point (needed for write-back and loop backedge args).
+    let mut merge_blocks: Vec<_> = preds.iter().filter(|(_, p)| p.len() > 1).collect();
+    merge_blocks.sort_by_key(|(idx, _)| *idx);
+    for (block_idx, _) in merge_blocks {
+        let label = block_label(*block_idx);
+        for &ctx_id in &ssa_info.written_contexts {
+            let _ = ssa.use_var(label, SsaVar::Context(ctx_id), &mut typed_alloc);
+        }
+        for &name in &ssa_info.written_vars {
+            let _ = ssa.use_var(label, SsaVar::Local(name), &mut typed_alloc);
         }
     }
 
