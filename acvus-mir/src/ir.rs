@@ -485,12 +485,3 @@ impl MirModule {
     }
 }
 
-#[cfg(test)]
-mod size_check {
-    use super::*;
-    #[test]
-    fn inst_size() {
-        eprintln!("InstKind: {} bytes", std::mem::size_of::<InstKind>());
-        eprintln!("Inst: {} bytes", std::mem::size_of::<Inst>());
-    }
-}

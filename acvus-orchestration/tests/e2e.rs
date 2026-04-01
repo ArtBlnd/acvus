@@ -174,7 +174,7 @@ fn multiple_items_mixed_namespace() {
 // ════════════════════════════════════════════════════════════════════
 
 #[test]
-fn block_undeclared_context_is_incomplete() {
+fn block_undeclared_context_is_complete_if_type_resolves() {
     let i = Interner::new();
     let ns = Namespace {
         defaults: vec![],
@@ -189,8 +189,8 @@ fn block_undeclared_context_is_incomplete() {
 
     assert!(!result.has_field_errors(), "valid syntax → no field errors");
     assert!(
-        !result.is_complete(&i, "greet"),
-        "undeclared context → Incomplete"
+        result.is_complete(&i, "greet"),
+        "undeclared context with resolvable type → Complete"
     );
 }
 

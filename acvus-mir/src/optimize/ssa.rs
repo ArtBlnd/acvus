@@ -291,7 +291,7 @@ mod tests {
         let result = ssa.use_var(label(0), ctx, &mut alloc);
 
         assert_eq!(result, v0);
-        assert!(ssa.finish().is_empty(), "no PHI needed");
+        assert!(ssa.finish().0.is_empty(), "no PHI needed");
     }
 
     /// Linear blocks: define in block 0, use in block 1 — no PHI.
@@ -309,7 +309,7 @@ mod tests {
 
         let result = ssa.use_var(label(1), ctx, &mut alloc);
         assert_eq!(result, v0, "should propagate from predecessor");
-        assert!(ssa.finish().is_empty(), "single predecessor, no PHI");
+        assert!(ssa.finish().0.is_empty(), "single predecessor, no PHI");
     }
 
     /// Diamond: block 0 → block 1 (write), block 0 → block 2 (no write), merge at block 3.
@@ -343,7 +343,7 @@ mod tests {
         assert_ne!(result, v_init, "should not be the initial value");
         assert_ne!(result, v_write, "should not be the written value");
 
-        let phis = ssa.finish();
+        let (phis, _) = ssa.finish();
         assert_eq!(phis.len(), 1, "one PHI for the merge");
         assert_eq!(phis[0].block, label(3));
         assert_eq!(phis[0].var, ctx);
@@ -379,7 +379,7 @@ mod tests {
         ssa.seal_block(label(3), &mut alloc);
 
         let _result = ssa.use_var(label(3), ctx, &mut alloc);
-        let phis = ssa.finish();
+        let (phis, _) = ssa.finish();
         assert_eq!(phis.len(), 1);
 
         // Incoming should be v1 from block 1, v2 from block 2
@@ -431,7 +431,7 @@ mod tests {
         ssa.seal_block(label(6), &mut alloc);
 
         let result = ssa.use_var(label(6), ctx, &mut alloc);
-        let phis = ssa.finish();
+        let (phis, _) = ssa.finish();
 
         // Should have PHIs at inner merge (block 4) and outer merge (block 6)
         assert!(
@@ -483,7 +483,7 @@ mod tests {
         // NOW seal block 1 — both predecessors known
         ssa.seal_block(label(1), &mut alloc);
 
-        let phis = ssa.finish();
+        let (phis, _) = ssa.finish();
         // Loop header should have a PHI (v0 from entry, v_body from back edge)
         assert!(!phis.is_empty(), "loop header should have PHI");
         let header_phi = phis.iter().find(|p| p.block == label(1)).unwrap();
@@ -527,7 +527,7 @@ mod tests {
             result, v0,
             "should be the same value — trivial PHI eliminated"
         );
-        assert!(ssa.finish().is_empty(), "trivial PHI should be eliminated");
+        assert!(ssa.finish().0.is_empty(), "trivial PHI should be eliminated");
     }
 
     /// Multiple contexts — independent PHIs.
@@ -562,7 +562,7 @@ mod tests {
         let _ra = ssa.use_var(label(3), ctx_a, &mut alloc);
         let rb = ssa.use_var(label(3), ctx_b, &mut alloc);
 
-        let phis = ssa.finish();
+        let (phis, _) = ssa.finish();
         // ctx_a should have PHI (different values from two sides)
         // ctx_b should NOT have PHI (same value from both sides — trivial)
         let phi_vars: Vec<SsaVar> = phis.iter().map(|p| p.var).collect();

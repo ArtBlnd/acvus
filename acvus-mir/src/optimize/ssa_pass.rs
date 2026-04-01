@@ -88,19 +88,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
     };
 
     // Step 2: Context value forwarding.
-    #[cfg(debug_assertions)]
-    {
-        let loads: usize = cfg.blocks.iter().flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Load { .. })).count();
-        eprintln!("[pre-forward] loads={loads}");
-    }
     let fwd_subst = forward_context_values(cfg, fn_types, &ssa_info.written_contexts);
-    #[cfg(debug_assertions)]
-    {
-        let loads: usize = cfg.blocks.iter().flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Load { .. })).count();
-        eprintln!("[post-forward] loads={loads}");
-    }
 
     // Step 3: Apply substitutions + remove promoted instructions.
     if !var_subst.is_empty() {
@@ -720,22 +708,6 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
         }
     }
 
-    // Debug: dump all Ref(Var/Param) instructions.
-    #[cfg(debug_assertions)]
-    for (bi, block) in cfg.blocks.iter().enumerate() {
-        for (ii, inst) in block.insts.iter().enumerate() {
-            if let InstKind::Ref { dst, target, path } = &inst.kind {
-                match target {
-                    RefTarget::Var(slot) | RefTarget::Param(slot) => {
-                        eprintln!("[SSA collect] B{bi}:{ii} Ref({:?}, {:?}) dst={:?} path={:?}",
-                            if matches!(target, RefTarget::Var(_)) { "Var" } else { "Param" },
-                            slot, dst, path);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
 
     // Second pass: collect SSA ops (only for promotable identity Refs).
     for (bi, block) in cfg.blocks.iter().enumerate() {
@@ -919,8 +891,6 @@ fn run_ssa_builder(
             let undef_val = alloc_var_val(val_factory, val_types, SsaVar::Context(ctx_id), ssa_info);
             ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), undef_val);
             undef_defs.push(undef_val);
-            #[cfg(debug_assertions)]
-            eprintln!("[SSA] undef for Context({:?}) = {:?}", ctx_id, undef_val);
         }
     }
 
@@ -942,8 +912,6 @@ fn run_ssa_builder(
             let undef_val = alloc_var_val(val_factory, val_types, SsaVar::Local(slot), ssa_info);
             ssa.define(ENTRY_BLOCK, SsaVar::Local(slot), undef_val);
             undef_defs.push(undef_val);
-            #[cfg(debug_assertions)]
-            eprintln!("[SSA] undef for Local({:?}) = {:?}", slot, undef_val);
         }
     }
 
@@ -994,13 +962,6 @@ fn run_ssa_builder(
                     SsaOp::VarLoad { dst, slot } | SsaOp::ParamLoad { dst, slot } => {
                         let ssa_val =
                             ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc);
-                        #[cfg(debug_assertions)]
-                        if undef_defs.contains(&ssa_val) {
-                            eprintln!(
-                                "[SSA] WARNING: VarLoad/ParamLoad {:?} for {:?} resolved to UNDEF {:?}",
-                                dst, slot, ssa_val
-                            );
-                        }
                         if ssa_val != *dst {
                             var_subst.insert(*dst, ssa_val);
                         }
@@ -1304,13 +1265,6 @@ fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, s
 
                 if all_loads_dead {
                     promoted_refs.insert(*dst);
-                } else {
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "[SSA] Ref(dst={:?}, {:?}) NOT promoted: all_loads_dead={}, users={:?}",
-                        dst, target, all_loads_dead,
-                        ref_users.get(dst)
-                    );
                 }
             }
         }
@@ -1328,11 +1282,7 @@ fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, s
         // - Loads whose dst was substituted
         // - Stores whose dst Ref is promoted
         block.insts.retain(|inst| match &inst.kind {
-            InstKind::Ref { dst, .. } if promoted_refs.contains(dst) => {
-                #[cfg(debug_assertions)]
-                eprintln!("[SSA retain] REMOVING Ref dst={dst:?}");
-                false
-            }
+            InstKind::Ref { dst, .. } if promoted_refs.contains(dst) => false,
             InstKind::Load { dst, .. } if substituted_loads.contains(dst) => false,
             InstKind::Store { dst, .. } if promoted_refs.contains(dst) => false,
             _ => true,

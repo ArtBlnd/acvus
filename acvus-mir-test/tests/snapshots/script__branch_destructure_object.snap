@@ -6,54 +6,34 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = undef
      2 │   r2 = ref @out
-     3 │   r3 = ref @out
-     4 │   r4 = load r3
-     5 │   r5 = ref @user
-     6 │   r6 = load r5
-     7 │   r7 = ref @user
-     9 │   r8 = test has_key(r6, "name")
-    10 │   r9 = r6.name
-    12 │   r10 = true (r11) && true (r12)
-    13 │   r13 = test has_key(r6, "age")
-    14 │   r14 = r6.age
-    16 │   r15 = r10 && true (r16)
-    17 │   jump_if r15 then L0 else L1(r4, r0, r1)
-    18 │ L0:
-    19 │   r17 = r6.name
-    20 │   r18 = r6.age
-    21 │   jump L1(r17, r17, r18)
-    22 │ L1(r19: String, r20: String, r21: Int):
-    23 │   store r2 = r19
-    24 │   r22 = ref @out
-    25 │   return r19
+     3 │   r3 = load r2
+     4 │   r4 = ref @user
+     5 │   r5 = load r4
+     6 │   r6 = ref @user
+     7 │   r7 = r5.name
+     8 │   r8 = ref @user
+     9 │   r9 = r5.age
+    10 │   r10 = ref @out
+    11 │   store r10 = r7
+    12 │   r11 = ref @out
+    13 │   return r7
 
-    ; r0 (v27) : String
-    ; r1 (v28) : Int
-    ; r2 (v32) : Ref<String>
-    ; r3 (@out) : Ref<String>
-    ; r4 (@out) : String
-    ; r5 (@user) : Ref<{age: Int, name: String}>
-    ; r6 (@user) : {age: Int, name: String}
-    ; r7 (@user) : Ref<{age: Int, name: String}>
-    ; r8 (v8) : Bool
-    ; r9 (v9) : String
-    ; r10 (v11) : Bool
-    ; r11 (v7) : Bool
-    ; r12 (v10) : Bool
-    ; r13 (v12) : Bool
-    ; r14 (v13) : Int
-    ; r15 (v15) : Bool
-    ; r16 (v14) : Bool
+    ; r0 (v20) : String
+    ; r1 (v21) : Int
+    ; r2 (@out) : Ref<String>
+    ; r3 (@out) : String
+    ; r4 (@user) : Ref<{age: Int, name: String}>
+    ; r5 (@user) : {age: Int, name: String}
+    ; r6 (@user) : Ref<{age: Int, name: String}>
+    ; r7 (name) : String
+    ; r8 (@user) : Ref<{age: Int, name: String}>
+    ; r9 (age) : Int
+    ; r10 (@out) : Ref<String>
+    ; r11 (@out) : Ref<String>
+    ; r12 (v11) : {age: Int, name: String}
+    ; r13 (v14) : Ref<Int>
+    ; r14 (v6) : {age: Int, name: String}
+    ; r15 (v9) : Ref<String>
+    ; r16 (v15) : Ref<String>
     ; r17 (name) : String
-    ; r18 (age) : Int
-    ; r19 (v29) : String
-    ; r20 (v30) : String
-    ; r21 (v31) : Int
-    ; r22 (@out) : Ref<String>
-    ; r23 (v22) : Ref<String>
-    ; r24 (v6) : {age: Int, name: String}
-    ; r25 (name) : String
-    ; r26 (v26) : String
-    ; r27 (v18) : Ref<String>
-    ; r28 (v21) : Ref<Int>
-    ; r29 (@out) : Ref<String>
+    ; r18 (v19) : String

@@ -47,18 +47,6 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
         }
     }
 
-    #[cfg(debug_assertions)]
-    {
-        eprintln!("=== B0 after hoist, before sink ===");
-        for (ii, inst) in cfg.blocks[0].insts.iter().enumerate() {
-            let defs = inst_info::defs(&inst.kind);
-            let uses = inst_info::uses(&inst.kind);
-            if !matches!(inst.kind, InstKind::Nop) {
-                eprintln!("  {ii}: defs={defs:?} uses={uses:?} {:?}", inst.kind);
-            }
-        }
-    }
-
     // Phase 2: Sink — move Eval and blocking instructions DOWN.
     sink_pass(cfg);
 }
