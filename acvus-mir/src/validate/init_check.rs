@@ -4,7 +4,7 @@
 //! (Var, Context, Param) are definitely initialized at each program point.
 //!
 //! At function call sites, checks that arguments have all fields required
-//! by the callee's parameter type. Required fields come from fn_types,
+//! by the callee's parameter type. Required fields come from fn_metadata,
 //! NOT from val_types (which may have been widened by unification).
 
 use acvus_utils::Astr;
@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::dataflow::{forward_analysis, DataflowAnalysis, DataflowState};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::{CfgBody};
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use acvus_ast::Span;
 use crate::ty::{Ty};
@@ -196,16 +196,14 @@ impl DataflowAnalysis for InitCheckAnalysis {
 
 /// Run field-level definite-assignment check on a CfgBody.
 ///
-/// `fn_types` maps function QualifiedRef → Ty (function type) for
+/// `fn_metadata` maps function QualifiedRef → FnMetadata for
 /// determining required fields at call sites.
-/// Run field-level definite-assignment check on a CfgBody.
 ///
-/// `fn_types`: function QualifiedRef → Ty for call-site checking.
 /// `external_contexts`: contexts provided by the host — these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
 pub fn check_init(
     cfg: &CfgBody,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     external_contexts: &FxHashSet<QualifiedRef>,
 ) -> Vec<UninitError> {
     let (ref_map, value_fields) = build_prepass(cfg);
@@ -265,7 +263,7 @@ pub fn check_init(
                         &state,
                         &ref_map,
                         cfg,
-                        fn_types,
+                        fn_metadata,
                         callee,
                         args,
                         inst.span,
@@ -289,7 +287,7 @@ fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
     ref_map: &RefMap,
     cfg: &CfgBody,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     callee: &Callee,
     args: &[ValueId],
     span: Span,
@@ -297,7 +295,7 @@ fn check_call_args(
 ) {
     // Resolve callee type.
     let fn_ty = match callee {
-        Callee::Direct(qref) => fn_types.get(qref),
+        Callee::Direct(qref) => fn_metadata.get(qref).map(|m| &m.ty),
         Callee::Indirect(_) => return, // Can't statically check indirect calls.
     };
     let fn_ty = match fn_ty {

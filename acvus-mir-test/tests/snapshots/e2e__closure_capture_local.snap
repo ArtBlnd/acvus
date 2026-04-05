@@ -28,10 +28,10 @@ expression: ir
     ; r3 (@items) : List<Int>
     ; r4 (v8) : String
     ; r5 (@items) : Ref<List<Int>>
-    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r7 (v14) : Fn(Int) -> Bool
     ; r8 (v4) : Int
-    ; r9 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r9 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r10 (collect(...)) : List<Int>
     ; r11 (v20) : String
     ; r12 (len(...)) : Int

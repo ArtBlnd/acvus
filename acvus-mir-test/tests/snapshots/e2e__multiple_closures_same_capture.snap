@@ -30,11 +30,11 @@ expression: ir
     ; r3 (@offset) : Ref<Int>
     ; r4 (@offset) : Int
     ; r5 (@items) : Ref<List<Int>>
-    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r7 (v9) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r9 (v11) : Fn(Int) -> Bool
-    ; r10 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r10 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r11 (collect(...)) : List<Int>
     ; r12 (v17) : String
     ; r13 (len(...)) : Int

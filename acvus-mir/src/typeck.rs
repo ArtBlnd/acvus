@@ -146,9 +146,6 @@ pub fn check_effect_constraint(
             }
         }
     }
-    if actual.io && !allowed.io {
-        violations.push("performs IO".to_string());
-    }
     if actual.self_modifying && !allowed.self_modifying {
         violations.push("is self-modifying".to_string());
     }

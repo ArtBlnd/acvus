@@ -53,6 +53,7 @@ fn compile_analysis(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -395,6 +396,7 @@ fn extern_async_call() {
                 effect: Effect::pure(),
             }),
             effect: None,
+            hint: None,
         },
     };
     let ir = compile_to_ir_with(
@@ -2253,7 +2255,7 @@ fn iter_ty_with(interner: &Interner, effect: Effect) -> Ty {
 }
 
 fn eff_iter_ty(interner: &Interner) -> Ty {
-    iter_ty_with(interner, Effect::io())
+    iter_ty_with(interner, Effect::self_modifying())
 }
 
 fn pure_iter_ty(interner: &Interner) -> Ty {
@@ -2419,7 +2421,7 @@ fn migrated_move_accept_effectful_fn_multiple_calls() {
         params: vec![Param::new(i.intern("_"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: Effect::io(),
+        effect: Effect::self_modifying(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);

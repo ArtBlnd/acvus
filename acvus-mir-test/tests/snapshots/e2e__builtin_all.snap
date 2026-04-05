@@ -19,7 +19,7 @@ expression: ir
     ; r0 (@items) : Ref<List<Int>>
     ; r1 (@items) : List<Int>
     ; r2 (@items) : Ref<List<Int>>
-    ; r3 (v6) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r3 (v6) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r4 (v7) : Fn(Int) -> Bool
     ; r5 (all(...)) : Bool
     ; r6 (to_string(...)) : String

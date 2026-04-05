@@ -597,15 +597,23 @@ impl IncrementalGraph {
             }
         }
 
-        let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+        let mut fn_metadata: FxHashMap<QualifiedRef, super::types::FnMetadata> =
+            FxHashMap::default();
         for (&qref, outcome) in &outcomes {
-            fn_types.insert(qref, outcome.meta().ty.clone());
+            let hint = self.functions.get(&qref).and_then(|f| f.constraint.hint);
+            fn_metadata.insert(
+                qref,
+                super::types::FnMetadata {
+                    ty: outcome.meta().ty.clone(),
+                    hint,
+                },
+            );
         }
 
         super::infer::InferResult {
             outcomes,
             context_types: Freeze::new(self.known_context_types()),
-            fn_types: Freeze::new(fn_types),
+            fn_metadata: Freeze::new(fn_metadata),
         }
     }
 }

@@ -72,7 +72,7 @@ pub fn lower(
             resolution_clone.type_map,
             resolution_clone.coercion_map,
             infer_result.context_types.clone(),
-            infer_result.fn_types.clone(),
+            infer_result.fn_metadata.clone(),
             policies.clone(),
             resolution_clone.extern_params,
         );
@@ -119,6 +119,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(contexts),

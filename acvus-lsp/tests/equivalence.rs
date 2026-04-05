@@ -26,6 +26,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -224,6 +225,7 @@ fn completion_pipe_trigger() {
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     });
 

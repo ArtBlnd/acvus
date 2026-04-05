@@ -22,63 +22,62 @@ expression: opt
     13 │   r13 = ref @multiplier
     14 │   r14 = ref @ok_count
     15 │   r15 = ref @sum
-    25 │   r16 = load r11
-    26 │   r17 = load r12
-    27 │   r18 = load r13
-    28 │   r19 = load r14
-    29 │   r20 = load r15
-    30 │   r21 = load r8
-    31 │   r22 = load r9
-    32 │   r23 = load r10
-    33 │   jump L0(0 (r24), r21, r20, r23, r19, r0, r1, r2, r3)
-    34 │ L0(r1: Int, r2: Int, r3: Int, r23: String, r24: Int, r0: {value: Int}, r19: Int, r20: Int, r21: Int):
-    35 │   r25 = spawn #0(r3, 0 (r24), r2)
-    36 │   store r4 = r2
-    37 │   store r5 = r3
-    38 │   store r6 = r23
-    39 │   store r7 = 0 (r24)
-    40 │   r26 = 0 (r24) + 1 (r27)
-    41 │   r28 = r2 + 1 (r29)
-    42 │   list_step r30, r31 = r22[r1] else L1()
-    43 │ L2:
-    44 │   r1 = r30.value
-    45 │   r32 = r1 >= r17
-    46 │   r33 = test r32 == true
-    47 │   r32 = r1 <= r16
-    48 │   r34 = test r32 == true
-    49 │   r19 = r1 * r18
-    50 │   r20 = r1 / 2 (r35)
-    51 │   r21 = r19 + r20
-    52 │   r19 = r3 + r21
-    53 │   r36 = call #1(r1)
-    54 │   r37 = T0 + r36
-    55 │   jump_if r33 then L7 else L8(0 (r38))
-    56 │ L7:
-    57 │   jump_if r34 then L9 else L10(0 (r38))
-    58 │ L9:
-    59 │   jump L10(1 (r39))
-    60 │ L10(r1: Int):
-    61 │   jump L8(r1)
-    62 │ L8(r1: Int):
-    63 │   r32 = r1 > 0 (r40)
-    64 │   r33 = test r32 == true
-    65 │   r32 = r1 == 0 (r41)
-    66 │   r34 = test r32 == true
-    67 │   jump_if r33 then L3 else L4(r3, 0 (r24), r21)
-    68 │ L3:
-    69 │   jump L4(r19, r26, r21)
-    70 │ L4(r1: Int, r3: Int, r24: Int):
-    71 │   jump_if r34 then L5 else L6(r2, r23)
-    72 │ L5:
-    73 │   jump L6(r28, r37)
-    74 │ L6(r2: Int, r23: String):
-    75 │   jump L0(r31, r2, r1, r23, r3, r30, r1, r1, 0 (r24))
-    76 │ L1:
-    77 │   r1 = eval r25
-    78 │   return r3
+    25 │   r16 = load r15
+    26 │   r17 = load r8
+    27 │   r18 = load r9
+    28 │   r19 = load r10
+    29 │   r20 = load r11
+    30 │   r21 = load r12
+    31 │   r22 = load r13
+    32 │   r23 = load r14
+    33 │   jump L0(0 (r24), r17, r16, r19, r23, r0, r1, r2, r3)
+    34 │ L0(r1: Int, r2: Int, r3: Int, r19: String, r24: Int, r0: {value: Int}, r16: Int, r17: Int, r23: Int):
+    35 │   store r4 = r2
+    36 │   store r5 = r3
+    37 │   store r6 = r19
+    38 │   store r7 = 0 (r24)
+    39 │   r25 = 0 (r24) + 1 (r26)
+    40 │   r27 = r2 + 1 (r28)
+    41 │   list_step r29, r30 = r18[r1] else L1()
+    42 │ L2:
+    43 │   r1 = r29.value
+    44 │   r31 = r1 >= r21
+    45 │   r32 = test r31 == true
+    46 │   r31 = r1 <= r20
+    47 │   r33 = test r31 == true
+    48 │   r16 = r1 * r22
+    49 │   r17 = r1 / 2 (r34)
+    50 │   r23 = r16 + r17
+    51 │   r16 = r3 + r23
+    52 │   r35 = call #0(r1)
+    53 │   r36 = T0 + r35
+    54 │   jump_if r32 then L7 else L8(0 (r37))
+    55 │ L7:
+    56 │   jump_if r33 then L9 else L10(0 (r37))
+    57 │ L9:
+    58 │   jump L10(1 (r38))
+    59 │ L10(r1: Int):
+    60 │   jump L8(r1)
+    61 │ L8(r1: Int):
+    62 │   r31 = r1 > 0 (r39)
+    63 │   r32 = test r31 == true
+    64 │   r31 = r1 == 0 (r40)
+    65 │   r33 = test r31 == true
+    66 │   jump_if r32 then L3 else L4(r3, 0 (r24), r23)
+    67 │ L3:
+    68 │   jump L4(r16, r25, r23)
+    69 │ L4(r1: Int, r3: Int, r24: Int):
+    70 │   jump_if r33 then L5 else L6(r2, r19)
+    71 │ L5:
+    72 │   jump L6(r27, r36)
+    73 │ L6(r2: Int, r19: String):
+    74 │   jump L0(r30, r2, r1, r19, r3, r29, r1, r1, 0 (r24))
+    75 │ L1:
+    76 │   r1 = call #1(r3, 0 (r24), r2)
+    77 │   return r3
 
     ; r0 (v1) : {value: Int}
-    ; r1 (value) : Int
+    ; r1 (publish_results(...)) : Int
     ; r2 (v3) : Int
     ; r3 (v4) : Int
     ; r4 (@err_count) : Ref<Int>
@@ -93,30 +92,29 @@ expression: opt
     ; r13 (@multiplier) : Ref<Int>
     ; r14 (@ok_count) : Ref<Int>
     ; r15 (@sum) : Ref<Int>
-    ; r16 (@max_val) : Int
-    ; r17 (@min_val) : Int
-    ; r18 (@multiplier) : Int
-    ; r19 (@ok_count) : Int
-    ; r20 (@sum) : Int
-    ; r21 (@err_count) : Int
-    ; r22 (@items) : List<{value: Int}>
-    ; r23 (@last_err) : String
+    ; r16 (@sum) : Int
+    ; r17 (@err_count) : Int
+    ; r18 (@items) : List<{value: Int}>
+    ; r19 (@last_err) : String
+    ; r20 (@max_val) : Int
+    ; r21 (@min_val) : Int
+    ; r22 (@multiplier) : Int
+    ; r23 (@ok_count) : Int
     ; r24 (v17) : Int
-    ; r25 (v34) : Handle!<Int>
-    ; r26 (v35) : Int
-    ; r27 (v22) : Int
-    ; r28 (v36) : Int
-    ; r29 (v24) : Int
-    ; r30 (v37) : {value: Int}
-    ; r31 (v38) : Int
+    ; r25 (v34) : Int
+    ; r26 (v22) : Int
+    ; r27 (v35) : Int
+    ; r28 (v24) : Int
+    ; r29 (v36) : {value: Int}
+    ; r30 (v37) : Int
+    ; r31 (v38) : Bool
     ; r32 (v39) : Bool
     ; r33 (v40) : Bool
-    ; r34 (v41) : Bool
-    ; r35 (v21) : Int
-    ; r36 (to_string(...)) : String
-    ; r37 (v43) : String
-    ; r38 (v18) : Int
-    ; r39 (v19) : Int
-    ; r40 (v20) : Int
-    ; r41 (v23) : Int
-    ; r42 (v25) : String
+    ; r34 (v21) : Int
+    ; r35 (to_string(...)) : String
+    ; r36 (v42) : String
+    ; r37 (v18) : Int
+    ; r38 (v19) : Int
+    ; r39 (v20) : Int
+    ; r40 (v23) : Int
+    ; r41 (v25) : String

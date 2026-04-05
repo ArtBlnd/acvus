@@ -134,6 +134,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-mir-host"
+version = "0.1.0"
+dependencies = [
+ "acvus-mir",
+ "acvus-mir-host-macro",
+ "acvus-utils",
+ "tokio",
+]
+
+[[package]]
+name = "acvus-mir-host-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "acvus-mir-test"
 version = "0.1.0"
 dependencies = [

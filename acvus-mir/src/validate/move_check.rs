@@ -754,7 +754,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
-            effect: Effect::io(), // effect of the fn doesn't matter, only captures
+            effect: Effect::self_modifying(), // effect of the fn doesn't matter, only captures
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }

@@ -136,7 +136,7 @@ fn main() {
             ret: Box::new(def.ret.to_ty(&interner)),
             captures: vec![],
             effect: if def.effectful {
-                Effect::io()
+                Effect::self_modifying()
             } else {
                 Effect::pure()
             },
@@ -176,6 +176,7 @@ fn main() {
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     });
 

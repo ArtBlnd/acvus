@@ -257,9 +257,10 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                 params: named,
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: Effect::io(),
+                effect: Effect::pure(),
             }),
             effect: None,
+            hint: Some(acvus_mir::ty::Hint::Io),
         };
 
         vec![

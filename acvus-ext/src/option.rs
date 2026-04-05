@@ -61,6 +61,7 @@ fn build_unwrap(interner: &Interner) -> acvus_interpreter::ExternFn {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     };
     ExternFnBuilder::new("unwrap", constraint).handler(h_unwrap)
 }
@@ -83,6 +84,7 @@ fn build_unwrap_or(interner: &Interner) -> acvus_interpreter::ExternFn {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     };
     ExternFnBuilder::new("unwrap_or", constraint).handler(h_unwrap_or)
 }

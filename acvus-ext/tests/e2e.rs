@@ -67,6 +67,7 @@ async fn run_ext_with_registry(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     });
 
@@ -379,6 +380,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     }
 }
 
@@ -499,6 +501,7 @@ async fn extern_cast_auto_coercion() {
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     });
 

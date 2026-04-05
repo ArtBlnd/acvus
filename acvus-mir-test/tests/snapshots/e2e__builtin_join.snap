@@ -18,7 +18,7 @@ expression: ir
     ; r0 (@names) : Ref<List<String>>
     ; r1 (@names) : List<String>
     ; r2 (@names) : Ref<List<String>>
-    ; r3 (v6) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r3 (v6) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r4 (join(...)) : String
     ; r5 (v9) : String
     ; r6 (v3) : String

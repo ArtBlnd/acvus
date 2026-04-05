@@ -68,8 +68,8 @@ fn run_pipeline_with_registry(
         .cloned()
         .ok_or_else(|| "no module produced for target".to_string())?;
 
-    // Use InferResult.fn_types (authoritative, frozen).
-    let fn_types = &inf.fn_types;
+    // Use InferResult.fn_metadata (authoritative, frozen).
+    let fn_metadata = &inf.fn_metadata;
 
     // Init check: field-level definite assignment on CfgBody (pre-SROA).
     {
@@ -79,7 +79,7 @@ fn run_pipeline_with_registry(
             .map(|c| c.qref)
             .collect();
         let cfg_main = cfg::promote(std::mem::take(&mut module.main));
-        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, fn_types, &external_contexts);
+        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, fn_metadata, &external_contexts);
         module.main = cfg::demote(cfg_main);
         if !init_errors.is_empty() {
             let msgs: Vec<String> = init_errors
@@ -101,15 +101,15 @@ fn run_pipeline_with_registry(
 
     // SSA: promote identity Refs to SSA form.
     let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
-    acvus_mir::optimize::ssa_pass::run(&mut cfg_main, fn_types);
+    acvus_mir::optimize::ssa_pass::run(&mut cfg_main, fn_metadata);
     module.main = cfg::demote(cfg_main);
     for closure in module.closures.values_mut() {
         let mut cfg_closure = cfg::promote(std::mem::take(closure));
-        acvus_mir::optimize::ssa_pass::run(&mut cfg_closure, fn_types);
+        acvus_mir::optimize::ssa_pass::run(&mut cfg_closure, fn_metadata);
         *closure = cfg::demote(cfg_closure);
     }
 
-    let validation_errors = acvus_mir::validate::validate(&module, fn_types, &FxHashMap::default());
+    let validation_errors = acvus_mir::validate::validate(&module, fn_metadata, &FxHashMap::default());
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()
@@ -160,6 +160,7 @@ pub fn compile_to_ir_with(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -233,6 +234,7 @@ pub fn compile_script_ir(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -274,6 +276,7 @@ pub fn compile_script_raw(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -345,6 +348,7 @@ pub fn compile_script_mode_raw(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -416,6 +420,7 @@ pub fn compile_script_optimized(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -457,7 +462,7 @@ pub fn compile_script_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_types,
+        &inf.fn_metadata,
         &inf.context_types,
         &FxHashSet::default(),
     );
@@ -522,6 +527,7 @@ pub fn compile_inline_ir_with(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
 
@@ -536,6 +542,7 @@ pub fn compile_inline_ir_with(
                 signature: sig.clone(),
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         });
     }
@@ -630,6 +637,7 @@ pub fn compile_multi_fn_raw(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
 
@@ -644,6 +652,7 @@ pub fn compile_multi_fn_raw(
                 signature: sig.clone(),
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         });
     }
@@ -739,6 +748,7 @@ pub fn compile_multi_fn_optimized(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     }];
 
@@ -753,6 +763,7 @@ pub fn compile_multi_fn_optimized(
                 signature: sig.clone(),
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         });
     }
@@ -798,7 +809,7 @@ pub fn compile_multi_fn_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_types,
+        &inf.fn_metadata,
         &inf.context_types,
         &FxHashSet::default(),
     );

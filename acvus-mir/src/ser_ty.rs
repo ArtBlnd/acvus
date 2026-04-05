@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectSet, EffectTarget, Identity, IdentityId, TokenId, Ty};
+use crate::ty::{Effect, EffectSet, EffectTarget, Identity, IdentityId, Ty};
 
 // ── Serializable Effect (mirrors ty::Effect without Astr) ────────────
 
@@ -33,7 +33,6 @@ pub enum SerEffect {
 pub struct SerEffectSet {
     pub reads: Vec<SerEffectTarget>,
     pub writes: Vec<SerEffectTarget>,
-    pub io: bool,
     pub self_modifying: bool,
 }
 
@@ -41,7 +40,7 @@ pub struct SerEffectSet {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SerEffectTarget {
     Context(SerQualifiedRef),
-    Token { id: usize },
+    Token(SerQualifiedRef),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -53,20 +52,14 @@ pub struct SerQualifiedRef {
 fn target_to_ser(t: &EffectTarget, interner: &Interner) -> SerEffectTarget {
     match t {
         EffectTarget::Context(qref) => SerEffectTarget::Context(qref_to_ser(qref, interner)),
-        EffectTarget::Token(tid) => SerEffectTarget::Token { id: tid.index() },
+        EffectTarget::Token(qref) => SerEffectTarget::Token(qref_to_ser(qref, interner)),
     }
 }
 
 fn ser_to_target(t: &SerEffectTarget, interner: &Interner) -> EffectTarget {
     match t {
         SerEffectTarget::Context(qref) => EffectTarget::Context(ser_to_qref(qref, interner)),
-        SerEffectTarget::Token { id } => {
-            // TokenId deserialization: we need to re-create with the same index.
-            // Since TokenId is opaque with alloc(), we use a deterministic mapping.
-            // For now, allocate fresh — the caller must ensure round-trip consistency.
-            let _ = id;
-            EffectTarget::Token(TokenId::alloc())
-        }
+        SerEffectTarget::Token(qref) => EffectTarget::Token(ser_to_qref(qref, interner)),
     }
 }
 
@@ -84,7 +77,6 @@ impl Effect {
                     .iter()
                     .map(|r| target_to_ser(r, interner))
                     .collect(),
-                io: set.io,
                 self_modifying: set.self_modifying,
             }),
             Effect::Var(v) => SerEffect::Var(*v),
@@ -106,7 +98,6 @@ impl SerEffect {
                     .iter()
                     .map(|r| ser_to_target(r, interner))
                     .collect(),
-                io: set.io,
                 self_modifying: set.self_modifying,
             }),
             SerEffect::Var(v) => Effect::Var(*v),

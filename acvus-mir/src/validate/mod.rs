@@ -6,19 +6,18 @@ pub use move_check::is_move_only;
 pub use type_check::{ValidationError, ValidationErrorKind};
 
 use crate::error::{MirError, MirErrorKind};
-use crate::graph::{ContextPolicy, QualifiedRef};
+use crate::graph::{ContextPolicy, FnMetadata, QualifiedRef};
 use crate::ir::MirModule;
-use crate::ty::Ty;
 use rustc_hash::FxHashMap;
 
 /// Run all validation passes on a MIR module.
 /// Returns errors found. Empty vec means valid.
 pub fn validate(
     module: &MirModule,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> Vec<ValidationError> {
-    let mut errors = type_check::check_types(module, fn_types, policies);
+    let mut errors = type_check::check_types(module, fn_metadata, policies);
     errors.extend(move_check::check_moves(module));
     errors
 }

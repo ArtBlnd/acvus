@@ -14,7 +14,7 @@
 //! # Dependency constraints (soundness)
 //!
 //! - SSA use-def: B uses value from A → A before B.
-//! - Token ordering: instructions sharing a TokenId preserve original order.
+//! - Token ordering: instructions sharing a token preserve original order.
 //! - ContextStore ordering: stores to the same context preserve original order.
 //!
 //! These constraints are edges in a dependency graph. The scheduler picks from
@@ -25,16 +25,16 @@ use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
 use crate::cfg::CfgBody;
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::*;
-use crate::ty::{Effect, EffectTarget, TokenId, Ty};
+use crate::ty::{Effect, EffectTarget, Ty};
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 ///
-/// `fn_types`: QualifiedRef → Ty for looking up callee effects (Token extraction).
-pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
+/// `fn_metadata`: QualifiedRef → FnMetadata for looking up callee effects (Token extraction).
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
     for block in &mut cfg.blocks {
-        reorder_block(&mut block.insts, &cfg.val_types, fn_types);
+        reorder_block(&mut block.insts, &cfg.val_types, fn_metadata);
     }
 }
 
@@ -57,12 +57,12 @@ enum Priority {
     Scheduled(usize, u8),
 }
 
-/// Extract TokenIds from a FunctionCall/Spawn/Eval's effect.
+/// Extract token QualifiedRefs from a FunctionCall/Spawn/Eval's effect.
 fn token_deps(
     kind: &InstKind,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
-) -> SmallVec<[TokenId; 2]> {
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+) -> SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
         InstKind::FunctionCall {
             callee: Callee::Direct(qref),
@@ -71,7 +71,7 @@ fn token_deps(
         | InstKind::Spawn {
             callee: Callee::Direct(qref),
             ..
-        } => fn_types.get(qref).and_then(|ty| match ty {
+        } => fn_metadata.get(qref).and_then(|m| match &m.ty {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -103,14 +103,14 @@ fn token_deps(
 fn reorder_block(
     insts: &mut Vec<Inst>,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
 ) {
     let n = insts.len();
     if n <= 1 {
         return;
     }
 
-    let deps = build_dependency_graph(insts, val_types, fn_types);
+    let deps = build_dependency_graph(insts, val_types, fn_metadata);
     let priorities = compute_priorities(insts);
 
     *insts = priority_topo_sort(insts, &deps, &priorities);
@@ -122,7 +122,7 @@ fn reorder_block(
 fn build_dependency_graph(
     insts: &[Inst],
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
 ) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
@@ -146,10 +146,10 @@ fn build_dependency_graph(
         }
     }
 
-    // Token ordering: instructions sharing a TokenId preserve original order.
-    let mut last_token_user: FxHashMap<TokenId, usize> = FxHashMap::default();
+    // Token ordering: instructions sharing a token preserve original order.
+    let mut last_token_user: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
-        for tid in token_deps(&inst.kind, val_types, fn_types) {
+        for tid in token_deps(&inst.kind, val_types, fn_metadata) {
             if let Some(&prev) = last_token_user.get(&tid) {
                 deps[i].push(prev);
             }
@@ -290,18 +290,20 @@ mod tests {
         })
     }
 
-    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
+    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, FnMetadata) {
         let qref = QualifiedRef::root(i.intern(name));
-        let ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::String),
-            captures: vec![],
-            effect: Effect::Resolved(EffectSet {
-                io: true,
-                ..Default::default()
-            }),
-        };
-        (qref, ty)
+        (
+            qref,
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::String),
+                    captures: vec![],
+                    effect: Effect::self_modifying(),
+                },
+                hint: Some(crate::ty::Hint::Io),
+            },
+        )
     }
 
     /// Collect all instructions from all blocks (flattened).
@@ -325,9 +327,9 @@ mod tests {
         let (fa, fa_ty) = io_fn_type(&i, "fetch_a");
         let (fb, fb_ty) = io_fn_type(&i, "fetch_b");
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(fa, fa_ty);
-        fn_types.insert(fb, fb_ty);
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(fa, fa_ty);
+        fn_metadata.insert(fb, fb_ty);
 
         // h0 = spawn fetch_a(); r0 = eval h0;
         // h1 = spawn fetch_b(); r1 = eval h1;
@@ -371,24 +373,18 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::Resolved(EffectSet {
-                    io: true,
-                    ..Default::default()
-                }),
+                Effect::self_modifying(),
             ),
         );
         cfg.val_types.insert(
             v(2),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::Resolved(EffectSet {
-                    io: true,
-                    ..Default::default()
-                }),
+                Effect::self_modifying(),
             ),
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         // Both spawns should come before both evals.
         let spawn_a = find_idx(
@@ -430,8 +426,8 @@ mod tests {
     fn eval_after_its_spawn() {
         let i = Interner::new();
         let (fa, fa_ty) = io_fn_type(&i, "fetch");
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(fa, fa_ty);
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(fa, fa_ty);
 
         let mut cfg = make_cfg(
             vec![
@@ -454,14 +450,11 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::Resolved(EffectSet {
-                    io: true,
-                    ..Default::default()
-                }),
+                Effect::self_modifying(),
             ),
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
@@ -476,8 +469,8 @@ mod tests {
         // const instructions should land between spawn and eval.
         let i = Interner::new();
         let (fa, fa_ty) = io_fn_type(&i, "fetch");
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(fa, fa_ty);
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(fa, fa_ty);
 
         let mut cfg = make_cfg(
             vec![
@@ -514,14 +507,11 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::Resolved(EffectSet {
-                    io: true,
-                    ..Default::default()
-                }),
+                Effect::self_modifying(),
             ),
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
@@ -538,22 +528,24 @@ mod tests {
         let i = Interner::new();
         let fa = QualifiedRef::root(i.intern("write_a"));
         let fb = QualifiedRef::root(i.intern("write_b"));
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(i.intern("db"));
 
-        let mut fn_types = FxHashMap::default();
+        let mut fn_metadata = FxHashMap::default();
         let token_effect = Effect::Resolved(EffectSet {
             writes: std::collections::BTreeSet::from([EffectTarget::Token(token)]),
-            io: true,
             ..Default::default()
         });
         for &qref in &[fa, fb] {
-            fn_types.insert(
+            fn_metadata.insert(
                 qref,
-                Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Unit),
-                    captures: vec![],
-                    effect: token_effect.clone(),
+                FnMetadata {
+                    ty: Ty::Fn {
+                        params: vec![],
+                        ret: Box::new(Ty::Unit),
+                        captures: vec![],
+                        effect: token_effect.clone(),
+                    },
+                    hint: None,
                 },
             );
         }
@@ -591,7 +583,7 @@ mod tests {
         cfg.val_types
             .insert(v(2), Ty::Handle(Box::new(Ty::Unit), token_effect.clone()));
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         // With shared token: spawn_a must come before spawn_b (original order preserved).
         let spawn_a = find_idx(

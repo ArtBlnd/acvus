@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@items) : Ref<List<Int>>
     ; r2 (@items) : List<Int>
     ; r3 (@items) : Ref<List<Int>>
-    ; r4 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r5 (v7) : Fn(Int) -> Int
-    ; r6 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r6 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r7 (collect(...)) : List<Int>
     ; r8 (v13) : String
     ; r9 (len(...)) : Int

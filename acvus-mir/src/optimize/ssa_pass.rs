@@ -35,16 +35,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::ssa::{ENTRY_BLOCK, SSABuilder, SsaVar};
 use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::{Callee, Inst, InstKind, Label, ValueId};
 use crate::ty::{Effect, Ty};
 
 /// Run the SSA context pass on a CfgBody.
 ///
-/// `fn_types` maps FunctionId → Ty for resolving callee effects
+/// `fn_metadata` maps FunctionId → FnMetadata for resolving callee effects
 /// (which contexts a function reads/writes). Used to populate
 /// `context_uses`/`context_defs` on FunctionCall/Spawn instructions.
-pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
     if cfg.blocks.is_empty() {
         return;
     }
@@ -88,7 +88,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
     };
 
     // Step 2: Context value forwarding.
-    let fwd_subst = forward_context_values(cfg, fn_types, &ssa_info.written_contexts);
+    let fwd_subst = forward_context_values(cfg, fn_metadata, &ssa_info.written_contexts);
 
     // Step 3: Apply substitutions + remove promoted instructions.
     if !var_subst.is_empty() {
@@ -114,7 +114,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
 ///   2. **Apply** — mutate `cfg.blocks` with the collected results.
 fn forward_context_values(
     cfg: &mut CfgBody,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> FxHashMap<ValueId, ValueId> {
     let num_blocks = cfg.blocks.len();
@@ -163,7 +163,7 @@ fn forward_context_values(
     struct CollectState<'a> {
         blocks: &'a [crate::cfg::Block],
         val_types: &'a mut FxHashMap<ValueId, Ty>,
-        fn_types: &'a FxHashMap<QualifiedRef, Ty>,
+        fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
         preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
         written_contexts: &'a BTreeSet<QualifiedRef>,
         dom_children: &'a [SmallVec<[usize; 4]>],
@@ -288,7 +288,7 @@ fn forward_context_values(
                     context_defs,
                     ..
                 } if context_uses.is_empty() && context_defs.is_empty() => {
-                    if let Some((reads, writes)) = extract_effect_refs(st.fn_types, fn_id) {
+                    if let Some((reads, writes)) = extract_effect_refs(st.fn_metadata, fn_id) {
                         let mut uses = Vec::new();
                         for qref in &reads {
                             if let Some(&val) = ctx_state.get(qref) {
@@ -345,7 +345,7 @@ fn forward_context_values(
     let mut state = CollectState {
         blocks: &cfg.blocks,
         val_types: &mut cfg.val_types,
-        fn_types,
+        fn_metadata,
         preds: &preds,
         written_contexts,
         dom_children: &dom_children,
@@ -405,16 +405,16 @@ fn forward_context_values(
 /// Only `EffectTarget::Context` refs are returned — `Token` targets are NOT
 /// SSA-compatible and must never be converted to context_uses/context_defs.
 pub(crate) fn extract_effect_refs(
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     fn_id: &QualifiedRef,
 ) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
     use crate::ty::EffectTarget;
 
-    let ty = fn_types.get(fn_id)?;
+    let m = fn_metadata.get(fn_id)?;
     let Ty::Fn {
         effect: Effect::Resolved(eff),
         ..
-    } = ty
+    } = &m.ty
     else {
         return None;
     };
@@ -1302,8 +1302,8 @@ mod tests {
     use acvus_utils::Interner;
     use std::collections::BTreeSet;
 
-    /// Empty fn_types — no ExternFn effect info.
-    fn no_fn_types() -> FxHashMap<QualifiedRef, Ty> {
+    /// Empty fn_metadata — no ExternFn effect info.
+    fn no_fn_metadata() -> FxHashMap<QualifiedRef, FnMetadata> {
         FxHashMap::default()
     }
 
@@ -1336,7 +1336,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_types());
+        run(&mut cfg_body, &no_fn_metadata());
         assert!(
             count_phi_blocks(&cfg_body) >= 1,
             "merge should have PHI for @x"
@@ -1357,7 +1357,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_types());
+        run(&mut cfg_body, &no_fn_metadata());
         assert!(count_phi_blocks(&cfg_body) >= 1);
     }
 
@@ -1371,7 +1371,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_types());
+        run(&mut cfg_body, &no_fn_metadata());
         assert!(
             count_phi_blocks(&cfg_body) >= 1,
             "loop header should have PHI for @sum"
@@ -1391,7 +1391,7 @@ mod tests {
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let stores_before = count_context_stores(&cfg_body);
-        run(&mut cfg_body, &no_fn_types());
+        run(&mut cfg_body, &no_fn_metadata());
         assert_eq!(count_context_stores(&cfg_body), stores_before);
     }
 
@@ -1401,7 +1401,7 @@ mod tests {
         let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let stores_before = count_context_stores(&cfg_body);
-        run(&mut cfg_body, &no_fn_types());
+        run(&mut cfg_body, &no_fn_metadata());
         assert_eq!(count_context_stores(&cfg_body), stores_before);
     }
 
@@ -1492,20 +1492,22 @@ mod tests {
         let qref = QualifiedRef::root(ctx_name);
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-        // Build fn_types: callee reads + writes @ctx.
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        // Build fn_metadata: callee reads + writes @ctx.
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
+                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
@@ -1555,7 +1557,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         // Find the FunctionCall and verify context_uses/context_defs are populated.
         let call_inst = cfg_body
@@ -1595,14 +1597,17 @@ mod tests {
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
         // Pure function — no reads, no writes.
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::pure(),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+                hint: None,
             },
         );
 
@@ -1627,7 +1632,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         let call_inst = cfg_body
             .blocks
@@ -1660,19 +1665,21 @@ mod tests {
         let qref = QualifiedRef::root(ctx_name);
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Unit),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::new(),
-                    writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Unit),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::new(),
+                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
@@ -1741,7 +1748,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         // The second Load (v4) should be eliminated — replaced by the def from the call.
         let remaining_loads: Vec<_> = cfg_body
@@ -1779,33 +1786,33 @@ mod tests {
 
     // ── Token/Context soundness tests ──────────────────────────────
 
-    use crate::ty::TokenId;
-
     /// Token read must NOT appear in context_uses after SSA pass.
     #[test]
     fn token_read_not_in_context_uses() {
         let interner = Interner::new();
         let ctx_name = interner.intern("ctx");
         let qref = QualifiedRef::root(ctx_name);
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(interner.intern("net"));
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([
-                        EffectTarget::Context(qref),
-                        EffectTarget::Token(token),
-                    ]),
-                    writes: BTreeSet::new(),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::from([
+                            EffectTarget::Context(qref),
+                            EffectTarget::Token(token),
+                        ]),
+                        writes: BTreeSet::new(),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
@@ -1850,7 +1857,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         // context_uses should have exactly 1 entry (the Context), NOT 2.
         for block in &cfg_body.blocks {
@@ -1879,25 +1886,27 @@ mod tests {
         let interner = Interner::new();
         let ctx_name = interner.intern("ctx");
         let qref = QualifiedRef::root(ctx_name);
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(interner.intern("fs"));
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Unit),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::new(),
-                    writes: BTreeSet::from([
-                        EffectTarget::Context(qref),
-                        EffectTarget::Token(token),
-                    ]),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Unit),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::new(),
+                        writes: BTreeSet::from([
+                            EffectTarget::Context(qref),
+                            EffectTarget::Token(token),
+                        ]),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
@@ -1942,7 +1951,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         for block in &cfg_body.blocks {
             for inst in &block.insts {
@@ -1970,28 +1979,30 @@ mod tests {
         let interner = Interner::new();
         let ctx_name = interner.intern("ctx");
         let qref = QualifiedRef::root(ctx_name);
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(interner.intern("db"));
         let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             callee_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([
-                        EffectTarget::Context(qref),
-                        EffectTarget::Token(token),
-                    ]),
-                    writes: BTreeSet::from([
-                        EffectTarget::Context(qref),
-                        EffectTarget::Token(token),
-                    ]),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::from([
+                            EffectTarget::Context(qref),
+                            EffectTarget::Token(token),
+                        ]),
+                        writes: BTreeSet::from([
+                            EffectTarget::Context(qref),
+                            EffectTarget::Token(token),
+                        ]),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
@@ -2036,7 +2047,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_types);
+        run(&mut cfg_body, &fn_metadata);
 
         for block in &cfg_body.blocks {
             for inst in &block.insts {
@@ -2072,7 +2083,7 @@ mod tests {
     fn effect_set_union_preserves_context_and_token() {
         let interner = Interner::new();
         let qref = QualifiedRef::root(interner.intern("ctx"));
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(interner.intern("net"));
 
         let a = EffectSet {
             reads: BTreeSet::from([EffectTarget::Context(qref)]),
@@ -2097,29 +2108,31 @@ mod tests {
     fn extract_effect_refs_filters_tokens() {
         let interner = Interner::new();
         let qref = QualifiedRef::root(interner.intern("ctx"));
-        let token = TokenId::alloc();
+        let token = QualifiedRef::root(interner.intern("fs"));
         let fid = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             fid,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads: BTreeSet::from([
-                        EffectTarget::Context(qref),
-                        EffectTarget::Token(token),
-                    ]),
-                    writes: BTreeSet::from([EffectTarget::Token(token)]),
-                    io: false,
-                    self_modifying: false,
-                }),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads: BTreeSet::from([
+                            EffectTarget::Context(qref),
+                            EffectTarget::Token(token),
+                        ]),
+                        writes: BTreeSet::from([EffectTarget::Token(token)]),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
             },
         );
 
-        let result = extract_effect_refs(&fn_types, &fid);
+        let result = extract_effect_refs(&fn_metadata, &fid);
         let (reads, writes) = result.unwrap();
         assert_eq!(reads.len(), 1, "only Context should be in reads");
         assert_eq!(reads[0], qref);
@@ -2140,7 +2153,7 @@ mod tests {
     /// Build a minimal CfgBody with: Ref → Store → Load → Return.
     /// When volatile=false, SSA should forward the store value and eliminate the load.
     /// When volatile=true, SSA must preserve the load.
-    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, Ty>) {
+    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, FnMetadata>) {
         use acvus_utils::LocalFactory;
         let interner = Interner::new();
         let ctx_qref = QualifiedRef::root(interner.intern("history"));
@@ -2210,14 +2223,14 @@ mod tests {
             val_factory: f,
             label_count: 0,
         };
-        (cfg::promote(body), no_fn_types())
+        (cfg::promote(body), no_fn_metadata())
     }
 
     #[test]
     fn non_volatile_context_is_forwarded() {
-        let (mut cfg, fn_types) = make_store_then_load(false);
+        let (mut cfg, fn_metadata) = make_store_then_load(false);
         let loads_before = count_context_loads(&cfg);
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
         let loads_after = count_context_loads(&cfg);
         // Non-volatile: SSA should forward the store → load is eliminated.
         assert!(
@@ -2230,9 +2243,9 @@ mod tests {
 
     #[test]
     fn volatile_context_not_forwarded() {
-        let (mut cfg, fn_types) = make_store_then_load(true);
+        let (mut cfg, fn_metadata) = make_store_then_load(true);
         let loads_before = count_context_loads(&cfg);
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
         let loads_after = count_context_loads(&cfg);
         // Volatile: SSA must NOT forward — load is preserved.
         assert_eq!(

@@ -310,6 +310,7 @@ mod tests {
                 effect: Effect::pure(),
             }),
             effect: None,
+            hint: None,
         }
     }
 

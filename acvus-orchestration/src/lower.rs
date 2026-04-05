@@ -282,6 +282,7 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
                 signature: Some(Signature { params: vec![] }),
                 output,
                 effect: Some(EffectConstraint::read_only()),
+                hint: None,
             },
         },
         field_errors,
@@ -373,6 +374,7 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
             signature: Some(Signature { params: vec![] }),
             output: Constraint::Inferred,
             effect: None, // LLM calls involve IO — no constraint
+            hint: None,
         },
     };
 
@@ -470,6 +472,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     signature: Some(Signature { params: vec![] }),
                     output: Constraint::Exact(Ty::String),
                     effect: Some(EffectConstraint::read_only()),
+                    hint: None,
                 },
             };
             DisplayLowerResult {
@@ -517,6 +520,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     signature: None, // param discovered by Infer via $bind
                     output: Constraint::Exact(Ty::String),
                     effect: Some(EffectConstraint::read_only()),
+                    hint: None,
                 },
             };
             functions.push(tpl_func);
@@ -552,6 +556,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 signature: Some(Signature { params: vec![] }),
                                 output: Constraint::Inferred,
                                 effect: Some(EffectConstraint::read_only()),
+                                hint: None,
                             },
                         });
                     }
@@ -594,6 +599,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 signature: Some(Signature { params: vec![] }),
                                 output: Constraint::Inferred,
                                 effect: Some(EffectConstraint::read_only()),
+                                hint: None,
                             },
                         });
                     }
@@ -643,7 +649,7 @@ mod tests {
             func.constraint.output,
             Constraint::Exact(Ty::String)
         ));
-        assert!(!func.constraint.effect.as_ref().unwrap().io);
+        assert!(func.constraint.effect.is_some(), "should have effect constraint");
     }
 
     #[test]
@@ -893,6 +899,7 @@ mod tests {
                 signature: None,
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         };
         let ns = Namespace {

@@ -22,8 +22,8 @@ expression: ir
     ; r5 (v6) : List<Int>
     ; r6 (v10) : Ref<List<Int>>
     ; r7 ($xs) : List<Int>
-    ; r8 (v12) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r8 (v12) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r9 (v13) : Fn(Int) -> Bool
-    ; r10 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r10 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
     ; r11 (collect(...)) : List<Int>
-    ; r12 (positives(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, io: false, self_modifying: false })>
+    ; r12 (positives(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>

@@ -11,7 +11,7 @@
 //! - `Cast` is the *only* instruction allowed to change a value's type.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::graph::{ContextPolicy, QualifiedRef};
+use crate::graph::{ContextPolicy, FnMetadata, QualifiedRef};
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::ty::{Effect, EffectSet, EffectTarget, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
@@ -70,17 +70,17 @@ pub enum ValidationErrorKind {
 /// Check type consistency of the entire module.  Returns all errors found.
 pub fn check_types(
     module: &MirModule,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     _policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    let mut ctx = CheckCtx::new("main".to_string(), fn_types);
+    let mut ctx = CheckCtx::new("main".to_string(), fn_metadata);
     ctx.check_body(&module.main, &mut errors);
 
     for (label, closure) in &module.closures {
         let name = format!("closure({:?})", label);
-        let mut ctx = CheckCtx::new(name, fn_types);
+        let mut ctx = CheckCtx::new(name, fn_metadata);
         ctx.check_body(closure, &mut errors);
     }
 
@@ -233,23 +233,23 @@ struct CheckCtx<'a> {
     scope_name: String,
     /// label → index in `insts` (for Jump target block param lookup)
     label_map: FxHashMap<Label, usize>,
-    /// QualifiedRef → Ty mapping for callee effect verification.
-    fn_types: &'a FxHashMap<QualifiedRef, Ty>,
+    /// QualifiedRef → FnMetadata mapping for callee effect verification.
+    fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
 }
 
 impl<'a> CheckCtx<'a> {
-    fn new(scope_name: String, fn_types: &'a FxHashMap<QualifiedRef, Ty>) -> Self {
+    fn new(scope_name: String, fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>) -> Self {
         Self {
             scope_name,
             label_map: FxHashMap::default(),
-            fn_types,
+            fn_metadata,
         }
     }
 
     /// Extract effect from a Direct callee's type. Returns None if pure or unknown.
     fn callee_effect(&self, fn_id: &QualifiedRef) -> Option<&'a EffectSet> {
-        let ty = self.fn_types.get(fn_id)?;
-        match ty {
+        let m = self.fn_metadata.get(fn_id)?;
+        match &m.ty {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..

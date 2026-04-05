@@ -26,6 +26,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     }
 }
 

@@ -159,6 +159,7 @@ impl LspSession {
                 signature: None,
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         };
 

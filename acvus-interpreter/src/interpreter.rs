@@ -5,6 +5,7 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId,
 };
+use acvus_mir::graph::FnMetadata;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec, TrackedDeque};
 use futures::future::BoxFuture;
@@ -342,7 +343,7 @@ impl Executable {
 pub struct InterpreterContext {
     pub interner: Interner,
     pub functions: Freeze<FxHashMap<QualifiedRef, Executable>>,
-    pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
+    pub fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
     pub context_names: Freeze<FxHashMap<QualifiedRef, Astr>>,
     pub executor: Arc<dyn crate::executor::Executor>,
 }
@@ -356,14 +357,14 @@ impl InterpreterContext {
         Self {
             interner: interner.clone(),
             functions: Freeze::new(functions),
-            fn_types: Freeze::new(FxHashMap::default()),
+            fn_metadata: Freeze::new(FxHashMap::default()),
             context_names: Freeze::new(FxHashMap::default()),
             executor,
         }
     }
 
-    pub fn with_fn_types(mut self, fn_types: FxHashMap<QualifiedRef, Ty>) -> Self {
-        self.fn_types = Freeze::new(fn_types);
+    pub fn with_fn_metadata(mut self, fn_metadata: FxHashMap<QualifiedRef, FnMetadata>) -> Self {
+        self.fn_metadata = Freeze::new(fn_metadata);
         self
     }
 

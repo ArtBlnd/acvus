@@ -871,7 +871,7 @@ mod tests {
     #[should_panic(expected = "move-only")]
     fn share_effectful_iterator_panics() {
         use acvus_mir::ty::Effect;
-        let v = Value::iterator(IterHandle::done(Effect::io()));
+        let v = Value::iterator(IterHandle::done(Effect::self_modifying()));
         let _ = v.share();
     }
 

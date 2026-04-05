@@ -9,7 +9,7 @@
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{Effect, EffectSet, Param, Ty, TySubst, TypeRegistry};
+use crate::ty::{Effect, EffectSet, Hint, Param, Ty, TySubst, TypeRegistry};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
@@ -84,9 +84,9 @@ pub struct InferResult {
     pub outcomes: FxHashMap<QualifiedRef, FnInferOutcome>,
     /// Resolved context types (known + inferred). Frozen after inference.
     pub context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Resolved function types: QualifiedRef → Ty::Fn. Frozen after inference.
-    /// Single source of truth for all function types post-inference.
-    pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
+    /// Resolved function metadata: QualifiedRef → FnMetadata { ty, hint }.
+    /// Single source of truth for all function type info post-inference.
+    pub fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
 }
 
 impl InferResult {
@@ -1008,10 +1008,24 @@ pub fn infer(
         fn_types.insert(qref, outcome.meta().ty.clone());
     }
 
+    // Build FnMetadata map: ty + hint from FnConstraint.
+    let fn_hints: FxHashMap<QualifiedRef, Option<Hint>> = graph
+        .functions
+        .iter()
+        .map(|f| (f.qref, f.constraint.hint))
+        .collect();
+    let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = fn_types
+        .into_iter()
+        .map(|(qref, ty)| {
+            let hint = fn_hints.get(&qref).copied().flatten();
+            (qref, FnMetadata { ty, hint })
+        })
+        .collect();
+
     InferResult {
         outcomes,
         context_types: Freeze::new(context_types),
-        fn_types: Freeze::new(fn_types),
+        fn_metadata: Freeze::new(fn_metadata),
     }
 }
 
@@ -1034,6 +1048,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(vec![]),
@@ -1063,6 +1078,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -1156,6 +1172,7 @@ mod tests {
                     signature: sig,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             });
             ids.push((aname, fid));
@@ -1627,6 +1644,7 @@ mod tests {
                 signature: None,
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         });
         CompilationGraph {
@@ -1687,6 +1705,7 @@ mod tests {
                     }),
                     output: output.clone(),
                     effect: None,
+                    hint: None,
                 },
             });
         }
@@ -1745,6 +1764,7 @@ mod tests {
                     }),
                     output: output.clone(),
                     effect: None,
+                    hint: None,
                 },
             });
         }
@@ -1811,6 +1831,7 @@ mod tests {
                     effect: Effect::pure(),
                 }),
                 effect: None,
+                hint: None,
             },
         }
     }
@@ -1843,6 +1864,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: Some(effect),
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -3291,7 +3313,6 @@ mod tests {
                 qref,
             )])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
-            io: false,
             self_modifying: false,
         };
         let (result, fid) = infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], allowed);
@@ -3310,7 +3331,6 @@ mod tests {
                 qref,
             )])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
-            io: false,
             self_modifying: false,
         };
         let (result, _fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
@@ -3337,7 +3357,6 @@ mod tests {
             writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
-            io: false,
             self_modifying: false,
         };
         let (result, fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
@@ -3358,7 +3377,6 @@ mod tests {
             writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref_x,
             )])),
-            io: false,
             self_modifying: false,
         };
         let (result, _fid) = infer_with_effect(
@@ -3521,6 +3539,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -3850,6 +3869,7 @@ mod tests {
                 signature: Some(Signature { params: vec![] }),
                 output: Constraint::Inferred,
                 effect: None,
+                hint: None,
             },
         });
         let caller_id = QualifiedRef::root(i.intern("caller"));
@@ -3862,6 +3882,7 @@ mod tests {
                 signature: None,
                 output: Constraint::Inferred,
                 effect: Some(crate::ty::EffectConstraint::pure()), // pure constraint
+                hint: None,
             },
         });
         let graph = CompilationGraph {
@@ -3919,6 +3940,7 @@ mod tests {
                     signature: None,
                     output: Constraint::Inferred,
                     effect: None,
+                    hint: None,
                 },
             }]),
             contexts: Freeze::new(contexts),

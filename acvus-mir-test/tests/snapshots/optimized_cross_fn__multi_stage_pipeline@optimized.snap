@@ -3,40 +3,37 @@ source: acvus-mir-test/tests/optimized_cross_fn.rs
 expression: opt
 ---
 === main ===
-     0 │   r0 = ref @stage3
-     1 │   r1 = ref @precision
+     0 │   r0 = ref @stage2
+     1 │   r1 = ref @stage3
      2 │   r2 = ref @stage1
      3 │   r3 = ref @source_id
      4 │   r4 = load r3
-     5 │   r5 = spawn #0(10 (r4))
+     5 │   r5 = call #0(10 (r4))
      6 │   r4 = load r2
-     7 │   r6 = eval r5
-     8 │   r7 = r6 * 10 (r4)
-    10 │   r6 = r7 / 10 (r4)
-    11 │   r2 = ref @stage1
-    12 │   store r2 = r6
-    13 │   r4 = load r0
-    14 │   r7 = r6 + 10 (r4)
-    16 │   r8 = r6 / 10 (r4)
-    17 │   r4 = r7 + r8
-    18 │   r0 = ref @stage3
-    19 │   store r0 = 10 (r4)
-    20 │   r7 = load r1
-    21 │   r8 = 10 (r4) / r7
-    22 │   r9 = r8 * r7
-    23 │   r5 = spawn #1(r6, 10 (r4), r9)
-    24 │   r0 = ref @stage3
-    25 │   store r0 = r9
-    26 │   r4 = eval r5
-    27 │   return r9
+     7 │   r6 = r5 * 10 (r4)
+     9 │   r5 = r6 / 10 (r4)
+    10 │   r2 = ref @stage1
+    11 │   r4 = load r0
+    12 │   r6 = r5 + 10 (r4)
+    14 │   r7 = r5 / 10 (r4)
+    15 │   r4 = r6 + r7
+    16 │   r0 = ref @stage2
+    17 │   r6 = load r1
+    18 │   r7 = 10 (r4) / r6
+    19 │   r8 = r7 * r6
+    20 │   r1 = ref @stage3
+    21 │   r6 = call #1(r5, 10 (r4), r8)
+    22 │   store r2 = r5
+    23 │   store r0 = 10 (r4)
+    24 │   store r1 = r8
+    25 │   return r8
 
-    ; r0 (@stage3) : Ref<Int>
-    ; r1 (@precision) : Ref<Int>
+    ; r0 (@stage2) : Ref<Int>
+    ; r1 (@stage3) : Ref<Int>
     ; r2 (@stage1) : Ref<Int>
     ; r3 (@source_id) : Ref<Int>
     ; r4 (@offset) : Int
-    ; r5 (v6) : Handle!<Int>
-    ; r6 (v7) : Int
-    ; r7 (@precision) : Int
+    ; r5 (fetch_data(...)) : Int
+    ; r6 (log_pipeline(...)) : Int
+    ; r7 (v8) : Int
     ; r8 (v9) : Int
-    ; r9 (v10) : Int

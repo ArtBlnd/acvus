@@ -15,7 +15,7 @@ members = [
     "pomollu-engine",
     "acvus-macro",
     "kovac-interpreter"
-]
+, "acvus-mir-host", "acvus-mir-host-macro"]
 
 [workspace.dependencies]
 rustc-hash = "2"

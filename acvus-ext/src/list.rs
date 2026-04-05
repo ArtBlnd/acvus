@@ -46,6 +46,7 @@ fn build_len(interner: &Interner) -> acvus_interpreter::ExternFn {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     };
     ExternFnBuilder::new("len", constraint).handler(h_len)
 }
@@ -68,6 +69,7 @@ fn build_reverse(interner: &Interner) -> acvus_interpreter::ExternFn {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     };
     ExternFnBuilder::new("reverse", constraint).handler(h_reverse)
 }

@@ -15,9 +15,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::{Callee, InstKind, RefTarget, ValueId};
-use crate::ty::Ty;
 
 // ── ref_to_ctx: ValueId → QualifiedRef mapping ─────────────────────
 
@@ -60,7 +59,7 @@ struct BlockContextInfo {
 fn analyze_block(
     block: &crate::cfg::Block,
     ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> BlockContextInfo {
     let mut reads = BTreeSet::new();
@@ -123,7 +122,7 @@ fn analyze_block(
                 if context_uses.is_empty() && context_defs.is_empty() {
                     if let Callee::Direct(fn_id) = callee {
                         if let Some((fn_reads, fn_writes)) =
-                            crate::optimize::ssa_pass::extract_effect_refs(fn_types, fn_id)
+                            crate::optimize::ssa_pass::extract_effect_refs(fn_metadata, fn_id)
                         {
                             for qref in fn_writes.iter().rev() {
                                 reads.remove(qref);
@@ -222,7 +221,7 @@ fn compute_context_liveness(
 ///
 /// Removes context Store instructions (and their preceding Ref) that are
 /// dead — the stored value is guaranteed to be overwritten before being read.
-pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
     let ref_to_ctx = build_ref_to_ctx(cfg);
     if ref_to_ctx.is_empty() {
         return;
@@ -249,7 +248,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
     let block_infos: Vec<BlockContextInfo> = cfg
         .blocks
         .iter()
-        .map(|block| analyze_block(block, &ref_to_ctx, fn_types, &written_contexts))
+        .map(|block| analyze_block(block, &ref_to_ctx, fn_metadata, &written_contexts))
         .collect();
 
     // Compute backward liveness.
@@ -326,7 +325,7 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
                     if context_uses.is_empty() && context_defs.is_empty() {
                         if let Callee::Direct(fn_id) = callee {
                             if let Some((fn_reads, fn_writes)) =
-                                crate::optimize::ssa_pass::extract_effect_refs(fn_types, fn_id)
+                                crate::optimize::ssa_pass::extract_effect_refs(fn_metadata, fn_id)
                             {
                                 for qref in &fn_writes {
                                     live.remove(qref);
@@ -413,6 +412,7 @@ mod tests {
     use super::*;
     use crate::cfg;
     use crate::ir::{DebugInfo, Inst, MirBody};
+    use crate::ty::Ty;
     use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 

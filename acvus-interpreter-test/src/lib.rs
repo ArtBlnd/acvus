@@ -19,7 +19,7 @@ pub struct CompileResult {
     pub modules: FxHashMap<QualifiedRef, Executable>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub builtin_ids: FxHashMap<Astr, QualifiedRef>,
-    pub fn_types: FxHashMap<QualifiedRef, Ty>,
+    pub fn_metadata: FxHashMap<QualifiedRef, FnMetadata>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
 }
 
@@ -81,18 +81,25 @@ pub fn compile_source_with_externs(
             signature: None,
             output: Constraint::Inferred,
             effect: None,
+            hint: None,
         },
     });
 
     // Register ExternFns.
     let mut extern_executables: FxHashMap<QualifiedRef, Executable> = FxHashMap::default();
-    let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+    let mut fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::default();
     for registry in extern_registries {
         let registered = registry.register(interner);
         for func in &registered.functions {
-            // Extract Ty from constraint for fn_types map.
+            // Extract Ty + hint from constraint for fn_metadata map.
             if let Constraint::Exact(ty) = &func.constraint.output {
-                fn_types.insert(func.qref, ty.clone());
+                fn_metadata.insert(
+                    func.qref,
+                    FnMetadata {
+                        ty: ty.clone(),
+                        hint: func.constraint.hint,
+                    },
+                );
             }
         }
         functions.extend(registered.functions);
@@ -141,7 +148,7 @@ pub fn compile_source_with_externs(
     }
 
     // Run full optimization pipeline: SSA → Inline → SpawnSplit → Reorder → SSA → RegColor → Validate.
-    let opt_result = graph_optimize::optimize(result.modules.clone(), &fn_types, &inf.context_types, &FxHashSet::default());
+    let opt_result = graph_optimize::optimize(result.modules.clone(), &fn_metadata, &inf.context_types, &FxHashSet::default());
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {
@@ -180,7 +187,7 @@ pub fn compile_source_with_externs(
         modules,
         context_names,
         builtin_ids,
-        fn_types,
+        fn_metadata,
         extern_executables,
     }
 }
@@ -223,7 +230,7 @@ pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Val
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
+        .with_fn_metadata(cr.fn_metadata)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -271,7 +278,7 @@ pub async fn run_script(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
+        .with_fn_metadata(cr.fn_metadata)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -307,7 +314,7 @@ pub async fn run_script_mode(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
+        .with_fn_metadata(cr.fn_metadata)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -351,7 +358,7 @@ pub async fn run_script_with_externs(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
+        .with_fn_metadata(cr.fn_metadata)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());

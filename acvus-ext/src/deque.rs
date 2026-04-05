@@ -65,6 +65,7 @@ fn make(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> ExternFnBu
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     };
     ExternFnBuilder::new(name, constraint)
 }

@@ -12,14 +12,17 @@
 use rustc_hash::FxHashMap;
 
 use crate::cfg::CfgBody;
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::*;
-use crate::ty::{Effect, Ty};
+use crate::ty::{Hint, Ty};
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
 ///
-/// `fn_types`: QualifiedRef → Ty mapping for callee effect lookup.
-pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
+/// `fn_metadata`: QualifiedRef → FnMetadata mapping for callee effect/type/hint lookup.
+pub fn run(
+    cfg: &mut CfgBody,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+) {
     for block in &mut cfg.blocks {
         let mut new_insts = Vec::with_capacity(block.insts.len() + 4);
 
@@ -31,12 +34,14 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
                     ref args,
                     ref context_uses,
                     ref context_defs,
-                } if is_io_call(fn_types, callee_id) => {
+                } if is_io_call(fn_metadata, callee_id) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
                     // Register Handle type: Handle<ReturnTy, Effect>.
-                    if let Some(Ty::Fn { ret, effect, .. }) = fn_types.get(callee_id) {
+                    if let Some(Ty::Fn { ret, effect, .. }) =
+                        fn_metadata.get(callee_id).map(|m| &m.ty)
+                    {
                         cfg.val_types
                             .insert(handle, Ty::Handle(ret.clone(), effect.clone()));
                     }
@@ -70,19 +75,12 @@ pub fn run(cfg: &mut CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) {
     }
 }
 
-/// Check if a Direct callee has IO effect.
-fn is_io_call(fn_types: &FxHashMap<QualifiedRef, Ty>, callee: &QualifiedRef) -> bool {
-    let Some(ty) = fn_types.get(callee) else {
-        return false;
-    };
-    let Ty::Fn {
-        effect: Effect::Resolved(eff),
-        ..
-    } = ty
-    else {
-        return false;
-    };
-    eff.io
+/// Check if a Direct callee has Hint::Io (candidates for spawn-split).
+fn is_io_call(fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, callee: &QualifiedRef) -> bool {
+    matches!(
+        fn_metadata.get(callee).and_then(|m| m.hint),
+        Some(Hint::Io)
+    )
 }
 
 #[cfg(test)]
@@ -121,10 +119,7 @@ mod tests {
     }
 
     fn io_effect() -> Effect {
-        Effect::Resolved(EffectSet {
-            io: true,
-            ..Default::default()
-        })
+        Effect::self_modifying()
     }
 
     fn pure_effect() -> Effect {
@@ -141,14 +136,17 @@ mod tests {
         let i = Interner::new();
         let fetch_id = QualifiedRef::root(i.intern("fetch"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             fetch_id,
-            Ty::Fn {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: io_effect(),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![Param::new(i.intern("id"), Ty::Int)],
+                    ret: Box::new(Ty::String),
+                    captures: vec![],
+                    effect: io_effect(),
+                },
+                hint: Some(Hint::Io),
             },
         );
 
@@ -170,7 +168,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         // Should be: Const, Spawn, Eval in block insts (Return is terminator).
         let insts = all_insts(&cfg);
@@ -203,17 +201,20 @@ mod tests {
         let i = Interner::new();
         let add_id = QualifiedRef::root(i.intern("add"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             add_id,
-            Ty::Fn {
-                params: vec![
-                    Param::new(i.intern("a"), Ty::Int),
-                    Param::new(i.intern("b"), Ty::Int),
-                ],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: pure_effect(),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![
+                        Param::new(i.intern("a"), Ty::Int),
+                        Param::new(i.intern("b"), Ty::Int),
+                    ],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: pure_effect(),
+                },
+                hint: None,
             },
         );
 
@@ -228,7 +229,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         // Pure call should NOT be split.
         let insts = all_insts(&cfg);
@@ -264,14 +265,17 @@ mod tests {
         let ctx_a = QualifiedRef::root(i.intern("a"));
         let ctx_b = QualifiedRef::root(i.intern("b"));
 
-        let mut fn_types = FxHashMap::default();
-        fn_types.insert(
+        let mut fn_metadata = FxHashMap::default();
+        fn_metadata.insert(
             fetch_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: io_effect(),
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: io_effect(),
+                },
+                hint: Some(Hint::Io),
             },
         );
 
@@ -286,7 +290,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 2);
@@ -313,15 +317,18 @@ mod tests {
         let fetch_a = QualifiedRef::root(i.intern("fetch_a"));
         let fetch_b = QualifiedRef::root(i.intern("fetch_b"));
 
-        let mut fn_types = FxHashMap::default();
+        let mut fn_metadata = FxHashMap::default();
         for &fid in &[fetch_a, fetch_b] {
-            fn_types.insert(
+            fn_metadata.insert(
                 fid,
-                Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-                    effect: io_effect(),
+                FnMetadata {
+                    ty: Ty::Fn {
+                        params: vec![],
+                        ret: Box::new(Ty::String),
+                        captures: vec![],
+                        effect: io_effect(),
+                    },
+                    hint: Some(Hint::Io),
                 },
             );
         }
@@ -353,7 +360,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_types);
+        run(&mut cfg, &fn_metadata);
 
         // 2 calls → 2 Spawn + 2 Eval + BinOp = 5 (Return is terminator)
         let insts = all_insts(&cfg);

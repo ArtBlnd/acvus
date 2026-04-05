@@ -7,7 +7,7 @@
 
 use acvus_utils::Freeze;
 
-use crate::ty::{EffectConstraint, Ty};
+use crate::ty::{EffectConstraint, Hint, Ty};
 
 // ── Identifiers ─────────────────────────────────────────────────────
 
@@ -54,6 +54,18 @@ pub struct FnConstraint {
     pub output: Constraint,
     /// Effect upper bound. `None` = no constraint (anything allowed).
     pub effect: Option<EffectConstraint>,
+    /// Hint for the function. `None` = no hint.
+    pub hint: Option<Hint>,
+}
+
+/// Per-function metadata used by optimizer passes.
+/// Bundles type information and scheduling hints into a single lookup.
+#[derive(Debug, Clone)]
+pub struct FnMetadata {
+    /// Resolved function type (Ty::Fn).
+    pub ty: Ty,
+    /// Scheduling hint from ExternFn declaration.
+    pub hint: Option<Hint>,
 }
 
 #[derive(Debug, Clone)]

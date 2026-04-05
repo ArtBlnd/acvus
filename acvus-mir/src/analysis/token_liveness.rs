@@ -1,26 +1,26 @@
 //! Token liveness analysis — backward dataflow over the CFG.
 //!
-//! Computes which TokenIds are live at each program point.
-//! A TokenId is live at a point if there exists a path forward from that point
-//! to an instruction that uses the token (FunctionCall/Spawn/Eval with that TokenId
+//! Computes which token QualifiedRefs are live at each program point.
+//! A token is live at a point if there exists a path forward from that point
+//! to an instruction that uses the token (FunctionCall/Spawn/Eval with that token
 //! in its effect).
 //!
 //! This is used by the reorder pass to determine whether two instructions
-//! sharing a TokenId can be reordered relative to each other.
+//! sharing a token can be reordered relative to each other.
 
 use rustc_hash::FxHashSet;
 
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, backward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::QualifiedRef;
+use crate::graph::{FnMetadata, QualifiedRef};
 use crate::ir::{Callee, Inst, InstKind, ValueId};
-use crate::ty::{Effect, EffectTarget, TokenId, Ty};
+use crate::ty::{Effect, EffectTarget, Ty};
 use rustc_hash::FxHashMap;
 
 // ── Domain ──────────────────────────────────────────────────────────
 
-/// Token liveness domain: a TokenId is either Live or Dead.
+/// Token liveness domain: a token is either Live or Dead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenLiveness {
     Dead,
@@ -47,16 +47,16 @@ impl SemiLattice for TokenLiveness {
 // ── Analysis ────────────────────────────────────────────────────────
 
 struct TokenLivenessAnalysis<'a> {
-    fn_types: &'a FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
     val_types: &'a FxHashMap<ValueId, Ty>,
 }
 
-/// Extract TokenIds from an instruction's effect.
+/// Extract token QualifiedRefs from an instruction's effect.
 fn token_ids_of(
     kind: &InstKind,
-    fn_types: &FxHashMap<QualifiedRef, Ty>,
+    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
     val_types: &FxHashMap<ValueId, Ty>,
-) -> smallvec::SmallVec<[TokenId; 2]> {
+) -> smallvec::SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
         InstKind::FunctionCall {
             callee: Callee::Direct(qref),
@@ -65,7 +65,7 @@ fn token_ids_of(
         | InstKind::Spawn {
             callee: Callee::Direct(qref),
             ..
-        } => fn_types.get(qref).and_then(|ty| match ty {
+        } => fn_metadata.get(qref).and_then(|m| match &m.ty {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -94,12 +94,12 @@ fn token_ids_of(
 }
 
 impl<'a> DataflowAnalysis for TokenLivenessAnalysis<'a> {
-    type Key = TokenId;
+    type Key = QualifiedRef;
     type Domain = TokenLiveness;
 
-    fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<TokenId, TokenLiveness>) {
+    fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<QualifiedRef, TokenLiveness>) {
         // Gen: if this instruction uses a token, mark it live.
-        for tid in token_ids_of(&inst.kind, self.fn_types, self.val_types) {
+        for tid in token_ids_of(&inst.kind, self.fn_metadata, self.val_types) {
             state.set(tid, TokenLiveness::Live);
         }
         // No kill: tokens don't have defs/redefinitions.
@@ -107,20 +107,20 @@ impl<'a> DataflowAnalysis for TokenLivenessAnalysis<'a> {
 
     fn propagate_forward(
         &self,
-        _source_exit: &DataflowState<TokenId, TokenLiveness>,
+        _source_exit: &DataflowState<QualifiedRef, TokenLiveness>,
         _params: &[ValueId],
         _args: &[ValueId],
-        _target_entry: &mut DataflowState<TokenId, TokenLiveness>,
+        _target_entry: &mut DataflowState<QualifiedRef, TokenLiveness>,
     ) -> bool {
         unreachable!("token liveness is backward-only")
     }
 
     fn propagate_backward(
         &self,
-        succ_entry: &DataflowState<TokenId, TokenLiveness>,
+        succ_entry: &DataflowState<QualifiedRef, TokenLiveness>,
         _succ_params: &[ValueId],
         _term_args: &[ValueId],
-        exit_state: &mut DataflowState<TokenId, TokenLiveness>,
+        exit_state: &mut DataflowState<QualifiedRef, TokenLiveness>,
     ) {
         // Tokens are not SSA — no param/arg mapping. Pure join.
         exit_state.join_from(succ_entry);
@@ -131,20 +131,20 @@ impl<'a> DataflowAnalysis for TokenLivenessAnalysis<'a> {
 
 /// Per-block token liveness sets.
 pub struct TokenLivenessResult {
-    pub live_in: Vec<FxHashSet<TokenId>>,
-    pub live_out: Vec<FxHashSet<TokenId>>,
+    pub live_in: Vec<FxHashSet<QualifiedRef>>,
+    pub live_out: Vec<FxHashSet<QualifiedRef>>,
 }
 
 impl TokenLivenessResult {
     /// Is `token` live at the entry of `block`?
-    pub fn is_live_in(&self, block: BlockIdx, token: TokenId) -> bool {
+    pub fn is_live_in(&self, block: BlockIdx, token: QualifiedRef) -> bool {
         self.live_in
             .get(block.0)
             .is_some_and(|set| set.contains(&token))
     }
 
     /// Is `token` live at the exit of `block`?
-    pub fn is_live_out(&self, block: BlockIdx, token: TokenId) -> bool {
+    pub fn is_live_out(&self, block: BlockIdx, token: QualifiedRef) -> bool {
         self.live_out
             .get(block.0)
             .is_some_and(|set| set.contains(&token))
@@ -152,7 +152,7 @@ impl TokenLivenessResult {
 }
 
 /// Run token liveness analysis on a CfgBody.
-pub fn analyze(cfg: &CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) -> TokenLivenessResult {
+pub fn analyze(cfg: &CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> TokenLivenessResult {
     if cfg.blocks.is_empty() {
         return TokenLivenessResult {
             live_in: vec![],
@@ -161,12 +161,12 @@ pub fn analyze(cfg: &CfgBody, fn_types: &FxHashMap<QualifiedRef, Ty>) -> TokenLi
     }
 
     let analysis = TokenLivenessAnalysis {
-        fn_types,
+        fn_metadata,
         val_types: &cfg.val_types,
     };
     let result = backward_analysis(cfg, &analysis);
 
-    let extract = |state: &DataflowState<TokenId, TokenLiveness>| -> FxHashSet<TokenId> {
+    let extract = |state: &DataflowState<QualifiedRef, TokenLiveness>| -> FxHashSet<QualifiedRef> {
         state
             .values
             .iter()
@@ -218,49 +218,54 @@ mod tests {
         })
     }
 
-    fn token_id() -> TokenId {
-        TokenId::alloc()
-    }
-
     fn io_fn_type_with_token(
         i: &acvus_utils::Interner,
         name: &str,
-        tid: TokenId,
-    ) -> (QualifiedRef, Ty) {
+        tid: QualifiedRef,
+    ) -> (QualifiedRef, FnMetadata) {
         let qref = QualifiedRef::root(i.intern(name));
         let mut reads = BTreeSet::new();
         reads.insert(EffectTarget::Token(tid));
-        let ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::Int),
-            captures: vec![],
-            effect: Effect::Resolved(EffectSet {
-                reads,
-                writes: BTreeSet::new(),
-                io: true,
-                self_modifying: false,
-            }),
-        };
-        (qref, ty)
+        (
+            qref,
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::Resolved(EffectSet {
+                        reads,
+                        writes: BTreeSet::new(),
+                        self_modifying: false,
+                    }),
+                },
+                hint: None,
+            },
+        )
     }
 
-    fn pure_fn_type(i: &acvus_utils::Interner, name: &str) -> (QualifiedRef, Ty) {
+    fn pure_fn_type(i: &acvus_utils::Interner, name: &str) -> (QualifiedRef, FnMetadata) {
         let qref = QualifiedRef::root(i.intern(name));
-        let ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::Int),
-            captures: vec![],
-            effect: Effect::pure(),
-        };
-        (qref, ty)
+        (
+            qref,
+            FnMetadata {
+                ty: Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: Effect::pure(),
+                },
+                hint: None,
+            },
+        )
     }
 
     #[test]
     fn single_block_token_live() {
         let i = acvus_utils::Interner::new();
-        let tid = token_id();
+        let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -276,16 +281,16 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_types);
+        let result = analyze(&cfg, &fn_metadata);
         assert!(result.is_live_in(BlockIdx(0), tid));
     }
 
     #[test]
     fn pure_call_no_token() {
         let i = acvus_utils::Interner::new();
-        let tid = token_id();
+        let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = pure_fn_type(&i, "pure_fn");
-        let fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -301,16 +306,16 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_types);
+        let result = analyze(&cfg, &fn_metadata);
         assert!(!result.is_live_in(BlockIdx(0), tid));
     }
 
     #[test]
     fn token_live_across_blocks() {
         let i = acvus_utils::Interner::new();
-        let tid = token_id();
+        let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -339,7 +344,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_types);
+        let result = analyze(&cfg, &fn_metadata);
         assert!(result.is_live_out(BlockIdx(0), tid));
         assert!(result.is_live_in(BlockIdx(1), tid));
     }
@@ -347,11 +352,11 @@ mod tests {
     #[test]
     fn two_tokens_independent() {
         let i = acvus_utils::Interner::new();
-        let tid1 = token_id();
-        let tid2 = token_id();
+        let tid1 = QualifiedRef::root(i.intern("net"));
+        let tid2 = QualifiedRef::root(i.intern("fs"));
         let (qref1, ty1) = io_fn_type_with_token(&i, "io1", tid1);
         let (qref2, ty2) = io_fn_type_with_token(&i, "io2", tid2);
-        let fn_types: FxHashMap<QualifiedRef, Ty> =
+        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> =
             FxHashMap::from_iter([(qref1, ty1), (qref2, ty2)]);
 
         let cfg = make_cfg(
@@ -384,7 +389,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_types);
+        let result = analyze(&cfg, &fn_metadata);
         assert!(result.is_live_in(BlockIdx(0), tid1));
         assert!(result.is_live_out(BlockIdx(0), tid2));
         assert!(result.is_live_in(BlockIdx(1), tid2));
@@ -394,9 +399,9 @@ mod tests {
     #[test]
     fn diamond_token_both_arms() {
         let i = acvus_utils::Interner::new();
-        let tid = token_id();
+        let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -453,7 +458,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_types);
+        let result = analyze(&cfg, &fn_metadata);
         assert!(result.is_live_out(BlockIdx(0), tid));
         assert!(!result.is_live_in(BlockIdx(3), tid));
     }

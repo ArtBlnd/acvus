@@ -1,0 +1,12 @@
+[package]
+name = "acvus-mir-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+acvus-mir-host-macro = { path = "../acvus-mir-host-macro" }
+acvus-mir = { path = "../acvus-mir" }
+acvus-utils = { path = "../acvus-utils" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

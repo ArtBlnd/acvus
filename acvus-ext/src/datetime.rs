@@ -73,6 +73,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     }
 }
 
@@ -90,9 +91,10 @@ fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
             params: named,
             ret: Box::new(ret),
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::pure(),
         }),
         effect: None,
+        hint: Some(acvus_mir::ty::Hint::Io),
     }
 }
 

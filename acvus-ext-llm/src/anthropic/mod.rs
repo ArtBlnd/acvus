@@ -191,9 +191,10 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
                 params: named,
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: Effect::io(),
+                effect: Effect::pure(),
             }),
             effect: None,
+            hint: Some(acvus_mir::ty::Hint::Io),
         };
 
         vec![ExternFnBuilder::new("anthropic", constraint).handler_async(

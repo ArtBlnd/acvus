@@ -67,8 +67,8 @@ fn iterator_same_effect_pure_unifies() {
 fn iterator_same_effect_effectful_unifies() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
-    let a = iter_ty(&i, Ty::Int, Effect::io());
-    let b = iter_ty(&i, Ty::Int, Effect::io());
+    let a = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(s.unify(&a, &b, Invariant).is_ok());
 }
 
@@ -77,7 +77,7 @@ fn iterator_effect_mismatch_invariant_fails() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::io());
+    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(s.unify(&a, &b, Invariant).is_err());
 }
 
@@ -111,9 +111,9 @@ fn iterator_effect_var_binds_to_effectful() {
     let mut s = subst_with(reg);
     let e = s.fresh_effect_var();
     let a = iter_ty(&i, Ty::Int, e.clone());
-    let b = iter_ty(&i, Ty::Int, Effect::io());
+    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(s.unify(&a, &b, Invariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::io());
+    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
 }
 
 #[test]
@@ -172,9 +172,9 @@ fn sequence_effect_var_binds_effectful() {
     let e = s.fresh_effect_var();
     let o = s.fresh_param();
     let a = seq_ty(&i, Ty::Int, o.clone(), e.clone());
-    let b = seq_ty(&i, Ty::Int, o, Effect::io());
+    let b = seq_ty(&i, Ty::Int, o, Effect::self_modifying());
     assert!(s.unify(&a, &b, Invariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::io());
+    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn sequence_same_identity_effect_mismatch_invariant_fails() {
     let mut s = subst_with(reg);
     let o = s.alloc_identity(false);
     let a = seq_ty(&i, Ty::Int, o.clone(), Effect::pure());
-    let b = seq_ty(&i, Ty::Int, o, Effect::io());
+    let b = seq_ty(&i, Ty::Int, o, Effect::self_modifying());
     assert!(s.unify(&a, &b, Invariant).is_err());
 }
 
@@ -226,7 +226,7 @@ fn sequence_is_ephemeral() {
 fn iterator_not_materializable() {
     let (i, _reg) = setup();
     assert!(!iter_ty(&i, Ty::Int, Effect::pure()).is_materializable());
-    assert!(!iter_ty(&i, Ty::Int, Effect::io()).is_materializable());
+    assert!(!iter_ty(&i, Ty::Int, Effect::self_modifying()).is_materializable());
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn sequence_not_materializable() {
     let mut s = TySubst::new();
     let o = s.alloc_identity(false);
     assert!(!seq_ty(&i, Ty::Int, o.clone(), Effect::pure()).is_materializable());
-    assert!(!seq_ty(&i, Ty::Int, o, Effect::io()).is_materializable());
+    assert!(!seq_ty(&i, Ty::Int, o, Effect::self_modifying()).is_materializable());
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn iterator_is_move_only() {
         Some(true)
     );
     assert_eq!(
-        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::Int, Effect::io())),
+        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::Int, Effect::self_modifying())),
         Some(true)
     );
 }
@@ -319,9 +319,9 @@ fn hof_shared_effect_var_binds_then_callback() {
 
     // Bind e = Effectful via iterator
     let iter_sig = iter_ty(&i, Ty::Int, e.clone());
-    let iter_actual = iter_ty(&i, Ty::Int, Effect::io());
+    let iter_actual = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(s.unify(&iter_actual, &iter_sig, Covariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::io());
+    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
 
     // Callback: Fn{effect:Pure} vs Fn{effect:e(=Effectful)}
     let actual_cb = Ty::Fn {
@@ -352,7 +352,7 @@ fn effect_subtyping_invariant_rejects_mismatch() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::io());
+    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(
         s.unify(&a, &b, Invariant).is_err(),
         "Invariant should reject Pure vs Effectful"
@@ -518,7 +518,7 @@ fn iterator_effect_subtyping_covariant() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let pure_iter = iter_ty(&i, Ty::Int, Effect::pure());
-    let io_iter = iter_ty(&i, Ty::Int, Effect::io());
+    let io_iter = iter_ty(&i, Ty::Int, Effect::self_modifying());
     // Pure ≤ IO in Covariant → OK (subeffect)
     assert!(
         s.unify(&pure_iter, &io_iter, Covariant).is_ok(),
@@ -540,7 +540,7 @@ fn iterator_effect_var_resolves_via_lub() {
     let e = s.fresh_effect_var();
     let param_iter = iter_ty(&i, Ty::Int, e.clone());
     let pure_iter = iter_ty(&i, Ty::Int, Effect::pure());
-    let io_iter = iter_ty(&i, Ty::Int, Effect::io());
+    let io_iter = iter_ty(&i, Ty::Int, Effect::self_modifying());
     // ?E matches Pure
     assert!(s.unify(&param_iter, &pure_iter, Invariant).is_ok());
     assert!(
@@ -561,7 +561,7 @@ fn lub_iterator_effect_invariant_rejects() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::io());
+    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
     assert!(
         s.unify(&a, &b, Invariant).is_err(),
         "Invariant should reject effect mismatch"

@@ -36,9 +36,10 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
                 params: sig_params,
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: Effect::io(),
+                effect: Effect::self_modifying(),
             }),
             effect: None,
+            hint: None,
         },
     }
 }

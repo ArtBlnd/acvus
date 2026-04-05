@@ -86,6 +86,7 @@ fn make_sig(params: &[Ty], ret: Ty, interner: &Interner) -> FnConstraint {
             effect: Effect::pure(),
         }),
         effect: None,
+        hint: None,
     }
 }
 

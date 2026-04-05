@@ -10,6 +10,7 @@ use crate::graph::{ContextPolicy, QualifiedRef};
 use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValOrigin, ValueId,
 };
+use crate::graph::FnMetadata;
 use crate::ty::Ty;
 use crate::typeck::{CoercionMap, TypeMap};
 
@@ -33,8 +34,8 @@ pub struct Lowerer<'a> {
     closure_label_count: u32,
     /// Context QualifiedRef → Ty.
     context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Function QualifiedRef → Ty. From InferResult.fn_types.
-    fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
+    /// Function QualifiedRef → FnMetadata. From InferResult.fn_metadata.
+    fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
     /// External constraints on contexts (volatile, read_only, etc.).
     policies: FxHashMap<QualifiedRef, ContextPolicy>,
     /// Context projection alias stack: @x → (@a, [x]) means @x is an alias for @a.x.
@@ -126,7 +127,7 @@ impl<'a> Lowerer<'a> {
         type_map: TypeMap,
         coercion_map: CoercionMap,
         context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-        fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
+        fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
         policies: FxHashMap<QualifiedRef, ContextPolicy>,
         extern_params: Vec<(Astr, Ty)>,
     ) -> Self {
@@ -153,7 +154,7 @@ impl<'a> Lowerer<'a> {
             closures: FxHashMap::default(),
             closure_label_count: 0,
             context_types,
-            fn_types,
+            fn_metadata,
             policies,
             context_aliases: vec![],
         }
@@ -1340,9 +1341,9 @@ impl<'a> Lowerer<'a> {
                     // ExternCast → lower as FunctionCall (pure, 1 arg, no context).
                     // Determine result type from the cast function's return type.
                     let ret_ty = self
-                        .fn_types
+                        .fn_metadata
                         .get(&fn_ref)
-                        .and_then(|ty| match ty {
+                        .and_then(|m| match &m.ty {
                             Ty::Fn { ret, .. } => Some(ret.as_ref().clone()),
                             _ => None,
                         })
@@ -2036,8 +2037,8 @@ impl<'a> Lowerer<'a> {
 
         // @fn_name(args) — context-based function call.
         if let Expr::ContextRef { name: qref, .. } = func {
-            let fn_ty = self.fn_types.get(qref);
-            if fn_ty.is_some() {
+            let fn_meta = self.fn_metadata.get(qref);
+            if fn_meta.is_some() {
                 let fn_id = *qref;
                 self.set_origin(dst, ValOrigin::Call(qref.name));
                 self.emit_inst(
@@ -2068,7 +2069,7 @@ impl<'a> Lowerer<'a> {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
                     // 1. Graph function (Direct call)
-                    if self.fn_types.contains_key(name) {
+                    if self.fn_metadata.contains_key(name) {
                         self.emit_inst(
                             call_span,
                             InstKind::FunctionCall {

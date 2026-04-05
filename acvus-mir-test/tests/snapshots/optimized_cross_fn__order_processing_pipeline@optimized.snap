@@ -64,11 +64,10 @@ expression: opt
     60 │   r16 = r20 + T4
     61 │   r18 = call #0(r8)
     62 │   r17 = r16 + T4
-    63 │   r21 = spawn #1(r17)
-    64 │   store r3 = r8
-    65 │   store r1 = r17
-    66 │   r10 = eval r21
-    67 │   return r8
+    63 │   store r3 = r8
+    64 │   store r1 = r17
+    65 │   r10 = call #1(r17)
+    66 │   return r8
 
     ; r0 (@shipping) : Ref<Int>
     ; r1 (@receipt_out) : Ref<String>
@@ -80,7 +79,7 @@ expression: opt
     ; r7 (@tax_rate) : Ref<Int>
     ; r8 (@shipping) : Int
     ; r9 (v11) : Int
-    ; r10 (@default_ship) : Int
+    ; r10 (send_email(...)) : Int
     ; r11 (v12) : Int
     ; r12 (v13) : Int
     ; r13 (v14) : Bool
@@ -91,4 +90,3 @@ expression: opt
     ; r18 (to_string(...)) : String
     ; r19 (v16) : Int
     ; r20 (v21) : String
-    ; r21 (v22) : Handle!<Int>

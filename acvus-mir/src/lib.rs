@@ -1,5 +1,4 @@
 pub mod analysis;
-pub mod extern_fn;
 pub mod cfg;
 pub mod error;
 pub mod graph;

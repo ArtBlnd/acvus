@@ -419,9 +419,10 @@ fn inline_io_effect_extern_inside() {
                 params: vec![Param::new(i.intern("id"), Ty::Int)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                effect: Effect::io(),
+                effect: Effect::self_modifying(),
             }),
             effect: None,
+            hint: None,
         },
     };
     let ir = compile_inline_ir_with(

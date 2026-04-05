@@ -189,22 +189,20 @@ impl TypeRegistry {
 
 // ── Effect target (Context vs Token) ────────────────────────────────
 
-acvus_utils::declare_id!(pub TokenId);
-
 /// Distinguishes SSA-compatible context refs from external shared-state tokens.
 ///
 /// - `Context(QualifiedRef)` — SSA-compatible. Compiler may convert to
 ///   `context_uses`/`context_defs` on Spawn/Eval/FunctionCall.
-/// - `Token(TokenId)` — NOT SSA-compatible. Functions sharing the same
+/// - `Token(QualifiedRef)` — NOT SSA-compatible. Functions sharing the same
 ///   Token must execute sequentially; the compiler must never lift a Token
 ///   into SSA context_uses/context_defs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EffectTarget {
     /// Context — SSA-compatible. Compiler can optimize (Spawn/Eval).
     Context(QualifiedRef),
-    /// Token — NOT SSA-compatible. External shared state.
-    /// Functions sharing the same Token must execute sequentially.
-    Token(TokenId),
+    /// Token — NOT SSA-compatible. Named external shared state.
+    /// Functions sharing the same Token QualifiedRef must execute sequentially.
+    Token(QualifiedRef),
 }
 
 /// A named, typed function parameter.
@@ -335,15 +333,24 @@ pub enum Materiality {
     Ephemeral,
 }
 
-/// Fine-grained effect information: which contexts are read/written,
-/// and whether opaque IO is involved.
+/// Scheduling hint for ExternFn execution.
+/// Not an effect — does not affect SSA ordering or correctness.
+/// Used by spawn-split and scheduler decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Hint {
+    /// Function performs I/O (network, disk, etc.)
+    Io,
+    /// Function is CPU-intensive.
+    CpuHeavy,
+}
+
+/// Fine-grained effect information: which contexts are read/written.
 ///
 /// Pure = all fields empty/false. No separate variant needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct EffectSet {
     pub reads: BTreeSet<EffectTarget>,
     pub writes: BTreeSet<EffectTarget>,
-    pub io: bool,
     /// Value is consumed/mutated on use (e.g. Iterator cursor advance).
     /// Propagates through combinators: map(self_mod_iter, f) → self_mod.
     pub self_modifying: bool,
@@ -351,7 +358,7 @@ pub struct EffectSet {
 
 impl EffectSet {
     pub fn is_pure(&self) -> bool {
-        self.reads.is_empty() && self.writes.is_empty() && !self.io && !self.self_modifying
+        self.reads.is_empty() && self.writes.is_empty() && !self.self_modifying
     }
 
     /// Union of two effect sets. All effects propagate (contagious).
@@ -359,7 +366,6 @@ impl EffectSet {
         Self {
             reads: self.reads.union(&other.reads).copied().collect(),
             writes: self.writes.union(&other.writes).copied().collect(),
-            io: self.io || other.io,
             self_modifying: self.self_modifying || other.self_modifying,
         }
     }
@@ -377,9 +383,6 @@ impl fmt::Display for EffectSet {
         }
         if !self.writes.is_empty() {
             parts.push(format!("w={}", self.writes.len()));
-        }
-        if self.io {
-            parts.push("io".to_string());
         }
         if self.self_modifying {
             parts.push("mut".to_string());
@@ -406,7 +409,6 @@ pub enum EffectBound {
 pub struct EffectConstraint {
     pub reads: EffectBound,
     pub writes: EffectBound,
-    pub io: bool,
     pub self_modifying: bool,
 }
 
@@ -416,17 +418,15 @@ impl EffectConstraint {
         Self {
             reads: EffectBound::Only(BTreeSet::new()),
             writes: EffectBound::Only(BTreeSet::new()),
-            io: false,
             self_modifying: false,
         }
     }
 
-    /// Read-only constraint — any reads allowed, no writes, no IO.
+    /// Read-only constraint — any reads allowed, no writes.
     pub fn read_only() -> Self {
         Self {
             reads: EffectBound::Any,
             writes: EffectBound::Only(BTreeSet::new()),
-            io: false,
             self_modifying: true,
         }
     }
@@ -443,17 +443,9 @@ pub enum Effect {
 }
 
 impl Effect {
-    /// No side effects: reads nothing, writes nothing, no IO.
+    /// No side effects: reads nothing, writes nothing.
     pub fn pure() -> Self {
         Effect::Resolved(EffectSet::default())
-    }
-
-    /// Opaque IO effect (e.g. context access without known QualifiedRef).
-    pub fn io() -> Self {
-        Effect::Resolved(EffectSet {
-            io: true,
-            ..EffectSet::default()
-        })
     }
 
     /// Self-modifying effect: value mutates on use (e.g. Iterator cursor).
@@ -1032,7 +1024,7 @@ impl TySubst {
         let resolved_b = self.resolve_effect(eb);
         let merged = match (&resolved_a, &resolved_b) {
             (Effect::Resolved(sa), Effect::Resolved(sb)) => Effect::Resolved(sa.union(sb)),
-            _ => Effect::io(),
+            _ => Effect::self_modifying(),
         };
         if let Some(v) = self.find_leaf_effect_var(ea) {
             self.effect_bindings.insert(v, merged.clone());
@@ -1095,7 +1087,7 @@ impl TySubst {
                 self.coerce_effects_to_effectful(ea, eb);
                 let resolved_a = self.resolve_effect(ea);
                 let resolved_b = self.resolve_effect(eb);
-                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::io);
+                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::self_modifying);
                 Some(Ty::Fn {
                     params: pa
                         .iter()
@@ -1142,7 +1134,7 @@ impl TySubst {
                             self.coerce_effects_to_effectful(ea, eb);
                             let ra = self.resolve_effect(ea);
                             let rb = self.resolve_effect(eb);
-                            ra.union(&rb).unwrap_or_else(Effect::io)
+                            ra.union(&rb).unwrap_or_else(Effect::self_modifying)
                         })
                         .collect();
                     Some(Ty::UserDefined {
@@ -3849,7 +3841,7 @@ mod tests {
         assert!(
             s.unify(
                 &ud(id, vec![], vec![Effect::pure()]),
-                &ud(id, vec![], vec![Effect::io()]),
+                &ud(id, vec![], vec![Effect::self_modifying()]),
                 Invariant,
             )
             .is_err()
@@ -3882,7 +3874,7 @@ mod tests {
 
         // Bind via unification
         assert!(s.unify(&p, &Ty::Int, Invariant).is_ok());
-        assert!(s.unify_effects(&e, &Effect::io(), Covariant).is_ok());
+        assert!(s.unify_effects(&e, &Effect::self_modifying(), Covariant).is_ok());
 
         let resolved = s.resolve(&ty);
         match resolved {
@@ -3893,7 +3885,7 @@ mod tests {
             } => {
                 assert_eq!(rid, id);
                 assert_eq!(type_args, vec![Ty::Int]);
-                assert_eq!(effect_args, vec![Effect::io()]);
+                assert_eq!(effect_args, vec![Effect::self_modifying()]);
             }
             _ => panic!("expected UserDefined, got {resolved:?}"),
         }
@@ -4779,7 +4771,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::self_modifying(),
         };
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
@@ -4800,7 +4792,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::self_modifying(),
         };
         assert!(s.unify(&v, &pure_fn, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_fn, Covariant).is_ok());
@@ -4822,7 +4814,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::self_modifying(),
         };
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
@@ -4848,7 +4840,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::self_modifying(),
         };
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
@@ -4930,7 +4922,7 @@ mod tests {
             ret: Box::new(Ty::Int),
 
             captures: vec![],
-            effect: Effect::io(),
+            effect: Effect::self_modifying(),
         };
         assert!(!fn_ty.is_materializable());
     }
@@ -5033,9 +5025,9 @@ mod tests {
         }
 
         #[test]
-        fn io_only_is_not_pure() {
+        fn self_modifying_only_is_not_pure() {
             let s = EffectSet {
-                io: true,
+                self_modifying: true,
                 ..Default::default()
             };
             assert!(!s.is_pure());
@@ -5087,7 +5079,6 @@ mod tests {
             assert!(u.reads.contains(&c1));
             assert!(u.reads.contains(&c2));
             assert!(u.writes.is_empty());
-            assert!(!u.io);
         }
 
         #[test]
@@ -5129,27 +5120,27 @@ mod tests {
         }
 
         #[test]
-        fn union_io_propagates() {
+        fn union_self_modifying_propagates() {
             let a = EffectSet {
-                io: true,
+                self_modifying: true,
                 ..Default::default()
             };
             let b = EffectSet::default();
-            assert!(a.union(&b).io);
-            assert!(b.union(&a).io);
+            assert!(a.union(&b).self_modifying);
+            assert!(b.union(&a).self_modifying);
         }
 
         #[test]
-        fn union_io_both_true() {
+        fn union_self_modifying_both_true() {
             let a = EffectSet {
-                io: true,
+                self_modifying: true,
                 ..Default::default()
             };
             let b = EffectSet {
-                io: true,
+                self_modifying: true,
                 ..Default::default()
             };
-            assert!(a.union(&b).io);
+            assert!(a.union(&b).self_modifying);
         }
 
         // ── Effect enum tests ───────────────────────────────────────
@@ -5162,10 +5153,10 @@ mod tests {
         }
 
         #[test]
-        fn effect_io_is_effectful() {
-            assert!(!Effect::io().is_pure());
-            assert!(Effect::io().is_effectful());
-            assert!(!Effect::io().is_var());
+        fn effect_self_modifying_is_effectful() {
+            assert!(!Effect::self_modifying().is_pure());
+            assert!(Effect::self_modifying().is_effectful());
+            assert!(!Effect::self_modifying().is_var());
         }
 
         #[test]
@@ -5219,7 +5210,7 @@ mod tests {
         fn unify_var_binds_to_resolved() {
             let mut s = TySubst::new();
             let var = s.fresh_effect_var();
-            let concrete = Effect::io();
+            let concrete = Effect::self_modifying();
             assert!(s.unify_effect(&var, &concrete).is_ok());
             let resolved = s.resolve_effect(&var);
             assert!(resolved.is_effectful());
@@ -5243,13 +5234,13 @@ mod tests {
         #[test]
         fn unify_effectful_effectful_ok() {
             let mut s = TySubst::new();
-            assert!(s.unify_effect(&Effect::io(), &Effect::io()).is_ok());
+            assert!(s.unify_effect(&Effect::self_modifying(), &Effect::self_modifying()).is_ok());
         }
 
         #[test]
         fn unify_pure_effectful_invariant_fails() {
             let mut s = TySubst::new();
-            assert!(s.unify_effect(&Effect::pure(), &Effect::io()).is_err());
+            assert!(s.unify_effect(&Effect::pure(), &Effect::self_modifying()).is_err());
         }
 
         #[test]
@@ -5257,7 +5248,7 @@ mod tests {
             let mut s = TySubst::new();
             // Pure ≤ Effectful in covariant position
             assert!(
-                s.unify_effects(&Effect::pure(), &Effect::io(), Covariant)
+                s.unify_effects(&Effect::pure(), &Effect::self_modifying(), Covariant)
                     .is_ok()
             );
         }
@@ -5267,7 +5258,7 @@ mod tests {
             let mut s = TySubst::new();
             // Effectful ≤ Pure in covariant position — should fail
             assert!(
-                s.unify_effects(&Effect::io(), &Effect::pure(), Covariant)
+                s.unify_effects(&Effect::self_modifying(), &Effect::pure(), Covariant)
                     .is_err()
             );
         }
@@ -5285,7 +5276,7 @@ mod tests {
             let mut s = TySubst::new();
             let v0 = s.fresh_effect_var();
             let v1 = s.fresh_effect_var();
-            let concrete = Effect::io();
+            let concrete = Effect::self_modifying();
             // v0 → v1 → concrete
             assert!(s.unify_effect(&v0, &v1).is_ok());
             assert!(s.unify_effect(&v1, &concrete).is_ok());
@@ -5300,7 +5291,7 @@ mod tests {
             let v1 = s.fresh_effect_var();
             assert!(s.unify_effect(&v0, &v1).is_ok());
             // Bind one → both resolve to same
-            let concrete = Effect::io();
+            let concrete = Effect::self_modifying();
             assert!(s.unify_effect(&v1, &concrete).is_ok());
             assert!(s.resolve_effect(&v0).is_effectful());
             assert!(s.resolve_effect(&v1).is_effectful());
@@ -5314,7 +5305,6 @@ mod tests {
             let e = Effect::Resolved(EffectSet {
                 reads: [c1].into_iter().collect(),
                 writes: [c2].into_iter().collect(),
-                io: false,
                 self_modifying: false,
             });
             assert!(!e.is_pure());
@@ -5323,7 +5313,6 @@ mod tests {
                 Effect::Resolved(s) => {
                     assert_eq!(s.reads.len(), 1);
                     assert_eq!(s.writes.len(), 1);
-                    assert!(!s.io);
                 }
                 _ => panic!("expected Resolved"),
             }
@@ -5345,7 +5334,6 @@ mod tests {
                 Effect::Resolved(set) => {
                     assert!(set.reads.contains(&c));
                     assert!(set.writes.is_empty());
-                    assert!(!set.io);
                 }
                 _ => panic!("expected Resolved"),
             }
@@ -5357,8 +5345,8 @@ mod tests {
         }
 
         #[test]
-        fn display_io() {
-            assert_eq!(format!("{}", Effect::io()), "Effectful(io)");
+        fn display_self_modifying() {
+            assert_eq!(format!("{}", Effect::self_modifying()), "Effectful(mut)");
         }
 
         #[test]
@@ -5369,7 +5357,6 @@ mod tests {
             let e = Effect::Resolved(EffectSet {
                 reads: [c1].into_iter().collect(),
                 writes: [c2].into_iter().collect(),
-                io: false,
                 self_modifying: false,
             });
             let s = format!("{e}");
