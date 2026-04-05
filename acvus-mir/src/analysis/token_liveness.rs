@@ -236,7 +236,6 @@ mod tests {
                     effect: Effect::Resolved(EffectSet {
                         reads,
                         writes: BTreeSet::new(),
-                        self_modifying: false,
                     }),
                 },
                 hint: None,

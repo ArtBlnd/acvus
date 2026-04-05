@@ -135,11 +135,7 @@ fn main() {
             params,
             ret: Box::new(def.ret.to_ty(&interner)),
             captures: vec![],
-            effect: if def.effectful {
-                Effect::self_modifying()
-            } else {
-                Effect::pure()
-            },
+            effect: Effect::pure(), // TODO: construct proper effect from def
         };
         contexts.push(acvus_mir::graph::types::Context {
             qref: QualifiedRef::root(interner.intern(name)),

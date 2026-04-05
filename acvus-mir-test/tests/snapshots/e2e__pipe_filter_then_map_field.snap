@@ -21,25 +21,25 @@ expression: ir
     14 │   r11 = r9 + r10
     15 │   return r11
 
-    ; r0 (v20) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r0 (v20) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r1 (@users) : Ref<List<{age: Int, name: String}>>
     ; r2 (@users) : List<{age: Int, name: String}>
     ; r3 (@users) : Ref<List<{age: Int, name: String}>>
-    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn({age: Int, name: String}) -> Bool
-    ; r6 (filter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (filter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (v9) : Fn({age: Int, name: String}) -> String
-    ; r8 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r8 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (v14) : String
     ; r10 (join(...)) : String
     ; r11 (v19) : String
     ; r12 (v3) : String
     ; r13 (v17) : String
-    ; r14 (v12) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>>
-    ; r15 (v15) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>>
+    ; r14 (v12) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
+    ; r15 (v15) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
     ; r16 (v13) : String
     ; r17 (v5) : List<{age: Int, name: String}>
-    ; r18 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r18 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

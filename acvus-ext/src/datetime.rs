@@ -9,7 +9,7 @@ use acvus_interpreter::{
 };
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{Effect, Ownership, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
@@ -17,6 +17,7 @@ fn user_defined_ty(id: QualifiedRef) -> Ty {
         id,
         type_args: vec![],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -124,6 +125,7 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         qref,
         type_params: vec![],
         effect_params: vec![],
+        ownership: Ownership::Clone,
     });
 
     let ty = user_defined_ty(qref);

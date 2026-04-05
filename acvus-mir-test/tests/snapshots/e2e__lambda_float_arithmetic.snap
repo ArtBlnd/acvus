@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@vals) : Ref<List<Float>>
     ; r2 (@vals) : List<Float>
     ; r3 (@vals) : Ref<List<Float>>
-    ; r4 (iter(...)) : Iterator<Float, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<Float, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn(Float) -> Float
-    ; r6 (map(...)) : Iterator<Float, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (map(...)) : Iterator<Float, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (collect(...)) : List<Float>
     ; r8 (v13) : String
     ; r9 (len(...)) : Int

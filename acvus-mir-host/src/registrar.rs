@@ -61,22 +61,28 @@ impl<T> TypeMarker<T> {
 /// Autoref level 1 (highest priority): T: Copy.
 pub trait AutoregCopy {
     fn __register_type(&self, reg: &mut impl Registrar);
+    fn __ownership(&self) -> crate::Ownership;
 }
 
 /// Autoref level 2: T: Clone.
 pub trait AutoregClone {
     fn __register_type(&self, reg: &mut impl Registrar);
+    fn __ownership(&self) -> crate::Ownership;
 }
 
 /// Autoref level 3 (lowest priority): any T: ITy.
 pub trait AutoregMove {
     fn __register_type(&self, reg: &mut impl Registrar);
+    fn __ownership(&self) -> crate::Ownership;
 }
 
 impl<T: ITy + Copy> AutoregCopy for &&TypeMarker<T> {
     fn __register_type(&self, reg: &mut impl Registrar) {
         reg.register_drop::<T>(std::mem::drop);
         reg.register_copy::<T>();
+    }
+    fn __ownership(&self) -> crate::Ownership {
+        crate::Ownership::Copy
     }
 }
 
@@ -85,10 +91,16 @@ impl<T: ITy + Clone> AutoregClone for &TypeMarker<T> {
         reg.register_drop::<T>(std::mem::drop);
         reg.register_clone::<T>(T::clone);
     }
+    fn __ownership(&self) -> crate::Ownership {
+        crate::Ownership::Clone
+    }
 }
 
 impl<T: ITy> AutoregMove for TypeMarker<T> {
     fn __register_type(&self, reg: &mut impl Registrar) {
         reg.register_drop::<T>(std::mem::drop);
+    }
+    fn __ownership(&self) -> crate::Ownership {
+        crate::Ownership::MoveOnly
     }
 }

@@ -20,8 +20,8 @@ expression: ir
     ; r4 (v5) : List<Int>
     ; r5 (v9) : Ref<List<Int>>
     ; r6 ($xs) : List<Int>
-    ; r7 (v11) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r7 (v11) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r8 (v12) : Fn(Int) -> Int
-    ; r9 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r9 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r10 (collect(...)) : List<Int>
-    ; r11 (apply_double(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r11 (apply_double(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>

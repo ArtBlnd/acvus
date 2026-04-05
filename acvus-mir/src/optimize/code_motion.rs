@@ -587,11 +587,15 @@ mod tests {
         (
             qref,
             FnMetadata {
+                // IO functions have no context/token effects in the effect set —
+                // their "IO-ness" is conveyed by Hint::Io. Spawn is always
+                // hoistable regardless of effect; token liveness only blocks hoist
+                // when a token write appears in the effect set.
                 ty: Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
-                    effect: Effect::self_modifying(),
+                    effect: Effect::pure(),
                 },
                 hint: Some(crate::ty::Hint::Io),
             },
@@ -612,7 +616,6 @@ mod tests {
                     effect: Effect::Resolved(EffectSet {
                         reads,
                         writes: BTreeSet::new(),
-                        self_modifying: false,
                     }),
                 },
                 hint: None,

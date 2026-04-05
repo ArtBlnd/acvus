@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
-use crate::ty::{Effect, EffectTarget, Materiality, Param, Polarity, Ty, TySubst, TypeEnv};
+use crate::ty::{Effect, EffectTarget, Materiality, Ownership, Param, Polarity, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
 
 /// Maps each AST node id to its inferred type.
@@ -44,7 +44,7 @@ pub struct TypeResolution<S = Checked> {
     pub coercion_map: CoercionMap,
     pub tail_ty: Ty,
     /// Effect of the function body.
-    /// Contains reads/writes as QualifiedRef sets, io, and self_modifying flags.
+    /// Contains reads/writes as QualifiedRef sets.
     pub body_effect: Effect,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
@@ -146,10 +146,6 @@ pub fn check_effect_constraint(
             }
         }
     }
-    if actual.self_modifying && !allowed.self_modifying {
-        violations.push("is self-modifying".to_string());
-    }
-
     if violations.is_empty() {
         Ok(())
     } else {
@@ -201,7 +197,7 @@ pub struct TypeChecker<'a, 's> {
     /// correct id (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
     lambda_body_ids: FxHashMap<AstId, AstId>,
-    /// Top-level body effect. Tracks reads/writes as QualifiedRef, io, and self_modifying.
+    /// Top-level body effect. Tracks reads/writes as QualifiedRef.
     /// Starts as pure (empty EffectSet); updated as context access and effectful calls occur.
     body_effect: Effect,
     /// In analysis mode: free parameters discovered during typecheck.
@@ -2570,6 +2566,7 @@ mod tests {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
@@ -2590,6 +2587,7 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), conn_ty.clone()),

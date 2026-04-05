@@ -870,8 +870,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "move-only")]
     fn share_effectful_iterator_panics() {
-        use acvus_mir::ty::Effect;
-        let v = Value::iterator(IterHandle::done(Effect::self_modifying()));
+        use std::collections::BTreeSet;
+        use acvus_mir::graph::QualifiedRef;
+        use acvus_mir::ty::{Effect, EffectSet, EffectTarget};
+        use acvus_utils::Interner;
+        let interner = Interner::new();
+        let effectful = Effect::Resolved(EffectSet {
+            reads: BTreeSet::new(),
+            writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+        });
+        let v = Value::iterator(IterHandle::done(effectful));
         let _ = v.share();
     }
 

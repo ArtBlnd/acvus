@@ -3,10 +3,19 @@
 //! Tests compile multiple local functions, inline, and snapshot the resulting IR.
 //! Organized by category with soundness and completeness coverage.
 
+use std::collections::BTreeSet;
+
 use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, Ty};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
+
+fn test_effectful(interner: &Interner) -> Effect {
+    Effect::Resolved(EffectSet {
+        reads: BTreeSet::new(),
+        writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+    })
+}
 
 fn sig(i: &Interner, params: &[(&str, Ty)]) -> Option<Signature> {
     Some(Signature {
@@ -419,7 +428,7 @@ fn inline_io_effect_extern_inside() {
                 params: vec![Param::new(i.intern("id"), Ty::Int)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                effect: Effect::self_modifying(),
+                effect: test_effectful(&i),
             }),
             effect: None,
             hint: None,

@@ -132,7 +132,6 @@ async fn extern_reads_context() {
                     Effect::Resolved(EffectSet {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::new(),
-                        self_modifying: false,
                     }),
                 ),
             )
@@ -169,7 +168,6 @@ async fn extern_writes_context() {
                     Effect::Resolved(EffectSet {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                        self_modifying: false,
                     }),
                 ),
             )
@@ -207,7 +205,6 @@ async fn extern_reads_and_writes_context() {
                     Effect::Resolved(EffectSet {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                        self_modifying: false,
                     }),
                 ),
             )
@@ -251,7 +248,6 @@ async fn extern_multiple_calls_sequential() {
                     Effect::Resolved(EffectSet {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                        self_modifying: false,
                     }),
                 ),
             )
@@ -367,7 +363,6 @@ fn ir_function_call_has_context_bindings() {
                     Effect::Resolved(EffectSet {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                        self_modifying: false,
                     }),
                 ),
             )
@@ -527,11 +522,10 @@ fn ir_pure_function_call_no_context_bindings() {
 //
 // Each test dumps the optimized MIR to stderr (--nocapture) for inspection.
 
-fn io_effect() -> Effect {
-    Effect::Resolved(EffectSet {
-        self_modifying: true,
-        ..Default::default()
-    })
+fn io_effect(_interner: &acvus_utils::Interner) -> Effect {
+    // IO functions have no context reads/writes — their IO-ness is expressed
+    // via Hint::Io, not through the effect system.
+    Effect::pure()
 }
 
 /// Registry with 4 independent IO functions (no args) + 1 parameterized.
@@ -540,28 +534,28 @@ fn io_registry() -> ExternRegistry {
         vec![
             ExternFnBuilder::new(
                 "fetch_a",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(), Some(Hint::Io)),
+                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((100i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_b",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(), Some(Hint::Io)),
+                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((200i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_c",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(), Some(Hint::Io)),
+                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((300i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_d",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(), Some(Hint::Io)),
+                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((400i64, Defs(())))),
             // Parameterized: fetch_by(x) = x * 10
             ExternFnBuilder::new(
                 "fetch_by",
-                sig_effect_hint(interner, vec![Ty::Int], Ty::Int, io_effect(), Some(Hint::Io)),
+                sig_effect_hint(interner, vec![Ty::Int], Ty::Int, io_effect(interner), Some(Hint::Io)),
             )
             .handler(|_: &Interner, (x,): (i64,), Uses(()): Uses<()>| Ok((x * 10, Defs(())))),
         ]

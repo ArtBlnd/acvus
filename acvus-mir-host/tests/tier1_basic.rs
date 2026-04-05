@@ -2,8 +2,8 @@
 
 use acvus_mir_host::testing::{DummyRegistrar, DummyScope};
 use acvus_mir_host::{
-    extern_fn, Callable, EffectParam, ExternFnDef, ExternType, Hosted,
-    ITy, Monomorphize, Scope, Ty,
+    extern_fn, Callable, Eff, EffectParam, ExternFnDef, ExternType, Hosted,
+    ITy, Monomorphize, Scope, Ty, Typeck,
 };
 use acvus_mir::ty::Effect;
 use acvus_utils::{Interner, QualifiedRef};
@@ -209,7 +209,7 @@ unsafe impl<T: Hosted, E: EffectParam> Hosted for AcvusIter<T, E> {}
 #[test]
 fn iter_type_decl() {
     let interner = Interner::new();
-    let decl = AcvusIter::<(), ()>::type_decl(&interner);
+    let decl = AcvusIter::<Typeck<0>, Eff<0>>::type_decl(&interner);
     assert_eq!(decl.qref, QualifiedRef::root(interner.intern("Iterator")));
     assert_eq!(decl.type_params.len(), 1);
     assert_eq!(decl.effect_params.len(), 1);

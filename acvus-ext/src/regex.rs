@@ -6,7 +6,7 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{Effect, Ownership, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
@@ -14,6 +14,7 @@ fn user_defined_ty(id: QualifiedRef) -> Ty {
         id,
         type_args: vec![],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -81,6 +82,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
         qref,
         type_params: vec![],
         effect_params: vec![],
+        ownership: Ownership::Clone,
     });
 
     let ty = user_defined_ty(qref);
@@ -127,7 +129,8 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::self_modifying()],
+                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
+                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )
@@ -135,7 +138,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::self_modifying(), move || {
+                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
                             let m = re.find_at(&text, start)?;
                             start = m.end();
                             Some(Value::string(m.as_str()))
@@ -168,7 +171,8 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::self_modifying()],
+                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
+                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )
@@ -177,7 +181,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     let mut last_end = 0;
                     let mut done = false;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::self_modifying(), move || {
+                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
                             if done {
                                 return None;
                             }
@@ -205,7 +209,8 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::self_modifying()],
+                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
+                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )
@@ -213,7 +218,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (text, Re(re, _)): (String, Re), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::self_modifying(), move || {
+                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
                             loop {
                                 let caps = re.captures_at(&text, start)?;
                                 let full = caps.get(0)?;

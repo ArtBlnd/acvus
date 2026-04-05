@@ -10,7 +10,7 @@ use acvus_interpreter::{
     Args, ExternFnBuilder, ExternRegistry, IterHandle, RuntimeError, Value, exec_next,
 };
 use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, Ownership, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
@@ -309,6 +309,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         qref: iter_qref,
         type_params: vec![None],
         effect_params: vec![None],
+        ownership: Ownership::MoveOnly,
     });
 
     // Register CastRules: List<T> → Iterator<T, Pure>, Deque<T, O> → Iterator<T, Pure>.
@@ -321,6 +322,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![Effect::pure()],
+                ownership: Ownership::MoveOnly,
             },
             fn_ref: QualifiedRef::root(interner.intern("iter")),
         });
@@ -335,6 +337,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![Effect::pure()],
+                ownership: Ownership::MoveOnly,
             },
             fn_ref: QualifiedRef::root(interner.intern("__cast_deque_to_iter")),
         });
@@ -347,6 +350,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
+                ownership: Ownership::MoveOnly,
             }
         };
 

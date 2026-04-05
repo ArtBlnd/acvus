@@ -3313,7 +3313,6 @@ mod tests {
                 qref,
             )])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
-            self_modifying: false,
         };
         let (result, fid) = infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3331,7 +3330,6 @@ mod tests {
                 qref,
             )])),
             writes: EffectBound::Only(std::collections::BTreeSet::new()),
-            self_modifying: false,
         };
         let (result, _fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3357,7 +3355,6 @@ mod tests {
             writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
-            self_modifying: false,
         };
         let (result, fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3377,7 +3374,6 @@ mod tests {
             writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref_x,
             )])),
-            self_modifying: false,
         };
         let (result, _fid) = infer_with_effect(
             &i,

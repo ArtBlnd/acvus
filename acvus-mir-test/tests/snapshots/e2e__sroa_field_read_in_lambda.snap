@@ -22,11 +22,11 @@ expression: ir
     ; r0 (@users) : Ref<List<{name: String}>>
     ; r1 (@users) : List<{name: String}>
     ; r2 (@users) : Ref<List<{name: String}>>
-    ; r3 (iter(...)) : Iterator<{name: String}, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r3 (iter(...)) : Iterator<{name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r4 (v7) : Fn({name: String}) -> String
-    ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r6 (collect(...)) : List<String>
-    ; r7 (v10) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r7 (v10) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r8 (join(...)) : String
     ; r9 (v13) : String
     ; r10 (v11) : String

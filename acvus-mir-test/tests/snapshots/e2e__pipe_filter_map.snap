@@ -26,11 +26,11 @@ expression: ir
     ; r1 (@items) : Ref<List<Int>>
     ; r2 (@items) : List<Int>
     ; r3 (@items) : Ref<List<Int>>
-    ; r4 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn(Int) -> Bool
-    ; r6 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (v9) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (collect(...)) : List<Int>
     ; r10 (v15) : String
     ; r11 (len(...)) : Int

@@ -28,9 +28,9 @@ expression: ir
     ; r3 (@threshold) : Ref<Int>
     ; r4 (@threshold) : Int
     ; r5 (@items) : Ref<List<Int>>
-    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (v9) : Fn(Int) -> Bool
-    ; r8 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r8 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (collect(...)) : List<Int>
     ; r10 (v15) : String
     ; r11 (len(...)) : Int

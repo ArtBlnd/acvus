@@ -20,22 +20,22 @@ expression: ir
     12 │   r9 = r7 + r8
     13 │   return r9
 
-    ; r0 (v18) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r0 (v18) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r1 (@names) : Ref<List<String>>
     ; r2 (@names) : List<String>
     ; r3 (@names) : Ref<List<String>>
-    ; r4 (iter(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn(String) -> String
-    ; r6 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (v12) : String
     ; r8 (join(...)) : String
     ; r9 (v17) : String
     ; r10 (v3) : String
     ; r11 (v11) : String
-    ; r12 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r12 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r13 (v15) : String
-    ; r14 (v10) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>>
-    ; r15 (v13) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>>
+    ; r14 (v10) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
+    ; r15 (v13) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
     ; r16 (v5) : List<String>
 
 === closure L0 (ValueId(0)) ===

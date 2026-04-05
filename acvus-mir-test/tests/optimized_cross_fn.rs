@@ -6,10 +6,19 @@
 //!
 //! Tests exercise: inlining, Spawn/Eval splitting, code motion, DSE, DCE, phi insertion.
 
+use std::collections::BTreeSet;
+
 use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, Ty};
 use acvus_mir_test::{compile_multi_fn_optimized, compile_multi_fn_raw};
 use acvus_utils::Interner;
+
+fn test_effectful(interner: &Interner) -> Effect {
+    Effect::Resolved(EffectSet {
+        reads: BTreeSet::new(),
+        writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+    })
+}
 
 fn sig(i: &Interner, params: &[(&str, Ty)]) -> Option<Signature> {
     Some(Signature {
@@ -36,7 +45,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
                 params: sig_params,
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: Effect::self_modifying(),
+                effect: test_effectful(i),
             }),
             effect: None,
             hint: None,

@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{Callee, Inst, InstKind, MirBody, MirModule, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Ownership, Ty};
 
 use super::type_check::{ValidationError, ValidationErrorKind};
 
@@ -41,8 +41,8 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         // Handle — always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
-        // UserDefined — always move-only (unknown internals)
-        Ty::UserDefined { .. } => Some(true),
+        // UserDefined — determined by ownership field
+        Ty::UserDefined { ownership, .. } => Some(*ownership == Ownership::MoveOnly),
 
         // Containers — transitive
         Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => is_move_only(inner),
@@ -715,6 +715,7 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         }
     }
 
@@ -754,7 +755,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
-            effect: Effect::self_modifying(), // effect of the fn doesn't matter, only captures
+            effect: Effect::pure(), // effect of the fn doesn't matter, only captures
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }

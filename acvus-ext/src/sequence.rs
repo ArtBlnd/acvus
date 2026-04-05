@@ -3,7 +3,7 @@
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value, exec_next};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, Ownership, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
@@ -99,6 +99,7 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         qref: seq_qref,
         type_params: vec![None, None], // T, O
         effect_params: vec![None],     // E
+        ownership: Ownership::MoveOnly,
     });
 
     // CastRule: Deque<T, O> → Sequence<T, O, Pure>
@@ -112,6 +113,7 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: seq_qref,
                 type_args: vec![t, o],
                 effect_args: vec![Effect::pure()],
+                ownership: Ownership::MoveOnly,
             },
             fn_ref: QualifiedRef::root(interner.intern("__cast_deque_to_seq")),
         });
@@ -127,11 +129,13 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: seq_qref,
                 type_args: vec![t.clone(), o],
                 effect_args: vec![e.clone()],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
+                ownership: Ownership::MoveOnly,
             },
             fn_ref: QualifiedRef::root(interner.intern("__cast_seq_to_iter")),
         });
@@ -144,6 +148,7 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: seq_qref,
                 type_args: vec![t, o],
                 effect_args: vec![e],
+                ownership: Ownership::MoveOnly,
             }
         };
         // Helper: Iterator<T, E>
@@ -152,6 +157,7 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
+                ownership: Ownership::MoveOnly,
             }
         };
 

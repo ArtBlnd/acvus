@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@users) : Ref<List<{age: Int, name: String}>>
     ; r2 (@users) : List<{age: Int, name: String}>
     ; r3 (@users) : Ref<List<{age: Int, name: String}>>
-    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn({age: Int, name: String}) -> (String, Int)
-    ; r6 (map(...)) : Iterator<(String, Int), Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (map(...)) : Iterator<(String, Int), Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (collect(...)) : List<(String, Int)>
     ; r8 (v13) : String
     ; r9 (len(...)) : Int

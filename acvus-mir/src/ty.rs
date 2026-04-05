@@ -3,10 +3,23 @@ use std::fmt;
 
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::graph::types::QualifiedRef;
 
 // ── UserDefined type system ──────────────────────────────────────────
+
+/// Ownership classification: how a value of this type may be used.
+///
+/// - `Copy`: trivially duplicated (e.g. integers, booleans).
+/// - `Clone`: explicitly duplicated (e.g. strings, lists).
+/// - `MoveOnly`: consumed on use, cannot be duplicated (e.g. handles, iterators).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Ownership {
+    Copy,
+    Clone,
+    MoveOnly,
+}
 
 /// Declaration of a user-defined type — the **single source of truth**
 /// for parameter count and constraints. Registered once, referenced by QualifiedRef everywhere.
@@ -17,6 +30,8 @@ pub struct UserDefinedDecl {
     pub type_params: Vec<Option<ParamConstraint>>,
     /// Effect parameter constraints. `None` = unconstrained.
     pub effect_params: Vec<Option<EffectConstraint>>,
+    /// How values of this type may be used (Copy, Clone, or MoveOnly).
+    pub ownership: Ownership,
 }
 
 /// Immutable registry of all UserDefined type declarations and ExternCast rules.
@@ -346,19 +361,22 @@ pub enum Hint {
 
 /// Fine-grained effect information: which contexts are read/written.
 ///
-/// Pure = all fields empty/false. No separate variant needed.
+/// Pure = all fields empty. No separate variant needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct EffectSet {
     pub reads: BTreeSet<EffectTarget>,
     pub writes: BTreeSet<EffectTarget>,
-    /// Value is consumed/mutated on use (e.g. Iterator cursor advance).
-    /// Propagates through combinators: map(self_mod_iter, f) → self_mod.
-    pub self_modifying: bool,
 }
 
 impl EffectSet {
     pub fn is_pure(&self) -> bool {
-        self.reads.is_empty() && self.writes.is_empty() && !self.self_modifying
+        self.reads.is_empty() && self.writes.is_empty()
+    }
+
+    /// Whether this effect set contains writes — i.e. the value is modifying.
+    /// Modifying values are move-only (no Clone) and require sequential execution.
+    pub fn is_modifying(&self) -> bool {
+        !self.writes.is_empty()
     }
 
     /// Union of two effect sets. All effects propagate (contagious).
@@ -366,7 +384,6 @@ impl EffectSet {
         Self {
             reads: self.reads.union(&other.reads).copied().collect(),
             writes: self.writes.union(&other.writes).copied().collect(),
-            self_modifying: self.self_modifying || other.self_modifying,
         }
     }
 }
@@ -383,9 +400,6 @@ impl fmt::Display for EffectSet {
         }
         if !self.writes.is_empty() {
             parts.push(format!("w={}", self.writes.len()));
-        }
-        if self.self_modifying {
-            parts.push("mut".to_string());
         }
         write!(f, "{})", parts.join(", "))
     }
@@ -409,7 +423,6 @@ pub enum EffectBound {
 pub struct EffectConstraint {
     pub reads: EffectBound,
     pub writes: EffectBound,
-    pub self_modifying: bool,
 }
 
 impl EffectConstraint {
@@ -418,7 +431,6 @@ impl EffectConstraint {
         Self {
             reads: EffectBound::Only(BTreeSet::new()),
             writes: EffectBound::Only(BTreeSet::new()),
-            self_modifying: false,
         }
     }
 
@@ -427,7 +439,6 @@ impl EffectConstraint {
         Self {
             reads: EffectBound::Any,
             writes: EffectBound::Only(BTreeSet::new()),
-            self_modifying: true,
         }
     }
 }
@@ -446,14 +457,6 @@ impl Effect {
     /// No side effects: reads nothing, writes nothing.
     pub fn pure() -> Self {
         Effect::Resolved(EffectSet::default())
-    }
-
-    /// Self-modifying effect: value mutates on use (e.g. Iterator cursor).
-    pub fn self_modifying() -> Self {
-        Effect::Resolved(EffectSet {
-            self_modifying: true,
-            ..EffectSet::default()
-        })
     }
 
     pub fn is_pure(&self) -> bool {
@@ -538,6 +541,7 @@ pub enum Ty {
         id: QualifiedRef,
         type_args: Vec<Ty>,
         effect_args: Vec<Effect>,
+        ownership: Ownership,
     },
     Option(Box<Ty>),
     /// User-defined structural enum type.
@@ -779,6 +783,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 id,
                 type_args,
                 effect_args,
+                ..
             } => {
                 let name = self.interner.resolve(id.name);
                 write!(f, "{name}")?;
@@ -1017,20 +1022,48 @@ impl TySubst {
         }
     }
 
-    /// Effect LUB: rebind effect vars to the union of both effects.
-    /// Falls back to `io()` (lattice top) when union is not computable.
-    fn coerce_effects_to_effectful(&mut self, ea: &Effect, eb: &Effect) {
+    /// Effect LUB: compute the union of two effects, binding any Vars.
+    /// Returns the merged effect.
+    fn merge_effects(&mut self, ea: &Effect, eb: &Effect) -> Effect {
         let resolved_a = self.resolve_effect(ea);
         let resolved_b = self.resolve_effect(eb);
-        let merged = match (&resolved_a, &resolved_b) {
-            (Effect::Resolved(sa), Effect::Resolved(sb)) => Effect::Resolved(sa.union(sb)),
-            _ => Effect::self_modifying(),
-        };
-        if let Some(v) = self.find_leaf_effect_var(ea) {
-            self.effect_bindings.insert(v, merged.clone());
-        }
-        if let Some(v) = self.find_leaf_effect_var(eb) {
-            self.effect_bindings.insert(v, merged);
+        match (&resolved_a, &resolved_b) {
+            (Effect::Resolved(sa), Effect::Resolved(sb)) => {
+                let merged = Effect::Resolved(sa.union(sb));
+                if let Some(v) = self.find_leaf_effect_var(ea) {
+                    self.effect_bindings.insert(v, merged.clone());
+                }
+                if let Some(v) = self.find_leaf_effect_var(eb) {
+                    self.effect_bindings.insert(v, merged.clone());
+                }
+                merged
+            }
+            (Effect::Resolved(_), Effect::Var(_)) => {
+                if let Some(v) = self.find_leaf_effect_var(eb) {
+                    self.effect_bindings.insert(v, resolved_a.clone());
+                }
+                resolved_a
+            }
+            (Effect::Var(_), Effect::Resolved(_)) => {
+                if let Some(v) = self.find_leaf_effect_var(ea) {
+                    self.effect_bindings.insert(v, resolved_b.clone());
+                }
+                resolved_b
+            }
+            (Effect::Var(_), Effect::Var(_)) => {
+                // Unify: bind a's leaf var to b's leaf var.
+                let va = self.find_leaf_effect_var(ea);
+                let vb = self.find_leaf_effect_var(eb);
+                match (va, vb) {
+                    (Some(va), Some(vb)) if va != vb => {
+                        self.effect_bindings.insert(va, Effect::Var(vb));
+                        Effect::Var(vb)
+                    }
+                    (Some(va), _) => Effect::Var(va),
+                    (_, Some(vb)) => Effect::Var(vb),
+                    _ => resolved_a,
+                }
+            }
         }
     }
 
@@ -1084,10 +1117,7 @@ impl TySubst {
                     self.unify(&a.ty, &b.ty, Polarity::Invariant).ok()?;
                 }
                 self.unify(ra, rb, Polarity::Invariant).ok()?;
-                self.coerce_effects_to_effectful(ea, eb);
-                let resolved_a = self.resolve_effect(ea);
-                let resolved_b = self.resolve_effect(eb);
-                let merged = resolved_a.union(&resolved_b).unwrap_or_else(Effect::self_modifying);
+                let merged = self.merge_effects(ea, eb);
                 Some(Ty::Fn {
                     params: pa
                         .iter()
@@ -1108,11 +1138,13 @@ impl TySubst {
                     id: id_a,
                     type_args: ta_a,
                     effect_args: ea_a,
+                    ownership: ownership_a,
                 },
                 Ty::UserDefined {
                     id: id_b,
                     type_args: ta_b,
                     effect_args: ea_b,
+                    ..
                 },
             ) if id_a == id_b => {
                 assert_eq!(ta_a.len(), ta_b.len());
@@ -1130,17 +1162,13 @@ impl TySubst {
                     let merged_effects: Vec<Effect> = ea_a
                         .iter()
                         .zip(ea_b.iter())
-                        .map(|(ea, eb)| {
-                            self.coerce_effects_to_effectful(ea, eb);
-                            let ra = self.resolve_effect(ea);
-                            let rb = self.resolve_effect(eb);
-                            ra.union(&rb).unwrap_or_else(Effect::self_modifying)
-                        })
+                        .map(|(ea, eb)| self.merge_effects(ea, eb))
                         .collect();
                     Some(Ty::UserDefined {
                         id: *id_a,
                         type_args: ta_a.iter().map(|t| self.resolve(t)).collect(),
                         effect_args: merged_effects,
+                        ownership: *ownership_a,
                     })
                 } else {
                     // type_args mismatch — rollback and try CastRule-based LUB.
@@ -1295,10 +1323,12 @@ impl TySubst {
                 id,
                 type_args,
                 effect_args,
+                ownership,
             } => Ty::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|t| self.resolve(t)).collect(),
                 effect_args: effect_args.iter().map(|e| self.resolve_effect(e)).collect(),
+                ownership: *ownership,
             },
             other => other.clone(),
         }
@@ -1372,11 +1402,13 @@ impl TySubst {
                     id: id_a,
                     type_args: ta_args,
                     effect_args: ea_args,
+                    ..
                 },
                 Ty::UserDefined {
                     id: id_b,
                     type_args: tb_args,
                     effect_args: eb_args,
+                    ..
                 },
             ) if id_a == id_b => {
                 // Same UserDefined type — unify args pairwise.
@@ -1864,6 +1896,7 @@ impl TySubst {
                 id,
                 type_args,
                 effect_args,
+                ownership,
             } => Ty::UserDefined {
                 id: *id,
                 type_args: type_args
@@ -1874,6 +1907,7 @@ impl TySubst {
                     .iter()
                     .map(|e| self.instantiate_effect(e, effect_map))
                     .collect(),
+                ownership: *ownership,
             },
             Ty::Handle(inner, effect) => {
                 let new_e = self.instantiate_effect(effect, effect_map);
@@ -1980,6 +2014,18 @@ mod tests {
 
     use Polarity::*;
 
+    /// Test helper: create a non-pure resolved effect with a dummy write target.
+    /// Used in place of the removed Effect::self_modifying().
+    fn effectful() -> Effect {
+        let i = Interner::new();
+        Effect::Resolved(EffectSet {
+            reads: std::collections::BTreeSet::new(),
+            writes: std::collections::BTreeSet::from([EffectTarget::Token(
+                QualifiedRef::root(i.intern("__test")),
+            )]),
+        })
+    }
+
     /// Test helper: create a unique `QualifiedRef` for each call.
     /// Uses a thread-local counter to ensure uniqueness across tests.
     fn fresh_qref() -> QualifiedRef {
@@ -1998,6 +2044,7 @@ mod tests {
             id: fresh_qref(),
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         }
     }
 
@@ -3725,6 +3772,7 @@ mod tests {
             id,
             type_args,
             effect_args,
+            ownership: Ownership::MoveOnly,
         }
     }
 
@@ -3841,7 +3889,7 @@ mod tests {
         assert!(
             s.unify(
                 &ud(id, vec![], vec![Effect::pure()]),
-                &ud(id, vec![], vec![Effect::self_modifying()]),
+                &ud(id, vec![], vec![effectful()]),
                 Invariant,
             )
             .is_err()
@@ -3874,7 +3922,8 @@ mod tests {
 
         // Bind via unification
         assert!(s.unify(&p, &Ty::Int, Invariant).is_ok());
-        assert!(s.unify_effects(&e, &Effect::self_modifying(), Covariant).is_ok());
+        let eff = effectful();
+        assert!(s.unify_effects(&e, &eff, Covariant).is_ok());
 
         let resolved = s.resolve(&ty);
         match resolved {
@@ -3882,10 +3931,11 @@ mod tests {
                 id: rid,
                 type_args,
                 effect_args,
+                ..
             } => {
                 assert_eq!(rid, id);
                 assert_eq!(type_args, vec![Ty::Int]);
-                assert_eq!(effect_args, vec![Effect::self_modifying()]);
+                assert_eq!(effect_args, vec![eff]);
             }
             _ => panic!("expected UserDefined, got {resolved:?}"),
         }
@@ -3917,6 +3967,7 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         let decl = reg.get(id);
         assert_eq!(decl.qref, id);
@@ -3932,11 +3983,13 @@ mod tests {
             qref: id,
             type_params: vec![],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
     }
 
@@ -3967,6 +4020,7 @@ mod tests {
             id,
             type_args: params.clone(),
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
@@ -3974,6 +4028,7 @@ mod tests {
             qref: id,
             type_params: vec![None; type_param_count],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         reg.register_cast(CastRule {
             from,
@@ -3995,6 +4050,7 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         let to = Ty::List(Box::new(Ty::Int));
         assert!(s.unify(&from, &to, Covariant).is_ok());
@@ -4010,6 +4066,7 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         let consumer_param = s.fresh_param();
         let to = Ty::List(Box::new(consumer_param.clone()));
@@ -4026,6 +4083,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Covariant).is_ok());
     }
@@ -4041,6 +4099,7 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::String, Covariant).is_err());
     }
@@ -4055,6 +4114,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Covariant).is_err());
     }
@@ -4068,6 +4128,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Invariant).is_err());
     }
@@ -4090,6 +4151,7 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t1)),
             fn_ref: fn_id_a,
@@ -4101,6 +4163,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -4112,6 +4175,7 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
@@ -4121,6 +4185,7 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         };
         assert!(
             s.unify(&from, &Ty::List(Box::new(Ty::Int)), Covariant)
@@ -4145,12 +4210,14 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         reg.register_cast(CastRule {
             from: Ty::UserDefined {
                 id,
                 type_args: vec![t.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t.clone())),
             fn_ref: fn_id_a,
@@ -4163,6 +4230,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -4181,6 +4249,7 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
+            ownership: Ownership::MoveOnly,
         });
         let mut s1 = TySubst::new();
         let t1 = s1.fresh_param();
@@ -4189,6 +4258,7 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t1)),
             fn_ref: fn_id_a,
@@ -4201,6 +4271,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                ownership: Ownership::MoveOnly,
             },
             to: Ty::Option(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -4771,7 +4842,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::self_modifying(),
+            effect: effectful(),
         };
         assert!(s.unify(&a, &b, Invariant).is_err());
     }
@@ -4792,7 +4863,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::self_modifying(),
+            effect: effectful(),
         };
         assert!(s.unify(&v, &pure_fn, Covariant).is_ok());
         assert!(s.unify(&v, &effectful_fn, Covariant).is_ok());
@@ -4814,7 +4885,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::self_modifying(),
+            effect: effectful(),
         };
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
@@ -4840,7 +4911,7 @@ mod tests {
             ret: Box::new(Ty::String),
 
             captures: vec![],
-            effect: Effect::self_modifying(),
+            effect: effectful(),
         };
         assert_eq!(format!("{}", ty.display(&i)), "Fn!(Int) -> String");
     }
@@ -4922,7 +4993,7 @@ mod tests {
             ret: Box::new(Ty::Int),
 
             captures: vec![],
-            effect: Effect::self_modifying(),
+            effect: effectful(),
         };
         assert!(!fn_ty.is_materializable());
     }
@@ -5018,6 +5089,18 @@ mod tests {
             EffectTarget::Context(QualifiedRef::root(interner.intern(&format!("ctx_{n}"))))
         }
 
+        /// Helper: a non-pure resolved effect with a dummy write target.
+        /// Used in place of the removed Effect::self_modifying().
+        fn effectful() -> Effect {
+            let i = Interner::new();
+            Effect::Resolved(EffectSet {
+                reads: std::collections::BTreeSet::new(),
+                writes: std::collections::BTreeSet::from([EffectTarget::Token(
+                    QualifiedRef::root(i.intern("__test")),
+                )]),
+            })
+        }
+
         #[test]
         fn default_is_pure() {
             let s = EffectSet::default();
@@ -5025,12 +5108,15 @@ mod tests {
         }
 
         #[test]
-        fn self_modifying_only_is_not_pure() {
+        fn writes_only_is_not_pure_and_modifying() {
+            let i = Interner::new();
+            let c = ctx(&i, 0);
             let s = EffectSet {
-                self_modifying: true,
+                writes: [c].into_iter().collect(),
                 ..Default::default()
             };
             assert!(!s.is_pure());
+            assert!(s.is_modifying());
         }
 
         #[test]
@@ -5120,27 +5206,32 @@ mod tests {
         }
 
         #[test]
-        fn union_self_modifying_propagates() {
+        fn union_modifying_propagates() {
+            let i = Interner::new();
+            let c = ctx(&i, 0);
             let a = EffectSet {
-                self_modifying: true,
+                writes: [c].into_iter().collect(),
                 ..Default::default()
             };
             let b = EffectSet::default();
-            assert!(a.union(&b).self_modifying);
-            assert!(b.union(&a).self_modifying);
+            assert!(a.union(&b).is_modifying());
+            assert!(b.union(&a).is_modifying());
         }
 
         #[test]
-        fn union_self_modifying_both_true() {
+        fn union_modifying_both_true() {
+            let i = Interner::new();
+            let c1 = ctx(&i, 0);
+            let c2 = ctx(&i, 1);
             let a = EffectSet {
-                self_modifying: true,
+                writes: [c1].into_iter().collect(),
                 ..Default::default()
             };
             let b = EffectSet {
-                self_modifying: true,
+                writes: [c2].into_iter().collect(),
                 ..Default::default()
             };
-            assert!(a.union(&b).self_modifying);
+            assert!(a.union(&b).is_modifying());
         }
 
         // ── Effect enum tests ───────────────────────────────────────
@@ -5153,10 +5244,10 @@ mod tests {
         }
 
         #[test]
-        fn effect_self_modifying_is_effectful() {
-            assert!(!Effect::self_modifying().is_pure());
-            assert!(Effect::self_modifying().is_effectful());
-            assert!(!Effect::self_modifying().is_var());
+        fn effect_with_writes_is_effectful() {
+            assert!(!effectful().is_pure());
+            assert!(effectful().is_effectful());
+            assert!(!effectful().is_var());
         }
 
         #[test]
@@ -5210,7 +5301,7 @@ mod tests {
         fn unify_var_binds_to_resolved() {
             let mut s = TySubst::new();
             let var = s.fresh_effect_var();
-            let concrete = Effect::self_modifying();
+            let concrete = effectful();
             assert!(s.unify_effect(&var, &concrete).is_ok());
             let resolved = s.resolve_effect(&var);
             assert!(resolved.is_effectful());
@@ -5234,13 +5325,13 @@ mod tests {
         #[test]
         fn unify_effectful_effectful_ok() {
             let mut s = TySubst::new();
-            assert!(s.unify_effect(&Effect::self_modifying(), &Effect::self_modifying()).is_ok());
+            assert!(s.unify_effect(&effectful(), &effectful()).is_ok());
         }
 
         #[test]
         fn unify_pure_effectful_invariant_fails() {
             let mut s = TySubst::new();
-            assert!(s.unify_effect(&Effect::pure(), &Effect::self_modifying()).is_err());
+            assert!(s.unify_effect(&Effect::pure(), &effectful()).is_err());
         }
 
         #[test]
@@ -5248,7 +5339,7 @@ mod tests {
             let mut s = TySubst::new();
             // Pure ≤ Effectful in covariant position
             assert!(
-                s.unify_effects(&Effect::pure(), &Effect::self_modifying(), Covariant)
+                s.unify_effects(&Effect::pure(), &effectful(), Covariant)
                     .is_ok()
             );
         }
@@ -5258,7 +5349,7 @@ mod tests {
             let mut s = TySubst::new();
             // Effectful ≤ Pure in covariant position — should fail
             assert!(
-                s.unify_effects(&Effect::self_modifying(), &Effect::pure(), Covariant)
+                s.unify_effects(&effectful(), &Effect::pure(), Covariant)
                     .is_err()
             );
         }
@@ -5276,7 +5367,7 @@ mod tests {
             let mut s = TySubst::new();
             let v0 = s.fresh_effect_var();
             let v1 = s.fresh_effect_var();
-            let concrete = Effect::self_modifying();
+            let concrete = effectful();
             // v0 → v1 → concrete
             assert!(s.unify_effect(&v0, &v1).is_ok());
             assert!(s.unify_effect(&v1, &concrete).is_ok());
@@ -5291,7 +5382,7 @@ mod tests {
             let v1 = s.fresh_effect_var();
             assert!(s.unify_effect(&v0, &v1).is_ok());
             // Bind one → both resolve to same
-            let concrete = Effect::self_modifying();
+            let concrete = effectful();
             assert!(s.unify_effect(&v1, &concrete).is_ok());
             assert!(s.resolve_effect(&v0).is_effectful());
             assert!(s.resolve_effect(&v1).is_effectful());
@@ -5305,7 +5396,6 @@ mod tests {
             let e = Effect::Resolved(EffectSet {
                 reads: [c1].into_iter().collect(),
                 writes: [c2].into_iter().collect(),
-                self_modifying: false,
             });
             assert!(!e.is_pure());
             assert!(e.is_effectful());
@@ -5345,8 +5435,9 @@ mod tests {
         }
 
         #[test]
-        fn display_self_modifying() {
-            assert_eq!(format!("{}", Effect::self_modifying()), "Effectful(mut)");
+        fn display_effectful_writes_only() {
+            // An effect with only writes displays as "Effectful(w=N)".
+            assert_eq!(format!("{}", effectful()), "Effectful(w=1)");
         }
 
         #[test]
@@ -5357,7 +5448,6 @@ mod tests {
             let e = Effect::Resolved(EffectSet {
                 reads: [c1].into_iter().collect(),
                 writes: [c2].into_iter().collect(),
-                self_modifying: false,
             });
             let s = format!("{e}");
             assert!(s.starts_with("Effectful("));

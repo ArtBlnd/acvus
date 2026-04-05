@@ -71,7 +71,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 
 /// Is this instruction a root (has side effects, unconditionally live)?
 ///
-/// An instruction with ANY effect (read, write, IO, self_modifying) must not
+/// An instruction with ANY effect (read, write, IO) must not
 /// be removed. Only provably pure instructions can be dead.
 fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> bool {
     match kind {

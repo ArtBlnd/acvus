@@ -100,17 +100,31 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     id: #qref_expr,
                     type_args: vec![#(#type_arg_exprs),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
+                    ownership: {
+                        use ::acvus_mir_host::AutoregCopy as _;
+                        use ::acvus_mir_host::AutoregClone as _;
+                        use ::acvus_mir_host::AutoregMove as _;
+                        (&&&::acvus_mir_host::TypeMarker::<#struct_name<#(#param_names),*>>::new()).__ownership()
+                    },
                 }
             }
         }
 
-        impl<#(#all_params),*> #struct_name<#(#param_names),*> {
+        impl<#(#all_params),*> #struct_name<#(#param_names),*>
+        where #(#all_bounds),*
+        {
             /// Build the UserDefinedDecl for registering in TypeRegistry.
             pub fn type_decl(__i: &::acvus_mir_host::Interner) -> ::acvus_mir_host::UserDefinedDecl {
                 ::acvus_mir_host::UserDefinedDecl {
                     qref: #qref_expr,
                     type_params: vec![None; #n_type_params],
                     effect_params: vec![None; #n_effect_params],
+                    ownership: {
+                        use ::acvus_mir_host::AutoregCopy as _;
+                        use ::acvus_mir_host::AutoregClone as _;
+                        use ::acvus_mir_host::AutoregMove as _;
+                        (&&&::acvus_mir_host::TypeMarker::<#struct_name<#(#param_names),*>>::new()).__ownership()
+                    },
                 }
             }
         }

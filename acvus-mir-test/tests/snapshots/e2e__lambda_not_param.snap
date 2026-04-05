@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@flags) : Ref<List<Bool>>
     ; r2 (@flags) : List<Bool>
     ; r3 (@flags) : Ref<List<Bool>>
-    ; r4 (iter(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r4 (iter(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r5 (v7) : Fn(Bool) -> Bool
-    ; r6 (map(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r6 (map(...)) : Iterator<Bool, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (collect(...)) : List<Bool>
     ; r8 (v13) : String
     ; r9 (len(...)) : Int

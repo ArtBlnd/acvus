@@ -1,7 +1,9 @@
+use std::collections::BTreeSet;
+
 use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
 use acvus_mir::{
     graph::infer,
-    ty::{Effect, Param, Ty},
+    ty::{Effect, EffectSet, EffectTarget, Ownership, Param, Ty},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
@@ -2251,11 +2253,19 @@ fn iter_ty_with(interner: &Interner, effect: Effect) -> Ty {
         id: iter_qref,
         type_args: vec![Ty::Int],
         effect_args: vec![effect],
+        ownership: Ownership::MoveOnly,
     }
 }
 
+fn test_effectful(interner: &Interner) -> Effect {
+    Effect::Resolved(EffectSet {
+        reads: BTreeSet::new(),
+        writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+    })
+}
+
 fn eff_iter_ty(interner: &Interner) -> Ty {
-    iter_ty_with(interner, Effect::self_modifying())
+    iter_ty_with(interner, test_effectful(interner))
 }
 
 fn pure_iter_ty(interner: &Interner) -> Ty {
@@ -2421,7 +2431,7 @@ fn migrated_move_accept_effectful_fn_multiple_calls() {
         params: vec![Param::new(i.intern("_"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: Effect::self_modifying(),
+        effect: test_effectful(&i),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);

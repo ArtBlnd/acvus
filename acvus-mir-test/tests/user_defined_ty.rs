@@ -4,8 +4,10 @@
 //! via `acvus_ext::std_registries`, verifying unification, effect propagation, materiality,
 //! and coercion behaviors.
 
+use std::collections::BTreeSet;
+
 use acvus_mir::graph::types::QualifiedRef;
-use acvus_mir::ty::{Effect, Materiality, Param, Polarity, Ty, TySubst, TypeRegistry};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Materiality, Ownership, Param, Polarity, Ty, TySubst, TypeRegistry};
 use acvus_utils::{Freeze, Interner};
 
 use Polarity::*;
@@ -27,6 +29,7 @@ fn iter_ty(interner: &Interner, elem: Ty, effect: Effect) -> Ty {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![effect],
+        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -37,6 +40,7 @@ fn seq_ty(interner: &Interner, elem: Ty, identity: Ty, effect: Effect) -> Ty {
         id: seq_qref,
         type_args: vec![elem, identity],
         effect_args: vec![effect],
+        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -48,6 +52,14 @@ fn subst_with(registry: TypeRegistry) -> TySubst {
 /// Wrap Ty into Param with a dummy name.
 fn tp(interner: &Interner, ty: Ty) -> Param {
     Param::new(interner.intern("_"), ty)
+}
+
+/// A resolved effectful Effect with a Token write — represents a non-pure effect.
+fn test_effectful(interner: &Interner) -> Effect {
+    Effect::Resolved(EffectSet {
+        reads: BTreeSet::new(),
+        writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+    })
 }
 
 // ================================================================
@@ -67,8 +79,8 @@ fn iterator_same_effect_pure_unifies() {
 fn iterator_same_effect_effectful_unifies() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
-    let a = iter_ty(&i, Ty::Int, Effect::self_modifying());
-    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let a = iter_ty(&i, Ty::Int, test_effectful(&i));
+    let b = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(s.unify(&a, &b, Invariant).is_ok());
 }
 
@@ -77,7 +89,7 @@ fn iterator_effect_mismatch_invariant_fails() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let b = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(s.unify(&a, &b, Invariant).is_err());
 }
 
@@ -111,9 +123,9 @@ fn iterator_effect_var_binds_to_effectful() {
     let mut s = subst_with(reg);
     let e = s.fresh_effect_var();
     let a = iter_ty(&i, Ty::Int, e.clone());
-    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let b = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(s.unify(&a, &b, Invariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
+    assert_eq!(s.resolve_effect(&e), test_effectful(&i));
 }
 
 #[test]
@@ -172,9 +184,9 @@ fn sequence_effect_var_binds_effectful() {
     let e = s.fresh_effect_var();
     let o = s.fresh_param();
     let a = seq_ty(&i, Ty::Int, o.clone(), e.clone());
-    let b = seq_ty(&i, Ty::Int, o, Effect::self_modifying());
+    let b = seq_ty(&i, Ty::Int, o, test_effectful(&i));
     assert!(s.unify(&a, &b, Invariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
+    assert_eq!(s.resolve_effect(&e), test_effectful(&i));
 }
 
 #[test]
@@ -194,7 +206,7 @@ fn sequence_same_identity_effect_mismatch_invariant_fails() {
     let mut s = subst_with(reg);
     let o = s.alloc_identity(false);
     let a = seq_ty(&i, Ty::Int, o.clone(), Effect::pure());
-    let b = seq_ty(&i, Ty::Int, o, Effect::self_modifying());
+    let b = seq_ty(&i, Ty::Int, o, test_effectful(&i));
     assert!(s.unify(&a, &b, Invariant).is_err());
 }
 
@@ -226,7 +238,7 @@ fn sequence_is_ephemeral() {
 fn iterator_not_materializable() {
     let (i, _reg) = setup();
     assert!(!iter_ty(&i, Ty::Int, Effect::pure()).is_materializable());
-    assert!(!iter_ty(&i, Ty::Int, Effect::self_modifying()).is_materializable());
+    assert!(!iter_ty(&i, Ty::Int, test_effectful(&i)).is_materializable());
 }
 
 #[test]
@@ -235,7 +247,7 @@ fn sequence_not_materializable() {
     let mut s = TySubst::new();
     let o = s.alloc_identity(false);
     assert!(!seq_ty(&i, Ty::Int, o.clone(), Effect::pure()).is_materializable());
-    assert!(!seq_ty(&i, Ty::Int, o, Effect::self_modifying()).is_materializable());
+    assert!(!seq_ty(&i, Ty::Int, o, test_effectful(&i)).is_materializable());
 }
 
 #[test]
@@ -275,7 +287,7 @@ fn iterator_is_move_only() {
         Some(true)
     );
     assert_eq!(
-        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::Int, Effect::self_modifying())),
+        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::Int, test_effectful(&i))),
         Some(true)
     );
 }
@@ -319,9 +331,9 @@ fn hof_shared_effect_var_binds_then_callback() {
 
     // Bind e = Effectful via iterator
     let iter_sig = iter_ty(&i, Ty::Int, e.clone());
-    let iter_actual = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let iter_actual = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(s.unify(&iter_actual, &iter_sig, Covariant).is_ok());
-    assert_eq!(s.resolve_effect(&e), Effect::self_modifying());
+    assert_eq!(s.resolve_effect(&e), test_effectful(&i));
 
     // Callback: Fn{effect:Pure} vs Fn{effect:e(=Effectful)}
     let actual_cb = Ty::Fn {
@@ -352,7 +364,7 @@ fn effect_subtyping_invariant_rejects_mismatch() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let b = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(
         s.unify(&a, &b, Invariant).is_err(),
         "Invariant should reject Pure vs Effectful"
@@ -373,6 +385,7 @@ fn instantiate_pair_shares_params() {
         qref: id,
         type_params: vec![None],
         effect_params: vec![],
+        ownership: Ownership::MoveOnly,
     });
     let mut rule_s = TySubst::new();
     let t = rule_s.fresh_param();
@@ -380,6 +393,7 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![t.clone()],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     };
     let to = Ty::List(Box::new(t));
 
@@ -391,6 +405,7 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![Ty::Int],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     };
     assert!(s.unify(&concrete_from, &inst_from, Invariant).is_ok());
 
@@ -518,7 +533,7 @@ fn iterator_effect_subtyping_covariant() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let pure_iter = iter_ty(&i, Ty::Int, Effect::pure());
-    let io_iter = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let io_iter = iter_ty(&i, Ty::Int, test_effectful(&i));
     // Pure ≤ IO in Covariant → OK (subeffect)
     assert!(
         s.unify(&pure_iter, &io_iter, Covariant).is_ok(),
@@ -540,7 +555,7 @@ fn iterator_effect_var_resolves_via_lub() {
     let e = s.fresh_effect_var();
     let param_iter = iter_ty(&i, Ty::Int, e.clone());
     let pure_iter = iter_ty(&i, Ty::Int, Effect::pure());
-    let io_iter = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let io_iter = iter_ty(&i, Ty::Int, test_effectful(&i));
     // ?E matches Pure
     assert!(s.unify(&param_iter, &pure_iter, Invariant).is_ok());
     assert!(
@@ -561,7 +576,7 @@ fn lub_iterator_effect_invariant_rejects() {
     let (i, reg) = setup();
     let mut s = subst_with(reg);
     let a = iter_ty(&i, Ty::Int, Effect::pure());
-    let b = iter_ty(&i, Ty::Int, Effect::self_modifying());
+    let b = iter_ty(&i, Ty::Int, test_effectful(&i));
     assert!(
         s.unify(&a, &b, Invariant).is_err(),
         "Invariant should reject effect mismatch"

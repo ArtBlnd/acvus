@@ -87,7 +87,7 @@ fn is_io_call(fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, callee: &Qualif
 mod tests {
     use super::*;
     use crate::cfg::promote;
-    use crate::ty::{Effect, EffectSet, Param};
+    use crate::ty::{Effect, Param};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
@@ -119,11 +119,13 @@ mod tests {
     }
 
     fn io_effect() -> Effect {
-        Effect::self_modifying()
+        // IO functions have no context/token effects in the effect set.
+        // Their "IO-ness" is conveyed by Hint::Io, not the effect set.
+        Effect::pure()
     }
 
     fn pure_effect() -> Effect {
-        Effect::Resolved(EffectSet::default())
+        Effect::pure()
     }
 
     /// Collect all instructions from all blocks (flattened).

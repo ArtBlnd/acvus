@@ -8,7 +8,7 @@ use acvus_interpreter::builtins::build_builtins;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, Ownership, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -159,6 +159,7 @@ fn infer_value_ty(v: &Value) -> Ty {
             id: o.type_id,
             type_args: vec![],
             effect_args: vec![],
+            ownership: Ownership::MoveOnly,
         },
         _ => Ty::Unit,
     }
@@ -396,12 +397,14 @@ fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRe
         qref: my_num_qref,
         type_params: vec![],
         effect_params: vec![],
+        ownership: Ownership::MoveOnly,
     });
 
     let my_num_ty = Ty::UserDefined {
         id: my_num_qref,
         type_args: vec![],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     };
 
     // We need to register ExternFns first to get FunctionIds, then register CastRule.
@@ -476,6 +479,7 @@ async fn extern_cast_auto_coercion() {
         id: my_num_qref,
         type_args: vec![],
         effect_args: vec![],
+        ownership: Ownership::MoveOnly,
     };
 
     // Register CastRule: MyNum → Int

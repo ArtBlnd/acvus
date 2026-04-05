@@ -27,11 +27,11 @@ expression: ir
     ; r5 (@items) : List<Int>
     ; r6 (v12) : Ref<List<Int>>
     ; r7 ($xs) : List<Int>
-    ; r8 (v14) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r8 (v14) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (v15) : Ref<Int>
     ; r10 ($n) : Int
     ; r11 (v17) : Fn(Int) -> Int
-    ; r12 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r12 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r13 (collect(...)) : List<Int>
-    ; r14 (add_n(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {}, self_modifying: false })>
+    ; r14 (add_n(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r15 (v5) : Int

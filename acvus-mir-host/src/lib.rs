@@ -24,7 +24,7 @@ pub use scope::{CallArgs, Scope};
 // ── Re-exports: MIR types used in generated code ───────────────────
 
 pub use acvus_mir::graph::types::{Constraint, FnConstraint, FnKind, Function, Signature};
-pub use acvus_mir::ty::UserDefinedDecl;
+pub use acvus_mir::ty::{Ownership, UserDefinedDecl};
 pub use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Hint, Param, Ty};
 pub use acvus_mir::ty::TySubst;
 pub use acvus_utils::{Interner, QualifiedRef};

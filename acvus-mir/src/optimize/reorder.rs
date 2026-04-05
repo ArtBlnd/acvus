@@ -259,8 +259,18 @@ fn priority_topo_sort(
 mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
-    use crate::ty::{Effect, EffectSet};
+    use crate::ty::{Effect, EffectSet, EffectTarget};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+
+    /// Helper: non-pure effect with a dummy write target.
+    fn effectful(i: &Interner, tag: &str) -> Effect {
+        Effect::Resolved(EffectSet {
+            reads: std::collections::BTreeSet::new(),
+            writes: std::collections::BTreeSet::from([EffectTarget::Token(
+                QualifiedRef::root(i.intern(tag)),
+            )]),
+        })
+    }
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -295,11 +305,14 @@ mod tests {
         (
             qref,
             FnMetadata {
+                // IO functions have no context/token effects — their "IO-ness"
+                // is conveyed by Hint::Io. The effect set has no tokens so that
+                // token liveness does not block spawn hoisting.
                 ty: Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    effect: Effect::self_modifying(),
+                    effect: Effect::pure(),
                 },
                 hint: Some(crate::ty::Hint::Io),
             },
@@ -373,14 +386,14 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::self_modifying(),
+                effectful(&i, "__handle"),
             ),
         );
         cfg.val_types.insert(
             v(2),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::self_modifying(),
+                effectful(&i, "__handle"),
             ),
         );
 
@@ -450,7 +463,7 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::self_modifying(),
+                effectful(&i, "__handle"),
             ),
         );
 
@@ -507,7 +520,7 @@ mod tests {
             v(0),
             Ty::Handle(
                 Box::new(Ty::String),
-                Effect::self_modifying(),
+                effectful(&i, "__handle"),
             ),
         );
 

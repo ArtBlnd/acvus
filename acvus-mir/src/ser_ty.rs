@@ -33,7 +33,6 @@ pub enum SerEffect {
 pub struct SerEffectSet {
     pub reads: Vec<SerEffectTarget>,
     pub writes: Vec<SerEffectTarget>,
-    pub self_modifying: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,7 +76,6 @@ impl Effect {
                     .iter()
                     .map(|r| target_to_ser(r, interner))
                     .collect(),
-                self_modifying: set.self_modifying,
             }),
             Effect::Var(v) => SerEffect::Var(*v),
         }
@@ -98,7 +96,6 @@ impl SerEffect {
                     .iter()
                     .map(|r| ser_to_target(r, interner))
                     .collect(),
-                self_modifying: set.self_modifying,
             }),
             SerEffect::Var(v) => Effect::Var(*v),
         }
@@ -167,6 +164,7 @@ pub enum SerTy {
         id: SerQualifiedRef,
         type_args: Vec<SerTy>,
         effect_args: Vec<SerEffect>,
+        ownership: crate::ty::Ownership,
     },
     Option {
         inner: Box<SerTy>,
@@ -220,10 +218,12 @@ impl Ty {
                 id,
                 type_args,
                 effect_args,
+                ownership,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| e.to_ser(interner)).collect(),
+                ownership: *ownership,
             },
             Ty::Option(inner) => SerTy::Option {
                 inner: Box::new(inner.to_ser(interner)),
@@ -299,10 +299,12 @@ impl SerTy {
                 id,
                 type_args,
                 effect_args,
+                ownership,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| e.to_effect(interner)).collect(),
+                ownership: *ownership,
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
             SerTy::Enum { name, variants } => Ty::Enum {
