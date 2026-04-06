@@ -8,54 +8,51 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @user
-     3 │   r3 = load r2
-     5 │   r4 = ref @user
-     6 │ L2:
-     8 │   r5 = test has_key(r3, "name")
-     9 │   r6 = r3.name
-    11 │   r7 = true (r8) && true (r9)
-    12 │   r10 = test has_key(r3, "age")
-    13 │   r11 = r3.age
-    15 │   r12 = r7 && true (r13)
-    16 │   jump_if r12 then L3 else L1
-    17 │ L3:
-    18 │   r14 = r3.name
-    19 │   r15 = r3.age
-    21 │   r16 = T0 + r14
-    22 │   jump L0(r16, r14, r15)
-    23 │ L1:
-    25 │   jump L0(T0, r0, r1)
-    26 │ L0(r17: String, r18: String, r19: Int):  ; merge_of L2
-    27 │   r20 = T0 + r17
-    28 │   return r20
+     3 │   r2 = ref @user
+     4 │   r3 = load r2
+     5 │ L2:
+     7 │   r4 = test has_key(r3, "name")
+     8 │   r5 = r3.name
+    10 │   r6 = true (r7) && true (r8)
+    11 │   r9 = test has_key(r3, "age")
+    12 │   r10 = r3.age
+    14 │   r11 = r6 && true (r12)
+    15 │   jump_if r11 then L3 else L1
+    16 │ L3:
+    17 │   r13 = r3.name
+    18 │   r14 = r3.age
+    20 │   r15 = T0 + r13
+    21 │   jump L0(r15, r13, r14)
+    22 │ L1:
+    24 │   jump L0(T0, r0, r1)
+    25 │ L0(r16: String, r17: String, r18: Int):  ; merge_of L2
+    26 │   r19 = T0 + r16
+    27 │   return r19
 
-    ; r0 (v28) : String
-    ; r1 (v29) : Int
+    ; r0 (v26) : String
+    ; r1 (v27) : Int
     ; r2 (@user) : Ref<{age: Int, email: String, name: String}>
-    ; r3 (@user) : {age: Int, email: String, name: String}
-    ; r4 (@user) : Ref<{age: Int, email: String, name: String}>
-    ; r5 (v7) : Bool
-    ; r6 (v8) : String
-    ; r7 (v10) : Bool
-    ; r8 (v6) : Bool
+    ; r3 (v3) : {age: Int, email: String, name: String}
+    ; r4 (v5) : Bool
+    ; r5 (v6) : String
+    ; r6 (v8) : Bool
+    ; r7 (v4) : Bool
+    ; r8 (v7) : Bool
     ; r9 (v9) : Bool
-    ; r10 (v11) : Bool
-    ; r11 (v12) : Int
-    ; r12 (v14) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (name) : String
-    ; r15 (age) : Int
+    ; r10 (v10) : Int
+    ; r11 (v12) : Bool
+    ; r12 (v11) : Bool
+    ; r13 (name) : String
+    ; r14 (age) : Int
+    ; r15 (v22) : String
     ; r16 (v24) : String
-    ; r17 (v26) : String
-    ; r18 (v30) : String
-    ; r19 (v31) : Int
-    ; r20 (v27) : String
-    ; r21 (v3) : String
-    ; r22 (v22) : Ref<String>
-    ; r23 (v25) : String
-    ; r24 (v17) : Ref<String>
-    ; r25 (v20) : Ref<Int>
-    ; r26 (v21) : String
-    ; r27 (v5) : {age: Int, email: String, name: String}
-    ; r28 (name) : String
+    ; r17 (v28) : String
+    ; r18 (v29) : Int
+    ; r19 (v25) : String
+    ; r20 (v20) : Ref<String>
+    ; r21 (v18) : Ref<Int>
+    ; r22 (name) : String
+    ; r23 (v1) : String
+    ; r24 (v23) : String
+    ; r25 (v15) : Ref<String>
+    ; r26 (v19) : String

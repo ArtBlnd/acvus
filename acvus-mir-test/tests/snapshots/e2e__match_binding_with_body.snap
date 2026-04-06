@@ -9,48 +9,45 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @user
-     2 │   r2 = load r1
-     4 │   r3 = ref @user
-     5 │ L2:
-     7 │   r4 = test has_key(r2, "name")
-     8 │   r5 = r2.name
-    10 │   r6 = true (r7) && true (r8)
-    11 │   jump_if r6 then L3 else L1
-    12 │ L3:
-    13 │   r9 = r2.name
-    15 │   r10 = T0 + r9
-    17 │   r11 = r10 + T1
-    18 │   jump L0(r11, r9)
-    19 │ L1:
-    22 │   r12 = T0 + T2
-    23 │   jump L0(r12, r0)
-    24 │ L0(r13: String, r14: String):  ; merge_of L2
-    25 │   r15 = T0 + r13
-    26 │   return r15
+     2 │   r1 = ref @user
+     3 │   r2 = load r1
+     4 │ L2:
+     6 │   r3 = test has_key(r2, "name")
+     7 │   r4 = r2.name
+     9 │   r5 = true (r6) && true (r7)
+    10 │   jump_if r5 then L3 else L1
+    11 │ L3:
+    12 │   r8 = r2.name
+    14 │   r9 = T0 + r8
+    16 │   r10 = r9 + T1
+    17 │   jump L0(r10, r8)
+    18 │ L1:
+    21 │   r11 = T0 + T2
+    22 │   jump L0(r11, r0)
+    23 │ L0(r12: String, r13: String):  ; merge_of L2
+    24 │   r14 = T0 + r12
+    25 │   return r14
 
-    ; r0 (v25) : String
+    ; r0 (v23) : String
     ; r1 (@user) : Ref<{age: Int, email: String, name: String}>
-    ; r2 (@user) : {age: Int, email: String, name: String}
-    ; r3 (@user) : Ref<{age: Int, email: String, name: String}>
-    ; r4 (v7) : Bool
-    ; r5 (v8) : String
-    ; r6 (v10) : Bool
-    ; r7 (v6) : Bool
-    ; r8 (v9) : Bool
-    ; r9 (name) : String
+    ; r2 (v3) : {age: Int, email: String, name: String}
+    ; r3 (v5) : Bool
+    ; r4 (v6) : String
+    ; r5 (v8) : Bool
+    ; r6 (v4) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (name) : String
+    ; r9 (v15) : String
     ; r10 (v17) : String
-    ; r11 (v19) : String
-    ; r12 (v22) : String
-    ; r13 (v23) : String
-    ; r14 (v26) : String
-    ; r15 (v24) : String
-    ; r16 (v3) : String
-    ; r17 (v14) : String
-    ; r18 (v15) : Ref<String>
-    ; r19 (v18) : String
-    ; r20 (v21) : String
-    ; r21 (v13) : Ref<String>
-    ; r22 (v20) : String
-    ; r23 (v5) : {age: Int, email: String, name: String}
-    ; r24 (name) : String
+    ; r11 (v20) : String
+    ; r12 (v21) : String
+    ; r13 (v24) : String
+    ; r14 (v22) : String
+    ; r15 (v11) : Ref<String>
+    ; r16 (name) : String
+    ; r17 (v18) : String
+    ; r18 (v13) : Ref<String>
+    ; r19 (v1) : String
+    ; r20 (v12) : String
+    ; r21 (v16) : String
+    ; r22 (v19) : String

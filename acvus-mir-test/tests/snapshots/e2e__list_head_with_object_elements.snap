@@ -8,56 +8,53 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @users
-     2 │   r2 = load r1
-     4 │   r3 = ref @users
-     5 │ L2:
-     6 │   r4 = test len(r2) >= 1
-     7 │   jump_if r4 then L3 else L4
-     8 │ L3:
-     9 │   r5 = r2[0]
-    11 │   r6 = r4 && true (r7)
-    12 │   jump L5(r6)
-    13 │ L4:
-    15 │   jump L5(false (r8))
-    16 │ L5(r9: Bool):
-    17 │   jump_if r9 then L6 else L1
-    18 │ L6:
-    19 │   r10 = r2[0]
-    21 │   r11 = r10.name
-    22 │   r12 = T0 + r11
-    23 │   jump L0(r12, r10)
-    24 │ L1:
-    27 │   r13 = T0 + T1
-    28 │   jump L0(r13, r0)
-    29 │ L0(r14: String, r15: {name: String}):  ; merge_of L2
-    30 │   r16 = T0 + r14
-    31 │   return r16
+     2 │   r1 = ref @users
+     3 │   r2 = load r1
+     4 │ L2:
+     5 │   r3 = test len(r2) >= 1
+     6 │   jump_if r3 then L3 else L4
+     7 │ L3:
+     8 │   r4 = r2[0]
+    10 │   r5 = r3 && true (r6)
+    11 │   jump L5(r5)
+    12 │ L4:
+    14 │   jump L5(false (r7))
+    15 │ L5(r8: Bool):
+    16 │   jump_if r8 then L6 else L1
+    17 │ L6:
+    18 │   r9 = r2[0]
+    20 │   r10 = r9.name
+    21 │   r11 = T0 + r10
+    22 │   jump L0(r11, r9)
+    23 │ L1:
+    26 │   r12 = T0 + T1
+    27 │   jump L0(r12, r0)
+    28 │ L0(r13: String, r14: {name: String}):  ; merge_of L2
+    29 │   r15 = T0 + r13
+    30 │   return r15
 
-    ; r0 (v26) : {name: String}
+    ; r0 (v24) : {name: String}
     ; r1 (@users) : Ref<List<{name: String}>>
-    ; r2 (@users) : List<{name: String}>
-    ; r3 (@users) : Ref<List<{name: String}>>
-    ; r4 (v6) : Bool
-    ; r5 (v7) : {name: String}
-    ; r6 (v9) : Bool
-    ; r7 (v8) : Bool
-    ; r8 (v11) : Bool
-    ; r9 (v10) : Bool
-    ; r10 (first) : {name: String}
-    ; r11 (v17) : String
-    ; r12 (v18) : String
-    ; r13 (v21) : String
-    ; r14 (v22) : String
-    ; r15 (v28) : {name: String}
-    ; r16 (v23) : String
-    ; r17 (v3) : String
-    ; r18 (v14) : Ref<{name: String}>
-    ; r19 (v25) : {name: String}
-    ; r20 (v15) : String
-    ; r21 (v20) : String
-    ; r22 (v24) : Ref<{name: String}>
-    ; r23 (v5) : List<{name: String}>
-    ; r24 (first.name) : Ref<String>
-    ; r25 (v27) : {name: String}
-    ; r26 (v19) : String
+    ; r2 (v3) : List<{name: String}>
+    ; r3 (v4) : Bool
+    ; r4 (v5) : {name: String}
+    ; r5 (v7) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (v9) : Bool
+    ; r8 (v8) : Bool
+    ; r9 (first) : {name: String}
+    ; r10 (v15) : String
+    ; r11 (v16) : String
+    ; r12 (v19) : String
+    ; r13 (v20) : String
+    ; r14 (v26) : {name: String}
+    ; r15 (v21) : String
+    ; r16 (v22) : Ref<{name: String}>
+    ; r17 (first.name) : Ref<String>
+    ; r18 (v25) : {name: String}
+    ; r19 (v17) : String
+    ; r20 (v18) : String
+    ; r21 (v13) : String
+    ; r22 (v1) : String
+    ; r23 (v12) : Ref<{name: String}>
+    ; r24 (v23) : {name: String}

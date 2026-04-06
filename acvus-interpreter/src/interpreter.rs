@@ -792,6 +792,7 @@ async fn execute_inst(
             args,
             context_uses,
             context_defs,
+            ..
         } => {
             let result = match callee {
                 Callee::Direct(id) => {
@@ -846,6 +847,7 @@ async fn execute_inst(
             callee,
             args,
             context_uses,
+            ..
         } => {
             let callee_id = match callee {
                 Callee::Direct(id) => *id,

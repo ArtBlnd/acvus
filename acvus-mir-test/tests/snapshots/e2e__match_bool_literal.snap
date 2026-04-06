@@ -8,33 +8,30 @@ expression: ir
   T2 = "off"
 
 === main ===
-     0 │   r0 = ref @flag
-     1 │   r1 = load r0
-     3 │   r2 = ref @flag
-     4 │ L2:
-     5 │   r3 = test r1 == true
-     6 │   jump_if r3 then L3 else L1
-     7 │ L3:
-    10 │   r4 = T0 + T1
-    11 │   jump L0(r4)
-    12 │ L1:
-    15 │   r5 = T0 + T2
-    16 │   jump L0(r5)
-    17 │ L0(r6: String):  ; merge_of L2
-    18 │   r7 = T0 + r6
-    19 │   return r7
+     1 │   r0 = ref @flag
+     2 │   r1 = load r0
+     3 │ L2:
+     4 │   r2 = test r1 == true
+     5 │   jump_if r2 then L3 else L1
+     6 │ L3:
+     9 │   r3 = T0 + T1
+    10 │   jump L0(r3)
+    11 │ L1:
+    14 │   r4 = T0 + T2
+    15 │   jump L0(r4)
+    16 │ L0(r5: String):  ; merge_of L2
+    17 │   r6 = T0 + r5
+    18 │   return r6
 
     ; r0 (@flag) : Ref<Bool>
-    ; r1 (@flag) : Bool
-    ; r2 (@flag) : Ref<Bool>
-    ; r3 (v6) : Bool
-    ; r4 (v9) : String
-    ; r5 (v12) : String
-    ; r6 (v13) : String
-    ; r7 (v14) : String
-    ; r8 (v7) : String
-    ; r9 (v11) : String
-    ; r10 (v3) : String
-    ; r11 (v10) : String
-    ; r12 (v5) : Bool
-    ; r13 (v8) : String
+    ; r1 (v3) : Bool
+    ; r2 (v4) : Bool
+    ; r3 (v7) : String
+    ; r4 (v10) : String
+    ; r5 (v11) : String
+    ; r6 (v12) : String
+    ; r7 (v6) : String
+    ; r8 (v9) : String
+    ; r9 (v5) : String
+    ; r10 (v1) : String
+    ; r11 (v8) : String

@@ -4,36 +4,34 @@ expression: opt
 ---
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @result
-     2 │   r2 = ref @config
-     3 │   r3 = ref @items
-     4 │   r4 = ref @result
-     5 │   r5 = load r2
-     6 │   r6 = r5.base_rate
-     7 │   r7 = r5.multiplier
-     8 │   r8 = 0 (r6) * r7
-    10 │   r9 = load r3
-    11 │   r7 = load r4
-    12 │   jump L0(0 (r6), r7, r0)
-    13 │ L0(r0: Int, r6: Int, r7: Int):
-    14 │   store r1 = 0 (r6)
-    15 │   list_step r10, r11 = r9[r0] else L1()
-    16 │ L2:
-    17 │   r0 = r10 * r8
-    18 │   r7 = 0 (r6) + r0
-    19 │   jump L0(r11, r7, r10)
-    20 │ L1:
-    21 │   return 0 (r6)
+     1 │   r1 = undef
+     2 │   r2 = ref @result
+     3 │   r3 = ref @config
+     4 │   r4 = load r3
+     5 │   r5 = r4.base_rate
+     6 │   r6 = r4.multiplier
+     7 │   r7 = 0 (r5) * r6
+     8 │   r8 = ref @items
+    10 │   r9 = load r8
+    11 │   jump L0(0 (r5), r0, r1)
+    12 │ L0(r0: Int, r1: Int, r5: Int):
+    13 │   store r2 = r1
+    14 │   list_step r6, r10 = r9[r0] else L1()
+    15 │ L2:
+    16 │   r0 = r6 * r7
+    17 │   r5 = r1 + r0
+    18 │   jump L0(r10, 0 (r5), r6)
+    19 │ L1:
+    20 │   return r1
 
     ; r0 (v1) : Int
-    ; r1 (@result) : Ref<Int>
-    ; r2 (@config) : Ref<{base_rate: Int, multiplier: Int}>
-    ; r3 (@items) : Ref<List<Int>>
-    ; r4 (@result) : Ref<Int>
-    ; r5 (@config) : {base_rate: Int, multiplier: Int}
-    ; r6 (base_rate) : Int
-    ; r7 (@result) : Int
-    ; r8 (v9) : Int
+    ; r1 (v2) : Int
+    ; r2 (@result) : Ref<Int>
+    ; r3 (@config) : Ref<{base_rate: Int, multiplier: Int}>
+    ; r4 (@config) : {base_rate: Int, multiplier: Int}
+    ; r5 (base_rate) : Int
+    ; r6 (multiplier) : Int
+    ; r7 (v8) : Int
+    ; r8 (@items) : Ref<List<Int>>
     ; r9 (@items) : List<Int>
     ; r10 (v11) : Int
-    ; r11 (v12) : Int

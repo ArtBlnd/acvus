@@ -4,45 +4,40 @@ expression: ir
 ---
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @count
+     1 │   r1 = undef
      2 │   r2 = ref @count
-     3 │   r3 = load r2
-     4 │   r4 = ref @items
-     5 │   r5 = load r4
-     6 │   r6 = ref @items
-     8 │   jump L0(0 (r7), r3, r0)
-     9 │ L0(r8: Int, r9: Int, r10: Int):
-    10 │   store r1 = r9
-    11 │   list_step r11, r12 = r5[r8] else L1()
-    12 │ L2:
-    13 │   r13 = ref x
-    14 │   store r13 = r11
-    15 │   r14 = ref @count
-    17 │   r15 = r9 + 1 (r16)
-    18 │   jump L0(r12, r15, r11)
-    19 │ L1:
-    20 │   r17 = ref @count
-    21 │   return r9
+     3 │   r3 = ref @items
+     4 │   r4 = load r3
+     6 │   jump L0(0 (r5), r0, r1)
+     7 │ L0(r6: Int, r7: Int, r8: Int):
+     8 │   store r2 = r7
+     9 │   list_step r9, r10 = r4[r6] else L1()
+    10 │ L2:
+    11 │   r11 = ref x
+    12 │   store r11 = r9
+    13 │   r12 = ref @count
+    15 │   r13 = r7 + 1 (r14)
+    16 │   jump L0(r10, r13, r9)
+    17 │ L1:
+    18 │   r15 = ref @count
+    19 │   return r7
 
-    ; r0 (v20) : Int
-    ; r1 (v23) : Ref<Int>
-    ; r2 (@count) : Ref<Int>
-    ; r3 (@count) : Int
-    ; r4 (@items) : Ref<List<Int>>
-    ; r5 (@items) : List<Int>
-    ; r6 (@items) : Ref<List<Int>>
-    ; r7 (v7) : Int
-    ; r8 (v8) : Int
-    ; r9 (v21) : Int
-    ; r10 (v22) : Int
-    ; r11 (x) : Int
-    ; r12 (v10) : Int
-    ; r13 (v12) : Ref<Int>
-    ; r14 (@count) : Ref<Int>
-    ; r15 (v16) : Int
+    ; r0 (v16) : Int
+    ; r1 (v17) : Int
+    ; r2 (v20) : Ref<Int>
+    ; r3 (@items) : Ref<List<Int>>
+    ; r4 (v2) : List<Int>
+    ; r5 (v3) : Int
+    ; r6 (v4) : Int
+    ; r7 (v18) : Int
+    ; r8 (v19) : Int
+    ; r9 (x) : Int
+    ; r10 (v6) : Int
+    ; r11 (v8) : Ref<Int>
+    ; r12 (@count) : Ref<Int>
+    ; r13 (v12) : Int
+    ; r14 (v11) : Int
+    ; r15 (@count) : Ref<Int>
     ; r16 (v15) : Int
-    ; r17 (@count) : Ref<Int>
-    ; r18 (v14) : Int
-    ; r19 (v6) : List<Int>
-    ; r20 (@count) : Ref<Int>
-    ; r21 (v19) : Int
+    ; r17 (v10) : Int
+    ; r18 (@count) : Ref<Int>

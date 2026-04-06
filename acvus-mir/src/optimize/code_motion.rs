@@ -35,14 +35,14 @@ use crate::analysis::token_liveness;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
-use crate::ty::{Effect, EffectTarget, Ty};
+use crate::ty::{Effect, Ty};
 
 // ── Entry point ────────────────────────────────────────────────────
 
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody) {
     // Phase 1: Hoist — move Spawn and pure instructions UP.
     loop {
-        if !hoist_pass(cfg, fn_metadata) {
+        if !hoist_pass(cfg) {
             break;
         }
     }
@@ -55,13 +55,13 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
 
 /// One iteration: find hoistable instructions, move them to the highest
 /// valid dominator. Returns true if anything moved.
-fn hoist_pass(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
+fn hoist_pass(cfg: &mut CfgBody) -> bool {
     if cfg.blocks.len() < 2 {
         return false;
     }
 
     let domtree = DomTree::build(cfg);
-    let tok_liveness = token_liveness::analyze(cfg, fn_metadata);
+    let tok_liveness = token_liveness::analyze(cfg);
     let mut def_block = build_def_block(cfg);
 
     // ── Collect hoists ─────────────────────────────────────────────
@@ -81,12 +81,12 @@ fn hoist_pass(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> b
         for (i, inst) in block.insts.iter().enumerate() {
             let kind = &inst.kind;
 
-            if !is_hoistable(kind, fn_metadata) || inst_info::defs(kind).is_empty() {
+            if !is_hoistable(kind) || inst_info::defs(kind).is_empty() {
                 continue;
             }
 
             let uses = inst_info::uses(kind);
-            let tokens = token_ids_of(kind, fn_metadata, &cfg.val_types);
+            let tokens = token_liveness::token_ids_of(kind, &cfg.val_types);
 
             if let Some(target) = find_highest_target(
                 BlockIdx(bi),
@@ -216,7 +216,7 @@ fn find_highest_target(
 ///
 /// Allowlist: only provably pure instructions. Unknown kinds default to
 /// not hoistable (soundness by construction).
-fn is_hoistable(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
+fn is_hoistable(kind: &InstKind) -> bool {
     match kind {
         // Arithmetic / logic.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } | InstKind::Cast { .. } => true,
@@ -262,20 +262,21 @@ fn is_hoistable(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> b
 
         // Pure direct FunctionCall.
         InstKind::FunctionCall {
-            callee: Callee::Direct(qref),
+            callee: Callee::Direct(_),
+            callee_ty,
             ..
-        } => is_pure_call(fn_metadata, qref),
+        } => is_pure_call(callee_ty),
 
         // Everything else: NOT hoistable.
         _ => false,
     }
 }
 
-fn is_pure_call(fn_metadata: &FxHashMap<QualifiedRef, Ty>, qref: &QualifiedRef) -> bool {
-    let Some(Ty::Fn {
+fn is_pure_call(callee_ty: &Ty) -> bool {
+    let Ty::Fn {
         effect: Effect::Resolved(eff),
         ..
-    }) = fn_metadata.get(qref)
+    } = callee_ty
     else {
         return false;
     };
@@ -289,43 +290,6 @@ fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
         crate::cfg::Terminator::ListStep { dst, index_dst, .. } => val == *dst || val == *index_dst,
         _ => false,
     }
-}
-
-fn token_ids_of(
-    kind: &InstKind,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
-    _val_types: &FxHashMap<ValueId, Ty>,
-) -> smallvec::SmallVec<[QualifiedRef; 2]> {
-    let effect_set = match kind {
-        InstKind::FunctionCall {
-            callee: Callee::Direct(qref),
-            ..
-        }
-        | InstKind::Spawn {
-            callee: Callee::Direct(qref),
-            ..
-        } => fn_metadata.get(qref).and_then(|m| match m {
-            Ty::Fn {
-                effect: Effect::Resolved(eff),
-                ..
-            } => Some(eff),
-            _ => None,
-        }),
-        _ => None,
-    };
-
-    let Some(eff) = effect_set else {
-        return smallvec::SmallVec::new();
-    };
-
-    eff.reads
-        .iter()
-        .chain(eff.writes.iter())
-        .filter_map(|t| match t {
-            EffectTarget::Token(tid) => Some(*tid),
-            _ => None,
-        })
-        .collect()
 }
 
 // ── Sink pass ─────────────────────────────────────────────────────
@@ -631,7 +595,6 @@ mod tests {
     fn spawn_hoisted_above_branch() {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
-        let fn_metadata = FxHashMap::from_iter([(qref, ty)]);
 
         let mut cfg = make_cfg(
             vec![
@@ -672,6 +635,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(1),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![v(0)],
                     context_uses: vec![],
                 },
@@ -680,7 +644,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn_idx = k
@@ -701,7 +665,6 @@ mod tests {
     fn block_param_dependency_prevents_hoist() {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
-        let fn_metadata = FxHashMap::from_iter([(qref, ty)]);
 
         let mut cfg = make_cfg(
             vec![
@@ -742,6 +705,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(4),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![v(3)],
                     context_uses: vec![],
                 },
@@ -750,7 +714,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn_idx = k
@@ -776,13 +740,13 @@ mod tests {
     fn eval_not_hoisted() {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
-        let fn_metadata = FxHashMap::from_iter([(qref, ty)]);
 
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -830,7 +794,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let eval_idx = k
@@ -858,13 +822,13 @@ mod tests {
         let tid = QualifiedRef::root(i.intern("db"));
         let (qref1, ty1) = token_fn_type(&i, "io1", tid);
         let (qref2, ty2) = token_fn_type(&i, "io2", tid);
-        let fn_metadata = FxHashMap::from_iter([(qref1, ty1), (qref2, ty2)]);
 
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(qref1),
+                    callee_ty: ty1,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -905,6 +869,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(1),
                     callee: Callee::Direct(qref2),
+                    callee_ty: ty2,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -913,7 +878,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn2_idx = k
@@ -942,7 +907,6 @@ mod tests {
     fn multi_level_hoist() {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
-        let fn_metadata = FxHashMap::from_iter([(qref, ty)]);
 
         // B0 → diamond → B3 → diamond → B6
         // Spawn in B6 should hoist directly to B0 in one pass.
@@ -1015,6 +979,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(1),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![v(0)],
                     context_uses: vec![],
                 },
@@ -1023,7 +988,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn_idx = k
@@ -1089,7 +1054,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
         let binop_idx = k
@@ -1116,7 +1081,6 @@ mod tests {
     fn eval_sunk_past_independent_computation() {
         let i = Interner::new();
         let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
-        let fn_metadata = FxHashMap::from_iter([(fetch_id, fetch_ty)]);
 
         // v0 = Spawn fetch
         // v1 = Eval v0              ← should sink
@@ -1128,6 +1092,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fetch_id),
+                    callee_ty: fetch_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -1153,7 +1118,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -1188,7 +1153,6 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("ctx"));
         let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
-        let fn_metadata = FxHashMap::from_iter([(fetch_id, fetch_ty)]);
 
         // v0 = Spawn fetch
         // v1 = Eval v0, context_defs=[(ctx, v5)]
@@ -1201,6 +1165,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fetch_id),
+                    callee_ty: fetch_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -1230,7 +1195,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -1301,7 +1266,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -1380,7 +1345,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -1443,7 +1408,7 @@ mod tests {
         );
 
         let body_before = demoted(cfg.clone());
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
         let body_after = demoted(cfg);
 
         let load_idx_before = kinds(&body_before)

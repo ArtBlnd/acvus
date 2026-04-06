@@ -9,20 +9,12 @@
 //! Reordering is left to a separate pass that can move independent
 //! instructions between Spawn and Eval.
 
-use rustc_hash::FxHashMap;
-
 use crate::cfg::CfgBody;
-use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::ty::{Hint, Ty};
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
-///
-/// `fn_metadata`: QualifiedRef → Ty mapping for callee effect/type/hint lookup.
-pub fn run(
-    cfg: &mut CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
-) {
+pub fn run(cfg: &mut CfgBody) {
     for block in &mut cfg.blocks {
         let mut new_insts = Vec::with_capacity(block.insts.len() + 4);
 
@@ -31,17 +23,16 @@ pub fn run(
                 InstKind::FunctionCall {
                     dst,
                     callee: Callee::Direct(ref callee_id),
+                    ref callee_ty,
                     ref args,
                     ref context_uses,
                     ref context_defs,
-                } if is_io_call(fn_metadata, callee_id) => {
+                } if is_io_call(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
                     // Register Handle type: Handle<ReturnTy, Effect>.
-                    if let Some(Ty::Fn { ret, effect, .. }) =
-                        fn_metadata.get(callee_id)
-                    {
+                    if let Ty::Fn { ret, effect, .. } = callee_ty {
                         cfg.val_types
                             .insert(handle, Ty::Handle(ret.clone(), effect.clone()));
                     }
@@ -51,6 +42,7 @@ pub fn run(
                         kind: InstKind::Spawn {
                             dst: handle,
                             callee: Callee::Direct(*callee_id),
+                            callee_ty: callee_ty.clone(),
                             args: args.clone(),
                             context_uses: context_uses.clone(),
                         },
@@ -76,19 +68,18 @@ pub fn run(
 }
 
 /// Check if a Direct callee has Hint::Io (candidates for spawn-split).
-fn is_io_call(fn_metadata: &FxHashMap<QualifiedRef, Ty>, callee: &QualifiedRef) -> bool {
-    matches!(
-        fn_metadata.get(callee).and_then(|m| m.hint()),
-        Some(Hint::Io)
-    )
+fn is_io_call(callee_ty: &Ty) -> bool {
+    matches!(callee_ty.hint(), Some(Hint::Io))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::graph::QualifiedRef;
     use crate::ty::{Effect, Param};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+    use rustc_hash::FxHashMap;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -150,6 +141,7 @@ mod tests {
             },
         );
 
+        let fetch_ty = fn_metadata[&fetch_id].clone();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -159,6 +151,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(fetch_id),
+                    callee_ty: fetch_ty,
                     args: vec![v(0)],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -168,7 +161,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         // Should be: Const, Spawn, Eval in block insts (Return is terminator).
         let insts = all_insts(&cfg);
@@ -220,6 +213,7 @@ mod tests {
             vec![InstKind::FunctionCall {
                 dst: v(0),
                 callee: Callee::Direct(add_id),
+                callee_ty: Ty::error(),
                 args: vec![v(1), v(2)],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -227,7 +221,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         // Pure call should NOT be split.
         let insts = all_insts(&cfg);
@@ -242,6 +236,7 @@ mod tests {
             vec![InstKind::FunctionCall {
                 dst: v(0),
                 callee: Callee::Indirect(v(1)),
+                callee_ty: Ty::error(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -249,7 +244,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 1);
@@ -275,10 +270,12 @@ mod tests {
             },
         );
 
+        let fetch_ty = fn_metadata[&fetch_id].clone();
         let mut cfg = make_cfg(
             vec![InstKind::FunctionCall {
                 dst: v(0),
                 callee: Callee::Direct(fetch_id),
+                callee_ty: fetch_ty,
                 args: vec![],
                 context_uses: vec![(ctx_a, v(1))],
                 context_defs: vec![(ctx_b, v(2))],
@@ -286,7 +283,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 2);
@@ -327,11 +324,13 @@ mod tests {
             );
         }
 
+        let io_fn_ty = fn_metadata[&fetch_a].clone();
         let mut cfg = make_cfg(
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(fetch_a),
+                    callee_ty: io_fn_ty.clone(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -339,6 +338,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(fetch_b),
+                    callee_ty: io_fn_ty,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -354,7 +354,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         // 2 calls → 2 Spawn + 2 Eval + BinOp = 5 (Return is terminator)
         let insts = all_insts(&cfg);

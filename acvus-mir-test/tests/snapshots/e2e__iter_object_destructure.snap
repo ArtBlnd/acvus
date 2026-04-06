@@ -7,43 +7,40 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @users
-     2 │   r2 = load r1
-     4 │   r3 = ref @users
-     7 │   jump L0(0 (r4), T0, r0)
-     8 │ L0(r5: Int, r6: String, r7: String):
-     9 │   list_step r8, r9 = r2[r5] else L1(r6)
-    10 │ L3:
-    11 │   r10 = r8.name
-    13 │   r11 = T0 + r10
-    14 │   r12 = r6 + r11
-    15 │   jump L0(r9, r12, r10)
-    16 │ L1(r13: String):
-    17 │   jump L2(r13)
-    18 │ L2(r14: String):
-    19 │   r15 = T0 + r14
-    20 │   return r15
+     2 │   r1 = ref @users
+     3 │   r2 = load r1
+     6 │   jump L0(0 (r3), T0, r0)
+     7 │ L0(r4: Int, r5: String, r6: String):
+     8 │   list_step r7, r8 = r2[r4] else L1(r5)
+     9 │ L3:
+    10 │   r9 = r7.name
+    12 │   r10 = T0 + r9
+    13 │   r11 = r5 + r10
+    14 │   jump L0(r8, r11, r9)
+    15 │ L1(r12: String):
+    16 │   jump L2(r12)
+    17 │ L2(r13: String):
+    18 │   r14 = T0 + r13
+    19 │   return r14
 
-    ; r0 (v23) : String
+    ; r0 (v21) : String
     ; r1 (@users) : Ref<List<{age: Int, name: String}>>
-    ; r2 (@users) : List<{age: Int, name: String}>
-    ; r3 (@users) : Ref<List<{age: Int, name: String}>>
+    ; r2 (v3) : List<{age: Int, name: String}>
+    ; r3 (v4) : Int
     ; r4 (v6) : Int
-    ; r5 (v8) : Int
-    ; r6 (v9) : String
-    ; r7 (v24) : String
-    ; r8 (v10) : {age: Int, name: String}
-    ; r9 (v11) : Int
-    ; r10 (name) : String
-    ; r11 (v18) : String
-    ; r12 (v19) : String
-    ; r13 (v20) : String
-    ; r14 (v21) : String
-    ; r15 (v22) : String
-    ; r16 (v3) : String
-    ; r17 (v14) : Ref<String>
-    ; r18 (name) : String
-    ; r19 (v15) : String
-    ; r20 (v7) : String
-    ; r21 (v5) : List<{age: Int, name: String}>
-    ; r22 (v16) : Ref<String>
+    ; r5 (v7) : String
+    ; r6 (v22) : String
+    ; r7 (v8) : {age: Int, name: String}
+    ; r8 (v9) : Int
+    ; r9 (name) : String
+    ; r10 (v16) : String
+    ; r11 (v17) : String
+    ; r12 (v18) : String
+    ; r13 (v19) : String
+    ; r14 (v20) : String
+    ; r15 (v14) : Ref<String>
+    ; r16 (v1) : String
+    ; r17 (name) : String
+    ; r18 (v5) : String
+    ; r19 (v13) : String
+    ; r20 (v12) : Ref<String>

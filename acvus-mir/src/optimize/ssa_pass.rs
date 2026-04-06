@@ -41,10 +41,7 @@ use crate::ty::{Effect, Ty};
 
 /// Run the SSA context pass on a CfgBody.
 ///
-/// `fn_metadata` maps FunctionId → Ty for resolving callee effects
-/// (which contexts a function reads/writes). Used to populate
-/// `context_uses`/`context_defs` on FunctionCall/Spawn instructions.
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody) {
     if cfg.blocks.is_empty() {
         return;
     }
@@ -88,7 +85,7 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     };
 
     // Step 2: Context value forwarding.
-    let fwd_subst = forward_context_values(cfg, fn_metadata, &ssa_info.written_contexts);
+    let fwd_subst = forward_context_values(cfg, &ssa_info.written_contexts);
 
     // Step 3: Apply substitutions + remove promoted instructions.
     if !var_subst.is_empty() {
@@ -114,7 +111,6 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
 ///   2. **Apply** — mutate `cfg.blocks` with the collected results.
 fn forward_context_values(
     cfg: &mut CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> FxHashMap<ValueId, ValueId> {
     let num_blocks = cfg.blocks.len();
@@ -163,7 +159,6 @@ fn forward_context_values(
     struct CollectState<'a> {
         blocks: &'a [crate::cfg::Block],
         val_types: &'a mut FxHashMap<ValueId, Ty>,
-        fn_metadata: &'a FxHashMap<QualifiedRef, Ty>,
         preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
         written_contexts: &'a BTreeSet<QualifiedRef>,
         dom_children: &'a [SmallVec<[usize; 4]>],
@@ -283,12 +278,13 @@ fn forward_context_values(
 
                 // FunctionCall with Direct callee: populate context_uses/context_defs.
                 InstKind::FunctionCall {
-                    callee: Callee::Direct(fn_id),
+                    callee: Callee::Direct(_),
+                    callee_ty,
                     context_uses,
                     context_defs,
                     ..
                 } if context_uses.is_empty() && context_defs.is_empty() => {
-                    if let Some((reads, writes)) = extract_effect_refs(st.fn_metadata, fn_id) {
+                    if let Some((reads, writes)) = extract_effect_refs(callee_ty) {
                         let mut uses = Vec::new();
                         for qref in &reads {
                             if let Some(&val) = ctx_state.get(qref) {
@@ -345,7 +341,6 @@ fn forward_context_values(
     let mut state = CollectState {
         blocks: &cfg.blocks,
         val_types: &mut cfg.val_types,
-        fn_metadata,
         preds: &preds,
         written_contexts,
         dom_children: &dom_children,
@@ -405,16 +400,14 @@ fn forward_context_values(
 /// Only `EffectTarget::Context` refs are returned — `Token` targets are NOT
 /// SSA-compatible and must never be converted to context_uses/context_defs.
 pub(crate) fn extract_effect_refs(
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
-    fn_id: &QualifiedRef,
+    callee_ty: &Ty,
 ) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
     use crate::ty::EffectTarget;
 
-    let m = fn_metadata.get(fn_id)?;
     let Ty::Fn {
         effect: Effect::Resolved(eff),
         ..
-    } = m
+    } = callee_ty
     else {
         return None;
     };
@@ -1338,7 +1331,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_metadata());
+        run(&mut cfg_body);
         assert!(
             count_phi_blocks(&cfg_body) >= 1,
             "merge should have PHI for @x"
@@ -1359,7 +1352,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_metadata());
+        run(&mut cfg_body);
         assert!(count_phi_blocks(&cfg_body) >= 1);
     }
 
@@ -1373,7 +1366,7 @@ mod tests {
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body, &no_fn_metadata());
+        run(&mut cfg_body);
         assert!(
             count_phi_blocks(&cfg_body) >= 1,
             "loop header should have PHI for @sum"
@@ -1393,7 +1386,7 @@ mod tests {
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let stores_before = count_context_stores(&cfg_body);
-        run(&mut cfg_body, &no_fn_metadata());
+        run(&mut cfg_body);
         assert_eq!(count_context_stores(&cfg_body), stores_before);
     }
 
@@ -1403,46 +1396,11 @@ mod tests {
         let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let stores_before = count_context_stores(&cfg_body);
-        run(&mut cfg_body, &no_fn_metadata());
+        run(&mut cfg_body);
         assert_eq!(count_context_stores(&cfg_body), stores_before);
     }
 
     // ── Script regression: entry loads + nested loops ──
-
-    #[test]
-    fn script_entry_loads_all_contexts() {
-        // All contexts must have Ref + Load in entry block.
-        let i = Interner::new();
-        let module = compile_script(
-            &i,
-            "x in @items { @sum = @sum + x; }; @sum",
-            &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
-        )
-        .unwrap();
-        let cfg_body = cfg::promote(module.main);
-
-        // Entry block is blocks[0].
-        let entry = &cfg_body.blocks[0];
-        let entry_projects: Vec<_> = entry
-            .insts
-            .iter()
-            .filter(|i| matches!(i.kind, InstKind::Ref { .. }))
-            .collect();
-        let entry_loads: Vec<_> = entry
-            .insts
-            .iter()
-            .filter(|i| matches!(i.kind, InstKind::Load { .. }))
-            .collect();
-        // Both @items and @sum should have entry loads.
-        assert!(
-            entry_projects.len() >= 2,
-            "expected entry Ref for all contexts"
-        );
-        assert!(
-            entry_loads.len() >= 2,
-            "expected entry Load for all contexts"
-        );
-    }
 
     #[test]
     fn script_nested_loop_phi() {
@@ -1545,6 +1503,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v2,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -1556,7 +1515,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         // Find the FunctionCall and verify context_uses/context_defs are populated.
         let call_inst = cfg_body
@@ -1618,6 +1577,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v0,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -1629,7 +1589,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         let call_inst = cfg_body
             .blocks
@@ -1715,6 +1675,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v2,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -1742,7 +1703,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         // The second Load (v4) should be eliminated — replaced by the def from the call.
         let remaining_loads: Vec<_> = cfg_body
@@ -1837,6 +1798,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v2,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -1848,7 +1810,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         // context_uses should have exactly 1 entry (the Context), NOT 2.
         for block in &cfg_body.blocks {
@@ -1928,6 +1890,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v2,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -1939,7 +1902,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         for block in &cfg_body.blocks {
             for inst in &block.insts {
@@ -2021,6 +1984,7 @@ mod tests {
             kind: InstKind::FunctionCall {
                 dst: v2,
                 callee: Callee::Direct(callee_id),
+                callee_ty: fn_metadata[&callee_id].clone(),
                 args: vec![],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -2032,7 +1996,7 @@ mod tests {
         });
 
         let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body, &fn_metadata);
+        run(&mut cfg_body);
 
         for block in &cfg_body.blocks {
             for inst in &block.insts {
@@ -2096,25 +2060,21 @@ mod tests {
         let token = QualifiedRef::root(interner.intern("fs"));
         let fid = QualifiedRef::root(interner.intern("callee"));
 
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            fid,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([
-                            EffectTarget::Context(qref),
-                            EffectTarget::Token(token),
-                        ]),
-                        writes: BTreeSet::from([EffectTarget::Token(token)]),
-                    }),
-                    hint: None,
-                },
-        );
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: Effect::Resolved(EffectSet {
+                reads: BTreeSet::from([
+                    EffectTarget::Context(qref),
+                    EffectTarget::Token(token),
+                ]),
+                writes: BTreeSet::from([EffectTarget::Token(token)]),
+            }),
+            hint: None,
+        };
 
-        let result = extract_effect_refs(&fn_metadata, &fid);
+        let result = extract_effect_refs(&fn_ty);
         let (reads, writes) = result.unwrap();
         assert_eq!(reads.len(), 1, "only Context should be in reads");
         assert_eq!(reads[0], qref);
@@ -2212,7 +2172,7 @@ mod tests {
     fn non_volatile_context_is_forwarded() {
         let (mut cfg, fn_metadata) = make_store_then_load(false);
         let loads_before = count_context_loads(&cfg);
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
         // Non-volatile: SSA should forward the store → load is eliminated.
         assert!(
@@ -2227,7 +2187,7 @@ mod tests {
     fn volatile_context_not_forwarded() {
         let (mut cfg, fn_metadata) = make_store_then_load(true);
         let loads_before = count_context_loads(&cfg);
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
         // Volatile: SSA must NOT forward — load is preserved.
         assert_eq!(

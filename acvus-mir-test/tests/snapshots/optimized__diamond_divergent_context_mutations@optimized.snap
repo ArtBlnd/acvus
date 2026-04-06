@@ -3,53 +3,53 @@ source: acvus-mir-test/tests/optimized.rs
 expression: opt
 ---
 === main ===
-     0 │   r0 = ref @output
-     1 │   r1 = ref @low
-     2 │   r2 = ref @high
-     3 │   r3 = ref @high
-     4 │   r4 = ref @input
-     5 │   r5 = ref @low
-     6 │   r6 = ref @output
-     8 │   r7 = load r4
-     9 │   r8 = r7 > 10 (r9)
+     0 │   r0 = undef
+     1 │   r1 = undef
+     2 │   r2 = undef
+     3 │   r3 = ref @output
+     4 │   r4 = ref @low
+     5 │   r5 = ref @high
+     6 │   r6 = ref @high
+     8 │   r7 = load r6
+     9 │   r8 = r7 > 1 (r9)
     10 │   r10 = test r8 == true
-    12 │   r11 = load r3
-    13 │   r12 = r11 + 10 (r9)
-    15 │   r13 = r7 * 10 (r9)
-    17 │   r8 = r7 <= 10 (r9)
-    18 │   r14 = test r8 == true
-    20 │   r15 = load r5
-    21 │   r16 = r15 + 10 (r9)
-    23 │   r17 = r7 + 10 (r9)
-    24 │   r9 = load r6
-    25 │   jump_if r10 then L0 else L1(10 (r9), r11)
-    26 │ L0:
-    27 │   jump L1(r13, r12)
-    28 │ L1(r9: Int, r7: Int):
-    29 │   store r2 = r7
-    30 │   jump_if r14 then L2 else L3(10 (r9), r15)
-    31 │ L2:
-    32 │   jump L3(r17, r16)
-    33 │ L3(r9: Int, r7: Int):
-    34 │   store r0 = 10 (r9)
-    35 │   store r1 = r7
-    36 │   return 10 (r9)
+    11 │   r6 = ref @high
+    14 │   r11 = r7 * 1 (r12)
+    16 │   r8 = r7 <= 1 (r12)
+    17 │   r13 = test r8 == true
+    18 │   r14 = ref @low
+    21 │   r15 = r7 + 10 (r16)
+    22 │   jump_if r10 then L0 else L1(r0, r2)
+    23 │ L0:
+    24 │   r0 = load r6
+    25 │   r2 = r0 + 1 (r9)
+    26 │   jump L1(r11, r2)
+    27 │ L1(r0: Int, r2: Int):
+    28 │   store r5 = r2
+    29 │   jump_if r13 then L2 else L3(r0, r1)
+    30 │ L2:
+    31 │   r0 = load r14
+    32 │   r1 = r0 + 1 (r12)
+    33 │   jump L3(r15, r1)
+    34 │ L3(r0: Int, r1: Int):
+    35 │   store r4 = r1
+    36 │   store r3 = r0
+    37 │   return r0
 
-    ; r0 (@output) : Ref<Int>
-    ; r1 (@low) : Ref<Int>
-    ; r2 (@high) : Ref<Int>
-    ; r3 (@high) : Ref<Int>
-    ; r4 (@input) : Ref<Int>
-    ; r5 (@low) : Ref<Int>
-    ; r6 (@output) : Ref<Int>
+    ; r0 (@low) : Int
+    ; r1 (v2) : Int
+    ; r2 (v3) : Int
+    ; r3 (@output) : Ref<Int>
+    ; r4 (@low) : Ref<Int>
+    ; r5 (@high) : Ref<Int>
+    ; r6 (@high) : Ref<Int>
     ; r7 (@input) : Int
     ; r8 (v10) : Bool
-    ; r9 (@output) : Int
+    ; r9 (v8) : Int
     ; r10 (v11) : Bool
-    ; r11 (@high) : Int
-    ; r12 (v13) : Int
-    ; r13 (v14) : Int
-    ; r14 (v15) : Bool
-    ; r15 (@low) : Int
-    ; r16 (v17) : Int
-    ; r17 (v18) : Int
+    ; r11 (v13) : Int
+    ; r12 (v12) : Int
+    ; r13 (v14) : Bool
+    ; r14 (@low) : Ref<Int>
+    ; r15 (v17) : Int
+    ; r16 (v16) : Int

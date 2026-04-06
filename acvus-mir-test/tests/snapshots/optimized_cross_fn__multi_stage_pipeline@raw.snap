@@ -4,273 +4,161 @@ expression: raw
 ---
 ── enrich ──
 === main ===
-     0 │   r0 = ref @offset
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @precision
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @scale
-     5 │   r5 = load r4
-     6 │   r6 = ref @source_id
-     7 │   r7 = load r6
-     8 │   r8 = ref @stage1
-     9 │   r9 = load r8
-    10 │   r10 = ref @stage2
-    11 │   r11 = load r10
-    12 │   r12 = ref @stage3
-    13 │   r13 = load r12
-    14 │   r14 = ref $v1
-    15 │   r15 = load r14
-    16 │   r16 = ref $v2
-    17 │   r17 = load r16
-    18 │   r18 = r15 + r17
-    19 │   r19 = ref $v1
-    20 │   r20 = load r19
-    22 │   r21 = r20 / 10 (r22)
-    23 │   r23 = r18 + r21
-    24 │   return r23
+     4 │   r4 = r1 + r3
+     5 │   r5 = ref $v1
+     6 │   r6 = load r5
+     8 │   r7 = r6 / 10 (r8)
+     9 │   r9 = r4 + r7
+    10 │   return r9
 
-    ; r0 (@offset) : Ref<Int>
-    ; r1 (@offset) : Int
-    ; r2 (@precision) : Ref<Int>
-    ; r3 (@precision) : Int
-    ; r4 (@scale) : Ref<Int>
-    ; r5 (@scale) : Int
-    ; r6 (@source_id) : Ref<Int>
-    ; r7 (@source_id) : Int
-    ; r8 (@stage1) : Ref<Int>
-    ; r9 (@stage1) : Int
-    ; r10 (@stage2) : Ref<Int>
-    ; r11 (@stage2) : Int
-    ; r12 (@stage3) : Ref<Int>
-    ; r13 (@stage3) : Int
-    ; r14 (v17) : Ref<Int>
-    ; r15 ($val) : Int
-    ; r16 (v19) : Ref<Int>
-    ; r17 ($offset) : Int
-    ; r18 (v21) : Int
-    ; r19 (v22) : Ref<Int>
-    ; r20 ($val) : Int
-    ; r21 (v25) : Int
-    ; r22 (v24) : Int
-    ; r23 (v26) : Int
-    ; r24 (v2) : Int
-    ; r25 (v1) : Int
+    ; r0 (v3) : Ref<Int>
+    ; r1 ($val) : Int
+    ; r2 (v5) : Ref<Int>
+    ; r3 ($offset) : Int
+    ; r4 (v7) : Int
+    ; r5 (v8) : Ref<Int>
+    ; r6 ($val) : Int
+    ; r7 (v11) : Int
+    ; r8 (v10) : Int
+    ; r9 (v12) : Int
+    ; r10 (v2) : Int
+    ; r11 (v1) : Int
 
 ── finalize ──
 === main ===
-     0 │   r0 = ref @offset
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @precision
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @scale
-     5 │   r5 = load r4
-     6 │   r6 = ref @source_id
-     7 │   r7 = load r6
-     8 │   r8 = ref @stage1
-     9 │   r9 = load r8
-    10 │   r10 = ref @stage2
-    11 │   r11 = load r10
-    12 │   r12 = ref @stage3
-    13 │   r13 = load r12
-    14 │   r14 = ref $v1
-    15 │   r15 = load r14
-    16 │   r16 = ref $v2
-    17 │   r17 = load r16
-    18 │   r18 = r15 / r17
-    19 │   r19 = ref $v2
-    20 │   r20 = load r19
-    21 │   r21 = r18 * r20
-    22 │   return r21
+     4 │   r4 = r1 / r3
+     5 │   r5 = ref $v2
+     6 │   r6 = load r5
+     7 │   r7 = r4 * r6
+     8 │   return r7
 
-    ; r0 (@offset) : Ref<Int>
-    ; r1 (@offset) : Int
-    ; r2 (@precision) : Ref<Int>
-    ; r3 (@precision) : Int
-    ; r4 (@scale) : Ref<Int>
-    ; r5 (@scale) : Int
-    ; r6 (@source_id) : Ref<Int>
-    ; r7 (@source_id) : Int
-    ; r8 (@stage1) : Ref<Int>
-    ; r9 (@stage1) : Int
-    ; r10 (@stage2) : Ref<Int>
-    ; r11 (@stage2) : Int
-    ; r12 (@stage3) : Ref<Int>
-    ; r13 (@stage3) : Int
-    ; r14 (v17) : Ref<Int>
-    ; r15 ($val) : Int
-    ; r16 (v19) : Ref<Int>
-    ; r17 ($prec) : Int
-    ; r18 (v21) : Int
-    ; r19 (v22) : Ref<Int>
-    ; r20 ($prec) : Int
-    ; r21 (v24) : Int
-    ; r22 (v2) : Int
-    ; r23 (v1) : Int
+    ; r0 (v3) : Ref<Int>
+    ; r1 ($val) : Int
+    ; r2 (v5) : Ref<Int>
+    ; r3 ($prec) : Int
+    ; r4 (v7) : Int
+    ; r5 (v8) : Ref<Int>
+    ; r6 ($prec) : Int
+    ; r7 (v10) : Int
+    ; r8 (v2) : Int
+    ; r9 (v1) : Int
 
 ── main ──
 === main ===
-     0 │   r0 = ref @offset
+     0 │   r0 = ref @source_id
      1 │   r1 = load r0
-     2 │   r2 = ref @precision
-     3 │   r3 = load r2
-     4 │   r4 = ref @scale
-     5 │   r5 = load r4
-     6 │   r6 = ref @source_id
-     7 │   r7 = load r6
-     8 │   r8 = ref @stage1
-     9 │   r9 = load r8
-    10 │   r10 = ref @stage2
-    11 │   r11 = load r10
-    12 │   r12 = ref @stage3
-    13 │   r13 = load r12
-    14 │   r14 = ref @source_id
-    15 │   r15 = load r14
-    16 │   r16 = call #0(r15)
-    17 │   r17 = ref raw
-    18 │   store r17 = r16
-    19 │   r18 = ref raw
-    20 │   r19 = load r18
-    21 │   r20 = ref @scale
-    22 │   r21 = load r20
-    23 │   r22 = call #1(r19, r21)
-    24 │   r23 = ref s1
-    25 │   store r23 = r22
-    26 │   r24 = ref s1
-    27 │   r25 = load r24
-    28 │   r26 = ref @stage1
-    29 │   store r26 = r25
-    30 │   r27 = ref s1
-    31 │   r28 = load r27
-    32 │   r29 = ref @offset
-    33 │   r30 = load r29
-    34 │   r31 = call #2(r28, r30)
-    35 │   r32 = ref s2
-    36 │   store r32 = r31
-    37 │   r33 = ref s2
-    38 │   r34 = load r33
-    39 │   r35 = ref @stage2
-    40 │   store r35 = r34
-    41 │   r36 = ref s2
-    42 │   r37 = load r36
-    43 │   r38 = ref @precision
-    44 │   r39 = load r38
-    45 │   r40 = call #3(r37, r39)
-    46 │   r41 = ref s3
-    47 │   store r41 = r40
-    48 │   r42 = ref s3
-    49 │   r43 = load r42
-    50 │   r44 = ref @stage3
-    51 │   store r44 = r43
-    52 │   r45 = ref s1
-    53 │   r46 = load r45
-    54 │   r47 = ref s2
-    55 │   r48 = load r47
-    56 │   r49 = ref s3
-    57 │   r50 = load r49
-    58 │   r51 = call #4(r46, r48, r50)
-    59 │   r52 = ref s3
-    60 │   r53 = load r52
-    61 │   return r53
+     2 │   r2 = call #0(r1)
+     3 │   r3 = ref raw
+     4 │   store r3 = r2
+     5 │   r4 = ref raw
+     6 │   r5 = load r4
+     7 │   r6 = ref @scale
+     8 │   r7 = load r6
+     9 │   r8 = call #1(r5, r7)
+    10 │   r9 = ref s1
+    11 │   store r9 = r8
+    12 │   r10 = ref s1
+    13 │   r11 = load r10
+    14 │   r12 = ref @stage1
+    15 │   store r12 = r11
+    16 │   r13 = ref s1
+    17 │   r14 = load r13
+    18 │   r15 = ref @offset
+    19 │   r16 = load r15
+    20 │   r17 = call #2(r14, r16)
+    21 │   r18 = ref s2
+    22 │   store r18 = r17
+    23 │   r19 = ref s2
+    24 │   r20 = load r19
+    25 │   r21 = ref @stage2
+    26 │   store r21 = r20
+    27 │   r22 = ref s2
+    28 │   r23 = load r22
+    29 │   r24 = ref @precision
+    30 │   r25 = load r24
+    31 │   r26 = call #3(r23, r25)
+    32 │   r27 = ref s3
+    33 │   store r27 = r26
+    34 │   r28 = ref s3
+    35 │   r29 = load r28
+    36 │   r30 = ref @stage3
+    37 │   store r30 = r29
+    38 │   r31 = ref s1
+    39 │   r32 = load r31
+    40 │   r33 = ref s2
+    41 │   r34 = load r33
+    42 │   r35 = ref s3
+    43 │   r36 = load r35
+    44 │   r37 = call #4(r32, r34, r36)
+    45 │   r38 = ref s3
+    46 │   r39 = load r38
+    47 │   return r39
 
-    ; r0 (@offset) : Ref<Int>
-    ; r1 (@offset) : Int
-    ; r2 (@precision) : Ref<Int>
-    ; r3 (@precision) : Int
-    ; r4 (@scale) : Ref<Int>
-    ; r5 (@scale) : Int
-    ; r6 (@source_id) : Ref<Int>
-    ; r7 (@source_id) : Int
-    ; r8 (@stage1) : Ref<Int>
-    ; r9 (@stage1) : Int
-    ; r10 (@stage2) : Ref<Int>
-    ; r11 (@stage2) : Int
-    ; r12 (@stage3) : Ref<Int>
-    ; r13 (@stage3) : Int
-    ; r14 (@source_id) : Ref<Int>
-    ; r15 (v16) : Int
-    ; r16 (fetch_data(...)) : Int
-    ; r17 (v19) : Ref<Int>
-    ; r18 (v20) : Ref<Int>
-    ; r19 (raw) : Int
-    ; r20 (@scale) : Ref<Int>
-    ; r21 (v23) : Int
-    ; r22 (normalize(...)) : Int
-    ; r23 (v26) : Ref<Int>
-    ; r24 (v27) : Ref<Int>
-    ; r25 (s1) : Int
-    ; r26 (@stage1) : Ref<Int>
-    ; r27 (v30) : Ref<Int>
-    ; r28 (s1) : Int
-    ; r29 (@offset) : Ref<Int>
-    ; r30 (v33) : Int
-    ; r31 (enrich(...)) : Int
-    ; r32 (v36) : Ref<Int>
-    ; r33 (v37) : Ref<Int>
+    ; r0 (@source_id) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (fetch_data(...)) : Int
+    ; r3 (v5) : Ref<Int>
+    ; r4 (v6) : Ref<Int>
+    ; r5 (raw) : Int
+    ; r6 (@scale) : Ref<Int>
+    ; r7 (v9) : Int
+    ; r8 (normalize(...)) : Int
+    ; r9 (v12) : Ref<Int>
+    ; r10 (v13) : Ref<Int>
+    ; r11 (s1) : Int
+    ; r12 (@stage1) : Ref<Int>
+    ; r13 (v16) : Ref<Int>
+    ; r14 (s1) : Int
+    ; r15 (@offset) : Ref<Int>
+    ; r16 (v19) : Int
+    ; r17 (enrich(...)) : Int
+    ; r18 (v22) : Ref<Int>
+    ; r19 (v23) : Ref<Int>
+    ; r20 (s2) : Int
+    ; r21 (@stage2) : Ref<Int>
+    ; r22 (v26) : Ref<Int>
+    ; r23 (s2) : Int
+    ; r24 (@precision) : Ref<Int>
+    ; r25 (v29) : Int
+    ; r26 (finalize(...)) : Int
+    ; r27 (v32) : Ref<Int>
+    ; r28 (v33) : Ref<Int>
+    ; r29 (s3) : Int
+    ; r30 (@stage3) : Ref<Int>
+    ; r31 (v36) : Ref<Int>
+    ; r32 (s1) : Int
+    ; r33 (v38) : Ref<Int>
     ; r34 (s2) : Int
-    ; r35 (@stage2) : Ref<Int>
-    ; r36 (v40) : Ref<Int>
-    ; r37 (s2) : Int
-    ; r38 (@precision) : Ref<Int>
-    ; r39 (v43) : Int
-    ; r40 (finalize(...)) : Int
-    ; r41 (v46) : Ref<Int>
-    ; r42 (v47) : Ref<Int>
-    ; r43 (s3) : Int
-    ; r44 (@stage3) : Ref<Int>
-    ; r45 (v50) : Ref<Int>
-    ; r46 (s1) : Int
-    ; r47 (v52) : Ref<Int>
-    ; r48 (s2) : Int
-    ; r49 (v54) : Ref<Int>
-    ; r50 (s3) : Int
-    ; r51 (log_pipeline(...)) : Int
-    ; r52 (v57) : Ref<Int>
-    ; r53 (s3) : Int
+    ; r35 (v40) : Ref<Int>
+    ; r36 (s3) : Int
+    ; r37 (log_pipeline(...)) : Int
+    ; r38 (v43) : Ref<Int>
+    ; r39 (s3) : Int
 
 ── normalize ──
 === main ===
-     0 │   r0 = ref @offset
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @precision
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @scale
-     5 │   r5 = load r4
-     6 │   r6 = ref @source_id
-     7 │   r7 = load r6
-     8 │   r8 = ref @stage1
-     9 │   r9 = load r8
-    10 │   r10 = ref @stage2
-    11 │   r11 = load r10
-    12 │   r12 = ref @stage3
-    13 │   r13 = load r12
-    14 │   r14 = ref $v1
-    15 │   r15 = load r14
-    16 │   r16 = ref $v2
-    17 │   r17 = load r16
-    18 │   r18 = r15 * r17
-    20 │   r19 = r18 / 1000 (r20)
-    21 │   return r19
+     4 │   r4 = r1 * r3
+     6 │   r5 = r4 / 1000 (r6)
+     7 │   return r5
 
-    ; r0 (@offset) : Ref<Int>
-    ; r1 (@offset) : Int
-    ; r2 (@precision) : Ref<Int>
-    ; r3 (@precision) : Int
-    ; r4 (@scale) : Ref<Int>
-    ; r5 (@scale) : Int
-    ; r6 (@source_id) : Ref<Int>
-    ; r7 (@source_id) : Int
-    ; r8 (@stage1) : Ref<Int>
-    ; r9 (@stage1) : Int
-    ; r10 (@stage2) : Ref<Int>
-    ; r11 (@stage2) : Int
-    ; r12 (@stage3) : Ref<Int>
-    ; r13 (@stage3) : Int
-    ; r14 (v17) : Ref<Int>
-    ; r15 ($val) : Int
-    ; r16 (v19) : Ref<Int>
-    ; r17 ($scale) : Int
-    ; r18 (v21) : Int
-    ; r19 (v23) : Int
-    ; r20 (v22) : Int
-    ; r21 (v2) : Int
-    ; r22 (v1) : Int
+    ; r0 (v3) : Ref<Int>
+    ; r1 ($val) : Int
+    ; r2 (v5) : Ref<Int>
+    ; r3 ($scale) : Int
+    ; r4 (v7) : Int
+    ; r5 (v9) : Int
+    ; r6 (v8) : Int
+    ; r7 (v2) : Int
+    ; r8 (v1) : Int

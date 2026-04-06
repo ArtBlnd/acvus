@@ -7,31 +7,28 @@ expression: ir
   T1 = ","
 
 === main ===
-     0 │   r0 = ref @users
-     1 │   r1 = load r0
-     3 │   r2 = ref @users
-     4 │   r3 = call #0(r1)
-     5 │   r4 = closure L0 []
-     6 │   r5 = call #1(r3, r4)
-     7 │   r6 = call #2(r5)
-     8 │   r7 = call #0(r6)
-    10 │   r8 = call #3(r7, T1)
-    11 │   r9 = T0 + r8
-    12 │   return r9
+     1 │   r0 = ref @users
+     2 │   r1 = load r0
+     3 │   r2 = call #0(r1)
+     4 │   r3 = closure L0 []
+     5 │   r4 = call #1(r2, r3)
+     6 │   r5 = call #2(r4)
+     7 │   r6 = call #0(r5)
+     9 │   r7 = call #3(r6, T1)
+    10 │   r8 = T0 + r7
+    11 │   return r8
 
     ; r0 (@users) : Ref<List<{name: String}>>
-    ; r1 (@users) : List<{name: String}>
-    ; r2 (@users) : Ref<List<{name: String}>>
-    ; r3 (iter(...)) : Iterator<{name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r4 (v7) : Fn({name: String}) -> String
-    ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r6 (collect(...)) : List<String>
-    ; r7 (v10) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r8 (join(...)) : String
-    ; r9 (v13) : String
-    ; r10 (v11) : String
-    ; r11 (v3) : String
-    ; r12 (v5) : List<{name: String}>
+    ; r1 (v3) : List<{name: String}>
+    ; r2 (iter(...)) : Iterator<{name: String}, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r3 (v5) : Fn({name: String}) -> String
+    ; r4 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r5 (collect(...)) : List<String>
+    ; r6 (v8) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r7 (join(...)) : String
+    ; r8 (v11) : String
+    ; r9 (v9) : String
+    ; r10 (v1) : String
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

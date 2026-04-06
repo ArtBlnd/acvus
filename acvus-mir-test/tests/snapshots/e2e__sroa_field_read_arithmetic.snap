@@ -5,16 +5,13 @@ expression: ir
 === main ===
      0 │   r0 = ref @obj
      1 │   r1 = load r0
-     2 │   r2 = ref @obj
-     3 │   r3 = r1.val
-     5 │   r4 = r3 + 1 (r5)
-     6 │   return r4
+     2 │   r2 = r1.val
+     4 │   r3 = r2 + 1 (r4)
+     5 │   return r3
 
-    ; r0 (@obj) : Ref<{val: Int}>
-    ; r1 (@obj) : {val: Int}
-    ; r2 (v7) : Ref<{val: Int}>
+    ; r0 (v5) : Ref<{val: Int}>
+    ; r1 (v6) : {val: Int}
+    ; r2 (v2) : Int
     ; r3 (v4) : Int
-    ; r4 (v6) : Int
-    ; r5 (v5) : Int
-    ; r6 (@obj.val) : Ref<Int>
-    ; r7 (v8) : {val: Int}
+    ; r4 (v3) : Int
+    ; r5 (@obj.val) : Ref<Int>

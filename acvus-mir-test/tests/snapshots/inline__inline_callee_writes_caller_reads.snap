@@ -5,39 +5,31 @@ expression: ir
 === main ===
      0 │   r0 = ref @count
      1 │   r1 = load r0
-     2 │   r2 = ref @count
-     3 │   r3 = load r2
+     3 │   r2 = r1 + 1 (r3)
      4 │   r4 = ref @count
-     5 │   r5 = load r4
-     7 │   r6 = r5 + 1 (r7)
-     8 │   r8 = ref @count
-     9 │   store r8 = r6
-    10 │   r9 = ref @count
-    11 │   r10 = load r9
-    12 │   r11 = ref x
-    13 │   store r11 = r10
-    14 │   r12 = ref x
-    15 │   r13 = load r12
-    16 │   r14 = ref @count
-    17 │   r15 = load r14
-    18 │   r16 = r13 + r15
-    19 │   return r16
+     5 │   store r4 = r2
+     6 │   r5 = ref @count
+     7 │   r6 = load r5
+     8 │   r7 = ref x
+     9 │   store r7 = r6
+    10 │   r8 = ref x
+    11 │   r9 = load r8
+    12 │   r10 = ref @count
+    13 │   r11 = load r10
+    14 │   r12 = r9 + r11
+    15 │   return r12
 
     ; r0 (@count) : Ref<Int>
-    ; r1 (@count) : Int
-    ; r2 (@count) : Ref<Int>
-    ; r3 (@count) : Int
+    ; r1 (v10) : Int
+    ; r2 (v12) : Int
+    ; r3 (v11) : Int
     ; r4 (@count) : Ref<Int>
-    ; r5 (v14) : Int
-    ; r6 (v16) : Int
-    ; r7 (v15) : Int
-    ; r8 (@count) : Ref<Int>
-    ; r9 (@count) : Ref<Int>
-    ; r10 (v19) : Int
-    ; r11 (v5) : Ref<Int>
-    ; r12 (v6) : Ref<Int>
-    ; r13 (x) : Int
-    ; r14 (@count) : Ref<Int>
-    ; r15 (v9) : Int
-    ; r16 (v10) : Int
-    ; r17 (bump(...)) : Int
+    ; r5 (@count) : Ref<Int>
+    ; r6 (v15) : Int
+    ; r7 (v3) : Ref<Int>
+    ; r8 (v4) : Ref<Int>
+    ; r9 (x) : Int
+    ; r10 (@count) : Ref<Int>
+    ; r11 (v7) : Int
+    ; r12 (v8) : Int
+    ; r13 (bump(...)) : Int

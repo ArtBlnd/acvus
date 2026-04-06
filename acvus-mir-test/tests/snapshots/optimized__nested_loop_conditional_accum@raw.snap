@@ -5,111 +5,99 @@ expression: raw
 === main ===
      0 │   r0 = ref @matrix
      1 │   r1 = load r0
-     2 │   r2 = ref @neg_sum
-     3 │   r3 = load r2
-     4 │   r4 = ref @pos_sum
-     5 │   r5 = load r4
-     6 │   r6 = ref @matrix
-     7 │   r7 = load r6
-     9 │   jump L0(0 (r8))
-    10 │ L0(r9: Int):
-    11 │   list_step r10, r11 = r7[r9] else L1()
-    12 │ L2:
-    13 │   r12 = ref row
-    14 │   store r12 = r10
-    15 │   r13 = ref row
-    16 │   r14 = load r13
-    18 │   jump L3(0 (r15))
-    19 │ L3(r16: Int):
-    20 │   list_step r17, r18 = r14[r16] else L4()
-    21 │ L5:
-    22 │   r19 = ref y
-    23 │   store r19 = r17
-    24 │   r20 = ref y
-    25 │   r21 = load r20
-    27 │   r22 = r21 > 0 (r23)
-    28 │   r24 = test r22 == true
-    29 │   jump_if r24 then L6 else L7
-    30 │ L6:
-    31 │   r25 = ref @pos_sum
-    32 │   r26 = load r25
-    33 │   r27 = ref y
-    34 │   r28 = load r27
-    35 │   r29 = r26 + r28
-    36 │   r30 = ref @pos_sum
-    37 │   store r30 = r29
-    38 │   jump L7
-    39 │ L7:
-    40 │   r31 = ref y
-    41 │   r32 = load r31
-    43 │   r33 = r32 < 0 (r34)
-    44 │   r35 = test r33 == true
-    45 │   jump_if r35 then L8 else L9
-    46 │ L8:
-    47 │   r36 = ref @neg_sum
-    48 │   r37 = load r36
-    49 │   r38 = ref y
-    50 │   r39 = load r38
-    51 │   r40 = r37 + r39
-    52 │   r41 = ref @neg_sum
-    53 │   store r41 = r40
-    54 │   jump L9
-    55 │ L9:
-    56 │   jump L3(r18)
-    57 │ L4:
-    58 │   jump L0(r11)
-    59 │ L1:
-    60 │   r42 = ref @pos_sum
-    61 │   r43 = load r42
-    62 │   r44 = ref @neg_sum
-    63 │   r45 = load r44
-    64 │   r46 = object {pos: r43, neg: r45}
-    65 │   return r46
+     3 │   jump L0(0 (r2))
+     4 │ L0(r3: Int):
+     5 │   list_step r4, r5 = r1[r3] else L1()
+     6 │ L2:
+     7 │   r6 = ref row
+     8 │   store r6 = r4
+     9 │   r7 = ref row
+    10 │   r8 = load r7
+    12 │   jump L3(0 (r9))
+    13 │ L3(r10: Int):
+    14 │   list_step r11, r12 = r8[r10] else L4()
+    15 │ L5:
+    16 │   r13 = ref y
+    17 │   store r13 = r11
+    18 │   r14 = ref y
+    19 │   r15 = load r14
+    21 │   r16 = r15 > 0 (r17)
+    22 │   r18 = test r16 == true
+    23 │   jump_if r18 then L6 else L7
+    24 │ L6:
+    25 │   r19 = ref @pos_sum
+    26 │   r20 = load r19
+    27 │   r21 = ref y
+    28 │   r22 = load r21
+    29 │   r23 = r20 + r22
+    30 │   r24 = ref @pos_sum
+    31 │   store r24 = r23
+    32 │   jump L7
+    33 │ L7:
+    34 │   r25 = ref y
+    35 │   r26 = load r25
+    37 │   r27 = r26 < 0 (r28)
+    38 │   r29 = test r27 == true
+    39 │   jump_if r29 then L8 else L9
+    40 │ L8:
+    41 │   r30 = ref @neg_sum
+    42 │   r31 = load r30
+    43 │   r32 = ref y
+    44 │   r33 = load r32
+    45 │   r34 = r31 + r33
+    46 │   r35 = ref @neg_sum
+    47 │   store r35 = r34
+    48 │   jump L9
+    49 │ L9:
+    50 │   jump L3(r12)
+    51 │ L4:
+    52 │   jump L0(r5)
+    53 │ L1:
+    54 │   r36 = ref @pos_sum
+    55 │   r37 = load r36
+    56 │   r38 = ref @neg_sum
+    57 │   r39 = load r38
+    58 │   r40 = object {pos: r37, neg: r39}
+    59 │   return r40
 
     ; r0 (@matrix) : Ref<List<List<Int>>>
-    ; r1 (@matrix) : List<List<Int>>
-    ; r2 (@neg_sum) : Ref<Int>
-    ; r3 (@neg_sum) : Int
-    ; r4 (@pos_sum) : Ref<Int>
-    ; r5 (@pos_sum) : Int
-    ; r6 (@matrix) : Ref<List<List<Int>>>
-    ; r7 (v8) : List<List<Int>>
-    ; r8 (v9) : Int
-    ; r9 (v10) : Int
-    ; r10 (row) : List<Int>
-    ; r11 (v12) : Int
-    ; r12 (v14) : Ref<List<Int>>
-    ; r13 (v15) : Ref<List<Int>>
-    ; r14 (row) : List<Int>
-    ; r15 (v17) : Int
-    ; r16 (v18) : Int
-    ; r17 (y) : Int
-    ; r18 (v20) : Int
-    ; r19 (v22) : Ref<Int>
-    ; r20 (v23) : Ref<Int>
-    ; r21 (y) : Int
-    ; r22 (v26) : Bool
-    ; r23 (v25) : Int
-    ; r24 (v27) : Bool
-    ; r25 (@pos_sum) : Ref<Int>
-    ; r26 (v29) : Int
-    ; r27 (v30) : Ref<Int>
-    ; r28 (y) : Int
-    ; r29 (v32) : Int
-    ; r30 (@pos_sum) : Ref<Int>
-    ; r31 (v34) : Ref<Int>
-    ; r32 (y) : Int
-    ; r33 (v37) : Bool
-    ; r34 (v36) : Int
-    ; r35 (v38) : Bool
-    ; r36 (@neg_sum) : Ref<Int>
+    ; r1 (v2) : List<List<Int>>
+    ; r2 (v3) : Int
+    ; r3 (v4) : Int
+    ; r4 (row) : List<Int>
+    ; r5 (v6) : Int
+    ; r6 (v8) : Ref<List<Int>>
+    ; r7 (v9) : Ref<List<Int>>
+    ; r8 (row) : List<Int>
+    ; r9 (v11) : Int
+    ; r10 (v12) : Int
+    ; r11 (y) : Int
+    ; r12 (v14) : Int
+    ; r13 (v16) : Ref<Int>
+    ; r14 (v17) : Ref<Int>
+    ; r15 (y) : Int
+    ; r16 (v20) : Bool
+    ; r17 (v19) : Int
+    ; r18 (v21) : Bool
+    ; r19 (@pos_sum) : Ref<Int>
+    ; r20 (v23) : Int
+    ; r21 (v24) : Ref<Int>
+    ; r22 (y) : Int
+    ; r23 (v26) : Int
+    ; r24 (@pos_sum) : Ref<Int>
+    ; r25 (v28) : Ref<Int>
+    ; r26 (y) : Int
+    ; r27 (v31) : Bool
+    ; r28 (v30) : Int
+    ; r29 (v32) : Bool
+    ; r30 (@neg_sum) : Ref<Int>
+    ; r31 (v34) : Int
+    ; r32 (v35) : Ref<Int>
+    ; r33 (y) : Int
+    ; r34 (v37) : Int
+    ; r35 (@neg_sum) : Ref<Int>
+    ; r36 (@pos_sum) : Ref<Int>
     ; r37 (v40) : Int
-    ; r38 (v41) : Ref<Int>
-    ; r39 (y) : Int
-    ; r40 (v43) : Int
-    ; r41 (@neg_sum) : Ref<Int>
-    ; r42 (@pos_sum) : Ref<Int>
-    ; r43 (v46) : Int
-    ; r44 (@neg_sum) : Ref<Int>
-    ; r45 (v48) : Int
-    ; r46 (v49) : {neg: Int, pos: Int}
+    ; r38 (@neg_sum) : Ref<Int>
+    ; r39 (v42) : Int
+    ; r40 (v43) : {neg: Int, pos: Int}

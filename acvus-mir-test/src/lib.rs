@@ -85,9 +85,6 @@ fn run_pipeline_with_registry(
         .cloned()
         .ok_or_else(|| "no module produced for target".to_string())?;
 
-    // Use InferResult.fn_metadata (authoritative, frozen).
-    let fn_metadata = &inf.fn_types;
-
     // Init check: field-level definite assignment on CfgBody (pre-SROA).
     {
         let external_contexts: rustc_hash::FxHashSet<QualifiedRef> = graph
@@ -96,7 +93,7 @@ fn run_pipeline_with_registry(
             .map(|c| c.qref)
             .collect();
         let cfg_main = cfg::promote(std::mem::take(&mut module.main));
-        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, fn_metadata, &external_contexts);
+        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, &external_contexts);
         module.main = cfg::demote(cfg_main);
         if !init_errors.is_empty() {
             let msgs: Vec<String> = init_errors
@@ -118,15 +115,15 @@ fn run_pipeline_with_registry(
 
     // SSA: promote identity Refs to SSA form.
     let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
-    acvus_mir::optimize::ssa_pass::run(&mut cfg_main, fn_metadata);
+    acvus_mir::optimize::ssa_pass::run(&mut cfg_main);
     module.main = cfg::demote(cfg_main);
     for closure in module.closures.values_mut() {
         let mut cfg_closure = cfg::promote(std::mem::take(closure));
-        acvus_mir::optimize::ssa_pass::run(&mut cfg_closure, fn_metadata);
+        acvus_mir::optimize::ssa_pass::run(&mut cfg_closure);
         *closure = cfg::demote(cfg_closure);
     }
 
-    let validation_errors = acvus_mir::validate::validate(&module, fn_metadata, &FxHashMap::default());
+    let validation_errors = acvus_mir::validate::validate(&module, &FxHashMap::default());
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()
@@ -454,7 +451,6 @@ pub fn compile_script_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_types,
         &inf.context_types,
         &FxHashSet::default(),
     );
@@ -771,7 +767,6 @@ pub fn compile_multi_fn_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_types,
         &inf.context_types,
         &FxHashSet::default(),
     );

@@ -3,41 +3,37 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @sum
-     1 │   r1 = load r0
-     5 │   r2 = list [1 (r3), 2 (r4), 3 (r5)]
-     6 │   r6 = cast DequeToList r2
-     8 │   jump L0(0 (r7))
-     9 │ L0(r8: Int):
-    10 │   list_step r9, r10 = r6[r8] else L1()
-    11 │ L2:
-    12 │   r11 = ref item
-    13 │   store r11 = r9
-    14 │   r12 = ref @sum
+     3 │   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     4 │   r4 = cast DequeToList r0
+     6 │   jump L0(0 (r5))
+     7 │ L0(r6: Int):
+     8 │   list_step r7, r8 = r4[r6] else L1()
+     9 │ L2:
+    10 │   r9 = ref item
+    11 │   store r9 = r7
+    12 │   r10 = ref @sum
+    13 │   r11 = load r10
+    14 │   r12 = ref item
     15 │   r13 = load r12
-    16 │   r14 = ref item
-    17 │   r15 = load r14
-    18 │   r16 = r13 + r15
-    19 │   r17 = ref @sum
-    20 │   store r17 = r16
-    21 │   jump L0(r10)
-    22 │ L1:
+    16 │   r14 = r11 + r13
+    17 │   r15 = ref @sum
+    18 │   store r15 = r14
+    19 │   jump L0(r8)
+    20 │ L1:
 
-    ; r0 (@sum) : Ref<Int>
-    ; r1 (@sum) : Int
-    ; r2 (v6) : Deque<Int, Identity(IdentityId(0))>
+    ; r0 (v4) : Deque<Int, Identity(IdentityId(0))>
+    ; r1 (v1) : Int
+    ; r2 (v2) : Int
     ; r3 (v3) : Int
-    ; r4 (v4) : Int
-    ; r5 (v5) : Int
-    ; r6 (v7) : List<Int>
-    ; r7 (v8) : Int
+    ; r4 (v5) : List<Int>
+    ; r5 (v6) : Int
+    ; r6 (v7) : Int
+    ; r7 (item) : Int
     ; r8 (v9) : Int
-    ; r9 (item) : Int
-    ; r10 (v11) : Int
-    ; r11 (v13) : Ref<Int>
-    ; r12 (@sum) : Ref<Int>
-    ; r13 (v15) : Int
-    ; r14 (v16) : Ref<Int>
-    ; r15 (item) : Int
-    ; r16 (v18) : Int
-    ; r17 (@sum) : Ref<Int>
+    ; r9 (v11) : Ref<Int>
+    ; r10 (@sum) : Ref<Int>
+    ; r11 (v13) : Int
+    ; r12 (v14) : Ref<Int>
+    ; r13 (item) : Int
+    ; r14 (v16) : Int
+    ; r15 (@sum) : Ref<Int>

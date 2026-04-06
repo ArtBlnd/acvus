@@ -5,37 +5,31 @@ expression: ir
 === main ===
      0 │   r0 = ref @a
      1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
+     3 │   r2 = r1 + 1 (r3)
      4 │   r4 = ref @a
-     6 │   r5 = r1 + 1 (r6)
-     7 │   r7 = ref @a
-     8 │   store r7 = r5
-     9 │   r8 = ref @b
-    11 │   r9 = r3 + 2 (r10)
-    12 │   r11 = ref @b
-    13 │   store r11 = r9
-    14 │   r12 = ref @a
-    15 │   r13 = ref @b
-    16 │   r14 = r5 + r9
-    17 │   return r14
+     5 │   store r4 = r2
+     6 │   r5 = ref @b
+     7 │   r6 = load r5
+     9 │   r7 = r6 + 2 (r8)
+    10 │   r9 = ref @b
+    11 │   store r9 = r7
+    12 │   r10 = ref @a
+    13 │   r11 = ref @b
+    14 │   r12 = r2 + r7
+    15 │   return r12
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
-    ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
     ; r4 (@a) : Ref<Int>
-    ; r5 (v8) : Int
+    ; r5 (@b) : Ref<Int>
     ; r6 (v7) : Int
-    ; r7 (@a) : Ref<Int>
-    ; r8 (@b) : Ref<Int>
-    ; r9 (v13) : Int
-    ; r10 (v12) : Int
+    ; r7 (v9) : Int
+    ; r8 (v8) : Int
+    ; r9 (@b) : Ref<Int>
+    ; r10 (@a) : Ref<Int>
     ; r11 (@b) : Ref<Int>
-    ; r12 (@a) : Ref<Int>
-    ; r13 (@b) : Ref<Int>
-    ; r14 (v19) : Int
-    ; r15 (v11) : Int
-    ; r16 (v6) : Int
-    ; r17 (v18) : Int
-    ; r18 (v16) : Int
+    ; r12 (v15) : Int
+    ; r13 (v14) : Int
+    ; r14 (v12) : Int

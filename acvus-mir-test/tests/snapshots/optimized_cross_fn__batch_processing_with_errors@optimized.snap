@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 439
 expression: opt
 ---
 === literals ===
@@ -11,110 +10,100 @@ expression: opt
      1 │   r1 = undef
      2 │   r2 = undef
      3 │   r3 = undef
-     4 │   r4 = ref @err_count
-     5 │   r5 = ref @sum
-     6 │   r6 = ref @last_err
-     7 │   r7 = ref @ok_count
+     4 │   r4 = undef
+     5 │   r5 = undef
+     6 │   r6 = undef
+     7 │   r7 = undef
      8 │   r8 = ref @err_count
-     9 │   r9 = ref @items
+     9 │   r9 = ref @sum
     10 │   r10 = ref @last_err
-    11 │   r11 = ref @max_val
-    12 │   r12 = ref @min_val
-    13 │   r13 = ref @multiplier
-    14 │   r14 = ref @ok_count
-    15 │   r15 = ref @sum
-    25 │   r16 = load r11
-    26 │   r17 = load r12
-    27 │   r18 = load r13
-    28 │   r19 = load r14
-    29 │   r20 = load r15
-    30 │   r21 = load r8
-    31 │   r22 = load r9
-    32 │   r23 = load r10
-    33 │   jump L0(0 (r24), r21, r20, r23, r19, r0, r1, r2, r3)
-    34 │ L0(r1: Int, r2: Int, r3: Int, r23: String, r24: Int, r0: {value: Int}, r19: Int, r20: Int, r21: Int):
-    35 │   store r4 = r2
-    36 │   store r5 = r3
-    37 │   store r6 = r23
-    38 │   store r7 = 0 (r24)
-    39 │   r25 = 0 (r24) + 1 (r26)
-    40 │   r27 = r2 + 1 (r28)
-    41 │   list_step r29, r30 = r22[r1] else L1()
-    42 │ L2:
-    43 │   r1 = r29.value
-    44 │   r31 = r1 >= r17
-    45 │   r32 = test r31 == true
-    46 │   r31 = r1 <= r16
-    47 │   r33 = test r31 == true
-    48 │   r19 = r1 * r18
-    49 │   r20 = r1 / 2 (r34)
-    50 │   r21 = r19 + r20
-    51 │   r19 = r3 + r21
-    52 │   jump_if r32 then L7 else L8(0 (r35))
-    53 │ L7:
-    54 │   jump_if r33 then L9 else L10(0 (r35))
-    55 │ L9:
-    56 │   jump L10(1 (r36))
-    57 │ L10(r20: Int):
-    58 │   jump L8(r20)
-    59 │ L8(r20: Int):
-    60 │   r31 = r20 > 0 (r37)
-    61 │   r32 = test r31 == true
-    62 │   r31 = r20 == 0 (r38)
-    63 │   r33 = test r31 == true
-    64 │   jump_if r32 then L3 else L4(r3, 0 (r24), r21)
-    65 │ L3:
-    66 │   jump L4(r19, r25, r21)
-    67 │ L4(r3: Int, r24: Int, r19: Int):
-    68 │   jump_if r33 then L5 else L6(r2, r23)
-    69 │ L5:
-    70 │   r23 = call #0(r1)
-    71 │   r39 = T0 + r23
-    72 │   jump L6(r27, r39)
-    73 │ L6(r1: Int, r23: String):
-    74 │   jump L0(r30, r1, r3, r23, 0 (r24), r29, r1, r20, r19)
-    75 │ L1:
-    76 │   r1 = call #1(r3, 0 (r24), r2)
-    77 │   return r3
+    11 │   r11 = ref @ok_count
+    12 │   r12 = ref @items
+    14 │   r13 = ref @min_val
+    15 │   r14 = ref @max_val
+    19 │   r15 = ref @multiplier
+    25 │   r16 = load r12
+    26 │   jump L0(0 (r17), r0, r1, r2, r3, r4, r5, r6, r7)
+    27 │ L0(r0: Int, r1: Int, r3: Int, r2: String, r5: Int, r4: {value: Int}, r6: Int, r7: Int, r17: Int):
+    28 │   r18 = r5 + 1 (r19)
+    29 │   r20 = r1 + 1 (r21)
+    30 │   store r10 = r2
+    31 │   store r11 = r5
+    32 │   store r8 = r1
+    33 │   store r9 = r3
+    34 │   list_step r22, r23 = r16[r0] else L1()
+    35 │ L2:
+    36 │   r0 = r22.value
+    37 │   r6 = load r13
+    38 │   r7 = load r14
+    39 │   r24 = r0 >= r6
+    40 │   r25 = test r24 == true
+    41 │   r24 = r0 <= r7
+    42 │   r26 = test r24 == true
+    43 │   r6 = r0 / 2 (r27)
+    44 │   r28 = call #0(r0)
+    45 │   r29 = T0 + r28
+    46 │   jump_if r25 then L7 else L8(0 (r30))
+    47 │ L7:
+    48 │   jump_if r26 then L9 else L10(0 (r30))
+    49 │ L9:
+    50 │   jump L10(1 (r31))
+    51 │ L10(r7: Int):
+    52 │   jump L8(r7)
+    53 │ L8(r7: Int):
+    54 │   r24 = r7 > 0 (r32)
+    55 │   r25 = test r24 == true
+    56 │   r24 = r7 == 0 (r33)
+    57 │   r26 = test r24 == true
+    58 │   jump_if r25 then L3 else L4(r3, r5, 0 (r17))
+    59 │ L3:
+    60 │   r5 = load r15
+    61 │   r7 = r0 * r5
+    62 │   r0 = r7 + r6
+    63 │   r5 = r3 + r0
+    64 │   jump L4(r5, r18, r0)
+    65 │ L4(r0: Int, r3: Int, r5: Int):
+    66 │   jump_if r26 then L5 else L6(r1, r2)
+    67 │ L5:
+    68 │   jump L6(r20, r29)
+    69 │ L6(r1: Int, r2: String):
+    70 │   jump L0(r23, r1, r0, r2, r3, r22, r0, r7, r5)
+    71 │ L1:
+    72 │   r0 = call #1(r3, r5, r1)
+    73 │   return r3
 
-    ; r0 (v1) : {value: Int}
-    ; r1 (publish_results(...)) : Int
-    ; r2 (v3) : Int
+    ; r0 (publish_results(...)) : Int
+    ; r1 (v2) : Int
+    ; r2 (v3) : String
     ; r3 (v4) : Int
-    ; r4 (@err_count) : Ref<Int>
-    ; r5 (@sum) : Ref<Int>
-    ; r6 (@last_err) : Ref<String>
-    ; r7 (@ok_count) : Ref<Int>
+    ; r4 (v5) : {value: Int}
+    ; r5 (@multiplier) : Int
+    ; r6 (@min_val) : Int
+    ; r7 (@max_val) : Int
     ; r8 (@err_count) : Ref<Int>
-    ; r9 (@items) : Ref<List<{value: Int}>>
+    ; r9 (@sum) : Ref<Int>
     ; r10 (@last_err) : Ref<String>
-    ; r11 (@max_val) : Ref<Int>
-    ; r12 (@min_val) : Ref<Int>
-    ; r13 (@multiplier) : Ref<Int>
-    ; r14 (@ok_count) : Ref<Int>
-    ; r15 (@sum) : Ref<Int>
-    ; r16 (@max_val) : Int
-    ; r17 (@min_val) : Int
-    ; r18 (@multiplier) : Int
-    ; r19 (@ok_count) : Int
-    ; r20 (@sum) : Int
-    ; r21 (@err_count) : Int
-    ; r22 (@items) : List<{value: Int}>
-    ; r23 (to_string(...)) : String
-    ; r24 (v17) : Int
-    ; r25 (v34) : Int
-    ; r26 (v22) : Int
-    ; r27 (v35) : Int
-    ; r28 (v24) : Int
-    ; r29 (v36) : {value: Int}
-    ; r30 (v37) : Int
-    ; r31 (v38) : Bool
-    ; r32 (v39) : Bool
-    ; r33 (v40) : Bool
-    ; r34 (v21) : Int
-    ; r35 (v18) : Int
-    ; r36 (v19) : Int
-    ; r37 (v20) : Int
-    ; r38 (v23) : Int
-    ; r39 (v41) : String
-    ; r40 (v25) : String
+    ; r11 (@ok_count) : Ref<Int>
+    ; r12 (@items) : Ref<List<{value: Int}>>
+    ; r13 (@min_val) : Ref<Int>
+    ; r14 (@max_val) : Ref<Int>
+    ; r15 (@multiplier) : Ref<Int>
+    ; r16 (@items) : List<{value: Int}>
+    ; r17 (v14) : Int
+    ; r18 (v27) : Int
+    ; r19 (v22) : Int
+    ; r20 (v28) : Int
+    ; r21 (v24) : Int
+    ; r22 (v29) : {value: Int}
+    ; r23 (v30) : Int
+    ; r24 (v31) : Bool
+    ; r25 (v32) : Bool
+    ; r26 (v33) : Bool
+    ; r27 (v21) : Int
+    ; r28 (to_string(...)) : String
+    ; r29 (v35) : String
+    ; r30 (v17) : Int
+    ; r31 (v18) : Int
+    ; r32 (v19) : Int
+    ; r33 (v23) : Int
+    ; r34 (v25) : String

@@ -98,9 +98,6 @@ fn run_pipeline(
         return Err(errors.join("\n"));
     }
 
-    // Use InferResult.fn_types (authoritative, frozen).
-    let fn_metadata = &inf.fn_types;
-
     // Run SROA + SSA + validate (lower outputs pre-SSA MIR).
     let mut module = result
         .modules
@@ -116,18 +113,18 @@ fn run_pipeline(
     }
     {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(&mut module.main, MirBody::new()));
-        crate::optimize::ssa_pass::run(&mut cfg_body, fn_metadata);
-        crate::optimize::dce::run(&mut cfg_body, fn_metadata);
+        crate::optimize::ssa_pass::run(&mut cfg_body);
+        crate::optimize::dce::run(&mut cfg_body);
         module.main = crate::cfg::demote(cfg_body);
     }
     for closure in module.closures.values_mut() {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(closure, MirBody::new()));
-        crate::optimize::ssa_pass::run(&mut cfg_body, fn_metadata);
-        crate::optimize::dce::run(&mut cfg_body, fn_metadata);
+        crate::optimize::ssa_pass::run(&mut cfg_body);
+        crate::optimize::dce::run(&mut cfg_body);
         *closure = crate::cfg::demote(cfg_body);
     }
 
-    let validation_errors = crate::validate::validate(&module, fn_metadata, &FxHashMap::default());
+    let validation_errors = crate::validate::validate(&module, &FxHashMap::default());
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()

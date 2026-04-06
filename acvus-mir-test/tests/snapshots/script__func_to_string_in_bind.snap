@@ -5,12 +5,9 @@ expression: ir
 === main ===
      0 │   r0 = ref @val
      1 │   r1 = load r0
-     2 │   r2 = ref @val
-     3 │   r3 = call #0(r1)
-     4 │   return r3
+     2 │   r2 = call #0(r1)
+     3 │   return r2
 
     ; r0 (@val) : Ref<Int>
-    ; r1 (@val) : Int
-    ; r2 (@val) : Ref<Int>
-    ; r3 (to_string(...)) : String
-    ; r4 (v4) : Int
+    ; r1 (v2) : Int
+    ; r2 (to_string(...)) : String

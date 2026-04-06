@@ -5,51 +5,46 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @sum
-     3 │   r3 = ref @data
-     4 │   r4 = load r3
-     5 │   r5 = ref @sum
-     6 │   r6 = load r5
-     7 │   r7 = ref @data
-     8 │   r8 = r4.items
-    10 │   jump L0(0 (r9), r6, r1)
-    11 │ L0(r10: Int, r11: Int, r12: Int):
-    12 │   store r2 = r11
-    13 │   list_step r13, r14 = r8[r10] else L1()
-    14 │ L2:
-    15 │   r15 = ref @sum
-    16 │   r16 = r11 + r13
-    17 │   jump L0(r14, r16, r13)
-    18 │ L1:
-    19 │   r17 = ref @sum
-    20 │   return r11
+     2 │   r2 = undef
+     3 │   r3 = ref @sum
+     4 │   r4 = ref @data
+     5 │   r5 = load r4
+     6 │   r6 = r5.items
+     8 │   jump L0(0 (r7), r0, r2)
+     9 │ L0(r8: Int, r9: Int, r10: Int):
+    10 │   store r3 = r9
+    11 │   list_step r11, r12 = r6[r8] else L1()
+    12 │ L2:
+    13 │   r13 = ref @sum
+    14 │   r14 = r9 + r11
+    15 │   jump L0(r12, r14, r11)
+    16 │ L1:
+    17 │   r15 = ref @sum
+    18 │   return r9
 
-    ; r0 (v26) : List<Int>
-    ; r1 (v27) : Int
-    ; r2 (v31) : Ref<Int>
-    ; r3 (@data) : Ref<{items: List<Int>}>
-    ; r4 (@data) : {items: List<Int>}
-    ; r5 (@sum) : Ref<Int>
-    ; r6 (@sum) : Int
-    ; r7 (@data) : Ref<{items: List<Int>}>
-    ; r8 (items) : List<Int>
-    ; r9 (v12) : Int
-    ; r10 (v13) : Int
-    ; r11 (v28) : Int
-    ; r12 (v30) : Int
-    ; r13 (x) : Int
-    ; r14 (v15) : Int
+    ; r0 (v22) : Int
+    ; r1 (v23) : List<Int>
+    ; r2 (v24) : Int
+    ; r3 (v28) : Ref<Int>
+    ; r4 (@data) : Ref<{items: List<Int>}>
+    ; r5 (v2) : {items: List<Int>}
+    ; r6 (items) : List<Int>
+    ; r7 (v8) : Int
+    ; r8 (v9) : Int
+    ; r9 (v25) : Int
+    ; r10 (v27) : Int
+    ; r11 (x) : Int
+    ; r12 (v11) : Int
+    ; r13 (@sum) : Ref<Int>
+    ; r14 (v18) : Int
     ; r15 (@sum) : Ref<Int>
-    ; r16 (v22) : Int
-    ; r17 (@sum) : Ref<Int>
-    ; r18 (v25) : Int
-    ; r19 (v6) : {items: List<Int>}
-    ; r20 (v9) : Ref<List<Int>>
-    ; r21 (items) : List<Int>
-    ; r22 (v20) : Ref<Int>
-    ; r23 (v17) : Ref<Int>
-    ; r24 (@sum) : Ref<Int>
-    ; r25 (x) : Int
-    ; r26 (v29) : List<Int>
-    ; r27 (v10) : Ref<List<Int>>
-    ; r28 (v19) : Int
+    ; r16 (v6) : Ref<List<Int>>
+    ; r17 (x) : Int
+    ; r18 (items) : List<Int>
+    ; r19 (v26) : List<Int>
+    ; r20 (v21) : Int
+    ; r21 (v13) : Ref<Int>
+    ; r22 (v15) : Int
+    ; r23 (v5) : Ref<List<Int>>
+    ; r24 (v16) : Ref<Int>
+    ; r25 (@sum) : Ref<Int>

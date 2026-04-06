@@ -3,31 +3,26 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @out
+     0 │   r0 = undef
      1 │   r1 = ref @out
-     2 │   r2 = load r1
-     3 │   r3 = ref @val
-     4 │   r4 = load r3
-     5 │   r5 = ref @val
-     6 │   r6 = test r4 == 42
-     7 │   jump_if r6 then L0 else L1(r2)
-     8 │ L0:
-    10 │   jump L1(1 (r7))
-    11 │ L1(r8: Int):
-    12 │   store r0 = r8
-    13 │   r9 = ref @out
-    14 │   return r8
+     2 │   r2 = ref @val
+     3 │   r3 = load r2
+     4 │   r4 = test r3 == 42
+     5 │   jump_if r4 then L0 else L1(r0)
+     6 │ L0:
+     8 │   jump L1(1 (r5))
+     9 │ L1(r6: Int):
+    10 │   store r1 = r6
+    11 │   r7 = ref @out
+    12 │   return r6
 
-    ; r0 (v13) : Ref<Int>
-    ; r1 (@out) : Ref<Int>
-    ; r2 (@out) : Int
-    ; r3 (@val) : Ref<Int>
-    ; r4 (@val) : Int
-    ; r5 (@val) : Ref<Int>
-    ; r6 (v7) : Bool
-    ; r7 (v8) : Int
-    ; r8 (v12) : Int
+    ; r0 (v8) : Int
+    ; r1 (v10) : Ref<Int>
+    ; r2 (@val) : Ref<Int>
+    ; r3 (v2) : Int
+    ; r4 (v3) : Bool
+    ; r5 (v4) : Int
+    ; r6 (v9) : Int
+    ; r7 (@out) : Ref<Int>
+    ; r8 (v7) : Int
     ; r9 (@out) : Ref<Int>
-    ; r10 (v11) : Int
-    ; r11 (v6) : Int
-    ; r12 (@out) : Ref<Int>

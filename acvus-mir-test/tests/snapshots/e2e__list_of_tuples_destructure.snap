@@ -8,48 +8,45 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @pairs
-     3 │   r3 = load r2
-     5 │   r4 = ref @pairs
-     8 │   jump L0(0 (r5), T0, r0, r1)
-     9 │ L0(r6: Int, r7: String, r8: String, r9: Int):
-    10 │   list_step r10, r11 = r3[r6] else L1(r7)
-    11 │ L3:
-    12 │   r12 = r10.0
-    13 │   r13 = r10.1
-    15 │   r14 = T0 + r12
-    16 │   r15 = r7 + r14
-    17 │   jump L0(r11, r15, r12, r13)
-    18 │ L1(r16: String):
-    19 │   jump L2(r16)
-    20 │ L2(r17: String):
-    21 │   r18 = T0 + r17
-    22 │   return r18
+     3 │   r2 = ref @pairs
+     4 │   r3 = load r2
+     7 │   jump L0(0 (r4), T0, r0, r1)
+     8 │ L0(r5: Int, r6: String, r7: String, r8: Int):
+     9 │   list_step r9, r10 = r3[r5] else L1(r6)
+    10 │ L3:
+    11 │   r11 = r9.0
+    12 │   r12 = r9.1
+    14 │   r13 = T0 + r11
+    15 │   r14 = r6 + r13
+    16 │   jump L0(r10, r14, r11, r12)
+    17 │ L1(r15: String):
+    18 │   jump L2(r15)
+    19 │ L2(r16: String):
+    20 │   r17 = T0 + r16
+    21 │   return r17
 
-    ; r0 (v26) : String
-    ; r1 (v27) : Int
+    ; r0 (v24) : String
+    ; r1 (v25) : Int
     ; r2 (@pairs) : Ref<List<(String, Int)>>
-    ; r3 (@pairs) : List<(String, Int)>
-    ; r4 (@pairs) : Ref<List<(String, Int)>>
+    ; r3 (v3) : List<(String, Int)>
+    ; r4 (v4) : Int
     ; r5 (v6) : Int
-    ; r6 (v8) : Int
-    ; r7 (v9) : String
-    ; r8 (v28) : String
-    ; r9 (v29) : Int
-    ; r10 (v10) : (String, Int)
-    ; r11 (v11) : Int
-    ; r12 (name) : String
-    ; r13 (age) : Int
-    ; r14 (v21) : String
-    ; r15 (v22) : String
-    ; r16 (v23) : String
-    ; r17 (v24) : String
-    ; r18 (v25) : String
-    ; r19 (v3) : String
-    ; r20 (v14) : Ref<String>
-    ; r21 (v17) : Ref<Int>
-    ; r22 (v7) : String
-    ; r23 (v18) : String
-    ; r24 (name) : String
-    ; r25 (v5) : List<(String, Int)>
-    ; r26 (v19) : Ref<String>
+    ; r6 (v7) : String
+    ; r7 (v26) : String
+    ; r8 (v27) : Int
+    ; r9 (v8) : (String, Int)
+    ; r10 (v9) : Int
+    ; r11 (name) : String
+    ; r12 (age) : Int
+    ; r13 (v19) : String
+    ; r14 (v20) : String
+    ; r15 (v21) : String
+    ; r16 (v22) : String
+    ; r17 (v23) : String
+    ; r18 (v17) : Ref<String>
+    ; r19 (v1) : String
+    ; r20 (name) : String
+    ; r21 (v12) : Ref<String>
+    ; r22 (v15) : Ref<Int>
+    ; r23 (v16) : String
+    ; r24 (v5) : String

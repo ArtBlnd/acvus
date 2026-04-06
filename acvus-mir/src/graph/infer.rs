@@ -33,7 +33,7 @@ pub struct FunctionMeta {
 pub enum FnInferOutcome {
     /// Type fully resolved. Lowerable.
     Complete {
-        resolution: crate::typeck::TypeResolution,
+        resolution: Freeze<crate::typeck::TypeResolution>,
         tail_ty: Ty,
         meta: FunctionMeta,
     },
@@ -55,10 +55,10 @@ impl FnInferOutcome {
         }
     }
 
-    /// Get the checked resolution if complete.
-    pub fn resolution(&self) -> Option<&crate::typeck::TypeResolution> {
+    /// Get the checked resolution if complete. Clone is cheap (Arc::clone).
+    pub fn resolution(&self) -> Option<Freeze<crate::typeck::TypeResolution>> {
         match self {
-            FnInferOutcome::Complete { resolution, .. } => Some(resolution),
+            FnInferOutcome::Complete { resolution, .. } => Some(resolution.clone()),
             FnInferOutcome::Incomplete { .. } => None,
         }
     }
@@ -84,9 +84,6 @@ pub struct InferResult {
     pub outcomes: FxHashMap<QualifiedRef, FnInferOutcome>,
     /// Resolved context types (known + inferred). Frozen after inference.
     pub context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Resolved function types: QualifiedRef → Ty.
-    /// Single source of truth for all function type info post-inference.
-    pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
 }
 
 impl InferResult {
@@ -94,13 +91,8 @@ impl InferResult {
     pub fn try_resolution(
         &self,
         id: QualifiedRef,
-    ) -> Option<&crate::typeck::TypeResolution> {
+    ) -> Option<Freeze<crate::typeck::TypeResolution>> {
         self.outcomes.get(&id)?.resolution()
-    }
-
-    /// Get the function type for a function.
-    pub fn fn_type(&self, id: QualifiedRef) -> Option<&Ty> {
-        self.fn_types.get(&id)
     }
 
     /// Get the context type for a QualifiedRef.
@@ -686,7 +678,7 @@ pub fn infer(
     let mut fn_direct_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
     let mut fn_unchecked: FxHashMap<
         QualifiedRef,
-        crate::typeck::TypeResolution,
+        Freeze<crate::typeck::TypeResolution>,
     > = FxHashMap::default();
     let mut fn_typeck_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> =
         FxHashMap::default();
@@ -1080,22 +1072,9 @@ pub fn infer(
         })
         .collect();
 
-    let mut fn_types: FxHashMap<QualifiedRef, Ty> = resolved_fn_types
-        .iter()
-        .map(|(&k, v)| {
-            let infer = solver.instantiate_poly(v);
-            let resolved = solver.resolve_ty(&infer);
-            (k, solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error()))
-        })
-        .collect();
-    for (&qref, outcome) in &outcomes {
-        fn_types.insert(qref, outcome.meta().ty.clone());
-    }
-
     InferResult {
         outcomes,
         context_types: Freeze::new(context_types),
-        fn_types: Freeze::new(fn_types),
     }
 }
 
@@ -3187,7 +3166,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let fid = ids[0].1;
         if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(resolution);
+            let effect_set = extract_effect_set(&resolution);
             assert!(
                 effect_set
                     .reads
@@ -3220,7 +3199,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let fid = ids[0].1;
         if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(resolution);
+            let effect_set = extract_effect_set(&resolution);
             assert!(
                 effect_set
                     .writes
@@ -3249,7 +3228,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let fid = ids[0].1;
         if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(resolution);
+            let effect_set = extract_effect_set(&resolution);
             assert!(effect_set.reads.is_empty());
             assert!(effect_set.writes.is_empty());
         }
@@ -3271,7 +3250,7 @@ mod tests {
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let get_x_id = ids[0].1;
         if let Some(resolution) = result.try_resolution(get_x_id) {
-            let effect_set = extract_effect_set(resolution);
+            let effect_set = extract_effect_set(&resolution);
             assert!(
                 effect_set
                     .reads
@@ -3280,7 +3259,7 @@ mod tests {
         }
         let main_id = ids[1].1;
         if let Some(resolution) = result.try_resolution(main_id) {
-            let effect_set = extract_effect_set(resolution);
+            let effect_set = extract_effect_set(&resolution);
             assert!(
                 !effect_set.is_pure(),
                 "caller of effectful function should not be pure"

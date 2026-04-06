@@ -9,79 +9,76 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = undef
      2 │   r2 = undef
-     3 │   r3 = ref @users
-     4 │   r4 = load r3
-     6 │   r5 = ref @users
-     9 │   jump L0(0 (r6), T0, r0, r1, r2)
-    10 │ L0(r7: Int, r8: String, r9: String, r10: List<{title: String}>, r11: String):
-    11 │   list_step r12, r13 = r4[r7] else L1(r8)
-    12 │ L3:
-    13 │   r14 = r12.name
-    14 │   r15 = r12.posts
-    18 │   jump L4(0 (r16), T0, r11)
-    19 │ L4(r17: Int, r18: String, r19: String):
-    20 │   list_step r20, r21 = r15[r17] else L5(r18)
-    21 │ L7:
-    22 │   r22 = r20.title
-    24 │   r23 = T0 + r22
-    25 │   r24 = r18 + r23
-    26 │   jump L4(r21, r24, r22)
-    27 │ L5(r25: String):
-    28 │   jump L6(r25)
-    29 │ L6(r26: String):
-    30 │   r27 = T0 + r26
-    31 │   r28 = r8 + r27
-    32 │   jump L0(r13, r28, r14, r15, r19)
-    33 │ L1(r29: String):
-    34 │   jump L2(r29)
-    35 │ L2(r30: String):
-    36 │   r31 = T0 + r30
-    37 │   return r31
+     4 │   r3 = ref @users
+     5 │   r4 = load r3
+     8 │   jump L0(0 (r5), T0, r0, r1, r2)
+     9 │ L0(r6: Int, r7: String, r8: String, r9: List<{title: String}>, r10: String):
+    10 │   list_step r11, r12 = r4[r6] else L1(r7)
+    11 │ L3:
+    12 │   r13 = r11.name
+    13 │   r14 = r11.posts
+    17 │   jump L4(0 (r15), T0, r10)
+    18 │ L4(r16: Int, r17: String, r18: String):
+    19 │   list_step r19, r20 = r14[r16] else L5(r17)
+    20 │ L7:
+    21 │   r21 = r19.title
+    23 │   r22 = T0 + r21
+    24 │   r23 = r17 + r22
+    25 │   jump L4(r20, r23, r21)
+    26 │ L5(r24: String):
+    27 │   jump L6(r24)
+    28 │ L6(r25: String):
+    29 │   r26 = T0 + r25
+    30 │   r27 = r7 + r26
+    31 │   jump L0(r12, r27, r13, r14, r18)
+    32 │ L1(r28: String):
+    33 │   jump L2(r28)
+    34 │ L2(r29: String):
+    35 │   r30 = T0 + r29
+    36 │   return r30
 
-    ; r0 (v42) : String
-    ; r1 (v43) : List<{title: String}>
-    ; r2 (v44) : String
+    ; r0 (v40) : String
+    ; r1 (v41) : List<{title: String}>
+    ; r2 (v42) : String
     ; r3 (@users) : Ref<List<{name: String, posts: List<{title: String}>}>>
-    ; r4 (@users) : List<{name: String, posts: List<{title: String}>}>
-    ; r5 (@users) : Ref<List<{name: String, posts: List<{title: String}>}>>
+    ; r4 (v3) : List<{name: String, posts: List<{title: String}>}>
+    ; r5 (v4) : Int
     ; r6 (v6) : Int
-    ; r7 (v8) : Int
-    ; r8 (v9) : String
-    ; r9 (v45) : String
-    ; r10 (v47) : List<{title: String}>
-    ; r11 (v49) : String
-    ; r12 (v10) : {name: String, posts: List<{title: String}>}
-    ; r13 (v11) : Int
-    ; r14 (name) : String
-    ; r15 (posts) : List<{title: String}>
+    ; r7 (v7) : String
+    ; r8 (v43) : String
+    ; r9 (v45) : List<{title: String}>
+    ; r10 (v47) : String
+    ; r11 (v8) : {name: String, posts: List<{title: String}>}
+    ; r12 (v9) : Int
+    ; r13 (name) : String
+    ; r14 (posts) : List<{title: String}>
+    ; r15 (v19) : Int
     ; r16 (v21) : Int
-    ; r17 (v23) : Int
-    ; r18 (v24) : String
-    ; r19 (v50) : String
-    ; r20 (v25) : {title: String}
-    ; r21 (v26) : Int
-    ; r22 (title) : String
-    ; r23 (v33) : String
-    ; r24 (v34) : String
-    ; r25 (v35) : String
-    ; r26 (v36) : String
-    ; r27 (v37) : String
-    ; r28 (v38) : String
-    ; r29 (v39) : String
-    ; r30 (v40) : String
-    ; r31 (v41) : String
-    ; r32 (v22) : String
-    ; r33 (v3) : String
-    ; r34 (v46) : String
-    ; r35 (v5) : List<{name: String, posts: List<{title: String}>}>
-    ; r36 (v31) : Ref<String>
-    ; r37 (v18) : String
-    ; r38 (v30) : String
-    ; r39 (v14) : Ref<String>
+    ; r17 (v22) : String
+    ; r18 (v48) : String
+    ; r19 (v23) : {title: String}
+    ; r20 (v24) : Int
+    ; r21 (title) : String
+    ; r22 (v31) : String
+    ; r23 (v32) : String
+    ; r24 (v33) : String
+    ; r25 (v34) : String
+    ; r26 (v35) : String
+    ; r27 (v36) : String
+    ; r28 (v37) : String
+    ; r29 (v38) : String
+    ; r30 (v39) : String
+    ; r31 (v44) : String
+    ; r32 (v28) : String
+    ; r33 (v46) : List<{title: String}>
+    ; r34 (v27) : Ref<String>
+    ; r35 (v5) : String
+    ; r36 (title) : String
+    ; r37 (v12) : Ref<String>
+    ; r38 (v15) : Ref<List<{title: String}>>
+    ; r39 (posts) : List<{title: String}>
     ; r40 (v17) : Ref<List<{title: String}>>
-    ; r41 (posts) : List<{title: String}>
-    ; r42 (v29) : Ref<String>
-    ; r43 (v7) : String
-    ; r44 (title) : String
-    ; r45 (v48) : List<{title: String}>
-    ; r46 (v19) : Ref<List<{title: String}>>
+    ; r41 (v20) : String
+    ; r42 (v1) : String
+    ; r43 (v16) : String
+    ; r44 (v29) : Ref<String>

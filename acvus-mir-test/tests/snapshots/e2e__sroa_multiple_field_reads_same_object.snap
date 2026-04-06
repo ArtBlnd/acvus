@@ -5,21 +5,18 @@ expression: ir
 === main ===
      0 │   r0 = ref @obj
      1 │   r1 = load r0
-     2 │   r2 = ref @obj
-     3 │   r3 = r1.x
-     4 │   r4 = ref @obj
-     5 │   r5 = r1.y
-     6 │   r6 = r3 + r5
-     7 │   return r6
+     2 │   r2 = r1.x
+     3 │   r3 = ref @obj
+     4 │   r4 = r1.y
+     5 │   r5 = r2 + r4
+     6 │   return r5
 
-    ; r0 (@obj) : Ref<{x: Int, y: Int}>
-    ; r1 (@obj) : {x: Int, y: Int}
-    ; r2 (v8) : Ref<{x: Int, y: Int}>
-    ; r3 (v4) : Int
-    ; r4 (v10) : Ref<{x: Int, y: Int}>
-    ; r5 (v6) : Int
-    ; r6 (v7) : Int
-    ; r7 (v11) : {x: Int, y: Int}
+    ; r0 (v6) : Ref<{x: Int, y: Int}>
+    ; r1 (v7) : {x: Int, y: Int}
+    ; r2 (v2) : Int
+    ; r3 (v8) : Ref<{x: Int, y: Int}>
+    ; r4 (v4) : Int
+    ; r5 (v5) : Int
+    ; r6 (@obj.y) : Ref<Int>
+    ; r7 (v9) : {x: Int, y: Int}
     ; r8 (@obj.x) : Ref<Int>
-    ; r9 (v9) : {x: Int, y: Int}
-    ; r10 (@obj.y) : Ref<Int>

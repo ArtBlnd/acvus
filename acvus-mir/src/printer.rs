@@ -262,7 +262,10 @@ fn write_body(
                         if name.starts_with('$') { name } else { format!("${name}") }
                     }
                     crate::ir::RefTarget::Context(qref) => {
-                        let name = ctx_ref_to_name.get(qref).map(|s| s.as_str()).unwrap_or("?");
+                        let name = ctx_ref_to_name
+                            .get(qref)
+                            .map(|s| s.as_str())
+                            .unwrap_or_else(|| ctx.interner.resolve(qref.name));
                         format!("@{name}")
                     }
                 };
@@ -381,6 +384,7 @@ fn write_body(
                 args,
                 context_uses,
                 context_defs,
+                ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
@@ -422,6 +426,7 @@ fn write_body(
                 callee,
                 args,
                 context_uses,
+                ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),

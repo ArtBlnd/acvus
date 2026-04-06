@@ -3,29 +3,22 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @a
+     0 │   r0 = ref @b
      1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
-     4 │   r4 = ref @b
-     5 │   r5 = r3.x
-     6 │   r6 = ref @a
-     7 │   store r6 = r5
-     9 │   r7 = ref @a
-    10 │   store r7 = 0 (r8)
-    11 │   r9 = ref @a
-    12 │   return 0 (r8)
+     2 │   r2 = r1.x
+     3 │   r3 = ref @a
+     4 │   store r3 = r2
+     6 │   r4 = ref @a
+     7 │   store r4 = 0 (r5)
+     8 │   r6 = ref @a
+     9 │   return 0 (r5)
 
-    ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
-    ; r2 (@b) : Ref<{x: Int}>
-    ; r3 (@b) : {x: Int}
-    ; r4 (v12) : Ref<{x: Int}>
-    ; r5 (v6) : Int
+    ; r0 (v8) : Ref<{x: Int}>
+    ; r1 (v9) : {x: Int}
+    ; r2 (v2) : Int
+    ; r3 (@a) : Ref<Int>
+    ; r4 (@a) : Ref<Int>
+    ; r5 (v4) : Int
     ; r6 (@a) : Ref<Int>
-    ; r7 (@a) : Ref<Int>
-    ; r8 (v8) : Int
-    ; r9 (@a) : Ref<Int>
-    ; r10 (v11) : Int
-    ; r11 (v13) : {x: Int}
-    ; r12 (@b.x) : Ref<Int>
+    ; r7 (v7) : Int
+    ; r8 (@b.x) : Ref<Int>

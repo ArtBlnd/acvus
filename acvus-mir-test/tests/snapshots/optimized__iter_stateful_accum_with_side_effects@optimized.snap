@@ -4,59 +4,53 @@ expression: opt
 ---
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @last_overdraft
-     2 │   r2 = ref @balance
-     3 │   r3 = ref @overdraft_count
-     4 │   r4 = ref @balance
-     5 │   r5 = ref @last_overdraft
+     1 │   r1 = undef
+     2 │   r2 = undef
+     3 │   r3 = undef
+     4 │   r4 = ref @last_overdraft
+     5 │   r5 = ref @balance
      6 │   r6 = ref @overdraft_count
      7 │   r7 = ref @transactions
-    11 │   r8 = load r5
-    12 │   r9 = load r6
-    13 │   r10 = load r7
-    14 │   r11 = load r4
-    15 │   jump L0(0 (r12), r8, r11, r9, r0)
-    16 │ L0(r12: Int, r8: String, r9: Int, r11: Int, r0: {amount: Int, id: String}):
-    17 │   store r1 = r8
-    18 │   store r2 = r9
-    19 │   store r3 = r11
-    20 │   r13 = r9 < 0 (r14)
-    21 │   r15 = test r13 == true
-    22 │   r16 = r11 + 1 (r17)
-    23 │   r18 = object {balance: r9, overdrafts: r11, last: r8}
-    24 │   list_step r19, r20 = r10[0 (r12)] else L1()
-    25 │ L2:
-    26 │   r12 = r19.amount
-    27 │   r21 = r9 + 0 (r12)
-    28 │   r22 = r19.id
-    29 │   jump_if r15 then L3 else L4(r8, r11)
-    30 │ L3:
-    31 │   jump L4(r22, r16)
-    32 │ L4(r8: String, r12: Int):
-    33 │   jump L0(r20, r8, r21, 0 (r12), r19)
-    34 │ L1:
-    35 │   return r18
+    11 │   r8 = load r7
+    12 │   jump L0(0 (r9), r0, r1, r2, r3)
+    13 │ L0(r1: Int, r0: String, r2: Int, r9: Int, r3: {amount: Int, id: String}):
+    14 │   r10 = r2 < 0 (r11)
+    15 │   r12 = test r10 == true
+    16 │   r13 = 0 (r9) + 1 (r14)
+    17 │   r15 = object {balance: r2, overdrafts: 0 (r9), last: r0}
+    18 │   store r5 = r2
+    19 │   store r6 = 0 (r9)
+    20 │   store r4 = r0
+    21 │   list_step r16, r17 = r8[r1] else L1()
+    22 │ L2:
+    23 │   r1 = r16.amount
+    24 │   r18 = r2 + r1
+    25 │   r19 = r16.id
+    26 │   jump_if r12 then L3 else L4(r0, 0 (r9))
+    27 │ L3:
+    28 │   jump L4(r19, r13)
+    29 │ L4(r0: String, r1: Int):
+    30 │   jump L0(r17, r0, r18, r1, r16)
+    31 │ L1:
+    32 │   return r15
 
-    ; r0 (v1) : {amount: Int, id: String}
-    ; r1 (@last_overdraft) : Ref<String>
-    ; r2 (@balance) : Ref<Int>
-    ; r3 (@overdraft_count) : Ref<Int>
-    ; r4 (@balance) : Ref<Int>
-    ; r5 (@last_overdraft) : Ref<String>
+    ; r0 (v1) : String
+    ; r1 (amount) : Int
+    ; r2 (v3) : Int
+    ; r3 (v4) : {amount: Int, id: String}
+    ; r4 (@last_overdraft) : Ref<String>
+    ; r5 (@balance) : Ref<Int>
     ; r6 (@overdraft_count) : Ref<Int>
     ; r7 (@transactions) : Ref<List<{amount: Int, id: String}>>
-    ; r8 (@last_overdraft) : String
-    ; r9 (@overdraft_count) : Int
-    ; r10 (@transactions) : List<{amount: Int, id: String}>
-    ; r11 (@balance) : Int
-    ; r12 (amount) : Int
-    ; r13 (v16) : Bool
-    ; r14 (v10) : Int
-    ; r15 (v17) : Bool
-    ; r16 (v18) : Int
-    ; r17 (v11) : Int
-    ; r18 (v19) : {balance: Int, last: String, overdrafts: Int}
-    ; r19 (v20) : {amount: Int, id: String}
-    ; r20 (v21) : Int
-    ; r21 (v22) : Int
-    ; r22 (id) : String
+    ; r8 (@transactions) : List<{amount: Int, id: String}>
+    ; r9 (v9) : Int
+    ; r10 (v13) : Bool
+    ; r11 (v10) : Int
+    ; r12 (v14) : Bool
+    ; r13 (v15) : Int
+    ; r14 (v11) : Int
+    ; r15 (v16) : {balance: Int, last: String, overdrafts: Int}
+    ; r16 (v17) : {amount: Int, id: String}
+    ; r17 (v18) : Int
+    ; r18 (v19) : Int
+    ; r19 (id) : String

@@ -146,11 +146,7 @@ pub fn compile_source_with_externs(
     }
 
     // Run full optimization pipeline: SSA → Inline → SpawnSplit → Reorder → SSA → RegColor → Validate.
-    // Merge pre-extracted fn_types with infer result fn_types (infer is authoritative).
-    for (qref, ty) in inf.fn_types.iter() {
-        fn_types.insert(*qref, ty.clone());
-    }
-    let opt_result = graph_optimize::optimize(result.modules.clone(), &fn_types, &inf.context_types, &FxHashSet::default());
+    let opt_result = graph_optimize::optimize(result.modules.clone(), &inf.context_types, &FxHashSet::default());
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {

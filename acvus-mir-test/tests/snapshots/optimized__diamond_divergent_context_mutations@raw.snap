@@ -3,98 +3,82 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @high
+     0 │   r0 = ref @input
      1 │   r1 = load r0
-     2 │   r2 = ref @input
-     3 │   r3 = load r2
-     4 │   r4 = ref @low
-     5 │   r5 = load r4
-     6 │   r6 = ref @output
-     7 │   r7 = load r6
-     8 │   r8 = ref @input
-     9 │   r9 = load r8
-    10 │   r10 = ref x
-    11 │   store r10 = r9
-    12 │   r11 = ref x
-    13 │   r12 = load r11
-    15 │   r13 = r12 > 100 (r14)
-    16 │   r15 = test r13 == true
-    17 │   jump_if r15 then L0 else L1
-    18 │ L0:
-    19 │   r16 = ref @high
-    20 │   r17 = load r16
-    22 │   r18 = r17 + 1 (r19)
-    23 │   r20 = ref @high
-    24 │   store r20 = r18
-    25 │   r21 = ref x
-    26 │   r22 = load r21
-    28 │   r23 = r22 * 2 (r24)
-    29 │   r25 = ref @output
-    30 │   store r25 = r23
-    31 │   jump L1
-    32 │ L1:
-    33 │   r26 = ref x
-    34 │   r27 = load r26
-    36 │   r28 = r27 <= 100 (r29)
-    37 │   r30 = test r28 == true
-    38 │   jump_if r30 then L2 else L3
-    39 │ L2:
-    40 │   r31 = ref @low
-    41 │   r32 = load r31
-    43 │   r33 = r32 + 1 (r34)
-    44 │   r35 = ref @low
-    45 │   store r35 = r33
-    46 │   r36 = ref x
-    47 │   r37 = load r36
-    49 │   r38 = r37 + 10 (r39)
-    50 │   r40 = ref @output
-    51 │   store r40 = r38
-    52 │   jump L3
-    53 │ L3:
-    54 │   r41 = ref @output
-    55 │   r42 = load r41
-    56 │   return r42
+     2 │   r2 = ref x
+     3 │   store r2 = r1
+     4 │   r3 = ref x
+     5 │   r4 = load r3
+     7 │   r5 = r4 > 100 (r6)
+     8 │   r7 = test r5 == true
+     9 │   jump_if r7 then L0 else L1
+    10 │ L0:
+    11 │   r8 = ref @high
+    12 │   r9 = load r8
+    14 │   r10 = r9 + 1 (r11)
+    15 │   r12 = ref @high
+    16 │   store r12 = r10
+    17 │   r13 = ref x
+    18 │   r14 = load r13
+    20 │   r15 = r14 * 2 (r16)
+    21 │   r17 = ref @output
+    22 │   store r17 = r15
+    23 │   jump L1
+    24 │ L1:
+    25 │   r18 = ref x
+    26 │   r19 = load r18
+    28 │   r20 = r19 <= 100 (r21)
+    29 │   r22 = test r20 == true
+    30 │   jump_if r22 then L2 else L3
+    31 │ L2:
+    32 │   r23 = ref @low
+    33 │   r24 = load r23
+    35 │   r25 = r24 + 1 (r26)
+    36 │   r27 = ref @low
+    37 │   store r27 = r25
+    38 │   r28 = ref x
+    39 │   r29 = load r28
+    41 │   r30 = r29 + 10 (r31)
+    42 │   r32 = ref @output
+    43 │   store r32 = r30
+    44 │   jump L3
+    45 │ L3:
+    46 │   r33 = ref @output
+    47 │   r34 = load r33
+    48 │   return r34
 
-    ; r0 (@high) : Ref<Int>
-    ; r1 (@high) : Int
-    ; r2 (@input) : Ref<Int>
-    ; r3 (@input) : Int
-    ; r4 (@low) : Ref<Int>
-    ; r5 (@low) : Int
-    ; r6 (@output) : Ref<Int>
-    ; r7 (@output) : Int
-    ; r8 (@input) : Ref<Int>
-    ; r9 (v10) : Int
-    ; r10 (v12) : Ref<Int>
-    ; r11 (v13) : Ref<Int>
-    ; r12 (x) : Int
-    ; r13 (v16) : Bool
-    ; r14 (v15) : Int
-    ; r15 (v17) : Bool
-    ; r16 (@high) : Ref<Int>
-    ; r17 (v19) : Int
-    ; r18 (v21) : Int
-    ; r19 (v20) : Int
-    ; r20 (@high) : Ref<Int>
-    ; r21 (v23) : Ref<Int>
-    ; r22 (x) : Int
-    ; r23 (v26) : Int
-    ; r24 (v25) : Int
-    ; r25 (@output) : Ref<Int>
-    ; r26 (v28) : Ref<Int>
-    ; r27 (x) : Int
-    ; r28 (v31) : Bool
-    ; r29 (v30) : Int
-    ; r30 (v32) : Bool
-    ; r31 (@low) : Ref<Int>
-    ; r32 (v34) : Int
-    ; r33 (v36) : Int
-    ; r34 (v35) : Int
-    ; r35 (@low) : Ref<Int>
-    ; r36 (v38) : Ref<Int>
-    ; r37 (x) : Int
-    ; r38 (v41) : Int
-    ; r39 (v40) : Int
-    ; r40 (@output) : Ref<Int>
-    ; r41 (@output) : Ref<Int>
-    ; r42 (v44) : Int
+    ; r0 (@input) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Ref<Int>
+    ; r3 (v5) : Ref<Int>
+    ; r4 (x) : Int
+    ; r5 (v8) : Bool
+    ; r6 (v7) : Int
+    ; r7 (v9) : Bool
+    ; r8 (@high) : Ref<Int>
+    ; r9 (v11) : Int
+    ; r10 (v13) : Int
+    ; r11 (v12) : Int
+    ; r12 (@high) : Ref<Int>
+    ; r13 (v15) : Ref<Int>
+    ; r14 (x) : Int
+    ; r15 (v18) : Int
+    ; r16 (v17) : Int
+    ; r17 (@output) : Ref<Int>
+    ; r18 (v20) : Ref<Int>
+    ; r19 (x) : Int
+    ; r20 (v23) : Bool
+    ; r21 (v22) : Int
+    ; r22 (v24) : Bool
+    ; r23 (@low) : Ref<Int>
+    ; r24 (v26) : Int
+    ; r25 (v28) : Int
+    ; r26 (v27) : Int
+    ; r27 (@low) : Ref<Int>
+    ; r28 (v30) : Ref<Int>
+    ; r29 (x) : Int
+    ; r30 (v33) : Int
+    ; r31 (v32) : Int
+    ; r32 (@output) : Ref<Int>
+    ; r33 (@output) : Ref<Int>
+    ; r34 (v36) : Int

@@ -5,76 +5,68 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @sum
-     3 │   r3 = ref @a
-     4 │   r4 = load r3
-     5 │   r5 = ref @b
-     6 │   r6 = load r5
-     7 │   r7 = ref @sum
-     8 │   r8 = load r7
-     9 │   r9 = ref @a
-    11 │   jump L0(0 (r10), r8, r0)
-    12 │ L0(r11: Int, r12: Int, r13: Int):
-    13 │   store r2 = r12
-    14 │   list_step r14, r15 = r4[r11] else L1()
-    15 │ L2:
-    16 │   r16 = ref @sum
-    17 │   r17 = r12 + r14
-    18 │   jump L0(r15, r17, r14)
-    19 │ L1:
-    20 │   r18 = ref @b
-    22 │   jump L3(0 (r19), r12, r1)
-    23 │ L3(r20: Int, r21: Int, r22: Int):
-    24 │   store r2 = r21
-    25 │   list_step r23, r24 = r6[r20] else L4()
-    26 │ L5:
-    27 │   r25 = ref @sum
-    28 │   r26 = r21 + r23
-    29 │   jump L3(r24, r26, r23)
-    30 │ L4:
-    31 │   r27 = ref @sum
-    32 │   return r21
+     2 │   r2 = undef
+     3 │   r3 = ref @sum
+     4 │   r4 = ref @a
+     5 │   r5 = load r4
+     7 │   jump L0(0 (r6), r0, r1)
+     8 │ L0(r7: Int, r8: Int, r9: Int):
+     9 │   store r3 = r8
+    10 │   list_step r10, r11 = r5[r7] else L1()
+    11 │ L2:
+    12 │   r12 = ref @sum
+    13 │   r13 = r8 + r10
+    14 │   jump L0(r11, r13, r10)
+    15 │ L1:
+    16 │   r14 = ref @b
+    17 │   r15 = load r14
+    19 │   jump L3(0 (r16), r8, r2)
+    20 │ L3(r17: Int, r18: Int, r19: Int):
+    21 │   store r3 = r18
+    22 │   list_step r20, r21 = r15[r17] else L4()
+    23 │ L5:
+    24 │   r22 = ref @sum
+    25 │   r23 = r18 + r20
+    26 │   jump L3(r21, r23, r20)
+    27 │ L4:
+    28 │   r24 = ref @sum
+    29 │   return r18
 
-    ; r0 (v37) : Int
-    ; r1 (v38) : Int
-    ; r2 (v45) : Ref<Int>
-    ; r3 (@a) : Ref<List<Int>>
-    ; r4 (@a) : List<Int>
-    ; r5 (@b) : Ref<List<Int>>
-    ; r6 (@b) : List<Int>
-    ; r7 (@sum) : Ref<Int>
-    ; r8 (@sum) : Int
-    ; r9 (@a) : Ref<List<Int>>
-    ; r10 (v9) : Int
-    ; r11 (v10) : Int
-    ; r12 (v39) : Int
-    ; r13 (v40) : Int
-    ; r14 (x) : Int
-    ; r15 (v12) : Int
-    ; r16 (@sum) : Ref<Int>
-    ; r17 (v19) : Int
-    ; r18 (@b) : Ref<List<Int>>
-    ; r19 (v23) : Int
-    ; r20 (v24) : Int
-    ; r21 (v42) : Int
-    ; r22 (v44) : Int
-    ; r23 (y) : Int
-    ; r24 (v26) : Int
-    ; r25 (@sum) : Ref<Int>
-    ; r26 (v33) : Int
+    ; r0 (v31) : Int
+    ; r1 (v32) : Int
+    ; r2 (v33) : Int
+    ; r3 (v40) : Ref<Int>
+    ; r4 (@a) : Ref<List<Int>>
+    ; r5 (v2) : List<Int>
+    ; r6 (v3) : Int
+    ; r7 (v4) : Int
+    ; r8 (v34) : Int
+    ; r9 (v35) : Int
+    ; r10 (x) : Int
+    ; r11 (v6) : Int
+    ; r12 (@sum) : Ref<Int>
+    ; r13 (v13) : Int
+    ; r14 (@b) : Ref<List<Int>>
+    ; r15 (v16) : List<Int>
+    ; r16 (v17) : Int
+    ; r17 (v18) : Int
+    ; r18 (v37) : Int
+    ; r19 (v39) : Int
+    ; r20 (y) : Int
+    ; r21 (v20) : Int
+    ; r22 (@sum) : Ref<Int>
+    ; r23 (v27) : Int
+    ; r24 (@sum) : Ref<Int>
+    ; r25 (v22) : Ref<Int>
+    ; r26 (v25) : Ref<Int>
     ; r27 (@sum) : Ref<Int>
-    ; r28 (v22) : List<Int>
-    ; r29 (v28) : Ref<Int>
-    ; r30 (v31) : Ref<Int>
-    ; r31 (v8) : List<Int>
-    ; r32 (v30) : Int
-    ; r33 (v14) : Ref<Int>
-    ; r34 (@sum) : Ref<Int>
-    ; r35 (x) : Int
-    ; r36 (v43) : Int
-    ; r37 (v36) : Int
-    ; r38 (v17) : Ref<Int>
-    ; r39 (@sum) : Ref<Int>
-    ; r40 (y) : Int
-    ; r41 (v16) : Int
-    ; r42 (v41) : Int
+    ; r28 (x) : Int
+    ; r29 (v8) : Ref<Int>
+    ; r30 (v11) : Ref<Int>
+    ; r31 (v30) : Int
+    ; r32 (@sum) : Ref<Int>
+    ; r33 (v36) : Int
+    ; r34 (v24) : Int
+    ; r35 (y) : Int
+    ; r36 (v10) : Int
+    ; r37 (v38) : Int

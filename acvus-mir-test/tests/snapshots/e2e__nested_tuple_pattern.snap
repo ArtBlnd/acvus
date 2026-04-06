@@ -9,67 +9,64 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = undef
      2 │   r2 = undef
-     3 │   r3 = ref @data
-     4 │   r4 = load r3
-     6 │   r5 = ref @data
-     7 │ L2:
-     9 │   r6 = r4.0
-    11 │   r7 = r6.0
-    13 │   r8 = true (r9) && true (r10)
-    14 │   r11 = r6.1
-    16 │   r12 = r8 && true (r13)
-    17 │   r14 = true (r15) && r12
-    18 │   r16 = r4.1
-    20 │   r17 = r14 && true (r18)
-    21 │   jump_if r17 then L3 else L1
-    22 │ L3:
-    23 │   r19 = r4.0
-    24 │   r20 = r19.0
-    25 │   r21 = r19.1
-    26 │   r22 = r4.1
-    28 │   r23 = T0 + r22
-    29 │   jump L0(r23, r20, r21, r22)
-    30 │ L1:
-    32 │   jump L0(T0, r0, r1, r2)
-    33 │ L0(r24: String, r25: Int, r26: Int, r27: String):  ; merge_of L2
-    34 │   r28 = T0 + r24
-    35 │   return r28
+     4 │   r3 = ref @data
+     5 │   r4 = load r3
+     6 │ L2:
+     8 │   r5 = r4.0
+    10 │   r6 = r5.0
+    12 │   r7 = true (r8) && true (r9)
+    13 │   r10 = r5.1
+    15 │   r11 = r7 && true (r12)
+    16 │   r13 = true (r14) && r11
+    17 │   r15 = r4.1
+    19 │   r16 = r13 && true (r17)
+    20 │   jump_if r16 then L3 else L1
+    21 │ L3:
+    22 │   r18 = r4.0
+    23 │   r19 = r18.0
+    24 │   r20 = r18.1
+    25 │   r21 = r4.1
+    27 │   r22 = T0 + r21
+    28 │   jump L0(r22, r19, r20, r21)
+    29 │ L1:
+    31 │   jump L0(T0, r0, r1, r2)
+    32 │ L0(r23: String, r24: Int, r25: Int, r26: String):  ; merge_of L2
+    33 │   r27 = T0 + r23
+    34 │   return r27
 
-    ; r0 (v36) : Int
-    ; r1 (v37) : Int
-    ; r2 (v38) : String
+    ; r0 (v34) : Int
+    ; r1 (v35) : Int
+    ; r2 (v36) : String
     ; r3 (@data) : Ref<((Int, Int), String)>
-    ; r4 (@data) : ((Int, Int), String)
-    ; r5 (@data) : Ref<((Int, Int), String)>
-    ; r6 (v7) : (Int, Int)
-    ; r7 (v9) : Int
-    ; r8 (v11) : Bool
+    ; r4 (v3) : ((Int, Int), String)
+    ; r5 (v5) : (Int, Int)
+    ; r6 (v7) : Int
+    ; r7 (v9) : Bool
+    ; r8 (v6) : Bool
     ; r9 (v8) : Bool
-    ; r10 (v10) : Bool
-    ; r11 (v12) : Int
-    ; r12 (v14) : Bool
+    ; r10 (v10) : Int
+    ; r11 (v12) : Bool
+    ; r12 (v11) : Bool
     ; r13 (v13) : Bool
-    ; r14 (v15) : Bool
-    ; r15 (v6) : Bool
-    ; r16 (v16) : String
-    ; r17 (v18) : Bool
-    ; r18 (v17) : Bool
-    ; r19 (v19) : (Int, Int)
-    ; r20 (a) : Int
-    ; r21 (b) : Int
-    ; r22 (label) : String
+    ; r14 (v4) : Bool
+    ; r15 (v14) : String
+    ; r16 (v16) : Bool
+    ; r17 (v15) : Bool
+    ; r18 (v17) : (Int, Int)
+    ; r19 (a) : Int
+    ; r20 (b) : Int
+    ; r21 (label) : String
+    ; r22 (v30) : String
     ; r23 (v32) : String
-    ; r24 (v34) : String
-    ; r25 (v39) : Int
-    ; r26 (v40) : Int
-    ; r27 (v41) : String
-    ; r28 (v35) : String
-    ; r29 (v3) : String
-    ; r30 (v22) : Ref<Int>
-    ; r31 (v25) : Ref<Int>
-    ; r32 (v28) : Ref<String>
-    ; r33 (label) : String
-    ; r34 (v30) : Ref<String>
-    ; r35 (v33) : String
-    ; r36 (v5) : ((Int, Int), String)
-    ; r37 (v29) : String
+    ; r24 (v37) : Int
+    ; r25 (v38) : Int
+    ; r26 (v39) : String
+    ; r27 (v33) : String
+    ; r28 (v28) : Ref<String>
+    ; r29 (v31) : String
+    ; r30 (v20) : Ref<Int>
+    ; r31 (v27) : String
+    ; r32 (v1) : String
+    ; r33 (v23) : Ref<Int>
+    ; r34 (v26) : Ref<String>
+    ; r35 (label) : String

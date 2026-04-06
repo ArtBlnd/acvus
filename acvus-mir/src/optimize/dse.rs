@@ -16,7 +16,6 @@ use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ty::Ty;
 use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 
 // ── ref_to_ctx: ValueId → QualifiedRef mapping ─────────────────────
@@ -60,7 +59,6 @@ struct BlockContextInfo {
 fn analyze_block(
     block: &crate::cfg::Block,
     ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> BlockContextInfo {
     let mut reads = BTreeSet::new();
@@ -106,7 +104,8 @@ fn analyze_block(
             InstKind::FunctionCall {
                 context_uses,
                 context_defs,
-                callee,
+                callee: Callee::Direct(_),
+                callee_ty,
                 ..
             } => {
                 // context_defs are writes (kill).
@@ -121,20 +120,34 @@ fn analyze_block(
                 }
                 // If context_uses/context_defs are empty, check effect info.
                 if context_uses.is_empty() && context_defs.is_empty() {
-                    if let Callee::Direct(fn_id) = callee {
-                        if let Some((fn_reads, fn_writes)) =
-                            crate::optimize::ssa_pass::extract_effect_refs(fn_metadata, fn_id)
-                        {
-                            for qref in fn_writes.iter().rev() {
-                                reads.remove(qref);
-                                kills.insert(*qref);
-                            }
-                            for qref in fn_reads.iter().rev() {
-                                kills.remove(qref);
-                                reads.insert(*qref);
-                            }
+                    if let Some((fn_reads, fn_writes)) =
+                        crate::optimize::ssa_pass::extract_effect_refs(callee_ty)
+                    {
+                        for qref in fn_writes.iter().rev() {
+                            reads.remove(qref);
+                            kills.insert(*qref);
+                        }
+                        for qref in fn_reads.iter().rev() {
+                            kills.remove(qref);
+                            reads.insert(*qref);
                         }
                     }
+                }
+            }
+
+            InstKind::FunctionCall {
+                context_uses,
+                context_defs,
+                ..
+            } => {
+                // Non-direct callee: only handle explicit context_uses/context_defs.
+                for (qref, _) in context_defs {
+                    reads.remove(qref);
+                    kills.insert(*qref);
+                }
+                for (qref, _) in context_uses {
+                    kills.remove(qref);
+                    reads.insert(*qref);
                 }
             }
 
@@ -222,7 +235,7 @@ fn compute_context_liveness(
 ///
 /// Removes context Store instructions (and their preceding Ref) that are
 /// dead — the stored value is guaranteed to be overwritten before being read.
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody) {
     let ref_to_ctx = build_ref_to_ctx(cfg);
     if ref_to_ctx.is_empty() {
         return;
@@ -249,7 +262,7 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     let block_infos: Vec<BlockContextInfo> = cfg
         .blocks
         .iter()
-        .map(|block| analyze_block(block, &ref_to_ctx, fn_metadata, &written_contexts))
+        .map(|block| analyze_block(block, &ref_to_ctx, &written_contexts))
         .collect();
 
     // Compute backward liveness.
@@ -314,7 +327,8 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
                 InstKind::FunctionCall {
                     context_uses,
                     context_defs,
-                    callee,
+                    callee: Callee::Direct(_),
+                    callee_ty,
                     ..
                 } => {
                     for (qref, _) in context_defs {
@@ -324,18 +338,29 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
                         live.insert(*qref);
                     }
                     if context_uses.is_empty() && context_defs.is_empty() {
-                        if let Callee::Direct(fn_id) = callee {
-                            if let Some((fn_reads, fn_writes)) =
-                                crate::optimize::ssa_pass::extract_effect_refs(fn_metadata, fn_id)
-                            {
-                                for qref in &fn_writes {
-                                    live.remove(qref);
-                                }
-                                for qref in &fn_reads {
-                                    live.insert(*qref);
-                                }
+                        if let Some((fn_reads, fn_writes)) =
+                            crate::optimize::ssa_pass::extract_effect_refs(callee_ty)
+                        {
+                            for qref in &fn_writes {
+                                live.remove(qref);
+                            }
+                            for qref in &fn_reads {
+                                live.insert(*qref);
                             }
                         }
+                    }
+                }
+
+                InstKind::FunctionCall {
+                    context_uses,
+                    context_defs,
+                    ..
+                } => {
+                    for (qref, _) in context_defs {
+                        live.remove(qref);
+                    }
+                    for (qref, _) in context_uses {
+                        live.insert(*qref);
                     }
                 }
 
@@ -509,7 +534,7 @@ mod tests {
         assert_eq!(count_stores(&cfg), 2);
         assert_eq!(count_refs(&cfg), 2);
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         assert_eq!(count_stores(&cfg), 1, "first dead store should be removed");
         assert_eq!(count_refs(&cfg), 1, "orphaned ref should be removed");
@@ -559,7 +584,7 @@ mod tests {
         let mut cfg = cfg::promote(body);
         let stores_before = count_stores(&cfg);
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         assert_eq!(
             count_stores(&cfg),
@@ -610,7 +635,7 @@ mod tests {
         let mut cfg = cfg::promote(body);
         let stores_before = count_stores(&cfg);
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         assert_eq!(
             count_stores(&cfg),
@@ -652,7 +677,7 @@ mod tests {
         let mut cfg = cfg::promote(body);
         let stores_before = count_stores(&cfg);
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         assert_eq!(
             count_stores(&cfg),
@@ -688,11 +713,11 @@ mod tests {
 
         // After test pipeline (SROA+SSA), run SSA again to simulate Pass 2.
         let mut cfg = cfg::promote(module.main);
-        crate::optimize::ssa_pass::run(&mut cfg, &FxHashMap::default());
+        crate::optimize::ssa_pass::run(&mut cfg);
 
         let stores_before = count_stores(&cfg);
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         let stores_after = count_stores(&cfg);
         // DSE should eliminate at least some dead phi write-backs.
@@ -722,7 +747,7 @@ mod tests {
         let mut cfg = cfg::promote(body);
         let inst_count_before: usize = cfg.blocks.iter().map(|b| b.insts.len()).sum();
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         let inst_count_after: usize = cfg.blocks.iter().map(|b| b.insts.len()).sum();
         assert_eq!(inst_count_before, inst_count_after);

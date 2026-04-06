@@ -4,115 +4,43 @@ expression: raw
 ---
 ── calc_discount ──
 === main ===
-     0 │   r0 = ref @customer
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @default_ship
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @discount_rate
-     5 │   r5 = load r4
-     6 │   r6 = ref @free_ship_min
-     7 │   r7 = load r6
-     8 │   r8 = ref @item_count
-     9 │   r9 = load r8
-    10 │   r10 = ref @receipt_out
-    11 │   r11 = load r10
-    12 │   r12 = ref @shipping
-    13 │   r13 = load r12
-    14 │   r14 = ref @tax_rate
-    15 │   r15 = load r14
-    16 │   r16 = ref @total_out
-    17 │   r17 = load r16
-    18 │   r18 = ref $v1
-    19 │   r19 = load r18
-    20 │   r20 = ref $v2
-    21 │   r21 = load r20
-    22 │   r22 = r19 * r21
-    24 │   r23 = r22 / 100 (r24)
-    25 │   return r23
+     4 │   r4 = r1 * r3
+     6 │   r5 = r4 / 100 (r6)
+     7 │   return r5
 
-    ; r0 (@customer) : Ref<String>
-    ; r1 (@customer) : String
-    ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@default_ship) : Int
-    ; r4 (@discount_rate) : Ref<Int>
-    ; r5 (@discount_rate) : Int
-    ; r6 (@free_ship_min) : Ref<Int>
-    ; r7 (@free_ship_min) : Int
-    ; r8 (@item_count) : Ref<Int>
-    ; r9 (@item_count) : Int
-    ; r10 (@receipt_out) : Ref<String>
-    ; r11 (@receipt_out) : String
-    ; r12 (@shipping) : Ref<Int>
-    ; r13 (@shipping) : Int
-    ; r14 (@tax_rate) : Ref<Int>
-    ; r15 (@tax_rate) : Int
-    ; r16 (@total_out) : Ref<Int>
-    ; r17 (@total_out) : Int
-    ; r18 (v21) : Ref<Int>
-    ; r19 ($subtotal) : Int
-    ; r20 (v23) : Ref<Int>
-    ; r21 ($rate) : Int
-    ; r22 (v25) : Int
-    ; r23 (v27) : Int
-    ; r24 (v26) : Int
-    ; r25 (v2) : Int
-    ; r26 (v1) : Int
+    ; r0 (v3) : Ref<Int>
+    ; r1 ($subtotal) : Int
+    ; r2 (v5) : Ref<Int>
+    ; r3 ($rate) : Int
+    ; r4 (v7) : Int
+    ; r5 (v9) : Int
+    ; r6 (v8) : Int
+    ; r7 (v2) : Int
+    ; r8 (v1) : Int
 
 ── calc_tax ──
 === main ===
-     0 │   r0 = ref @customer
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @default_ship
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @discount_rate
-     5 │   r5 = load r4
-     6 │   r6 = ref @free_ship_min
-     7 │   r7 = load r6
-     8 │   r8 = ref @item_count
-     9 │   r9 = load r8
-    10 │   r10 = ref @receipt_out
-    11 │   r11 = load r10
-    12 │   r12 = ref @shipping
-    13 │   r13 = load r12
-    14 │   r14 = ref @tax_rate
-    15 │   r15 = load r14
-    16 │   r16 = ref @total_out
-    17 │   r17 = load r16
-    18 │   r18 = ref $v1
-    19 │   r19 = load r18
-    20 │   r20 = ref $v2
-    21 │   r21 = load r20
-    22 │   r22 = r19 * r21
-    24 │   r23 = r22 / 100 (r24)
-    25 │   return r23
+     4 │   r4 = r1 * r3
+     6 │   r5 = r4 / 100 (r6)
+     7 │   return r5
 
-    ; r0 (@customer) : Ref<String>
-    ; r1 (@customer) : String
-    ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@default_ship) : Int
-    ; r4 (@discount_rate) : Ref<Int>
-    ; r5 (@discount_rate) : Int
-    ; r6 (@free_ship_min) : Ref<Int>
-    ; r7 (@free_ship_min) : Int
-    ; r8 (@item_count) : Ref<Int>
-    ; r9 (@item_count) : Int
-    ; r10 (@receipt_out) : Ref<String>
-    ; r11 (@receipt_out) : String
-    ; r12 (@shipping) : Ref<Int>
-    ; r13 (@shipping) : Int
-    ; r14 (@tax_rate) : Ref<Int>
-    ; r15 (@tax_rate) : Int
-    ; r16 (@total_out) : Ref<Int>
-    ; r17 (@total_out) : Int
-    ; r18 (v21) : Ref<Int>
-    ; r19 ($amount) : Int
-    ; r20 (v23) : Ref<Int>
-    ; r21 ($rate) : Int
-    ; r22 (v25) : Int
-    ; r23 (v27) : Int
-    ; r24 (v26) : Int
-    ; r25 (v2) : Int
-    ; r26 (v1) : Int
+    ; r0 (v3) : Ref<Int>
+    ; r1 ($amount) : Int
+    ; r2 (v5) : Ref<Int>
+    ; r3 ($rate) : Int
+    ; r4 (v7) : Int
+    ; r5 (v9) : Int
+    ; r6 (v8) : Int
+    ; r7 (v2) : Int
+    ; r8 (v1) : Int
 
 ── format_receipt ──
 === literals ===
@@ -123,317 +51,245 @@ expression: raw
   T4 = " total:"
 
 === main ===
-     0 │   r0 = ref @customer
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @default_ship
-     3 │   r3 = load r2
-     4 │   r4 = ref @discount_rate
-     5 │   r5 = load r4
-     6 │   r6 = ref @free_ship_min
-     7 │   r7 = load r6
-     8 │   r8 = ref @item_count
-     9 │   r9 = load r8
-    10 │   r10 = ref @receipt_out
-    11 │   r11 = load r10
-    12 │   r12 = ref @shipping
-    13 │   r13 = load r12
-    14 │   r14 = ref @tax_rate
-    15 │   r15 = load r14
-    16 │   r16 = ref @total_out
-    17 │   r17 = load r16
-    18 │   r18 = ref $v1
-    19 │   r19 = load r18
-    21 │   r20 = r19 + T0
-    22 │   r21 = ref $v2
-    23 │   r22 = load r21
-    24 │   r23 = call #0(r22)
-    25 │   r24 = r20 + r23
-    27 │   r25 = r24 + T1
-    28 │   r26 = ref $v3
-    29 │   r27 = load r26
-    30 │   r28 = call #0(r27)
-    31 │   r29 = r25 + r28
-    33 │   r30 = r29 + T2
-    34 │   r31 = ref $v4
-    35 │   r32 = load r31
-    36 │   r33 = call #0(r32)
-    37 │   r34 = r30 + r33
-    39 │   r35 = r34 + T3
-    40 │   r36 = ref $v5
-    41 │   r37 = load r36
-    42 │   r38 = call #0(r37)
-    43 │   r39 = r35 + r38
-    45 │   r40 = r39 + T4
-    46 │   r41 = ref $v6
-    47 │   r42 = load r41
-    48 │   r43 = call #0(r42)
-    49 │   r44 = r40 + r43
-    50 │   return r44
+     3 │   r2 = r1 + T0
+     4 │   r3 = ref $v2
+     5 │   r4 = load r3
+     6 │   r5 = call #0(r4)
+     7 │   r6 = r2 + r5
+     9 │   r7 = r6 + T1
+    10 │   r8 = ref $v3
+    11 │   r9 = load r8
+    12 │   r10 = call #0(r9)
+    13 │   r11 = r7 + r10
+    15 │   r12 = r11 + T2
+    16 │   r13 = ref $v4
+    17 │   r14 = load r13
+    18 │   r15 = call #0(r14)
+    19 │   r16 = r12 + r15
+    21 │   r17 = r16 + T3
+    22 │   r18 = ref $v5
+    23 │   r19 = load r18
+    24 │   r20 = call #0(r19)
+    25 │   r21 = r17 + r20
+    27 │   r22 = r21 + T4
+    28 │   r23 = ref $v6
+    29 │   r24 = load r23
+    30 │   r25 = call #0(r24)
+    31 │   r26 = r22 + r25
+    32 │   return r26
 
-    ; r0 (@customer) : Ref<String>
-    ; r1 (@customer) : String
-    ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@default_ship) : Int
-    ; r4 (@discount_rate) : Ref<Int>
-    ; r5 (@discount_rate) : Int
-    ; r6 (@free_ship_min) : Ref<Int>
-    ; r7 (@free_ship_min) : Int
-    ; r8 (@item_count) : Ref<Int>
-    ; r9 (@item_count) : Int
-    ; r10 (@receipt_out) : Ref<String>
-    ; r11 (@receipt_out) : String
-    ; r12 (@shipping) : Ref<Int>
-    ; r13 (@shipping) : Int
-    ; r14 (@tax_rate) : Ref<Int>
-    ; r15 (@tax_rate) : Int
-    ; r16 (@total_out) : Ref<Int>
-    ; r17 (@total_out) : Int
-    ; r18 (v25) : Ref<String>
-    ; r19 ($name) : String
-    ; r20 (v28) : String
-    ; r21 (v29) : Ref<Int>
-    ; r22 ($sub) : Int
-    ; r23 (to_string(...)) : String
-    ; r24 (v32) : String
-    ; r25 (v34) : String
-    ; r26 (v35) : Ref<Int>
-    ; r27 ($disc) : Int
-    ; r28 (to_string(...)) : String
-    ; r29 (v38) : String
-    ; r30 (v40) : String
-    ; r31 (v41) : Ref<Int>
-    ; r32 ($tax) : Int
-    ; r33 (to_string(...)) : String
-    ; r34 (v44) : String
-    ; r35 (v46) : String
-    ; r36 (v47) : Ref<Int>
-    ; r37 ($ship) : Int
-    ; r38 (to_string(...)) : String
-    ; r39 (v50) : String
-    ; r40 (v52) : String
-    ; r41 (v53) : Ref<Int>
-    ; r42 ($total) : Int
-    ; r43 (to_string(...)) : String
-    ; r44 (v56) : String
-    ; r45 (v3) : Int
-    ; r46 (v6) : Int
-    ; r47 (v2) : Int
-    ; r48 (v5) : Int
-    ; r49 (v27) : String
-    ; r50 (v33) : String
-    ; r51 (v39) : String
-    ; r52 (v1) : String
-    ; r53 (v51) : String
-    ; r54 (v45) : String
-    ; r55 (v4) : Int
+    ; r0 (v7) : Ref<String>
+    ; r1 ($name) : String
+    ; r2 (v10) : String
+    ; r3 (v11) : Ref<Int>
+    ; r4 ($sub) : Int
+    ; r5 (to_string(...)) : String
+    ; r6 (v14) : String
+    ; r7 (v16) : String
+    ; r8 (v17) : Ref<Int>
+    ; r9 ($disc) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v20) : String
+    ; r12 (v22) : String
+    ; r13 (v23) : Ref<Int>
+    ; r14 ($tax) : Int
+    ; r15 (to_string(...)) : String
+    ; r16 (v26) : String
+    ; r17 (v28) : String
+    ; r18 (v29) : Ref<Int>
+    ; r19 ($ship) : Int
+    ; r20 (to_string(...)) : String
+    ; r21 (v32) : String
+    ; r22 (v34) : String
+    ; r23 (v35) : Ref<Int>
+    ; r24 ($total) : Int
+    ; r25 (to_string(...)) : String
+    ; r26 (v38) : String
+    ; r27 (v3) : Int
+    ; r28 (v6) : Int
+    ; r29 (v9) : String
+    ; r30 (v27) : String
+    ; r31 (v33) : String
+    ; r32 (v15) : String
+    ; r33 (v21) : String
+    ; r34 (v2) : Int
+    ; r35 (v5) : Int
+    ; r36 (v1) : String
+    ; r37 (v4) : Int
 
 ── main ──
 === main ===
-     0 │   r0 = ref @customer
+     0 │   r0 = ref @item_count
      1 │   r1 = load r0
-     2 │   r2 = ref @default_ship
-     3 │   r3 = load r2
-     4 │   r4 = ref @discount_rate
-     5 │   r5 = load r4
-     6 │   r6 = ref @free_ship_min
-     7 │   r7 = load r6
-     8 │   r8 = ref @item_count
-     9 │   r9 = load r8
-    10 │   r10 = ref @receipt_out
-    11 │   r11 = load r10
-    12 │   r12 = ref @shipping
-    13 │   r13 = load r12
-    14 │   r14 = ref @tax_rate
-    15 │   r15 = load r14
-    16 │   r16 = ref @total_out
-    17 │   r17 = load r16
-    18 │   r18 = ref @item_count
-    19 │   r19 = load r18
-    21 │   r20 = r19 * 100 (r21)
-    22 │   r22 = ref subtotal
-    23 │   store r22 = r20
-    24 │   r23 = ref subtotal
-    25 │   r24 = load r23
-    26 │   r25 = ref @discount_rate
-    27 │   r26 = load r25
-    28 │   r27 = call #0(r24, r26)
-    29 │   r28 = ref discount
-    30 │   store r28 = r27
-    31 │   r29 = ref subtotal
-    32 │   r30 = load r29
-    33 │   r31 = ref discount
-    34 │   r32 = load r31
-    35 │   r33 = r30 - r32
-    36 │   r34 = ref @tax_rate
-    37 │   r35 = load r34
-    38 │   r36 = call #1(r33, r35)
-    39 │   r37 = ref tax
-    40 │   store r37 = r36
-    41 │   r38 = ref subtotal
-    42 │   r39 = load r38
-    43 │   r40 = ref discount
-    44 │   r41 = load r40
-    45 │   r42 = r39 - r41
-    46 │   r43 = ref tax
-    47 │   r44 = load r43
-    48 │   r45 = r42 + r44
-    49 │   r46 = ref total
-    50 │   store r46 = r45
-    51 │   r47 = ref total
-    52 │   r48 = load r47
-    53 │   r49 = ref @free_ship_min
-    54 │   r50 = load r49
-    55 │   r51 = r48 > r50
-    56 │   r52 = test r51 == true
-    57 │   jump_if r52 then L0 else L1
-    58 │ L0:
-    60 │   r53 = ref @shipping
-    61 │   store r53 = 0 (r54)
-    62 │   jump L1
-    63 │ L1:
-    64 │   r55 = ref total
-    65 │   r56 = load r55
-    66 │   r57 = ref @free_ship_min
-    67 │   r58 = load r57
-    68 │   r59 = r56 <= r58
-    69 │   r60 = test r59 == true
-    70 │   jump_if r60 then L2 else L3
-    71 │ L2:
-    72 │   r61 = ref @default_ship
-    73 │   r62 = load r61
-    74 │   r63 = ref @shipping
-    75 │   store r63 = r62
-    76 │   jump L3
-    77 │ L3:
-    78 │   r64 = ref total
-    79 │   r65 = load r64
-    80 │   r66 = ref @shipping
-    81 │   r67 = load r66
-    82 │   r68 = r65 + r67
-    83 │   r69 = ref final_total
-    84 │   store r69 = r68
-    85 │   r70 = ref @customer
-    86 │   r71 = load r70
-    87 │   r72 = ref subtotal
-    88 │   r73 = load r72
-    89 │   r74 = ref discount
-    90 │   r75 = load r74
-    91 │   r76 = ref tax
-    92 │   r77 = load r76
-    93 │   r78 = ref @shipping
-    94 │   r79 = load r78
-    95 │   r80 = ref final_total
-    96 │   r81 = load r80
-    97 │   r82 = call #2(r71, r73, r75, r77, r79, r81)
-    98 │   r83 = ref receipt
-    99 │   store r83 = r82
-   100 │   r84 = ref final_total
-   101 │   r85 = load r84
-   102 │   r86 = ref @total_out
-   103 │   store r86 = r85
-   104 │   r87 = ref receipt
-   105 │   r88 = load r87
-   106 │   r89 = ref @receipt_out
-   107 │   store r89 = r88
-   108 │   r90 = ref receipt
-   109 │   r91 = load r90
-   110 │   r92 = call #3(r91)
-   111 │   r93 = ref final_total
-   112 │   r94 = load r93
-   113 │   return r94
+     3 │   r2 = r1 * 100 (r3)
+     4 │   r4 = ref subtotal
+     5 │   store r4 = r2
+     6 │   r5 = ref subtotal
+     7 │   r6 = load r5
+     8 │   r7 = ref @discount_rate
+     9 │   r8 = load r7
+    10 │   r9 = call #0(r6, r8)
+    11 │   r10 = ref discount
+    12 │   store r10 = r9
+    13 │   r11 = ref subtotal
+    14 │   r12 = load r11
+    15 │   r13 = ref discount
+    16 │   r14 = load r13
+    17 │   r15 = r12 - r14
+    18 │   r16 = ref @tax_rate
+    19 │   r17 = load r16
+    20 │   r18 = call #1(r15, r17)
+    21 │   r19 = ref tax
+    22 │   store r19 = r18
+    23 │   r20 = ref subtotal
+    24 │   r21 = load r20
+    25 │   r22 = ref discount
+    26 │   r23 = load r22
+    27 │   r24 = r21 - r23
+    28 │   r25 = ref tax
+    29 │   r26 = load r25
+    30 │   r27 = r24 + r26
+    31 │   r28 = ref total
+    32 │   store r28 = r27
+    33 │   r29 = ref total
+    34 │   r30 = load r29
+    35 │   r31 = ref @free_ship_min
+    36 │   r32 = load r31
+    37 │   r33 = r30 > r32
+    38 │   r34 = test r33 == true
+    39 │   jump_if r34 then L0 else L1
+    40 │ L0:
+    42 │   r35 = ref @shipping
+    43 │   store r35 = 0 (r36)
+    44 │   jump L1
+    45 │ L1:
+    46 │   r37 = ref total
+    47 │   r38 = load r37
+    48 │   r39 = ref @free_ship_min
+    49 │   r40 = load r39
+    50 │   r41 = r38 <= r40
+    51 │   r42 = test r41 == true
+    52 │   jump_if r42 then L2 else L3
+    53 │ L2:
+    54 │   r43 = ref @default_ship
+    55 │   r44 = load r43
+    56 │   r45 = ref @shipping
+    57 │   store r45 = r44
+    58 │   jump L3
+    59 │ L3:
+    60 │   r46 = ref total
+    61 │   r47 = load r46
+    62 │   r48 = ref @shipping
+    63 │   r49 = load r48
+    64 │   r50 = r47 + r49
+    65 │   r51 = ref final_total
+    66 │   store r51 = r50
+    67 │   r52 = ref @customer
+    68 │   r53 = load r52
+    69 │   r54 = ref subtotal
+    70 │   r55 = load r54
+    71 │   r56 = ref discount
+    72 │   r57 = load r56
+    73 │   r58 = ref tax
+    74 │   r59 = load r58
+    75 │   r60 = ref @shipping
+    76 │   r61 = load r60
+    77 │   r62 = ref final_total
+    78 │   r63 = load r62
+    79 │   r64 = call #2(r53, r55, r57, r59, r61, r63)
+    80 │   r65 = ref receipt
+    81 │   store r65 = r64
+    82 │   r66 = ref final_total
+    83 │   r67 = load r66
+    84 │   r68 = ref @total_out
+    85 │   store r68 = r67
+    86 │   r69 = ref receipt
+    87 │   r70 = load r69
+    88 │   r71 = ref @receipt_out
+    89 │   store r71 = r70
+    90 │   r72 = ref receipt
+    91 │   r73 = load r72
+    92 │   r74 = call #3(r73)
+    93 │   r75 = ref final_total
+    94 │   r76 = load r75
+    95 │   return r76
 
-    ; r0 (@customer) : Ref<String>
-    ; r1 (@customer) : String
-    ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@default_ship) : Int
-    ; r4 (@discount_rate) : Ref<Int>
-    ; r5 (@discount_rate) : Int
-    ; r6 (@free_ship_min) : Ref<Int>
-    ; r7 (@free_ship_min) : Int
-    ; r8 (@item_count) : Ref<Int>
-    ; r9 (@item_count) : Int
-    ; r10 (@receipt_out) : Ref<String>
-    ; r11 (@receipt_out) : String
-    ; r12 (@shipping) : Ref<Int>
-    ; r13 (@shipping) : Int
-    ; r14 (@tax_rate) : Ref<Int>
-    ; r15 (@tax_rate) : Int
-    ; r16 (@total_out) : Ref<Int>
-    ; r17 (@total_out) : Int
-    ; r18 (@item_count) : Ref<Int>
-    ; r19 (v20) : Int
-    ; r20 (v22) : Int
-    ; r21 (v21) : Int
-    ; r22 (v24) : Ref<Int>
-    ; r23 (v25) : Ref<Int>
-    ; r24 (subtotal) : Int
-    ; r25 (@discount_rate) : Ref<Int>
-    ; r26 (v28) : Int
-    ; r27 (calc_discount(...)) : Int
-    ; r28 (v31) : Ref<Int>
-    ; r29 (v32) : Ref<Int>
-    ; r30 (subtotal) : Int
-    ; r31 (v34) : Ref<Int>
-    ; r32 (discount) : Int
-    ; r33 (v36) : Int
-    ; r34 (@tax_rate) : Ref<Int>
-    ; r35 (v38) : Int
-    ; r36 (calc_tax(...)) : Int
-    ; r37 (v41) : Ref<Int>
-    ; r38 (v42) : Ref<Int>
-    ; r39 (subtotal) : Int
-    ; r40 (v44) : Ref<Int>
-    ; r41 (discount) : Int
-    ; r42 (v46) : Int
-    ; r43 (v47) : Ref<Int>
-    ; r44 (tax) : Int
-    ; r45 (v49) : Int
+    ; r0 (@item_count) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
+    ; r4 (v6) : Ref<Int>
+    ; r5 (v7) : Ref<Int>
+    ; r6 (subtotal) : Int
+    ; r7 (@discount_rate) : Ref<Int>
+    ; r8 (v10) : Int
+    ; r9 (calc_discount(...)) : Int
+    ; r10 (v13) : Ref<Int>
+    ; r11 (v14) : Ref<Int>
+    ; r12 (subtotal) : Int
+    ; r13 (v16) : Ref<Int>
+    ; r14 (discount) : Int
+    ; r15 (v18) : Int
+    ; r16 (@tax_rate) : Ref<Int>
+    ; r17 (v20) : Int
+    ; r18 (calc_tax(...)) : Int
+    ; r19 (v23) : Ref<Int>
+    ; r20 (v24) : Ref<Int>
+    ; r21 (subtotal) : Int
+    ; r22 (v26) : Ref<Int>
+    ; r23 (discount) : Int
+    ; r24 (v28) : Int
+    ; r25 (v29) : Ref<Int>
+    ; r26 (tax) : Int
+    ; r27 (v31) : Int
+    ; r28 (v33) : Ref<Int>
+    ; r29 (v34) : Ref<Int>
+    ; r30 (total) : Int
+    ; r31 (@free_ship_min) : Ref<Int>
+    ; r32 (v37) : Int
+    ; r33 (v38) : Bool
+    ; r34 (v39) : Bool
+    ; r35 (@shipping) : Ref<Int>
+    ; r36 (v40) : Int
+    ; r37 (v42) : Ref<Int>
+    ; r38 (total) : Int
+    ; r39 (@free_ship_min) : Ref<Int>
+    ; r40 (v45) : Int
+    ; r41 (v46) : Bool
+    ; r42 (v47) : Bool
+    ; r43 (@default_ship) : Ref<Int>
+    ; r44 (v49) : Int
+    ; r45 (@shipping) : Ref<Int>
     ; r46 (v51) : Ref<Int>
-    ; r47 (v52) : Ref<Int>
-    ; r48 (total) : Int
-    ; r49 (@free_ship_min) : Ref<Int>
+    ; r47 (total) : Int
+    ; r48 (@shipping) : Ref<Int>
+    ; r49 (v54) : Int
     ; r50 (v55) : Int
-    ; r51 (v56) : Bool
-    ; r52 (v57) : Bool
-    ; r53 (@shipping) : Ref<Int>
-    ; r54 (v58) : Int
-    ; r55 (v60) : Ref<Int>
-    ; r56 (total) : Int
-    ; r57 (@free_ship_min) : Ref<Int>
-    ; r58 (v63) : Int
-    ; r59 (v64) : Bool
-    ; r60 (v65) : Bool
-    ; r61 (@default_ship) : Ref<Int>
-    ; r62 (v67) : Int
-    ; r63 (@shipping) : Ref<Int>
-    ; r64 (v69) : Ref<Int>
-    ; r65 (total) : Int
-    ; r66 (@shipping) : Ref<Int>
-    ; r67 (v72) : Int
-    ; r68 (v73) : Int
-    ; r69 (v75) : Ref<Int>
-    ; r70 (@customer) : Ref<String>
-    ; r71 (v77) : String
-    ; r72 (v78) : Ref<Int>
-    ; r73 (subtotal) : Int
-    ; r74 (v80) : Ref<Int>
-    ; r75 (discount) : Int
-    ; r76 (v82) : Ref<Int>
-    ; r77 (tax) : Int
-    ; r78 (@shipping) : Ref<Int>
-    ; r79 (v85) : Int
-    ; r80 (v86) : Ref<Int>
-    ; r81 (final_total) : Int
-    ; r82 (format_receipt(...)) : String
-    ; r83 (v90) : Ref<String>
-    ; r84 (v91) : Ref<Int>
-    ; r85 (final_total) : Int
-    ; r86 (@total_out) : Ref<Int>
-    ; r87 (v94) : Ref<String>
-    ; r88 (receipt) : String
-    ; r89 (@receipt_out) : Ref<String>
-    ; r90 (v97) : Ref<String>
-    ; r91 (receipt) : String
-    ; r92 (send_email(...)) : Int
-    ; r93 (v100) : Ref<Int>
-    ; r94 (final_total) : Int
+    ; r51 (v57) : Ref<Int>
+    ; r52 (@customer) : Ref<String>
+    ; r53 (v59) : String
+    ; r54 (v60) : Ref<Int>
+    ; r55 (subtotal) : Int
+    ; r56 (v62) : Ref<Int>
+    ; r57 (discount) : Int
+    ; r58 (v64) : Ref<Int>
+    ; r59 (tax) : Int
+    ; r60 (@shipping) : Ref<Int>
+    ; r61 (v67) : Int
+    ; r62 (v68) : Ref<Int>
+    ; r63 (final_total) : Int
+    ; r64 (format_receipt(...)) : String
+    ; r65 (v72) : Ref<String>
+    ; r66 (v73) : Ref<Int>
+    ; r67 (final_total) : Int
+    ; r68 (@total_out) : Ref<Int>
+    ; r69 (v76) : Ref<String>
+    ; r70 (receipt) : String
+    ; r71 (@receipt_out) : Ref<String>
+    ; r72 (v79) : Ref<String>
+    ; r73 (receipt) : String
+    ; r74 (send_email(...)) : Int
+    ; r75 (v82) : Ref<Int>
+    ; r76 (final_total) : Int

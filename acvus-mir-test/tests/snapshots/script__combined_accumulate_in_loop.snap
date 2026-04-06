@@ -4,65 +4,58 @@ expression: ir
 ---
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @sum
-     2 │   r2 = ref @product
-     3 │   r3 = ref @items
-     4 │   r4 = load r3
-     5 │   r5 = ref @product
+     1 │   r1 = undef
+     2 │   r2 = undef
+     3 │   r3 = ref @sum
+     4 │   r4 = ref @product
+     5 │   r5 = ref @items
      6 │   r6 = load r5
-     7 │   r7 = ref @sum
-     8 │   r8 = load r7
-     9 │   r9 = ref @items
-    11 │   jump L0(0 (r10), r8, r6, r0)
-    12 │ L0(r11: Int, r12: Int, r13: Int, r14: Int):
-    13 │   store r1 = r12
-    14 │   store r2 = r13
-    15 │   list_step r15, r16 = r4[r11] else L1()
-    16 │ L2:
-    17 │   r17 = ref @sum
-    18 │   r18 = r12 + r15
-    19 │   r19 = ref @product
-    20 │   r20 = r13 * r15
-    21 │   jump L0(r16, r18, r20, r15)
-    22 │ L1:
-    23 │   r21 = ref @sum
-    24 │   r22 = ref @product
-    25 │   r23 = r12 + r13
-    26 │   return r23
+     8 │   jump L0(0 (r7), r0, r1, r2)
+     9 │ L0(r8: Int, r9: Int, r10: Int, r11: Int):
+    10 │   store r3 = r9
+    11 │   store r4 = r10
+    12 │   list_step r12, r13 = r6[r8] else L1()
+    13 │ L2:
+    14 │   r14 = ref @sum
+    15 │   r15 = r9 + r12
+    16 │   r16 = ref @product
+    17 │   r17 = r10 * r12
+    18 │   jump L0(r13, r15, r17, r12)
+    19 │ L1:
+    20 │   r18 = ref @sum
+    21 │   r19 = ref @product
+    22 │   r20 = r9 + r10
+    23 │   return r20
 
-    ; r0 (v32) : Int
-    ; r1 (v36) : Ref<Int>
-    ; r2 (v37) : Ref<Int>
-    ; r3 (@items) : Ref<List<Int>>
-    ; r4 (@items) : List<Int>
-    ; r5 (@product) : Ref<Int>
-    ; r6 (@product) : Int
-    ; r7 (@sum) : Ref<Int>
-    ; r8 (@sum) : Int
-    ; r9 (@items) : Ref<List<Int>>
-    ; r10 (v9) : Int
-    ; r11 (v10) : Int
-    ; r12 (v33) : Int
-    ; r13 (v34) : Int
-    ; r14 (v35) : Int
-    ; r15 (x) : Int
-    ; r16 (v12) : Int
-    ; r17 (@sum) : Ref<Int>
-    ; r18 (v19) : Int
+    ; r0 (v26) : Int
+    ; r1 (v27) : Int
+    ; r2 (v28) : Int
+    ; r3 (v32) : Ref<Int>
+    ; r4 (v33) : Ref<Int>
+    ; r5 (@items) : Ref<List<Int>>
+    ; r6 (v2) : List<Int>
+    ; r7 (v3) : Int
+    ; r8 (v4) : Int
+    ; r9 (v29) : Int
+    ; r10 (v30) : Int
+    ; r11 (v31) : Int
+    ; r12 (x) : Int
+    ; r13 (v6) : Int
+    ; r14 (@sum) : Ref<Int>
+    ; r15 (v13) : Int
+    ; r16 (@product) : Ref<Int>
+    ; r17 (v19) : Int
+    ; r18 (@sum) : Ref<Int>
     ; r19 (@product) : Ref<Int>
     ; r20 (v25) : Int
-    ; r21 (@sum) : Ref<Int>
-    ; r22 (@product) : Ref<Int>
-    ; r23 (v31) : Int
-    ; r24 (v22) : Int
-    ; r25 (v28) : Int
-    ; r26 (v8) : List<Int>
-    ; r27 (v30) : Int
-    ; r28 (v14) : Ref<Int>
-    ; r29 (v17) : Ref<Int>
-    ; r30 (x) : Int
-    ; r31 (x) : Int
-    ; r32 (@sum) : Ref<Int>
-    ; r33 (v23) : Ref<Int>
-    ; r34 (@product) : Ref<Int>
-    ; r35 (v16) : Int
+    ; r21 (v22) : Int
+    ; r22 (x) : Int
+    ; r23 (v11) : Ref<Int>
+    ; r24 (@sum) : Ref<Int>
+    ; r25 (@product) : Ref<Int>
+    ; r26 (v17) : Ref<Int>
+    ; r27 (x) : Int
+    ; r28 (v24) : Int
+    ; r29 (v8) : Ref<Int>
+    ; r30 (v10) : Int
+    ; r31 (v16) : Int

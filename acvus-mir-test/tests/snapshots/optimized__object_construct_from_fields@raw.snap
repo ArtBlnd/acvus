@@ -7,82 +7,70 @@ expression: raw
   T1 = ")"
 
 === main ===
-     0 │   r0 = ref @min_score
+     0 │   r0 = ref @user.age
      1 │   r1 = load r0
-     2 │   r2 = ref @output
-     3 │   r3 = load r2
-     4 │   r4 = ref @user
-     5 │   r5 = load r4
-     6 │   r6 = ref @user.age
-     7 │   r7 = load r6
-     9 │   r8 = r7 * 2 (r9)
-    10 │   r10 = ref score
-    11 │   store r10 = r8
-    12 │   r11 = ref @user.name
-    13 │   r12 = load r11
-    15 │   r13 = r12 + T0
-    16 │   r14 = ref score
-    17 │   r15 = load r14
-    18 │   r16 = call #0(r15)
-    19 │   r17 = r13 + r16
-    21 │   r18 = r17 + T1
-    22 │   r19 = ref label
-    23 │   store r19 = r18
-    24 │   r20 = ref score
-    25 │   r21 = load r20
-    26 │   r22 = ref @min_score
-    27 │   r23 = load r22
-    28 │   r24 = r21 > r23
-    29 │   r25 = ref eligible
-    30 │   store r25 = r24
-    31 │   r26 = ref label
-    32 │   r27 = load r26
-    33 │   r28 = ref score
-    34 │   r29 = load r28
-    35 │   r30 = ref eligible
-    36 │   r31 = load r30
-    37 │   r32 = object {label: r27, score: r29, eligible: r31}
-    38 │   r33 = ref @output
-    39 │   store r33 = r32
-    40 │   r34 = ref @output
-    41 │   r35 = load r34
-    42 │   return r35
+     3 │   r2 = r1 * 2 (r3)
+     4 │   r4 = ref score
+     5 │   store r4 = r2
+     6 │   r5 = ref @user.name
+     7 │   r6 = load r5
+     9 │   r7 = r6 + T0
+    10 │   r8 = ref score
+    11 │   r9 = load r8
+    12 │   r10 = call #0(r9)
+    13 │   r11 = r7 + r10
+    15 │   r12 = r11 + T1
+    16 │   r13 = ref label
+    17 │   store r13 = r12
+    18 │   r14 = ref score
+    19 │   r15 = load r14
+    20 │   r16 = ref @min_score
+    21 │   r17 = load r16
+    22 │   r18 = r15 > r17
+    23 │   r19 = ref eligible
+    24 │   store r19 = r18
+    25 │   r20 = ref label
+    26 │   r21 = load r20
+    27 │   r22 = ref score
+    28 │   r23 = load r22
+    29 │   r24 = ref eligible
+    30 │   r25 = load r24
+    31 │   r26 = object {label: r21, score: r23, eligible: r25}
+    32 │   r27 = ref @output
+    33 │   store r27 = r26
+    34 │   r28 = ref @output
+    35 │   r29 = load r28
+    36 │   return r29
 
-    ; r0 (@min_score) : Ref<Int>
-    ; r1 (@min_score) : Int
-    ; r2 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
-    ; r3 (@output) : {eligible: Bool, label: String, score: Int}
-    ; r4 (@user) : Ref<{age: Int, name: String}>
-    ; r5 (@user) : {age: Int, name: String}
-    ; r6 (@user.age) : Ref<Int>
-    ; r7 (v8) : Int
-    ; r8 (v10) : Int
-    ; r9 (v9) : Int
-    ; r10 (v12) : Ref<Int>
-    ; r11 (@user.name) : Ref<String>
-    ; r12 (v14) : String
-    ; r13 (v16) : String
-    ; r14 (v17) : Ref<Int>
+    ; r0 (@user.age) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
+    ; r4 (v6) : Ref<Int>
+    ; r5 (@user.name) : Ref<String>
+    ; r6 (v8) : String
+    ; r7 (v10) : String
+    ; r8 (v11) : Ref<Int>
+    ; r9 (score) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v14) : String
+    ; r12 (v16) : String
+    ; r13 (v18) : Ref<String>
+    ; r14 (v19) : Ref<Int>
     ; r15 (score) : Int
-    ; r16 (to_string(...)) : String
-    ; r17 (v20) : String
-    ; r18 (v22) : String
-    ; r19 (v24) : Ref<String>
-    ; r20 (v25) : Ref<Int>
-    ; r21 (score) : Int
-    ; r22 (@min_score) : Ref<Int>
-    ; r23 (v28) : Int
-    ; r24 (v29) : Bool
-    ; r25 (v31) : Ref<Bool>
-    ; r26 (v32) : Ref<String>
-    ; r27 (label) : String
-    ; r28 (v34) : Ref<Int>
-    ; r29 (score) : Int
-    ; r30 (v36) : Ref<Bool>
-    ; r31 (eligible) : Bool
-    ; r32 (v38) : {eligible: Bool, label: String, score: Int}
-    ; r33 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
-    ; r34 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
-    ; r35 (v41) : {eligible: Bool, label: String, score: Int}
-    ; r36 (v15) : String
-    ; r37 (v21) : String
+    ; r16 (@min_score) : Ref<Int>
+    ; r17 (v22) : Int
+    ; r18 (v23) : Bool
+    ; r19 (v25) : Ref<Bool>
+    ; r20 (v26) : Ref<String>
+    ; r21 (label) : String
+    ; r22 (v28) : Ref<Int>
+    ; r23 (score) : Int
+    ; r24 (v30) : Ref<Bool>
+    ; r25 (eligible) : Bool
+    ; r26 (v32) : {eligible: Bool, label: String, score: Int}
+    ; r27 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
+    ; r28 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
+    ; r29 (v35) : {eligible: Bool, label: String, score: Int}
+    ; r30 (v9) : String
+    ; r31 (v15) : String

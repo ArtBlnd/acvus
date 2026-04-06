@@ -8,50 +8,47 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @pair
-     3 │   r3 = load r2
-     5 │   r4 = ref @pair
-     6 │ L2:
-     8 │   r5 = r3.0
-    10 │   r6 = true (r7) && true (r8)
-    11 │   r9 = r3.1
-    13 │   r10 = r6 && true (r11)
-    14 │   jump_if r10 then L3 else L1
-    15 │ L3:
-    16 │   r12 = r3.0
-    17 │   r13 = r3.1
-    19 │   r14 = T0 + r12
-    20 │   jump L0(r14, r12, r13)
-    21 │ L1:
-    23 │   jump L0(T0, r0, r1)
-    24 │ L0(r15: String, r16: String, r17: Int):  ; merge_of L2
-    25 │   r18 = T0 + r15
-    26 │   return r18
+     3 │   r2 = ref @pair
+     4 │   r3 = load r2
+     5 │ L2:
+     7 │   r4 = r3.0
+     9 │   r5 = true (r6) && true (r7)
+    10 │   r8 = r3.1
+    12 │   r9 = r5 && true (r10)
+    13 │   jump_if r9 then L3 else L1
+    14 │ L3:
+    15 │   r11 = r3.0
+    16 │   r12 = r3.1
+    18 │   r13 = T0 + r11
+    19 │   jump L0(r13, r11, r12)
+    20 │ L1:
+    22 │   jump L0(T0, r0, r1)
+    23 │ L0(r14: String, r15: String, r16: Int):  ; merge_of L2
+    24 │   r17 = T0 + r14
+    25 │   return r17
 
-    ; r0 (v26) : String
-    ; r1 (v27) : Int
+    ; r0 (v24) : String
+    ; r1 (v25) : Int
     ; r2 (@pair) : Ref<(String, Int)>
-    ; r3 (@pair) : (String, Int)
-    ; r4 (@pair) : Ref<(String, Int)>
-    ; r5 (v7) : String
-    ; r6 (v9) : Bool
+    ; r3 (v3) : (String, Int)
+    ; r4 (v5) : String
+    ; r5 (v7) : Bool
+    ; r6 (v4) : Bool
     ; r7 (v6) : Bool
-    ; r8 (v8) : Bool
-    ; r9 (v10) : Int
-    ; r10 (v12) : Bool
-    ; r11 (v11) : Bool
-    ; r12 (name) : String
-    ; r13 (age) : Int
+    ; r8 (v8) : Int
+    ; r9 (v10) : Bool
+    ; r10 (v9) : Bool
+    ; r11 (name) : String
+    ; r12 (age) : Int
+    ; r13 (v20) : String
     ; r14 (v22) : String
-    ; r15 (v24) : String
-    ; r16 (v28) : String
-    ; r17 (v29) : Int
-    ; r18 (v25) : String
-    ; r19 (v3) : String
-    ; r20 (v20) : Ref<String>
-    ; r21 (v18) : Ref<Int>
-    ; r22 (name) : String
-    ; r23 (v23) : String
-    ; r24 (v15) : Ref<String>
-    ; r25 (v5) : (String, Int)
-    ; r26 (v19) : String
+    ; r15 (v26) : String
+    ; r16 (v27) : Int
+    ; r17 (v23) : String
+    ; r18 (v17) : String
+    ; r19 (v18) : Ref<String>
+    ; r20 (v21) : String
+    ; r21 (v13) : Ref<String>
+    ; r22 (v1) : String
+    ; r23 (v16) : Ref<Int>
+    ; r24 (name) : String

@@ -8,56 +8,53 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @items
-     3 │   r3 = load r2
-     7 │   r4 = T0 + T0
-     8 │   r5 = ref @items
-    11 │   jump L0(0 (r6), T0, 0 (r7), r1)
-    12 │ L0(r8: Int, r9: String, r10: Int, r11: Int):
-    13 │   list_step r12, r13 = r3[r8] else L1(r9)
-    14 │ L3:
-    17 │   r14 = T0 + T0
-    18 │   r15 = r9 + r14
-    19 │   jump L0(r13, r15, r12, r12)
-    20 │ L1(r16: String):
-    21 │   jump L2(r16)
-    22 │ L2(r17: String):
-    23 │   r18 = r4 + r17
-    24 │   r19 = call #0(r10)
-    25 │   r20 = r18 + r19
-    26 │   return r20
+     5 │   r2 = T0 + T0
+     6 │   r3 = ref @items
+     7 │   r4 = load r3
+    10 │   jump L0(0 (r5), T0, 0 (r6), r1)
+    11 │ L0(r7: Int, r8: String, r9: Int, r10: Int):
+    12 │   list_step r11, r12 = r4[r7] else L1(r8)
+    13 │ L3:
+    16 │   r13 = T0 + T0
+    17 │   r14 = r8 + r13
+    18 │   jump L0(r12, r14, r11, r11)
+    19 │ L1(r15: String):
+    20 │   jump L2(r15)
+    21 │ L2(r16: String):
+    22 │   r17 = r2 + r16
+    23 │   r18 = call #0(r9)
+    24 │   r19 = r17 + r18
+    25 │   return r19
 
-    ; r0 (v33) : Int
-    ; r1 (v34) : Int
-    ; r2 (@items) : Ref<List<Int>>
-    ; r3 (@items) : List<Int>
-    ; r4 (v8) : String
-    ; r5 (@items) : Ref<List<Int>>
-    ; r6 (v11) : Int
-    ; r7 (v4) : Int
-    ; r8 (v13) : Int
-    ; r9 (v14) : String
-    ; r10 (v35) : Int
-    ; r11 (v36) : Int
-    ; r12 (x) : Int
-    ; r13 (v16) : Int
-    ; r14 (v24) : String
-    ; r15 (v25) : String
-    ; r16 (v26) : String
-    ; r17 (v27) : String
-    ; r18 (v28) : String
-    ; r19 (to_string(...)) : String
-    ; r20 (v32) : String
-    ; r21 (v3) : String
-    ; r22 (v22) : Ref<Int>
-    ; r23 (v6) : Ref<Int>
-    ; r24 (v12) : String
-    ; r25 (last) : Int
-    ; r26 (v20) : Ref<Int>
-    ; r27 (v23) : String
-    ; r28 (v18) : Ref<Int>
-    ; r29 (x) : Int
-    ; r30 (v7) : String
-    ; r31 (v29) : Ref<Int>
-    ; r32 (v10) : List<Int>
-    ; r33 (v19) : String
+    ; r0 (v31) : Int
+    ; r1 (v32) : Int
+    ; r2 (v6) : String
+    ; r3 (@items) : Ref<List<Int>>
+    ; r4 (v8) : List<Int>
+    ; r5 (v9) : Int
+    ; r6 (v2) : Int
+    ; r7 (v11) : Int
+    ; r8 (v12) : String
+    ; r9 (v33) : Int
+    ; r10 (v34) : Int
+    ; r11 (x) : Int
+    ; r12 (v14) : Int
+    ; r13 (v22) : String
+    ; r14 (v23) : String
+    ; r15 (v24) : String
+    ; r16 (v25) : String
+    ; r17 (v26) : String
+    ; r18 (to_string(...)) : String
+    ; r19 (v30) : String
+    ; r20 (last) : Int
+    ; r21 (v17) : String
+    ; r22 (v1) : String
+    ; r23 (v20) : Ref<Int>
+    ; r24 (v4) : Ref<Int>
+    ; r25 (v18) : Ref<Int>
+    ; r26 (v21) : String
+    ; r27 (v5) : String
+    ; r28 (v27) : Ref<Int>
+    ; r29 (v10) : String
+    ; r30 (v16) : Ref<Int>
+    ; r31 (x) : Int

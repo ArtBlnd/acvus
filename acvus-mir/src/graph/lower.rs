@@ -64,17 +64,10 @@ pub fn lower(
             continue;
         };
 
-        // Clone the resolution for lowering (lower consumes it).
-        let resolution_clone = resolution.clone();
-
         let lowerer = crate::lower::Lowerer::new(
             interner,
-            resolution_clone.type_map,
-            resolution_clone.coercion_map,
-            infer_result.context_types.clone(),
-            infer_result.fn_types.clone(),
+            resolution,
             policies.clone(),
-            resolution_clone.extern_params,
         );
         let module = match parsed {
             ParsedSource::Script(script) => lowerer.lower_script(script),

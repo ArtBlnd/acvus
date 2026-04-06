@@ -5,35 +5,28 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @out
+     2 │   r2 = ref @user
      3 │   r3 = load r2
-     4 │   r4 = ref @user
-     5 │   r5 = load r4
-     6 │   r6 = ref @user
-     7 │   r7 = r5.name
-     8 │   r8 = ref @user
-     9 │   r9 = r5.age
-    10 │   r10 = ref @out
-    11 │   store r10 = r7
-    12 │   r11 = ref @out
-    13 │   return r7
+     4 │   r4 = r3.name
+     5 │   r5 = ref @user
+     6 │   r6 = r3.age
+     7 │   r7 = ref @out
+     8 │   store r7 = r4
+     9 │   r8 = ref @out
+    10 │   return r4
 
-    ; r0 (v20) : String
-    ; r1 (v21) : Int
-    ; r2 (@out) : Ref<String>
-    ; r3 (@out) : String
-    ; r4 (@user) : Ref<{age: Int, name: String}>
-    ; r5 (@user) : {age: Int, name: String}
-    ; r6 (@user) : Ref<{age: Int, name: String}>
-    ; r7 (name) : String
-    ; r8 (@user) : Ref<{age: Int, name: String}>
-    ; r9 (age) : Int
-    ; r10 (@out) : Ref<String>
-    ; r11 (@out) : Ref<String>
-    ; r12 (v11) : {age: Int, name: String}
-    ; r13 (v14) : Ref<Int>
-    ; r14 (v6) : {age: Int, name: String}
-    ; r15 (v9) : Ref<String>
-    ; r16 (v15) : Ref<String>
-    ; r17 (name) : String
-    ; r18 (v19) : String
+    ; r0 (v16) : String
+    ; r1 (v17) : Int
+    ; r2 (@user) : Ref<{age: Int, name: String}>
+    ; r3 (v2) : {age: Int, name: String}
+    ; r4 (name) : String
+    ; r5 (@user) : Ref<{age: Int, name: String}>
+    ; r6 (age) : Int
+    ; r7 (@out) : Ref<String>
+    ; r8 (@out) : Ref<String>
+    ; r9 (v11) : Ref<String>
+    ; r10 (name) : String
+    ; r11 (v15) : String
+    ; r12 (v7) : {age: Int, name: String}
+    ; r13 (v10) : Ref<Int>
+    ; r14 (v5) : Ref<String>

@@ -9,57 +9,51 @@ expression: ir
   T3 = "guest"
 
 === main ===
-     0 │   r0 = ref @level
-     1 │   r1 = load r0
-     2 │   r2 = ref @role
-     3 │   r3 = load r2
-     5 │   r4 = ref @role
-     6 │ L2:
-     7 │   r5 = test r3 == "admin"
-     8 │   jump_if r5 then L3 else L1
-     9 │ L3:
-    11 │   r6 = ref @level
-    12 │ L6:
-    13 │   r7 = test r1 in 1..10
-    14 │   jump_if r7 then L7 else L5
-    15 │ L7:
-    18 │   r8 = T0 + T1
-    19 │   jump L4(r8)
-    20 │ L5:
-    23 │   r9 = T0 + T2
-    24 │   jump L4(r9)
-    25 │ L4(r10: String):  ; merge_of L6
-    26 │   r11 = T0 + r10
-    27 │   jump L0(r11)
-    28 │ L1:
-    31 │   r12 = T0 + T3
-    32 │   jump L0(r12)
-    33 │ L0(r13: String):  ; merge_of L2
-    34 │   r14 = T0 + r13
-    35 │   return r14
+     1 │   r0 = ref @role
+     2 │   r1 = load r0
+     3 │ L2:
+     4 │   r2 = test r1 == "admin"
+     5 │   jump_if r2 then L3 else L1
+     6 │ L3:
+     8 │   r3 = ref @level
+     9 │   r4 = load r3
+    10 │ L6:
+    11 │   r5 = test r4 in 1..10
+    12 │   jump_if r5 then L7 else L5
+    13 │ L7:
+    16 │   r6 = T0 + T1
+    17 │   jump L4(r6)
+    18 │ L5:
+    21 │   r7 = T0 + T2
+    22 │   jump L4(r7)
+    23 │ L4(r8: String):  ; merge_of L6
+    24 │   r9 = T0 + r8
+    25 │   jump L0(r9)
+    26 │ L1:
+    29 │   r10 = T0 + T3
+    30 │   jump L0(r10)
+    31 │ L0(r11: String):  ; merge_of L2
+    32 │   r12 = T0 + r11
+    33 │   return r12
 
-    ; r0 (@level) : Ref<Int>
-    ; r1 (@level) : Int
-    ; r2 (@role) : Ref<String>
-    ; r3 (@role) : String
-    ; r4 (@role) : Ref<String>
+    ; r0 (@role) : Ref<String>
+    ; r1 (v3) : String
+    ; r2 (v4) : Bool
+    ; r3 (@level) : Ref<Int>
+    ; r4 (v7) : Int
     ; r5 (v8) : Bool
-    ; r6 (@level) : Ref<Int>
-    ; r7 (v12) : Bool
+    ; r6 (v11) : String
+    ; r7 (v14) : String
     ; r8 (v15) : String
-    ; r9 (v18) : String
+    ; r9 (v16) : String
     ; r10 (v19) : String
     ; r11 (v20) : String
-    ; r12 (v23) : String
-    ; r13 (v24) : String
-    ; r14 (v25) : String
-    ; r15 (v22) : String
-    ; r16 (v11) : Int
-    ; r17 (v14) : String
-    ; r18 (v9) : String
-    ; r19 (v17) : String
-    ; r20 (v7) : String
-    ; r21 (v21) : String
-    ; r22 (v13) : String
-    ; r23 (v5) : String
-    ; r24 (v16) : String
+    ; r12 (v21) : String
+    ; r13 (v9) : String
+    ; r14 (v17) : String
+    ; r15 (v1) : String
+    ; r16 (v10) : String
+    ; r17 (v18) : String
+    ; r18 (v5) : String
+    ; r19 (v13) : String
+    ; r20 (v12) : String

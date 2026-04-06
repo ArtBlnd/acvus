@@ -8,21 +8,18 @@ expression: ir
   T2 = "!"
 
 === main ===
-     0 │   r0 = ref @name
-     1 │   r1 = load r0
-     4 │   r2 = T0 + T1
-     5 │   r3 = ref @name
-     6 │   r4 = r2 + r1
-     8 │   r5 = r4 + T2
-     9 │   return r5
+     2 │   r0 = T0 + T1
+     3 │   r1 = ref @name
+     4 │   r2 = load r1
+     5 │   r3 = r0 + r2
+     7 │   r4 = r3 + T2
+     8 │   return r4
 
-    ; r0 (@name) : Ref<String>
-    ; r1 (@name) : String
+    ; r0 (v3) : String
+    ; r1 (@name) : Ref<String>
     ; r2 (v5) : String
-    ; r3 (@name) : Ref<String>
+    ; r3 (v6) : String
     ; r4 (v8) : String
-    ; r5 (v10) : String
-    ; r6 (v3) : String
-    ; r7 (v7) : String
-    ; r8 (v9) : String
-    ; r9 (v4) : String
+    ; r5 (v7) : String
+    ; r6 (v2) : String
+    ; r7 (v1) : String

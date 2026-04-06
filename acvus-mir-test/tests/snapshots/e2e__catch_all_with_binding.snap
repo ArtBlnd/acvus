@@ -9,41 +9,38 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @role
-     2 │   r2 = load r1
-     4 │   r3 = ref @role
-     5 │ L2:
-     6 │   r4 = test r2 == "admin"
-     7 │   jump_if r4 then L3 else L1
-     8 │ L3:
-    11 │   r5 = T0 + T1
-    12 │   jump L0(r5, r0)
-    13 │ L1:
-    17 │   r6 = T0 + T0
-    18 │   r7 = r6 + T2
-    19 │   jump L0(r7, T2)
-    20 │ L0(r8: String, r9: String):  ; merge_of L2
-    21 │   r10 = T0 + r8
-    22 │   return r10
+     2 │   r1 = ref @role
+     3 │   r2 = load r1
+     4 │ L2:
+     5 │   r3 = test r2 == "admin"
+     6 │   jump_if r3 then L3 else L1
+     7 │ L3:
+    10 │   r4 = T0 + T1
+    11 │   jump L0(r4, r0)
+    12 │ L1:
+    16 │   r5 = T0 + T0
+    17 │   r6 = r5 + T2
+    18 │   jump L0(r6, T2)
+    19 │ L0(r7: String, r8: String):  ; merge_of L2
+    20 │   r9 = T0 + r7
+    21 │   return r9
 
-    ; r0 (v21) : String
+    ; r0 (v19) : String
     ; r1 (@role) : Ref<String>
-    ; r2 (@role) : String
-    ; r3 (@role) : Ref<String>
-    ; r4 (v6) : Bool
-    ; r5 (v9) : String
-    ; r6 (v15) : String
-    ; r7 (v18) : String
-    ; r8 (v19) : String
-    ; r9 (v22) : String
-    ; r10 (v20) : String
-    ; r11 (v11) : String
-    ; r12 (v3) : String
-    ; r13 (v14) : String
-    ; r14 (fallback) : String
-    ; r15 (v7) : String
-    ; r16 (v10) : String
+    ; r2 (v3) : String
+    ; r3 (v4) : Bool
+    ; r4 (v7) : String
+    ; r5 (v13) : String
+    ; r6 (v16) : String
+    ; r7 (v17) : String
+    ; r8 (v20) : String
+    ; r9 (v18) : String
+    ; r10 (v11) : Ref<String>
+    ; r11 (v14) : Ref<String>
+    ; r12 (v6) : String
+    ; r13 (v9) : String
+    ; r14 (v1) : String
+    ; r15 (v12) : String
+    ; r16 (fallback) : String
     ; r17 (v5) : String
-    ; r18 (v13) : Ref<String>
-    ; r19 (v16) : Ref<String>
-    ; r20 (v8) : String
+    ; r18 (v8) : String

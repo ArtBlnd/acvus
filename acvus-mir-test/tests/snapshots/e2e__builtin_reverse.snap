@@ -7,45 +7,42 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @items
-     2 │   r2 = load r1
-     4 │   r3 = ref @items
-     5 │   r4 = call #0(r2)
-     8 │   jump L0(0 (r5), T0, r0)
-     9 │ L0(r6: Int, r7: String, r8: Int):
-    10 │   list_step r9, r10 = r4[r6] else L1(r7)
-    11 │ L3:
-    13 │   r11 = call #1(r9)
-    14 │   r12 = T0 + r11
-    15 │   r13 = r7 + r12
-    16 │   jump L0(r10, r13, r9)
-    17 │ L1(r14: String):
-    18 │   jump L2(r14)
-    19 │ L2(r15: String):
-    20 │   r16 = T0 + r15
-    21 │   return r16
+     2 │   r1 = ref @items
+     3 │   r2 = load r1
+     4 │   r3 = call #0(r2)
+     7 │   jump L0(0 (r4), T0, r0)
+     8 │ L0(r5: Int, r6: String, r7: Int):
+     9 │   list_step r8, r9 = r3[r5] else L1(r6)
+    10 │ L3:
+    12 │   r10 = call #1(r8)
+    13 │   r11 = T0 + r10
+    14 │   r12 = r6 + r11
+    15 │   jump L0(r9, r12, r8)
+    16 │ L1(r13: String):
+    17 │   jump L2(r13)
+    18 │ L2(r14: String):
+    19 │   r15 = T0 + r14
+    20 │   return r15
 
-    ; r0 (v24) : Int
+    ; r0 (v22) : Int
     ; r1 (@items) : Ref<List<Int>>
-    ; r2 (@items) : List<Int>
-    ; r3 (@items) : Ref<List<Int>>
-    ; r4 (reverse(...)) : List<Int>
+    ; r2 (v3) : List<Int>
+    ; r3 (reverse(...)) : List<Int>
+    ; r4 (v5) : Int
     ; r5 (v7) : Int
-    ; r6 (v9) : Int
-    ; r7 (v10) : String
-    ; r8 (v25) : Int
-    ; r9 (x) : Int
-    ; r10 (v12) : Int
-    ; r11 (to_string(...)) : String
-    ; r12 (v19) : String
-    ; r13 (v20) : String
-    ; r14 (v21) : String
-    ; r15 (v22) : String
-    ; r16 (v23) : String
-    ; r17 (v3) : String
-    ; r18 (v14) : Ref<Int>
+    ; r6 (v8) : String
+    ; r7 (v23) : Int
+    ; r8 (x) : Int
+    ; r9 (v10) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v17) : String
+    ; r12 (v18) : String
+    ; r13 (v19) : String
+    ; r14 (v20) : String
+    ; r15 (v21) : String
+    ; r16 (v14) : Ref<Int>
+    ; r17 (v6) : String
+    ; r18 (v1) : String
     ; r19 (x) : Int
-    ; r20 (v15) : String
-    ; r21 (v5) : List<Int>
-    ; r22 (v16) : Ref<Int>
-    ; r23 (v8) : String
+    ; r20 (v13) : String
+    ; r21 (v12) : Ref<Int>

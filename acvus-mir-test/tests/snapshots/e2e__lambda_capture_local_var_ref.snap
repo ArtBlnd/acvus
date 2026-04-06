@@ -8,45 +8,42 @@ expression: ir
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @items
-     3 │   r3 = load r2
-     7 │   r4 = T0 + T0
-     8 │   r5 = ref @items
-     9 │   r6 = call #0(r3)
-    10 │   r7 = closure L0 [10 (r8)]
-    11 │   r9 = call #1(r6, r7)
-    12 │   r10 = call #2(r9)
-    14 │   r11 = r4 + T0
-    15 │   r12 = call #3(r10)
-    16 │   r13 = call #4(r12)
-    17 │   r14 = r11 + r13
-    18 │   return r14
+     5 │   r2 = T0 + T0
+     6 │   r3 = ref @items
+     7 │   r4 = load r3
+     8 │   r5 = call #0(r4)
+     9 │   r6 = closure L0 [10 (r7)]
+    10 │   r8 = call #1(r5, r6)
+    11 │   r9 = call #2(r8)
+    13 │   r10 = r2 + T0
+    14 │   r11 = call #3(r9)
+    15 │   r12 = call #4(r11)
+    16 │   r13 = r10 + r12
+    17 │   return r13
 
-    ; r0 (v26) : Int
-    ; r1 (v27) : List<Int>
-    ; r2 (@items) : Ref<List<Int>>
-    ; r3 (@items) : List<Int>
-    ; r4 (v8) : String
-    ; r5 (@items) : Ref<List<Int>>
-    ; r6 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r7 (v14) : Fn(Int) -> Bool
-    ; r8 (v4) : Int
-    ; r9 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r10 (collect(...)) : List<Int>
-    ; r11 (v20) : String
-    ; r12 (len(...)) : Int
-    ; r13 (to_string(...)) : String
-    ; r14 (v25) : String
-    ; r15 (x) : List<Int>
-    ; r16 (v3) : String
-    ; r17 (v6) : Ref<Int>
-    ; r18 (v18) : Ref<List<Int>>
-    ; r19 (v7) : String
-    ; r20 (v21) : Ref<List<Int>>
-    ; r21 (v10) : List<Int>
-    ; r22 (offset) : Int
-    ; r23 (v12) : Ref<Int>
-    ; r24 (v19) : String
+    ; r0 (v24) : Int
+    ; r1 (v25) : List<Int>
+    ; r2 (v6) : String
+    ; r3 (@items) : Ref<List<Int>>
+    ; r4 (v8) : List<Int>
+    ; r5 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r6 (v12) : Fn(Int) -> Bool
+    ; r7 (v2) : Int
+    ; r8 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r9 (collect(...)) : List<Int>
+    ; r10 (v18) : String
+    ; r11 (len(...)) : Int
+    ; r12 (to_string(...)) : String
+    ; r13 (v23) : String
+    ; r14 (offset) : Int
+    ; r15 (v17) : String
+    ; r16 (x) : List<Int>
+    ; r17 (v4) : Ref<Int>
+    ; r18 (v10) : Ref<Int>
+    ; r19 (v1) : String
+    ; r20 (v5) : String
+    ; r21 (v16) : Ref<List<Int>>
+    ; r22 (v19) : Ref<List<Int>>
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
      0 │   r0 = undef

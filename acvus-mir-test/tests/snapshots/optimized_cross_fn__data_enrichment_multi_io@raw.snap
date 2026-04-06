@@ -4,54 +4,30 @@ expression: raw
 ---
 ── compute_score ──
 === main ===
-     0 │   r0 = ref @alert_count
+     0 │   r0 = ref $v1
      1 │   r1 = load r0
-     2 │   r2 = ref @result_label
+     2 │   r2 = ref $v2
      3 │   r3 = load r2
-     4 │   r4 = ref @result_score
-     5 │   r5 = load r4
-     6 │   r6 = ref @threshold
-     7 │   r7 = load r6
-     8 │   r8 = ref @user_id
-     9 │   r9 = load r8
-    10 │   r10 = ref @weight
-    11 │   r11 = load r10
-    12 │   r12 = ref $v1
-    13 │   r13 = load r12
-    14 │   r14 = ref $v2
-    15 │   r15 = load r14
-    16 │   r16 = r13 + r15
-    17 │   r17 = ref $v3
-    18 │   r18 = load r17
-    19 │   r19 = r16 * r18
-    21 │   r20 = r19 / 100 (r21)
-    22 │   return r20
+     4 │   r4 = r1 + r3
+     5 │   r5 = ref $v3
+     6 │   r6 = load r5
+     7 │   r7 = r4 * r6
+     9 │   r8 = r7 / 100 (r9)
+    10 │   return r8
 
-    ; r0 (@alert_count) : Ref<Int>
-    ; r1 (@alert_count) : Int
-    ; r2 (@result_label) : Ref<String>
-    ; r3 (@result_label) : String
-    ; r4 (@result_score) : Ref<Int>
-    ; r5 (@result_score) : Int
-    ; r6 (@threshold) : Ref<Int>
-    ; r7 (@threshold) : Int
-    ; r8 (@user_id) : Ref<Int>
-    ; r9 (@user_id) : Int
-    ; r10 (@weight) : Ref<Int>
-    ; r11 (@weight) : Int
-    ; r12 (v16) : Ref<Int>
-    ; r13 ($profile) : Int
-    ; r14 (v18) : Ref<Int>
-    ; r15 ($history) : Int
-    ; r16 (v20) : Int
-    ; r17 (v21) : Ref<Int>
-    ; r18 ($weight) : Int
-    ; r19 (v23) : Int
-    ; r20 (v25) : Int
-    ; r21 (v24) : Int
-    ; r22 (v3) : Int
-    ; r23 (v2) : Int
-    ; r24 (v1) : Int
+    ; r0 (v4) : Ref<Int>
+    ; r1 ($profile) : Int
+    ; r2 (v6) : Ref<Int>
+    ; r3 ($history) : Int
+    ; r4 (v8) : Int
+    ; r5 (v9) : Ref<Int>
+    ; r6 ($weight) : Int
+    ; r7 (v11) : Int
+    ; r8 (v13) : Int
+    ; r9 (v12) : Int
+    ; r10 (v3) : Int
+    ; r11 (v2) : Int
+    ; r12 (v1) : Int
 
 ── format_label ──
 === literals ===
@@ -60,185 +36,137 @@ expression: raw
   T2 = ")"
 
 === main ===
-     0 │   r0 = ref @alert_count
-     1 │   r1 = load r0
-     2 │   r2 = ref @result_label
-     3 │   r3 = load r2
-     4 │   r4 = ref @result_score
-     5 │   r5 = load r4
-     6 │   r6 = ref @threshold
-     7 │   r7 = load r6
-     8 │   r8 = ref @user_id
-     9 │   r9 = load r8
-    10 │   r10 = ref @weight
-    11 │   r11 = load r10
-    13 │   r12 = ref $v1
-    14 │   r13 = load r12
-    15 │   r14 = call #0(r13)
-    16 │   r15 = T0 + r14
-    18 │   r16 = r15 + T1
-    19 │   r17 = ref $v2
-    20 │   r18 = load r17
-    21 │   r19 = call #0(r18)
-    22 │   r20 = r16 + r19
-    24 │   r21 = r20 + T2
-    25 │   return r21
+     1 │   r0 = ref $v1
+     2 │   r1 = load r0
+     3 │   r2 = call #0(r1)
+     4 │   r3 = T0 + r2
+     6 │   r4 = r3 + T1
+     7 │   r5 = ref $v2
+     8 │   r6 = load r5
+     9 │   r7 = call #0(r6)
+    10 │   r8 = r4 + r7
+    12 │   r9 = r8 + T2
+    13 │   return r9
 
-    ; r0 (@alert_count) : Ref<Int>
-    ; r1 (@alert_count) : Int
-    ; r2 (@result_label) : Ref<String>
-    ; r3 (@result_label) : String
-    ; r4 (@result_score) : Ref<Int>
-    ; r5 (@result_score) : Int
-    ; r6 (@threshold) : Ref<Int>
-    ; r7 (@threshold) : Int
-    ; r8 (@user_id) : Ref<Int>
-    ; r9 (@user_id) : Int
-    ; r10 (@weight) : Ref<Int>
-    ; r11 (@weight) : Int
-    ; r12 (v16) : Ref<Int>
-    ; r13 ($profile) : Int
-    ; r14 (to_string(...)) : String
-    ; r15 (v19) : String
-    ; r16 (v21) : String
-    ; r17 (v22) : Ref<Int>
-    ; r18 ($score) : Int
-    ; r19 (to_string(...)) : String
-    ; r20 (v25) : String
-    ; r21 (v27) : String
-    ; r22 (v26) : String
-    ; r23 (v15) : String
-    ; r24 (v2) : Int
-    ; r25 (v20) : String
-    ; r26 (v1) : Int
+    ; r0 (v4) : Ref<Int>
+    ; r1 ($profile) : Int
+    ; r2 (to_string(...)) : String
+    ; r3 (v7) : String
+    ; r4 (v9) : String
+    ; r5 (v10) : Ref<Int>
+    ; r6 ($score) : Int
+    ; r7 (to_string(...)) : String
+    ; r8 (v13) : String
+    ; r9 (v15) : String
+    ; r10 (v3) : String
+    ; r11 (v14) : String
+    ; r12 (v1) : Int
+    ; r13 (v2) : Int
+    ; r14 (v8) : String
 
 ── main ──
 === main ===
-     0 │   r0 = ref @alert_count
+     0 │   r0 = ref @user_id
      1 │   r1 = load r0
-     2 │   r2 = ref @result_label
-     3 │   r3 = load r2
-     4 │   r4 = ref @result_score
-     5 │   r5 = load r4
-     6 │   r6 = ref @threshold
-     7 │   r7 = load r6
-     8 │   r8 = ref @user_id
-     9 │   r9 = load r8
-    10 │   r10 = ref @weight
-    11 │   r11 = load r10
-    12 │   r12 = ref @user_id
-    13 │   r13 = load r12
-    14 │   r14 = call #0(r13)
-    15 │   r15 = ref profile
-    16 │   store r15 = r14
-    17 │   r16 = ref @user_id
-    18 │   r17 = load r16
-    19 │   r18 = call #1(r17)
-    20 │   r19 = ref history
-    21 │   store r19 = r18
-    22 │   r20 = ref profile
-    23 │   r21 = load r20
-    24 │   r22 = ref history
-    25 │   r23 = load r22
-    26 │   r24 = ref @weight
-    27 │   r25 = load r24
-    28 │   r26 = call #2(r21, r23, r25)
-    29 │   r27 = ref score
-    30 │   store r27 = r26
-    31 │   r28 = ref profile
-    32 │   r29 = load r28
-    33 │   r30 = ref score
-    34 │   r31 = load r30
-    35 │   r32 = call #3(r29, r31)
-    36 │   r33 = ref label
-    37 │   store r33 = r32
-    38 │   r34 = ref score
-    39 │   r35 = load r34
-    40 │   r36 = ref @threshold
-    41 │   r37 = load r36
-    42 │   r38 = r35 > r37
-    43 │   r39 = test r38 == true
-    44 │   jump_if r39 then L0 else L1
-    45 │ L0:
-    46 │   r40 = ref @user_id
-    47 │   r41 = load r40
-    48 │   r42 = ref score
-    49 │   r43 = load r42
-    50 │   r44 = call #4(r41, r43)
-    51 │   r45 = ref @alert_count
-    52 │   r46 = load r45
-    54 │   r47 = r46 + 1 (r48)
-    55 │   r49 = ref @alert_count
-    56 │   store r49 = r47
-    57 │   jump L1
-    58 │ L1:
-    59 │   r50 = ref label
-    60 │   r51 = load r50
-    61 │   r52 = ref @result_label
-    62 │   store r52 = r51
-    63 │   r53 = ref score
-    64 │   r54 = load r53
-    65 │   r55 = ref @result_score
-    66 │   store r55 = r54
-    67 │   r56 = ref score
-    68 │   r57 = load r56
-    69 │   return r57
+     2 │   r2 = call #0(r1)
+     3 │   r3 = ref profile
+     4 │   store r3 = r2
+     5 │   r4 = ref @user_id
+     6 │   r5 = load r4
+     7 │   r6 = call #1(r5)
+     8 │   r7 = ref history
+     9 │   store r7 = r6
+    10 │   r8 = ref profile
+    11 │   r9 = load r8
+    12 │   r10 = ref history
+    13 │   r11 = load r10
+    14 │   r12 = ref @weight
+    15 │   r13 = load r12
+    16 │   r14 = call #2(r9, r11, r13)
+    17 │   r15 = ref score
+    18 │   store r15 = r14
+    19 │   r16 = ref profile
+    20 │   r17 = load r16
+    21 │   r18 = ref score
+    22 │   r19 = load r18
+    23 │   r20 = call #3(r17, r19)
+    24 │   r21 = ref label
+    25 │   store r21 = r20
+    26 │   r22 = ref score
+    27 │   r23 = load r22
+    28 │   r24 = ref @threshold
+    29 │   r25 = load r24
+    30 │   r26 = r23 > r25
+    31 │   r27 = test r26 == true
+    32 │   jump_if r27 then L0 else L1
+    33 │ L0:
+    34 │   r28 = ref @user_id
+    35 │   r29 = load r28
+    36 │   r30 = ref score
+    37 │   r31 = load r30
+    38 │   r32 = call #4(r29, r31)
+    39 │   r33 = ref @alert_count
+    40 │   r34 = load r33
+    42 │   r35 = r34 + 1 (r36)
+    43 │   r37 = ref @alert_count
+    44 │   store r37 = r35
+    45 │   jump L1
+    46 │ L1:
+    47 │   r38 = ref label
+    48 │   r39 = load r38
+    49 │   r40 = ref @result_label
+    50 │   store r40 = r39
+    51 │   r41 = ref score
+    52 │   r42 = load r41
+    53 │   r43 = ref @result_score
+    54 │   store r43 = r42
+    55 │   r44 = ref score
+    56 │   r45 = load r44
+    57 │   return r45
 
-    ; r0 (@alert_count) : Ref<Int>
-    ; r1 (@alert_count) : Int
-    ; r2 (@result_label) : Ref<String>
-    ; r3 (@result_label) : String
-    ; r4 (@result_score) : Ref<Int>
-    ; r5 (@result_score) : Int
-    ; r6 (@threshold) : Ref<Int>
-    ; r7 (@threshold) : Int
-    ; r8 (@user_id) : Ref<Int>
-    ; r9 (@user_id) : Int
-    ; r10 (@weight) : Ref<Int>
-    ; r11 (@weight) : Int
-    ; r12 (@user_id) : Ref<Int>
-    ; r13 (v14) : Int
-    ; r14 (fetch_profile(...)) : Int
-    ; r15 (v17) : Ref<Int>
-    ; r16 (@user_id) : Ref<Int>
-    ; r17 (v19) : Int
-    ; r18 (fetch_history(...)) : Int
-    ; r19 (v22) : Ref<Int>
-    ; r20 (v23) : Ref<Int>
-    ; r21 (profile) : Int
-    ; r22 (v25) : Ref<Int>
-    ; r23 (history) : Int
-    ; r24 (@weight) : Ref<Int>
-    ; r25 (v28) : Int
-    ; r26 (compute_score(...)) : Int
-    ; r27 (v31) : Ref<Int>
-    ; r28 (v32) : Ref<Int>
-    ; r29 (profile) : Int
-    ; r30 (v34) : Ref<Int>
+    ; r0 (@user_id) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (fetch_profile(...)) : Int
+    ; r3 (v5) : Ref<Int>
+    ; r4 (@user_id) : Ref<Int>
+    ; r5 (v7) : Int
+    ; r6 (fetch_history(...)) : Int
+    ; r7 (v10) : Ref<Int>
+    ; r8 (v11) : Ref<Int>
+    ; r9 (profile) : Int
+    ; r10 (v13) : Ref<Int>
+    ; r11 (history) : Int
+    ; r12 (@weight) : Ref<Int>
+    ; r13 (v16) : Int
+    ; r14 (compute_score(...)) : Int
+    ; r15 (v19) : Ref<Int>
+    ; r16 (v20) : Ref<Int>
+    ; r17 (profile) : Int
+    ; r18 (v22) : Ref<Int>
+    ; r19 (score) : Int
+    ; r20 (format_label(...)) : String
+    ; r21 (v26) : Ref<String>
+    ; r22 (v27) : Ref<Int>
+    ; r23 (score) : Int
+    ; r24 (@threshold) : Ref<Int>
+    ; r25 (v30) : Int
+    ; r26 (v31) : Bool
+    ; r27 (v32) : Bool
+    ; r28 (@user_id) : Ref<Int>
+    ; r29 (v34) : Int
+    ; r30 (v35) : Ref<Int>
     ; r31 (score) : Int
-    ; r32 (format_label(...)) : String
-    ; r33 (v38) : Ref<String>
-    ; r34 (v39) : Ref<Int>
-    ; r35 (score) : Int
-    ; r36 (@threshold) : Ref<Int>
-    ; r37 (v42) : Int
-    ; r38 (v43) : Bool
-    ; r39 (v44) : Bool
-    ; r40 (@user_id) : Ref<Int>
-    ; r41 (v46) : Int
-    ; r42 (v47) : Ref<Int>
-    ; r43 (score) : Int
-    ; r44 (notify_alert(...)) : Int
-    ; r45 (@alert_count) : Ref<Int>
-    ; r46 (v51) : Int
-    ; r47 (v53) : Int
-    ; r48 (v52) : Int
-    ; r49 (@alert_count) : Ref<Int>
-    ; r50 (v55) : Ref<String>
-    ; r51 (label) : String
-    ; r52 (@result_label) : Ref<String>
-    ; r53 (v58) : Ref<Int>
-    ; r54 (score) : Int
-    ; r55 (@result_score) : Ref<Int>
-    ; r56 (v61) : Ref<Int>
-    ; r57 (score) : Int
+    ; r32 (notify_alert(...)) : Int
+    ; r33 (@alert_count) : Ref<Int>
+    ; r34 (v39) : Int
+    ; r35 (v41) : Int
+    ; r36 (v40) : Int
+    ; r37 (@alert_count) : Ref<Int>
+    ; r38 (v43) : Ref<String>
+    ; r39 (label) : String
+    ; r40 (@result_label) : Ref<String>
+    ; r41 (v46) : Ref<Int>
+    ; r42 (score) : Int
+    ; r43 (@result_score) : Ref<Int>
+    ; r44 (v49) : Ref<Int>
+    ; r45 (score) : Int

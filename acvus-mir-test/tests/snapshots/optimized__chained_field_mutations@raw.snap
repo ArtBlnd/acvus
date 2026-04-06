@@ -3,49 +3,45 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @state
+     0 │   r0 = ref @state.step
      1 │   r1 = load r0
-     2 │   r2 = ref @state.step
-     3 │   r3 = load r2
-     5 │   r4 = r3 + 1 (r5)
-     6 │   r6 = ref @state.step
-     7 │   store r6 = r4
-     8 │   r7 = ref @state.value
+     3 │   r2 = r1 + 1 (r3)
+     4 │   r4 = ref @state.step
+     5 │   store r4 = r2
+     6 │   r5 = ref @state.value
+     7 │   r6 = load r5
+     8 │   r7 = ref @state.multiplier
      9 │   r8 = load r7
-    10 │   r9 = ref @state.multiplier
-    11 │   r10 = load r9
-    12 │   r11 = r8 * r10
-    13 │   r12 = ref @state.value
-    14 │   store r12 = r11
-    15 │   r13 = ref @state.step
+    10 │   r9 = r6 * r8
+    11 │   r10 = ref @state.value
+    12 │   store r10 = r9
+    13 │   r11 = ref @state.step
+    14 │   r12 = load r11
+    15 │   r13 = ref @state.max_steps
     16 │   r14 = load r13
-    17 │   r15 = ref @state.max_steps
-    18 │   r16 = load r15
-    19 │   r17 = r14 >= r16
-    20 │   r18 = ref @state.done
-    21 │   store r18 = r17
-    22 │   r19 = ref @state
-    23 │   r20 = load r19
-    24 │   return r20
+    17 │   r15 = r12 >= r14
+    18 │   r16 = ref @state.done
+    19 │   store r16 = r15
+    20 │   r17 = ref @state
+    21 │   r18 = load r17
+    22 │   return r18
 
-    ; r0 (@state) : Ref<{done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}>
-    ; r1 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
-    ; r2 (@state.step) : Ref<Int>
-    ; r3 (v4) : Int
-    ; r4 (v6) : Int
-    ; r5 (v5) : Int
-    ; r6 (@state) : Ref<Int>
-    ; r7 (@state.value) : Ref<Int>
+    ; r0 (@state.step) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
+    ; r4 (@state) : Ref<Int>
+    ; r5 (@state.value) : Ref<Int>
+    ; r6 (v7) : Int
+    ; r7 (@state.multiplier) : Ref<Int>
     ; r8 (v9) : Int
-    ; r9 (@state.multiplier) : Ref<Int>
-    ; r10 (v11) : Int
-    ; r11 (v12) : Int
-    ; r12 (@state) : Ref<Int>
-    ; r13 (@state.step) : Ref<Int>
+    ; r9 (v10) : Int
+    ; r10 (@state) : Ref<Int>
+    ; r11 (@state.step) : Ref<Int>
+    ; r12 (v13) : Int
+    ; r13 (@state.max_steps) : Ref<Int>
     ; r14 (v15) : Int
-    ; r15 (@state.max_steps) : Ref<Int>
-    ; r16 (v17) : Int
-    ; r17 (v18) : Bool
-    ; r18 (@state) : Ref<Bool>
-    ; r19 (@state) : Ref<{done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}>
-    ; r20 (v21) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r15 (v16) : Bool
+    ; r16 (@state) : Ref<Bool>
+    ; r17 (@state) : Ref<{done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}>
+    ; r18 (v19) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}

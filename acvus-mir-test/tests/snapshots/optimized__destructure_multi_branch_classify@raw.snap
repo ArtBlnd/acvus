@@ -11,98 +11,90 @@ expression: raw
   T5 = ")"
 
 === main ===
-     0 │   r0 = ref @output
+     0 │   r0 = ref @user.age
      1 │   r1 = load r0
-     2 │   r2 = ref @user
-     3 │   r3 = load r2
-     4 │   r4 = ref @user.age
-     5 │   r5 = load r4
-     6 │   r6 = ref age
-     7 │   store r6 = r5
-     9 │   r7 = ref @output
-    10 │   store r7 = T0
-    11 │   r8 = ref age
-    12 │   r9 = load r8
-    14 │   r10 = r9 >= 65 (r11)
-    15 │   r12 = test r10 == true
-    16 │   jump_if r12 then L0 else L1
-    17 │ L0:
-    19 │   r13 = ref @output
-    20 │   store r13 = T1
-    21 │   jump L1
-    22 │ L1:
-    23 │   r14 = ref age
-    24 │   r15 = load r14
-    26 │   r16 = r15 >= 18 (r17)
-    27 │   r18 = test r16 == true
-    28 │   jump_if r18 then L2 else L3
-    29 │ L2:
-    31 │   r19 = ref @output
-    32 │   store r19 = T2
-    33 │   jump L3
-    34 │ L3:
-    35 │   r20 = ref age
-    36 │   r21 = load r20
-    38 │   r22 = r21 < 18 (r23)
-    39 │   r24 = test r22 == true
-    40 │   jump_if r24 then L4 else L5
-    41 │ L4:
-    43 │   r25 = ref @output
-    44 │   store r25 = T3
-    45 │   jump L5
-    46 │ L5:
-    47 │   r26 = ref @user.name
-    48 │   r27 = load r26
-    50 │   r28 = r27 + T4
-    51 │   r29 = ref @output
-    52 │   r30 = load r29
-    53 │   r31 = r28 + r30
-    55 │   r32 = r31 + T5
-    56 │   r33 = ref @output
-    57 │   store r33 = r32
-    58 │   r34 = ref @output
-    59 │   r35 = load r34
-    60 │   return r35
+     2 │   r2 = ref age
+     3 │   store r2 = r1
+     5 │   r3 = ref @output
+     6 │   store r3 = T0
+     7 │   r4 = ref age
+     8 │   r5 = load r4
+    10 │   r6 = r5 >= 65 (r7)
+    11 │   r8 = test r6 == true
+    12 │   jump_if r8 then L0 else L1
+    13 │ L0:
+    15 │   r9 = ref @output
+    16 │   store r9 = T1
+    17 │   jump L1
+    18 │ L1:
+    19 │   r10 = ref age
+    20 │   r11 = load r10
+    22 │   r12 = r11 >= 18 (r13)
+    23 │   r14 = test r12 == true
+    24 │   jump_if r14 then L2 else L3
+    25 │ L2:
+    27 │   r15 = ref @output
+    28 │   store r15 = T2
+    29 │   jump L3
+    30 │ L3:
+    31 │   r16 = ref age
+    32 │   r17 = load r16
+    34 │   r18 = r17 < 18 (r19)
+    35 │   r20 = test r18 == true
+    36 │   jump_if r20 then L4 else L5
+    37 │ L4:
+    39 │   r21 = ref @output
+    40 │   store r21 = T3
+    41 │   jump L5
+    42 │ L5:
+    43 │   r22 = ref @user.name
+    44 │   r23 = load r22
+    46 │   r24 = r23 + T4
+    47 │   r25 = ref @output
+    48 │   r26 = load r25
+    49 │   r27 = r24 + r26
+    51 │   r28 = r27 + T5
+    52 │   r29 = ref @output
+    53 │   store r29 = r28
+    54 │   r30 = ref @output
+    55 │   r31 = load r30
+    56 │   return r31
 
-    ; r0 (@output) : Ref<String>
-    ; r1 (@output) : String
-    ; r2 (@user) : Ref<{age: Int, name: String}>
-    ; r3 (@user) : {age: Int, name: String}
-    ; r4 (@user.age) : Ref<Int>
-    ; r5 (v6) : Int
-    ; r6 (v8) : Ref<Int>
-    ; r7 (@output) : Ref<String>
-    ; r8 (v11) : Ref<Int>
-    ; r9 (age) : Int
-    ; r10 (v14) : Bool
-    ; r11 (v13) : Int
-    ; r12 (v15) : Bool
-    ; r13 (@output) : Ref<String>
-    ; r14 (v18) : Ref<Int>
-    ; r15 (age) : Int
-    ; r16 (v21) : Bool
-    ; r17 (v20) : Int
-    ; r18 (v22) : Bool
-    ; r19 (@output) : Ref<String>
-    ; r20 (v25) : Ref<Int>
-    ; r21 (age) : Int
-    ; r22 (v28) : Bool
-    ; r23 (v27) : Int
-    ; r24 (v29) : Bool
+    ; r0 (@user.age) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Ref<Int>
+    ; r3 (@output) : Ref<String>
+    ; r4 (v7) : Ref<Int>
+    ; r5 (age) : Int
+    ; r6 (v10) : Bool
+    ; r7 (v9) : Int
+    ; r8 (v11) : Bool
+    ; r9 (@output) : Ref<String>
+    ; r10 (v14) : Ref<Int>
+    ; r11 (age) : Int
+    ; r12 (v17) : Bool
+    ; r13 (v16) : Int
+    ; r14 (v18) : Bool
+    ; r15 (@output) : Ref<String>
+    ; r16 (v21) : Ref<Int>
+    ; r17 (age) : Int
+    ; r18 (v24) : Bool
+    ; r19 (v23) : Int
+    ; r20 (v25) : Bool
+    ; r21 (@output) : Ref<String>
+    ; r22 (@user.name) : Ref<String>
+    ; r23 (v29) : String
+    ; r24 (v31) : String
     ; r25 (@output) : Ref<String>
-    ; r26 (@user.name) : Ref<String>
-    ; r27 (v33) : String
-    ; r28 (v35) : String
+    ; r26 (v33) : String
+    ; r27 (v34) : String
+    ; r28 (v36) : String
     ; r29 (@output) : Ref<String>
-    ; r30 (v37) : String
-    ; r31 (v38) : String
-    ; r32 (v40) : String
-    ; r33 (@output) : Ref<String>
-    ; r34 (@output) : Ref<String>
-    ; r35 (v43) : String
-    ; r36 (v9) : String
-    ; r37 (v30) : String
-    ; r38 (v34) : String
-    ; r39 (v39) : String
-    ; r40 (v23) : String
-    ; r41 (v16) : String
+    ; r30 (@output) : Ref<String>
+    ; r31 (v39) : String
+    ; r32 (v12) : String
+    ; r33 (v30) : String
+    ; r34 (v5) : String
+    ; r35 (v26) : String
+    ; r36 (v35) : String
+    ; r37 (v19) : String

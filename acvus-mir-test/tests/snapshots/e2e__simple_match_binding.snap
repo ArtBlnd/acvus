@@ -7,22 +7,19 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @name
-     2 │   r2 = load r1
-     4 │   r3 = ref @name
-     6 │   r4 = T0 + T0
-     7 │   r5 = r4 + r2
-     8 │   return r5
+     2 │   r1 = ref @name
+     3 │   r2 = load r1
+     5 │   r3 = T0 + T0
+     6 │   r4 = r3 + r2
+     7 │   return r4
 
-    ; r0 (v13) : String
+    ; r0 (v11) : String
     ; r1 (@name) : Ref<String>
-    ; r2 (@name) : String
-    ; r3 (@name) : Ref<String>
-    ; r4 (v9) : String
-    ; r5 (v12) : String
-    ; r6 (v7) : Ref<String>
-    ; r7 (x) : String
-    ; r8 (v3) : String
-    ; r9 (v10) : Ref<String>
-    ; r10 (v5) : String
-    ; r11 (v8) : String
+    ; r2 (v3) : String
+    ; r3 (v7) : String
+    ; r4 (v10) : String
+    ; r5 (v6) : String
+    ; r6 (x) : String
+    ; r7 (v5) : Ref<String>
+    ; r8 (v1) : String
+    ; r9 (v8) : Ref<String>

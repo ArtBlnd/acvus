@@ -9,85 +9,82 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = undef
      2 │   r2 = undef
-     3 │   r3 = ref @data
-     4 │   r4 = load r3
-     6 │   r5 = ref @data
-     7 │ L2:
-     9 │   r6 = r4.0
-    11 │   r7 = true (r8) && true (r9)
-    12 │   r10 = r4.1
-    14 │   r11 = r7 && true (r12)
-    15 │   jump_if r11 then L3 else L1
-    16 │ L3:
-    17 │   r13 = r4.0
-    18 │   r14 = r4.1
-    20 │   r15 = T0 + r13
-    23 │   jump L4(0 (r16), T0, r2)
-    24 │ L4(r17: Int, r18: String, r19: Int):
-    25 │   list_step r20, r21 = r14[r17] else L5(r18)
-    26 │ L7:
-    28 │   r22 = call #0(r20)
-    29 │   r23 = T0 + r22
-    30 │   r24 = r18 + r23
-    31 │   jump L4(r21, r24, r20)
-    32 │ L5(r25: String):
-    33 │   jump L6(r25)
-    34 │ L6(r26: String):
-    35 │   r27 = r15 + r26
-    36 │   jump L0(r27, r13, r14, r19)
-    37 │ L1:
-    39 │   jump L0(T0, r0, r1, r2)
-    40 │ L0(r28: String, r29: String, r30: List<Int>, r31: Int):  ; merge_of L2
-    41 │   r32 = T0 + r28
-    42 │   return r32
+     4 │   r3 = ref @data
+     5 │   r4 = load r3
+     6 │ L2:
+     8 │   r5 = r4.0
+    10 │   r6 = true (r7) && true (r8)
+    11 │   r9 = r4.1
+    13 │   r10 = r6 && true (r11)
+    14 │   jump_if r10 then L3 else L1
+    15 │ L3:
+    16 │   r12 = r4.0
+    17 │   r13 = r4.1
+    19 │   r14 = T0 + r12
+    22 │   jump L4(0 (r15), T0, r2)
+    23 │ L4(r16: Int, r17: String, r18: Int):
+    24 │   list_step r19, r20 = r13[r16] else L5(r17)
+    25 │ L7:
+    27 │   r21 = call #0(r19)
+    28 │   r22 = T0 + r21
+    29 │   r23 = r17 + r22
+    30 │   jump L4(r20, r23, r19)
+    31 │ L5(r24: String):
+    32 │   jump L6(r24)
+    33 │ L6(r25: String):
+    34 │   r26 = r14 + r25
+    35 │   jump L0(r26, r12, r13, r18)
+    36 │ L1:
+    38 │   jump L0(T0, r0, r1, r2)
+    39 │ L0(r27: String, r28: String, r29: List<Int>, r30: Int):  ; merge_of L2
+    40 │   r31 = T0 + r27
+    41 │   return r31
 
-    ; r0 (v45) : String
-    ; r1 (v46) : List<Int>
-    ; r2 (v47) : Int
+    ; r0 (v43) : String
+    ; r1 (v44) : List<Int>
+    ; r2 (v45) : Int
     ; r3 (@data) : Ref<(String, List<Int>)>
-    ; r4 (@data) : (String, List<Int>)
-    ; r5 (@data) : Ref<(String, List<Int>)>
-    ; r6 (v7) : String
-    ; r7 (v9) : Bool
+    ; r4 (v3) : (String, List<Int>)
+    ; r5 (v5) : String
+    ; r6 (v7) : Bool
+    ; r7 (v4) : Bool
     ; r8 (v6) : Bool
-    ; r9 (v8) : Bool
-    ; r10 (v10) : List<Int>
-    ; r11 (v12) : Bool
-    ; r12 (v11) : Bool
-    ; r13 (label) : String
-    ; r14 (items) : List<Int>
-    ; r15 (v22) : String
+    ; r9 (v8) : List<Int>
+    ; r10 (v10) : Bool
+    ; r11 (v9) : Bool
+    ; r12 (label) : String
+    ; r13 (items) : List<Int>
+    ; r14 (v20) : String
+    ; r15 (v23) : Int
     ; r16 (v25) : Int
-    ; r17 (v27) : Int
-    ; r18 (v28) : String
-    ; r19 (v50) : Int
-    ; r20 (x) : Int
-    ; r21 (v30) : Int
-    ; r22 (to_string(...)) : String
-    ; r23 (v37) : String
-    ; r24 (v38) : String
-    ; r25 (v39) : String
-    ; r26 (v40) : String
+    ; r17 (v26) : String
+    ; r18 (v48) : Int
+    ; r19 (x) : Int
+    ; r20 (v28) : Int
+    ; r21 (to_string(...)) : String
+    ; r22 (v35) : String
+    ; r23 (v36) : String
+    ; r24 (v37) : String
+    ; r25 (v38) : String
+    ; r26 (v39) : String
     ; r27 (v41) : String
-    ; r28 (v43) : String
-    ; r29 (v51) : String
-    ; r30 (v52) : List<Int>
-    ; r31 (v53) : Int
-    ; r32 (v44) : String
-    ; r33 (v3) : String
-    ; r34 (label) : String
-    ; r35 (items) : List<Int>
-    ; r36 (v5) : (String, List<Int>)
-    ; r37 (v49) : List<Int>
-    ; r38 (v34) : Ref<Int>
-    ; r39 (v15) : Ref<String>
-    ; r40 (v18) : Ref<List<Int>>
-    ; r41 (v33) : String
-    ; r42 (v20) : Ref<String>
-    ; r43 (v42) : String
-    ; r44 (v23) : Ref<List<Int>>
-    ; r45 (v26) : String
-    ; r46 (v48) : String
-    ; r47 (v32) : Ref<Int>
-    ; r48 (x) : Int
-    ; r49 (v19) : String
+    ; r28 (v49) : String
+    ; r29 (v50) : List<Int>
+    ; r30 (v51) : Int
+    ; r31 (v42) : String
+    ; r32 (items) : List<Int>
+    ; r33 (v47) : List<Int>
+    ; r34 (v24) : String
+    ; r35 (v46) : String
+    ; r36 (v30) : Ref<Int>
+    ; r37 (v31) : String
+    ; r38 (v18) : Ref<String>
+    ; r39 (v40) : String
+    ; r40 (v21) : Ref<List<Int>>
+    ; r41 (x) : Int
+    ; r42 (v17) : String
+    ; r43 (v1) : String
+    ; r44 (v32) : Ref<Int>
+    ; r45 (v13) : Ref<String>
+    ; r46 (v16) : Ref<List<Int>>
+    ; r47 (label) : String

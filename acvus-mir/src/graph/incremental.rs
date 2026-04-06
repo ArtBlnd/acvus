@@ -587,11 +587,6 @@ impl IncrementalGraph {
             }
         }
 
-        let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-        for (&qref, outcome) in &outcomes {
-            fn_types.insert(qref, outcome.meta().ty.clone());
-        }
-
         super::infer::InferResult {
             outcomes,
             context_types: {
@@ -607,7 +602,6 @@ impl IncrementalGraph {
                         .collect(),
                 )
             },
-            fn_types: Freeze::new(fn_types),
         }
     }
 }

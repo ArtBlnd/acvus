@@ -2,7 +2,7 @@ use acvus_ast::{
     AstId, BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
-use acvus_utils::{Astr, Interner};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::error::{MirError, MirErrorKind};
@@ -22,6 +22,11 @@ pub type TypeMap = FxHashMap<AstId, Ty>;
 /// Produced by the type checker, consumed by the lowerer.
 pub type CoercionMap = Vec<(AstId, CastKind)>;
 
+/// Maps callee expression AstId → QualifiedRef for direct calls.
+/// Present only when typeck resolved the callee to a named function.
+/// Absent = indirect call (local variable, closure, etc.).
+pub type DirectCallMap = FxHashMap<AstId, QualifiedRef>;
+
 // ── TypeResolution: boundary between TypeChecker and Lowerer ──────────
 
 /// Result of type checking a single script or template.
@@ -33,6 +38,9 @@ pub type CoercionMap = Vec<(AstId, CastKind)>;
 pub struct TypeResolution {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
+    /// Direct call resolution: callee AstId → QualifiedRef.
+    /// Only contains entries for calls resolved to named functions.
+    pub direct_calls: DirectCallMap,
     pub tail_ty: Ty,
     /// Effect of the function body.
     /// Contains reads/writes as QualifiedRef sets.
@@ -45,6 +53,7 @@ impl TypeResolution {
     fn new(
         type_map: TypeMap,
         coercion_map: CoercionMap,
+        direct_calls: DirectCallMap,
         tail_ty: Ty,
         body_effect: Effect,
         extern_params: Vec<(Astr, Ty)>,
@@ -52,6 +61,7 @@ impl TypeResolution {
         Self {
             type_map,
             coercion_map,
+            direct_calls,
             tail_ty,
             body_effect,
             extern_params,
@@ -141,6 +151,8 @@ pub struct TypeChecker<'a, 's> {
     type_map: FxHashMap<AstId, InferTy>,
     /// Accumulated coercion records (span → CastKind).
     coercion_map: CoercionMap,
+    /// Direct call resolutions (callee AstId → QualifiedRef).
+    direct_calls: DirectCallMap,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
@@ -171,6 +183,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             solver,
             type_map: FxHashMap::default(),
             coercion_map: CoercionMap::default(),
+            direct_calls: DirectCallMap::default(),
             errors: Vec::new(),
             analysis: None,
             lambda_stack: Vec::new(),
@@ -256,7 +269,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     pub fn check_template(
         mut self,
         template: &Template,
-    ) -> Result<TypeResolution, Vec<MirError>> {
+    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         self.check_nodes(&template.body);
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -271,13 +284,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
             })
             .collect();
         let body_effect = self.freeze_effect_or_pure(&self.body_effect.clone());
-        Ok(TypeResolution::new(
+        Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
+            self.direct_calls,
             Ty::String,
             body_effect,
             extern_params,
-        ))
+        )))
     }
 
     /// Type check a script. Consumes self, returns TypeResolution.
@@ -286,7 +300,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         mut self,
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
-    ) -> Result<TypeResolution, Vec<MirError>> {
+    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         for stmt in &script.stmts {
             self.check_stmt(stmt);
         }
@@ -327,13 +341,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .collect();
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
         let body_effect = self.freeze_effect_or_pure(&self.body_effect.clone());
-        Ok(TypeResolution::new(
+        Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
+            self.direct_calls,
             frozen_tail,
             body_effect,
             extern_params,
-        ))
+        )))
     }
 
     /// Unify `value_ty` with `expected_ty` in covariant position, recording
@@ -345,16 +360,28 @@ impl<'a, 's> TypeChecker<'a, 's> {
         expected_ty: &InferTy,
         coerce_id: Option<AstId>,
     ) -> Result<(), (InferTy, InferTy)> {
-        self.solver.last_extern_cast = None;
         let result = self.solver.unify_ty(value_ty, expected_ty, Polarity::Covariant, self.registry);
-        if result.is_ok()
+        if let Ok(maybe_fn) = &result
             && let Some(id) = coerce_id
         {
-            // ExternCast takes priority — set by try_coerce_infer inside unify_ty.
-            if let Some(fn_ref) = self.solver.last_extern_cast.take() {
-                let resolved_exp = self.solver.resolve_ty(expected_ty);
-                let ret_ty = self.solver.freeze_ty(&resolved_exp).unwrap_or_else(|_| Ty::error());
-                self.coercion_map.push((id, CastKind::Extern { fn_ref, ret_ty }));
+            if let Some(fn_ref) = maybe_fn {
+                // Build callee_ty: instantiate the cast function's PolyTy and unify
+                // with value_ty (param) and expected_ty (ret) to get concrete types.
+                let callee_ty = if let Some(poly) = self.env.functions.get(fn_ref) {
+                    let inst = self.solver.instantiate_poly(poly);
+                    // Unify param with value_ty, ret with expected_ty to concretize.
+                    if let TyTerm::Fn { params, ret, .. } = &inst {
+                        if let Some(p) = params.first() {
+                            let _ = self.solver.unify_ty(&p.ty, value_ty, Polarity::Invariant, self.registry);
+                        }
+                        let _ = self.solver.unify_ty(ret, expected_ty, Polarity::Invariant, self.registry);
+                    }
+                    let resolved = self.solver.resolve_ty(&inst);
+                    self.solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error())
+                } else {
+                    Ty::error()
+                };
+                self.coercion_map.push((id, CastKind::Extern { fn_ref: *fn_ref, callee_ty }));
             } else {
                 let resolved_val = self.solver.resolve_ty(value_ty);
                 let resolved_exp = self.solver.resolve_ty(expected_ty);
@@ -367,7 +394,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
         }
-        result
+        result.map(|_| ())
     }
 
     fn push_scope(&mut self) {
@@ -1707,6 +1734,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     {
                         return Self::infer_error();
                     }
+                    // Record callee's full Fn type on the callee's AstId.
+                    self.record(func.id(), self.solver.resolve_ty(&fn_ty));
+                    // Record direct call resolution.
+                    self.direct_calls.insert(func.id(), *name);
                     return self.solver.resolve_ty(ret);
                 }
                 _ => {
@@ -1719,9 +1750,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
         }
 
-        // Check local variable with function type.
+        // Check local variable with function type (indirect call).
         if let Some(var_ty) = self.lookup_var(name.name) {
             let resolved = self.solver.resolve_ty(&var_ty);
+            // Record callee's Fn type on the callee's AstId (indirect — no direct_calls entry).
+            self.record(func.id(), resolved.clone());
             let pipe_left_span = pipe_left.map(|e| e.span());
             let pipe_left_id = pipe_left.map(|e| e.id());
             return self.check_callable(
@@ -2249,7 +2282,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         })?;
-        Ok(resolution.type_map)
+        Ok(resolution.type_map.clone())
     }
 
     #[test]

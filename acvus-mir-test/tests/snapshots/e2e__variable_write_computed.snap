@@ -7,33 +7,27 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @a
-     2 │   r2 = load r1
-     3 │   r3 = ref @b
-     4 │   r4 = load r3
-     6 │   r5 = ref @a
-     7 │   r6 = ref @b
-     8 │   r7 = r2 + r4
-    10 │   r8 = T0 + T0
-    11 │   r9 = call #0(r7)
-    12 │   r10 = r8 + r9
-    13 │   return r10
+     2 │   r1 = ref @a
+     3 │   r2 = load r1
+     4 │   r3 = ref @b
+     5 │   r4 = load r3
+     6 │   r5 = r2 + r4
+     8 │   r6 = T0 + T0
+     9 │   r7 = call #0(r5)
+    10 │   r8 = r6 + r7
+    11 │   return r8
 
-    ; r0 (v19) : Int
+    ; r0 (v15) : Int
     ; r1 (@a) : Ref<Int>
-    ; r2 (@a) : Int
+    ; r2 (v3) : Int
     ; r3 (@b) : Ref<Int>
-    ; r4 (@b) : Int
-    ; r5 (@a) : Ref<Int>
-    ; r6 (@b) : Ref<Int>
-    ; r7 (v10) : Int
+    ; r4 (v5) : Int
+    ; r5 (v6) : Int
+    ; r6 (v10) : String
+    ; r7 (to_string(...)) : String
     ; r8 (v14) : String
-    ; r9 (to_string(...)) : String
-    ; r10 (v18) : String
-    ; r11 (v9) : Int
-    ; r12 (v12) : Ref<Int>
-    ; r13 (v15) : Ref<Int>
-    ; r14 (v7) : Int
-    ; r15 (v13) : String
-    ; r16 (v5) : String
-    ; r17 (result) : Int
+    ; r9 (v11) : Ref<Int>
+    ; r10 (v9) : String
+    ; r11 (v1) : String
+    ; r12 (result) : Int
+    ; r13 (v8) : Ref<Int>

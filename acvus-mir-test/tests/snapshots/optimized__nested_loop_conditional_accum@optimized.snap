@@ -5,64 +5,60 @@ expression: opt
 === main ===
      0 │   r0 = undef
      1 │   r1 = undef
-     2 │   r2 = ref @neg_sum
-     3 │   r3 = ref @pos_sum
-     4 │   r4 = ref @matrix
-     5 │   r5 = ref @neg_sum
-     6 │   r6 = ref @pos_sum
-    11 │   r7 = load r4
-    12 │   r8 = load r5
-    13 │   r9 = load r6
-    14 │   jump L0(0 (r10), r8, r9, r0, r1)
-    15 │ L0(r1: Int, r10: Int, r8: Int, r0: List<Int>, r9: Int):
-    16 │   store r2 = 0 (r10)
-    17 │   store r3 = r8
-    18 │   r11 = object {pos: r8, neg: 0 (r10)}
-    19 │   list_step r12, r13 = r7[r1] else L1()
-    20 │ L2:
-    21 │   jump L3(0 (r14), 0 (r10), r8, r9)
-    22 │ L3(r1: Int, r10: Int, r8: Int, r9: Int):
-    23 │   list_step r15, r16 = r12[r1] else L4()
-    24 │ L5:
-    25 │   r17 = r15 > 0 (r18)
-    26 │   r19 = test r17 == true
-    27 │   r1 = r8 + r15
-    28 │   r17 = r15 < 0 (r20)
-    29 │   r21 = test r17 == true
-    30 │   r9 = 0 (r10) + r15
-    31 │   jump_if r19 then L6 else L7(r8)
-    32 │ L6:
-    33 │   jump L7(r1)
-    34 │ L7(r1: Int):
-    35 │   jump_if r21 then L8 else L9(0 (r10))
-    36 │ L8:
-    37 │   jump L9(r9)
-    38 │ L9(r10: Int):
-    39 │   jump L3(r16, 0 (r10), r1, r15)
-    40 │ L4:
-    41 │   jump L0(r13, 0 (r10), r8, r12, r9)
-    42 │ L1:
-    43 │   return r11
+     2 │   r2 = undef
+     3 │   r3 = undef
+     4 │   r4 = ref @neg_sum
+     5 │   r5 = ref @pos_sum
+     6 │   r6 = ref @matrix
+    11 │   r7 = load r6
+    12 │   jump L0(0 (r8), r0, r1, r2, r3)
+    13 │ L0(r0: Int, r1: Int, r3: Int, r2: List<Int>, r8: Int):
+    14 │   r9 = object {pos: r3, neg: r1}
+    15 │   store r4 = r1
+    16 │   store r5 = r3
+    17 │   list_step r10, r11 = r7[r0] else L1()
+    18 │ L2:
+    19 │   jump L3(0 (r12), r1, r3, 0 (r8))
+    20 │ L3(r0: Int, r1: Int, r3: Int, r8: Int):
+    21 │   list_step r13, r14 = r10[r0] else L4()
+    22 │ L5:
+    23 │   r15 = r13 > 0 (r16)
+    24 │   r17 = test r15 == true
+    25 │   r0 = r3 + r13
+    26 │   r15 = r13 < 0 (r18)
+    27 │   r19 = test r15 == true
+    28 │   r8 = r1 + r13
+    29 │   jump_if r17 then L6 else L7(r3)
+    30 │ L6:
+    31 │   jump L7(r0)
+    32 │ L7(r0: Int):
+    33 │   jump_if r19 then L8 else L9(r1)
+    34 │ L8:
+    35 │   jump L9(0 (r8))
+    36 │ L9(r1: Int):
+    37 │   jump L3(r14, r1, r0, r13)
+    38 │ L4:
+    39 │   jump L0(r11, r1, r3, r10, 0 (r8))
+    40 │ L1:
+    41 │   return r9
 
-    ; r0 (v1) : List<Int>
+    ; r0 (v1) : Int
     ; r1 (v2) : Int
-    ; r2 (@neg_sum) : Ref<Int>
-    ; r3 (@pos_sum) : Ref<Int>
-    ; r4 (@matrix) : Ref<List<List<Int>>>
-    ; r5 (@neg_sum) : Ref<Int>
-    ; r6 (@pos_sum) : Ref<Int>
+    ; r2 (v3) : List<Int>
+    ; r3 (v4) : Int
+    ; r4 (@neg_sum) : Ref<Int>
+    ; r5 (@pos_sum) : Ref<Int>
+    ; r6 (@matrix) : Ref<List<List<Int>>>
     ; r7 (@matrix) : List<List<Int>>
-    ; r8 (@neg_sum) : Int
-    ; r9 (@pos_sum) : Int
-    ; r10 (v8) : Int
-    ; r11 (v15) : {neg: Int, pos: Int}
-    ; r12 (v16) : List<Int>
-    ; r13 (v17) : Int
-    ; r14 (v9) : Int
-    ; r15 (v18) : Int
-    ; r16 (v19) : Int
-    ; r17 (v20) : Bool
-    ; r18 (v10) : Int
-    ; r19 (v21) : Bool
-    ; r20 (v11) : Int
-    ; r21 (v22) : Bool
+    ; r8 (v8) : Int
+    ; r9 (v13) : {neg: Int, pos: Int}
+    ; r10 (v14) : List<Int>
+    ; r11 (v15) : Int
+    ; r12 (v9) : Int
+    ; r13 (v16) : Int
+    ; r14 (v17) : Int
+    ; r15 (v18) : Bool
+    ; r16 (v10) : Int
+    ; r17 (v19) : Bool
+    ; r18 (v11) : Int
+    ; r19 (v20) : Bool

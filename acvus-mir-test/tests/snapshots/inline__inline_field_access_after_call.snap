@@ -5,18 +5,10 @@ expression: ir
 === main ===
      0 │   r0 = ref @user
      1 │   r1 = load r0
-     2 │   r2 = ref @user
-     3 │   r3 = load r2
-     4 │   r4 = ref @user
-     5 │   r5 = load r4
-     6 │   r6 = r5.name
-     7 │   return r6
+     2 │   r2 = r1.name
+     3 │   return r2
 
     ; r0 (@user) : Ref<{age: Int, name: String}>
-    ; r1 (@user) : {age: Int, name: String}
-    ; r2 (@user) : Ref<{age: Int, name: String}>
-    ; r3 (@user) : {age: Int, name: String}
-    ; r4 (@user) : Ref<{age: Int, name: String}>
-    ; r5 (v8) : {age: Int, name: String}
-    ; r6 (name) : String
-    ; r7 (make_obj(...)) : {age: Int, name: String}
+    ; r1 (v4) : {age: Int, name: String}
+    ; r2 (name) : String
+    ; r3 (make_obj(...)) : {age: Int, name: String}

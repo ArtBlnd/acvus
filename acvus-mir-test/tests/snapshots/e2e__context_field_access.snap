@@ -6,18 +6,15 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = ref @user
-     1 │   r1 = load r0
-     3 │   r2 = ref @user
-     4 │   r3 = r1.name
-     5 │   r4 = T0 + r3
-     6 │   return r4
+     1 │   r0 = ref @user
+     2 │   r1 = load r0
+     3 │   r2 = r1.name
+     4 │   r3 = T0 + r2
+     5 │   return r3
 
-    ; r0 (@user) : Ref<{age: Int, email: String, name: String}>
-    ; r1 (@user) : {age: Int, email: String, name: String}
-    ; r2 (v7) : Ref<{age: Int, email: String, name: String}>
-    ; r3 (v5) : String
-    ; r4 (v6) : String
-    ; r5 (v3) : String
-    ; r6 (v8) : {age: Int, email: String, name: String}
-    ; r7 (@user.name) : Ref<String>
+    ; r0 (v5) : Ref<{age: Int, email: String, name: String}>
+    ; r1 (v6) : {age: Int, email: String, name: String}
+    ; r2 (v3) : String
+    ; r3 (v4) : String
+    ; r4 (v1) : String
+    ; r5 (@user.name) : Ref<String>

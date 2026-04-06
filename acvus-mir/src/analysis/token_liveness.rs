@@ -17,6 +17,7 @@ use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, ValueId};
 use crate::ty::{Effect, EffectTarget, Ty};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 // ── Domain ──────────────────────────────────────────────────────────
 
@@ -47,31 +48,31 @@ impl SemiLattice for TokenLiveness {
 // ── Analysis ────────────────────────────────────────────────────────
 
 struct TokenLivenessAnalysis<'a> {
-    fn_metadata: &'a FxHashMap<QualifiedRef, Ty>,
     val_types: &'a FxHashMap<ValueId, Ty>,
 }
 
 /// Extract token QualifiedRefs from an instruction's effect.
-fn token_ids_of(
+pub fn token_ids_of(
     kind: &InstKind,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     val_types: &FxHashMap<ValueId, Ty>,
-) -> smallvec::SmallVec<[QualifiedRef; 2]> {
+) -> SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
         InstKind::FunctionCall {
-            callee: Callee::Direct(qref),
+            callee: Callee::Direct(_),
+            callee_ty,
             ..
         }
         | InstKind::Spawn {
-            callee: Callee::Direct(qref),
+            callee: Callee::Direct(_),
+            callee_ty,
             ..
-        } => fn_metadata.get(qref).and_then(|m| match m {
+        } => match callee_ty {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
             } => Some(eff),
             _ => None,
-        }),
+        },
         InstKind::Eval { src, .. } => val_types.get(src).and_then(|ty| match ty {
             Ty::Handle(_, Effect::Resolved(eff)) => Some(eff),
             _ => None,
@@ -80,7 +81,7 @@ fn token_ids_of(
     };
 
     let Some(eff) = effect_set else {
-        return smallvec::SmallVec::new();
+        return SmallVec::new();
     };
 
     eff.reads
@@ -99,7 +100,7 @@ impl<'a> DataflowAnalysis for TokenLivenessAnalysis<'a> {
 
     fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<QualifiedRef, TokenLiveness>) {
         // Gen: if this instruction uses a token, mark it live.
-        for tid in token_ids_of(&inst.kind, self.fn_metadata, self.val_types) {
+        for tid in token_ids_of(&inst.kind, self.val_types) {
             state.set(tid, TokenLiveness::Live);
         }
         // No kill: tokens don't have defs/redefinitions.
@@ -152,7 +153,7 @@ impl TokenLivenessResult {
 }
 
 /// Run token liveness analysis on a CfgBody.
-pub fn analyze(cfg: &CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> TokenLivenessResult {
+pub fn analyze(cfg: &CfgBody) -> TokenLivenessResult {
     if cfg.blocks.is_empty() {
         return TokenLivenessResult {
             live_in: vec![],
@@ -161,7 +162,6 @@ pub fn analyze(cfg: &CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> Toke
     }
 
     let analysis = TokenLivenessAnalysis {
-        fn_metadata,
         val_types: &cfg.val_types,
     };
     let result = backward_analysis(cfg, &analysis);
@@ -260,13 +260,13 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -276,7 +276,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_metadata);
+        let result = analyze(&cfg);
         assert!(result.is_live_in(BlockIdx(0), tid));
     }
 
@@ -285,13 +285,13 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = pure_fn_type(&i, "pure_fn");
-        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -301,7 +301,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_metadata);
+        let result = analyze(&cfg);
         assert!(!result.is_live_in(BlockIdx(0), tid));
     }
 
@@ -310,7 +310,6 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -330,6 +329,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -339,7 +339,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_metadata);
+        let result = analyze(&cfg);
         assert!(result.is_live_out(BlockIdx(0), tid));
         assert!(result.is_live_in(BlockIdx(1), tid));
     }
@@ -351,14 +351,13 @@ mod tests {
         let tid2 = QualifiedRef::root(i.intern("fs"));
         let (qref1, ty1) = io_fn_type_with_token(&i, "io1", tid1);
         let (qref2, ty2) = io_fn_type_with_token(&i, "io2", tid2);
-        let fn_metadata: FxHashMap<QualifiedRef, Ty> =
-            FxHashMap::from_iter([(qref1, ty1), (qref2, ty2)]);
 
         let cfg = make_cfg(
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(qref1),
+                    callee_ty: ty1,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -375,6 +374,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(qref2),
+                    callee_ty: ty2,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -384,7 +384,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_metadata);
+        let result = analyze(&cfg);
         assert!(result.is_live_in(BlockIdx(0), tid1));
         assert!(result.is_live_out(BlockIdx(0), tid2));
         assert!(result.is_live_in(BlockIdx(1), tid2));
@@ -396,7 +396,6 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -419,6 +418,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty.clone(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -435,6 +435,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(2),
                     callee: Callee::Direct(qref),
+                    callee_ty: ty,
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -453,7 +454,7 @@ mod tests {
             5,
         );
 
-        let result = analyze(&cfg, &fn_metadata);
+        let result = analyze(&cfg);
         assert!(result.is_live_out(BlockIdx(0), tid));
         assert!(!result.is_live_in(BlockIdx(3), tid));
     }

@@ -9,74 +9,68 @@ expression: ir
   T3 = "other"
 
 === main ===
-     0 │   r0 = ref @a
-     1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
-     5 │   r4 = ref @a
-     6 │   r5 = ref @b
-     7 │   r6 = tuple (r1, r3)
-     8 │ L2:
-    10 │   r7 = r6.0
-    11 │   r8 = test r7 == 0
-    12 │   r9 = true (r10) && r8
-    13 │   r11 = r6.1
-    14 │   r12 = test r11 == 1
-    15 │   r13 = r9 && r12
-    16 │   jump_if r13 then L4 else L3
-    17 │ L4:
-    18 │   r14 = r6.0
-    19 │   r15 = r6.1
-    22 │   r16 = T0 + T1
-    23 │   jump L0(r16)
-    24 │ L3:
-    26 │   r17 = r6.0
-    27 │   r18 = test r17 == 1
-    28 │   r19 = true (r20) && r18
-    29 │   jump_if r19 then L5 else L1
-    30 │ L5:
-    31 │   r21 = r6.0
-    34 │   r22 = T0 + T2
-    35 │   jump L0(r22)
-    36 │ L1:
-    39 │   r23 = T0 + T3
-    40 │   jump L0(r23)
-    41 │ L0(r24: String):  ; merge_of L2
-    42 │   r25 = T0 + r24
-    43 │   return r25
+     1 │   r0 = ref @a
+     2 │   r1 = load r0
+     3 │   r2 = ref @b
+     4 │   r3 = load r2
+     5 │   r4 = tuple (r1, r3)
+     6 │ L2:
+     8 │   r5 = r4.0
+     9 │   r6 = test r5 == 0
+    10 │   r7 = true (r8) && r6
+    11 │   r9 = r4.1
+    12 │   r10 = test r9 == 1
+    13 │   r11 = r7 && r10
+    14 │   jump_if r11 then L4 else L3
+    15 │ L4:
+    16 │   r12 = r4.0
+    17 │   r13 = r4.1
+    20 │   r14 = T0 + T1
+    21 │   jump L0(r14)
+    22 │ L3:
+    24 │   r15 = r4.0
+    25 │   r16 = test r15 == 1
+    26 │   r17 = true (r18) && r16
+    27 │   jump_if r17 then L5 else L1
+    28 │ L5:
+    29 │   r19 = r4.0
+    32 │   r20 = T0 + T2
+    33 │   jump L0(r20)
+    34 │ L1:
+    37 │   r21 = T0 + T3
+    38 │   jump L0(r21)
+    39 │ L0(r22: String):  ; merge_of L2
+    40 │   r23 = T0 + r22
+    41 │   return r23
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
+    ; r1 (v3) : Int
     ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
-    ; r4 (@a) : Ref<Int>
-    ; r5 (@b) : Ref<Int>
-    ; r6 (v10) : (Int, Int)
-    ; r7 (v12) : Int
-    ; r8 (v13) : Bool
-    ; r9 (v14) : Bool
-    ; r10 (v11) : Bool
-    ; r11 (v15) : Int
-    ; r12 (v16) : Bool
-    ; r13 (v17) : Bool
-    ; r14 (v18) : Int
-    ; r15 (v19) : Int
-    ; r16 (v22) : String
-    ; r17 (v24) : Int
-    ; r18 (v25) : Bool
-    ; r19 (v26) : Bool
-    ; r20 (v23) : Bool
-    ; r21 (v27) : Int
+    ; r3 (v5) : Int
+    ; r4 (v6) : (Int, Int)
+    ; r5 (v8) : Int
+    ; r6 (v9) : Bool
+    ; r7 (v10) : Bool
+    ; r8 (v7) : Bool
+    ; r9 (v11) : Int
+    ; r10 (v12) : Bool
+    ; r11 (v13) : Bool
+    ; r12 (v14) : Int
+    ; r13 (v15) : Int
+    ; r14 (v18) : String
+    ; r15 (v20) : Int
+    ; r16 (v21) : Bool
+    ; r17 (v22) : Bool
+    ; r18 (v19) : Bool
+    ; r19 (v23) : Int
+    ; r20 (v26) : String
+    ; r21 (v29) : String
     ; r22 (v30) : String
-    ; r23 (v33) : String
-    ; r24 (v34) : String
-    ; r25 (v35) : String
-    ; r26 (v9) : Int
-    ; r27 (v28) : String
-    ; r28 (v31) : String
-    ; r29 (v20) : String
-    ; r30 (v21) : String
-    ; r31 (v5) : String
-    ; r32 (v7) : Int
-    ; r33 (v29) : String
-    ; r34 (v32) : String
+    ; r23 (v31) : String
+    ; r24 (v25) : String
+    ; r25 (v28) : String
+    ; r26 (v17) : String
+    ; r27 (v1) : String
+    ; r28 (v24) : String
+    ; r29 (v27) : String
+    ; r30 (v16) : String

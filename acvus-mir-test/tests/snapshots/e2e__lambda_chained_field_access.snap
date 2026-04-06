@@ -8,34 +8,31 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @users
-     2 │   r2 = load r1
-     4 │   r3 = ref @users
-     5 │   r4 = call #0(r2)
-     6 │   r5 = closure L0 []
-     7 │   r6 = call #1(r4, r5)
-     9 │   r7 = T0 + T0
-    11 │   r8 = call #2(r6, T1)
-    12 │   r9 = r7 + r8
-    13 │   return r9
+     2 │   r1 = ref @users
+     3 │   r2 = load r1
+     4 │   r3 = call #0(r2)
+     5 │   r4 = closure L0 []
+     6 │   r5 = call #1(r3, r4)
+     8 │   r6 = T0 + T0
+    10 │   r7 = call #2(r5, T1)
+    11 │   r8 = r6 + r7
+    12 │   return r8
 
-    ; r0 (v18) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r0 (v16) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r1 (@users) : Ref<List<{address: {city: String}}>>
-    ; r2 (@users) : List<{address: {city: String}}>
-    ; r3 (@users) : Ref<List<{address: {city: String}}>>
-    ; r4 (iter(...)) : Iterator<{address: {city: String}}, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r5 (v7) : Fn({address: {city: String}}) -> String
-    ; r6 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r7 (v12) : String
-    ; r8 (join(...)) : String
-    ; r9 (v17) : String
-    ; r10 (v3) : String
-    ; r11 (v11) : String
+    ; r2 (v3) : List<{address: {city: String}}>
+    ; r3 (iter(...)) : Iterator<{address: {city: String}}, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r4 (v5) : Fn({address: {city: String}}) -> String
+    ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r6 (v10) : String
+    ; r7 (join(...)) : String
+    ; r8 (v15) : String
+    ; r9 (v11) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
+    ; r10 (v9) : String
+    ; r11 (v1) : String
     ; r12 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r13 (v15) : String
-    ; r14 (v10) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
-    ; r15 (v13) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
-    ; r16 (v5) : List<{address: {city: String}}>
+    ; r13 (v13) : String
+    ; r14 (v8) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

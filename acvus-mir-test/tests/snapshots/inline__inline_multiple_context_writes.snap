@@ -3,40 +3,24 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @a
-     1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
-     4 │   r4 = ref @a
-     5 │   r5 = load r4
-     6 │   r6 = ref @b
-     7 │   r7 = load r6
-     9 │   r8 = ref @a
-    10 │   store r8 = 1 (r9)
-    12 │   r10 = ref @b
-    13 │   store r10 = 2 (r11)
-    14 │   r12 = ref @a
-    15 │   r13 = load r12
-    16 │   r14 = ref @b
-    17 │   r15 = load r14
-    18 │   r16 = r13 + r15
-    19 │   return r16
+     1 │   r0 = ref @a
+     2 │   store r0 = 1 (r1)
+     4 │   r2 = ref @b
+     5 │   store r2 = 2 (r3)
+     6 │   r4 = ref @a
+     7 │   r5 = load r4
+     8 │   r6 = ref @b
+     9 │   r7 = load r6
+    10 │   r8 = r5 + r7
+    11 │   return r8
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
+    ; r1 (v2) : Int
     ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
+    ; r3 (v4) : Int
     ; r4 (@a) : Ref<Int>
-    ; r5 (@a) : Int
+    ; r5 (v7) : Int
     ; r6 (@b) : Ref<Int>
-    ; r7 (@b) : Int
-    ; r8 (@a) : Ref<Int>
-    ; r9 (v10) : Int
-    ; r10 (@b) : Ref<Int>
-    ; r11 (v12) : Int
-    ; r12 (@a) : Ref<Int>
-    ; r13 (v15) : Int
-    ; r14 (@b) : Ref<Int>
-    ; r15 (v17) : Int
-    ; r16 (v18) : Int
-    ; r17 (init(...)) : Int
+    ; r7 (v9) : Int
+    ; r8 (v10) : Int
+    ; r9 (init(...)) : Int

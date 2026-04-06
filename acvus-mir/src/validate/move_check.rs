@@ -531,6 +531,7 @@ fn process_inst(
             args,
             context_uses,
             context_defs,
+            ..
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
@@ -792,6 +793,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v1,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v0],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -799,6 +801,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v2,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v0],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -829,6 +832,7 @@ mod tests {
             vec![inst(InstKind::FunctionCall {
                 dst: v1,
                 callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                callee_ty: Ty::error(),
                 args: vec![v0],
                 context_uses: vec![],
                 context_defs: vec![],
@@ -892,6 +896,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v1],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -922,6 +927,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v5,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v3],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -983,6 +989,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v3,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v1],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -1001,6 +1008,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee_ty: Ty::error(),
                     args: vec![v2],
                     context_uses: vec![],
                     context_defs: vec![],

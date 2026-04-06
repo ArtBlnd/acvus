@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 195
 expression: opt
 ---
 === literals ===
@@ -11,87 +10,86 @@ expression: opt
   T4 = " total:"
 
 === main ===
-     0 │   r0 = ref @shipping
-     1 │   r1 = ref @receipt_out
+     0 │   r0 = undef
+     1 │   r1 = ref @shipping
      2 │   r2 = ref @default_ship
-     3 │   r3 = ref @total_out
-     4 │   r4 = ref @free_ship_min
-     5 │   r5 = ref @item_count
-     6 │   r6 = ref @shipping
-     7 │   r7 = ref @tax_rate
-     9 │   r8 = load r5
-    10 │   r9 = r8 * 100 (r10)
-    11 │   r10 = load r3
-    12 │   r8 = r9 * 100 (r10)
-    14 │   r11 = r8 / 100 (r10)
-    15 │   r10 = r9 - r11
-    16 │   r8 = load r7
-    17 │   r12 = 100 (r10) * r8
-    19 │   r8 = r12 / 100 (r10)
-    20 │   r10 = r9 - r11
-    21 │   r12 = 100 (r10) + r8
-    22 │   r10 = load r4
-    23 │   r13 = r12 > 100 (r10)
-    24 │   r14 = test r13 == true
-    26 │   r13 = r12 <= 100 (r10)
-    27 │   r15 = test r13 == true
-    29 │   r16 = load r1
-    30 │   r17 = T2 + T1
-    35 │   r3 = ref @total_out
-    36 │   r1 = ref @receipt_out
-    37 │   r10 = load r2
-    38 │   r18 = load r6
-    39 │   jump_if r14 then L0 else L1(r18)
-    40 │ L0:
-    41 │   jump L1(0 (r19))
-    42 │ L1(r19: Int):
-    43 │   jump_if r15 then L2 else L3(0 (r19))
-    44 │ L2:
-    45 │   jump L3(100 (r10))
-    46 │ L3(r10: Int):
-    47 │   store r0 = 100 (r10)
-    48 │   r19 = r12 + 100 (r10)
-    49 │   r20 = call #0(r9)
-    50 │   r21 = r17 + r20
-    51 │   r17 = r21 + T1
-    52 │   r22 = call #0(r11)
-    53 │   r20 = r17 + T1
-    54 │   r22 = r20 + T2
-    55 │   r16 = call #0(r8)
-    56 │   r17 = T1 + T2
-    57 │   r22 = r17 + T3
-    58 │   r16 = call #0(100 (r10))
-    59 │   r17 = T1 + T2
-    60 │   r22 = r17 + T4
-    61 │   r16 = call #0(0 (r19))
-    62 │   r17 = T1 + T2
-    63 │   store r3 = 0 (r19)
-    64 │   store r1 = r17
-    65 │   r10 = call #1(r17)
-    66 │   return 0 (r19)
+     4 │   r3 = load r2
+     5 │   r4 = r3 * 100 (r5)
+     6 │   r2 = ref @default_ship
+     7 │   r5 = load r2
+     8 │   r3 = r4 * 100 (r5)
+    10 │   r6 = r3 / 100 (r5)
+    11 │   r5 = r4 - r6
+    12 │   r2 = ref @default_ship
+    13 │   r3 = load r2
+    14 │   r7 = 100 (r5) * r3
+    16 │   r3 = r7 / 100 (r5)
+    17 │   r5 = r4 - r6
+    18 │   r7 = 100 (r5) + r3
+    19 │   r2 = ref @default_ship
+    20 │   r5 = load r2
+    21 │   r8 = r7 > 100 (r5)
+    22 │   r9 = test r8 == true
+    24 │   r8 = r7 <= 100 (r5)
+    25 │   r10 = test r8 == true
+    26 │   r2 = ref @default_ship
+    27 │   r11 = ref @customer
+    29 │   r12 = call #0(r4)
+    31 │   r13 = call #0(r6)
+    33 │   r14 = call #0(r3)
+    36 │   r15 = ref @total_out
+    37 │   r16 = ref @receipt_out
+    38 │   jump_if r9 then L0 else L1(r0)
+    39 │ L0:
+    40 │   jump L1(0 (r17))
+    41 │ L1(r0: Int):
+    42 │   jump_if r10 then L2 else L3(r0)
+    43 │ L2:
+    44 │   r0 = load r2
+    45 │   jump L3(r0)
+    46 │ L3(r0: Int):
+    47 │   r5 = r7 + r0
+    48 │   r18 = load r11
+    49 │   r19 = r18 + T0
+    50 │   r20 = r19 + r12
+    51 │   r12 = T0 + T1
+    52 │   r20 = r12 + r13
+    53 │   r12 = T0 + T2
+    54 │   r20 = r12 + r14
+    55 │   r12 = T0 + T3
+    56 │   r20 = call #0(r0)
+    57 │   r21 = r12 + T0
+    58 │   r20 = T1 + T4
+    59 │   r12 = call #0(100 (r5))
+    60 │   r21 = T0 + r12
+    61 │   r3 = call #1(T1)
+    62 │   store r16 = T1
+    63 │   store r1 = r0
+    64 │   store r15 = 100 (r5)
+    65 │   return 100 (r5)
 
-    ; r0 (@shipping) : Ref<Int>
-    ; r1 (@receipt_out) : Ref<String>
+    ; r0 (@default_ship) : Int
+    ; r1 (@shipping) : Ref<Int>
     ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@total_out) : Ref<Int>
-    ; r4 (@free_ship_min) : Ref<Int>
-    ; r5 (@item_count) : Ref<Int>
-    ; r6 (@shipping) : Ref<Int>
-    ; r7 (@tax_rate) : Ref<Int>
-    ; r8 (@tax_rate) : Int
-    ; r9 (v11) : Int
-    ; r10 (send_email(...)) : Int
-    ; r11 (v12) : Int
-    ; r12 (v13) : Int
-    ; r13 (v14) : Bool
-    ; r14 (v15) : Bool
-    ; r15 (v17) : Bool
-    ; r16 (to_string(...)) : String
-    ; r17 (v20) : String
-    ; r18 (@shipping) : Int
-    ; r19 (v16) : Int
+    ; r3 (send_email(...)) : Int
+    ; r4 (v6) : Int
+    ; r5 (@free_ship_min) : Int
+    ; r6 (v7) : Int
+    ; r7 (v8) : Int
+    ; r8 (v9) : Bool
+    ; r9 (v10) : Bool
+    ; r10 (v12) : Bool
+    ; r11 (@customer) : Ref<String>
+    ; r12 (to_string(...)) : String
+    ; r13 (to_string(...)) : String
+    ; r14 (to_string(...)) : String
+    ; r15 (@total_out) : Ref<Int>
+    ; r16 (@receipt_out) : Ref<String>
+    ; r17 (v11) : Int
+    ; r18 (@customer) : String
+    ; r19 (v25) : String
     ; r20 (to_string(...)) : String
-    ; r21 (v25) : String
-    ; r22 (to_string(...)) : String
-    ; r23 (v22) : String
-    ; r24 (v21) : String
+    ; r21 (v16) : String
+    ; r22 (v18) : String
+    ; r23 (v21) : String
+    ; r24 (v20) : String

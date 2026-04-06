@@ -5,15 +5,12 @@ expression: ir
 === main ===
      0 │   r0 = ref @obj
      1 │   r1 = load r0
-     2 │   r2 = ref @obj
-     3 │   r3 = r1.a.b
-     4 │   r4 = call #0(r3)
-     5 │   return r4
+     2 │   r2 = r1.a.b
+     3 │   r3 = call #0(r2)
+     4 │   return r3
 
-    ; r0 (@obj) : Ref<{a: {b: Int}}>
-    ; r1 (@obj) : {a: {b: Int}}
-    ; r2 (v6) : Ref<{a: {b: Int}}>
-    ; r3 (v4) : Int
-    ; r4 (to_string(...)) : String
-    ; r5 (@obj.a.b) : Ref<Int>
-    ; r6 (v7) : {a: {b: Int}}
+    ; r0 (v4) : Ref<{a: {b: Int}}>
+    ; r1 (v5) : {a: {b: Int}}
+    ; r2 (v2) : Int
+    ; r3 (to_string(...)) : String
+    ; r4 (@obj.a.b) : Ref<Int>

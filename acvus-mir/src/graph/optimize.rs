@@ -4,9 +4,6 @@
 //!
 //! Pass 1 (cross-module): SSA → Inline
 //! Pass 2 (per-module):   SpawnSplit → CodeMotion → Reorder → SSA → RegColor → Validate
-//!
-//! Each body is promoted to CfgBody once, all passes run, then demoted once.
-//! Validate runs on MirBody (after demote) to catch demotion bugs.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -28,32 +25,25 @@ pub struct OptimizeResult {
 }
 
 /// Run the full optimization pipeline.
-///
-/// `modules`: lowered MIR modules from Phase 3 (lower).
-/// `fn_metadata`: QualifiedRef → Ty mapping for all functions.
-/// `recursive_fns`: set of functions involved in recursion (SCC).
 pub fn optimize(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
-    optimize_inner(modules, fn_metadata, context_types, recursive_fns, false)
+    optimize_inner(modules, context_types, recursive_fns, false)
 }
 
 /// Optimize with untyped scalar register coloring (for kovac).
 pub fn optimize_untyped(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
-    optimize_inner(modules, fn_metadata, context_types, recursive_fns, true)
+    optimize_inner(modules, context_types, recursive_fns, true)
 }
 
 fn optimize_inner(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
     untyped_scalars: bool,
@@ -62,29 +52,26 @@ fn optimize_inner(
 
     let mut ssa_modules = modules;
     for module in ssa_modules.values_mut() {
-        run_pass1_body(&mut module.main, fn_metadata, context_types);
+        run_pass1_body(&mut module.main, context_types);
         for closure in module.closures.values_mut() {
-            run_pass1_body(closure, fn_metadata, context_types);
+            run_pass1_body(closure, context_types);
         }
     }
 
     let inlined = inliner::inline(&ssa_modules, recursive_fns);
 
     // ── Pass 2: Optimize + Validate (per-module, direct calls) ──────
-    //
-    // promote once → all passes on CfgBody → demote once → validate on MirBody.
 
     let mut result_modules = FxHashMap::default();
     let mut all_errors = Vec::new();
 
     for (qref, mut module) in inlined.modules {
-        run_pass2_body(&mut module.main, fn_metadata, context_types, untyped_scalars);
+        run_pass2_body(&mut module.main, context_types, untyped_scalars);
         for closure in module.closures.values_mut() {
-            run_pass2_body(closure, fn_metadata, context_types, untyped_scalars);
+            run_pass2_body(closure, context_types, untyped_scalars);
         }
 
-        // Validate on MirBody — after demote, catches demotion bugs.
-        let errors = validate::validate(&module, fn_metadata, &FxHashMap::default());
+        let errors = validate::validate(&module, &FxHashMap::default());
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
@@ -101,39 +88,36 @@ fn optimize_inner(
 /// Pass 1: SROA → SSA → DSE → DCE on a single body.
 fn run_pass1_body(
     body: &mut crate::ir::MirBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
 ) {
     optimize::sroa::run_body(body, context_types);
     let mut cfg = cfg::promote(std::mem::take(body));
-    optimize::ssa_pass::run(&mut cfg, fn_metadata);
-    optimize::dse::run(&mut cfg, fn_metadata);
-    optimize::dce::run(&mut cfg, fn_metadata);
+    optimize::ssa_pass::run(&mut cfg);
+    optimize::dse::run(&mut cfg);
+    optimize::dce::run(&mut cfg);
     *body = cfg::demote(cfg);
 }
 
 /// Pass 2: Full optimization pipeline on a single body.
-/// SROA on MirBody, then promote once → all passes on CfgBody → demote once.
 fn run_pass2_body(
     body: &mut crate::ir::MirBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     untyped_scalars: bool,
 ) {
     optimize::sroa::run_body(body, context_types);
     let mut cfg = cfg::promote(std::mem::take(body));
-    run_pass2(&mut cfg, fn_metadata, untyped_scalars);
+    run_pass2(&mut cfg, untyped_scalars);
     *body = cfg::demote(cfg);
 }
 
-/// Pass 2 pipeline on CfgBody: SpawnSplit → SSA → DSE → CodeMotion → Reorder → RegColor.
-fn run_pass2(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>, untyped_scalars: bool) {
-    optimize::spawn_split::run(cfg, fn_metadata);
-    optimize::ssa_pass::run(cfg, fn_metadata);
-    optimize::dse::run(cfg, fn_metadata);
-    optimize::dce::run(cfg, fn_metadata);
-    optimize::code_motion::run(cfg, fn_metadata);
-    optimize::reorder::run(cfg, fn_metadata);
+/// Pass 2 pipeline on CfgBody.
+fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
+    optimize::spawn_split::run(cfg);
+    optimize::ssa_pass::run(cfg);
+    optimize::dse::run(cfg);
+    optimize::dce::run(cfg);
+    optimize::code_motion::run(cfg);
+    optimize::reorder::run(cfg);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
     if untyped_scalars {

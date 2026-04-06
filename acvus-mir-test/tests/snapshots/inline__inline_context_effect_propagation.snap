@@ -5,26 +5,18 @@ expression: ir
 === main ===
      0 │   r0 = ref @counter
      1 │   r1 = load r0
-     2 │   r2 = ref @counter
-     3 │   r3 = load r2
+     3 │   r2 = r1 + 1 (r3)
      4 │   r4 = ref @counter
-     5 │   r5 = load r4
-     7 │   r6 = r5 + 1 (r7)
-     8 │   r8 = ref @counter
-     9 │   store r8 = r6
-    10 │   r9 = ref @counter
-    11 │   r10 = load r9
-    12 │   return r10
+     5 │   store r4 = r2
+     6 │   r5 = ref @counter
+     7 │   r6 = load r5
+     8 │   return r6
 
     ; r0 (@counter) : Ref<Int>
-    ; r1 (@counter) : Int
-    ; r2 (@counter) : Ref<Int>
-    ; r3 (@counter) : Int
+    ; r1 (v3) : Int
+    ; r2 (v5) : Int
+    ; r3 (v4) : Int
     ; r4 (@counter) : Ref<Int>
-    ; r5 (v7) : Int
-    ; r6 (v9) : Int
-    ; r7 (v8) : Int
-    ; r8 (@counter) : Ref<Int>
-    ; r9 (@counter) : Ref<Int>
-    ; r10 (v12) : Int
-    ; r11 (inc_and_get(...)) : Int
+    ; r5 (@counter) : Ref<Int>
+    ; r6 (v8) : Int
+    ; r7 (inc_and_get(...)) : Int

@@ -6,26 +6,20 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = ref @a
-     1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
-     5 │   r4 = ref @a
-     6 │   r5 = ref @b
-     7 │   r6 = r1 + r3
-     8 │   r7 = call #0(r6)
-     9 │   r8 = T0 + r7
-    10 │   return r8
+     1 │   r0 = ref @a
+     2 │   r1 = load r0
+     3 │   r2 = ref @b
+     4 │   r3 = load r2
+     5 │   r4 = r1 + r3
+     6 │   r5 = call #0(r4)
+     7 │   r6 = T0 + r5
+     8 │   return r6
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
+    ; r1 (v3) : Int
     ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
-    ; r4 (@a) : Ref<Int>
-    ; r5 (@b) : Ref<Int>
-    ; r6 (v10) : Int
-    ; r7 (to_string(...)) : String
-    ; r8 (v12) : String
-    ; r9 (v7) : Int
-    ; r10 (v9) : Int
-    ; r11 (v5) : String
+    ; r3 (v5) : Int
+    ; r4 (v6) : Int
+    ; r5 (to_string(...)) : String
+    ; r6 (v8) : String
+    ; r7 (v1) : String

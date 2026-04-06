@@ -7,60 +7,44 @@ expression: raw
      1 │   r1 = load r0
      2 │   r2 = ref @b
      3 │   r3 = load r2
-     4 │   r4 = ref @output
-     5 │   r5 = load r4
-     6 │   r6 = ref @scale
-     7 │   r7 = load r6
-     8 │   r8 = ref @a
-     9 │   r9 = load r8
-    10 │   r10 = ref @b
-    11 │   r11 = load r10
-    12 │   r12 = r9 + r11
-    13 │   r13 = ref sum
-    14 │   store r13 = r12
-    15 │   r14 = ref sum
-    16 │   r15 = load r14
-    17 │   r16 = ref @scale
-    18 │   r17 = load r16
-    19 │   r18 = r15 * r17
-    20 │   r19 = ref scaled
-    21 │   store r19 = r18
-    22 │   r20 = ref scaled
-    23 │   r21 = load r20
-    24 │   r22 = ref @a
-    25 │   r23 = load r22
-    26 │   r24 = r21 + r23
-    27 │   r25 = ref @output
-    28 │   store r25 = r24
-    29 │   r26 = ref @output
-    30 │   r27 = load r26
-    31 │   return r27
+     4 │   r4 = r1 + r3
+     5 │   r5 = ref sum
+     6 │   store r5 = r4
+     7 │   r6 = ref sum
+     8 │   r7 = load r6
+     9 │   r8 = ref @scale
+    10 │   r9 = load r8
+    11 │   r10 = r7 * r9
+    12 │   r11 = ref scaled
+    13 │   store r11 = r10
+    14 │   r12 = ref scaled
+    15 │   r13 = load r12
+    16 │   r14 = ref @a
+    17 │   r15 = load r14
+    18 │   r16 = r13 + r15
+    19 │   r17 = ref @output
+    20 │   store r17 = r16
+    21 │   r18 = ref @output
+    22 │   r19 = load r18
+    23 │   return r19
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
+    ; r1 (v2) : Int
     ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
-    ; r4 (@output) : Ref<Int>
-    ; r5 (@output) : Int
-    ; r6 (@scale) : Ref<Int>
-    ; r7 (@scale) : Int
-    ; r8 (@a) : Ref<Int>
-    ; r9 (v10) : Int
-    ; r10 (@b) : Ref<Int>
-    ; r11 (v12) : Int
-    ; r12 (v13) : Int
-    ; r13 (v15) : Ref<Int>
-    ; r14 (v16) : Ref<Int>
-    ; r15 (sum) : Int
-    ; r16 (@scale) : Ref<Int>
-    ; r17 (v19) : Int
-    ; r18 (v20) : Int
-    ; r19 (v22) : Ref<Int>
-    ; r20 (v23) : Ref<Int>
-    ; r21 (scaled) : Int
-    ; r22 (@a) : Ref<Int>
-    ; r23 (v26) : Int
-    ; r24 (v27) : Int
-    ; r25 (@output) : Ref<Int>
-    ; r26 (@output) : Ref<Int>
-    ; r27 (v30) : Int
+    ; r3 (v4) : Int
+    ; r4 (v5) : Int
+    ; r5 (v7) : Ref<Int>
+    ; r6 (v8) : Ref<Int>
+    ; r7 (sum) : Int
+    ; r8 (@scale) : Ref<Int>
+    ; r9 (v11) : Int
+    ; r10 (v12) : Int
+    ; r11 (v14) : Ref<Int>
+    ; r12 (v15) : Ref<Int>
+    ; r13 (scaled) : Int
+    ; r14 (@a) : Ref<Int>
+    ; r15 (v18) : Int
+    ; r16 (v19) : Int
+    ; r17 (@output) : Ref<Int>
+    ; r18 (@output) : Ref<Int>
+    ; r19 (v22) : Int

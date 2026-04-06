@@ -7,45 +7,42 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @items
-     2 │   r2 = load r1
-     4 │   r3 = ref @items
-     5 │   r4 = call #0(r2)
-     6 │   r5 = closure L0 []
-     7 │   r6 = call #1(r4, r5)
-     8 │   r7 = closure L1 []
-     9 │   r8 = call #2(r6, r7)
-    10 │   r9 = closure L2 []
-    11 │   r10 = call #2(r8, r9)
-    12 │   r11 = call #3(r10)
-    14 │   r12 = T0 + T0
-    15 │   r13 = call #4(r11)
-    16 │   r14 = call #5(r13)
-    17 │   r15 = r12 + r14
-    18 │   return r15
+     2 │   r1 = ref @items
+     3 │   r2 = load r1
+     4 │   r3 = call #0(r2)
+     5 │   r4 = closure L0 []
+     6 │   r5 = call #1(r3, r4)
+     7 │   r6 = closure L1 []
+     8 │   r7 = call #2(r5, r6)
+     9 │   r8 = closure L2 []
+    10 │   r9 = call #2(r7, r8)
+    11 │   r10 = call #3(r9)
+    13 │   r11 = T0 + T0
+    14 │   r12 = call #4(r10)
+    15 │   r13 = call #5(r12)
+    16 │   r14 = r11 + r13
+    17 │   return r14
 
-    ; r0 (v23) : List<Int>
+    ; r0 (v21) : List<Int>
     ; r1 (@items) : Ref<List<Int>>
-    ; r2 (@items) : List<Int>
-    ; r3 (@items) : Ref<List<Int>>
-    ; r4 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r5 (v7) : Fn(Int) -> Bool
-    ; r6 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r7 (v9) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r9 (v11) : Fn(Int) -> Int
-    ; r10 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r11 (collect(...)) : List<Int>
-    ; r12 (v17) : String
-    ; r13 (len(...)) : Int
-    ; r14 (to_string(...)) : String
-    ; r15 (v22) : String
-    ; r16 (v3) : String
-    ; r17 (v15) : Ref<List<Int>>
-    ; r18 (v18) : Ref<List<Int>>
-    ; r19 (v5) : List<Int>
-    ; r20 (v16) : String
-    ; r21 (x) : List<Int>
+    ; r2 (v3) : List<Int>
+    ; r3 (iter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r4 (v5) : Fn(Int) -> Bool
+    ; r5 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r6 (v7) : Fn(Int) -> Int
+    ; r7 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r8 (v9) : Fn(Int) -> Int
+    ; r9 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (v15) : String
+    ; r12 (len(...)) : Int
+    ; r13 (to_string(...)) : String
+    ; r14 (v20) : String
+    ; r15 (v14) : String
+    ; r16 (x) : List<Int>
+    ; r17 (v1) : String
+    ; r18 (v13) : Ref<List<Int>>
+    ; r19 (v16) : Ref<List<Int>>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

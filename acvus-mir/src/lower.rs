@@ -11,7 +11,7 @@ use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValOrigin, ValueId,
 };
 use crate::ty::Ty;
-use crate::typeck::{CoercionMap, TypeMap};
+use crate::typeck::TypeResolution;
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -22,8 +22,8 @@ pub struct Lowerer<'a> {
     /// Variable name → storage slot ValueId.
     /// Each variable gets a unique slot (like LLVM's alloca).
     var_slots: FxHashMap<Astr, ValueId>,
-    /// Type map from type checker.
-    type_map: TypeMap,
+    /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
+    resolution: Freeze<TypeResolution>,
     /// Coercion map from type checker (expr AstId → CastKind).
     coercion_lookup: FxHashMap<AstId, CastKind>,
     /// Closures produced during lowering.
@@ -31,10 +31,6 @@ pub struct Lowerer<'a> {
     /// Global closure label counter — shared across nesting levels to prevent
     /// label collisions when nested closures each allocate from a sub-body.
     closure_label_count: u32,
-    /// Context QualifiedRef → Ty.
-    context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Function QualifiedRef → Ty. From InferResult.fn_types.
-    fn_metadata: Freeze<FxHashMap<QualifiedRef, Ty>>,
     /// External constraints on contexts (volatile, read_only, etc.).
     policies: FxHashMap<QualifiedRef, ContextPolicy>,
     /// Context projection alias stack: @x → (@a, [x]) means @x is an alias for @a.x.
@@ -123,21 +119,18 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
 impl<'a> Lowerer<'a> {
     pub fn new(
         interner: &'a Interner,
-        type_map: TypeMap,
-        coercion_map: CoercionMap,
-        context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-        fn_metadata: Freeze<FxHashMap<QualifiedRef, Ty>>,
+        resolution: Freeze<TypeResolution>,
         policies: FxHashMap<QualifiedRef, ContextPolicy>,
-        extern_params: Vec<(Astr, Ty)>,
     ) -> Self {
-        let coercion_lookup: FxHashMap<AstId, CastKind> = coercion_map.into_iter().collect();
+        let coercion_lookup: FxHashMap<AstId, CastKind> =
+            resolution.coercion_map.iter().cloned().collect();
         let initial_scope = FxHashMap::default();
         let mut body = MirBody::new();
 
         // Allocate param_regs for extern params (LLVM-style: params are SSA values).
         // param_regs[i] holds the initial value of extern_params[i].
         // SSA will use these as entry definitions instead of Ref+Load.
-        for (name, ty) in &extern_params {
+        for (name, ty) in &resolution.extern_params {
             let reg = body.val_factory.next();
             body.val_types.insert(reg, ty.clone());
             body.params.push((*name, reg));
@@ -148,43 +141,22 @@ impl<'a> Lowerer<'a> {
             interner,
             scopes: vec![initial_scope],
             var_slots: FxHashMap::default(),
-            type_map,
+            resolution,
             coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
-            context_types,
-            fn_metadata,
             policies,
             context_aliases: vec![],
         }
     }
 
-    /// Emit Ref + Load for all known contexts at entry.
-    /// This is the alloca equivalent — SSA pass will promote these to PHI form.
-    /// Order is deterministic (sorted by context name).
-    fn emit_entry_context_loads(&mut self, span: Span) {
-        let mut entries: Vec<_> = self
-            .context_types
-            .iter()
-            .map(|(&qref, ty)| (qref, ty.clone()))
-            .collect();
-        entries.sort_by_key(|(qref, _)| self.interner.resolve(qref.name).to_string());
-
-        for (qref, ty) in entries {
-            let val = self.emit_ref_load(span, RefTarget::Context(qref), vec![], ty);
-            self.set_origin(val, ValOrigin::Context(qref.name));
-        }
-    }
-
     pub fn lower_template(mut self, template: &Template) -> MirModule {
-        self.emit_entry_context_loads(template.span);
         let result = self.lower_nodes(&template.body, template.span);
         self.emit_inst(template.span, InstKind::Return(result));
         self.build_module()
     }
 
     pub fn lower_script(mut self, script: &Script) -> MirModule {
-        self.emit_entry_context_loads(script.span);
         for stmt in &script.stmts {
             self.lower_stmt(stmt);
         }
@@ -1264,7 +1236,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn type_of_id(&self, id: AstId) -> Ty {
-        self.type_map.get(&id).cloned().unwrap_or(Ty::error())
+        self.resolution.type_map.get(&id).cloned().unwrap_or(Ty::error())
     }
 
     // --- Node lowering ---
@@ -1336,16 +1308,21 @@ impl<'a> Lowerer<'a> {
         let val = self.materialize(val, span);
         if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
             match &kind {
-                CastKind::Extern { fn_ref, ret_ty } => {
+                CastKind::Extern { fn_ref, callee_ty } => {
                     // ExternCast → lower as FunctionCall (pure, 1 arg, no context).
-                    // ret_ty is the concrete return type resolved at this call site by typeck.
+                    // Derive ret_ty from callee_ty.
+                    let ret_ty = match callee_ty {
+                        Ty::Fn { ret, .. } => *ret.clone(),
+                        _ => panic!("CastKind::Extern callee_ty is not Fn: {callee_ty:?}"),
+                    };
                     let cast_dst = self.alloc_val();
-                    self.set_val_type(cast_dst, ret_ty.clone());
+                    self.set_val_type(cast_dst, ret_ty);
                     self.emit_inst(
                         span,
                         InstKind::FunctionCall {
                             dst: cast_dst,
                             callee: Callee::Direct(*fn_ref),
+                            callee_ty: callee_ty.clone(),
                             args: vec![val],
                             context_uses: vec![],
                             context_defs: vec![],
@@ -1687,12 +1664,16 @@ impl<'a> Lowerer<'a> {
                         // Fallback: evaluate both sides, call as indirect.
                         let l = self.lower_expr(left);
                         let r = self.lower_expr(right);
+                        let fn_ty = self.body.val_types.get(&r)
+                            .expect("indirect callee must have val_type")
+                            .clone();
                         let dst = self.alloc_typed(expr.id());
                         self.emit_inst(
                             *span,
                             InstKind::FunctionCall {
                                 dst,
                                 callee: Callee::Indirect(r),
+                                callee_ty: fn_ty,
                                 args: vec![l],
                                 context_uses: vec![],
                                 context_defs: vec![],
@@ -2026,26 +2007,6 @@ impl<'a> Lowerer<'a> {
         }
         let dst = self.alloc_typed(call_id);
 
-        // @fn_name(args) — context-based function call.
-        if let Expr::ContextRef { name: qref, .. } = func {
-            let fn_meta = self.fn_metadata.get(qref);
-            if fn_meta.is_some() {
-                let fn_id = *qref;
-                self.set_origin(dst, ValOrigin::Call(qref.name));
-                self.emit_inst(
-                    call_span,
-                    InstKind::FunctionCall {
-                        dst,
-                        callee: Callee::Direct(fn_id),
-                        args: arg_regs,
-                        context_uses: vec![],
-                        context_defs: vec![],
-                    },
-                );
-                return dst;
-            }
-        }
-
         // Named function call (Ident).
         if let Expr::Ident {
             name,
@@ -2059,13 +2020,15 @@ impl<'a> Lowerer<'a> {
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    // 1. Graph function (Direct call)
-                    if self.fn_metadata.contains_key(name) {
+                    // 1. Direct call — typeck resolved this callee to a named function.
+                    if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
+                        let callee_ty = self.type_of_id(func.id());
                         self.emit_inst(
                             call_span,
                             InstKind::FunctionCall {
                                 dst,
-                                callee: Callee::Direct(*name),
+                                callee: Callee::Direct(qref),
+                                callee_ty,
                                 args: arg_regs,
                                 context_uses: vec![],
                                 context_defs: vec![],
@@ -2082,7 +2045,7 @@ impl<'a> Lowerer<'a> {
                             *ident_span,
                             RefTarget::Var(slot),
                             vec![],
-                            closure_ty,
+                            closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
                         self.emit_inst(
@@ -2090,6 +2053,7 @@ impl<'a> Lowerer<'a> {
                             InstKind::FunctionCall {
                                 dst,
                                 callee: Callee::Indirect(closure_reg),
+                                callee_ty: closure_ty,
                                 args: arg_regs,
                                 context_uses: vec![],
                                 context_defs: vec![],
@@ -2109,11 +2073,15 @@ impl<'a> Lowerer<'a> {
         // Expression call (e.g., (|x| -> x)(42), or complex pipe)
         self.set_origin(dst, ValOrigin::Call(self.interner.intern("<closure>")));
         let func_reg = self.lower_expr(func);
+        let fn_ty = self.body.val_types.get(&func_reg)
+            .expect("indirect callee must have val_type")
+            .clone();
         self.emit_inst(
             call_span,
             InstKind::FunctionCall {
                 dst,
                 callee: Callee::Indirect(func_reg),
+                callee_ty: fn_ty,
                 args: arg_regs,
                 context_uses: vec![],
                 context_defs: vec![],

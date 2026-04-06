@@ -4,19 +4,19 @@
 //! (Var, Context, Param) are definitely initialized at each program point.
 //!
 //! At function call sites, checks that arguments have all fields required
-//! by the callee's parameter type. Required fields come from fn_metadata,
-//! NOT from val_types (which may have been widened by unification).
+//! by the callee's parameter type. Required fields come from the instruction's
+//! `callee_ty`, NOT from val_types (which may have been widened by unification).
 
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::dataflow::{forward_analysis, DataflowAnalysis, DataflowState};
 use crate::analysis::domain::SemiLattice;
-use crate::cfg::{CfgBody};
+use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use acvus_ast::Span;
-use crate::ty::{Ty};
+use crate::ty::Ty;
 
 // ── Domain ──────────────────────────────────────────────────────────
 
@@ -196,14 +196,10 @@ impl DataflowAnalysis for InitCheckAnalysis {
 
 /// Run field-level definite-assignment check on a CfgBody.
 ///
-/// `fn_metadata` maps function QualifiedRef → Ty for
-/// determining required fields at call sites.
-///
 /// `external_contexts`: contexts provided by the host — these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
 pub fn check_init(
     cfg: &CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     external_contexts: &FxHashSet<QualifiedRef>,
 ) -> Vec<UninitError> {
     let (ref_map, value_fields) = build_prepass(cfg);
@@ -254,17 +250,17 @@ pub fn check_init(
                 }
                 // Check function calls: all required fields of args must be init.
                 InstKind::FunctionCall {
-                    callee, args, ..
+                    callee, callee_ty, args, ..
                 }
                 | InstKind::Spawn {
-                    callee, args, ..
+                    callee, callee_ty, args, ..
                 } => {
                     check_call_args(
                         &state,
                         &ref_map,
                         cfg,
-                        fn_metadata,
                         callee,
+                        callee_ty,
                         args,
                         inst.span,
                         &mut errors,
@@ -287,21 +283,17 @@ fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
     ref_map: &RefMap,
     cfg: &CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     callee: &Callee,
+    callee_ty: &Ty,
     args: &[ValueId],
     span: Span,
     errors: &mut Vec<UninitError>,
 ) {
-    // Resolve callee type.
-    let fn_ty = match callee {
-        Callee::Direct(qref) => fn_metadata.get(qref),
-        Callee::Indirect(_) => return, // Can't statically check indirect calls.
-    };
-    let fn_ty = match fn_ty {
-        Some(ty) => ty,
-        None => return,
-    };
+    // Can't statically check indirect calls.
+    if matches!(callee, Callee::Indirect(_)) {
+        return;
+    }
+    let fn_ty = callee_ty;
 
     // Extract parameter types from function type.
     let param_types = match fn_ty {

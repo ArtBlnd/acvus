@@ -7,37 +7,13 @@ expression: ir
      1 │   r1 = load r0
      2 │   r2 = ref @b
      3 │   r3 = load r2
-     4 │   r4 = ref @a
-     5 │   r5 = load r4
-     6 │   r6 = ref @b
-     7 │   r7 = load r6
-     8 │   r8 = ref @a
-     9 │   r9 = load r8
-    10 │   r10 = ref @a
-    11 │   r11 = load r10
-    12 │   r12 = ref @b
-    13 │   r13 = load r12
-    14 │   r14 = ref @b
-    15 │   r15 = load r14
-    16 │   r16 = r9 + r15
-    17 │   return r16
+     4 │   r4 = r1 + r3
+     5 │   return r4
 
     ; r0 (@a) : Ref<Int>
-    ; r1 (@a) : Int
+    ; r1 (v5) : Int
     ; r2 (@b) : Ref<Int>
-    ; r3 (@b) : Int
-    ; r4 (@a) : Ref<Int>
-    ; r5 (@a) : Int
-    ; r6 (@b) : Ref<Int>
-    ; r7 (@b) : Int
-    ; r8 (@a) : Ref<Int>
-    ; r9 (v13) : Int
-    ; r10 (@a) : Ref<Int>
-    ; r11 (@a) : Int
-    ; r12 (@b) : Ref<Int>
-    ; r13 (@b) : Int
-    ; r14 (@b) : Ref<Int>
-    ; r15 (v19) : Int
-    ; r16 (v7) : Int
-    ; r17 (read_b(...)) : Int
-    ; r18 (read_a(...)) : Int
+    ; r3 (v7) : Int
+    ; r4 (v3) : Int
+    ; r5 (read_a(...)) : Int
+    ; r6 (read_b(...)) : Int

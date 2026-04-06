@@ -30,11 +30,9 @@ use crate::ir::*;
 use crate::ty::{Effect, EffectTarget, Ty};
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
-///
-/// `fn_metadata`: QualifiedRef → Ty for looking up callee effects (Token extraction).
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody) {
     for block in &mut cfg.blocks {
-        reorder_block(&mut block.insts, &cfg.val_types, fn_metadata);
+        reorder_block(&mut block.insts, &cfg.val_types);
     }
 }
 
@@ -61,23 +59,24 @@ enum Priority {
 fn token_deps(
     kind: &InstKind,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) -> SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
         InstKind::FunctionCall {
-            callee: Callee::Direct(qref),
+            callee: Callee::Direct(_),
+            callee_ty,
             ..
         }
         | InstKind::Spawn {
-            callee: Callee::Direct(qref),
+            callee: Callee::Direct(_),
+            callee_ty,
             ..
-        } => fn_metadata.get(qref).and_then(|m| match m {
+        } => match callee_ty {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
             } => Some(eff),
             _ => None,
-        }),
+        },
         InstKind::Eval { src, .. } => val_types.get(src).and_then(|ty| match ty {
             Ty::Handle(_, Effect::Resolved(eff)) => Some(eff),
             _ => None,
@@ -103,14 +102,13 @@ fn token_deps(
 fn reorder_block(
     insts: &mut Vec<Inst>,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) {
     let n = insts.len();
     if n <= 1 {
         return;
     }
 
-    let deps = build_dependency_graph(insts, val_types, fn_metadata);
+    let deps = build_dependency_graph(insts, val_types);
     let priorities = compute_priorities(insts);
 
     *insts = priority_topo_sort(insts, &deps, &priorities);
@@ -122,7 +120,6 @@ fn reorder_block(
 fn build_dependency_graph(
     insts: &[Inst],
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
@@ -149,7 +146,7 @@ fn build_dependency_graph(
     // Token ordering: instructions sharing a token preserve original order.
     let mut last_token_user: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
-        for tid in token_deps(&inst.kind, val_types, fn_metadata) {
+        for tid in token_deps(&inst.kind, val_types) {
             if let Some(&prev) = last_token_user.get(&tid) {
                 deps[i].push(prev);
             }
@@ -258,7 +255,7 @@ fn priority_topo_sort(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg::{self, CfgBody};
+    use crate::cfg;
     use crate::ty::{Effect, EffectSet, EffectTarget};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
@@ -300,7 +297,7 @@ mod tests {
         })
     }
 
-    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
+    fn io_fn_ty(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
@@ -335,12 +332,8 @@ mod tests {
         // After:  spawn_a, spawn_b, eval_a, eval_b, add, return
         //   (spawns first, evals later)
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_type(&i, "fetch_a");
-        let (fb, fb_ty) = io_fn_type(&i, "fetch_b");
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(fa, fa_ty);
-        fn_metadata.insert(fb, fb_ty);
+        let (fa, fa_ty) = io_fn_ty(&i, "fetch_a");
+        let (fb, fb_ty) = io_fn_ty(&i, "fetch_b");
 
         // h0 = spawn fetch_a(); r0 = eval h0;
         // h1 = spawn fetch_b(); r1 = eval h1;
@@ -350,6 +343,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fa),
+                    callee_ty: fa_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -361,6 +355,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(2),
                     callee: Callee::Direct(fb),
+                    callee_ty: fb_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -395,7 +390,7 @@ mod tests {
             ),
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         // Both spawns should come before both evals.
         let spawn_a = find_idx(
@@ -436,15 +431,14 @@ mod tests {
     #[test]
     fn eval_after_its_spawn() {
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_type(&i, "fetch");
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(fa, fa_ty);
+        let (fa, fa_ty) = io_fn_ty(&i, "fetch");
 
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fa),
+                    callee_ty: fa_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -465,7 +459,7 @@ mod tests {
             ),
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
@@ -479,9 +473,7 @@ mod tests {
         // spawn, const, const, eval, add, return
         // const instructions should land between spawn and eval.
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_type(&i, "fetch");
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(fa, fa_ty);
+        let (fa, fa_ty) = io_fn_ty(&i, "fetch");
 
         let mut cfg = make_cfg(
             vec![
@@ -496,6 +488,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fa),
+                    callee_ty: fa_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -522,7 +515,7 @@ mod tests {
             ),
         );
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
@@ -541,29 +534,24 @@ mod tests {
         let fb = QualifiedRef::root(i.intern("write_b"));
         let token = QualifiedRef::root(i.intern("db"));
 
-        let mut fn_metadata = FxHashMap::default();
         let token_effect = Effect::Resolved(EffectSet {
             writes: std::collections::BTreeSet::from([EffectTarget::Token(token)]),
             ..Default::default()
         });
-        for &qref in &[fa, fb] {
-            fn_metadata.insert(
-                qref,
-                Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Unit),
-                    captures: vec![],
-                    effect: token_effect.clone(),
-                    hint: None,
-                },
-            );
-        }
+        let callee_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+            captures: vec![],
+            effect: token_effect.clone(),
+            hint: None,
+        };
 
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
                     dst: v(0),
                     callee: Callee::Direct(fa),
+                    callee_ty: callee_ty.clone(),
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -575,6 +563,7 @@ mod tests {
                 InstKind::Spawn {
                     dst: v(2),
                     callee: Callee::Direct(fb),
+                    callee_ty: callee_ty,
                     args: vec![],
                     context_uses: vec![],
                 },
@@ -592,7 +581,7 @@ mod tests {
         cfg.val_types
             .insert(v(2), Ty::Handle(Box::new(Ty::Unit), token_effect.clone()));
 
-        run(&mut cfg, &fn_metadata);
+        run(&mut cfg);
 
         // With shared token: spawn_a must come before spawn_b (original order preserved).
         let spawn_a = find_idx(
@@ -650,7 +639,7 @@ mod tests {
             .iter()
             .map(|i| std::mem::discriminant(&i.kind))
             .collect();
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
         let after: Vec<_> = all_insts(&cfg)
             .iter()
             .map(|i| std::mem::discriminant(&i.kind))
@@ -682,7 +671,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg, &FxHashMap::default());
+        run(&mut cfg);
 
         let const_idx = find_idx(&cfg, |k| matches!(k, InstKind::Const { .. })).unwrap();
         let binop_idx = find_idx(&cfg, |k| matches!(k, InstKind::BinOp { .. })).unwrap();

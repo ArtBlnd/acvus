@@ -5,21 +5,18 @@ expression: ir
 === main ===
      0 │   r0 = ref @items
      1 │   r1 = load r0
-     2 │   r2 = ref @items
-     3 │   r3 = call #0(r1)
-     4 │   r4 = closure L0 []
-     5 │   r5 = call #1(r3, r4)
-     6 │   r6 = call #2(r5)
-     7 │   return r6
+     2 │   r2 = call #0(r1)
+     3 │   r3 = closure L0 []
+     4 │   r4 = call #1(r2, r3)
+     5 │   r5 = call #2(r4)
+     6 │   return r5
 
     ; r0 (@items) : Ref<List<Int>>
-    ; r1 (@items) : List<Int>
-    ; r2 (@items) : Ref<List<Int>>
-    ; r3 (v5) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r4 (v6) : Fn(Int) -> Bool
-    ; r5 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r6 (collect(...)) : List<Int>
-    ; r7 (v4) : List<Int>
+    ; r1 (v2) : List<Int>
+    ; r2 (v3) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r3 (v4) : Fn(Int) -> Bool
+    ; r4 (filter(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r5 (collect(...)) : List<Int>
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

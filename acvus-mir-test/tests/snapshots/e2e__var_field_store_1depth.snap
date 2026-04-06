@@ -6,24 +6,21 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = ref @obj
      2 │   r2 = load r1
-     3 │   r3 = ref @obj
-     5 │   r4 = field_set r2.x = 0 (r5)
-     6 │   r6 = r4.x
-     7 │   return r6
+     4 │   r3 = field_set r2.x = 0 (r4)
+     5 │   r5 = r3.x
+     6 │   return r5
 
-    ; r0 (v17) : {x: Int}
+    ; r0 (v15) : {x: Int}
     ; r1 (@obj) : Ref<{x: Int}>
-    ; r2 (@obj) : {x: Int}
-    ; r3 (@obj) : Ref<{x: Int}>
-    ; r4 (v13) : {x: Int}
-    ; r5 (v7) : Int
-    ; r6 (v10) : Int
-    ; r7 (v11) : Ref<{x: Int}>
-    ; r8 (v14) : Ref<{x: Int}>
-    ; r9 (v6) : Ref<{x: Int}>
-    ; r10 (a.x) : Ref<Int>
-    ; r11 (v12) : {x: Int}
-    ; r12 (v4) : {x: Int}
-    ; r13 (v15) : Ref<{x: Int}>
-    ; r14 (v16) : {x: Int}
-    ; r15 (v8) : Ref<Int>
+    ; r2 (v2) : {x: Int}
+    ; r3 (v11) : {x: Int}
+    ; r4 (v5) : Int
+    ; r5 (v8) : Int
+    ; r6 (a.x) : Ref<Int>
+    ; r7 (v14) : {x: Int}
+    ; r8 (v10) : {x: Int}
+    ; r9 (v6) : Ref<Int>
+    ; r10 (v9) : Ref<{x: Int}>
+    ; r11 (v13) : Ref<{x: Int}>
+    ; r12 (v12) : Ref<{x: Int}>
+    ; r13 (v4) : Ref<{x: Int}>

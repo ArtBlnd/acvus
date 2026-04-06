@@ -204,6 +204,7 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
 mod tests {
     use super::*;
     use acvus_utils::LocalIdOps;
+    use crate::ty::Ty;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -238,6 +239,7 @@ mod tests {
         let inst = InstKind::FunctionCall {
             dst: v(3),
             callee: crate::ir::Callee::Direct(qref),
+            callee_ty: Ty::error(),
             args: vec![v(0), v(1)],
             context_uses: vec![(qref, v(2))],
             context_defs: vec![],
@@ -257,6 +259,7 @@ mod tests {
         let spawn = InstKind::Spawn {
             dst: v(1),
             callee: crate::ir::Callee::Direct(qref),
+            callee_ty: Ty::error(),
             args: vec![v(0)],
             context_uses: vec![],
         };
@@ -334,6 +337,7 @@ mod tests {
         let inst = InstKind::FunctionCall {
             dst: v(3),
             callee: crate::ir::Callee::Direct(qref),
+            callee_ty: Ty::error(),
             args: vec![v(0)],
             context_uses: vec![],
             context_defs: vec![(qref, v(4)), (qref, v(5))],
@@ -370,6 +374,7 @@ mod tests {
         let inst = InstKind::FunctionCall {
             dst: v(2),
             callee: crate::ir::Callee::Indirect(v(0)),
+            callee_ty: Ty::error(),
             args: vec![v(1)],
             context_uses: vec![],
             context_defs: vec![],

@@ -8,49 +8,46 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @items
-     2 │   r2 = load r1
-     4 │   r3 = ref @items
-     7 │   jump L0(0 (r4), T0, r0)
-     8 │ L0(r5: Int, r6: String, r7: Int):
-     9 │   list_step r8, r9 = r2[r5] else L1(r6)
-    10 │ L3:
-    12 │   r10 = call #0(r8)
-    13 │   r11 = T0 + r10
-    14 │   r12 = r6 + r11
-    15 │   jump L0(r9, r12, r8)
-    16 │ L1(r13: String):
-    19 │   r14 = T0 + T1
-    20 │   r15 = r13 + r14
-    21 │   jump L2(r15)
-    22 │ L2(r16: String):
-    23 │   r17 = T0 + r16
-    24 │   return r17
+     2 │   r1 = ref @items
+     3 │   r2 = load r1
+     6 │   jump L0(0 (r3), T0, r0)
+     7 │ L0(r4: Int, r5: String, r6: Int):
+     8 │   list_step r7, r8 = r2[r4] else L1(r5)
+     9 │ L3:
+    11 │   r9 = call #0(r7)
+    12 │   r10 = T0 + r9
+    13 │   r11 = r5 + r10
+    14 │   jump L0(r8, r11, r7)
+    15 │ L1(r12: String):
+    18 │   r13 = T0 + T1
+    19 │   r14 = r12 + r13
+    20 │   jump L2(r14)
+    21 │ L2(r15: String):
+    22 │   r16 = T0 + r15
+    23 │   return r16
 
-    ; r0 (v27) : Int
+    ; r0 (v25) : Int
     ; r1 (@items) : Ref<List<Int>>
-    ; r2 (@items) : List<Int>
-    ; r3 (@items) : Ref<List<Int>>
+    ; r2 (v3) : List<Int>
+    ; r3 (v4) : Int
     ; r4 (v6) : Int
-    ; r5 (v8) : Int
-    ; r6 (v9) : String
-    ; r7 (v28) : Int
-    ; r8 (x) : Int
-    ; r9 (v11) : Int
-    ; r10 (to_string(...)) : String
-    ; r11 (v18) : String
-    ; r12 (v19) : String
-    ; r13 (v20) : String
-    ; r14 (v23) : String
-    ; r15 (v24) : String
-    ; r16 (v25) : String
-    ; r17 (v26) : String
-    ; r18 (v22) : String
-    ; r19 (v3) : String
-    ; r20 (v14) : String
-    ; r21 (v15) : Ref<Int>
-    ; r22 (v7) : String
-    ; r23 (v21) : String
-    ; r24 (v13) : Ref<Int>
-    ; r25 (v5) : List<Int>
-    ; r26 (x) : Int
+    ; r5 (v7) : String
+    ; r6 (v26) : Int
+    ; r7 (x) : Int
+    ; r8 (v9) : Int
+    ; r9 (to_string(...)) : String
+    ; r10 (v16) : String
+    ; r11 (v17) : String
+    ; r12 (v18) : String
+    ; r13 (v21) : String
+    ; r14 (v22) : String
+    ; r15 (v23) : String
+    ; r16 (v24) : String
+    ; r17 (v11) : Ref<Int>
+    ; r18 (x) : Int
+    ; r19 (v13) : Ref<Int>
+    ; r20 (v20) : String
+    ; r21 (v1) : String
+    ; r22 (v12) : String
+    ; r23 (v5) : String
+    ; r24 (v19) : String

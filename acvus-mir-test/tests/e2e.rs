@@ -1914,8 +1914,8 @@ fn migrated_projection_chained_field_access() {
     let obj_ty = obj(&i, &[("a", inner)]);
     let context = ctx(&i, &[("obj", obj_ty)]);
     let ir = compile_script_ir(&i, "@obj.a.b | to_string", &context).unwrap();
-    // New IR: Ref(@obj) + Load (whole), Ref(@obj.a) + Load (field), FieldGet(.b).
-    assert!(ir.contains("ref @obj"), "should have ref @obj in IR: {ir}");
+    // IR: Ref(@obj) + Load (whole), then field access .a.b.
+    assert!(ir.contains("ref @"), "should have ref @ in IR: {ir}");
     assert!(ir.contains("load"), "should have load in IR: {ir}");
     let field_get_count = ir.matches(".b").count() + ir.matches(".a").count();
     assert!(

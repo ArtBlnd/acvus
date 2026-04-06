@@ -539,6 +539,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             args,
             context_uses,
             context_defs,
+            ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
@@ -553,6 +554,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             callee,
             args,
             context_uses,
+            ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {

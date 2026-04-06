@@ -359,6 +359,7 @@ fn remap_inst(
         InstKind::FunctionCall {
             dst,
             callee,
+            callee_ty,
             args,
             context_uses,
             context_defs,
@@ -370,6 +371,7 @@ fn remap_inst(
             InstKind::FunctionCall {
                 dst: r(*dst),
                 callee,
+                callee_ty: callee_ty.clone(),
                 args: rv(args),
                 context_uses: context_uses.iter().map(|(id, v)| (*id, r(*v))).collect(),
                 context_defs: context_defs.iter().map(|(id, v)| (*id, r(*v))).collect(),
@@ -378,6 +380,7 @@ fn remap_inst(
         InstKind::Spawn {
             dst,
             callee,
+            callee_ty,
             args,
             context_uses,
         } => {
@@ -389,6 +392,7 @@ fn remap_inst(
             InstKind::Spawn {
                 dst: r(*dst),
                 callee,
+                callee_ty: callee_ty.clone(),
                 args: rv(args),
                 context_uses: ctx,
             }
@@ -666,6 +670,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(callee_id),
+                    callee_ty: Ty::error(),
                     args: vec![v(0)],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -722,6 +727,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(extern_id),
+                    callee_ty: Ty::error(),
                     args: vec![v(0)],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -768,6 +774,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(rec_id),
+                    callee_ty: Ty::error(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -823,6 +830,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(g_id),
+                    callee_ty: Ty::error(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -837,6 +845,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(f_id),
+                    callee_ty: Ty::error(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],
@@ -877,6 +886,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Indirect(v(0)),
+                    callee_ty: Ty::error(),
                     args: vec![],
                     context_uses: vec![],
                     context_defs: vec![],

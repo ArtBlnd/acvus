@@ -3,78 +3,62 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @found
+     0 │   r0 = ref @items
      1 │   r1 = load r0
-     2 │   r2 = ref @idx
-     3 │   r3 = load r2
-     4 │   r4 = ref @items
-     5 │   r5 = load r4
-     6 │   r6 = ref @target
-     7 │   r7 = load r6
-     8 │   r8 = ref @items
-     9 │   r9 = load r8
-    11 │   jump L0(0 (r10))
-    12 │ L0(r11: Int):
-    13 │   list_step r12, r13 = r9[r11] else L1()
-    14 │ L2:
-    15 │   r14 = ref x
-    16 │   store r14 = r12
-    17 │   r15 = ref x
-    18 │   r16 = load r15
-    19 │   r17 = ref @target
-    20 │   r18 = load r17
-    21 │   r19 = r16 == r18
-    22 │   r20 = test r19 == true
-    23 │   jump_if r20 then L3 else L4
-    24 │ L3:
-    26 │   r21 = ref @found
-    27 │   store r21 = true (r22)
-    28 │   jump L4
-    29 │ L4:
-    30 │   r23 = ref @idx
-    31 │   r24 = load r23
-    33 │   r25 = r24 + 1 (r26)
-    34 │   r27 = ref @idx
-    35 │   store r27 = r25
-    36 │   jump L0(r13)
-    37 │ L1:
-    38 │   r28 = ref @found
-    39 │   r29 = load r28
-    40 │   r30 = ref @idx
-    41 │   r31 = load r30
-    42 │   r32 = object {found: r29, index: r31}
-    43 │   return r32
+     3 │   jump L0(0 (r2))
+     4 │ L0(r3: Int):
+     5 │   list_step r4, r5 = r1[r3] else L1()
+     6 │ L2:
+     7 │   r6 = ref x
+     8 │   store r6 = r4
+     9 │   r7 = ref x
+    10 │   r8 = load r7
+    11 │   r9 = ref @target
+    12 │   r10 = load r9
+    13 │   r11 = r8 == r10
+    14 │   r12 = test r11 == true
+    15 │   jump_if r12 then L3 else L4
+    16 │ L3:
+    18 │   r13 = ref @found
+    19 │   store r13 = true (r14)
+    20 │   jump L4
+    21 │ L4:
+    22 │   r15 = ref @idx
+    23 │   r16 = load r15
+    25 │   r17 = r16 + 1 (r18)
+    26 │   r19 = ref @idx
+    27 │   store r19 = r17
+    28 │   jump L0(r5)
+    29 │ L1:
+    30 │   r20 = ref @found
+    31 │   r21 = load r20
+    32 │   r22 = ref @idx
+    33 │   r23 = load r22
+    34 │   r24 = object {found: r21, index: r23}
+    35 │   return r24
 
-    ; r0 (@found) : Ref<Bool>
-    ; r1 (@found) : Bool
-    ; r2 (@idx) : Ref<Int>
-    ; r3 (@idx) : Int
-    ; r4 (@items) : Ref<List<Int>>
-    ; r5 (@items) : List<Int>
-    ; r6 (@target) : Ref<Int>
-    ; r7 (@target) : Int
-    ; r8 (@items) : Ref<List<Int>>
-    ; r9 (v10) : List<Int>
-    ; r10 (v11) : Int
-    ; r11 (v12) : Int
-    ; r12 (x) : Int
-    ; r13 (v14) : Int
-    ; r14 (v16) : Ref<Int>
-    ; r15 (v17) : Ref<Int>
-    ; r16 (x) : Int
-    ; r17 (@target) : Ref<Int>
-    ; r18 (v20) : Int
-    ; r19 (v21) : Bool
-    ; r20 (v22) : Bool
-    ; r21 (@found) : Ref<Bool>
-    ; r22 (v23) : Bool
-    ; r23 (@idx) : Ref<Int>
-    ; r24 (v26) : Int
-    ; r25 (v28) : Int
-    ; r26 (v27) : Int
-    ; r27 (@idx) : Ref<Int>
-    ; r28 (@found) : Ref<Bool>
-    ; r29 (v31) : Bool
-    ; r30 (@idx) : Ref<Int>
-    ; r31 (v33) : Int
-    ; r32 (v34) : {found: Bool, index: Int}
+    ; r0 (@items) : Ref<List<Int>>
+    ; r1 (v2) : List<Int>
+    ; r2 (v3) : Int
+    ; r3 (v4) : Int
+    ; r4 (x) : Int
+    ; r5 (v6) : Int
+    ; r6 (v8) : Ref<Int>
+    ; r7 (v9) : Ref<Int>
+    ; r8 (x) : Int
+    ; r9 (@target) : Ref<Int>
+    ; r10 (v12) : Int
+    ; r11 (v13) : Bool
+    ; r12 (v14) : Bool
+    ; r13 (@found) : Ref<Bool>
+    ; r14 (v15) : Bool
+    ; r15 (@idx) : Ref<Int>
+    ; r16 (v18) : Int
+    ; r17 (v20) : Int
+    ; r18 (v19) : Int
+    ; r19 (@idx) : Ref<Int>
+    ; r20 (@found) : Ref<Bool>
+    ; r21 (v23) : Bool
+    ; r22 (@idx) : Ref<Int>
+    ; r23 (v25) : Int
+    ; r24 (v26) : {found: Bool, index: Int}

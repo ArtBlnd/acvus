@@ -7,26 +7,23 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @flag
-     2 │   r2 = load r1
-     4 │   r3 = ref @flag
-     5 │   r4 = !r2
-     7 │   r5 = T0 + T0
-     8 │   r6 = call #0(r4)
-     9 │   r7 = r5 + r6
-    10 │   return r7
+     2 │   r1 = ref @flag
+     3 │   r2 = load r1
+     4 │   r3 = !r2
+     6 │   r4 = T0 + T0
+     7 │   r5 = call #0(r3)
+     8 │   r6 = r4 + r5
+     9 │   return r6
 
-    ; r0 (v15) : Bool
+    ; r0 (v13) : Bool
     ; r1 (@flag) : Ref<Bool>
-    ; r2 (@flag) : Bool
-    ; r3 (@flag) : Ref<Bool>
-    ; r4 (v6) : Bool
-    ; r5 (v10) : String
-    ; r6 (to_string(...)) : String
-    ; r7 (v14) : String
-    ; r8 (v3) : String
-    ; r9 (v11) : Ref<Bool>
-    ; r10 (v9) : String
-    ; r11 (v5) : Bool
-    ; r12 (x) : Bool
-    ; r13 (v8) : Ref<Bool>
+    ; r2 (v3) : Bool
+    ; r3 (v4) : Bool
+    ; r4 (v8) : String
+    ; r5 (to_string(...)) : String
+    ; r6 (v12) : String
+    ; r7 (v7) : String
+    ; r8 (x) : Bool
+    ; r9 (v6) : Ref<Bool>
+    ; r10 (v9) : Ref<Bool>
+    ; r11 (v1) : String

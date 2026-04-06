@@ -9,43 +9,40 @@ expression: ir
   T3 = "guest"
 
 === main ===
-     0 │   r0 = ref @role
-     1 │   r1 = load r0
-     3 │   r2 = ref @role
-     4 │ L2:
-     5 │   r3 = test r1 == "admin"
-     6 │   jump_if r3 then L4 else L3
-     7 │ L4:
-    10 │   r4 = T0 + T1
-    11 │   jump L0(r4)
-    12 │ L3:
-    13 │   r5 = test r1 == "user"
-    14 │   jump_if r5 then L5 else L1
-    15 │ L5:
-    18 │   r6 = T0 + T2
-    19 │   jump L0(r6)
-    20 │ L1:
-    23 │   r7 = T0 + T3
-    24 │   jump L0(r7)
-    25 │ L0(r8: String):  ; merge_of L2
-    26 │   r9 = T0 + r8
-    27 │   return r9
+     1 │   r0 = ref @role
+     2 │   r1 = load r0
+     3 │ L2:
+     4 │   r2 = test r1 == "admin"
+     5 │   jump_if r2 then L4 else L3
+     6 │ L4:
+     9 │   r3 = T0 + T1
+    10 │   jump L0(r3)
+    11 │ L3:
+    12 │   r4 = test r1 == "user"
+    13 │   jump_if r4 then L5 else L1
+    14 │ L5:
+    17 │   r5 = T0 + T2
+    18 │   jump L0(r5)
+    19 │ L1:
+    22 │   r6 = T0 + T3
+    23 │   jump L0(r6)
+    24 │ L0(r7: String):  ; merge_of L2
+    25 │   r8 = T0 + r7
+    26 │   return r8
 
     ; r0 (@role) : Ref<String>
-    ; r1 (@role) : String
-    ; r2 (@role) : Ref<String>
-    ; r3 (v6) : Bool
-    ; r4 (v9) : String
-    ; r5 (v10) : Bool
-    ; r6 (v13) : String
-    ; r7 (v16) : String
-    ; r8 (v17) : String
-    ; r9 (v18) : String
-    ; r10 (v3) : String
-    ; r11 (v11) : String
-    ; r12 (v14) : String
-    ; r13 (v12) : String
-    ; r14 (v15) : String
-    ; r15 (v7) : String
-    ; r16 (v5) : String
-    ; r17 (v8) : String
+    ; r1 (v3) : String
+    ; r2 (v4) : Bool
+    ; r3 (v7) : String
+    ; r4 (v8) : Bool
+    ; r5 (v11) : String
+    ; r6 (v14) : String
+    ; r7 (v15) : String
+    ; r8 (v16) : String
+    ; r9 (v6) : String
+    ; r10 (v9) : String
+    ; r11 (v1) : String
+    ; r12 (v12) : String
+    ; r13 (v10) : String
+    ; r14 (v13) : String
+    ; r15 (v5) : String

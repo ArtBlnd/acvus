@@ -9,35 +9,25 @@ expression: ir
      3 │   r3 = load r2
      4 │   r4 = ref @b
      5 │   r5 = load r4
-     6 │   r6 = ref @out
-     7 │   r7 = load r6
-     8 │   r8 = ref @a
-     9 │   r9 = ref @b
-    10 │   r10 = r3 + r5
-    11 │   r11 = ref @out
-    12 │   store r11 = r10
-    13 │   r12 = ref @out
-    14 │   return r10
+     6 │   r6 = r3 + r5
+     7 │   r7 = ref @out
+     8 │   store r7 = r6
+     9 │   r8 = ref @out
+    10 │   return r6
 
-    ; r0 (v23) : Int
-    ; r1 (v24) : Int
+    ; r0 (v17) : Int
+    ; r1 (v18) : Int
     ; r2 (@a) : Ref<Int>
-    ; r3 (@a) : Int
+    ; r3 (x) : Int
     ; r4 (@b) : Ref<Int>
-    ; r5 (@b) : Int
-    ; r6 (@out) : Ref<Int>
-    ; r7 (@out) : Int
-    ; r8 (@a) : Ref<Int>
-    ; r9 (@b) : Ref<Int>
-    ; r10 (v19) : Int
-    ; r11 (@out) : Ref<Int>
-    ; r12 (@out) : Ref<Int>
-    ; r13 (v22) : Int
-    ; r14 (v14) : Ref<Int>
-    ; r15 (v17) : Ref<Int>
-    ; r16 (v15) : Ref<Int>
-    ; r17 (v10) : Ref<Int>
-    ; r18 (y) : Int
-    ; r19 (x) : Int
-    ; r20 (y) : Int
-    ; r21 (x) : Int
+    ; r5 (y) : Int
+    ; r6 (v13) : Int
+    ; r7 (@out) : Ref<Int>
+    ; r8 (@out) : Ref<Int>
+    ; r9 (v11) : Ref<Int>
+    ; r10 (v9) : Ref<Int>
+    ; r11 (y) : Int
+    ; r12 (v4) : Ref<Int>
+    ; r13 (x) : Int
+    ; r14 (v16) : Int
+    ; r15 (v8) : Ref<Int>

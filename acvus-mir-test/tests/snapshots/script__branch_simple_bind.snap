@@ -6,27 +6,20 @@ expression: ir
      0 │   r0 = undef
      1 │   r1 = ref @data
      2 │   r2 = load r1
-     3 │   r3 = ref @out
-     4 │   r4 = load r3
-     5 │   r5 = ref @data
-     7 │   r6 = r2 + 1 (r7)
-     8 │   r8 = ref @out
-     9 │   store r8 = r6
-    10 │   r9 = ref @out
-    11 │   return r6
+     4 │   r3 = r2 + 1 (r4)
+     5 │   r5 = ref @out
+     6 │   store r5 = r3
+     7 │   r6 = ref @out
+     8 │   return r3
 
-    ; r0 (v16) : Int
+    ; r0 (v12) : Int
     ; r1 (@data) : Ref<Int>
-    ; r2 (@data) : Int
-    ; r3 (@out) : Ref<Int>
-    ; r4 (@out) : Int
-    ; r5 (@data) : Ref<Int>
-    ; r6 (v12) : Int
+    ; r2 (x) : Int
+    ; r3 (v8) : Int
+    ; r4 (v7) : Int
+    ; r5 (@out) : Ref<Int>
+    ; r6 (@out) : Ref<Int>
     ; r7 (v11) : Int
-    ; r8 (@out) : Ref<Int>
-    ; r9 (@out) : Ref<Int>
-    ; r10 (x) : Int
-    ; r11 (v9) : Ref<Int>
-    ; r12 (v15) : Int
-    ; r13 (x) : Int
-    ; r14 (v8) : Ref<Int>
+    ; r8 (x) : Int
+    ; r9 (v5) : Ref<Int>
+    ; r10 (v4) : Ref<Int>

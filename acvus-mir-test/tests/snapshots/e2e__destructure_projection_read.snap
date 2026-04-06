@@ -5,13 +5,10 @@ expression: ir
 === main ===
      0 │   r0 = ref @a
      1 │   r1 = load r0
-     2 │   r2 = ref @a
-     3 │   r3 = r1.x
-     4 │   return r3
+     2 │   r2 = r1.x
+     3 │   return r2
 
-    ; r0 (@a) : Ref<{x: Int, y: Int}>
-    ; r1 (@a) : {x: Int, y: Int}
-    ; r2 (v5) : Ref<{x: Int, y: Int}>
-    ; r3 (v4) : Int
-    ; r4 (@a.x) : Ref<Int>
-    ; r5 (v6) : {x: Int, y: Int}
+    ; r0 (v3) : Ref<{x: Int, y: Int}>
+    ; r1 (v4) : {x: Int, y: Int}
+    ; r2 (v2) : Int
+    ; r3 (@a.x) : Ref<Int>

@@ -26,8 +26,8 @@ pub enum CastKind {
     /// `Range → List<Int>` — materialise range into list.
     RangeToList,
     /// ExternCast — coercion performed by a registered pure ExternFn.
-    /// `ret_ty` is the concrete return type at this call site (resolved during typeck).
-    Extern { fn_ref: QualifiedRef, ret_ty: Ty },
+    /// `callee_ty` is the full Fn type of the cast function at this call site.
+    Extern { fn_ref: QualifiedRef, callee_ty: Ty },
 }
 
 impl CastKind {
@@ -154,6 +154,7 @@ pub enum InstKind {
     FunctionCall {
         dst: ValueId,
         callee: Callee,
+        callee_ty: Ty,
         args: Vec<ValueId>,
         context_uses: Vec<(QualifiedRef, ValueId)>,
         context_defs: Vec<(QualifiedRef, ValueId)>,
@@ -165,6 +166,7 @@ pub enum InstKind {
     Spawn {
         dst: ValueId,
         callee: Callee,
+        callee_ty: Ty,
         args: Vec<ValueId>,
         context_uses: Vec<(QualifiedRef, ValueId)>,
     },

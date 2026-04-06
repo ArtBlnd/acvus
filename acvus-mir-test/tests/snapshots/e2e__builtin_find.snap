@@ -6,26 +6,23 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = ref @items
-     1 │   r1 = load r0
-     3 │   r2 = ref @items
-     4 │   r3 = call #0(r1)
-     5 │   r4 = closure L0 []
-     6 │   r5 = call #1(r3, r4)
-     7 │   r6 = call #2(r5)
-     8 │   r7 = T0 + r6
-     9 │   return r7
+     1 │   r0 = ref @items
+     2 │   r1 = load r0
+     3 │   r2 = call #0(r1)
+     4 │   r3 = closure L0 []
+     5 │   r4 = call #1(r2, r3)
+     6 │   r5 = call #2(r4)
+     7 │   r6 = T0 + r5
+     8 │   return r6
 
     ; r0 (@items) : Ref<List<Int>>
-    ; r1 (@items) : List<Int>
-    ; r2 (@items) : Ref<List<Int>>
-    ; r3 (v6) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r4 (v7) : Fn(Int) -> Bool
-    ; r5 (find(...)) : Int
-    ; r6 (to_string(...)) : String
-    ; r7 (v10) : String
-    ; r8 (v3) : String
-    ; r9 (v5) : List<Int>
+    ; r1 (v3) : List<Int>
+    ; r2 (v4) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r3 (v5) : Fn(Int) -> Bool
+    ; r4 (find(...)) : Int
+    ; r5 (to_string(...)) : String
+    ; r6 (v8) : String
+    ; r7 (v1) : String
 
 === closure L0 (ValueId(0)) ===
      0 │   r0 = undef

@@ -9,48 +9,45 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @role
-     2 │   r2 = load r1
-     6 │   r3 = T0 + T0
-     7 │   r4 = ref @role
-     8 │ L2:
-     9 │   r5 = test r2 == "admin"
-    10 │   jump_if r5 then L3 else L1
-    11 │ L3:
-    15 │   r6 = T0 + T0
-    16 │   jump L0(r6, T1)
-    17 │ L1:
-    21 │   r7 = T0 + T0
-    22 │   jump L0(r7, T2)
-    23 │ L0(r8: String, r9: String):  ; merge_of L2
-    24 │   r10 = r3 + r8
-    25 │   r11 = r10 + r9
-    26 │   return r11
+     4 │   r1 = T0 + T0
+     5 │   r2 = ref @role
+     6 │   r3 = load r2
+     7 │ L2:
+     8 │   r4 = test r3 == "admin"
+     9 │   jump_if r4 then L3 else L1
+    10 │ L3:
+    14 │   r5 = T0 + T0
+    15 │   jump L0(r5, T1)
+    16 │ L1:
+    20 │   r6 = T0 + T0
+    21 │   jump L0(r6, T2)
+    22 │ L0(r7: String, r8: String):  ; merge_of L2
+    23 │   r9 = r1 + r7
+    24 │   r10 = r9 + r8
+    25 │   return r10
 
-    ; r0 (v27) : String
-    ; r1 (@role) : Ref<String>
-    ; r2 (@role) : String
+    ; r0 (v25) : String
+    ; r1 (v6) : String
+    ; r2 (@role) : Ref<String>
     ; r3 (v8) : String
-    ; r4 (@role) : Ref<String>
-    ; r5 (v11) : Bool
-    ; r6 (v16) : String
-    ; r7 (v21) : String
-    ; r8 (v22) : String
-    ; r9 (v28) : String
-    ; r10 (v23) : String
-    ; r11 (v26) : String
-    ; r12 (v3) : String
-    ; r13 (v14) : Ref<String>
-    ; r14 (selected) : String
-    ; r15 (v6) : Ref<String>
-    ; r16 (v17) : String
-    ; r17 (v15) : String
-    ; r18 (v4) : String
-    ; r19 (v7) : String
-    ; r20 (v10) : String
-    ; r21 (v18) : String
-    ; r22 (v20) : String
-    ; r23 (v12) : String
-    ; r24 (v13) : String
-    ; r25 (v24) : Ref<String>
-    ; r26 (v19) : Ref<String>
+    ; r4 (v9) : Bool
+    ; r5 (v14) : String
+    ; r6 (v19) : String
+    ; r7 (v20) : String
+    ; r8 (v26) : String
+    ; r9 (v21) : String
+    ; r10 (v24) : String
+    ; r11 (v22) : Ref<String>
+    ; r12 (v11) : String
+    ; r13 (v17) : Ref<String>
+    ; r14 (v15) : String
+    ; r15 (v18) : String
+    ; r16 (v10) : String
+    ; r17 (v13) : String
+    ; r18 (v2) : String
+    ; r19 (v1) : String
+    ; r20 (v12) : Ref<String>
+    ; r21 (selected) : String
+    ; r22 (v4) : Ref<String>
+    ; r23 (v5) : String
+    ; r24 (v16) : String

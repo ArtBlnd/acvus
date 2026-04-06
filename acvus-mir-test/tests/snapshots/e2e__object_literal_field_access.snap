@@ -7,27 +7,24 @@ expression: ir
 
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @name
-     2 │   r2 = load r1
-     4 │   r3 = ref @name
-     5 │   r4 = object {name: r2}
-     7 │   r5 = T0 + T0
-     8 │   r6 = r4.name
-     9 │   r7 = r5 + r6
-    10 │   return r7
+     2 │   r1 = ref @name
+     3 │   r2 = load r1
+     4 │   r3 = object {name: r2}
+     6 │   r4 = T0 + T0
+     7 │   r5 = r3.name
+     8 │   r6 = r4 + r5
+     9 │   return r6
 
-    ; r0 (v16) : {name: String}
+    ; r0 (v14) : {name: String}
     ; r1 (@name) : Ref<String>
-    ; r2 (@name) : String
-    ; r3 (@name) : Ref<String>
-    ; r4 (v6) : {name: String}
+    ; r2 (v3) : String
+    ; r3 (v4) : {name: String}
+    ; r4 (v8) : String
     ; r5 (v10) : String
-    ; r6 (v12) : String
-    ; r7 (v13) : String
-    ; r8 (v3) : String
+    ; r6 (v11) : String
+    ; r7 (v7) : String
+    ; r8 (v6) : Ref<{name: String}>
     ; r9 (o.name) : Ref<String>
-    ; r10 (v14) : Ref<{name: String}>
-    ; r11 (v9) : String
-    ; r12 (v15) : {name: String}
-    ; r13 (v5) : String
-    ; r14 (v8) : Ref<{name: String}>
+    ; r10 (v13) : {name: String}
+    ; r11 (v1) : String
+    ; r12 (v12) : Ref<{name: String}>

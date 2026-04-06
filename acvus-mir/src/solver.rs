@@ -71,9 +71,6 @@ pub struct Solver {
     pub(crate) ty_bounds: Vec<TypeBound>,
     pub(crate) effect_bounds: Vec<EffectBound>,
     pub(crate) identity_factory: acvus_utils::LocalFactory<IdentityId>,
-    /// Set by `try_coerce_infer` when an ExternCast rule matches.
-    /// Consumed by the typechecker to record the coercion in the coercion_map.
-    pub last_extern_cast: Option<QualifiedRef>,
 }
 
 impl Solver {
@@ -82,7 +79,6 @@ impl Solver {
             ty_bounds: Vec::new(),
             effect_bounds: Vec::new(),
             identity_factory: acvus_utils::LocalFactory::new(),
-            last_extern_cast: None,
         }
     }
 
@@ -415,20 +411,21 @@ impl Solver {
     // ── Type unification ────────────────────────────────────────────
 
     /// Unify two InferTy with polarity-based subtyping.
+    /// Returns `Ok(Some(fn_ref))` when an ExternCast coercion was used.
     pub fn unify_ty(
         &mut self,
         a: &InferTy,
         b: &InferTy,
         pol: Polarity,
         registry: &TypeRegistry,
-    ) -> Result<(), (InferTy, InferTy)> {
+    ) -> Result<Option<QualifiedRef>, (InferTy, InferTy)> {
         let orig_a = a;
         let orig_b = b;
         let a = self.shallow_resolve_ty(a);
         let b = self.shallow_resolve_ty(b);
 
         match (&a, &b) {
-            (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => Ok(()),
+            (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => Ok(None),
 
             (TyTerm::Int, TyTerm::Int)
             | (TyTerm::Float, TyTerm::Float)
@@ -436,7 +433,7 @@ impl Solver {
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
             | (TyTerm::Range, TyTerm::Range)
-            | (TyTerm::Byte, TyTerm::Byte) => Ok(()),
+            | (TyTerm::Byte, TyTerm::Byte) => Ok(None),
 
             (
                 TyTerm::UserDefined { id: id_a, type_args: ta_args, effect_args: ea_args },
@@ -451,7 +448,7 @@ impl Solver {
                     && ea_args.iter().zip(eb_args.iter())
                         .all(|(ea, eb)| self.unify_infer_effects(ea, eb, pol).is_ok());
                 if effect_ok {
-                    Ok(())
+                    Ok(None)
                 } else {
                     self.rollback(snap);
                     self.lub_or_err_infer(pol, orig_a, orig_b, &a, &b, registry)
@@ -469,7 +466,7 @@ impl Solver {
                     if let Some(payload_b) = vb.get(tag) {
                         match (payload_a, payload_b) {
                             (None, None) => {}
-                            (Some(ty_a), Some(ty_b)) => self.unify_ty(ty_a, ty_b, pol, registry)?,
+                            (Some(ty_a), Some(ty_b)) => { self.unify_ty(ty_a, ty_b, pol, registry)?; }
                             _ => return Err((a.clone(), b.clone())),
                         }
                     }
@@ -488,7 +485,7 @@ impl Solver {
                         self.bind_ty(leaf, merged_ty);
                     }
                 }
-                Ok(())
+                Ok(None)
             }
 
             // Var + anything
@@ -496,7 +493,7 @@ impl Solver {
                 if let TyTerm::Var(id2) = other
                     && id == id2
                 {
-                    return Ok(());
+                    return Ok(None);
                 }
                 if self.occurs_in(*id, other) {
                     return Err((a.clone(), b.clone()));
@@ -557,7 +554,7 @@ impl Solver {
                         self.bind_ty(*id, other.clone());
                     }
                 }
-                Ok(())
+                Ok(None)
             }
 
             (TyTerm::Tuple(ea), TyTerm::Tuple(eb)) => {
@@ -567,20 +564,20 @@ impl Solver {
                 for (ta, tb) in ea.iter().zip(eb.iter()) {
                     self.unify_ty(ta, tb, pol, registry)?;
                 }
-                Ok(())
+                Ok(None)
             }
 
             (TyTerm::List(a), TyTerm::List(b)) => self.unify_ty(a, b, Polarity::Invariant, registry),
 
             (TyTerm::Deque(ia, oa), TyTerm::Deque(ib, ob)) => {
                 match self.unify_ty(oa, ob, Polarity::Invariant, registry) {
-                    Ok(()) => self.unify_ty(ia, ib, Polarity::Invariant, registry),
+                    Ok(_) => self.unify_ty(ia, ib, Polarity::Invariant, registry),
                     Err(_) => self.lub_or_err_infer(pol, orig_a, orig_b, &a, &b, registry),
                 }
             }
 
             (TyTerm::Identity(a), TyTerm::Identity(b)) => {
-                if a == b { Ok(()) } else { Err((TyTerm::Identity(*a), TyTerm::Identity(*b))) }
+                if a == b { Ok(None) } else { Err((TyTerm::Identity(*a), TyTerm::Identity(*b))) }
             }
 
             (TyTerm::Option(a), TyTerm::Option(b)) => self.unify_ty(a, b, Polarity::Invariant, registry),
@@ -626,7 +623,7 @@ impl Solver {
                     if let Some(leaf) = self.find_leaf_var(orig_b) {
                         self.bind_ty(leaf, merged_ty);
                     }
-                    return Ok(());
+                    return Ok(None);
                 } else if field_mismatch {
                     return Err((a.clone(), b.clone()));
                 }
@@ -634,7 +631,7 @@ impl Solver {
                 let a_only = fa.keys().any(|k| !fb.contains_key(k));
                 let b_only = fb.keys().any(|k| !fa.contains_key(k));
                 if !a_only && !b_only {
-                    return Ok(());
+                    return Ok(None);
                 }
 
                 let leaf_a = self.find_leaf_var(orig_a);
@@ -657,7 +654,7 @@ impl Solver {
                 if let Some(var) = leaf_b {
                     self.bind_ty(var, merged_ty);
                 }
-                Ok(())
+                Ok(None)
             }
 
             (
@@ -673,6 +670,7 @@ impl Solver {
                 }
                 self.unify_ty(ra, rb, pol, registry)?;
                 self.unify_infer_effects(ea, eb, pol)
+                    .map(|_| None)
                     .or_else(|_| self.lub_or_err_infer(pol, orig_a, orig_b, &a, &b, registry))
             }
 
@@ -685,10 +683,7 @@ impl Solver {
                         Polarity::Invariant => unreachable!(),
                     };
                     if let Ok(maybe_fn) = self.try_coerce_infer(sub, sup, registry) {
-                        if maybe_fn.is_some() {
-                            self.last_extern_cast = maybe_fn;
-                        }
-                        return Ok(());
+                        return Ok(maybe_fn);
                     }
                 }
                 Err((a, b))
@@ -793,7 +788,7 @@ impl Solver {
         a: &InferTy,
         b: &InferTy,
         registry: &TypeRegistry,
-    ) -> Result<(), (InferTy, InferTy)> {
+    ) -> Result<Option<QualifiedRef>, (InferTy, InferTy)> {
         if pol == Polarity::Invariant {
             return Err((a.clone(), b.clone()));
         }
@@ -809,7 +804,7 @@ impl Solver {
         if let Some(leaf) = leaf_b {
             self.bind_ty(leaf, lub);
         }
-        Ok(())
+        Ok(None)
     }
 
     // ── Coercion ────────────────────────────────────────────────────

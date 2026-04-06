@@ -3,16 +3,12 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @x
-     1 │   r1 = load r0
+     1 │   r0 = ref @x
+     2 │   store r0 = 42 (r1)
      3 │   r2 = ref @x
-     4 │   store r2 = 42 (r3)
-     5 │   r4 = ref @x
-     6 │   return 42 (r3)
+     4 │   return 42 (r1)
 
     ; r0 (@x) : Ref<Int>
-    ; r1 (@x) : Int
+    ; r1 (v1) : Int
     ; r2 (@x) : Ref<Int>
-    ; r3 (v3) : Int
-    ; r4 (@x) : Ref<Int>
-    ; r5 (v6) : Int
+    ; r3 (v4) : Int

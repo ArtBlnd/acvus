@@ -15,7 +15,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{CfgBody, Terminator};
-use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, ValueId};
 use crate::ty::{Effect, Ty};
 use crate::analysis::inst_info;
@@ -73,7 +72,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 ///
 /// An instruction with ANY effect (read, write, IO) must not
 /// be removed. Only provably pure instructions can be dead.
-fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
+fn is_root(kind: &InstKind) -> bool {
     match kind {
         // Context store — externally observable.
         InstKind::Store { .. } => true,
@@ -82,9 +81,9 @@ fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
         InstKind::Eval { .. } => true,
 
         // FunctionCall: root unless provably pure.
-        InstKind::FunctionCall { callee, .. } => match callee {
+        InstKind::FunctionCall { callee, callee_ty, .. } => match callee {
             Callee::Indirect(_) => true, // Unknown effect → root.
-            Callee::Direct(qref) => !is_pure_fn(fn_metadata, qref),
+            Callee::Direct(_) => !is_pure_fn(callee_ty),
         },
 
         // Spawn: pure (deferred execution). The actual effect happens at Eval.
@@ -97,12 +96,12 @@ fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
 }
 
 /// Check if a function is provably pure (no effects at all).
-fn is_pure_fn(fn_metadata: &FxHashMap<QualifiedRef, Ty>, qref: &QualifiedRef) -> bool {
-    match fn_metadata.get(qref) {
-        Some(Ty::Fn {
+fn is_pure_fn(callee_ty: &Ty) -> bool {
+    match callee_ty {
+        Ty::Fn {
             effect: Effect::Resolved(eff),
             ..
-        }) => eff.is_pure(),
+        } => eff.is_pure(),
         _ => false, // Unknown → not pure (conservative).
     }
 }
@@ -143,7 +142,7 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
+pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
 
     // Live instruction set: (block_idx, inst_idx).
@@ -156,7 +155,7 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     // Phase 1: seed roots.
     for (bi, block) in cfg.blocks.iter().enumerate() {
         for (ii, inst) in block.insts.iter().enumerate() {
-            if is_root(&inst.kind, fn_metadata) {
+            if is_root(&inst.kind) {
                 live_insts.insert((bi, ii));
                 worklist.extend(inst_info::uses(&inst.kind));
             }

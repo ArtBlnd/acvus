@@ -3,50 +3,46 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @stats
+     0 │   r0 = ref @stats.count
      1 │   r1 = load r0
-     2 │   r2 = ref @stats.count
-     3 │   r3 = load r2
-     5 │   r4 = r3 + 1 (r5)
-     6 │   r6 = ref count
-     7 │   store r6 = r4
-     8 │   r7 = ref count
+     3 │   r2 = r1 + 1 (r3)
+     4 │   r4 = ref count
+     5 │   store r4 = r2
+     6 │   r5 = ref count
+     7 │   r6 = load r5
+     8 │   r7 = ref @stats.threshold
      9 │   r8 = load r7
-    10 │   r9 = ref @stats.threshold
-    11 │   r10 = load r9
-    12 │   r11 = r8 > r10
-    13 │   r12 = test r11 == true
-    14 │   jump_if r12 then L0 else L1
-    15 │ L0:
-    16 │   r13 = ref count
-    17 │   r14 = load r13
-    18 │   r15 = ref @stats.count
-    19 │   store r15 = r14
-    21 │   r16 = ref @stats.exceeded
-    22 │   store r16 = true (r17)
-    23 │   jump L1
-    24 │ L1:
-    25 │   r18 = ref @stats
-    26 │   r19 = load r18
-    27 │   return r19
+    10 │   r9 = r6 > r8
+    11 │   r10 = test r9 == true
+    12 │   jump_if r10 then L0 else L1
+    13 │ L0:
+    14 │   r11 = ref count
+    15 │   r12 = load r11
+    16 │   r13 = ref @stats.count
+    17 │   store r13 = r12
+    19 │   r14 = ref @stats.exceeded
+    20 │   store r14 = true (r15)
+    21 │   jump L1
+    22 │ L1:
+    23 │   r16 = ref @stats
+    24 │   r17 = load r16
+    25 │   return r17
 
-    ; r0 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
-    ; r1 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
-    ; r2 (@stats.count) : Ref<Int>
-    ; r3 (v4) : Int
-    ; r4 (v6) : Int
-    ; r5 (v5) : Int
-    ; r6 (v8) : Ref<Int>
-    ; r7 (v9) : Ref<Int>
-    ; r8 (count) : Int
-    ; r9 (@stats.threshold) : Ref<Int>
-    ; r10 (v12) : Int
-    ; r11 (v13) : Bool
-    ; r12 (v14) : Bool
-    ; r13 (v15) : Ref<Int>
-    ; r14 (count) : Int
-    ; r15 (@stats) : Ref<Int>
-    ; r16 (@stats) : Ref<Bool>
-    ; r17 (v18) : Bool
-    ; r18 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
-    ; r19 (v21) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r0 (@stats.count) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
+    ; r4 (v6) : Ref<Int>
+    ; r5 (v7) : Ref<Int>
+    ; r6 (count) : Int
+    ; r7 (@stats.threshold) : Ref<Int>
+    ; r8 (v10) : Int
+    ; r9 (v11) : Bool
+    ; r10 (v12) : Bool
+    ; r11 (v13) : Ref<Int>
+    ; r12 (count) : Int
+    ; r13 (@stats) : Ref<Int>
+    ; r14 (@stats) : Ref<Bool>
+    ; r15 (v16) : Bool
+    ; r16 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
+    ; r17 (v19) : {count: Int, exceeded: Bool, threshold: Int}

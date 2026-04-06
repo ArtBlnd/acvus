@@ -4,43 +4,41 @@ expression: ir
 ---
 === main ===
      0 │   r0 = undef
-     1 │   r1 = ref @sum
+     1 │   r1 = undef
      2 │   r2 = ref @sum
-     3 │   r3 = load r2
-     6 │   r4 = range 0 (r5)..10 (r6)
-     7 │   r7 = cast RangeToList r4
-     9 │   jump L0(0 (r8), r3, r0)
-    10 │ L0(r9: Int, r10: Int, r11: Int):
-    11 │   store r1 = r10
-    12 │   list_step r12, r13 = r7[r9] else L1()
-    13 │ L2:
-    14 │   r14 = ref @sum
-    15 │   r15 = r10 + r12
-    16 │   jump L0(r13, r15, r12)
-    17 │ L1:
-    18 │   r16 = ref @sum
-    19 │   return r10
+     5 │   r3 = range 0 (r4)..10 (r5)
+     6 │   r6 = cast RangeToList r3
+     8 │   jump L0(0 (r7), r0, r1)
+     9 │ L0(r8: Int, r9: Int, r10: Int):
+    10 │   store r2 = r9
+    11 │   list_step r11, r12 = r6[r8] else L1()
+    12 │ L2:
+    13 │   r13 = ref @sum
+    14 │   r14 = r9 + r11
+    15 │   jump L0(r12, r14, r11)
+    16 │ L1:
+    17 │   r15 = ref @sum
+    18 │   return r9
 
-    ; r0 (v21) : Int
-    ; r1 (v24) : Ref<Int>
-    ; r2 (@sum) : Ref<Int>
-    ; r3 (@sum) : Int
-    ; r4 (v5) : Range
-    ; r5 (v3) : Int
-    ; r6 (v4) : Int
-    ; r7 (v6) : List<Int>
-    ; r8 (v7) : Int
-    ; r9 (v8) : Int
+    ; r0 (v19) : Int
+    ; r1 (v20) : Int
+    ; r2 (v23) : Ref<Int>
+    ; r3 (v3) : Range
+    ; r4 (v1) : Int
+    ; r5 (v2) : Int
+    ; r6 (v4) : List<Int>
+    ; r7 (v5) : Int
+    ; r8 (v6) : Int
+    ; r9 (v21) : Int
     ; r10 (v22) : Int
-    ; r11 (v23) : Int
-    ; r12 (x) : Int
-    ; r13 (v10) : Int
-    ; r14 (@sum) : Ref<Int>
-    ; r15 (v17) : Int
-    ; r16 (@sum) : Ref<Int>
-    ; r17 (v14) : Int
-    ; r18 (v20) : Int
-    ; r19 (v15) : Ref<Int>
-    ; r20 (@sum) : Ref<Int>
-    ; r21 (v12) : Ref<Int>
-    ; r22 (x) : Int
+    ; r11 (x) : Int
+    ; r12 (v8) : Int
+    ; r13 (@sum) : Ref<Int>
+    ; r14 (v15) : Int
+    ; r15 (@sum) : Ref<Int>
+    ; r16 (x) : Int
+    ; r17 (v10) : Ref<Int>
+    ; r18 (v18) : Int
+    ; r19 (v13) : Ref<Int>
+    ; r20 (v12) : Int
+    ; r21 (@sum) : Ref<Int>

@@ -5,16 +5,8 @@ expression: ir
 === main ===
      0 │   r0 = ref @count
      1 │   r1 = load r0
-     2 │   r2 = ref @count
-     3 │   r3 = load r2
-     4 │   r4 = ref @count
-     5 │   r5 = load r4
-     6 │   return r5
+     2 │   return r1
 
     ; r0 (@count) : Ref<Int>
-    ; r1 (@count) : Int
-    ; r2 (@count) : Ref<Int>
-    ; r3 (@count) : Int
-    ; r4 (@count) : Ref<Int>
-    ; r5 (v7) : Int
-    ; r6 (get_count(...)) : Int
+    ; r1 (v3) : Int
+    ; r2 (get_count(...)) : Int
