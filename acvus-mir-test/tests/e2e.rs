@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
 use acvus_mir::{
     graph::infer,
-    ty::{Effect, EffectSet, EffectTarget, Ownership, Param, Ty},
+    ty::{Effect, EffectSet, EffectTarget, Param, Ty},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
@@ -2253,7 +2253,6 @@ fn iter_ty_with(interner: &Interner, effect: Effect) -> Ty {
         id: iter_qref,
         type_args: vec![Ty::Int],
         effect_args: vec![effect],
-        ownership: Ownership::MoveOnly,
     }
 }
 

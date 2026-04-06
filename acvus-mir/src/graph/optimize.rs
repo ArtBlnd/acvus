@@ -135,6 +135,7 @@ fn run_pass2(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata
     optimize::code_motion::run(cfg, fn_metadata);
     optimize::reorder::run(cfg, fn_metadata);
     debug_validate(cfg);
+    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
     if untyped_scalars {
         optimize::reg_color::color_body_untyped(cfg);
     } else {

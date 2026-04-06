@@ -714,6 +714,14 @@ async fn execute_inst(
             let val = eval_cast(*kind, frame.share(*src));
             frame.set(*dst, val);
         }
+        InstKind::Clone { dst, src } => {
+            let val = frame.share(*src);
+            frame.set(*dst, val);
+        }
+        InstKind::Drop { src } => {
+            // Consume the value, releasing its resources.
+            let _ = frame.take(*src);
+        }
 
         // ── List iteration ───────────────────────────────
         InstKind::ListStep {

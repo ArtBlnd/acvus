@@ -5,7 +5,7 @@ use std::sync::Arc;
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Ownership, Param, Ty, TySubst};
+use acvus_mir::ty::{Effect, Param, Ty, TySubst};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -80,7 +80,6 @@ pub fn deque_registry(interner: &Interner) -> ExternRegistry {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
-                ownership: Ownership::MoveOnly,
             }
         };
 

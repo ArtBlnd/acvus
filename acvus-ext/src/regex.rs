@@ -6,7 +6,7 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, Ownership, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
@@ -14,7 +14,6 @@ fn user_defined_ty(id: QualifiedRef) -> Ty {
         id,
         type_args: vec![],
         effect_args: vec![],
-        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -82,7 +81,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
         qref,
         type_params: vec![],
         effect_params: vec![],
-        ownership: Ownership::Clone,
     });
 
     let ty = user_defined_ty(qref);
@@ -130,7 +128,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                         id: iter_qref,
                         type_args: vec![Ty::String],
                         effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
-                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )
@@ -172,7 +169,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                         id: iter_qref,
                         type_args: vec![Ty::String],
                         effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
-                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )
@@ -210,7 +206,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                         id: iter_qref,
                         type_args: vec![Ty::String],
                         effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
-                        ownership: Ownership::MoveOnly,
                     },
                 ),
             )

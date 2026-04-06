@@ -158,6 +158,7 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::TestListLen { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
             | InstKind::Cast { dst, .. }
+            | InstKind::Clone { dst, .. }
             | InstKind::Spawn { dst, .. }
             | InstKind::Eval { dst, .. }
             | InstKind::Poison { dst }
@@ -180,6 +181,7 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
 
             // Instructions that don't produce values
             InstKind::Store { .. }
+            | InstKind::Drop { .. }
             | InstKind::Return(_)
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }

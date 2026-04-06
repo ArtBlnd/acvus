@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{Callee, Inst, InstKind, MirBody, MirModule, ValueId};
-use crate::ty::{Ownership, Ty};
+use crate::ty::Ty;
 
 use super::type_check::{ValidationError, ValidationErrorKind};
 
@@ -41,8 +41,8 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         // Handle — always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
-        // UserDefined — determined by ownership field
-        Ty::UserDefined { ownership, .. } => Some(*ownership == Ownership::MoveOnly),
+        // UserDefined — always move-only
+        Ty::UserDefined { .. } => Some(true),
 
         // Containers — transitive
         Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => is_move_only(inner),
@@ -502,6 +502,15 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
+        InstKind::Clone { dst, src, .. } => {
+            // Clone reads src (not consumed — it's being cloned)
+            // src remains alive after clone
+            state.set_value(*dst, Liveness::Alive);
+            let _ = src;
+        }
+        InstKind::Drop { src } => {
+            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
+        }
         InstKind::ListStep { dst, index_dst, .. } => {
             // list is borrowed (not consumed), index_src is Int (copyable).
             state.set_value(*dst, Liveness::Alive);
@@ -715,7 +724,6 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         }
     }
 

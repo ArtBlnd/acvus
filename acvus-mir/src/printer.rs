@@ -738,6 +738,17 @@ fn write_body(
                 kind,
                 vn.fmt_use(*src, &consts, &texts)
             )?,
+            InstKind::Clone { dst, src } => writeln!(
+                f,
+                "{} = clone {}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*src, &consts, &texts)
+            )?,
+            InstKind::Drop { src } => writeln!(
+                f,
+                "drop {}",
+                vn.fmt_use(*src, &consts, &texts)
+            )?,
             InstKind::Undef { dst } => writeln!(f, "{} = undef", vn.fmt_val(*dst))?,
             InstKind::Poison { dst } => writeln!(f, "{} = poison", vn.fmt_val(*dst))?,
         }

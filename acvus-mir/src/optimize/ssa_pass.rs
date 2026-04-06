@@ -554,6 +554,8 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         }
         InstKind::Return(v) => s(v),
         InstKind::Cast { src, .. } => s(src),
+        InstKind::Clone { src, .. } => s(src),
+        InstKind::Drop { src } => s(src),
     }
 }
 

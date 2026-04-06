@@ -48,6 +48,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
         | InstKind::Cast { dst, .. }
+        | InstKind::Clone { dst, .. }
         | InstKind::ListStep { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Eval { dst, .. }
@@ -56,6 +57,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 
         // These don't define a new Val
         InstKind::Store { .. }
+        | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return(_)

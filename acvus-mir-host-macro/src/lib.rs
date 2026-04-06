@@ -100,12 +100,6 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     id: #qref_expr,
                     type_args: vec![#(#type_arg_exprs),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
-                    ownership: {
-                        use ::acvus_mir_host::AutoregCopy as _;
-                        use ::acvus_mir_host::AutoregClone as _;
-                        use ::acvus_mir_host::AutoregMove as _;
-                        (&&&::acvus_mir_host::TypeMarker::<#struct_name<#(#param_names),*>>::new()).__ownership()
-                    },
                 }
             }
         }
@@ -119,12 +113,6 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     qref: #qref_expr,
                     type_params: vec![None; #n_type_params],
                     effect_params: vec![None; #n_effect_params],
-                    ownership: {
-                        use ::acvus_mir_host::AutoregCopy as _;
-                        use ::acvus_mir_host::AutoregClone as _;
-                        use ::acvus_mir_host::AutoregMove as _;
-                        (&&&::acvus_mir_host::TypeMarker::<#struct_name<#(#param_names),*>>::new()).__ownership()
-                    },
                 }
             }
         }

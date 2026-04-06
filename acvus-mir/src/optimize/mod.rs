@@ -1,6 +1,7 @@
 pub mod code_motion;
 pub mod const_dedup;
 pub mod dce;
+pub mod drop_insertion;
 pub mod dse;
 pub mod reg_color;
 pub mod reorder;

@@ -322,6 +322,31 @@ pub enum InstKind {
         kind: CastKind,
     },
 
+    /// Clone a value. `dst` receives an independent copy of `src`.
+    ///
+    /// Emitted for explicit `clone(x)` calls. The compiler statically verifies
+    /// that `src`'s type is cloneable (Copy or has a registered clone function).
+    /// MoveOnly types → compile error, never reaches this instruction.
+    ///
+    /// At runtime, the interpreter calls `TryClone::try_clone` on the value.
+    /// For Copy types this is a bitwise copy; for UserDefined types it invokes
+    /// the registered clone function via the Owned vtable.
+    Clone {
+        dst: ValueId,
+        src: ValueId,
+    },
+
+    /// Drop a value, releasing its resources.
+    ///
+    /// Inserted by the compiler at the end of a value's live range (last use
+    /// or scope exit). No `dst` — Drop only consumes, never produces.
+    ///
+    /// At runtime, the interpreter calls the Owned vtable's drop function.
+    /// Copy types (SBO) have a no-op drop. Boxed types invoke their destructor.
+    Drop {
+        src: ValueId,
+    },
+
     /// Poison value: result of a compile-time error (e.g. undefined function).
     /// The typechecker already reported the error; this exists so the lowerer
     /// can continue without panicking. Must never be reached at runtime.

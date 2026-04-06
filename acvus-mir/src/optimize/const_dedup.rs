@@ -222,6 +222,10 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::Cast { src, .. } => remap_val(src, remap),
 
+        InstKind::Clone { src, .. } => remap_val(src, remap),
+
+        InstKind::Drop { src } => remap_val(src, remap),
+
         InstKind::ListStep {
             list,
             index_src,

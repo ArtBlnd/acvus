@@ -3,23 +3,9 @@ use std::fmt;
 
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
-use serde::{Deserialize, Serialize};
-
 use crate::graph::types::QualifiedRef;
 
 // ── UserDefined type system ──────────────────────────────────────────
-
-/// Ownership classification: how a value of this type may be used.
-///
-/// - `Copy`: trivially duplicated (e.g. integers, booleans).
-/// - `Clone`: explicitly duplicated (e.g. strings, lists).
-/// - `MoveOnly`: consumed on use, cannot be duplicated (e.g. handles, iterators).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Ownership {
-    Copy,
-    Clone,
-    MoveOnly,
-}
 
 /// Declaration of a user-defined type — the **single source of truth**
 /// for parameter count and constraints. Registered once, referenced by QualifiedRef everywhere.
@@ -30,8 +16,6 @@ pub struct UserDefinedDecl {
     pub type_params: Vec<Option<ParamConstraint>>,
     /// Effect parameter constraints. `None` = unconstrained.
     pub effect_params: Vec<Option<EffectConstraint>>,
-    /// How values of this type may be used (Copy, Clone, or MoveOnly).
-    pub ownership: Ownership,
 }
 
 /// Immutable registry of all UserDefined type declarations and ExternCast rules.
@@ -541,7 +525,6 @@ pub enum Ty {
         id: QualifiedRef,
         type_args: Vec<Ty>,
         effect_args: Vec<Effect>,
-        ownership: Ownership,
     },
     Option(Box<Ty>),
     /// User-defined structural enum type.
@@ -1138,13 +1121,11 @@ impl TySubst {
                     id: id_a,
                     type_args: ta_a,
                     effect_args: ea_a,
-                    ownership: ownership_a,
                 },
                 Ty::UserDefined {
                     id: id_b,
                     type_args: ta_b,
                     effect_args: ea_b,
-                    ..
                 },
             ) if id_a == id_b => {
                 assert_eq!(ta_a.len(), ta_b.len());
@@ -1168,7 +1149,6 @@ impl TySubst {
                         id: *id_a,
                         type_args: ta_a.iter().map(|t| self.resolve(t)).collect(),
                         effect_args: merged_effects,
-                        ownership: *ownership_a,
                     })
                 } else {
                     // type_args mismatch — rollback and try CastRule-based LUB.
@@ -1323,12 +1303,10 @@ impl TySubst {
                 id,
                 type_args,
                 effect_args,
-                ownership,
             } => Ty::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|t| self.resolve(t)).collect(),
                 effect_args: effect_args.iter().map(|e| self.resolve_effect(e)).collect(),
-                ownership: *ownership,
             },
             other => other.clone(),
         }
@@ -1896,7 +1874,6 @@ impl TySubst {
                 id,
                 type_args,
                 effect_args,
-                ownership,
             } => Ty::UserDefined {
                 id: *id,
                 type_args: type_args
@@ -1907,7 +1884,6 @@ impl TySubst {
                     .iter()
                     .map(|e| self.instantiate_effect(e, effect_map))
                     .collect(),
-                ownership: *ownership,
             },
             Ty::Handle(inner, effect) => {
                 let new_e = self.instantiate_effect(effect, effect_map);
@@ -2044,7 +2020,6 @@ mod tests {
             id: fresh_qref(),
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         }
     }
 
@@ -3772,7 +3747,6 @@ mod tests {
             id,
             type_args,
             effect_args,
-            ownership: Ownership::MoveOnly,
         }
     }
 
@@ -3967,7 +3941,6 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         let decl = reg.get(id);
         assert_eq!(decl.qref, id);
@@ -3983,13 +3956,11 @@ mod tests {
             qref: id,
             type_params: vec![],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
     }
 
@@ -4020,7 +3991,6 @@ mod tests {
             id,
             type_args: params.clone(),
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
@@ -4028,7 +3998,6 @@ mod tests {
             qref: id,
             type_params: vec![None; type_param_count],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         reg.register_cast(CastRule {
             from,
@@ -4050,7 +4019,6 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         let to = Ty::List(Box::new(Ty::Int));
         assert!(s.unify(&from, &to, Covariant).is_ok());
@@ -4066,7 +4034,6 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         let consumer_param = s.fresh_param();
         let to = Ty::List(Box::new(consumer_param.clone()));
@@ -4083,7 +4050,6 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Covariant).is_ok());
     }
@@ -4099,7 +4065,6 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::String, Covariant).is_err());
     }
@@ -4114,7 +4079,6 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Covariant).is_err());
     }
@@ -4128,7 +4092,6 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         assert!(s.unify(&from, &Ty::Int, Invariant).is_err());
     }
@@ -4151,7 +4114,6 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t1)),
             fn_ref: fn_id_a,
@@ -4163,7 +4125,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -4175,7 +4136,6 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
@@ -4185,7 +4145,6 @@ mod tests {
             id,
             type_args: vec![Ty::Int],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         assert!(
             s.unify(&from, &Ty::List(Box::new(Ty::Int)), Covariant)
@@ -4210,14 +4169,12 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         reg.register_cast(CastRule {
             from: Ty::UserDefined {
                 id,
                 type_args: vec![t.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t.clone())),
             fn_ref: fn_id_a,
@@ -4230,7 +4187,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -4249,7 +4205,6 @@ mod tests {
             qref: id,
             type_params: vec![None],
             effect_params: vec![],
-            ownership: Ownership::MoveOnly,
         });
         let mut s1 = TySubst::new();
         let t1 = s1.fresh_param();
@@ -4258,7 +4213,6 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::List(Box::new(t1)),
             fn_ref: fn_id_a,
@@ -4271,7 +4225,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
             to: Ty::Option(Box::new(t2)),
             fn_ref: fn_id_b,

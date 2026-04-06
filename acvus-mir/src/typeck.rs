@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
-use crate::ty::{Effect, EffectTarget, Materiality, Ownership, Param, Polarity, Ty, TySubst, TypeEnv};
+use crate::ty::{Effect, EffectTarget, Materiality, Param, Polarity, Ty, TySubst, TypeEnv};
 use crate::variant::VariantPayload;
 
 /// Maps each AST node id to its inferred type.
@@ -2566,7 +2566,6 @@ mod tests {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
                 effect_args: vec![],
-                ownership: Ownership::MoveOnly,
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
@@ -2587,7 +2586,6 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
             effect_args: vec![],
-            ownership: Ownership::MoveOnly,
         };
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), conn_ty.clone()),

@@ -38,6 +38,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
         | InstKind::Cast { dst, .. }
+        | InstKind::Clone { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => smallvec![*dst],
@@ -65,6 +66,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
         InstKind::Store { .. }
+        | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return(_)
@@ -90,7 +92,9 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
-        InstKind::Cast { src, .. } => smallvec![*src],
+        InstKind::Cast { src, .. }
+        | InstKind::Clone { src, .. }
+        | InstKind::Drop { src } => smallvec![*src],
         InstKind::Return(val) => smallvec![*val],
         InstKind::TestLiteral { src, .. } => smallvec![*src],
         InstKind::TestVariant { src, .. } => smallvec![*src],

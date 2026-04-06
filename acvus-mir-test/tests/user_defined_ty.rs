@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use acvus_mir::graph::types::QualifiedRef;
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Materiality, Ownership, Param, Polarity, Ty, TySubst, TypeRegistry};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Materiality, Param, Polarity, Ty, TySubst, TypeRegistry};
 use acvus_utils::{Freeze, Interner};
 
 use Polarity::*;
@@ -29,7 +29,6 @@ fn iter_ty(interner: &Interner, elem: Ty, effect: Effect) -> Ty {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![effect],
-        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -40,7 +39,6 @@ fn seq_ty(interner: &Interner, elem: Ty, identity: Ty, effect: Effect) -> Ty {
         id: seq_qref,
         type_args: vec![elem, identity],
         effect_args: vec![effect],
-        ownership: Ownership::MoveOnly,
     }
 }
 
@@ -385,7 +383,6 @@ fn instantiate_pair_shares_params() {
         qref: id,
         type_params: vec![None],
         effect_params: vec![],
-        ownership: Ownership::MoveOnly,
     });
     let mut rule_s = TySubst::new();
     let t = rule_s.fresh_param();
@@ -393,7 +390,6 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![t.clone()],
         effect_args: vec![],
-        ownership: Ownership::MoveOnly,
     };
     let to = Ty::List(Box::new(t));
 
@@ -405,7 +401,6 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![Ty::Int],
         effect_args: vec![],
-        ownership: Ownership::MoveOnly,
     };
     assert!(s.unify(&concrete_from, &inst_from, Invariant).is_ok());
 
