@@ -24,7 +24,8 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_mir::graph::{FnConstraint, FnKind, Function, QualifiedRef};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::ty::{EffectConstraint, PolyTy};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -157,22 +158,30 @@ enum HandlerKind {
 /// A fully-specified external function: constraint + handler.
 pub struct ExternFn {
     pub name: String,
-    pub constraint: FnConstraint,
+    pub ty: PolyTy,
+    pub effect_constraint: Option<EffectConstraint>,
     handler_kind: HandlerKind,
 }
 
 /// Builder for constructing an ExternFn.
 pub struct ExternFnBuilder {
     name: String,
-    constraint: FnConstraint,
+    ty: PolyTy,
+    effect_constraint: Option<EffectConstraint>,
 }
 
 impl ExternFnBuilder {
-    pub fn new(name: impl Into<String>, constraint: FnConstraint) -> Self {
+    pub fn new(name: impl Into<String>, ty: PolyTy) -> Self {
         Self {
             name: name.into(),
-            constraint,
+            ty,
+            effect_constraint: None,
         }
+    }
+
+    pub fn with_effect_constraint(mut self, constraint: EffectConstraint) -> Self {
+        self.effect_constraint = Some(constraint);
+        self
     }
 
     /// Register a sync type-safe handler with explicit `Uses` and `Defs`.
@@ -186,7 +195,8 @@ impl ExternFnBuilder {
     {
         ExternFn {
             name: self.name,
-            constraint: self.constraint,
+            ty: self.ty.clone(),
+            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Extern(into_sync_extern_handler(f)),
         }
     }
@@ -203,7 +213,8 @@ impl ExternFnBuilder {
     {
         ExternFn {
             name: self.name,
-            constraint: self.constraint,
+            ty: self.ty.clone(),
+            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Extern(into_async_extern_handler(f)),
         }
     }
@@ -212,7 +223,8 @@ impl ExternFnBuilder {
     pub fn sync_handler(self, f: SyncBuiltinFn) -> ExternFn {
         ExternFn {
             name: self.name,
-            constraint: self.constraint,
+            ty: self.ty.clone(),
+            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Sync(f)),
         }
     }
@@ -221,7 +233,8 @@ impl ExternFnBuilder {
     pub fn async_handler(self, f: AsyncBuiltinFn) -> ExternFn {
         ExternFn {
             name: self.name,
-            constraint: self.constraint,
+            ty: self.ty.clone(),
+            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Async(f)),
         }
     }
@@ -265,7 +278,8 @@ impl ExternRegistry {
             functions.push(Function {
                 qref,
                 kind: FnKind::Extern,
-                constraint: f.constraint,
+                ty: f.ty,
+                effect_constraint: f.effect_constraint,
             });
 
             match f.handler_kind {
@@ -286,30 +300,23 @@ impl ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_mir::graph::{Constraint, Signature};
-    use acvus_mir::ty::{Effect, Param, Ty};
+    use acvus_mir::ty::{Effect, Param, Poly, PolyEffect, PolyParam, Ty, TyTerm, lift_to_poly, lift_effect};
 
     fn interner() -> Interner {
         Interner::new()
     }
 
-    fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-        let named: Vec<Param> = params
-            .into_iter()
+    fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+        let named: Vec<PolyParam> = params
+            .iter()
             .enumerate()
-            .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+            .map(|(i, ty)| PolyParam::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
             .collect();
-        FnConstraint {
-            signature: Some(Signature {
-                params: named.clone(),
-            }),
-            output: Constraint::Exact(Ty::Fn {
-                params: named,
-                ret: Box::new(ret),
-                captures: vec![],
-                effect: Effect::pure(),
-            }),
-            effect: None,
+        TyTerm::Fn {
+            params: named,
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: lift_effect(&Effect::pure()),
             hint: None,
         }
     }

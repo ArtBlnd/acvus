@@ -33,13 +33,13 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::token_liveness;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::ty::{Effect, EffectTarget, Ty};
 
 // ── Entry point ────────────────────────────────────────────────────
 
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     // Phase 1: Hoist — move Spawn and pure instructions UP.
     loop {
         if !hoist_pass(cfg, fn_metadata) {
@@ -55,7 +55,7 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>)
 
 /// One iteration: find hoistable instructions, move them to the highest
 /// valid dominator. Returns true if anything moved.
-fn hoist_pass(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> bool {
+fn hoist_pass(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
     if cfg.blocks.len() < 2 {
         return false;
     }
@@ -216,7 +216,7 @@ fn find_highest_target(
 ///
 /// Allowlist: only provably pure instructions. Unknown kinds default to
 /// not hoistable (soundness by construction).
-fn is_hoistable(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> bool {
+fn is_hoistable(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
     match kind {
         // Arithmetic / logic.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } | InstKind::Cast { .. } => true,
@@ -271,11 +271,11 @@ fn is_hoistable(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, FnMetadat
     }
 }
 
-fn is_pure_call(fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, qref: &QualifiedRef) -> bool {
+fn is_pure_call(fn_metadata: &FxHashMap<QualifiedRef, Ty>, qref: &QualifiedRef) -> bool {
     let Some(Ty::Fn {
         effect: Effect::Resolved(eff),
         ..
-    }) = fn_metadata.get(qref).map(|m| &m.ty)
+    }) = fn_metadata.get(qref)
     else {
         return false;
     };
@@ -293,7 +293,7 @@ fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
 
 fn token_ids_of(
     kind: &InstKind,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     _val_types: &FxHashMap<ValueId, Ty>,
 ) -> smallvec::SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
@@ -304,7 +304,7 @@ fn token_ids_of(
         | InstKind::Spawn {
             callee: Callee::Direct(qref),
             ..
-        } => fn_metadata.get(qref).and_then(|m| match &m.ty {
+        } => fn_metadata.get(qref).and_then(|m| match m {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -582,42 +582,38 @@ mod tests {
         })
     }
 
-    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, FnMetadata) {
+    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
-            FnMetadata {
-                // IO functions have no context/token effects in the effect set —
-                // their "IO-ness" is conveyed by Hint::Io. Spawn is always
-                // hoistable regardless of effect; token liveness only blocks hoist
-                // when a token write appears in the effect set.
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
+            // IO functions have no context/token effects in the effect set —
+            // their "IO-ness" is conveyed by Hint::Io. Spawn is always
+            // hoistable regardless of effect; token liveness only blocks hoist
+            // when a token write appears in the effect set.
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::pure(),
                 hint: Some(crate::ty::Hint::Io),
             },
         )
     }
 
-    fn token_fn_type(i: &Interner, name: &str, tid: QualifiedRef) -> (QualifiedRef, FnMetadata) {
+    fn token_fn_type(i: &Interner, name: &str, tid: QualifiedRef) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         let mut reads = BTreeSet::new();
         reads.insert(EffectTarget::Token(tid));
         (
             qref,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads,
-                        writes: BTreeSet::new(),
-                    }),
-                },
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads,
+                    writes: BTreeSet::new(),
+                }),
                 hint: None,
             },
         )

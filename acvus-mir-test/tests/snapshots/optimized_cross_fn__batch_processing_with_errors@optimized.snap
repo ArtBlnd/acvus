@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 439
 expression: opt
 ---
 === literals ===
@@ -22,56 +23,56 @@ expression: opt
     13 │   r13 = ref @multiplier
     14 │   r14 = ref @ok_count
     15 │   r15 = ref @sum
-    25 │   r16 = load r15
-    26 │   r17 = load r8
-    27 │   r18 = load r9
-    28 │   r19 = load r10
-    29 │   r20 = load r11
-    30 │   r21 = load r12
-    31 │   r22 = load r13
-    32 │   r23 = load r14
-    33 │   jump L0(0 (r24), r17, r16, r19, r23, r0, r1, r2, r3)
-    34 │ L0(r1: Int, r2: Int, r3: Int, r19: String, r24: Int, r0: {value: Int}, r16: Int, r17: Int, r23: Int):
+    25 │   r16 = load r11
+    26 │   r17 = load r12
+    27 │   r18 = load r13
+    28 │   r19 = load r14
+    29 │   r20 = load r15
+    30 │   r21 = load r8
+    31 │   r22 = load r9
+    32 │   r23 = load r10
+    33 │   jump L0(0 (r24), r21, r20, r23, r19, r0, r1, r2, r3)
+    34 │ L0(r1: Int, r2: Int, r3: Int, r23: String, r24: Int, r0: {value: Int}, r19: Int, r20: Int, r21: Int):
     35 │   store r4 = r2
     36 │   store r5 = r3
-    37 │   store r6 = r19
+    37 │   store r6 = r23
     38 │   store r7 = 0 (r24)
     39 │   r25 = 0 (r24) + 1 (r26)
     40 │   r27 = r2 + 1 (r28)
-    41 │   list_step r29, r30 = r18[r1] else L1()
+    41 │   list_step r29, r30 = r22[r1] else L1()
     42 │ L2:
     43 │   r1 = r29.value
-    44 │   r31 = r1 >= r21
+    44 │   r31 = r1 >= r17
     45 │   r32 = test r31 == true
-    46 │   r31 = r1 <= r20
+    46 │   r31 = r1 <= r16
     47 │   r33 = test r31 == true
-    48 │   r16 = r1 * r22
-    49 │   r17 = r1 / 2 (r34)
-    50 │   r23 = r16 + r17
-    51 │   r16 = r3 + r23
-    52 │   r35 = call #0(r1)
-    53 │   r36 = T0 + r35
-    54 │   jump_if r32 then L7 else L8(0 (r37))
-    55 │ L7:
-    56 │   jump_if r33 then L9 else L10(0 (r37))
-    57 │ L9:
-    58 │   jump L10(1 (r38))
-    59 │ L10(r1: Int):
-    60 │   jump L8(r1)
-    61 │ L8(r1: Int):
-    62 │   r31 = r1 > 0 (r39)
-    63 │   r32 = test r31 == true
-    64 │   r31 = r1 == 0 (r40)
-    65 │   r33 = test r31 == true
-    66 │   jump_if r32 then L3 else L4(r3, 0 (r24), r23)
-    67 │ L3:
-    68 │   jump L4(r16, r25, r23)
-    69 │ L4(r1: Int, r3: Int, r24: Int):
-    70 │   jump_if r33 then L5 else L6(r2, r19)
-    71 │ L5:
-    72 │   jump L6(r27, r36)
-    73 │ L6(r2: Int, r19: String):
-    74 │   jump L0(r30, r2, r1, r19, r3, r29, r1, r1, 0 (r24))
+    48 │   r19 = r1 * r18
+    49 │   r20 = r1 / 2 (r34)
+    50 │   r21 = r19 + r20
+    51 │   r19 = r3 + r21
+    52 │   jump_if r32 then L7 else L8(0 (r35))
+    53 │ L7:
+    54 │   jump_if r33 then L9 else L10(0 (r35))
+    55 │ L9:
+    56 │   jump L10(1 (r36))
+    57 │ L10(r20: Int):
+    58 │   jump L8(r20)
+    59 │ L8(r20: Int):
+    60 │   r31 = r20 > 0 (r37)
+    61 │   r32 = test r31 == true
+    62 │   r31 = r20 == 0 (r38)
+    63 │   r33 = test r31 == true
+    64 │   jump_if r32 then L3 else L4(r3, 0 (r24), r21)
+    65 │ L3:
+    66 │   jump L4(r19, r25, r21)
+    67 │ L4(r3: Int, r24: Int, r19: Int):
+    68 │   jump_if r33 then L5 else L6(r2, r23)
+    69 │ L5:
+    70 │   r23 = call #0(r1)
+    71 │   r39 = T0 + r23
+    72 │   jump L6(r27, r39)
+    73 │ L6(r1: Int, r23: String):
+    74 │   jump L0(r30, r1, r3, r23, 0 (r24), r29, r1, r20, r19)
     75 │ L1:
     76 │   r1 = call #1(r3, 0 (r24), r2)
     77 │   return r3
@@ -92,14 +93,14 @@ expression: opt
     ; r13 (@multiplier) : Ref<Int>
     ; r14 (@ok_count) : Ref<Int>
     ; r15 (@sum) : Ref<Int>
-    ; r16 (@sum) : Int
-    ; r17 (@err_count) : Int
-    ; r18 (@items) : List<{value: Int}>
-    ; r19 (@last_err) : String
-    ; r20 (@max_val) : Int
-    ; r21 (@min_val) : Int
-    ; r22 (@multiplier) : Int
-    ; r23 (@ok_count) : Int
+    ; r16 (@max_val) : Int
+    ; r17 (@min_val) : Int
+    ; r18 (@multiplier) : Int
+    ; r19 (@ok_count) : Int
+    ; r20 (@sum) : Int
+    ; r21 (@err_count) : Int
+    ; r22 (@items) : List<{value: Int}>
+    ; r23 (to_string(...)) : String
     ; r24 (v17) : Int
     ; r25 (v34) : Int
     ; r26 (v22) : Int
@@ -111,10 +112,9 @@ expression: opt
     ; r32 (v39) : Bool
     ; r33 (v40) : Bool
     ; r34 (v21) : Int
-    ; r35 (to_string(...)) : String
-    ; r36 (v42) : String
-    ; r37 (v18) : Int
-    ; r38 (v19) : Int
-    ; r39 (v20) : Int
-    ; r40 (v23) : Int
-    ; r41 (v25) : String
+    ; r35 (v18) : Int
+    ; r36 (v19) : Int
+    ; r37 (v20) : Int
+    ; r38 (v23) : Int
+    ; r39 (v41) : String
+    ; r40 (v25) : String

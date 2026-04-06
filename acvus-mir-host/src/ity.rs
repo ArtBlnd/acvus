@@ -3,20 +3,34 @@
 //! Typeck<N>: Compile-time stand-in for generic type parameters.
 //! EffectParam + Eff<N>: Effect variable system.
 
-use acvus_mir::ty::{Effect, Ty};
+use acvus_mir::ty::{Effect, InferEffect, InferTy, PolyEffect, PolyTy, Ty, lift_effect, lift_to_poly, lift_effect_to_poly, lift_ty};
 use acvus_utils::Interner;
 
 // ── ITy ────────────────────────────────────────────────────────────
 
 /// Bridge between Rust host types and MIR compiler types.
 ///
-/// `type_vars`: pre-allocated Ty::Param entries (from TySubst::fresh_param).
-/// `effect_vars`: pre-allocated Effect::Var entries (from TySubst::fresh_effect_var).
+/// `type_vars`: pre-allocated type entries (from Solver::fresh_ty_var).
+/// `effect_vars`: pre-allocated effect entries (from Solver::fresh_effect_var).
 ///
 /// Concrete types ignore both slices. Typeck<N> indexes into type_vars.
 /// Eff<N> indexes into effect_vars.
 pub trait ITy: Sized + 'static {
     fn ty(interner: &Interner, type_vars: &[Ty], effect_vars: &[Effect]) -> Ty;
+
+    /// Infer-phase version: returns `InferTy` with solver variables.
+    /// Default: lifts the concrete type (works for non-generic types).
+    fn infer_ty(interner: &Interner, type_vars: &[InferTy], effect_vars: &[InferEffect]) -> InferTy {
+        let _ = (type_vars, effect_vars);
+        lift_ty(&Self::ty(interner, &[], &[]))
+    }
+
+    /// Poly-phase version: returns `PolyTy` with positional Var placeholders.
+    /// Default: lifts the concrete type (works for non-generic types).
+    fn poly_ty(interner: &Interner, type_vars: &[PolyTy], effect_vars: &[PolyEffect]) -> PolyTy {
+        let _ = (type_vars, effect_vars);
+        lift_to_poly(&Self::ty(interner, &[], &[]))
+    }
 }
 
 // ── Builtin ITy impls ─────────────────────────────────────────────
@@ -32,11 +46,23 @@ impl<T: ITy> ITy for Vec<T> {
     fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
         Ty::List(Box::new(T::ty(i, tv, ev)))
     }
+    fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
+        InferTy::List(Box::new(T::infer_ty(i, tv, ev)))
+    }
+    fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
+        PolyTy::List(Box::new(T::poly_ty(i, tv, ev)))
+    }
 }
 
 impl<T: ITy> ITy for Option<T> {
     fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
         Ty::Option(Box::new(T::ty(i, tv, ev)))
+    }
+    fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
+        InferTy::Option(Box::new(T::infer_ty(i, tv, ev)))
+    }
+    fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
+        PolyTy::Option(Box::new(T::poly_ty(i, tv, ev)))
     }
 }
 
@@ -45,6 +71,12 @@ macro_rules! impl_ity_tuple {
         impl<$($T: ITy),+> ITy for ($($T,)+) {
             fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
                 Ty::Tuple(vec![$($T::ty(i, tv, ev)),+])
+            }
+            fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
+                InferTy::Tuple(vec![$($T::infer_ty(i, tv, ev)),+])
+            }
+            fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
+                PolyTy::Tuple(vec![$($T::poly_ty(i, tv, ev)),+])
             }
         }
     }
@@ -158,6 +190,18 @@ impl_monomorphize!(A, B, C, D, E, F);
 /// effect parameters from type parameters.
 pub trait EffectParam: 'static {
     fn effect(effect_vars: &[Effect]) -> Effect;
+
+    /// Infer-phase version: returns `InferEffect` with solver variables.
+    fn infer_effect(effect_vars: &[InferEffect]) -> InferEffect {
+        let _ = effect_vars;
+        lift_effect(&Effect::pure())
+    }
+
+    /// Poly-phase version: returns `PolyEffect` with positional Var placeholders.
+    fn poly_effect(effect_vars: &[PolyEffect]) -> PolyEffect {
+        let _ = effect_vars;
+        lift_effect_to_poly(&Effect::pure())
+    }
 }
 
 // ── Typeck<N>: type variable stand-in ──────────────────────────────
@@ -166,11 +210,17 @@ pub trait EffectParam: 'static {
 ///
 /// The `#[extern_fn]` macro assigns `Typeck<0>`, `Typeck<1>`, ... to each
 /// generic type parameter (those with `Hosted` bound).
-/// `ty()` returns the pre-allocated `Ty::Param` from `type_vars[N]`.
+/// `ty()` returns the pre-allocated type variable from `type_vars[N]`.
 pub struct Typeck<const N: usize>;
 
 impl<const N: usize> ITy for Typeck<N> {
     fn ty(_: &Interner, type_vars: &[Ty], _: &[Effect]) -> Ty {
+        type_vars[N].clone()
+    }
+    fn infer_ty(_: &Interner, type_vars: &[InferTy], _: &[InferEffect]) -> InferTy {
+        type_vars[N].clone()
+    }
+    fn poly_ty(_: &Interner, type_vars: &[PolyTy], _: &[PolyEffect]) -> PolyTy {
         type_vars[N].clone()
     }
 }
@@ -189,6 +239,12 @@ pub struct Eff<const N: usize>;
 
 impl<const N: usize> EffectParam for Eff<N> {
     fn effect(effect_vars: &[Effect]) -> Effect {
+        effect_vars[N].clone()
+    }
+    fn infer_effect(effect_vars: &[InferEffect]) -> InferEffect {
+        effect_vars[N].clone()
+    }
+    fn poly_effect(effect_vars: &[PolyEffect]) -> PolyEffect {
         effect_vars[N].clone()
     }
 }

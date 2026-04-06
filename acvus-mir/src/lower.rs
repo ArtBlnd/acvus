@@ -10,7 +10,6 @@ use crate::graph::{ContextPolicy, QualifiedRef};
 use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValOrigin, ValueId,
 };
-use crate::graph::FnMetadata;
 use crate::ty::Ty;
 use crate::typeck::{CoercionMap, TypeMap};
 
@@ -34,8 +33,8 @@ pub struct Lowerer<'a> {
     closure_label_count: u32,
     /// Context QualifiedRef → Ty.
     context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Function QualifiedRef → FnMetadata. From InferResult.fn_metadata.
-    fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
+    /// Function QualifiedRef → Ty. From InferResult.fn_types.
+    fn_metadata: Freeze<FxHashMap<QualifiedRef, Ty>>,
     /// External constraints on contexts (volatile, read_only, etc.).
     policies: FxHashMap<QualifiedRef, ContextPolicy>,
     /// Context projection alias stack: @x → (@a, [x]) means @x is an alias for @a.x.
@@ -127,7 +126,7 @@ impl<'a> Lowerer<'a> {
         type_map: TypeMap,
         coercion_map: CoercionMap,
         context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-        fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
+        fn_metadata: Freeze<FxHashMap<QualifiedRef, Ty>>,
         policies: FxHashMap<QualifiedRef, ContextPolicy>,
         extern_params: Vec<(Astr, Ty)>,
     ) -> Self {
@@ -1335,26 +1334,18 @@ impl<'a> Lowerer<'a> {
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
     fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
         let val = self.materialize(val, span);
-        if let Some(&kind) = self.coercion_lookup.get(&id) {
-            match kind {
-                CastKind::Extern(fn_ref) => {
+        if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
+            match &kind {
+                CastKind::Extern { fn_ref, ret_ty } => {
                     // ExternCast → lower as FunctionCall (pure, 1 arg, no context).
-                    // Determine result type from the cast function's return type.
-                    let ret_ty = self
-                        .fn_metadata
-                        .get(&fn_ref)
-                        .and_then(|m| match &m.ty {
-                            Ty::Fn { ret, .. } => Some(ret.as_ref().clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(Ty::error);
+                    // ret_ty is the concrete return type resolved at this call site by typeck.
                     let cast_dst = self.alloc_val();
-                    self.set_val_type(cast_dst, ret_ty);
+                    self.set_val_type(cast_dst, ret_ty.clone());
                     self.emit_inst(
                         span,
                         InstKind::FunctionCall {
                             dst: cast_dst,
-                            callee: Callee::Direct(fn_ref),
+                            callee: Callee::Direct(*fn_ref),
                             args: vec![val],
                             context_uses: vec![],
                             context_defs: vec![],
@@ -1362,7 +1353,7 @@ impl<'a> Lowerer<'a> {
                     );
                     cast_dst
                 }
-                _ => {
+                kind => {
                     // Native cast — inline conversion.
                     let src_ty = self
                         .body
@@ -1378,7 +1369,7 @@ impl<'a> Lowerer<'a> {
                         InstKind::Cast {
                             dst: cast_dst,
                             src: val,
-                            kind,
+                            kind: kind.clone(),
                         },
                     );
                     cast_dst

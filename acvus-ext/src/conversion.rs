@@ -5,8 +5,7 @@ use std::sync::Arc;
 use acvus_interpreter::{
     Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value, ValueKind,
 };
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, ParamConstraint, Ty, TySubst};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -89,31 +88,40 @@ fn h_int_to_char(
 
 // ── Constraint builders ─────────────────────────────────────────────
 
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
 
-fn scalar_sig(interner: &Interner, ret: Ty) -> FnConstraint {
-    let mut s = TySubst::new();
-    let t = s.fresh_param_constrained(ParamConstraint::scalar());
-    sig(interner, vec![t], ret)
+fn sig_poly(interner: &Interner, params: Vec<PolyTy>, ret: PolyTy) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .into_iter()
+        .enumerate()
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), ty))
+        .collect();
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(ret),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
+        hint: None,
+    }
+}
+
+fn scalar_sig(interner: &Interner, ret: Ty) -> PolyTy {
+    let mut b = PolyBuilder::new();
+    let t = b.fresh_ty_var();
+    sig_poly(interner, vec![t], lift_to_poly(&ret))
 }
 
 // ── Registry ────────────────────────────────────────────────────────

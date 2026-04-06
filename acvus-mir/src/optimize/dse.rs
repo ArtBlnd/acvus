@@ -15,7 +15,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
+use crate::ty::Ty;
 use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 
 // ── ref_to_ctx: ValueId → QualifiedRef mapping ─────────────────────
@@ -59,7 +60,7 @@ struct BlockContextInfo {
 fn analyze_block(
     block: &crate::cfg::Block,
     ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> BlockContextInfo {
     let mut reads = BTreeSet::new();
@@ -221,7 +222,7 @@ fn compute_context_liveness(
 ///
 /// Removes context Store instructions (and their preceding Ref) that are
 /// dead — the stored value is guaranteed to be overwritten before being read.
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     let ref_to_ctx = build_ref_to_ctx(cfg);
     if ref_to_ctx.is_empty() {
         return;

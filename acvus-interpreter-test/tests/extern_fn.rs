@@ -4,34 +4,28 @@ use std::collections::BTreeSet;
 
 use acvus_interpreter::{Defs, Executable, ExternFnBuilder, ExternRegistry, Uses, Value};
 use acvus_interpreter_test::*;
-use acvus_mir::graph::{Constraint, FnConstraint, QualifiedRef, Signature};
+use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Hint, Param, Ty, TypeRegistry};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Hint, Param, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, lift_effect_to_poly, lift_to_poly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
 
-fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> FnConstraint {
+fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> PolyTy {
     sig_effect_hint(interner, params, ret, effect, None)
 }
 
@@ -41,23 +35,17 @@ fn sig_effect_hint(
     ret: Ty,
     effect: Effect,
     hint: Option<Hint>,
-) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect,
-        }),
-        effect: None,
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: lift_effect_to_poly(&effect),
         hint,
     }
 }

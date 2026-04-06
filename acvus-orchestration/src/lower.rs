@@ -11,10 +11,9 @@
 
 use acvus_ast::{AstId, Expr, Literal, ObjectExprField, RefKind, Script, Span};
 use acvus_mir::graph::{
-    CompilationGraph, Constraint, FnConstraint, FnKind, Function, ParsedAst, QualifiedRef,
-    Signature,
+    CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef,
 };
-use acvus_mir::ty::{EffectConstraint, Ty};
+use acvus_mir::ty::{EffectConstraint, PolyBuilder, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 
 use crate::spec::{Block, BlockMode, Content, DisplaySpec, Item, LlmSpec, Namespace, Provider};
@@ -268,9 +267,10 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
         },
     };
 
-    let output = match block.mode {
-        BlockMode::Template => Constraint::Exact(Ty::String),
-        BlockMode::Script => Constraint::Inferred,
+    let mut pb = PolyBuilder::new();
+    let ret = match block.mode {
+        BlockMode::Template => lift_to_poly(&Ty::String),
+        BlockMode::Script => pb.fresh_ty_var(),
     };
 
     let qref = QualifiedRef::qualified(ns_name, interner.intern(&block.name));
@@ -278,12 +278,14 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
         function: Function {
             qref,
             kind: FnKind::Local(parsed_ast),
-            constraint: FnConstraint {
-                signature: Some(Signature { params: vec![] }),
-                output,
-                effect: Some(EffectConstraint::read_only()),
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(ret),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: Some(EffectConstraint::read_only()),
         },
         field_errors,
     }
@@ -367,15 +369,18 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
     let ast = script(stmts, tail);
 
     let qref = QualifiedRef::qualified(ns_name, interner.intern(&llm.name));
+    let mut pb = PolyBuilder::new();
     let function = Function {
         qref,
         kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: Some(Signature { params: vec![] }),
-            output: Constraint::Inferred,
-            effect: None, // LLM calls involve IO — no constraint
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None, // LLM calls involve IO — no constraint
     };
 
     LlmLowerResult {
@@ -465,15 +470,18 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                 }
             };
 
+            let mut pb = PolyBuilder::new();
             let func = Function {
                 qref,
                 kind: FnKind::Local(parsed),
-                constraint: FnConstraint {
-                    signature: Some(Signature { params: vec![] }),
-                    output: Constraint::Exact(Ty::String),
-                    effect: Some(EffectConstraint::read_only()),
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(lift_to_poly(&Ty::String)),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: Some(EffectConstraint::read_only()),
             };
             DisplayLowerResult {
                 functions: vec![func],
@@ -513,15 +521,18 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                 }
             };
 
+            let mut pb = PolyBuilder::new();
             let tpl_func = Function {
                 qref: tpl_qref,
                 kind: FnKind::Local(tpl_parsed),
-                constraint: FnConstraint {
-                    signature: None, // param discovered by Infer via $bind
-                    output: Constraint::Exact(Ty::String),
-                    effect: Some(EffectConstraint::read_only()),
+                ty: TyTerm::Fn {
+                    params: vec![], // param discovered by Infer via $bind
+                    ret: Box::new(lift_to_poly(&Ty::String)),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: Some(EffectConstraint::read_only()),
             };
             functions.push(tpl_func);
 
@@ -549,15 +560,18 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
 
                         let history_qref =
                             QualifiedRef::qualified(ns_name, interner.intern(&history_name));
+                        let mut pb = PolyBuilder::new();
                         functions.push(Function {
                             qref: history_qref,
                             kind: FnKind::Local(ParsedAst::Script(ast)),
-                            constraint: FnConstraint {
-                                signature: Some(Signature { params: vec![] }),
-                                output: Constraint::Inferred,
-                                effect: Some(EffectConstraint::read_only()),
+                            ty: TyTerm::Fn {
+                                params: vec![],
+                                ret: Box::new(pb.fresh_ty_var()),
+                                captures: vec![],
+                                effect: pb.fresh_effect_var(),
                                 hint: None,
                             },
+                            effect_constraint: Some(EffectConstraint::read_only()),
                         });
                     }
                     Err(err) => {
@@ -592,15 +606,18 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
 
                         let live_qref =
                             QualifiedRef::qualified(ns_name, interner.intern(&live_name));
+                        let mut pb = PolyBuilder::new();
                         functions.push(Function {
                             qref: live_qref,
                             kind: FnKind::Local(ParsedAst::Script(ast)),
-                            constraint: FnConstraint {
-                                signature: Some(Signature { params: vec![] }),
-                                output: Constraint::Inferred,
-                                effect: Some(EffectConstraint::read_only()),
+                            ty: TyTerm::Fn {
+                                params: vec![],
+                                ret: Box::new(pb.fresh_ty_var()),
+                                captures: vec![],
+                                effect: pb.fresh_effect_var(),
                                 hint: None,
                             },
+                            effect_constraint: Some(EffectConstraint::read_only()),
                         });
                     }
                     Err(err) => {
@@ -645,11 +662,12 @@ mod tests {
 
         let func = &output.graph.functions[0];
         assert_eq!(i.resolve(func.qref.name), "greeting");
-        assert!(matches!(
-            func.constraint.output,
-            Constraint::Exact(Ty::String)
-        ));
-        assert!(func.constraint.effect.is_some(), "should have effect constraint");
+        // Template blocks have ret = String in the Fn type.
+        match &func.ty {
+            TyTerm::Fn { ret, .. } => assert_eq!(**ret, lift_to_poly(&Ty::String)),
+            other => panic!("expected TyTerm::Fn, got {:?}", other),
+        }
+        assert!(func.effect_constraint.is_some(), "should have effect constraint");
     }
 
     #[test]
@@ -667,7 +685,11 @@ mod tests {
         let output = lower_namespace(&i, &ns, &[]);
 
         let func = &output.graph.functions[0];
-        assert!(matches!(func.constraint.output, Constraint::Inferred));
+        // Script blocks have a Var placeholder for ret (inferred).
+        match &func.ty {
+            TyTerm::Fn { ret, .. } => assert!(matches!(**ret, TyTerm::Var(_))),
+            other => panic!("expected TyTerm::Fn, got {:?}", other),
+        }
     }
 
     // ── LLM tests ─────────────────────────────────────────────────
@@ -799,10 +821,10 @@ mod tests {
         assert_eq!(output.graph.functions.len(), 1);
         let func = &output.graph.functions[0];
         assert_eq!(i.resolve(func.qref.name), "output");
-        assert!(matches!(
-            func.constraint.output,
-            Constraint::Exact(Ty::String)
-        ));
+        match &func.ty {
+            TyTerm::Fn { ret, .. } => assert_eq!(**ret, lift_to_poly(&Ty::String)),
+            other => panic!("expected TyTerm::Fn, got {:?}", other),
+        }
     }
 
     #[test]
@@ -892,15 +914,18 @@ mod tests {
     #[test]
     fn extern_fns_included_in_graph() {
         let i = Interner::new();
+        let mut pb = PolyBuilder::new();
         let extern_fn = Function {
             qref: QualifiedRef::root(i.intern("google_llm")),
             kind: FnKind::Extern,
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: None,
         };
         let ns = Namespace {
             name: "test".into(),

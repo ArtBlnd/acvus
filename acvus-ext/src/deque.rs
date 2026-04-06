@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TySubst};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, PolyEffect, PolyTy, TyTerm, lift_effect_to_poly};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -44,30 +43,24 @@ fn h_consume(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError
 
 // ── Signature helpers ───────────────────────────────────────────────
 
-fn p(interner: &Interner, idx: usize, ty: Ty) -> Param {
-    Param::new(interner.intern(&format!("_{idx}")), ty)
+fn p(interner: &Interner, idx: usize, ty: PolyTy) -> ParamTerm<Poly> {
+    ParamTerm::<Poly>::new(interner.intern(&format!("_{idx}")), ty)
 }
 
-fn make(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> ExternFnBuilder {
-    let named: Vec<Param> = params
-        .iter()
+fn make(interner: &Interner, name: &str, params: Vec<PolyTy>, ret: PolyTy) -> ExternFnBuilder {
+    let named: Vec<ParamTerm<Poly>> = params
+        .into_iter()
         .enumerate()
-        .map(|(i, ty)| p(interner, i, ty.clone()))
+        .map(|(i, ty)| p(interner, i, ty))
         .collect();
-    let constraint = FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    let ty = TyTerm::Fn {
+        params: named,
+        ret: Box::new(ret),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
-    ExternFnBuilder::new(name, constraint)
+    ExternFnBuilder::new(name, ty)
 }
 
 // ── Registry ────────────────────────────────────────────────────────
@@ -75,8 +68,8 @@ fn make(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> ExternFnBu
 pub fn deque_registry(interner: &Interner) -> ExternRegistry {
     let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
     ExternRegistry::new(move |interner| {
-        let it = |t: Ty, e: Effect| -> Ty {
-            Ty::UserDefined {
+        let it = |t: PolyTy, e: PolyEffect| -> PolyTy {
+            TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
@@ -85,30 +78,30 @@ pub fn deque_registry(interner: &Interner) -> ExternRegistry {
 
         // append: (Deque<T, O>, T) → Deque<T, O>
         let append = {
-            let mut s = TySubst::new();
-            let t = s.fresh_param();
-            let o = s.fresh_param();
-            let deque = Ty::Deque(Box::new(t.clone()), Box::new(o.clone()));
+            let mut b = PolyBuilder::new();
+            let t = b.fresh_ty_var();
+            let o = b.fresh_ty_var();
+            let deque = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
             make(interner, "append", vec![deque.clone(), t], deque).sync_handler(h_append)
         };
 
         // extend: (Deque<T, O>, Iterator<T, E>) → Deque<T, O>
         let extend = {
-            let mut s = TySubst::new();
-            let t = s.fresh_param();
-            let o = s.fresh_param();
-            let e = s.fresh_effect_var();
-            let deque = Ty::Deque(Box::new(t.clone()), Box::new(o.clone()));
+            let mut b = PolyBuilder::new();
+            let t = b.fresh_ty_var();
+            let o = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
+            let deque = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
             make(interner, "extend", vec![deque.clone(), it(t, e)], deque).sync_handler(h_extend)
         };
 
         // consume: (Deque<T, O>, Int) → Deque<T, O>
         let consume = {
-            let mut s = TySubst::new();
-            let t = s.fresh_param();
-            let o = s.fresh_param();
-            let deque = Ty::Deque(Box::new(t), Box::new(o));
-            make(interner, "consume", vec![deque.clone(), Ty::Int], deque).sync_handler(h_consume)
+            let mut b = PolyBuilder::new();
+            let t = b.fresh_ty_var();
+            let o = b.fresh_ty_var();
+            let deque = TyTerm::Deque(Box::new(t), Box::new(o));
+            make(interner, "consume", vec![deque.clone(), TyTerm::Int], deque).sync_handler(h_consume)
         };
 
         vec![append, extend, consume]

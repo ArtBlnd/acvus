@@ -26,7 +26,7 @@ expression: ir
     ; r4 (v7) : Fn({name: String}) -> String
     ; r5 (map(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r6 (collect(...)) : List<String>
-    ; r7 (v10) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r7 (v10) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r8 (join(...)) : String
     ; r9 (v13) : String
     ; r10 (v11) : String

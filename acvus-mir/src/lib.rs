@@ -7,6 +7,7 @@ pub mod lower;
 pub mod optimize;
 pub mod printer;
 pub mod ser_ty;
+pub mod solver;
 pub mod ty;
 pub mod typeck;
 pub mod validate;
@@ -80,6 +81,7 @@ mod tests {
             ret: Box::new(Ty::String),
             captures: vec![],
             effect: Effect::pure(),
+            hint: None,
         };
         compile_template(
             &i,
@@ -218,6 +220,7 @@ mod tests {
 
                     captures: vec![],
                     effect: Effect::pure(),
+                    hint: None,
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -263,6 +266,7 @@ mod tests {
                     ret: Box::new(Ty::String),
                     captures: vec![],
                     effect: Effect::pure(),
+                    hint: None,
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -474,7 +478,9 @@ mod tests {
     #[test]
     fn materiality_store_deque() {
         let i = Interner::new();
-        let o = crate::ty::TySubst::new().alloc_identity(false);
+        let mut solver = crate::ty::Solver::new();
+        let infer_o = solver.alloc_identity(false);
+        let o = solver.freeze_ty(&infer_o).unwrap();
         assert!(
             compile_script(
                 &i,
@@ -511,6 +517,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
             effect: Effect::pure(),
+            hint: None,
         };
         // Storing a function to context must fail.
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
@@ -529,6 +536,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
             effect: Effect::pure(),
+            hint: None,
         };
         let list_fn_ty = Ty::List(Box::new(fn_ty));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
@@ -542,6 +550,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
             effect: Effect::pure(),
+            hint: None,
         };
         let obj_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),

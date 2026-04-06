@@ -95,7 +95,7 @@ pub mod compile {
         // Phase 1: Extract
         let ext = extract::extract(interner, &lowered.graph);
 
-        // Phase 2: Infer (with check_completeness + effect constraint)
+        // Phase 2: Infer (with policy + effect constraint validation)
         let inf = infer::infer(
             interner,
             &lowered.graph,

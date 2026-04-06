@@ -8,7 +8,7 @@ use acvus_interpreter::builtins::build_builtins;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, Param, ParamTerm, Poly, Ty, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -48,7 +48,7 @@ async fn run_ext_with_registry(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
@@ -58,18 +58,23 @@ async fn run_ext_with_registry(
     for reg in &registered {
         functions.extend(reg.functions.iter().cloned());
     }
-    functions.push(Function {
-        qref: entry_qref,
-        kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(interner, source).expect("parse"),
-        )),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    });
+    {
+        let mut pb = acvus_mir::ty::PolyBuilder::new();
+        functions.push(Function {
+            qref: entry_qref,
+            kind: FnKind::Local(ParsedAst::Script(
+                acvus_ast::parse_script(interner, source).expect("parse"),
+            )),
+            ty: acvus_mir::ty::PolyTy::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
+                hint: None,
+            },
+            effect_constraint: None,
+        });
+    }
 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -363,23 +368,17 @@ async fn mixed_regex_and_encoding() {
 //  ExternCast — coercion via registered CastRule
 // ═══════════════════════════════════════════════════════════════════════
 
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> acvus_mir::ty::PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    acvus_mir::ty::PolyTy::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
@@ -480,8 +479,8 @@ async fn extern_cast_auto_coercion() {
 
     // Register CastRule: MyNum → Int
     tr.register_cast(CastRule {
-        from: my_num_ty,
-        to: Ty::Int,
+        from: lift_to_poly(&my_num_ty),
+        to: lift_to_poly(&Ty::Int),
         fn_ref: to_int_qref,
     });
 
@@ -494,16 +493,21 @@ async fn extern_cast_auto_coercion() {
         functions.extend(reg.functions.iter().cloned());
     }
     let ast = acvus_ast::parse_script(&i, "double(make_num())").expect("parse error");
-    functions.push(Function {
-        qref: entry_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    });
+    {
+        let mut pb = acvus_mir::ty::PolyBuilder::new();
+        functions.push(Function {
+            qref: entry_qref,
+            kind: FnKind::Local(ParsedAst::Script(ast)),
+            ty: acvus_mir::ty::PolyTy::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
+                hint: None,
+            },
+            effect_constraint: None,
+        });
+    }
 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

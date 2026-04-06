@@ -19,7 +19,7 @@ expression: ir
     ; r3 (v4) : List<Int>
     ; r4 (v8) : Ref<List<Int>>
     ; r5 ($xs) : List<Int>
-    ; r6 (v10) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r6 (v10) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r7 (v11) : Fn(Int) -> Int
     ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (collect(...)) : List<Int>

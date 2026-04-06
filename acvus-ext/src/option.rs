@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TySubst};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, TyTerm, lift_effect_to_poly};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -44,49 +43,37 @@ fn h_unwrap_or(
 // ── Builders ────────────────────────────────────────────────────────
 
 fn build_unwrap(interner: &Interner) -> acvus_interpreter::ExternFn {
-    let mut s = TySubst::new();
-    let t = s.fresh_param();
-    let named = vec![Param::new(
+    let mut b = PolyBuilder::new();
+    let t = b.fresh_ty_var();
+    let named = vec![ParamTerm::<Poly>::new(
         interner.intern("_0"),
-        Ty::Option(Box::new(t.clone())),
+        TyTerm::Option(Box::new(t.clone())),
     )];
-    let constraint = FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(t),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    let ty = TyTerm::Fn {
+        params: named,
+        ret: Box::new(t),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
-    ExternFnBuilder::new("unwrap", constraint).handler(h_unwrap)
+    ExternFnBuilder::new("unwrap", ty).handler(h_unwrap)
 }
 
 fn build_unwrap_or(interner: &Interner) -> acvus_interpreter::ExternFn {
-    let mut s = TySubst::new();
-    let t = s.fresh_param();
+    let mut b = PolyBuilder::new();
+    let t = b.fresh_ty_var();
     let named = vec![
-        Param::new(interner.intern("_0"), Ty::Option(Box::new(t.clone()))),
-        Param::new(interner.intern("_1"), t.clone()),
+        ParamTerm::<Poly>::new(interner.intern("_0"), TyTerm::Option(Box::new(t.clone()))),
+        ParamTerm::<Poly>::new(interner.intern("_1"), t.clone()),
     ];
-    let constraint = FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(t),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    let ty = TyTerm::Fn {
+        params: named,
+        ret: Box::new(t),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
-    ExternFnBuilder::new("unwrap_or", constraint).handler(h_unwrap_or)
+    ExternFnBuilder::new("unwrap_or", ty).handler(h_unwrap_or)
 }
 
 // ── Registry ────────────────────────────────────────────────────────

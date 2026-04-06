@@ -3,9 +3,9 @@
 use acvus_mir_host::testing::{DummyRegistrar, DummyScope};
 use acvus_mir_host::{
     extern_fn, Callable, Eff, EffectParam, ExternFnDef, ExternType, Hosted,
-    ITy, Monomorphize, Scope, Ty, Typeck,
+    PolyTy, Monomorphize, Scope, Ty, Typeck, lift_to_poly,
 };
-use acvus_mir::ty::Effect;
+use acvus_mir::ty::{Effect, EffectTerm};
 use acvus_utils::{Interner, QualifiedRef};
 
 // ── Concrete: len_str ──────────────────────────────────────────────
@@ -52,16 +52,13 @@ fn len_str_registration() {
 fn len_str_constraint() {
     let interner = Interner::new();
     let c = LenStrFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 1);
-    assert_eq!(sig.params[0].ty, Ty::String);
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { params, ret, .. }) => {
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params[0].ty, Ty::String);
-            assert_eq!(**ret, Ty::Int);
+            assert_eq!(params[0].ty, lift_to_poly(&Ty::String));
+            assert_eq!(**ret, lift_to_poly(&Ty::Int));
         }
-        other => panic!("expected Exact(Ty::Fn), got {:?}", other),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -97,15 +94,14 @@ fn add_call() {
 fn add_constraint() {
     let interner = Interner::new();
     let c = AddFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 2);
-    assert_eq!(sig.params[0].ty, Ty::Int);
-    assert_eq!(sig.params[1].ty, Ty::Int);
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { ret, .. }) => {
-            assert_eq!(**ret, Ty::Int);
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].ty, lift_to_poly(&Ty::Int));
+            assert_eq!(params[1].ty, lift_to_poly(&Ty::Int));
+            assert_eq!(**ret, lift_to_poly(&Ty::Int));
         }
-        other => panic!("expected Exact(Ty::Fn), got {:?}", other),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -120,20 +116,19 @@ fn reverse<T: Hosted>(v: Vec<T>) -> (Vec<T>,) {
 fn reverse_constraint() {
     let interner = Interner::new();
     let c = ReverseFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 1);
-    match &sig.params[0].ty {
-        Ty::List(inner) => assert!(inner.is_param()),
-        other => panic!("expected List(Param), got {:?}", other),
-    }
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { params, ret, .. }) => {
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 1);
+            match &params[0].ty {
+                PolyTy::List(inner) => assert!(matches!(**inner, PolyTy::Var(_))),
+                other => panic!("expected List(Var), got {:?}", other),
+            }
             match (&params[0].ty, ret.as_ref()) {
-                (Ty::List(p), Ty::List(r)) => assert_eq!(p, r, "same type var"),
+                (PolyTy::List(p), PolyTy::List(r)) => assert_eq!(p, r, "same type var"),
                 other => panic!("expected (List, List), got {:?}", other),
             }
         }
-        other => panic!("expected Exact(Ty::Fn), got {:?}", other),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -148,24 +143,23 @@ fn swap<T: Hosted, U: Hosted>(a: T, b: U) -> (U, T) {
 fn swap_constraint() {
     let interner = Interner::new();
     let c = SwapFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 2);
-    let t0 = &sig.params[0].ty;
-    let t1 = &sig.params[1].ty;
-    assert!(t0.is_param());
-    assert!(t1.is_param());
-    assert_ne!(t0, t1);
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { params, ret, .. }) => {
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 2);
+            let t0 = &params[0].ty;
+            let t1 = &params[1].ty;
+            assert!(matches!(t0, PolyTy::Var(_)));
+            assert!(matches!(t1, PolyTy::Var(_)));
+            assert_ne!(t0, t1);
             match ret.as_ref() {
-                Ty::Tuple(elems) => {
+                PolyTy::Tuple(elems) => {
                     assert_eq!(&elems[0], t1);
                     assert_eq!(&elems[1], t0);
                 }
                 other => panic!("expected Tuple, got {:?}", other),
             }
         }
-        other => panic!("expected Exact(Ty::Fn), got {:?}", other),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -180,21 +174,25 @@ fn filter<T: Hosted, E: EffectParam, F: Callable<(T,), bool, E>>(v: Vec<T>, _pre
 fn filter_constraint() {
     let interner = Interner::new();
     let c = FilterFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 2);
+    match &c {
+        PolyTy::Fn { params, .. } => {
+            assert_eq!(params.len(), 2);
 
-    let t_param = match &sig.params[0].ty {
-        Ty::List(inner) => { assert!(inner.is_param()); inner.as_ref().clone() }
-        other => panic!("expected List(Param), got {:?}", other),
-    };
+            let t_param = match &params[0].ty {
+                PolyTy::List(inner) => { assert!(matches!(**inner, PolyTy::Var(_))); inner.as_ref().clone() }
+                other => panic!("expected List(Var), got {:?}", other),
+            };
 
-    match &sig.params[1].ty {
-        Ty::Fn { params: fn_params, ret, effect, .. } => {
-            assert_eq!(fn_params[0].ty, t_param);
-            assert_eq!(**ret, Ty::Bool);
-            assert!(effect.is_var());
+            match &params[1].ty {
+                PolyTy::Fn { params: fn_params, ret, effect, .. } => {
+                    assert_eq!(fn_params[0].ty, t_param);
+                    assert_eq!(**ret, lift_to_poly(&Ty::Bool));
+                    assert!(matches!(effect, EffectTerm::Var(_)));
+                }
+                other => panic!("expected PolyTy::Fn, got {:?}", other),
+            }
         }
-        other => panic!("expected Ty::Fn, got {:?}", other),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -229,42 +227,41 @@ fn map_iter<T: Hosted, U: Hosted, E: EffectParam, F: Callable<(T,), U, E>>(
 fn map_constraint() {
     let interner = Interner::new();
     let c = MapFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 2);
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 2);
 
-    let (t_param, e_var) = match &sig.params[0].ty {
-        Ty::UserDefined { id, type_args, effect_args, .. } => {
-            assert_eq!(*id, QualifiedRef::root(interner.intern("Iterator")));
-            assert!(type_args[0].is_param());
-            assert!(effect_args[0].is_var());
-            (type_args[0].clone(), effect_args[0].clone())
-        }
-        other => panic!("expected UserDefined(Iterator), got {:?}", other),
-    };
+            let (t_param, e_var) = match &params[0].ty {
+                PolyTy::UserDefined { id, type_args, effect_args, .. } => {
+                    assert_eq!(*id, QualifiedRef::root(interner.intern("Iterator")));
+                    assert!(matches!(&type_args[0], PolyTy::Var(_)));
+                    assert!(matches!(&effect_args[0], EffectTerm::Var(_)));
+                    (type_args[0].clone(), effect_args[0].clone())
+                }
+                other => panic!("expected UserDefined(Iterator), got {:?}", other),
+            };
 
-    let u_param = match &sig.params[1].ty {
-        Ty::Fn { params: fn_params, ret, effect, .. } => {
-            assert_eq!(fn_params[0].ty, t_param);
-            assert!(ret.is_param());
-            assert_eq!(*effect, e_var);
-            ret.as_ref().clone()
-        }
-        other => panic!("expected Ty::Fn, got {:?}", other),
-    };
+            let u_param = match &params[1].ty {
+                PolyTy::Fn { params: fn_params, ret, effect, .. } => {
+                    assert_eq!(fn_params[0].ty, t_param);
+                    assert!(matches!(**ret, PolyTy::Var(_)));
+                    assert_eq!(*effect, e_var);
+                    ret.as_ref().clone()
+                }
+                other => panic!("expected PolyTy::Fn, got {:?}", other),
+            };
 
-    assert_ne!(t_param, u_param);
+            assert_ne!(t_param, u_param);
 
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { ret, .. }) => {
             match ret.as_ref() {
-                Ty::UserDefined { type_args, effect_args, .. } => {
+                PolyTy::UserDefined { type_args, effect_args, .. } => {
                     assert_eq!(type_args[0], u_param);
                     assert_eq!(effect_args[0], e_var);
                 }
                 other => panic!("expected UserDefined, got {:?}", other),
             }
         }
-        _ => panic!("expected Exact(Ty::Fn)"),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -280,20 +277,19 @@ fn collect_iter<T: Hosted, E: EffectParam>(it: AcvusIter<T, E>) -> (Vec<T>,) {
 fn collect_constraint() {
     let interner = Interner::new();
     let c = CollectFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 1);
-    let t_param = match &sig.params[0].ty {
-        Ty::UserDefined { type_args, .. } => type_args[0].clone(),
-        other => panic!("expected UserDefined, got {:?}", other),
-    };
-    match &c.output {
-        acvus_mir_host::Constraint::Exact(Ty::Fn { ret, .. }) => {
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 1);
+            let t_param = match &params[0].ty {
+                PolyTy::UserDefined { type_args, .. } => type_args[0].clone(),
+                other => panic!("expected UserDefined, got {:?}", other),
+            };
             match ret.as_ref() {
-                Ty::List(inner) => assert_eq!(**inner, t_param),
+                PolyTy::List(inner) => assert_eq!(**inner, t_param),
                 other => panic!("expected List, got {:?}", other),
             }
         }
-        _ => panic!("expected Exact(Ty::Fn)"),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -308,11 +304,15 @@ fn add_num<A: Monomorphize<(i64, f64)> + std::ops::Add<Output = A>>(a: A, b: A) 
 fn add_num_monomorphized() {
     let interner = Interner::new();
     let c0 = AddNumFn0::constraint(&interner);
-    let sig0 = c0.signature.as_ref().unwrap();
-    assert_eq!(sig0.params[0].ty, Ty::Int);
+    match &c0 {
+        PolyTy::Fn { params, .. } => assert_eq!(params[0].ty, lift_to_poly(&Ty::Int)),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
+    }
     let c1 = AddNumFn1::constraint(&interner);
-    let sig1 = c1.signature.as_ref().unwrap();
-    assert_eq!(sig1.params[0].ty, Ty::Float);
+    match &c1 {
+        PolyTy::Fn { params, .. } => assert_eq!(params[0].ty, lift_to_poly(&Ty::Float)),
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
+    }
 }
 
 #[test]
@@ -363,11 +363,15 @@ fn count<S: Scope, T: Hosted>(scope: &mut S, v: Vec<T>) -> (i64,) {
 fn count_scoped_constraint() {
     let interner = Interner::new();
     let c = CountFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 1, "scope should not appear as param");
-    match &sig.params[0].ty {
-        Ty::List(inner) => assert!(inner.is_param()),
-        other => panic!("expected List(Param), got {:?}", other),
+    match &c {
+        PolyTy::Fn { params, .. } => {
+            assert_eq!(params.len(), 1, "scope should not appear as param");
+            match &params[0].ty {
+                PolyTy::List(inner) => assert!(matches!(**inner, PolyTy::Var(_))),
+                other => panic!("expected List(Var), got {:?}", other),
+            }
+        }
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
     }
 }
 
@@ -421,10 +425,14 @@ fn json_parse(s: String, inferred_ret_ty: Ty) -> acvus_mir_host::Inferrable {
 fn json_parse_constraint() {
     let interner = Interner::new();
     let c = JsonParseFn::constraint(&interner);
-    let sig = c.signature.as_ref().unwrap();
-    assert_eq!(sig.params.len(), 1); // only `s: String`, not inferred_ret_ty
-    assert_eq!(sig.params[0].ty, Ty::String);
-    assert!(matches!(c.output, acvus_mir_host::Constraint::Inferred));
+    match &c {
+        PolyTy::Fn { params, ret, .. } => {
+            assert_eq!(params.len(), 1); // only `s: String`, not inferred_ret_ty
+            assert_eq!(params[0].ty, lift_to_poly(&Ty::String));
+            assert!(matches!(**ret, PolyTy::Var(_)), "infer: ret should be Var");
+        }
+        other => panic!("expected PolyTy::Fn, got {:?}", other),
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
-use crate::ty::{EffectSet, Ty};
+use crate::ty::{EffectSet, PolyTy, Ty, lift_to_poly};
 
 use super::extract::{ExtractResult, ParsedSource, extract_one};
 use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
@@ -320,13 +320,11 @@ impl IncrementalGraph {
 
     fn run_infer(&mut self) {
         let known_ctx = self.known_context_types();
-        let mut resolved_fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+        let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         // Seed with extern function types (always known upfront).
         for (qref, func) in &self.functions {
             if let FnKind::Extern = &func.kind {
-                if let Constraint::Exact(ty) = &func.constraint.output {
-                    resolved_fn_types.insert(*qref, ty.clone());
-                }
+                resolved_fn_types.insert(*qref, func.ty.clone());
             }
         }
 
@@ -348,7 +346,7 @@ impl IncrementalGraph {
             if self.infer_cache[scc_idx].is_some() {
                 // Still need to accumulate resolved types for subsequent SCCs.
                 if let Some(ref cached) = self.infer_cache[scc_idx] {
-                    resolved_fn_types.extend(cached.resolved_types.clone());
+                    resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
                 }
                 continue;
             }
@@ -367,7 +365,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
             );
 
-            resolved_fn_types.extend(result.resolved_types.clone());
+            resolved_fn_types.extend(result.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
             for (qref, errs) in &result.errors {
                 self.diagnostics.insert(*qref, errs.clone());
             }
@@ -388,13 +386,11 @@ impl IncrementalGraph {
 
         // Re-run infer from this SCC onwards.
         let known_ctx = self.known_context_types();
-        let mut resolved_fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+        let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         // Seed with extern function types.
         for (qref, func) in &self.functions {
             if let FnKind::Extern = &func.kind {
-                if let Constraint::Exact(ty) = &func.constraint.output {
-                    resolved_fn_types.insert(*qref, ty.clone());
-                }
+                resolved_fn_types.insert(*qref, func.ty.clone());
             }
         }
 
@@ -414,7 +410,7 @@ impl IncrementalGraph {
         // Accumulate resolved types from prior SCCs.
         for scc_idx in 0..start_scc {
             if let Some(ref cached) = self.infer_cache[scc_idx] {
-                resolved_fn_types.extend(cached.resolved_types.clone());
+                resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
             }
         }
 
@@ -426,7 +422,7 @@ impl IncrementalGraph {
             if !dirty_sccs.contains(&scc_idx) {
                 // Not dirty — use cached result.
                 if let Some(ref cached) = self.infer_cache[scc_idx] {
-                    resolved_fn_types.extend(cached.resolved_types.clone());
+                    resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
                 }
                 continue;
             }
@@ -479,7 +475,7 @@ impl IncrementalGraph {
                 self.diagnostics.insert(*qref, errs.clone());
             }
 
-            resolved_fn_types.extend(result.resolved_types.clone());
+            resolved_fn_types.extend(result.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
             self.infer_cache[scc_idx] = Some(result);
         }
 
@@ -548,16 +544,10 @@ impl IncrementalGraph {
 
     // ── Helpers ─────────────────────────────────────────────────────
 
-    fn known_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
+    fn known_context_types(&self) -> FxHashMap<QualifiedRef, PolyTy> {
         self.contexts
             .values()
-            .filter_map(|ctx| {
-                if let Constraint::Exact(ty) = &ctx.constraint {
-                    Some((ctx.qref, ty.clone()))
-                } else {
-                    None
-                }
-            })
+            .map(|ctx| (ctx.qref, ctx.ty.clone()))
             .collect()
     }
 
@@ -583,7 +573,7 @@ impl IncrementalGraph {
 
         for scc_result in self.infer_cache.iter().flatten() {
             // Convert SccInferResult metas to Incomplete outcomes (temporary — incremental
-            // does not yet run check_completeness; this will be reworked in Step 6).
+            // Incremental does not yet verify effect constraints; will be reworked in Step 6).
             for (&fid, meta) in &scc_result.fn_metas {
                 outcomes.insert(
                     fid,
@@ -597,23 +587,27 @@ impl IncrementalGraph {
             }
         }
 
-        let mut fn_metadata: FxHashMap<QualifiedRef, super::types::FnMetadata> =
-            FxHashMap::default();
+        let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
         for (&qref, outcome) in &outcomes {
-            let hint = self.functions.get(&qref).and_then(|f| f.constraint.hint);
-            fn_metadata.insert(
-                qref,
-                super::types::FnMetadata {
-                    ty: outcome.meta().ty.clone(),
-                    hint,
-                },
-            );
+            fn_types.insert(qref, outcome.meta().ty.clone());
         }
 
         super::infer::InferResult {
             outcomes,
-            context_types: Freeze::new(self.known_context_types()),
-            fn_metadata: Freeze::new(fn_metadata),
+            context_types: {
+                // PolyTy → InferTy (instantiate) → Ty (freeze) at the output boundary.
+                let mut solver = crate::ty::Solver::new();
+                Freeze::new(
+                    self.known_context_types()
+                        .into_iter()
+                        .map(|(k, v)| {
+                            let infer = solver.instantiate_poly(&v);
+                            (k, solver.freeze_ty(&infer).unwrap_or_else(|_| Ty::error()))
+                        })
+                        .collect(),
+                )
+            },
+            fn_types: Freeze::new(fn_types),
         }
     }
 }

@@ -16,12 +16,17 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     let mut functions = vec![Function {
         qref: test_qref,
         kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
+        ty: {
+            let mut pb = acvus_mir::ty::PolyBuilder::new();
+            acvus_mir::ty::PolyTy::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: acvus_mir::ty::lift_effect_to_poly(&acvus_mir::ty::Effect::pure()),
+                hint: None,
+            }
         },
+        effect_constraint: None,
     }];
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -63,7 +68,7 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     }
 
     // Run optimization pipeline (SROA → SSA → Inline → RegColor → Validate).
-    let fn_metadata = inf.fn_metadata.clone();
+    let fn_metadata = inf.fn_types.clone();
     let context_types = FxHashMap::default();
     let recursive_fns = FxHashSet::default();
 

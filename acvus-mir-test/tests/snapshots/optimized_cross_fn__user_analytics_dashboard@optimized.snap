@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 285
 expression: opt
 ---
 === literals ===
@@ -25,78 +26,78 @@ expression: opt
     11 │   r11 = ref @total_age
     12 │   r12 = ref @users
     31 │   r13 = ref @output
-    32 │   r14 = load r12
-    33 │   r15 = load r7
-    34 │   r16 = load r8
-    35 │   r17 = load r9
-    36 │   r18 = load r10
-    37 │   r19 = load r11
-    38 │   jump L0(0 (r20), r15, r16, r17, r19, r18, r0, r1)
-    39 │ L0(r1: Int, r20: Int, r15: Int, r17: String, r16: Int, r18: Int, r0: {age: Int, name: String}, r19: Int):
+    32 │   r14 = load r10
+    33 │   r15 = load r11
+    34 │   r16 = load r12
+    35 │   r17 = load r7
+    36 │   r18 = load r8
+    37 │   r19 = load r9
+    38 │   jump L0(0 (r20), r17, r18, r19, r15, r14, r0, r1)
+    39 │ L0(r1: Int, r20: Int, r14: Int, r19: String, r15: Int, r17: Int, r0: {age: Int, name: String}, r18: Int):
     40 │   store r2 = 0 (r20)
-    41 │   store r3 = r15
-    42 │   store r4 = r17
-    43 │   store r5 = r16
-    44 │   store r6 = r18
-    45 │   r21 = r18 + 1 (r22)
+    41 │   store r3 = r14
+    42 │   store r4 = r19
+    43 │   store r5 = r15
+    44 │   store r6 = r17
+    45 │   r21 = r17 + 1 (r22)
     46 │   r23 = 0 (r20) + 1 (r24)
-    47 │   r25 = r15 + 1 (r26)
-    48 │   r27 = call #0(r18)
-    49 │   r28 = T1 + r27
-    50 │   r27 = r28 + T2
-    51 │   r28 = call #0(0 (r20))
-    52 │   r29 = r27 + r28
-    53 │   r27 = r29 + T3
-    54 │   r28 = call #0(r15)
-    55 │   r29 = r27 + r28
-    56 │   r27 = r29 + T4
-    57 │   r28 = call #0(r16)
-    58 │   r29 = r27 + r28
-    59 │   r27 = r29 + T5
-    60 │   r28 = r27 + r17
-    61 │   list_step r30, r31 = r14[r1] else L1()
-    62 │ L2:
-    63 │   r1 = r30.age
-    64 │   r32 = r1 >= 65 (r33)
-    65 │   r34 = test r32 == true
-    66 │   r32 = r1 >= 18 (r35)
-    67 │   r36 = test r32 == true
-    68 │   r1 = r30.age
-    69 │   r19 = r16 + r1
-    70 │   r27 = r30.name
-    71 │   r28 = r17 + r27
-    72 │   r17 = r28 + T0
-    73 │   jump_if r34 then L9 else L10(0 (r37))
-    74 │ L9:
-    75 │   jump L10(2 (r38))
-    76 │ L10(r1: Int):
-    77 │   jump_if r36 then L11 else L12(r1)
-    78 │ L11:
-    79 │   jump L12(1 (r39))
-    80 │ L12(r1: Int):
-    81 │   r32 = r1 > 1 (r40)
-    82 │   r34 = test r32 == true
-    83 │   r32 = r1 == 1 (r41)
-    84 │   r36 = test r32 == true
-    85 │   r32 = r1 == 0 (r42)
-    86 │   r43 = test r32 == true
-    87 │   jump_if r34 then L3 else L4(r18)
-    88 │ L3:
-    89 │   jump L4(r21)
-    90 │ L4(r1: Int):
-    91 │   jump_if r36 then L5 else L6(0 (r20))
-    92 │ L5:
-    93 │   jump L6(r23)
-    94 │ L6(r20: Int):
-    95 │   jump_if r43 then L7 else L8(r15)
-    96 │ L7:
-    97 │   jump L8(r25)
-    98 │ L8(r15: Int):
-    99 │   jump L0(r31, 0 (r20), r15, r17, r19, r1, r30, r1)
-   100 │ L1:
-   101 │   r1 = call #1(r28)
-   102 │   store r13 = r28
-   103 │   return r28
+    47 │   r25 = r14 + 1 (r26)
+    48 │   list_step r27, r28 = r16[r1] else L1()
+    49 │ L2:
+    50 │   r1 = r27.age
+    51 │   r29 = r1 >= 65 (r30)
+    52 │   r31 = test r29 == true
+    53 │   r29 = r1 >= 18 (r32)
+    54 │   r33 = test r29 == true
+    55 │   r1 = r27.age
+    56 │   r18 = r15 + r1
+    57 │   r34 = r27.name
+    58 │   r35 = r19 + r34
+    59 │   r19 = r35 + T0
+    60 │   jump_if r31 then L9 else L10(0 (r36))
+    61 │ L9:
+    62 │   jump L10(2 (r37))
+    63 │ L10(r1: Int):
+    64 │   jump_if r33 then L11 else L12(r1)
+    65 │ L11:
+    66 │   jump L12(1 (r38))
+    67 │ L12(r1: Int):
+    68 │   r29 = r1 > 1 (r39)
+    69 │   r31 = test r29 == true
+    70 │   r29 = r1 == 1 (r40)
+    71 │   r33 = test r29 == true
+    72 │   r29 = r1 == 0 (r41)
+    73 │   r42 = test r29 == true
+    74 │   jump_if r31 then L3 else L4(r17)
+    75 │ L3:
+    76 │   jump L4(r21)
+    77 │ L4(r1: Int):
+    78 │   jump_if r33 then L5 else L6(0 (r20))
+    79 │ L5:
+    80 │   jump L6(r23)
+    81 │ L6(r20: Int):
+    82 │   jump_if r42 then L7 else L8(r14)
+    83 │ L7:
+    84 │   jump L8(r25)
+    85 │ L8(r14: Int):
+    86 │   jump L0(r28, 0 (r20), r14, r19, r18, r1, r27, r1)
+    87 │ L1:
+    88 │   r43 = call #0(r17)
+    89 │   r34 = T1 + T0
+    90 │   r43 = r34 + T2
+    91 │   r44 = call #0(0 (r20))
+    92 │   r45 = T0 + T1
+    93 │   r43 = T2 + T3
+    94 │   r44 = call #0(r14)
+    95 │   r45 = T0 + T1
+    96 │   r43 = T2 + T4
+    97 │   r44 = call #0(r15)
+    98 │   r45 = T0 + T1
+    99 │   r43 = T2 + T5
+   100 │   r44 = T0 + r19
+   101 │   r1 = call #1(T1)
+   102 │   store r13 = T1
+   103 │   return T1
 
     ; r0 (v1) : {age: Int, name: String}
     ; r1 (send_report(...)) : Int
@@ -112,12 +113,12 @@ expression: opt
     ; r11 (@total_age) : Ref<Int>
     ; r12 (@users) : Ref<List<{age: Int, name: String}>>
     ; r13 (@output) : Ref<String>
-    ; r14 (@users) : List<{age: Int, name: String}>
-    ; r15 (@adult_count) : Int
-    ; r16 (@minor_count) : Int
-    ; r17 (@name_list) : String
-    ; r18 (@senior_count) : Int
-    ; r19 (@total_age) : Int
+    ; r14 (@senior_count) : Int
+    ; r15 (@total_age) : Int
+    ; r16 (@users) : List<{age: Int, name: String}>
+    ; r17 (@adult_count) : Int
+    ; r18 (@minor_count) : Int
+    ; r19 (@name_list) : String
     ; r20 (v14) : Int
     ; r21 (v39) : Int
     ; r22 (v21) : Int
@@ -125,26 +126,25 @@ expression: opt
     ; r24 (v23) : Int
     ; r25 (v41) : Int
     ; r26 (v25) : Int
-    ; r27 (name) : String
-    ; r28 (to_string(...)) : String
-    ; r29 (v44) : String
-    ; r30 (v45) : {age: Int, name: String}
-    ; r31 (v46) : Int
-    ; r32 (v47) : Bool
-    ; r33 (v16) : Int
-    ; r34 (v48) : Bool
-    ; r35 (v18) : Int
-    ; r36 (v49) : Bool
-    ; r37 (v15) : Int
-    ; r38 (v17) : Int
-    ; r39 (v19) : Int
-    ; r40 (v20) : Int
-    ; r41 (v22) : Int
-    ; r42 (v24) : Int
-    ; r43 (v50) : Bool
-    ; r44 (v28) : String
-    ; r45 (v27) : String
-    ; r46 (v31) : String
-    ; r47 (v30) : String
-    ; r48 (v26) : String
-    ; r49 (v29) : String
+    ; r27 (v42) : {age: Int, name: String}
+    ; r28 (v43) : Int
+    ; r29 (v44) : Bool
+    ; r30 (v16) : Int
+    ; r31 (v45) : Bool
+    ; r32 (v18) : Int
+    ; r33 (v46) : Bool
+    ; r34 (name) : String
+    ; r35 (v48) : String
+    ; r36 (v15) : Int
+    ; r37 (v17) : Int
+    ; r38 (v19) : Int
+    ; r39 (v20) : Int
+    ; r40 (v22) : Int
+    ; r41 (v24) : Int
+    ; r42 (v49) : Bool
+    ; r43 (to_string(...)) : String
+    ; r44 (to_string(...)) : String
+    ; r45 (v28) : String
+    ; r46 (v30) : String
+    ; r47 (v31) : String
+    ; r48 (v29) : String

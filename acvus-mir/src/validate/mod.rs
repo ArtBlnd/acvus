@@ -6,7 +6,8 @@ pub use move_check::is_move_only;
 pub use type_check::{ValidationError, ValidationErrorKind};
 
 use crate::error::{MirError, MirErrorKind};
-use crate::graph::{ContextPolicy, FnMetadata, QualifiedRef};
+use crate::graph::{ContextPolicy, QualifiedRef};
+use crate::ty::Ty;
 use crate::ir::MirModule;
 use rustc_hash::FxHashMap;
 
@@ -14,7 +15,7 @@ use rustc_hash::FxHashMap;
 /// Returns errors found. Empty vec means valid.
 pub fn validate(
     module: &MirModule,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module, fn_metadata, policies);

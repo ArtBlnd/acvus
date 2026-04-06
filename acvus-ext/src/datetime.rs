@@ -8,8 +8,7 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{Effect, Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_effect_to_poly, lift_to_poly};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
@@ -56,45 +55,33 @@ impl IntoValue for Dt {
 
 // ── Constraint builders ─────────────────────────────────────────────
 
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
 
-fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> FnConstraint {
-    let named: Vec<Param> = params
-        .into_iter()
+fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
+        .iter()
         .enumerate()
-        .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
-        hint: Some(acvus_mir::ty::Hint::Io),
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(lift_to_poly(&ret)),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
+        hint: Some(Hint::Io),
     }
 }
 

@@ -5,8 +5,8 @@
 
 use std::collections::BTreeSet;
 
-use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, Ty};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 
@@ -17,13 +17,11 @@ fn test_effectful(interner: &Interner) -> Effect {
     })
 }
 
-fn sig(i: &Interner, params: &[(&str, Ty)]) -> Option<Signature> {
-    Some(Signature {
-        params: params
-            .iter()
-            .map(|(name, ty)| Param::new(i.intern(name), ty.clone()))
-            .collect(),
-    })
+fn sig(i: &Interner, params: &[(&str, Ty)]) -> Vec<PolyParam> {
+    params
+        .iter()
+        .map(|(name, ty)| ParamTerm::<Poly>::new(i.intern(name), lift_to_poly(ty)))
+        .collect()
 }
 
 fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
@@ -417,22 +415,18 @@ fn inline_io_effect_extern_inside() {
     // fetch(x) is ExternFn with IO effect; wrapper calls it.
     // wrapper(id) = fetch(id); main = wrapper(1)
     let i = Interner::new();
+    use acvus_mir::ty::{TyTerm, lift_effect_to_poly};
     let fetch = Function {
         qref: QualifiedRef::root(i.intern("fetch")),
         kind: FnKind::Extern,
-        constraint: FnConstraint {
-            signature: Some(Signature {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
-            }),
-            output: Constraint::Exact(Ty::Fn {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: test_effectful(&i),
-            }),
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
+            ret: Box::new(lift_to_poly(&Ty::String)),
+            captures: vec![],
+            effect: lift_effect_to_poly(&test_effectful(&i)),
             hint: None,
         },
+        effect_constraint: None,
     };
     let ir = compile_inline_ir_with(
         &i,

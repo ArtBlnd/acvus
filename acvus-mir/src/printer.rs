@@ -960,6 +960,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: Effect::pure(),
+                hint: None,
             },
         )]);
         let out = compile_and_dump_ctx("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);

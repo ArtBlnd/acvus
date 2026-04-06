@@ -8,8 +8,8 @@
 
 use std::collections::BTreeSet;
 
-use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, Ty};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyParam, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
 use acvus_mir_test::{compile_multi_fn_optimized, compile_multi_fn_raw};
 use acvus_utils::Interner;
 
@@ -20,36 +20,29 @@ fn test_effectful(interner: &Interner) -> Effect {
     })
 }
 
-fn sig(i: &Interner, params: &[(&str, Ty)]) -> Option<Signature> {
-    Some(Signature {
-        params: params
-            .iter()
-            .map(|(name, ty)| Param::new(i.intern(name), ty.clone()))
-            .collect(),
-    })
+fn sig(i: &Interner, params: &[(&str, Ty)]) -> Vec<PolyParam> {
+    params
+        .iter()
+        .map(|(name, ty)| ParamTerm::<Poly>::new(i.intern(name), lift_to_poly(ty)))
+        .collect()
 }
 
 fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Function {
-    let sig_params: Vec<Param> = params
+    let infer_params: Vec<ParamTerm<Poly>> = params
         .iter()
-        .map(|(n, ty)| Param::new(i.intern(n), ty.clone()))
+        .map(|(n, ty)| ParamTerm::<Poly>::new(i.intern(n), lift_to_poly(ty)))
         .collect();
     Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern,
-        constraint: FnConstraint {
-            signature: Some(Signature {
-                params: sig_params.clone(),
-            }),
-            output: Constraint::Exact(Ty::Fn {
-                params: sig_params,
-                ret: Box::new(ret),
-                captures: vec![],
-                effect: test_effectful(i),
-            }),
-            effect: None,
+        ty: TyTerm::Fn {
+            params: infer_params,
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: lift_effect_to_poly(&test_effectful(i)),
             hint: None,
         },
+        effect_constraint: None,
     }
 }
 

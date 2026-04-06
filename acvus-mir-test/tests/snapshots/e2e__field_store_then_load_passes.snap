@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 3130
 expression: ir
 ---
 === main ===
@@ -23,9 +24,9 @@ expression: ir
     ; r5 (v4) : Int
     ; r6 (v12) : Ref<{x: Int}>
     ; r7 (v13) : Ref<{x: Int}>
-    ; r8 (v7) : ?5
+    ; r8 (v7) : <error>
     ; r9 (to_string(...)) : String
     ; r10 (v14) : {x: Int}
     ; r11 (v10) : {x: Int}
-    ; r12 (@a.y) : Ref<?5>
+    ; r12 (@a.y) : Ref<<error>>
     ; r13 (@a) : Ref<Int>

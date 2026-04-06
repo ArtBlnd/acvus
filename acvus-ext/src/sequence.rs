@@ -2,8 +2,7 @@
 
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value, exec_next};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{CastRule, Effect, Param, Ty, TySubst, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, ParamTerm, Poly, PolyBuilder, PolyEffect, PolyTy, TyTerm, TypeRegistry, UserDefinedDecl, lift_effect_to_poly};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
@@ -65,27 +64,21 @@ fn h_next_seq(
 
 // ── Signature helpers ───────────────────────────────────────────────
 
-fn p(interner: &Interner, idx: usize, ty: Ty) -> Param {
-    Param::new(interner.intern(&format!("_{idx}")), ty)
+fn p(interner: &Interner, idx: usize, ty: PolyTy) -> ParamTerm<Poly> {
+    ParamTerm::<Poly>::new(interner.intern(&format!("_{idx}")), ty)
 }
 
-fn make_sig(params: &[Ty], ret: Ty, interner: &Interner) -> FnConstraint {
-    let named: Vec<Param> = params
+fn make_sig(params: &[PolyTy], ret: PolyTy, interner: &Interner) -> PolyTy {
+    let named: Vec<ParamTerm<Poly>> = params
         .iter()
         .enumerate()
         .map(|(i, ty)| p(interner, i, ty.clone()))
         .collect();
-    FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(ret),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    TyTerm::Fn {
+        params: named,
+        ret: Box::new(ret),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
@@ -103,32 +96,32 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
 
     // CastRule: Deque<T, O> → Sequence<T, O, Pure>
     {
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
         type_registry.register_cast(CastRule {
-            from: Ty::Deque(Box::new(t.clone()), Box::new(o.clone())),
-            to: Ty::UserDefined {
+            from: TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone())),
+            to: TyTerm::UserDefined {
                 id: seq_qref,
                 type_args: vec![t, o],
-                effect_args: vec![Effect::pure()],
+                effect_args: vec![lift_effect_to_poly(&Effect::pure())],
             },
             fn_ref: QualifiedRef::root(interner.intern("__cast_deque_to_seq")),
         });
     }
     // CastRule: Sequence<T, O, E> → Iterator<T, E>
     {
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         type_registry.register_cast(CastRule {
-            from: Ty::UserDefined {
+            from: TyTerm::UserDefined {
                 id: seq_qref,
                 type_args: vec![t.clone(), o],
                 effect_args: vec![e.clone()],
             },
-            to: Ty::UserDefined {
+            to: TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
@@ -139,16 +132,16 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
 
     ExternRegistry::new(move |interner| {
         // Helper: Sequence<T, O, E>
-        let sq = |t: Ty, o: Ty, e: Effect| -> Ty {
-            Ty::UserDefined {
+        let sq = |t: PolyTy, o: PolyTy, e: PolyEffect| -> PolyTy {
+            TyTerm::UserDefined {
                 id: seq_qref,
                 type_args: vec![t, o],
                 effect_args: vec![e],
             }
         };
         // Helper: Iterator<T, E>
-        let it = |t: Ty, e: Effect| -> Ty {
-            Ty::UserDefined {
+        let it = |t: PolyTy, e: PolyEffect| -> PolyTy {
+            TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![e],
@@ -156,34 +149,34 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         };
 
         // take_seq: (Sequence<T, O, E>, Int) → Sequence<T, O, E>
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         let seq = sq(t.clone(), o.clone(), e.clone());
         let take_seq = ExternFnBuilder::new(
             "take_seq",
-            make_sig(&[seq.clone(), Ty::Int], seq.clone(), interner),
+            make_sig(&[seq.clone(), TyTerm::Int], seq.clone(), interner),
         )
         .sync_handler(h_take_seq);
 
         // skip_seq: same sig
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         let seq = sq(t.clone(), o.clone(), e.clone());
         let skip_seq = ExternFnBuilder::new(
             "skip_seq",
-            make_sig(&[seq.clone(), Ty::Int], seq.clone(), interner),
+            make_sig(&[seq.clone(), TyTerm::Int], seq.clone(), interner),
         )
         .sync_handler(h_skip_seq);
 
         // chain_seq: (Sequence<T, O, E>, Iterator<T, E>) → Sequence<T, O, E>
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         let seq = sq(t.clone(), o.clone(), e.clone());
         let chain_seq = ExternFnBuilder::new(
             "chain_seq",
@@ -196,39 +189,39 @@ pub fn sequence_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         .sync_handler(h_chain_seq);
 
         // next_seq: (Sequence<T, O, E>) → Option<(T, Sequence<T, O, E>)>
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         let seq = sq(t.clone(), o.clone(), e.clone());
         let next_seq = ExternFnBuilder::new(
             "next_seq",
             make_sig(
                 &[seq.clone()],
-                Ty::Option(Box::new(Ty::Tuple(vec![t, seq]))),
+                TyTerm::Option(Box::new(TyTerm::Tuple(vec![t, seq]))),
                 interner,
             ),
         )
         .async_handler(h_next_seq);
 
         // Cast helpers.
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
         let deque_to_seq = ExternFnBuilder::new(
             "__cast_deque_to_seq",
             make_sig(
-                &[Ty::Deque(Box::new(t.clone()), Box::new(o.clone()))],
-                sq(t, o, Effect::pure()),
+                &[TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()))],
+                sq(t, o, lift_effect_to_poly(&Effect::pure())),
                 interner,
             ),
         )
         .sync_handler(h_deque_to_seq);
 
-        let mut s = TySubst::new();
-        let t = s.fresh_param();
-        let o = s.fresh_param();
-        let e = s.fresh_effect_var();
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let o = b.fresh_ty_var();
+        let e = b.fresh_effect_var();
         let seq_to_iter = ExternFnBuilder::new(
             "__cast_seq_to_iter",
             make_sig(&[sq(t.clone(), o, e.clone())], it(t, e), interner),

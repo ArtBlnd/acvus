@@ -6,7 +6,7 @@
 //! use-after-move violations.
 //!
 //! Design:
-//! - `Ty::Error` / `Ty::Param` / `Effect::Var` → skip (analysis mode).
+//! - `Ty::Error` → skip (analysis mode).
 //! - `Fn` with move-only captures → FnOnce (transitive).
 //! - Join at merge points: `Alive ⊔ Moved = Moved` (conservative).
 //! - $variables: tracked by name. `Store` (via Ref) revives, `Load` of move-only consumes.
@@ -100,7 +100,10 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         Ty::Ref(..) => None,
 
         // Unknown — skip
-        Ty::Param { .. } | Ty::Error(_) => None,
+        Ty::Error(_) => None,
+
+        // Post-inference: no type variables remain.
+        Ty::Var(v) => match *v {},
     }
 }
 
@@ -753,6 +756,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![test_user_defined()],
             effect: Effect::pure(),
+            hint: None,
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -764,6 +768,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
             effect: Effect::pure(), // effect of the fn doesn't matter, only captures
+            hint: None,
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }
@@ -1012,11 +1017,9 @@ mod tests {
     fn ty_param_skipped() {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
-        // v0 = Ty::Param, used twice → no error (analysis mode)
-        let mut subst = crate::ty::TySubst::new();
-        let param_ty = subst.fresh_param();
+        // v0 = Ty::Error (unresolved), used twice → no error (analysis mode)
         let mut val_types = FxHashMap::default();
-        val_types.insert(v0, param_ty);
+        val_types.insert(v0, Ty::error());
 
         let module = make_module(
             vec![inst(InstKind::Return(v0)), inst(InstKind::Return(v0))],
@@ -1024,7 +1027,7 @@ mod tests {
         );
 
         let errors = check_moves(&module);
-        assert!(errors.is_empty(), "Ty::Param should be skipped");
+        assert!(errors.is_empty(), "Ty::Error should be skipped");
     }
 
     // E2E compile pipeline tests have been migrated to acvus-mir-test/tests/e2e.rs

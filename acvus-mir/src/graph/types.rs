@@ -7,7 +7,7 @@
 
 use acvus_utils::Freeze;
 
-use crate::ty::{EffectConstraint, Hint, Ty};
+use crate::ty::{EffectConstraint, PolyTy};
 
 // ── Identifiers ─────────────────────────────────────────────────────
 
@@ -17,56 +17,7 @@ acvus_utils::declare_id!(pub ScopeId);
 // Re-export from acvus-utils.
 pub use acvus_utils::QualifiedRef;
 
-// ── Constraint ───────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub enum Constraint {
-    /// Type inferred from source.
-    Inferred,
-    /// Exact declared type.
-    Exact(Ty),
-    /// Type derived from a function's output type.
-    DerivedFnOutput(QualifiedRef, TypeTransform),
-    /// Type derived from a context's type.
-    DerivedContext(QualifiedRef, TypeTransform),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeTransform {
-    Identity,
-    ElemOf,
-}
-
 // ── Function ────────────────────────────────────────────────────────
-
-/// A callable signature: named, typed parameters.
-#[derive(Debug, Clone)]
-pub struct Signature {
-    pub params: Vec<crate::ty::Param>,
-}
-
-/// Output + optional call signature.
-#[derive(Debug, Clone)]
-pub struct FnConstraint {
-    /// Parameter types.
-    pub signature: Option<Signature>,
-    /// Output type constraint.
-    pub output: Constraint,
-    /// Effect upper bound. `None` = no constraint (anything allowed).
-    pub effect: Option<EffectConstraint>,
-    /// Hint for the function. `None` = no hint.
-    pub hint: Option<Hint>,
-}
-
-/// Per-function metadata used by optimizer passes.
-/// Bundles type information and scheduling hints into a single lookup.
-#[derive(Debug, Clone)]
-pub struct FnMetadata {
-    /// Resolved function type (Ty::Fn).
-    pub ty: Ty,
-    /// Scheduling hint from ExternFn declaration.
-    pub hint: Option<Hint>,
-}
 
 #[derive(Debug, Clone)]
 pub enum FnKind {
@@ -85,23 +36,34 @@ pub enum ParsedAst {
 }
 
 /// An executable entity in the graph. Identified by `QualifiedRef`.
+///
+/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, effect, hint }`.
+/// Unresolved parts use `Var(n)` placeholders (inferred by the solver).
 #[derive(Debug, Clone)]
 pub struct Function {
     /// Unique identity = namespace + name.
     pub qref: QualifiedRef,
     pub kind: FnKind,
-    pub constraint: FnConstraint,
+    /// The function's polymorphic type (Fn { params, ret, captures, effect, hint }).
+    /// `Var` placeholders are inferred by the solver.
+    pub ty: PolyTy,
+    /// Effect upper bound. `None` = no constraint (anything allowed).
+    /// Checked post-inference: body effect must not exceed this bound.
+    pub effect_constraint: Option<EffectConstraint>,
 }
 
 // ── Context ──────────────────────────────────────────────────────────
 
 /// A loadable value in the graph. Injected externally or derived from a function.
 /// Identified by `QualifiedRef` (namespace + name).
+///
+/// `ty` is a `PolyTy`. If the type is unknown (to be inferred), use a `Var` placeholder.
 #[derive(Debug, Clone)]
 pub struct Context {
     /// Unique identity = namespace + name.
     pub qref: QualifiedRef,
-    pub constraint: Constraint,
+    /// The context's polymorphic type. `Var` = to be inferred.
+    pub ty: PolyTy,
 }
 
 // ── Context policy ──────────────────────────────────────────────────

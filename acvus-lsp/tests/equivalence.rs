@@ -4,7 +4,7 @@
 use acvus_lsp::LspSession;
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -14,20 +14,23 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let template = acvus_ast::parse(interner, source).expect("parse failed");
+    let mut pb = PolyBuilder::new();
     let mut functions = vec![Function {
         qref: test_qref,
         kind: FnKind::Local(ParsedAst::Template(template)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None,
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
@@ -84,7 +87,7 @@ fn lsp_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<Stri
     let mut session = LspSession::new(interner);
     register_std(&mut session);
     for (name, ty) in ctx {
-        session.add_context(name, None, Constraint::Exact(ty.clone()));
+        session.add_context(name, None, lift_to_poly(ty));
     }
     let doc = session.open("test", source, None);
     let mut errs: Vec<String> = session
@@ -132,7 +135,7 @@ fn incremental_update_fixes_error() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
     register_std(&mut session);
-    session.add_context("x", None, Constraint::Exact(Ty::Int));
+    session.add_context("x", None, lift_to_poly(&Ty::Int));
 
     // Start with emit type error: Int not emittable in template.
     let doc = session.open("test", "{{ @x }}", None);
@@ -157,7 +160,7 @@ fn incremental_update_introduces_error() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
     register_std(&mut session);
-    session.add_context("name", None, Constraint::Exact(Ty::String));
+    session.add_context("name", None, lift_to_poly(&Ty::String));
 
     // Start correct.
     let doc = session.open("test", "hello {{ @name }}", None);
@@ -174,8 +177,8 @@ fn namespace_context_isolation() {
     let mut session = LspSession::new(&i);
 
     let ns = session.add_namespace("node_a");
-    session.add_context("value", Some(ns), Constraint::Exact(Ty::Int));
-    session.add_context("global", None, Constraint::Exact(Ty::String));
+    session.add_context("value", Some(ns), lift_to_poly(&Ty::Int));
+    session.add_context("global", None, lift_to_poly(&Ty::String));
 
     // Root function sees @global.
     let doc_root = session.open("root_fn", "{{ @global }}", None);
@@ -191,8 +194,8 @@ fn namespace_context_isolation() {
 fn completion_context_trigger() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
-    session.add_context("name", None, Constraint::Exact(Ty::String));
-    session.add_context("count", None, Constraint::Exact(Ty::Int));
+    session.add_context("name", None, lift_to_poly(&Ty::String));
+    session.add_context("count", None, lift_to_poly(&Ty::Int));
 
     let doc = session.open("test", "{{ @n }}", None);
     // Cursor after "@n" → context trigger with prefix "n"
@@ -212,21 +215,24 @@ fn completion_context_trigger() {
 fn completion_pipe_trigger() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
-    session.add_context("name", None, Constraint::Exact(Ty::String));
+    session.add_context("name", None, lift_to_poly(&Ty::String));
 
     // Add a helper function so visible_functions returns something.
     let helper_qref = QualifiedRef::root(i.intern("helper"));
+    let mut pb = PolyBuilder::new();
     session.graph_mut().add_function(Function {
         qref: helper_qref,
         kind: FnKind::Local(ParsedAst::Template(
             acvus_ast::parse(&i, "hello").unwrap(),
         )),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None,
     });
 
     let doc = session.open("test", "{{ @name | helper }}", None);
@@ -257,7 +263,7 @@ fn completion_keyword_trigger() {
 fn completion_empty_after_close() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
-    session.add_context("name", None, Constraint::Exact(Ty::String));
+    session.add_context("name", None, lift_to_poly(&Ty::String));
 
     let doc = session.open("test", "{{ @n }}", None);
     session.close(doc);
@@ -269,8 +275,8 @@ fn completion_empty_after_close() {
 fn completion_updates_with_source() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
-    session.add_context("name", None, Constraint::Exact(Ty::String));
-    session.add_context("age", None, Constraint::Exact(Ty::Int));
+    session.add_context("name", None, lift_to_poly(&Ty::String));
+    session.add_context("age", None, lift_to_poly(&Ty::Int));
 
     let doc = session.open("test", "{{ @n }}", None);
     let items = session.completions(doc, 5);

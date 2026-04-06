@@ -27,7 +27,7 @@ expression: ir
     ; r5 (@items) : List<Int>
     ; r6 (v12) : Ref<List<Int>>
     ; r7 ($xs) : List<Int>
-    ; r8 (v14) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r8 (v14) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r9 (v15) : Ref<Int>
     ; r10 ($n) : Int
     ; r11 (v17) : Fn(Int) -> Int

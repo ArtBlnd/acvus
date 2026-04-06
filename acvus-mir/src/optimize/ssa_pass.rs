@@ -35,16 +35,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::ssa::{ENTRY_BLOCK, SSABuilder, SsaVar};
 use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, Label, ValueId};
 use crate::ty::{Effect, Ty};
 
 /// Run the SSA context pass on a CfgBody.
 ///
-/// `fn_metadata` maps FunctionId → FnMetadata for resolving callee effects
+/// `fn_metadata` maps FunctionId → Ty for resolving callee effects
 /// (which contexts a function reads/writes). Used to populate
 /// `context_uses`/`context_defs` on FunctionCall/Spawn instructions.
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     if cfg.blocks.is_empty() {
         return;
     }
@@ -114,7 +114,7 @@ pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>)
 ///   2. **Apply** — mutate `cfg.blocks` with the collected results.
 fn forward_context_values(
     cfg: &mut CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> FxHashMap<ValueId, ValueId> {
     let num_blocks = cfg.blocks.len();
@@ -163,7 +163,7 @@ fn forward_context_values(
     struct CollectState<'a> {
         blocks: &'a [crate::cfg::Block],
         val_types: &'a mut FxHashMap<ValueId, Ty>,
-        fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
+        fn_metadata: &'a FxHashMap<QualifiedRef, Ty>,
         preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
         written_contexts: &'a BTreeSet<QualifiedRef>,
         dom_children: &'a [SmallVec<[usize; 4]>],
@@ -405,7 +405,7 @@ fn forward_context_values(
 /// Only `EffectTarget::Context` refs are returned — `Token` targets are NOT
 /// SSA-compatible and must never be converted to context_uses/context_defs.
 pub(crate) fn extract_effect_refs(
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     fn_id: &QualifiedRef,
 ) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
     use crate::ty::EffectTarget;
@@ -414,7 +414,7 @@ pub(crate) fn extract_effect_refs(
     let Ty::Fn {
         effect: Effect::Resolved(eff),
         ..
-    } = &m.ty
+    } = m
     else {
         return None;
     };
@@ -1305,7 +1305,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// Empty fn_metadata — no ExternFn effect info.
-    fn no_fn_metadata() -> FxHashMap<QualifiedRef, FnMetadata> {
+    fn no_fn_metadata() -> FxHashMap<QualifiedRef, Ty> {
         FxHashMap::default()
     }
 
@@ -1498,8 +1498,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
@@ -1507,9 +1506,8 @@ mod tests {
                         reads: BTreeSet::from([EffectTarget::Context(qref)]),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         // Build MIR manually then promote:
@@ -1601,15 +1599,13 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
                     effect: Effect::pure(),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         let mut body = MirBody::new();
@@ -1669,8 +1665,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Unit),
                     captures: vec![],
@@ -1678,9 +1673,8 @@ mod tests {
                         reads: BTreeSet::new(),
                         writes: BTreeSet::from([EffectTarget::Context(qref)]),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         // v0 = Ref @ctx
@@ -1798,8 +1792,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
@@ -1810,9 +1803,8 @@ mod tests {
                         ]),
                         writes: BTreeSet::new(),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         let mut body = MirBody::new();
@@ -1891,8 +1883,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Unit),
                     captures: vec![],
@@ -1903,9 +1894,8 @@ mod tests {
                             EffectTarget::Token(token),
                         ]),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         let mut body = MirBody::new();
@@ -1983,8 +1973,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             callee_id,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
@@ -1998,9 +1987,8 @@ mod tests {
                             EffectTarget::Token(token),
                         ]),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         let mut body = MirBody::new();
@@ -2111,8 +2099,7 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             fid,
-            FnMetadata {
-                ty: Ty::Fn {
+            Ty::Fn {
                     params: vec![],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
@@ -2123,9 +2110,8 @@ mod tests {
                         ]),
                         writes: BTreeSet::from([EffectTarget::Token(token)]),
                     }),
+                    hint: None,
                 },
-                hint: None,
-            },
         );
 
         let result = extract_effect_refs(&fn_metadata, &fid);
@@ -2149,7 +2135,7 @@ mod tests {
     /// Build a minimal CfgBody with: Ref → Store → Load → Return.
     /// When volatile=false, SSA should forward the store value and eliminate the load.
     /// When volatile=true, SSA must preserve the load.
-    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, FnMetadata>) {
+    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, Ty>) {
         use acvus_utils::LocalFactory;
         let interner = Interner::new();
         let ctx_qref = QualifiedRef::root(interner.intern("history"));

@@ -15,7 +15,7 @@ use crate::graph::QualifiedRef;
 use crate::graph::inliner;
 use crate::ir::MirModule;
 use crate::optimize;
-use crate::graph::FnMetadata;
+
 use crate::ty::Ty;
 use crate::validate::{self, ValidationError};
 
@@ -30,11 +30,11 @@ pub struct OptimizeResult {
 /// Run the full optimization pipeline.
 ///
 /// `modules`: lowered MIR modules from Phase 3 (lower).
-/// `fn_metadata`: QualifiedRef → FnMetadata mapping for all functions.
+/// `fn_metadata`: QualifiedRef → Ty mapping for all functions.
 /// `recursive_fns`: set of functions involved in recursion (SCC).
 pub fn optimize(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
@@ -44,7 +44,7 @@ pub fn optimize(
 /// Optimize with untyped scalar register coloring (for kovac).
 pub fn optimize_untyped(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
@@ -53,7 +53,7 @@ pub fn optimize_untyped(
 
 fn optimize_inner(
     modules: FxHashMap<QualifiedRef, MirModule>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
     untyped_scalars: bool,
@@ -101,7 +101,7 @@ fn optimize_inner(
 /// Pass 1: SROA → SSA → DSE → DCE on a single body.
 fn run_pass1_body(
     body: &mut crate::ir::MirBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
 ) {
     optimize::sroa::run_body(body, context_types);
@@ -116,7 +116,7 @@ fn run_pass1_body(
 /// SROA on MirBody, then promote once → all passes on CfgBody → demote once.
 fn run_pass2_body(
     body: &mut crate::ir::MirBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     untyped_scalars: bool,
 ) {
@@ -127,7 +127,7 @@ fn run_pass2_body(
 }
 
 /// Pass 2 pipeline on CfgBody: SpawnSplit → SSA → DSE → CodeMotion → Reorder → RegColor.
-fn run_pass2(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, untyped_scalars: bool) {
+fn run_pass2(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>, untyped_scalars: bool) {
     optimize::spawn_split::run(cfg, fn_metadata);
     optimize::ssa_pass::run(cfg, fn_metadata);
     optimize::dse::run(cfg, fn_metadata);

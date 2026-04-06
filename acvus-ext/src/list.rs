@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty, TySubst};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, TyTerm, lift_effect_to_poly};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -32,46 +31,34 @@ fn h_reverse(
 // ── Builders ────────────────────────────────────────────────────────
 
 fn build_len(interner: &Interner) -> acvus_interpreter::ExternFn {
-    let mut s = TySubst::new();
-    let t = s.fresh_param();
-    let named = vec![Param::new(interner.intern("_0"), Ty::List(Box::new(t)))];
-    let constraint = FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(Ty::Int),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    let mut b = PolyBuilder::new();
+    let t = b.fresh_ty_var();
+    let named = vec![ParamTerm::<Poly>::new(interner.intern("_0"), TyTerm::List(Box::new(t)))];
+    let ty = TyTerm::Fn {
+        params: named,
+        ret: Box::new(TyTerm::Int),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
-    ExternFnBuilder::new("len", constraint).handler(h_len)
+    ExternFnBuilder::new("len", ty).handler(h_len)
 }
 
 fn build_reverse(interner: &Interner) -> acvus_interpreter::ExternFn {
-    let mut s = TySubst::new();
-    let t = s.fresh_param();
-    let named = vec![Param::new(
+    let mut b = PolyBuilder::new();
+    let t = b.fresh_ty_var();
+    let named = vec![ParamTerm::<Poly>::new(
         interner.intern("_0"),
-        Ty::List(Box::new(t.clone())),
+        TyTerm::List(Box::new(t.clone())),
     )];
-    let constraint = FnConstraint {
-        signature: Some(Signature {
-            params: named.clone(),
-        }),
-        output: Constraint::Exact(Ty::Fn {
-            params: named,
-            ret: Box::new(Ty::List(Box::new(t))),
-            captures: vec![],
-            effect: Effect::pure(),
-        }),
-        effect: None,
+    let ty = TyTerm::Fn {
+        params: named,
+        ret: Box::new(TyTerm::List(Box::new(t))),
+        captures: vec![],
+        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
-    ExternFnBuilder::new("reverse", constraint).handler(h_reverse)
+    ExternFnBuilder::new("reverse", ty).handler(h_reverse)
 }
 
 // ── Registry ────────────────────────────────────────────────────────

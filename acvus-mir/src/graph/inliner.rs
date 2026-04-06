@@ -576,7 +576,7 @@ fn remap_inst(
         InstKind::Cast { dst, src, kind } => InstKind::Cast {
             dst: r(*dst),
             src: r(*src),
-            kind: *kind,
+            kind: kind.clone(),
         },
 
         // Clone / Drop

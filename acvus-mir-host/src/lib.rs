@@ -23,10 +23,11 @@ pub use scope::{CallArgs, Scope};
 
 // ── Re-exports: MIR types used in generated code ───────────────────
 
-pub use acvus_mir::graph::types::{Constraint, FnConstraint, FnKind, Function, Signature};
+pub use acvus_mir::graph::types::{FnKind, Function};
 pub use acvus_mir::ty::UserDefinedDecl;
 pub use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Hint, Param, Ty};
-pub use acvus_mir::ty::TySubst;
+pub use acvus_mir::ty::{Infer, InferEffect, InferTy, ParamTerm, Solver, lift_effect, lift_ty};
+pub use acvus_mir::ty::{Poly, PolyBuilder, PolyEffect, PolyParam, PolyTy, lift_to_poly, lift_effect_to_poly};
 pub use acvus_utils::{Interner, QualifiedRef};
 
 // ── Re-export: proc macro ──────────────────────────────────────────

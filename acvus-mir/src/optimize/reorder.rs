@@ -25,14 +25,14 @@ use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
 use crate::cfg::CfgBody;
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::ty::{Effect, EffectTarget, Ty};
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 ///
-/// `fn_metadata`: QualifiedRef → FnMetadata for looking up callee effects (Token extraction).
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
+/// `fn_metadata`: QualifiedRef → Ty for looking up callee effects (Token extraction).
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     for block in &mut cfg.blocks {
         reorder_block(&mut block.insts, &cfg.val_types, fn_metadata);
     }
@@ -61,7 +61,7 @@ enum Priority {
 fn token_deps(
     kind: &InstKind,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) -> SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
         InstKind::FunctionCall {
@@ -71,7 +71,7 @@ fn token_deps(
         | InstKind::Spawn {
             callee: Callee::Direct(qref),
             ..
-        } => fn_metadata.get(qref).and_then(|m| match &m.ty {
+        } => fn_metadata.get(qref).and_then(|m| match m {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -103,7 +103,7 @@ fn token_deps(
 fn reorder_block(
     insts: &mut Vec<Inst>,
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) {
     let n = insts.len();
     if n <= 1 {
@@ -122,7 +122,7 @@ fn reorder_block(
 fn build_dependency_graph(
     insts: &[Inst],
     val_types: &FxHashMap<ValueId, Ty>,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
@@ -300,20 +300,18 @@ mod tests {
         })
     }
 
-    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, FnMetadata) {
+    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
-            FnMetadata {
-                // IO functions have no context/token effects — their "IO-ness"
-                // is conveyed by Hint::Io. The effect set has no tokens so that
-                // token liveness does not block spawn hoisting.
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
+            // IO functions have no context/token effects — their "IO-ness"
+            // is conveyed by Hint::Io. The effect set has no tokens so that
+            // token liveness does not block spawn hoisting.
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::String),
+                captures: vec![],
+                effect: Effect::pure(),
                 hint: Some(crate::ty::Hint::Io),
             },
         )
@@ -551,13 +549,11 @@ mod tests {
         for &qref in &[fa, fb] {
             fn_metadata.insert(
                 qref,
-                FnMetadata {
-                    ty: Ty::Fn {
-                        params: vec![],
-                        ret: Box::new(Ty::Unit),
-                        captures: vec![],
-                        effect: token_effect.clone(),
-                    },
+                Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::Unit),
+                    captures: vec![],
+                    effect: token_effect.clone(),
                     hint: None,
                 },
             );

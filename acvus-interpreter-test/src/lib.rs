@@ -7,7 +7,7 @@ use acvus_interpreter::{
 };
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -19,7 +19,7 @@ pub struct CompileResult {
     pub modules: FxHashMap<QualifiedRef, Executable>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub builtin_ids: FxHashMap<Astr, QualifiedRef>,
-    pub fn_metadata: FxHashMap<QualifiedRef, FnMetadata>,
+    pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
 }
 
@@ -68,38 +68,36 @@ pub fn compile_source_with_externs(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
     let entry_qref = QualifiedRef::root(interner.intern("test"));
+    let mut pb = PolyBuilder::new();
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,
         kind: FnKind::Local(ast),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None,
     });
 
     // Register ExternFns.
     let mut extern_executables: FxHashMap<QualifiedRef, Executable> = FxHashMap::default();
-    let mut fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::default();
+    let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
     for registry in extern_registries {
         let registered = registry.register(interner);
         for func in &registered.functions {
-            // Extract Ty + hint from constraint for fn_metadata map.
-            if let Constraint::Exact(ty) = &func.constraint.output {
-                fn_metadata.insert(
-                    func.qref,
-                    FnMetadata {
-                        ty: ty.clone(),
-                        hint: func.constraint.hint,
-                    },
-                );
+            // Extract concrete Ty from the function's polymorphic type.
+            // Polymorphic ExternFns (with Var placeholders) are skipped — only fully concrete ones get metadata.
+            if let Some(ty) = try_freeze_poly(&func.ty) {
+                fn_types.insert(func.qref, ty);
             }
         }
         functions.extend(registered.functions);
@@ -148,7 +146,11 @@ pub fn compile_source_with_externs(
     }
 
     // Run full optimization pipeline: SSA → Inline → SpawnSplit → Reorder → SSA → RegColor → Validate.
-    let opt_result = graph_optimize::optimize(result.modules.clone(), &fn_metadata, &inf.context_types, &FxHashSet::default());
+    // Merge pre-extracted fn_types with infer result fn_types (infer is authoritative).
+    for (qref, ty) in inf.fn_types.iter() {
+        fn_types.insert(*qref, ty.clone());
+    }
+    let opt_result = graph_optimize::optimize(result.modules.clone(), &fn_types, &inf.context_types, &FxHashSet::default());
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {
@@ -187,7 +189,7 @@ pub fn compile_source_with_externs(
         modules,
         context_names,
         builtin_ids,
-        fn_metadata,
+        fn_types,
         extern_executables,
     }
 }
@@ -230,7 +232,7 @@ pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Val
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_metadata(cr.fn_metadata)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -278,7 +280,7 @@ pub async fn run_script(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_metadata(cr.fn_metadata)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -314,7 +316,7 @@ pub async fn run_script_mode(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_metadata(cr.fn_metadata)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());
@@ -358,7 +360,7 @@ pub async fn run_script_with_externs(
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_metadata(cr.fn_metadata)
+        .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
 
     let page = InMemoryContext::new(snapshot, interner.clone());

@@ -9,7 +9,7 @@
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{Effect, EffectSet, Hint, Param, Ty, TySubst, TypeRegistry};
+use crate::ty::{Effect, EffectSet, InferEffect, InferTy, Param, ParamTerm, PolyBuilder, PolyEffect, PolyParam, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty, lift_effect};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
@@ -33,7 +33,7 @@ pub struct FunctionMeta {
 pub enum FnInferOutcome {
     /// Type fully resolved. Lowerable.
     Complete {
-        resolution: crate::typeck::TypeResolution<crate::typeck::Checked>,
+        resolution: crate::typeck::TypeResolution,
         tail_ty: Ty,
         meta: FunctionMeta,
     },
@@ -56,7 +56,7 @@ impl FnInferOutcome {
     }
 
     /// Get the checked resolution if complete.
-    pub fn resolution(&self) -> Option<&crate::typeck::TypeResolution<crate::typeck::Checked>> {
+    pub fn resolution(&self) -> Option<&crate::typeck::TypeResolution> {
         match self {
             FnInferOutcome::Complete { resolution, .. } => Some(resolution),
             FnInferOutcome::Incomplete { .. } => None,
@@ -84,9 +84,9 @@ pub struct InferResult {
     pub outcomes: FxHashMap<QualifiedRef, FnInferOutcome>,
     /// Resolved context types (known + inferred). Frozen after inference.
     pub context_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
-    /// Resolved function metadata: QualifiedRef → FnMetadata { ty, hint }.
+    /// Resolved function types: QualifiedRef → Ty.
     /// Single source of truth for all function type info post-inference.
-    pub fn_metadata: Freeze<FxHashMap<QualifiedRef, FnMetadata>>,
+    pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
 }
 
 impl InferResult {
@@ -94,13 +94,13 @@ impl InferResult {
     pub fn try_resolution(
         &self,
         id: QualifiedRef,
-    ) -> Option<&crate::typeck::TypeResolution<crate::typeck::Checked>> {
+    ) -> Option<&crate::typeck::TypeResolution> {
         self.outcomes.get(&id)?.resolution()
     }
 
     /// Get the function type for a function.
     pub fn fn_type(&self, id: QualifiedRef) -> Option<&Ty> {
-        self.outcomes.get(&id).map(|o| &o.meta().ty)
+        self.fn_types.get(&id)
     }
 
     /// Get the context type for a QualifiedRef.
@@ -474,47 +474,65 @@ pub fn infer_scc(
     scc: &[QualifiedRef],
     fn_by_id: &FxHashMap<QualifiedRef, &Function>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
-    known_ctx: &FxHashMap<QualifiedRef, Ty>,
-    resolved_fn_types: &FxHashMap<QualifiedRef, Ty>,
+    known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
+    resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
 ) -> SccInferResult {
-    let mut subst = TySubst::new();
+    let mut solver = Solver::new();
+    let registry = TypeRegistry::default();
+    let mut poly_builder = PolyBuilder::new();
+
+    // Instantiate context types into solver-scoped InferTy.
+    let known_ctx_infer: FxHashMap<QualifiedRef, InferTy> = known_ctx
+        .iter()
+        .map(|(&k, v)| (k, solver.instantiate_poly(v)))
+        .collect();
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
-    let mut fn_ret_vars: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-    let mut fn_effect_vars: FxHashMap<QualifiedRef, Effect> = FxHashMap::default();
+    let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
+    let mut fn_effect_vars: FxHashMap<QualifiedRef, InferEffect> = FxHashMap::default();
     let mut fn_direct_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
     let mut fn_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> = FxHashMap::default();
 
-    // Build Ty::Fn for functions in this SCC (with fresh ret/effect vars).
-    let mut scc_fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+    // Build PolyTy::Fn templates for functions in this SCC.
+    // Solver ret/effect vars are kept separately for unification.
+    let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
 
     for &fid in scc {
         let func = fn_by_id[&fid];
-        let ret = match &func.constraint.output {
-            Constraint::Exact(ty) => ty.clone(),
-            _ => subst.fresh_param(),
+
+        // Destructure func.ty — must be Fn for local functions.
+        let TyTerm::Fn {
+            params: ref fn_params,
+            ret: ref fn_ret,
+            hint: ref fn_hint,
+            ..
+        } = func.ty
+        else {
+            unreachable!("local function ty must be Fn");
         };
-        let effect = subst.fresh_effect_var();
-        fn_ret_vars.insert(fid, ret.clone());
-        fn_effect_vars.insert(fid, effect.clone());
 
-        let sig_params: Vec<Param> = func
-            .constraint
-            .signature
-            .as_ref()
-            .map(|s| s.params.clone())
-            .unwrap_or_default();
+        // Solver vars for unification (InferTy).
+        let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+        let effect_var = solver.fresh_effect_var();
+        fn_ret_vars.insert(fid, ret_var.clone());
+        fn_effect_vars.insert(fid, effect_var.clone());
 
-        let fn_ty = Ty::Fn {
-            params: sig_params,
-            ret: Box::new(ret),
+        // Poly template for TypeEnv: func.ty's params/ret/hint, fresh effect.
+        let poly_effect: PolyEffect = poly_builder.fresh_effect_var();
+        let fn_ty: PolyTy = TyTerm::Fn {
+            params: fn_params.clone(),
+            ret: fn_ret.clone(),
             captures: vec![],
-            effect,
+            effect: poly_effect,
+            hint: *fn_hint,
         };
         scc_fn_types.insert(func.qref, fn_ty);
     }
 
-    // Build TypeEnv: already-resolved functions + this SCC's unresolved functions.
-    let mut env_functions = resolved_fn_types.clone();
+    // Build TypeEnv: already-resolved functions + this SCC's poly templates.
+    let mut env_functions: FxHashMap<QualifiedRef, PolyTy> = resolved_fn_types
+        .iter()
+        .map(|(&k, v)| (k, v.clone()))
+        .collect();
     env_functions.extend(scc_fn_types);
 
     // Typecheck each function in this SCC.
@@ -525,38 +543,63 @@ pub fn infer_scc(
         };
 
         let env = crate::ty::TypeEnv {
-            contexts: known_ctx.clone(),
+            contexts: known_ctx_infer.clone(),
             functions: env_functions.clone(),
         };
 
-        let expected_tail = fn_ret_vars.get(&fid);
-        let declared_types: Vec<Ty> = func
-            .constraint
-            .signature
-            .as_ref()
-            .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
-            .unwrap_or_default();
+        // Extract ret and params from func.ty.
+        let TyTerm::Fn {
+            ret: ref fn_ret,
+            params: ref fn_params,
+            ..
+        } = func.ty
+        else {
+            unreachable!("local function ty must be Fn");
+        };
 
-        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut subst)
+        let expected_tail_ty: Option<Ty> = {
+            let infer = solver.instantiate_poly(fn_ret);
+            solver.freeze_ty(&infer).ok()
+        };
+        let declared_types: Vec<Ty> = fn_params
+            .iter()
+            .filter_map(|p| {
+                let infer = solver.instantiate_poly(&p.ty);
+                solver.freeze_ty(&infer).ok()
+            })
+            .collect();
+
+        let checker = crate::typeck::TypeChecker::new(interner, &env, &registry, &mut solver)
             .with_analysis_mode()
             .with_declared_param_types(declared_types);
         let result = match parsed {
-            ParsedSource::Script(script) => checker.check_script(script, expected_tail),
+            ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
             ParsedSource::Template(template) => checker.check_template(template),
         };
 
         match result {
             Ok(ref unchecked) => {
+                // Unify effect var with body effect.
                 if let Some(effect_var) = fn_effect_vars.get(&fid) {
-                    let _ = subst.unify_effect(effect_var, &unchecked.body_effect);
+                    let body_effect_infer = lift_effect(&unchecked.body_effect);
+                    let _ = solver.unify_infer_effects(effect_var, &body_effect_infer, crate::ty::Polarity::Invariant);
                 }
-                if let Effect::Resolved(ref effect_set) = unchecked.body_effect {
-                    fn_direct_effects.insert(fid, effect_set.clone());
+                // Unify ret var with tail ty (for inferred return types).
+                if expected_tail_ty.is_none() {
+                    if let Some(ret_var) = fn_ret_vars.get(&fid) {
+                        let tail_infer = lift_ty(&unchecked.tail_ty);
+                        let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, &registry);
+                    }
                 }
+                match &unchecked.body_effect {
+                    Effect::Resolved(effect_set) => { fn_direct_effects.insert(fid, effect_set.clone()); }
+                    Effect::Var(v) => match *v {},
+                }
+
                 let bind: Vec<Param> = unchecked
                     .extern_params
                     .iter()
-                    .map(|(name, ty)| Param::new(*name, subst.resolve(ty)))
+                    .map(|(name, ty)| Param::new(*name, ty.clone()))
                     .collect();
                 fn_bind_params.insert(fid, bind);
             }
@@ -566,7 +609,7 @@ pub fn infer_scc(
         }
     }
 
-    // Resolve all functions in this SCC.
+    // Resolve all functions in this SCC — freeze InferTy → Ty at the boundary.
     let mut resolved_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
     let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
 
@@ -574,26 +617,29 @@ pub fn infer_scc(
         let func = fn_by_id[&fid];
         let ret = fn_ret_vars
             .get(&fid)
-            .map(|r| subst.resolve(r))
+            .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
             .unwrap_or_else(Ty::error);
         let effect = fn_effect_vars
             .get(&fid)
-            .map(|e| subst.resolve_effect(e))
+            .and_then(|e| solver.freeze_effect(&solver.resolve_infer_effect(e)).ok())
             .unwrap_or_else(Effect::pure);
         let bind: Vec<Param> = fn_bind_params
             .get(&fid)
-            .map(|b| {
-                b.iter()
-                    .map(|p| Param::new(p.name, subst.resolve(&p.ty)))
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_default();
+
+        // Preserve hint from the original func.ty.
+        let hint = match &func.ty {
+            TyTerm::Fn { hint, .. } => *hint,
+            _ => None,
+        };
 
         let fn_ty = Ty::Fn {
             params: bind.clone(),
             ret: Box::new(ret),
             captures: vec![],
             effect,
+            hint,
         };
         resolved_types.insert(func.qref, fn_ty.clone());
         fn_metas.insert(
@@ -621,59 +667,50 @@ pub fn infer_scc(
 /// 1. Build call graph from AST references.
 /// 2. Compute SCCs (Tarjan) — reverse topological order.
 /// 3. Process each SCC:
-///    - Within an SCC: shared TySubst, no instantiation of intra-SCC calls.
+///    - Within an SCC: shared Solver, no instantiation of intra-SCC calls.
 ///    - After an SCC is done: resolve ret vars → concrete Ty::Fn.
 ///    - Next SCC sees concrete types → instantiation is safe.
 pub fn infer(
     interner: &Interner,
     graph: &CompilationGraph,
     extract: &ExtractResult,
-    user_context_types: &FxHashMap<QualifiedRef, Ty>,
+    user_context_types: &FxHashMap<QualifiedRef, PolyTy>,
     type_registry: Freeze<TypeRegistry>,
     policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> InferResult {
-    let mut subst = TySubst::with_registry(type_registry);
+    let mut solver = Solver::new();
+    let registry_ref: &TypeRegistry = &type_registry;
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
     let mut fn_direct_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
     let mut fn_unchecked: FxHashMap<
         QualifiedRef,
-        crate::typeck::TypeResolution<crate::typeck::Unchecked>,
+        crate::typeck::TypeResolution,
     > = FxHashMap::default();
     let mut fn_typeck_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> =
         FxHashMap::default();
-    let mut resolved_fn_types: FxHashMap<QualifiedRef, Ty> = Default::default();
+    let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = Default::default();
     let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
 
     // ── Setup ────────────────────────────────────────────────────────
 
-    // Extern function types are always known upfront.
+    // Extern function types are always known upfront (their PolyTy is fully concrete).
     for func in graph.functions.iter() {
-        if let FnKind::Extern = &func.kind
-            && let Constraint::Exact(ty) = &func.constraint.output
-        {
-            resolved_fn_types.insert(func.qref, ty.clone());
+        if let FnKind::Extern = &func.kind {
+            resolved_fn_types.insert(func.qref, func.ty.clone());
         }
     }
 
     // Known context types: graph declarations + user-provided.
-    let mut known_ctx: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
+    // Internally work with InferTy; freeze to Ty at the output boundary.
+    // If ctx.ty is fully concrete → instantiate_poly gives a concrete InferTy.
+    // If ctx.ty contains Var placeholders → instantiate_poly maps each Var to a fresh solver var.
+    let mut known_ctx: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     for ctx in graph.contexts.iter() {
-        match &ctx.constraint {
-            Constraint::Exact(ty) => {
-                known_ctx.insert(ctx.qref, ty.clone());
-            }
-            Constraint::Inferred => {
-                known_ctx.insert(ctx.qref, subst.fresh_param());
-            }
-            Constraint::DerivedFnOutput(_, _) | Constraint::DerivedContext(_, _) => {
-                // TODO: resolve derived types. For now, fresh var.
-                known_ctx.insert(ctx.qref, subst.fresh_param());
-            }
-        }
+        known_ctx.insert(ctx.qref, solver.instantiate_poly(&ctx.ty));
     }
-    known_ctx.extend(user_context_types.iter().map(|(&k, v)| (k, v.clone())));
+    known_ctx.extend(user_context_types.iter().map(|(&k, v)| (k, solver.instantiate_poly(v))));
 
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
@@ -696,41 +733,55 @@ pub fn infer(
     // ── STEP 2: Typecheck + resolve per SCC ─────────────────────────
 
     for scc in &sccs {
-        // 2a. Build Ty::Fn for SCC members with fresh ret/effect vars.
-        let mut scc_fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-        let mut scc_ret_vars: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-        let mut scc_effect_vars: FxHashMap<QualifiedRef, Effect> = FxHashMap::default();
+        // 2a. Build PolyTy::Fn templates for SCC members.
+        // Solver ret/effect vars are kept separately for unification.
+        let mut poly_builder = PolyBuilder::new();
+        let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
+        let mut scc_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
+        let mut scc_effect_vars: FxHashMap<QualifiedRef, InferEffect> = FxHashMap::default();
 
         for &fid in scc {
             let func = fn_by_id[&fid];
-            let ret = match &func.constraint.output {
-                Constraint::Exact(ty) => ty.clone(),
-                _ => subst.fresh_param(),
+
+            // Destructure func.ty — must be Fn for local functions.
+            let TyTerm::Fn {
+                params: ref fn_params,
+                ret: ref fn_ret,
+                hint: ref fn_hint,
+                ..
+            } = func.ty
+            else {
+                unreachable!("local function ty must be Fn");
             };
-            let effect = subst.fresh_effect_var();
-            scc_ret_vars.insert(fid, ret.clone());
-            scc_effect_vars.insert(fid, effect.clone());
 
-            let sig_params: Vec<Param> = func
-                .constraint
-                .signature
-                .as_ref()
-                .map(|s| s.params.clone())
-                .unwrap_or_default();
+            // Solver vars for unification (InferTy).
+            // If ret is concrete (no Poly Vars) → instantiate_poly gives concrete InferTy.
+            // If ret has Vars → instantiate_poly maps each Var to a fresh solver var.
+            let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+            let effect_var = solver.fresh_effect_var();
+            scc_ret_vars.insert(fid, ret_var.clone());
+            scc_effect_vars.insert(fid, effect_var.clone());
 
+            // Poly template for TypeEnv: use func.ty's params/ret/hint,
+            // but replace effect with a fresh poly_builder var (effects are always inferred per-SCC).
+            let poly_effect: PolyEffect = poly_builder.fresh_effect_var();
             scc_fn_types.insert(
                 func.qref,
-                Ty::Fn {
-                    params: sig_params,
-                    ret: Box::new(ret),
+                TyTerm::Fn {
+                    params: fn_params.clone(),
+                    ret: fn_ret.clone(),
                     captures: vec![],
-                    effect,
+                    effect: poly_effect,
+                    hint: *fn_hint,
                 },
             );
         }
 
         // 2b. Typecheck each function with resolved + SCC-local type env.
-        let mut env_functions = resolved_fn_types.clone();
+        let mut env_functions: FxHashMap<QualifiedRef, PolyTy> = resolved_fn_types
+            .iter()
+            .map(|(&k, v)| (k, v.clone()))
+            .collect();
         env_functions.extend(scc_fn_types);
 
         for &fid in scc {
@@ -744,35 +795,61 @@ pub fn infer(
                 functions: env_functions.clone(),
             };
 
-            let expected_tail = scc_ret_vars.get(&fid);
-            let declared_types: Vec<Ty> = func
-                .constraint
-                .signature
-                .as_ref()
-                .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
-                .unwrap_or_default();
+            // Extract ret and params from func.ty.
+            let TyTerm::Fn {
+                ret: ref fn_ret,
+                params: ref fn_params,
+                ..
+            } = func.ty
+            else {
+                unreachable!("local function ty must be Fn");
+            };
 
-            let checker = crate::typeck::TypeChecker::new(interner, &env, &mut subst)
+            // For expected_tail: if ret is fully concrete (no Poly Vars), freeze to Ty.
+            // If ret has Vars (inferred), freeze fails → None → typechecker infers freely.
+            let expected_tail_ty: Option<Ty> = {
+                let infer = solver.instantiate_poly(fn_ret);
+                solver.freeze_ty(&infer).ok()
+            };
+            let declared_types: Vec<Ty> = fn_params
+                .iter()
+                .filter_map(|p| {
+                    let infer = solver.instantiate_poly(&p.ty);
+                    solver.freeze_ty(&infer).ok()
+                })
+                .collect();
+
+            let checker = crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
                 .with_analysis_mode()
                 .with_declared_param_types(declared_types);
             let result = match parsed {
-                ParsedSource::Script(script) => checker.check_script(script, expected_tail),
+                ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
                 ParsedSource::Template(template) => checker.check_template(template),
             };
 
             match result {
                 Ok(unchecked) => {
+                    // Unify effect var with body effect.
                     if let Some(effect_var) = scc_effect_vars.get(&fid) {
-                        let _ = subst.unify_effect(effect_var, &unchecked.body_effect);
+                        let body_effect_infer = lift_effect(&unchecked.body_effect);
+                        let _ = solver.unify_infer_effects(effect_var, &body_effect_infer, crate::ty::Polarity::Invariant);
                     }
-                    if let Effect::Resolved(ref effect_set) = unchecked.body_effect {
-                        fn_direct_effects.insert(fid, effect_set.clone());
+                    // Unify ret var with tail ty (for inferred return types).
+                    if expected_tail_ty.is_none() {
+                        if let Some(ret_var) = scc_ret_vars.get(&fid) {
+                            let tail_infer = lift_ty(&unchecked.tail_ty);
+                            let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, registry_ref);
+                        }
+                    }
+                    match &unchecked.body_effect {
+                        Effect::Resolved(effect_set) => { fn_direct_effects.insert(fid, effect_set.clone()); }
+                        Effect::Var(v) => match *v {},
                     }
 
                     let bind: Vec<Param> = unchecked
                         .extern_params
                         .iter()
-                        .map(|(name, ty)| Param::new(*name, subst.resolve(ty)))
+                        .map(|(name, ty)| Param::new(*name, ty.clone()))
                         .collect();
                     fn_bind_params.insert(fid, bind);
                     fn_unchecked.insert(fid, unchecked);
@@ -783,32 +860,36 @@ pub fn infer(
             }
         }
 
-        // 2c. Resolve SCC: build resolved fn types + fn_metas.
+        // 2c. Resolve SCC: freeze InferTy → Ty, build resolved fn types + fn_metas.
         for &fid in scc {
+            let func = fn_by_id[&fid];
             let ret = scc_ret_vars
                 .get(&fid)
-                .map(|r| subst.resolve(r))
+                .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
                 .unwrap_or_else(Ty::error);
             let effect = scc_effect_vars
                 .get(&fid)
-                .map(|e| subst.resolve_effect(e))
+                .and_then(|e| solver.freeze_effect(&solver.resolve_infer_effect(e)).ok())
                 .unwrap_or_else(Effect::pure);
             let bind: Vec<Param> = fn_bind_params
                 .get(&fid)
-                .map(|b| {
-                    b.iter()
-                        .map(|p| Param::new(p.name, subst.resolve(&p.ty)))
-                        .collect()
-                })
+                .cloned()
                 .unwrap_or_default();
+
+            // Preserve hint from the original func.ty.
+            let hint = match &func.ty {
+                TyTerm::Fn { hint, .. } => *hint,
+                _ => None,
+            };
 
             let fn_ty = Ty::Fn {
                 params: bind.clone(),
                 ret: Box::new(ret),
                 captures: vec![],
                 effect,
+                hint,
             };
-            resolved_fn_types.insert(fid, fn_ty.clone());
+            resolved_fn_types.insert(fid, lift_to_poly(&fn_ty));
             fn_metas.insert(
                 fid,
                 FunctionMeta {
@@ -872,7 +953,7 @@ pub fn infer(
         }
     }
 
-    // ── STEP 4: check_completeness + effect constraint → outcomes ───
+    // ── STEP 4: policy + effect constraint → outcomes ───
 
     let mut outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = FxHashMap::default();
 
@@ -911,121 +992,110 @@ pub fn infer(
             continue;
         };
 
-        // Try check_completeness.
-        match crate::typeck::check_completeness(unchecked, &subst) {
-            Ok(checked) => {
-                // Check read_only policy: writes to read_only contexts are forbidden.
-                if let Effect::Resolved(ref eff) = checked.body_effect {
-                    let ro_violations: Vec<QualifiedRef> = eff
-                        .writes
-                        .iter()
-                        .filter_map(|target| {
-                            if let crate::ty::EffectTarget::Context(qref) = target
-                                && policies.get(qref).is_some_and(|p| p.read_only)
-                            {
-                                Some(*qref)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+        // Validate policies and effect constraints.
+        let checked = unchecked;
 
-                    if !ro_violations.is_empty() {
-                        let detail = ro_violations
-                            .iter()
-                            .map(|q| interner.resolve(q.name).to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        outcomes.insert(
-                            fid,
-                            FnInferOutcome::Incomplete {
-                                unknown_contexts: vec![],
-                                unknown_extern_params: checked.extern_params.clone(),
-                                meta,
-                                errors: vec![crate::error::MirError {
-                                    kind: crate::error::MirErrorKind::EffectViolation {
-                                        detail: format!("write to read_only context: {detail}"),
-                                    },
-                                    span: acvus_ast::Span::ZERO,
-                                }],
-                            },
-                        );
-                        continue;
+        // Check read_only policy: writes to read_only contexts are forbidden.
+        let eff = match &checked.body_effect {
+            Effect::Resolved(eff) => eff,
+            Effect::Var(v) => match *v {},
+        };
+        {
+            let ro_violations: Vec<QualifiedRef> = eff
+                .writes
+                .iter()
+                .filter_map(|target| {
+                    if let crate::ty::EffectTarget::Context(qref) = target
+                        && policies.get(qref).is_some_and(|p| p.read_only)
+                    {
+                        Some(*qref)
+                    } else {
+                        None
                     }
-                }
+                })
+                .collect();
 
-                // Check effect constraint if present.
-                if let Some(func) = fn_by_id.get(&fid)
-                    && let Some(ref allowed) = func.constraint.effect
-                    && let Err(err) =
-                        crate::typeck::check_effect_constraint(&checked.body_effect, allowed)
-                {
-                    outcomes.insert(
-                        fid,
-                        FnInferOutcome::Incomplete {
-                            unknown_contexts: vec![],
-                            unknown_extern_params: checked.extern_params.clone(),
-                            meta,
-                            errors: vec![err],
-                        },
-                    );
-                    continue;
-                }
-
-                let tail_ty = checked.tail_ty.clone();
-                outcomes.insert(
-                    fid,
-                    FnInferOutcome::Complete {
-                        resolution: checked,
-                        tail_ty,
-                        meta,
-                    },
-                );
-            }
-            Err(errors) => {
+            if !ro_violations.is_empty() {
+                let detail = ro_violations
+                    .iter()
+                    .map(|q| interner.resolve(q.name).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 outcomes.insert(
                     fid,
                     FnInferOutcome::Incomplete {
                         unknown_contexts: vec![],
-                        unknown_extern_params: vec![],
+                        unknown_extern_params: checked.extern_params.clone(),
                         meta,
-                        errors,
+                        errors: vec![crate::error::MirError {
+                            kind: crate::error::MirErrorKind::EffectViolation {
+                                detail: format!("write to read_only context: {detail}"),
+                            },
+                            span: acvus_ast::Span::ZERO,
+                        }],
                     },
                 );
+                continue;
             }
         }
+
+        // Check effect constraint if present.
+        if let Some(func) = fn_by_id.get(&fid)
+            && let Some(ref allowed) = func.effect_constraint
+            && let Err(err) =
+                crate::typeck::check_effect_constraint(&checked.body_effect, allowed)
+        {
+            outcomes.insert(
+                fid,
+                FnInferOutcome::Incomplete {
+                    unknown_contexts: vec![],
+                    unknown_extern_params: checked.extern_params.clone(),
+                    meta,
+                    errors: vec![err],
+                },
+            );
+            continue;
+        }
+
+        let tail_ty = checked.tail_ty.clone();
+        outcomes.insert(
+            fid,
+            FnInferOutcome::Complete {
+                resolution: checked,
+                tail_ty,
+                meta,
+            },
+        );
     }
 
     // ── STEP 5: Build result ────────────────────────────────────────
 
-    let mut context_types: FxHashMap<QualifiedRef, Ty> = known_ctx;
-    for ty in context_types.values_mut() {
-        *ty = subst.resolve(ty);
-    }
+    // Freeze InferTy → Ty for context types at the output boundary.
+    let context_types: FxHashMap<QualifiedRef, Ty> = known_ctx
+        .iter()
+        .map(|(&k, v)| {
+            let resolved = solver.resolve_ty(v);
+            let frozen = solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error());
+            (k, frozen)
+        })
+        .collect();
 
-    let mut fn_types: FxHashMap<QualifiedRef, Ty> = resolved_fn_types;
+    let mut fn_types: FxHashMap<QualifiedRef, Ty> = resolved_fn_types
+        .iter()
+        .map(|(&k, v)| {
+            let infer = solver.instantiate_poly(v);
+            let resolved = solver.resolve_ty(&infer);
+            (k, solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error()))
+        })
+        .collect();
     for (&qref, outcome) in &outcomes {
         fn_types.insert(qref, outcome.meta().ty.clone());
     }
 
-    // Build FnMetadata map: ty + hint from FnConstraint.
-    let fn_hints: FxHashMap<QualifiedRef, Option<Hint>> = graph
-        .functions
-        .iter()
-        .map(|f| (f.qref, f.constraint.hint))
-        .collect();
-    let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = fn_types
-        .into_iter()
-        .map(|(qref, ty)| {
-            let hint = fn_hints.get(&qref).copied().flatten();
-            (qref, FnMetadata { ty, hint })
-        })
-        .collect();
-
     InferResult {
         outcomes,
         context_types: Freeze::new(context_types),
-        fn_metadata: Freeze::new(fn_metadata),
+        fn_types: Freeze::new(fn_types),
     }
 }
 
@@ -1033,10 +1103,11 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::EffectTarget;
+    use crate::ty::{EffectTarget, EffectTerm, lift_ty, lift_effect, lift_to_poly, ParamTerm, Infer, Poly, PolyBuilder};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
+        let mut pb = PolyBuilder::new();
         let qref = QualifiedRef::root(interner.intern("test"));
         CompilationGraph {
             functions: Freeze::new(vec![Function {
@@ -1044,12 +1115,14 @@ mod tests {
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         }
@@ -1060,11 +1133,12 @@ mod tests {
         source: &str,
         ctx: &[(&str, Ty)],
     ) -> CompilationGraph {
+        let mut pb = PolyBuilder::new();
         let contexts = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
         let qref = QualifiedRef::root(interner.intern("test"));
@@ -1074,12 +1148,14 @@ mod tests {
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         }
@@ -1151,29 +1227,31 @@ mod tests {
         fns: &[(&str, &str, Option<Vec<Ty>>)],
         ctx: &[(&str, Ty)],
     ) -> (CompilationGraph, Vec<(Astr, QualifiedRef)>) {
+        let mut pb = PolyBuilder::new();
         let mut functions = Vec::new();
         let mut ids = Vec::new();
         for &(name, source, ref params) in fns {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
-            let sig = params.as_ref().map(|p| Signature {
-                params: p
-                    .iter()
+            let poly_params: Vec<PolyParam> = params.as_ref().map(|p| {
+                p.iter()
                     .enumerate()
-                    .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty.clone()))
-                    .collect(),
-            });
+                    .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
+                    .collect()
+            }).unwrap_or_default();
             functions.push(Function {
                 qref: fid,
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: sig,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: poly_params,
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             });
             ids.push((aname, fid));
         }
@@ -1181,7 +1259,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
         let graph = CompilationGraph {
@@ -1478,6 +1556,7 @@ mod tests {
                     ret: Box::new(Ty::Int),
                     captures: vec![],
                     effect: fn_effect,
+                    hint: None,
                 }]),
             )],
             &[],
@@ -1521,6 +1600,7 @@ mod tests {
                         ret: Box::new(Ty::Int),
                         captures: vec![],
                         effect: fn_effect,
+                        hint: None,
                     }]),
                 ),
                 // caller invokes both → gets both effects transitively
@@ -1570,6 +1650,7 @@ mod tests {
                             reads: [EffectTarget::Context(ctx_x)].into_iter().collect(),
                             ..Default::default()
                         }),
+                        hint: None,
                     }]),
                 ),
                 (
@@ -1583,6 +1664,7 @@ mod tests {
                             writes: [EffectTarget::Context(ctx_y)].into_iter().collect(),
                             ..Default::default()
                         }),
+                        hint: None,
                     }]),
                 ),
                 // caller gets both effects transitively
@@ -1626,11 +1708,12 @@ mod tests {
         source: &str,
         ctx: &[(&str, Ty)],
     ) -> CompilationGraph {
+        let mut pb = PolyBuilder::new();
         let contexts = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
         let mut functions = Vec::new();
@@ -1640,12 +1723,14 @@ mod tests {
             kind: FnKind::Local(ParsedAst::Script(
                 acvus_ast::parse_script(interner, source).expect("parse"),
             )),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: None,
         });
         CompilationGraph {
             functions: Freeze::new(functions),
@@ -1671,14 +1756,15 @@ mod tests {
     /// `fns`: list of `(name, source, signature, output_constraint)`.
     fn make_multi_fn_graph(
         interner: &Interner,
-        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Option<PolyTy>)],
         ctx: &[(&str, Ty)],
     ) -> (CompilationGraph, Vec<(Astr, QualifiedRef)>) {
+        let mut pb = PolyBuilder::new();
         let contexts: Vec<Context> = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
 
@@ -1689,24 +1775,28 @@ mod tests {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
             ids.push((aname, fid));
+            let poly_params: Vec<PolyParam> = sig.as_ref().map(|params| {
+                params
+                    .iter()
+                    .map(|(name, ty)| {
+                        ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
+                    })
+                    .collect()
+            }).unwrap_or_default();
+            let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
             functions.push(Function {
                 qref: fid,
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: sig.as_ref().map(|params| Signature {
-                        params: params
-                            .iter()
-                            .map(|(name, ty)| {
-                                crate::ty::Param::new(interner.intern(name), ty.clone())
-                            })
-                            .collect(),
-                    }),
-                    output: output.clone(),
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: poly_params,
+                    ret: Box::new(ret),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             });
         }
 
@@ -1720,7 +1810,7 @@ mod tests {
     /// Infer a multi-function graph, return result and ids.
     fn infer_multi(
         interner: &Interner,
-        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Option<PolyTy>)],
         ctx: &[(&str, Ty)],
     ) -> (InferResult, Vec<(Astr, QualifiedRef)>) {
         infer_with_extern(interner, fns, &[], ctx)
@@ -1729,15 +1819,16 @@ mod tests {
     /// Build a graph with both local and extern functions, then infer.
     fn infer_with_extern(
         interner: &Interner,
-        local_fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Constraint)],
+        local_fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Option<PolyTy>)],
         extern_fns: &[Function],
         ctx: &[(&str, Ty)],
     ) -> (InferResult, Vec<(Astr, QualifiedRef)>) {
+        let mut pb = PolyBuilder::new();
         let contexts: Vec<Context> = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
 
@@ -1748,24 +1839,28 @@ mod tests {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
             ids.push((aname, fid));
+            let poly_params: Vec<PolyParam> = sig.as_ref().map(|params| {
+                params
+                    .iter()
+                    .map(|(name, ty)| {
+                        ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
+                    })
+                    .collect()
+            }).unwrap_or_default();
+            let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
             functions.push(Function {
                 qref: fid,
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: sig.as_ref().map(|params| Signature {
-                        params: params
-                            .iter()
-                            .map(|(name, ty)| {
-                                crate::ty::Param::new(interner.intern(name), ty.clone())
-                            })
-                            .collect(),
-                    }),
-                    output: output.clone(),
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: poly_params,
+                    ret: Box::new(ret),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             });
         }
 
@@ -1796,7 +1891,7 @@ mod tests {
 
     /// Helper: extract the resolved EffectSet from a TypeResolution's body_effect.
     fn extract_effect_set(
-        resolution: &crate::typeck::TypeResolution<crate::typeck::Checked>,
+        resolution: &crate::typeck::TypeResolution,
     ) -> &EffectSet {
         match &resolution.body_effect {
             Effect::Resolved(set) => set,
@@ -1812,27 +1907,22 @@ mod tests {
     }
 
     fn make_extern_fn(interner: &Interner, name: &str, params: Vec<Ty>, ret: Ty) -> Function {
-        let named_params: Vec<crate::ty::Param> = params
-            .into_iter()
+        let named_params: Vec<ParamTerm<Poly>> = params
+            .iter()
             .enumerate()
-            .map(|(i, ty)| crate::ty::Param::new(interner.intern(&format!("_{i}")), ty))
+            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
             .collect();
         Function {
             qref: QualifiedRef::root(interner.intern(name)),
             kind: FnKind::Extern,
-            constraint: FnConstraint {
-                signature: Some(Signature {
-                    params: named_params.clone(),
-                }),
-                output: Constraint::Exact(Ty::Fn {
-                    params: named_params,
-                    ret: Box::new(ret),
-                    captures: vec![],
-                    effect: Effect::pure(),
-                }),
-                effect: None,
+            ty: TyTerm::Fn {
+                params: named_params,
+                ret: Box::new(lift_to_poly(&ret)),
+                captures: vec![],
+                effect: EffectTerm::Resolved(EffectSet::default()),
                 hint: None,
             },
+            effect_constraint: None,
         }
     }
 
@@ -1843,11 +1933,12 @@ mod tests {
         ctx: &[(&str, Ty)],
         effect: crate::ty::EffectConstraint,
     ) -> (InferResult, QualifiedRef) {
+        let mut pb = PolyBuilder::new();
         let contexts: Vec<Context> = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
 
@@ -1860,12 +1951,14 @@ mod tests {
             functions: Freeze::new(vec![Function {
                 qref: fid,
                 kind: FnKind::Local(parsed),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: Some(effect),
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: Some(effect),
             }]),
             contexts: Freeze::new(contexts),
         };
@@ -1936,7 +2029,7 @@ mod tests {
         let graph = make_graph_no_ctx_with_builtins(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), Ty::Int);
+        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
         let result = infer(
             &i,
             &graph,
@@ -2054,9 +2147,9 @@ mod tests {
                     "double",
                     "$x * 2",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "double(21)", None, Constraint::Inferred),
+                ("main", "double(21)", None, None),
             ],
             &[],
         );
@@ -2073,8 +2166,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("greet", "\"hello\"", Some(vec![]), Constraint::Inferred),
-                ("main", "greet()", None, Constraint::Inferred),
+                ("greet", "\"hello\"", Some(vec![]), None),
+                ("main", "greet()", None, None),
             ],
             &[],
         );
@@ -2095,9 +2188,9 @@ mod tests {
                     "add",
                     "$x + $y",
                     Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "add(1, 2)", None, Constraint::Inferred),
+                ("main", "add(1, 2)", None, None),
             ],
             &[],
         );
@@ -2118,15 +2211,15 @@ mod tests {
                     "inc",
                     "$x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "double_inc",
                     "inc($x) + inc($x)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "double_inc(5)", None, Constraint::Inferred),
+                ("main", "double_inc(5)", None, None),
             ],
             &[],
         );
@@ -2143,8 +2236,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("get_count", "@count", Some(vec![]), Constraint::Inferred),
-                ("main", "get_count() + 1", None, Constraint::Inferred),
+                ("get_count", "@count", Some(vec![]), None),
+                ("main", "get_count() + 1", None, None),
             ],
             &[("count", Ty::Int)],
         );
@@ -2165,9 +2258,9 @@ mod tests {
                     "make_str",
                     "\"hi\"",
                     Some(vec![]),
-                    Constraint::Exact(Ty::String),
+                    Some(lift_to_poly(&Ty::String)),
                 ),
-                ("main", "make_str()", None, Constraint::Inferred),
+                ("main", "make_str()", None, None),
             ],
             &[],
         );
@@ -2184,8 +2277,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("five", "5", Some(vec![]), Constraint::Inferred),
-                ("main", "five() + five()", None, Constraint::Inferred),
+                ("five", "5", Some(vec![]), None),
+                ("main", "five() + five()", None, None),
             ],
             &[],
         );
@@ -2206,9 +2299,9 @@ mod tests {
                     "double",
                     "$x * 2",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "10 | double", None, Constraint::Inferred),
+                ("main", "10 | double", None, None),
             ],
             &[],
         );
@@ -2231,9 +2324,9 @@ mod tests {
                     "echo",
                     "$s",
                     Some(vec![("s", Ty::String)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "echo(\"hello\")", None, Constraint::Inferred),
+                ("main", "echo(\"hello\")", None, None),
             ],
             &[],
         );
@@ -2254,10 +2347,10 @@ mod tests {
                     "inc",
                     "$x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("a", "inc(10)", None, Constraint::Inferred),
-                ("b", "inc(20)", None, Constraint::Inferred),
+                ("a", "inc(10)", None, None),
+                ("b", "inc(20)", None, None),
             ],
             &[],
         );
@@ -2278,9 +2371,9 @@ mod tests {
                     "is_positive",
                     "$x > 0",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "is_positive(42)", None, Constraint::Inferred),
+                ("main", "is_positive(42)", None, None),
             ],
             &[],
         );
@@ -2297,10 +2390,10 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("d", "1", Some(vec![]), Constraint::Inferred),
-                ("c", "d()", Some(vec![]), Constraint::Inferred),
-                ("b", "c()", Some(vec![]), Constraint::Inferred),
-                ("main", "b()", None, Constraint::Inferred),
+                ("d", "1", Some(vec![]), None),
+                ("c", "d()", Some(vec![]), None),
+                ("b", "c()", Some(vec![]), None),
+                ("main", "b()", None, None),
             ],
             &[],
         );
@@ -2323,9 +2416,9 @@ mod tests {
                     "inc",
                     "$x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "inc(inc(0))", None, Constraint::Inferred),
+                ("main", "inc(inc(0))", None, None),
             ],
             &[],
         );
@@ -2346,15 +2439,15 @@ mod tests {
                     "is_even",
                     "is_odd($n - 1)",
                     Some(vec![("n", Ty::Int)]),
-                    Constraint::Exact(Ty::Bool),
+                    Some(lift_to_poly(&Ty::Bool)),
                 ),
                 (
                     "is_odd",
                     "is_even($n - 1)",
                     Some(vec![("n", Ty::Int)]),
-                    Constraint::Exact(Ty::Bool),
+                    Some(lift_to_poly(&Ty::Bool)),
                 ),
-                ("main", "is_even(10)", None, Constraint::Inferred),
+                ("main", "is_even(10)", None, None),
             ],
             &[],
         );
@@ -2375,9 +2468,9 @@ mod tests {
                     "fib",
                     "fib($n - 1) + fib($n - 2)",
                     Some(vec![("n", Ty::Int)]),
-                    Constraint::Exact(Ty::Int),
+                    Some(lift_to_poly(&Ty::Int)),
                 ),
-                ("main", "fib(10)", None, Constraint::Inferred),
+                ("main", "fib(10)", None, None),
             ],
             &[],
         );
@@ -2398,9 +2491,9 @@ mod tests {
                     "avg",
                     "($a + $b) / 2.0",
                     Some(vec![("a", Ty::Float), ("b", Ty::Float)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "avg(1.0, 3.0)", None, Constraint::Inferred),
+                ("main", "avg(1.0, 3.0)", None, None),
             ],
             &[],
         );
@@ -2423,9 +2516,9 @@ mod tests {
                     "double",
                     "x * 2",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "double(\"hello\")", None, Constraint::Inferred),
+                ("main", "double(\"hello\")", None, None),
             ],
             &[],
         );
@@ -2446,9 +2539,9 @@ mod tests {
                     "inc",
                     "x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "inc(1, 2)", None, Constraint::Inferred),
+                ("main", "inc(1, 2)", None, None),
             ],
             &[],
         );
@@ -2466,9 +2559,9 @@ mod tests {
                     "add",
                     "x + y",
                     Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "add(1)", None, Constraint::Inferred),
+                ("main", "add(1)", None, None),
             ],
             &[],
         );
@@ -2482,8 +2575,8 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("make_str", "\"hello\"", Some(vec![]), Constraint::Inferred),
-                ("main", "make_str() + 1", None, Constraint::Inferred),
+                ("make_str", "\"hello\"", Some(vec![]), None),
+                ("main", "make_str() + 1", None, None),
             ],
             &[],
         );
@@ -2496,7 +2589,7 @@ mod tests {
         let i = Interner::new();
         let (result, _ids) = infer_multi(
             &i,
-            &[("main", "nonexistent(1)", None, Constraint::Inferred)],
+            &[("main", "nonexistent(1)", None, None)],
             &[],
         );
         assert!(
@@ -2512,8 +2605,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("bad", "42", Some(vec![]), Constraint::Exact(Ty::String)),
-                ("main", "bad()", None, Constraint::Inferred),
+                ("bad", "42", Some(vec![]), Some(lift_to_poly(&Ty::String))),
+                ("main", "bad()", None, None),
             ],
             &[],
         );
@@ -2534,13 +2627,13 @@ mod tests {
                     "ping",
                     "pong(x)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "pong",
                     "ping(x)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
             ],
             &[],
@@ -2560,9 +2653,9 @@ mod tests {
                     "needs_int",
                     "x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "\"hello\" | needs_int", None, Constraint::Inferred),
+                ("main", "\"hello\" | needs_int", None, None),
             ],
             &[],
         );
@@ -2579,8 +2672,8 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("get_name", "@name", Some(vec![]), Constraint::Inferred),
-                ("main", "get_name() + 1", None, Constraint::Inferred),
+                ("get_name", "@name", Some(vec![]), None),
+                ("main", "get_name() + 1", None, None),
             ],
             &[("name", Ty::String)],
         );
@@ -2597,8 +2690,8 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("f", "x", Some(vec![("x", Ty::Int)]), Constraint::Inferred),
-                ("main", "f(1) + f(1, 2)", None, Constraint::Inferred),
+                ("f", "x", Some(vec![("x", Ty::Int)]), None),
+                ("main", "f(1) + f(1, 2)", None, None),
             ],
             &[],
         );
@@ -2612,13 +2705,13 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("make_int", "42", Some(vec![]), Constraint::Inferred),
-                ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
+                ("make_int", "42", Some(vec![]), None),
+                ("make_str", "\"hi\"", Some(vec![]), None),
                 (
                     "main",
                     "[make_int(), make_str()]",
                     None,
-                    Constraint::Inferred,
+                    None,
                 ),
             ],
             &[],
@@ -2636,14 +2729,14 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("make_str", "\"hi\"", Some(vec![]), Constraint::Inferred),
+                ("make_str", "\"hi\"", Some(vec![]), None),
                 (
                     "needs_int",
                     "x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "needs_int(make_str())", None, Constraint::Inferred),
+                ("main", "needs_int(make_str())", None, None),
             ],
             &[],
         );
@@ -2662,8 +2755,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("pi", "3", Some(vec![]), Constraint::Inferred),
-                ("main", "pi()", None, Constraint::Inferred),
+                ("pi", "3", Some(vec![]), None),
+                ("main", "pi()", None, None),
             ],
             &[],
         );
@@ -2680,8 +2773,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("len", "42", Some(vec![]), Constraint::Exact(Ty::Int)),
-                ("main", "len()", None, Constraint::Inferred),
+                ("len", "42", Some(vec![]), Some(lift_to_poly(&Ty::Int))),
+                ("main", "len()", None, None),
             ],
             &[],
         );
@@ -2698,8 +2791,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("main", "helper()", None, Constraint::Inferred),
-                ("helper", "42", Some(vec![]), Constraint::Inferred),
+                ("main", "helper()", None, None),
+                ("helper", "42", Some(vec![]), None),
             ],
             &[],
         );
@@ -2719,9 +2812,9 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("read_a", "@x + 1", Some(vec![]), Constraint::Inferred),
-                ("read_b", "@x + 2", Some(vec![]), Constraint::Inferred),
-                ("main", "read_a() + read_b()", None, Constraint::Inferred),
+                ("read_a", "@x + 1", Some(vec![]), None),
+                ("read_b", "@x + 2", Some(vec![]), None),
+                ("main", "read_a() + read_b()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -2742,9 +2835,9 @@ mod tests {
                     "f",
                     "f($x - 1)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Exact(Ty::Int),
+                    Some(lift_to_poly(&Ty::Int)),
                 ),
-                ("main", "f(10)", None, Constraint::Inferred),
+                ("main", "f(10)", None, None),
             ],
             &[],
         );
@@ -2761,10 +2854,10 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("d", "1", Some(vec![]), Constraint::Inferred),
-                ("b", "d() + 10", Some(vec![]), Constraint::Inferred),
-                ("c", "d() + 20", Some(vec![]), Constraint::Inferred),
-                ("main", "b() + c()", None, Constraint::Inferred),
+                ("d", "1", Some(vec![]), None),
+                ("b", "d() + 10", Some(vec![]), None),
+                ("c", "d() + 20", Some(vec![]), None),
+                ("main", "b() + c()", None, None),
             ],
             &[],
         );
@@ -2791,25 +2884,25 @@ mod tests {
                     "stage1",
                     "$x + 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "stage2",
                     "$x * 2",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "stage3",
                     "$x - 1",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "main",
                     "0 | stage1 | stage2 | stage3",
                     None,
-                    Constraint::Inferred,
+                    None,
                 ),
             ],
             &[],
@@ -2827,8 +2920,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("a", "1 + 2", None, Constraint::Inferred),
-                ("b", "\"hello\"", None, Constraint::Inferred),
+                ("a", "1 + 2", None, None),
+                ("b", "\"hello\"", None, None),
             ],
             &[],
         );
@@ -2849,8 +2942,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("get_user", "@user", Some(vec![]), Constraint::Exact(obj_ty)),
-                ("main", "get_user().name", None, Constraint::Inferred),
+                ("get_user", "@user", Some(vec![]), Some(lift_to_poly(&obj_ty))),
+                ("main", "get_user().name", None, None),
             ],
             &[(
                 "user",
@@ -2877,8 +2970,8 @@ mod tests {
         let (result, _) = infer_multi(
             &i,
             &[
-                ("a", "0", Some(vec![]), Constraint::Inferred),
-                ("main", "a() + \"hello\"", None, Constraint::Inferred),
+                ("a", "0", Some(vec![]), None),
+                ("main", "a() + \"hello\"", None, None),
             ],
             &[],
         );
@@ -2892,9 +2985,9 @@ mod tests {
         let (result, _) = infer_multi(
             &i,
             &[
-                ("a", "0", Some(vec![]), Constraint::Inferred),
-                ("ok_caller", "a() + 1", None, Constraint::Inferred),
-                ("bad_caller", "a() + \"hi\"", None, Constraint::Inferred),
+                ("a", "0", Some(vec![]), None),
+                ("ok_caller", "a() + 1", None, None),
+                ("bad_caller", "a() + \"hi\"", None, None),
             ],
             &[],
         );
@@ -2915,13 +3008,13 @@ mod tests {
                     "ping",
                     "pong(x)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
                 (
                     "pong",
                     "ping(x)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
             ],
             &[],
@@ -2946,9 +3039,9 @@ mod tests {
                     "f",
                     "f(x - 1)",
                     Some(vec![("x", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "f(10)", None, Constraint::Inferred),
+                ("main", "f(10)", None, None),
             ],
             &[],
         );
@@ -2965,8 +3058,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("get_x", "@x", Some(vec![]), Constraint::Inferred),
-                ("main", "get_x()", None, Constraint::Inferred),
+                ("get_x", "@x", Some(vec![]), None),
+                ("main", "get_x()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -2991,9 +3084,9 @@ mod tests {
                     "add",
                     "$x + $y",
                     Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
-                    Constraint::Inferred,
+                    None,
                 ),
-                ("main", "add(1, 2)", None, Constraint::Inferred),
+                ("main", "add(1, 2)", None, None),
             ],
             &[],
         );
@@ -3014,8 +3107,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("set_x", "@x = 42; @x", Some(vec![]), Constraint::Inferred),
-                ("main", "set_x()", None, Constraint::Inferred),
+                ("set_x", "@x = 42; @x", Some(vec![]), None),
+                ("main", "set_x()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -3042,8 +3135,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("bad", "42", Some(vec![]), Constraint::Exact(Ty::String)),
-                ("main", "bad()", None, Constraint::Inferred),
+                ("bad", "42", Some(vec![]), Some(lift_to_poly(&Ty::String))),
+                ("main", "bad()", None, None),
             ],
             &[],
         );
@@ -3064,8 +3157,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("mystery", "x", Some(vec![]), Constraint::Inferred),
-                ("main", "mystery() + 1", None, Constraint::Inferred),
+                ("mystery", "x", Some(vec![]), None),
+                ("main", "mystery() + 1", None, None),
             ],
             &[],
         );
@@ -3087,7 +3180,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("reader", "@x + @y", Some(vec![]), Constraint::Inferred)],
+            &[("reader", "@x + @y", Some(vec![]), None)],
             &[("x", Ty::Int), ("y", Ty::Int)],
         );
         let errs = error_strings(&i, &result);
@@ -3120,7 +3213,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("writer", "@x = 42; @x", Some(vec![]), Constraint::Inferred)],
+            &[("writer", "@x = 42; @x", Some(vec![]), None)],
             &[("x", Ty::Int)],
         );
         let errs = error_strings(&i, &result);
@@ -3149,7 +3242,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("pure_fn", "1 + 2", Some(vec![]), Constraint::Inferred)],
+            &[("pure_fn", "1 + 2", Some(vec![]), None)],
             &[],
         );
         let errs = error_strings(&i, &result);
@@ -3169,8 +3262,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("get_x", "@x", Some(vec![]), Constraint::Inferred),
-                ("main", "get_x()", None, Constraint::Inferred),
+                ("get_x", "@x", Some(vec![]), None),
+                ("main", "get_x()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -3204,7 +3297,7 @@ mod tests {
         let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
         let (result, ids) = infer_with_extern(
             &i,
-            &[("main", "fetch(42)", None, Constraint::Inferred)],
+            &[("main", "fetch(42)", None, None)],
             &[fetch],
             &[],
         );
@@ -3221,7 +3314,7 @@ mod tests {
         let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
         let (result, _) = infer_with_extern(
             &i,
-            &[("main", "fetch(\"bad\")", None, Constraint::Inferred)],
+            &[("main", "fetch(\"bad\")", None, None)],
             &[fetch],
             &[],
         );
@@ -3238,7 +3331,7 @@ mod tests {
         let get_count = make_extern_fn(&i, "get_count", vec![], Ty::Int);
         let (result, ids) = infer_with_extern(
             &i,
-            &[("main", "get_count() + 1", None, Constraint::Inferred)],
+            &[("main", "get_count() + 1", None, None)],
             &[get_count],
             &[],
         );
@@ -3257,8 +3350,8 @@ mod tests {
         let (result, ids) = infer_with_extern(
             &i,
             &[
-                ("use_add", "ext_add(1, 2)", None, Constraint::Inferred),
-                ("use_greet", "ext_greet(\"hi\")", None, Constraint::Inferred),
+                ("use_add", "ext_add(1, 2)", None, None),
+                ("use_greet", "ext_greet(\"hi\")", None, None),
             ],
             &[add, greet],
             &[],
@@ -3271,7 +3364,7 @@ mod tests {
 
     // ── Effect constraint tests ──────────────────────────────────────
 
-    use crate::ty::{EffectBound, EffectConstraint};
+    use crate::ty::{EffectCap, EffectConstraint};
 
     /// Pure function with pure constraint: should pass.
     #[test]
@@ -3309,10 +3402,10 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
-            writes: EffectBound::Only(std::collections::BTreeSet::new()),
+            writes: EffectCap::Only(std::collections::BTreeSet::new()),
         };
         let (result, fid) = infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3326,10 +3419,10 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
-            writes: EffectBound::Only(std::collections::BTreeSet::new()),
+            writes: EffectCap::Only(std::collections::BTreeSet::new()),
         };
         let (result, _fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
         let errs = error_strings(&i, &result);
@@ -3349,10 +3442,10 @@ mod tests {
         let i = Interner::new();
         let qref = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
-            writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            writes: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref,
             )])),
         };
@@ -3368,10 +3461,10 @@ mod tests {
         let i = Interner::new();
         let qref_x = QualifiedRef::root(i.intern("x"));
         let allowed = EffectConstraint {
-            reads: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref_x,
             )])),
-            writes: EffectBound::Only(std::collections::BTreeSet::from([EffectTarget::Context(
+            writes: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
                 qref_x,
             )])),
         };
@@ -3395,7 +3488,7 @@ mod tests {
         let i = Interner::new();
         let (result, _ids) = infer_multi(
             &i,
-            &[("test", "@x = 42; @x", None, Constraint::Inferred)],
+            &[("test", "@x = 42; @x", None, None)],
             &[("x", Ty::Int)],
         );
         let errs = error_strings(&i, &result);
@@ -3520,9 +3613,10 @@ mod tests {
     #[test]
     fn context_declared_inferred_is_complete() {
         let i = Interner::new();
+        let mut pb = PolyBuilder::new();
         let contexts = vec![Context {
             qref: QualifiedRef::root(i.intern("x")),
-            constraint: Constraint::Inferred,
+            ty: pb.fresh_ty_var(),
         }];
         let test_qref = QualifiedRef::root(i.intern("test"));
         let graph = CompilationGraph {
@@ -3531,12 +3625,14 @@ mod tests {
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(&i, "@x + 1").expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         };
@@ -3592,7 +3688,7 @@ mod tests {
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), Ty::Int);
+        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
         let result = infer(
             &i,
             &graph,
@@ -3648,7 +3744,7 @@ mod tests {
                 "test",
                 "$x + 1",
                 Some(vec![("x", Ty::Int)]),
-                Constraint::Inferred,
+                None,
             )],
             &[],
         );
@@ -3669,7 +3765,7 @@ mod tests {
                 "test",
                 "$x + $y",
                 Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
-                Constraint::Inferred,
+                None,
             )],
             &[],
         );
@@ -3691,7 +3787,7 @@ mod tests {
                 "test",
                 "$x + 1",
                 Some(vec![("x", Ty::Int)]),
-                Constraint::Inferred,
+                None,
             )],
             &[],
         );
@@ -3710,7 +3806,7 @@ mod tests {
                 "test",
                 r#"$x + "hello""#,
                 Some(vec![("x", Ty::String)]),
-                Constraint::Inferred,
+                None,
             )],
             &[],
         );
@@ -3729,7 +3825,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "42", Some(vec![]), Constraint::Exact(Ty::Int))],
+            &[("test", "42", Some(vec![]), Some(lift_to_poly(&Ty::Int)))],
             &[],
         );
         let fid = ids[0].1;
@@ -3749,7 +3845,7 @@ mod tests {
                 "test",
                 r#""hello""#,
                 Some(vec![]),
-                Constraint::Exact(Ty::Int),
+                Some(lift_to_poly(&Ty::Int)),
             )],
             &[],
         );
@@ -3766,7 +3862,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", r#""hello""#, Some(vec![]), Constraint::Inferred)],
+            &[("test", r#""hello""#, Some(vec![]), None)],
             &[],
         );
         let fid = ids[0].1;
@@ -3784,8 +3880,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("reader", "@x", Some(vec![]), Constraint::Inferred),
-                ("caller", "reader()", None, Constraint::Inferred),
+                ("reader", "@x", Some(vec![]), None),
+                ("caller", "reader()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -3805,8 +3901,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("writer", "@x = 42; @x", Some(vec![]), Constraint::Inferred),
-                ("caller", "writer()", None, Constraint::Inferred),
+                ("writer", "@x = 42; @x", Some(vec![]), None),
+                ("caller", "writer()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -3826,9 +3922,9 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("leaf", "@x", Some(vec![]), Constraint::Inferred),
-                ("mid", "leaf()", Some(vec![]), Constraint::Inferred),
-                ("top", "mid()", None, Constraint::Inferred),
+                ("leaf", "@x", Some(vec![]), None),
+                ("mid", "leaf()", Some(vec![]), None),
+                ("top", "mid()", None, None),
             ],
             &[("x", Ty::Int)],
         );
@@ -3850,9 +3946,10 @@ mod tests {
 
         // "reader" reads @x (no constraint).
         // "caller" calls reader() but has pure constraint.
+        let mut pb = PolyBuilder::new();
         let contexts: Vec<Context> = vec![Context {
             qref: QualifiedRef::root(i.intern("x")),
-            constraint: Constraint::Exact(Ty::Int),
+            ty: lift_to_poly(&Ty::Int),
         }];
         let mut functions = Vec::new();
         let reader_id = QualifiedRef::root(i.intern("reader"));
@@ -3861,12 +3958,14 @@ mod tests {
             kind: FnKind::Local(ParsedAst::Script(
                 acvus_ast::parse_script(&i, "@x").expect("parse"),
             )),
-            constraint: FnConstraint {
-                signature: Some(Signature { params: vec![] }),
-                output: Constraint::Inferred,
-                effect: None,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: None,
         });
         let caller_id = QualifiedRef::root(i.intern("caller"));
         functions.push(Function {
@@ -3874,12 +3973,14 @@ mod tests {
             kind: FnKind::Local(ParsedAst::Script(
                 acvus_ast::parse_script(&i, "reader()").expect("parse"),
             )),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: Some(crate::ty::EffectConstraint::pure()), // pure constraint
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: Some(crate::ty::EffectConstraint::pure()), // pure constraint
         });
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
@@ -3916,11 +4017,12 @@ mod tests {
         ctx: &[(&str, Ty)],
         policies: &FxHashMap<QualifiedRef, ContextPolicy>,
     ) -> (InferResult, QualifiedRef) {
+        let mut pb = PolyBuilder::new();
         let contexts: Vec<Context> = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: lift_to_poly(ty),
             })
             .collect();
 
@@ -3932,12 +4034,14 @@ mod tests {
             functions: Freeze::new(vec![Function {
                 qref: fid,
                 kind: FnKind::Local(parsed),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         };

@@ -77,7 +77,7 @@ impl Effect {
                     .map(|r| target_to_ser(r, interner))
                     .collect(),
             }),
-            Effect::Var(v) => SerEffect::Var(*v),
+            Effect::Var(v) => match *v {},
         }
     }
 }
@@ -97,7 +97,7 @@ impl SerEffect {
                     .map(|r| ser_to_target(r, interner))
                     .collect(),
             }),
-            SerEffect::Var(v) => Effect::Var(*v),
+            SerEffect::Var(_) => Effect::pure(),
         }
     }
 }
@@ -136,16 +136,6 @@ pub enum SerTy {
     Range,
     Byte,
     Error,
-    /// Type parameter. Should not appear in persisted data; deserializes to Ty::error().
-    Param {
-        id: u32,
-    },
-    /// Legacy variant kept for backward-compatible deserialization only.
-    Infer,
-    /// Legacy variant kept for backward-compatible deserialization only.
-    Var {
-        id: u32,
-    },
     List {
         elem: Box<SerTy>,
     },
@@ -251,7 +241,7 @@ impl Ty {
             }),
             Ty::Handle(..) => todo!("Handle serialization not yet implemented"),
             Ty::Ref(..) => todo!("Ref serialization not yet implemented"),
-            Ty::Param { token: p, .. } => SerTy::Param { id: p.id() },
+            Ty::Var(v) => match *v {},
         }
     }
 }
@@ -268,9 +258,6 @@ impl SerTy {
             SerTy::Range => Ty::Range,
             SerTy::Byte => Ty::Byte,
             SerTy::Error => Ty::error(),
-            // Param / Infer / Var should never appear in persisted data.
-            // Recover gracefully with poison type.
-            SerTy::Param { .. } | SerTy::Infer | SerTy::Var { .. } => Ty::error(),
             SerTy::List { elem } => Ty::List(Box::new(elem.to_ty(interner))),
             SerTy::Object { fields } => Ty::Object(
                 fields
@@ -291,6 +278,7 @@ impl SerTy {
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
                 effect: effect.to_effect(interner),
+                hint: None,
             },
             SerTy::UserDefined {
                 id,

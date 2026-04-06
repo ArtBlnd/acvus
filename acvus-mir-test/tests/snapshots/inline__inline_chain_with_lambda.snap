@@ -25,13 +25,13 @@ expression: ir
     ; r4 (v5) : List<Int>
     ; r5 (v10) : Ref<List<Int>>
     ; r6 ($xs) : List<Int>
-    ; r7 (v12) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r7 (v12) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r8 (v13) : Fn(Int) -> Int
     ; r9 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r10 (collect(...)) : List<Int>
     ; r11 (v16) : Ref<List<Int>>
     ; r12 ($xs) : List<Int>
-    ; r13 (v18) : Iterator<?0, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r13 (v18) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
     ; r14 (v20) : Fn(Int, Int) -> Int
     ; r15 (fold(...)) : Int
     ; r16 (v19) : Int

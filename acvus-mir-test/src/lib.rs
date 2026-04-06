@@ -3,9 +3,26 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{PolyBuilder, PolyParam, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// Build an inferred `Function` with the given qref, kind, and optional params.
+fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -> Function {
+    let mut pb = PolyBuilder::new();
+    Function {
+        qref,
+        kind,
+        ty: TyTerm::Fn {
+            params,
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
+            hint: None,
+        },
+        effect_constraint: None,
+    }
+}
 
 /// Run extract → infer → lower, collecting errors from all passes.
 fn run_pipeline(
@@ -69,7 +86,7 @@ fn run_pipeline_with_registry(
         .ok_or_else(|| "no module produced for target".to_string())?;
 
     // Use InferResult.fn_metadata (authoritative, frozen).
-    let fn_metadata = &inf.fn_metadata;
+    let fn_metadata = &inf.fn_types;
 
     // Init check: field-level definite assignment on CfgBody (pre-SROA).
     {
@@ -145,7 +162,7 @@ pub fn compile_to_ir_with(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -153,16 +170,11 @@ pub fn compile_to_ir_with(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Template(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Template(ast)),
+        vec![],
+    )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
     for registry in std_regs {
@@ -219,7 +231,7 @@ pub fn compile_script_ir(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -227,16 +239,11 @@ pub fn compile_script_ir(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
     for registry in std_regs {
@@ -261,7 +268,7 @@ pub fn compile_script_raw(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -269,16 +276,11 @@ pub fn compile_script_raw(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
     for registry in std_regs {
@@ -333,7 +335,7 @@ pub fn compile_script_mode_raw(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -341,16 +343,11 @@ pub fn compile_script_mode_raw(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
     for registry in std_regs {
@@ -405,7 +402,7 @@ pub fn compile_script_optimized(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -413,16 +410,11 @@ pub fn compile_script_optimized(
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
     for registry in std_regs {
@@ -462,7 +454,7 @@ pub fn compile_script_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_metadata,
+        &inf.fn_types,
         &inf.context_types,
         &FxHashSet::default(),
     );
@@ -494,7 +486,7 @@ pub fn compile_script_optimized(
 pub fn compile_inline_ir(
     interner: &Interner,
     target: (&str, &str),
-    helpers: &[(&str, &str, Option<Signature>)],
+    helpers: &[(&str, &str, Vec<PolyParam>)],
     contexts: &[(&str, Ty)],
 ) -> Result<String, String> {
     compile_inline_ir_with(interner, target, helpers, contexts, &[])
@@ -504,7 +496,7 @@ pub fn compile_inline_ir(
 pub fn compile_inline_ir_with(
     interner: &Interner,
     target: (&str, &str),
-    helpers: &[(&str, &str, Option<Signature>)],
+    helpers: &[(&str, &str, Vec<PolyParam>)],
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
@@ -512,7 +504,7 @@ pub fn compile_inline_ir_with(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
@@ -520,31 +512,21 @@ pub fn compile_inline_ir_with(
     let target_ast = acvus_ast::parse_script(interner, target.1)
         .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
 
-    let mut functions = vec![Function {
-        qref: target_qref,
-        kind: FnKind::Local(ParsedAst::Script(target_ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        target_qref,
+        FnKind::Local(ParsedAst::Script(target_ast)),
+        vec![],
+    )];
 
-    for &(name, source, ref sig) in helpers {
+    for (name, source, params) in helpers {
         let qref = QualifiedRef::root(interner.intern(name));
         let ast = acvus_ast::parse_script(interner, source)
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
-        functions.push(Function {
+        functions.push(inferred_function(
             qref,
-            kind: FnKind::Local(ParsedAst::Script(ast)),
-            constraint: FnConstraint {
-                signature: sig.clone(),
-                output: Constraint::Inferred,
-                effect: None,
-                hint: None,
-            },
-        });
+            FnKind::Local(ParsedAst::Script(ast)),
+            params.clone(),
+        ));
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -614,7 +596,7 @@ pub fn compile_inline_ir_with(
 pub fn compile_multi_fn_raw(
     interner: &Interner,
     target: (&str, &str),
-    helpers: &[(&str, &str, Option<Signature>)],
+    helpers: &[(&str, &str, Vec<PolyParam>)],
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
@@ -622,7 +604,7 @@ pub fn compile_multi_fn_raw(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
@@ -630,31 +612,21 @@ pub fn compile_multi_fn_raw(
     let target_ast = acvus_ast::parse_script(interner, target.1)
         .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
 
-    let mut functions = vec![Function {
-        qref: target_qref,
-        kind: FnKind::Local(ParsedAst::Script(target_ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        target_qref,
+        FnKind::Local(ParsedAst::Script(target_ast)),
+        vec![],
+    )];
 
-    for &(name, source, ref sig) in helpers {
+    for (name, source, params) in helpers {
         let qref = QualifiedRef::root(interner.intern(name));
         let ast = acvus_ast::parse_script(interner, source)
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
-        functions.push(Function {
+        functions.push(inferred_function(
             qref,
-            kind: FnKind::Local(ParsedAst::Script(ast)),
-            constraint: FnConstraint {
-                signature: sig.clone(),
-                output: Constraint::Inferred,
-                effect: None,
-                hint: None,
-            },
-        });
+            FnKind::Local(ParsedAst::Script(ast)),
+            params.clone(),
+        ));
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -725,7 +697,7 @@ pub fn compile_multi_fn_raw(
 pub fn compile_multi_fn_optimized(
     interner: &Interner,
     target: (&str, &str),
-    helpers: &[(&str, &str, Option<Signature>)],
+    helpers: &[(&str, &str, Vec<PolyParam>)],
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
@@ -733,7 +705,7 @@ pub fn compile_multi_fn_optimized(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
@@ -741,31 +713,21 @@ pub fn compile_multi_fn_optimized(
     let target_ast = acvus_ast::parse_script(interner, target.1)
         .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
 
-    let mut functions = vec![Function {
-        qref: target_qref,
-        kind: FnKind::Local(ParsedAst::Script(target_ast)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
-            hint: None,
-        },
-    }];
+    let mut functions = vec![inferred_function(
+        target_qref,
+        FnKind::Local(ParsedAst::Script(target_ast)),
+        vec![],
+    )];
 
-    for &(name, source, ref sig) in helpers {
+    for (name, source, params) in helpers {
         let qref = QualifiedRef::root(interner.intern(name));
         let ast = acvus_ast::parse_script(interner, source)
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
-        functions.push(Function {
+        functions.push(inferred_function(
             qref,
-            kind: FnKind::Local(ParsedAst::Script(ast)),
-            constraint: FnConstraint {
-                signature: sig.clone(),
-                output: Constraint::Inferred,
-                effect: None,
-                hint: None,
-            },
-        });
+            FnKind::Local(ParsedAst::Script(ast)),
+            params.clone(),
+        ));
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -809,7 +771,7 @@ pub fn compile_multi_fn_optimized(
 
     let opt_result = acvus_mir::graph::optimize::optimize(
         result.modules,
-        &inf.fn_metadata,
+        &inf.fn_types,
         &inf.context_types,
         &FxHashSet::default(),
     );

@@ -10,6 +10,7 @@
 use acvus_mir::error::MirError;
 use acvus_mir::graph::incremental::{ContextInfo, IncrementalGraph};
 use acvus_mir::graph::types::*;
+use acvus_mir::ty::{PolyBuilder, PolyTy, TyTerm};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -121,14 +122,14 @@ impl LspSession {
         &mut self,
         name: &str,
         namespace: Option<Astr>,
-        constraint: Constraint,
+        ty: PolyTy,
     ) -> QualifiedRef {
         let interned = self.graph.interner().intern(name);
         let qref = match namespace {
             Some(ns) => QualifiedRef::qualified(ns, interned),
             None => QualifiedRef::root(interned),
         };
-        self.graph.add_context(Context { qref, constraint });
+        self.graph.add_context(Context { qref, ty });
         qref
     }
 
@@ -152,15 +153,18 @@ impl LspSession {
 
         // Always parse as template for LSP (templates are the primary document type).
         let ast = acvus_ast::parse(&interner, source).expect("parse error in LSP open");
+        let mut pb = PolyBuilder::new();
         let func = Function {
             qref,
             kind: FnKind::Local(ParsedAst::Template(ast)),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: None,
         };
 
         self.graph.add_function(func);
@@ -259,10 +263,7 @@ impl LspSession {
             if !label[1..].starts_with(prefix) {
                 continue;
             }
-            let ty = match &ctx.constraint {
-                Constraint::Exact(ty) => format!("{}", ty.display(interner)),
-                _ => "inferred".to_string(),
-            };
+            let ty = format!("{:?}", ctx.ty);
             items.push(CompletionItem {
                 label: label.clone(),
                 kind: CompletionKind::Context,

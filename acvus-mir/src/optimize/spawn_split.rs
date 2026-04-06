@@ -12,16 +12,16 @@
 use rustc_hash::FxHashMap;
 
 use crate::cfg::CfgBody;
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::ty::{Hint, Ty};
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
 ///
-/// `fn_metadata`: QualifiedRef → FnMetadata mapping for callee effect/type/hint lookup.
+/// `fn_metadata`: QualifiedRef → Ty mapping for callee effect/type/hint lookup.
 pub fn run(
     cfg: &mut CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
 ) {
     for block in &mut cfg.blocks {
         let mut new_insts = Vec::with_capacity(block.insts.len() + 4);
@@ -40,7 +40,7 @@ pub fn run(
 
                     // Register Handle type: Handle<ReturnTy, Effect>.
                     if let Some(Ty::Fn { ret, effect, .. }) =
-                        fn_metadata.get(callee_id).map(|m| &m.ty)
+                        fn_metadata.get(callee_id)
                     {
                         cfg.val_types
                             .insert(handle, Ty::Handle(ret.clone(), effect.clone()));
@@ -76,9 +76,9 @@ pub fn run(
 }
 
 /// Check if a Direct callee has Hint::Io (candidates for spawn-split).
-fn is_io_call(fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, callee: &QualifiedRef) -> bool {
+fn is_io_call(fn_metadata: &FxHashMap<QualifiedRef, Ty>, callee: &QualifiedRef) -> bool {
     matches!(
-        fn_metadata.get(callee).and_then(|m| m.hint),
+        fn_metadata.get(callee).and_then(|m| m.hint()),
         Some(Hint::Io)
     )
 }
@@ -141,13 +141,11 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             fetch_id,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![Param::new(i.intern("id"), Ty::Int)],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-                    effect: io_effect(),
-                },
+            Ty::Fn {
+                params: vec![Param::new(i.intern("id"), Ty::Int)],
+                ret: Box::new(Ty::String),
+                captures: vec![],
+                effect: io_effect(),
                 hint: Some(Hint::Io),
             },
         );
@@ -206,16 +204,14 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             add_id,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![
-                        Param::new(i.intern("a"), Ty::Int),
-                        Param::new(i.intern("b"), Ty::Int),
-                    ],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: pure_effect(),
-                },
+            Ty::Fn {
+                params: vec![
+                    Param::new(i.intern("a"), Ty::Int),
+                    Param::new(i.intern("b"), Ty::Int),
+                ],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: pure_effect(),
                 hint: None,
             },
         );
@@ -270,13 +266,11 @@ mod tests {
         let mut fn_metadata = FxHashMap::default();
         fn_metadata.insert(
             fetch_id,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: io_effect(),
-                },
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: io_effect(),
                 hint: Some(Hint::Io),
             },
         );
@@ -323,13 +317,11 @@ mod tests {
         for &fid in &[fetch_a, fetch_b] {
             fn_metadata.insert(
                 fid,
-                FnMetadata {
-                    ty: Ty::Fn {
-                        params: vec![],
-                        ret: Box::new(Ty::String),
-                        captures: vec![],
-                        effect: io_effect(),
-                    },
+                Ty::Fn {
+                    params: vec![],
+                    ret: Box::new(Ty::String),
+                    captures: vec![],
+                    effect: io_effect(),
                     hint: Some(Hint::Io),
                 },
             );

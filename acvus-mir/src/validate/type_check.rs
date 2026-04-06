@@ -6,12 +6,12 @@
 //! [`ValidationError`] instead of panicking.
 //!
 //! Design:
-//! - `Ty::Error` / `Ty::Param` unify with anything (analysis mode may leave
-//!   them unresolved).
+//! - `Ty::Error` unifies with anything (analysis mode may leave them
+//!   unresolved).  `Ty::Var(Infallible)` is uninhabitable for concrete types.
 //! - `Cast` is the *only* instruction allowed to change a value's type.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::graph::{ContextPolicy, FnMetadata, QualifiedRef};
+use crate::graph::{ContextPolicy, QualifiedRef};
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::ty::{Effect, EffectSet, EffectTarget, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
@@ -70,7 +70,7 @@ pub enum ValidationErrorKind {
 /// Check type consistency of the entire module.  Returns all errors found.
 pub fn check_types(
     module: &MirModule,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     _policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
@@ -88,26 +88,28 @@ pub fn check_types(
 }
 
 // ---------------------------------------------------------------------------
-// Structural type equality (invariant, with Error/Param escape)
+// Structural type equality (invariant, with Error escape)
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if two identity slots match.  `Ty::Param` (unresolved) matches anything,
-/// just like `Ty::Error`.  Concrete identities must be equal.
+/// Returns `true` if two identity slots match.  `Ty::Error` matches anything.
+/// `Ty::Var(Infallible)` is uninhabitable for concrete types.
 fn identities_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        (Ty::Param { .. }, _) | (_, Ty::Param { .. }) => true,
+        (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
         _ => a == b,
     }
 }
 
 /// Returns `true` if `a` and `b` are structurally equal under invariant
-/// variance.  `Ty::Error` and `Ty::Param` match anything (poison / unresolved).
+/// variance.  `Ty::Error` matches anything (poison).
+/// `Ty::Var(Infallible)` is uninhabitable for concrete types.
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        // Poison / unresolved — accept anything.
+        // Poison — accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        (Ty::Param { .. }, _) | (_, Ty::Param { .. }) => true,
+        // Uninhabitable — concrete types never have Var.
+        (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
 
         // Primitives
         (Ty::Int, Ty::Int) => true,
@@ -161,11 +163,11 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
     }
 }
 
-/// Effect matching for validation: Var matches anything (like Ty::Param),
-/// and Pure ≤ Effectful (subtyping).
+/// Effect matching for validation: Pure ≤ Effectful (subtyping).
+/// `Effect::Var(Infallible)` is uninhabitable for concrete types.
 fn effects_match(a: &Effect, b: &Effect) -> bool {
     match (a, b) {
-        (Effect::Var(_), _) | (_, Effect::Var(_)) => true,
+        (Effect::Var(v), _) | (_, Effect::Var(v)) => match *v {},
         // Both resolved — any resolved effects match in the two-element lattice
         // (Pure ≤ Effectful subtyping).
         (Effect::Resolved(_), Effect::Resolved(_)) => true,
@@ -233,12 +235,12 @@ struct CheckCtx<'a> {
     scope_name: String,
     /// label → index in `insts` (for Jump target block param lookup)
     label_map: FxHashMap<Label, usize>,
-    /// QualifiedRef → FnMetadata mapping for callee effect verification.
-    fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
+    /// QualifiedRef → Ty mapping for callee effect verification.
+    fn_metadata: &'a FxHashMap<QualifiedRef, Ty>,
 }
 
 impl<'a> CheckCtx<'a> {
-    fn new(scope_name: String, fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>) -> Self {
+    fn new(scope_name: String, fn_metadata: &'a FxHashMap<QualifiedRef, Ty>) -> Self {
         Self {
             scope_name,
             label_map: FxHashMap::default(),
@@ -249,7 +251,7 @@ impl<'a> CheckCtx<'a> {
     /// Extract effect from a Direct callee's type. Returns None if pure or unknown.
     fn callee_effect(&self, fn_id: &QualifiedRef) -> Option<&'a EffectSet> {
         let m = self.fn_metadata.get(fn_id)?;
-        match &m.ty {
+        match m {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -425,7 +427,7 @@ impl<'a> CheckCtx<'a> {
                             errors,
                         );
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
+                } else if !dst_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -456,7 +458,7 @@ impl<'a> CheckCtx<'a> {
                             );
                         }
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
+                } else if !dst_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -509,7 +511,7 @@ impl<'a> CheckCtx<'a> {
                             );
                         }
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
+                } else if !dst_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -718,7 +720,7 @@ impl<'a> CheckCtx<'a> {
                 if let Ty::Ref(inner, _) = src_ty {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "Load", "dst", inner.as_ref(), dst_ty, errors);
-                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
+                } else if !src_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -740,7 +742,7 @@ impl<'a> CheckCtx<'a> {
                     // Context materiality check: storing non-materializable to context is an error.
                     if let Some(crate::ir::RefTarget::Context(_)) = ref_target.get(dst)
                         && let Some(ty) = vt.get(value)
-                        && !matches!(ty, Ty::Error(_) | Ty::Param { .. })
+                        && !matches!(ty, Ty::Error(_))
                         && !ty.is_materializable()
                     {
                         errors.push(ValidationError {
@@ -750,7 +752,7 @@ impl<'a> CheckCtx<'a> {
                             kind: ValidationErrorKind::NotMaterializable { ty: ty.clone() },
                         });
                     }
-                } else if !dst_ty.is_error() && !matches!(dst_ty, Ty::Param { .. }) {
+                } else if !dst_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -771,7 +773,7 @@ impl<'a> CheckCtx<'a> {
                 let obj_ty = ty!(*object);
                 // Try direct type first, then unwrap one container level
                 // (lowerer may record List/Deque type for pattern-match iteration)
-                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
+                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_)) {
                     obj_ty
                 } else {
                     unwrap_element_ty(obj_ty)
@@ -794,7 +796,7 @@ impl<'a> CheckCtx<'a> {
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "FieldGet", "dst", &resolved, dst_ty, errors);
                     }
-                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Param { .. }) {
+                } else if !obj_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -836,7 +838,7 @@ impl<'a> CheckCtx<'a> {
                     }
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "FieldSet", "dst ≡ object", obj_ty, dst_ty, errors);
-                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Param { .. }) {
+                } else if !obj_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -852,7 +854,7 @@ impl<'a> CheckCtx<'a> {
 
             InstKind::ObjectGet { dst, object, key } => {
                 let obj_ty = ty!(*object);
-                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
+                let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_)) {
                     obj_ty
                 } else {
                     unwrap_element_ty(obj_ty)
@@ -862,7 +864,7 @@ impl<'a> CheckCtx<'a> {
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "ObjectGet", "dst", field_ty, dst_ty, errors);
                     }
-                } else if !obj_ty.is_error() && !matches!(obj_ty, Ty::Param { .. }) {
+                } else if !obj_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -894,7 +896,7 @@ impl<'a> CheckCtx<'a> {
                             },
                         });
                     }
-                } else if !tup_ty.is_error() && !matches!(tup_ty, Ty::Param { .. }) {
+                } else if !tup_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -913,7 +915,7 @@ impl<'a> CheckCtx<'a> {
                 if let Some(inner) = as_list_inner(list_ty) {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ListIndex", "dst", inner, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
+                } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -934,7 +936,7 @@ impl<'a> CheckCtx<'a> {
                 if let Some(inner) = as_list_inner(list_ty) {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ListGet", "dst", inner, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
+                } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -953,7 +955,7 @@ impl<'a> CheckCtx<'a> {
                 let dst_ty = ty!(*dst);
                 if as_list_inner(list_ty).is_some() {
                     self.assert_match(pc, span, "ListSlice", "dst ≡ list", list_ty, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
+                } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -977,8 +979,7 @@ impl<'a> CheckCtx<'a> {
                 let src_ty = ty!(*src);
                 if !matches!(
                     src_ty,
-                    Ty::List(_) | Ty::Deque(_, _) | Ty::Error(_) | Ty::Param { .. }
-                ) {
+                    Ty::List(_) | Ty::Deque(_, _) | Ty::Error(_)                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -996,12 +997,12 @@ impl<'a> CheckCtx<'a> {
 
             InstKind::TestObjectKey { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
+                let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_)) {
                     src_ty
                 } else {
                     unwrap_element_ty(src_ty)
                 };
-                if !matches!(src_ty, Ty::Object(_) | Ty::Error(_) | Ty::Param { .. }) {
+                if !matches!(src_ty, Ty::Object(_) | Ty::Error(_)) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1028,8 +1029,7 @@ impl<'a> CheckCtx<'a> {
                 let src_ty = ty!(*src);
                 if !matches!(
                     src_ty,
-                    Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_) | Ty::Param { .. }
-                ) {
+                    Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_)                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1055,7 +1055,7 @@ impl<'a> CheckCtx<'a> {
                     Ty::Enum { .. } => {
                         // Enum unwrap: dst type comes from val_types, trust typechecker
                     }
-                    Ty::Error(_) | Ty::Param { .. } => {}
+                    Ty::Error(_) => {}
                     _ => {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
@@ -1084,7 +1084,7 @@ impl<'a> CheckCtx<'a> {
                     // dst gets the element type
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ListStep", "dst", elem, dst_ty, errors);
-                } else if !list_ty.is_error() && !matches!(list_ty, Ty::Param { .. }) {
+                } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1239,7 +1239,7 @@ impl<'a> CheckCtx<'a> {
                             }
                         }
                         let dst_ty = ty!(*dst);
-                        if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_) | Ty::Param { .. }) {
+                        if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_)) {
                             errors.push(ValidationError {
                                 scope: self.scope_name.clone(),
                                 inst_index: pc,
@@ -1309,7 +1309,7 @@ impl<'a> CheckCtx<'a> {
                 if let Ty::Handle(inner, _) = src_ty {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "Eval", "dst", inner, dst_ty, errors);
-                } else if !src_ty.is_error() && !matches!(src_ty, Ty::Param { .. }) {
+                } else if !src_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1501,8 +1501,9 @@ mod tests {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
-        let mut subst = crate::ty::TySubst::new();
-        let o = subst.alloc_identity(false);
+        let mut solver = crate::ty::Solver::new();
+        let infer_o = solver.alloc_identity(false);
+        let o = solver.freeze_ty(&infer_o).unwrap();
         let mut vt = FxHashMap::default();
         vt.insert(v0, Ty::Deque(Box::new(Ty::Int), Box::new(o)));
         vt.insert(v1, Ty::List(Box::new(Ty::Int)));

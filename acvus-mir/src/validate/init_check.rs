@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::dataflow::{forward_analysis, DataflowAnalysis, DataflowState};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::{CfgBody};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use acvus_ast::Span;
 use crate::ty::{Ty};
@@ -196,14 +196,14 @@ impl DataflowAnalysis for InitCheckAnalysis {
 
 /// Run field-level definite-assignment check on a CfgBody.
 ///
-/// `fn_metadata` maps function QualifiedRef → FnMetadata for
+/// `fn_metadata` maps function QualifiedRef → Ty for
 /// determining required fields at call sites.
 ///
 /// `external_contexts`: contexts provided by the host — these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
 pub fn check_init(
     cfg: &CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     external_contexts: &FxHashSet<QualifiedRef>,
 ) -> Vec<UninitError> {
     let (ref_map, value_fields) = build_prepass(cfg);
@@ -287,7 +287,7 @@ fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
     ref_map: &RefMap,
     cfg: &CfgBody,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     callee: &Callee,
     args: &[ValueId],
     span: Span,
@@ -295,7 +295,7 @@ fn check_call_args(
 ) {
     // Resolve callee type.
     let fn_ty = match callee {
-        Callee::Direct(qref) => fn_metadata.get(qref).map(|m| &m.ty),
+        Callee::Direct(qref) => fn_metadata.get(qref),
         Callee::Indirect(_) => return, // Can't statically check indirect calls.
     };
     let fn_ty = match fn_ty {

@@ -60,9 +60,11 @@ pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ty::{TyTerm, PolyBuilder};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> (CompilationGraph, QualifiedRef) {
+        let mut pb = PolyBuilder::new();
         let fn_qref = QualifiedRef::root(interner.intern("test_unit"));
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
@@ -70,12 +72,14 @@ mod tests {
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         };
@@ -96,17 +100,20 @@ mod tests {
     #[test]
     fn extract_skips_extern() {
         let i = Interner::new();
+        let mut pb = PolyBuilder::new();
         let qref = QualifiedRef::root(i.intern("ext"));
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
                 kind: FnKind::Extern,
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         };

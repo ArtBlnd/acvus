@@ -87,6 +87,22 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     // Build QualifiedRef expression with optional namespace.
     let qref_expr = make_qref_expr(attr.ns.as_deref(), ty_name);
 
+    // Build infer-phase type_args and effect_args expressions.
+    let infer_type_arg_exprs: Vec<_> = type_params.iter().map(|name| {
+        quote! { <#name as ::acvus_mir_host::ITy>::infer_ty(__i, __tv, __ev) }
+    }).collect();
+    let infer_effect_arg_exprs: Vec<_> = effect_params.iter().map(|name| {
+        quote! { <#name as ::acvus_mir_host::EffectParam>::infer_effect(__ev) }
+    }).collect();
+
+    // Build poly-phase type_args and effect_args expressions.
+    let poly_type_arg_exprs: Vec<_> = type_params.iter().map(|name| {
+        quote! { <#name as ::acvus_mir_host::ITy>::poly_ty(__i, __tv, __ev) }
+    }).collect();
+    let poly_effect_arg_exprs: Vec<_> = effect_params.iter().map(|name| {
+        quote! { <#name as ::acvus_mir_host::EffectParam>::poly_effect(__ev) }
+    }).collect();
+
     Ok(quote! {
         impl<#(#all_params),*> ::acvus_mir_host::ITy for #struct_name<#(#param_names),*>
         where #(#all_bounds),*
@@ -100,6 +116,30 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     id: #qref_expr,
                     type_args: vec![#(#type_arg_exprs),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
+                }
+            }
+
+            fn infer_ty(
+                __i: &::acvus_mir_host::Interner,
+                __tv: &[::acvus_mir_host::InferTy],
+                __ev: &[::acvus_mir_host::InferEffect],
+            ) -> ::acvus_mir_host::InferTy {
+                ::acvus_mir_host::InferTy::UserDefined {
+                    id: #qref_expr,
+                    type_args: vec![#(#infer_type_arg_exprs),*],
+                    effect_args: vec![#(#infer_effect_arg_exprs),*],
+                }
+            }
+
+            fn poly_ty(
+                __i: &::acvus_mir_host::Interner,
+                __tv: &[::acvus_mir_host::PolyTy],
+                __ev: &[::acvus_mir_host::PolyEffect],
+            ) -> ::acvus_mir_host::PolyTy {
+                ::acvus_mir_host::PolyTy::UserDefined {
+                    id: #qref_expr,
+                    type_args: vec![#(#poly_type_arg_exprs),*],
+                    effect_args: vec![#(#poly_effect_arg_exprs),*],
                 }
             }
         }
@@ -196,7 +236,8 @@ fn generate(attr: parse::ExternFnAttr, input_fn: ItemFn) -> syn::Result<proc_mac
                 ::acvus_mir_host::Function {
                     qref: #fn_qref,
                     kind: ::acvus_mir_host::FnKind::Extern,
-                    constraint: Self::constraint(__i),
+                    ty: Self::constraint(__i),
+                    effect_constraint: None,
                 }
             }
         }
@@ -561,6 +602,174 @@ fn substitute_effect(
     quote! { ::acvus_mir_host::Effect::pure() }
 }
 
+/// Build the InferTy expression for a parameter type (infer phase).
+///
+/// Parallel to `build_param_ty` but produces InferTy via ITy::infer_ty().
+fn build_infer_param_ty(ty: &syn::Type, generics: &[parse::GenericInfo]) -> proc_macro2::TokenStream {
+    if let syn::Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+            let seg = &type_path.path.segments[0];
+            if matches!(seg.arguments, syn::PathArguments::None) {
+                for g in generics {
+                    if g.is_type && seg.ident == g.name {
+                        if let Some(callable) = &g.callable {
+                            return build_infer_callable_ty(callable, generics);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let sub_ty = substitute_generics(ty, generics);
+    quote! { <#sub_ty as ::acvus_mir_host::ITy>::infer_ty(__interner, &__type_vars, &__effect_vars) }
+}
+
+/// Build InferTy::Fn from a Callable<Args, Ret, E> bound (infer phase).
+fn build_infer_callable_ty(
+    callable: &parse::CallableInfo,
+    generics: &[parse::GenericInfo],
+) -> proc_macro2::TokenStream {
+    let arg_types: Vec<syn::Type> = match &callable.args_ty {
+        syn::Type::Tuple(tuple) => tuple.elems.iter().cloned().collect(),
+        single => vec![single.clone()],
+    };
+
+    let param_exprs: Vec<_> = arg_types.iter().enumerate().map(|(i, ty)| {
+        let sub_ty = substitute_generics(ty, generics);
+        let name_str = format!("_{i}");
+        quote! {
+            ::acvus_mir_host::ParamTerm::<::acvus_mir_host::Infer>::new(
+                __interner.intern(#name_str),
+                <#sub_ty as ::acvus_mir_host::ITy>::infer_ty(__interner, &__type_vars, &__effect_vars),
+            )
+        }
+    }).collect();
+
+    let sub_ret = substitute_generics(&callable.ret_ty, generics);
+    let ret_expr = quote! { <#sub_ret as ::acvus_mir_host::ITy>::infer_ty(__interner, &__type_vars, &__effect_vars) };
+
+    let sub_effect = substitute_infer_effect(&callable.effect_ty, generics);
+
+    quote! {
+        {
+            ::acvus_mir_host::InferTy::Fn {
+                params: vec![#(#param_exprs),*],
+                ret: Box::new(#ret_expr),
+                captures: vec![],
+                effect: #sub_effect,
+                hint: None,
+            }
+        }
+    }
+}
+
+/// Resolve an effect type to an InferEffect expression (infer phase).
+fn substitute_infer_effect(
+    ty: &syn::Type,
+    generics: &[parse::GenericInfo],
+) -> proc_macro2::TokenStream {
+    if let syn::Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+            let seg = &type_path.path.segments[0];
+            if matches!(seg.arguments, syn::PathArguments::None) {
+                for g in generics {
+                    if !g.is_type && seg.ident == g.name {
+                        let idx = g.index;
+                        return quote! {
+                            <::acvus_mir_host::Eff<#idx> as ::acvus_mir_host::EffectParam>::infer_effect(&__effect_vars)
+                        };
+                    }
+                }
+            }
+        }
+    }
+    quote! { ::acvus_mir_host::lift_effect(&::acvus_mir_host::Effect::pure()) }
+}
+
+/// Build the PolyTy expression for a parameter type (poly phase).
+///
+/// Parallel to `build_infer_param_ty` but produces PolyTy via ITy::poly_ty().
+fn build_poly_param_ty(ty: &syn::Type, generics: &[parse::GenericInfo]) -> proc_macro2::TokenStream {
+    if let syn::Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+            let seg = &type_path.path.segments[0];
+            if matches!(seg.arguments, syn::PathArguments::None) {
+                for g in generics {
+                    if g.is_type && seg.ident == g.name {
+                        if let Some(callable) = &g.callable {
+                            return build_poly_callable_ty(callable, generics);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let sub_ty = substitute_generics(ty, generics);
+    quote! { <#sub_ty as ::acvus_mir_host::ITy>::poly_ty(__interner, &__type_vars, &__effect_vars) }
+}
+
+/// Build PolyTy::Fn from a Callable<Args, Ret, E> bound (poly phase).
+fn build_poly_callable_ty(
+    callable: &parse::CallableInfo,
+    generics: &[parse::GenericInfo],
+) -> proc_macro2::TokenStream {
+    let arg_types: Vec<syn::Type> = match &callable.args_ty {
+        syn::Type::Tuple(tuple) => tuple.elems.iter().cloned().collect(),
+        single => vec![single.clone()],
+    };
+
+    let param_exprs: Vec<_> = arg_types.iter().enumerate().map(|(i, ty)| {
+        let sub_ty = substitute_generics(ty, generics);
+        let name_str = format!("_{i}");
+        quote! {
+            ::acvus_mir_host::ParamTerm::<::acvus_mir_host::Poly>::new(
+                __interner.intern(#name_str),
+                <#sub_ty as ::acvus_mir_host::ITy>::poly_ty(__interner, &__type_vars, &__effect_vars),
+            )
+        }
+    }).collect();
+
+    let sub_ret = substitute_generics(&callable.ret_ty, generics);
+    let ret_expr = quote! { <#sub_ret as ::acvus_mir_host::ITy>::poly_ty(__interner, &__type_vars, &__effect_vars) };
+
+    let sub_effect = substitute_poly_effect(&callable.effect_ty, generics);
+
+    quote! {
+        {
+            ::acvus_mir_host::PolyTy::Fn {
+                params: vec![#(#param_exprs),*],
+                ret: Box::new(#ret_expr),
+                captures: vec![],
+                effect: #sub_effect,
+                hint: None,
+            }
+        }
+    }
+}
+
+/// Resolve an effect type to a PolyEffect expression (poly phase).
+fn substitute_poly_effect(
+    ty: &syn::Type,
+    generics: &[parse::GenericInfo],
+) -> proc_macro2::TokenStream {
+    if let syn::Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+            let seg = &type_path.path.segments[0];
+            if matches!(seg.arguments, syn::PathArguments::None) {
+                for g in generics {
+                    if !g.is_type && seg.ident == g.name {
+                        let idx = g.index;
+                        return quote! {
+                            <::acvus_mir_host::Eff<#idx> as ::acvus_mir_host::EffectParam>::poly_effect(&__effect_vars)
+                        };
+                    }
+                }
+            }
+        }
+    }
+    quote! { ::acvus_mir_host::lift_effect_to_poly(&::acvus_mir_host::Effect::pure()) }
+}
+
 /// Replace generic param names for runtime call wrapper.
 /// Type params → `__S::Owned`. Effect params → `Eff<N>`.
 fn substitute_owned(ty: &syn::Type, generics: &[parse::GenericInfo]) -> syn::Type {
@@ -606,7 +815,7 @@ fn substitute_owned(ty: &syn::Type, generics: &[parse::GenericInfo]) -> syn::Typ
 /// Generate FnConstraint from the signature.
 ///
 /// For concrete handlers: type_vars and effect_vars are empty.
-/// For generic handlers: TySubst allocates Ty::Param / Effect::Var,
+/// For generic handlers: PolyBuilder allocates PolyTy::Var / PolyEffect::Var,
 /// and generic type names in the signature are replaced with Typeck<N>.
 fn generate_constraint(
     generics: &[parse::GenericInfo],
@@ -616,57 +825,51 @@ fn generate_constraint(
     let n_type_vars = generics.iter().filter(|g| g.is_type).count();
     let n_effect_vars = generics.iter().filter(|g| !g.is_type).count();
 
-    // Generate TySubst allocation for type vars and effect vars.
+    // Generate PolyBuilder allocation for type vars and effect vars.
     let type_var_allocs: Vec<_> = (0..n_type_vars).map(|_| {
-        quote! { __subst.fresh_param() }
+        quote! { __builder.fresh_ty_var() }
     }).collect();
     let effect_var_allocs: Vec<_> = (0..n_effect_vars).map(|_| {
-        quote! { __subst.fresh_effect_var() }
+        quote! { __builder.fresh_effect_var() }
     }).collect();
 
-    // Build param types.
+    // Build param types (poly phase).
     // For each function param:
-    //   - If its type is a Callable generic → generate Ty::Fn directly
-    //   - Otherwise → substitute generics with Typeck<N> and use ITy::ty()
+    //   - If its type is a Callable generic → generate PolyTy::Fn directly
+    //   - Otherwise → substitute generics with Typeck<N> and use ITy::poly_ty()
     let param_constructs: Vec<_> = params.params.iter().map(|p| {
         let name_str = p.name.to_string();
-        let ty_expr = build_param_ty(&p.ty, generics);
+        let ty_expr = build_poly_param_ty(&p.ty, generics);
         quote! {
-            ::acvus_mir_host::Param::new(
+            ::acvus_mir_host::ParamTerm::<::acvus_mir_host::Poly>::new(
                 __interner.intern(#name_str),
                 #ty_expr,
             )
         }
     }).collect();
 
-    // Build return type.
+    // Build return type (poly phase).
     let ret_ty = if ret.types.is_empty() {
-        quote! { ::acvus_mir_host::Ty::Unit }
+        quote! { ::acvus_mir_host::PolyTy::Unit }
     } else if ret.types.len() == 1 {
-        build_param_ty(&ret.types[0], generics)
+        build_poly_param_ty(&ret.types[0], generics)
     } else {
-        let tys: Vec<_> = ret.types.iter().map(|ty| build_param_ty(ty, generics)).collect();
-        quote! { ::acvus_mir_host::Ty::Tuple(vec![#(#tys),*]) }
+        let tys: Vec<_> = ret.types.iter().map(|ty| build_poly_param_ty(ty, generics)).collect();
+        quote! { ::acvus_mir_host::PolyTy::Tuple(vec![#(#tys),*]) }
     };
 
     Ok(quote! {
-        /// Build the FnConstraint for this ExternFn.
-        pub fn constraint(__interner: &::acvus_mir_host::Interner) -> ::acvus_mir_host::FnConstraint {
-            let mut __subst = ::acvus_mir_host::TySubst::new();
-            let __type_vars: Vec<::acvus_mir_host::Ty> = vec![#(#type_var_allocs),*];
-            let __effect_vars: Vec<::acvus_mir_host::Effect> = vec![#(#effect_var_allocs),*];
+        /// Build the PolyTy for this ExternFn (always a TyTerm::Fn).
+        pub fn constraint(__interner: &::acvus_mir_host::Interner) -> ::acvus_mir_host::PolyTy {
+            let mut __builder = ::acvus_mir_host::PolyBuilder::new();
+            let __type_vars: Vec<::acvus_mir_host::PolyTy> = vec![#(#type_var_allocs),*];
+            let __effect_vars: Vec<::acvus_mir_host::PolyEffect> = vec![#(#effect_var_allocs),*];
             let __params = vec![#(#param_constructs),*];
-            ::acvus_mir_host::FnConstraint {
-                signature: Some(::acvus_mir_host::Signature {
-                    params: __params.clone(),
-                }),
-                output: ::acvus_mir_host::Constraint::Exact(::acvus_mir_host::Ty::Fn {
-                    params: __params,
-                    ret: Box::new(#ret_ty),
-                    captures: vec![],
-                    effect: ::acvus_mir_host::Effect::pure(),
-                }),
-                effect: None,
+            ::acvus_mir_host::PolyTy::Fn {
+                params: __params,
+                ret: Box::new(#ret_ty),
+                captures: vec![],
+                effect: ::acvus_mir_host::lift_effect_to_poly(&::acvus_mir_host::Effect::pure()),
                 hint: None,
             }
         }
@@ -694,14 +897,14 @@ fn generate_infer(
     let user_parsed = parse::ParsedParams { params: user_params.clone(), has_scope: false };
     let reg_calls = user_parsed.registration_tokens(&[]);
 
-    // Param types for FnConstraint.
+    // Param types for FnConstraint (poly phase — concrete types lifted).
     let param_constructs: Vec<_> = user_params.iter().map(|p| {
         let name_str = p.name.to_string();
         let ty = &p.ty;
         quote! {
-            ::acvus_mir_host::Param::new(
+            ::acvus_mir_host::ParamTerm::<::acvus_mir_host::Poly>::new(
                 __interner.intern(#name_str),
-                <#ty as ::acvus_mir_host::ITy>::ty(__interner, &[], &[]),
+                <#ty as ::acvus_mir_host::ITy>::poly_ty(__interner, &[], &[]),
             )
         }
     }).collect();
@@ -746,15 +949,15 @@ fn generate_infer(
                 ::acvus_mir_host::ExternFnFuture::Ready(Some(Ok(())))
             }
 
-            /// Build the FnConstraint. Output = Inferred.
-            pub fn constraint(__interner: &::acvus_mir_host::Interner) -> ::acvus_mir_host::FnConstraint {
+            /// Build the PolyTy. Return type = fresh Var (inferred).
+            pub fn constraint(__interner: &::acvus_mir_host::Interner) -> ::acvus_mir_host::PolyTy {
+                let mut __builder = ::acvus_mir_host::PolyBuilder::new();
                 let __params = vec![#(#param_constructs),*];
-                ::acvus_mir_host::FnConstraint {
-                    signature: Some(::acvus_mir_host::Signature {
-                        params: __params,
-                    }),
-                    output: ::acvus_mir_host::Constraint::Inferred,
-                    effect: None,
+                ::acvus_mir_host::PolyTy::Fn {
+                    params: __params,
+                    ret: Box::new(__builder.fresh_ty_var()),
+                    captures: vec![],
+                    effect: ::acvus_mir_host::lift_effect_to_poly(&::acvus_mir_host::Effect::pure()),
                     hint: None,
                 }
             }

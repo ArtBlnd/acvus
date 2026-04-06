@@ -19,14 +19,15 @@ pub struct Inst {
 }
 
 /// Type coercion kind — 1:1 with the subtyping rules in `try_coerce`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CastKind {
     /// `Deque<T, O> → List<T>` — origin erased, container preserved.
     DequeToList,
     /// `Range → List<Int>` — materialise range into list.
     RangeToList,
     /// ExternCast — coercion performed by a registered pure ExternFn.
-    Extern(QualifiedRef),
+    /// `ret_ty` is the concrete return type at this call site (resolved during typeck).
+    Extern { fn_ref: QualifiedRef, ret_ty: Ty },
 }
 
 impl CastKind {

@@ -13,7 +13,7 @@ use rustc_hash::FxHashSet;
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, backward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, ValueId};
 use crate::ty::{Effect, EffectTarget, Ty};
 use rustc_hash::FxHashMap;
@@ -47,14 +47,14 @@ impl SemiLattice for TokenLiveness {
 // ── Analysis ────────────────────────────────────────────────────────
 
 struct TokenLivenessAnalysis<'a> {
-    fn_metadata: &'a FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &'a FxHashMap<QualifiedRef, Ty>,
     val_types: &'a FxHashMap<ValueId, Ty>,
 }
 
 /// Extract token QualifiedRefs from an instruction's effect.
 fn token_ids_of(
     kind: &InstKind,
-    fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>,
+    fn_metadata: &FxHashMap<QualifiedRef, Ty>,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> smallvec::SmallVec<[QualifiedRef; 2]> {
     let effect_set = match kind {
@@ -65,7 +65,7 @@ fn token_ids_of(
         | InstKind::Spawn {
             callee: Callee::Direct(qref),
             ..
-        } => fn_metadata.get(qref).and_then(|m| match &m.ty {
+        } => fn_metadata.get(qref).and_then(|m| match m {
             Ty::Fn {
                 effect: Effect::Resolved(eff),
                 ..
@@ -152,7 +152,7 @@ impl TokenLivenessResult {
 }
 
 /// Run token liveness analysis on a CfgBody.
-pub fn analyze(cfg: &CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> TokenLivenessResult {
+pub fn analyze(cfg: &CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> TokenLivenessResult {
     if cfg.blocks.is_empty() {
         return TokenLivenessResult {
             live_in: vec![],
@@ -222,38 +222,34 @@ mod tests {
         i: &acvus_utils::Interner,
         name: &str,
         tid: QualifiedRef,
-    ) -> (QualifiedRef, FnMetadata) {
+    ) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         let mut reads = BTreeSet::new();
         reads.insert(EffectTarget::Token(tid));
         (
             qref,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads,
-                        writes: BTreeSet::new(),
-                    }),
-                },
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::Resolved(EffectSet {
+                    reads,
+                    writes: BTreeSet::new(),
+                }),
                 hint: None,
             },
         )
     }
 
-    fn pure_fn_type(i: &acvus_utils::Interner, name: &str) -> (QualifiedRef, FnMetadata) {
+    fn pure_fn_type(i: &acvus_utils::Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
-            FnMetadata {
-                ty: Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::pure(),
-                },
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: Effect::pure(),
                 hint: None,
             },
         )
@@ -264,7 +260,7 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -289,7 +285,7 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = pure_fn_type(&i, "pure_fn");
-        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -314,7 +310,7 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![
@@ -355,7 +351,7 @@ mod tests {
         let tid2 = QualifiedRef::root(i.intern("fs"));
         let (qref1, ty1) = io_fn_type_with_token(&i, "io1", tid1);
         let (qref2, ty2) = io_fn_type_with_token(&i, "io2", tid2);
-        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> =
+        let fn_metadata: FxHashMap<QualifiedRef, Ty> =
             FxHashMap::from_iter([(qref1, ty1), (qref2, ty2)]);
 
         let cfg = make_cfg(
@@ -400,7 +396,7 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let tid = QualifiedRef::root(i.intern("net"));
         let (qref, ty) = io_fn_type_with_token(&i, "io_fn", tid);
-        let fn_metadata: FxHashMap<QualifiedRef, FnMetadata> = FxHashMap::from_iter([(qref, ty)]);
+        let fn_metadata: FxHashMap<QualifiedRef, Ty> = FxHashMap::from_iter([(qref, ty)]);
 
         let cfg = make_cfg(
             vec![

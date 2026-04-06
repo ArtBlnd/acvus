@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::graph::*;
 use crate::graph::{extract, infer, lower as graph_lower};
 use crate::ir::{MirBody, MirModule};
-use crate::ty::Ty;
+use crate::ty::{Ty, TyTerm, PolyBuilder};
 
 /// Build a single-unit CompilationGraph for testing.
 /// Returns the graph and the `QualifiedRef` of the test unit.
@@ -19,11 +19,12 @@ pub(crate) fn make_graph(
     is_template: bool,
     ctx: &[(&str, Ty)],
 ) -> (CompilationGraph, QualifiedRef) {
+    let mut pb = PolyBuilder::new();
     let contexts = ctx
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: crate::ty::lift_to_poly(ty),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -37,12 +38,14 @@ pub(crate) fn make_graph(
         functions: Freeze::new(vec![Function {
             qref: test_qref,
             kind: FnKind::Local(parsed),
-            constraint: FnConstraint {
-                signature: None,
-                output: Constraint::Inferred,
-                effect: None,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: pb.fresh_effect_var(),
                 hint: None,
             },
+            effect_constraint: None,
         }]),
         contexts: Freeze::new(contexts),
     };
@@ -95,8 +98,8 @@ fn run_pipeline(
         return Err(errors.join("\n"));
     }
 
-    // Use InferResult.fn_metadata (authoritative, frozen).
-    let fn_metadata = &inf.fn_metadata;
+    // Use InferResult.fn_types (authoritative, frozen).
+    let fn_metadata = &inf.fn_types;
 
     // Run SROA + SSA + validate (lower outputs pre-SSA MIR).
     let mut module = result

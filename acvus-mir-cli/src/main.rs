@@ -4,7 +4,7 @@ use std::{env, fs, process};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::printer::dump;
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
@@ -119,27 +119,28 @@ fn main() {
         .iter()
         .map(|(name, def)| acvus_mir::graph::types::Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(def.to_ty(&interner)),
+            ty: lift_to_poly(&def.to_ty(&interner)),
         })
         .collect();
 
     // Extern fns are also contexts with Ty::Fn.
     for (name, def) in &ctx.extern_fns {
-        let params: Vec<Param> = def
+        let params: Vec<ParamTerm<Poly>> = def
             .params
             .iter()
             .enumerate()
-            .map(|(i, p)| Param::new(interner.intern(&format!("_{i}")), p.to_ty(&interner)))
+            .map(|(i, p)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(&p.to_ty(&interner))))
             .collect();
-        let fn_ty = Ty::Fn {
+        let fn_ty = TyTerm::Fn {
             params,
-            ret: Box::new(def.ret.to_ty(&interner)),
+            ret: Box::new(lift_to_poly(&def.ret.to_ty(&interner))),
             captures: vec![],
-            effect: Effect::pure(), // TODO: construct proper effect from def
+            effect: lift_effect_to_poly(&Effect::pure()), // TODO: construct proper effect from def
+            hint: None,
         };
         contexts.push(acvus_mir::graph::types::Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(fn_ty),
+            ty: fn_ty,
         });
     }
 
@@ -165,15 +166,18 @@ fn main() {
         let registered = registry.register(&interner);
         functions.extend(registered.functions);
     }
+    let mut pb = PolyBuilder::new();
     functions.push(Function {
         qref: fn_qref,
         kind: FnKind::Local(parsed_ast),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None,
     });
 
     let graph = CompilationGraph {

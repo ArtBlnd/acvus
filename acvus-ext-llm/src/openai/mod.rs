@@ -5,8 +5,7 @@ pub mod schema;
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::graph::{Constraint, FnConstraint, Signature};
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Effect, Hint, ParamTerm, Poly, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -244,27 +243,21 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
 
         let params = vec![Ty::List(Box::new(input_msg_ty)), config_ty];
         let ret = Ty::List(Box::new(msg_elem_ty));
-        let named: Vec<Param> = params
-            .into_iter()
+        let named: Vec<ParamTerm<Poly>> = params
+            .iter()
             .enumerate()
-            .map(|(i, ty)| Param::new(interner.intern(&format!("_{i}")), ty))
+            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
             .collect();
-        let constraint = FnConstraint {
-            signature: Some(Signature {
-                params: named.clone(),
-            }),
-            output: Constraint::Exact(Ty::Fn {
-                params: named,
-                ret: Box::new(ret),
-                captures: vec![],
-                effect: Effect::pure(),
-            }),
-            effect: None,
-            hint: Some(acvus_mir::ty::Hint::Io),
+        let ty = TyTerm::Fn {
+            params: named,
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: lift_effect_to_poly(&Effect::pure()),
+            hint: Some(Hint::Io),
         };
 
         vec![
-            ExternFnBuilder::new("openai_chat", constraint).handler_async(
+            ExternFnBuilder::new("openai_chat", ty).handler_async(
                 move |interner: Interner,
                       (messages_val, config_val): (Value, Value),
                       Uses(()): Uses<()>| {

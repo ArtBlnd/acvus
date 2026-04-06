@@ -15,7 +15,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{CfgBody, Terminator};
-use crate::graph::{FnMetadata, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, ValueId};
 use crate::ty::{Effect, Ty};
 use crate::analysis::inst_info;
@@ -73,7 +73,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 ///
 /// An instruction with ANY effect (read, write, IO) must not
 /// be removed. Only provably pure instructions can be dead.
-fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -> bool {
+fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, Ty>) -> bool {
     match kind {
         // Context store — externally observable.
         InstKind::Store { .. } => true,
@@ -97,8 +97,8 @@ fn is_root(kind: &InstKind, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) -
 }
 
 /// Check if a function is provably pure (no effects at all).
-fn is_pure_fn(fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>, qref: &QualifiedRef) -> bool {
-    match fn_metadata.get(qref).map(|m| &m.ty) {
+fn is_pure_fn(fn_metadata: &FxHashMap<QualifiedRef, Ty>, qref: &QualifiedRef) -> bool {
+    match fn_metadata.get(qref) {
         Some(Ty::Fn {
             effect: Effect::Resolved(eff),
             ..
@@ -143,7 +143,7 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, FnMetadata>) {
+pub fn run(cfg: &mut CfgBody, fn_metadata: &FxHashMap<QualifiedRef, Ty>) {
     let def_map = build_def_map(cfg);
 
     // Live instruction set: (block_idx, inst_idx).

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use acvus_mir::graph::{Constraint, FnConstraint, FnKind, Function, QualifiedRef, Signature};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::{
     graph::infer,
-    ty::{Effect, EffectSet, EffectTarget, Param, Ty},
+    ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_to_poly, lift_effect_to_poly},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
@@ -17,10 +17,11 @@ fn compile_analysis(
     ctx: &[(&str, Ty)],
 ) -> Result<acvus_mir::ir::MirModule, String> {
     use acvus_mir::graph::{
-        CompilationGraph, Constraint, Context, FnConstraint, FnKind, Function, ParsedAst,
+        CompilationGraph, Context, FnKind, Function, ParsedAst,
         QualifiedRef,
     };
     use acvus_mir::graph::{extract, lower as graph_lower};
+    use acvus_mir::ty::PolyBuilder;
     use acvus_utils::Freeze;
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -29,7 +30,7 @@ fn compile_analysis(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            constraint: Constraint::Exact(ty.clone()),
+            ty: lift_to_poly(ty),
         })
         .collect();
 
@@ -38,9 +39,10 @@ fn compile_analysis(
     let declared: FxHashSet<Astr> = contexts.iter().map(|c| c.qref.name).collect();
     for ast_qref in acvus_ast::extract_template_context_refs(&template) {
         if !declared.contains(&ast_qref.name) {
+            let mut pb = PolyBuilder::new();
             contexts.push(Context {
                 qref: QualifiedRef::root(ast_qref.name),
-                constraint: Constraint::Inferred,
+                ty: pb.fresh_ty_var(),
             });
         }
     }
@@ -48,15 +50,18 @@ fn compile_analysis(
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let template = acvus_ast::parse(interner, source).expect("parse failed");
 
+    let mut pb = PolyBuilder::new();
     let mut functions: Vec<Function> = vec![Function {
         qref: test_qref,
         kind: FnKind::Local(ParsedAst::Template(template)),
-        constraint: FnConstraint {
-            signature: None,
-            output: Constraint::Inferred,
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: pb.fresh_effect_var(),
             hint: None,
         },
+        effect_constraint: None,
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
@@ -387,19 +392,14 @@ fn extern_async_call() {
     let fetch_user = Function {
         qref: QualifiedRef::root(i.intern("fetch_user")),
         kind: FnKind::Extern,
-        constraint: FnConstraint {
-            signature: Some(Signature {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
-            }),
-            output: Constraint::Exact(Ty::Fn {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: Effect::pure(),
-            }),
-            effect: None,
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
+            ret: Box::new(lift_to_poly(&Ty::String)),
+            captures: vec![],
+            effect: lift_effect_to_poly(&Effect::pure()),
             hint: None,
         },
+        effect_constraint: None,
     };
     let ir = compile_to_ir_with(
         &i,
@@ -1450,6 +1450,7 @@ fn extern_fn_object_return() {
                 ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
                 captures: vec![],
                 effect: Effect::pure(),
+                hint: None,
             },
         )],
     );
@@ -1936,6 +1937,7 @@ fn migrated_pipe_extern_fn_ok() {
                     ret: Box::new(Ty::String),
                     captures: vec![],
                     effect: Effect::pure(),
+                    hint: None,
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -2431,6 +2433,7 @@ fn migrated_move_accept_effectful_fn_multiple_calls() {
         ret: Box::new(Ty::Int),
         captures: vec![],
         effect: test_effectful(&i),
+        hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);
@@ -2811,6 +2814,7 @@ fn projection_soundness_reject_fn_in_context() {
         ret: Box::new(Ty::Int),
         captures: vec![],
         effect: acvus_mir::ty::Effect::pure(),
+        hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);
@@ -2826,6 +2830,7 @@ fn projection_soundness_reject_list_fn_in_context() {
         ret: Box::new(Ty::Int),
         captures: vec![],
         effect: acvus_mir::ty::Effect::pure(),
+        hint: None,
     };
     let context = ctx(&i, &[("xs", Ty::List(Box::new(fn_ty)))]);
     let result = compile_script_ir(&i, "@xs = @xs; @xs", &context);
@@ -2994,6 +2999,7 @@ fn sroa_soundness_reject_fn_in_context() {
         ret: Box::new(Ty::Int),
         captures: vec![],
         effect: acvus_mir::ty::Effect::pure(),
+        hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);

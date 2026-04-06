@@ -72,7 +72,7 @@ pub fn lower(
             resolution_clone.type_map,
             resolution_clone.coercion_map,
             infer_result.context_types.clone(),
-            infer_result.fn_metadata.clone(),
+            infer_result.fn_types.clone(),
             policies.clone(),
             resolution_clone.extern_params,
         );
@@ -92,7 +92,7 @@ pub fn lower(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{graph::extract, ty::Ty};
+    use crate::{graph::extract, ty::{Ty, TyTerm, PolyBuilder}};
     use crate::ir::InstKind;
     use acvus_utils::{Freeze, Interner};
 
@@ -101,11 +101,12 @@ mod tests {
         source: &str,
         ctx: &[(&str, Ty)],
     ) -> CompilationGraph {
+        let mut pb = PolyBuilder::new();
         let contexts = ctx
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                constraint: Constraint::Exact(ty.clone()),
+                ty: crate::ty::lift_to_poly(ty),
             })
             .collect();
         let fn_qref = QualifiedRef::root(interner.intern("test"));
@@ -115,12 +116,14 @@ mod tests {
                 kind: FnKind::Local(ParsedAst::Script(
                     acvus_ast::parse_script(interner, source).expect("parse"),
                 )),
-                constraint: FnConstraint {
-                    signature: None,
-                    output: Constraint::Inferred,
-                    effect: None,
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
+                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         }
