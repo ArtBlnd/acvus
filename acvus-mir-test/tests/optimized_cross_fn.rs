@@ -6,19 +6,11 @@
 //!
 //! Tests exercise: inlining, Spawn/Eval splitting, code motion, DSE, DCE, phi insertion.
 
-use std::collections::BTreeSet;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyParam, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, TyTerm, lift_to_poly};
 use acvus_mir_test::{compile_multi_fn_optimized, compile_multi_fn_raw};
 use acvus_utils::Interner;
-
-fn test_effectful(interner: &Interner) -> Effect {
-    Effect::Resolved(EffectSet {
-        reads: BTreeSet::new(),
-        writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
-    })
-}
 
 fn sig(i: &Interner, params: &[(&str, Ty)]) -> Vec<PolyParam> {
     params
@@ -39,10 +31,8 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
             params: infer_params,
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
-            effect: lift_effect_to_poly(&test_effectful(i)),
             hint: None,
         },
-        effect_constraint: None,
     }
 }
 

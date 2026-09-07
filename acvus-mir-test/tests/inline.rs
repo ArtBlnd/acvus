@@ -3,19 +3,11 @@
 //! Tests compile multiple local functions, inline, and snapshot the resulting IR.
 //! Organized by category with soundness and completeness coverage.
 
-use std::collections::BTreeSet;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
-
-fn test_effectful(interner: &Interner) -> Effect {
-    Effect::Resolved(EffectSet {
-        reads: BTreeSet::new(),
-        writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
-    })
-}
 
 fn sig(i: &Interner, params: &[(&str, Ty)]) -> Vec<PolyParam> {
     params
@@ -415,13 +407,13 @@ fn inline_chain_with_lambda() {
 }
 
 // =======================================================================
-//  5. Effect / Token — IO effect, token-based effect propagation
+//  5. IO and context propagation through inlining
 // =======================================================================
 
 #[ignore = "pending identity integration"]
 #[test]
 fn inline_pure_function() {
-    // Pure function: no effects. add(a,b)=a+b; main=add(1,2)
+    // add(a,b)=a+b; main=add(1,2)
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
@@ -435,11 +427,11 @@ fn inline_pure_function() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn inline_io_effect_extern_inside() {
-    // fetch(x) is ExternFn with IO effect; wrapper calls it.
+fn inline_io_extern_inside() {
+    // fetch(x) is an IO ExternFn; wrapper calls it.
     // wrapper(id) = fetch(id); main = wrapper(1)
     let i = Interner::new();
-    use acvus_mir::ty::{TyTerm, lift_effect_to_poly};
+    use acvus_mir::ty::TyTerm;
     let fetch = Function {
         qref: QualifiedRef::root(i.intern("fetch")),
         kind: FnKind::Extern,
@@ -447,10 +439,8 @@ fn inline_io_effect_extern_inside() {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
-            effect: lift_effect_to_poly(&test_effectful(&i)),
             hint: None,
         },
-        effect_constraint: None,
     };
     let ir = compile_inline_ir_with(
         &i,
@@ -465,8 +455,8 @@ fn inline_io_effect_extern_inside() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn inline_context_effect_propagation() {
-    // Callee writes context (effect). After inline, effect is visible in caller.
+fn inline_context_write_propagation() {
+    // Callee writes context. After inline, the write is visible in caller.
     // inc_and_get() = { @counter = @counter + 1; @counter }; main = inc_and_get()
     let i = Interner::new();
     let ir = compile_inline_ir(

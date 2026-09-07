@@ -3,7 +3,7 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::ty::{Effect, Hint, ParamTerm, Poly, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{Hint, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 
 use crate::extract::{obj_get_decimal, obj_get_str, obj_get_u32, split_system, values_to_messages};
@@ -236,7 +236,6 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
             params: named,
             ret: Box::new(lift_to_poly(&msg_ty)),
             captures: vec![],
-            effect: lift_effect_to_poly(&Effect::pure()),
             hint: Some(Hint::Io),
         };
 

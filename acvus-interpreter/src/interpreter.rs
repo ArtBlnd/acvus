@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
@@ -12,6 +13,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::error::RuntimeError;
+use crate::iter::{ExpansionFrame, IterHandle, IterOp, IterSource};
 use crate::value::{FnValue, Value};
 
 /// Runtime representation of a Ref instruction's target.
@@ -300,13 +302,6 @@ enum Flow {
     Next,
     Jump(usize),
     Return(Value),
-}
-
-/// Result of applying ops pipeline to a single element.
-enum ApplyResult {
-    Emit(Value),
-    Skip,
-    Expand(Vec<Value>),
 }
 
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
@@ -1107,223 +1102,107 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
 
 /// Pull one element from an iterator. Standalone — no Interpreter needed.
 /// FnValues in IterOps are self-contained and execute via fn_value_call.
-pub async fn exec_next(iter: &mut crate::iter::IterHandle) -> Result<Option<Value>, RuntimeError> {
-    use crate::iter::{EffectfulState, IterHandle};
-
-    match iter {
-        IterHandle::Pure { items, init, index } => {
-            if let Some(collected) = items.lock().unwrap().as_ref() {
-                if *index < collected.len() {
-                    let val = collected[*index].clone();
-                    *index += 1;
-                    return Ok(Some(val));
-                } else {
-                    return Ok(None);
-                }
-            }
-
-            let pinit = init
-                .lock()
-                .unwrap()
-                .take()
-                .expect("pure iterator: init already consumed but items not set");
-            let collected = collect_through_ops(pinit.source, &pinit.ops).await?;
-            let arc: Arc<[Value]> = collected.into();
-            *items.lock().unwrap() = Some(Arc::clone(&arc));
-
-            if *index < arc.len() {
-                let val = arc[*index].clone();
-                *index += 1;
-                Ok(Some(val))
-            } else {
-                Ok(None)
+pub fn exec_next(iter: &mut IterHandle) -> BoxFuture<'_, Result<Option<Value>, RuntimeError>> {
+    Box::pin(async move {
+        loop {
+            let Some((start_op, val)) = next_input(iter).await? else {
+                return Ok(None);
+            };
+            if let Some(out) = run_ops(iter, start_op, val).await? {
+                return Ok(Some(out));
             }
         }
-        IterHandle::Effectful { state, .. } => match state {
-            EffectfulState::Done => Ok(None),
-            EffectfulState::Suspended {
-                source,
-                elem_ops,
-                offset,
-                take_remaining,
-            } => {
-                if let Some(0) = take_remaining {
-                    *state = EffectfulState::Done;
-                    return Ok(None);
+    })
+}
+
+async fn next_input(iter: &mut IterHandle) -> Result<Option<(usize, Value)>, RuntimeError> {
+    while let Some(frame) = iter.expansions.last_mut() {
+        if let Some(val) = frame.items.pop_front() {
+            return Ok(Some((frame.next_op, val)));
+        }
+        iter.expansions.pop();
+    }
+    if iter.exhausted {
+        return Ok(None);
+    }
+
+    let raw = match &mut iter.source {
+        IterSource::Leaf(leaf) => leaf.pull(),
+        IterSource::Chain(parts) => loop {
+            let Some(front) = parts.front_mut() else {
+                break None;
+            };
+            match exec_next(front).await? {
+                Some(val) => break Some(val),
+                None => {
+                    parts.pop_front();
                 }
-
-                while *offset < source.len() {
-                    let val = source[*offset].clone();
-                    *offset += 1;
-
-                    let result = apply_ops(val, elem_ops).await?;
-
-                    match result {
-                        ApplyResult::Emit(v) => {
-                            if let Some(rem) = take_remaining {
-                                *rem -= 1;
-                            }
-                            return Ok(Some(v));
-                        }
-                        ApplyResult::Skip => continue,
-                        ApplyResult::Expand(items) => {
-                            if let Some(first) = items.into_iter().next() {
-                                if let Some(rem) = take_remaining {
-                                    *rem -= 1;
-                                }
-                                return Ok(Some(first));
-                            }
-                            continue;
-                        }
-                    }
-                }
-                *state = EffectfulState::Done;
-                Ok(None)
-            }
-            EffectfulState::Generator {
-                next_fn,
-                elem_ops,
-                take_remaining,
-            } => {
-                if let Some(0) = take_remaining {
-                    *state = EffectfulState::Done;
-                    return Ok(None);
-                }
-
-                while let Some(val) = next_fn.get_mut()() {
-                    let result = apply_ops(val, elem_ops).await?;
-
-                    match result {
-                        ApplyResult::Emit(v) => {
-                            if let Some(rem) = take_remaining {
-                                *rem -= 1;
-                            }
-                            return Ok(Some(v));
-                        }
-                        ApplyResult::Skip => continue,
-                        ApplyResult::Expand(items) => {
-                            if let Some(first) = items.into_iter().next() {
-                                if let Some(rem) = take_remaining {
-                                    *rem -= 1;
-                                }
-                                return Ok(Some(first));
-                            }
-                            continue;
-                        }
-                    }
-                }
-                *state = EffectfulState::Done;
-                Ok(None)
             }
         },
-    }
+    };
+    Ok(raw.map(|val| (0, val)))
 }
 
-/// Collect all source elements through an ops pipeline.
-async fn collect_through_ops(
-    source: Vec<Value>,
-    ops: &[crate::iter::IterOp],
-) -> Result<Vec<Value>, RuntimeError> {
-    use crate::iter::IterOp;
-
-    let mut items = source;
-
-    for op in ops {
-        match op {
-            IterOp::Map(f) => {
-                let mut mapped = Vec::with_capacity(items.len());
-                for item in items {
-                    mapped.push(f.call(item).await?);
-                }
-                items = mapped;
-            }
-            IterOp::Filter(f) => {
-                let mut filtered = Vec::with_capacity(items.len());
-                for item in items {
-                    let keep = f.call(item.clone()).await?;
-                    if keep.as_bool() {
-                        filtered.push(item);
-                    }
-                }
-                items = filtered;
-            }
-            IterOp::Take(n) => {
-                items.truncate(*n);
-            }
-            IterOp::Skip(n) => {
-                if *n < items.len() {
-                    items = items.split_off(*n);
-                } else {
-                    items.clear();
-                }
-            }
-            IterOp::Chain(extra) => {
-                items.extend(extra.iter().cloned());
-            }
-            IterOp::Flatten => {
-                let mut flat = Vec::new();
-                for item in items {
-                    match item {
-                        Value::List(l) => flat.extend(l.iter().cloned()),
-                        other => flat.push(other),
-                    }
-                }
-                items = flat;
-            }
-            IterOp::FlatMap(f) => {
-                let mut flat = Vec::new();
-                for item in items {
-                    let result = f.call(item).await?;
-                    match result {
-                        Value::List(l) => flat.extend(l.iter().cloned()),
-                        other => flat.push(other),
-                    }
-                }
-                items = flat;
-            }
-        }
-    }
-
-    Ok(items)
-}
-
-/// Apply ops pipeline to a single element (effectful path).
-async fn apply_ops(
+async fn run_ops(
+    iter: &mut IterHandle,
+    start_op: usize,
     mut val: Value,
-    ops: &[crate::iter::IterOp],
-) -> Result<ApplyResult, RuntimeError> {
-    use crate::iter::IterOp;
-
-    for op in ops {
-        match op {
-            IterOp::Map(f) => {
-                val = f.call(val).await?;
-            }
+) -> Result<Option<Value>, RuntimeError> {
+    let mut i = start_op;
+    while i < iter.ops.len() {
+        match &mut iter.ops[i] {
+            IterOp::Map(f) => val = f.call(val).await?,
             IterOp::Filter(f) => {
-                let keep = f.call(val.clone()).await?;
-                if !keep.as_bool() {
-                    return Ok(ApplyResult::Skip);
+                if !f.call(val.clone()).await?.as_bool() {
+                    return Ok(None);
                 }
             }
-            IterOp::Take(_) | IterOp::Skip(_) | IterOp::Chain(_) => {
-                unreachable!("iterator-level ops resolved at construction time")
+            IterOp::Skip { remaining } => {
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    return Ok(None);
+                }
             }
-            IterOp::Flatten => {
-                return match val {
-                    Value::List(l) => Ok(ApplyResult::Expand(l.iter().cloned().collect())),
-                    other => Ok(ApplyResult::Emit(other)),
-                };
+            IterOp::Take { remaining } => {
+                if *remaining == 0 {
+                    return Ok(None);
+                }
+                *remaining -= 1;
+                if *remaining == 0 {
+                    iter.exhausted = true;
+                }
             }
-            IterOp::FlatMap(f) => {
-                let result = f.call(val).await?;
-                return match result {
-                    Value::List(l) => Ok(ApplyResult::Expand(l.iter().cloned().collect())),
-                    other => Ok(ApplyResult::Emit(other)),
-                };
-            }
+            IterOp::Flatten => match val {
+                Value::List(l) => {
+                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
+                        return Ok(None);
+                    };
+                    val = first;
+                }
+                other => val = other,
+            },
+            IterOp::FlatMap(f) => match f.call(val).await? {
+                Value::List(l) => {
+                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
+                        return Ok(None);
+                    };
+                    val = first;
+                }
+                other => val = other,
+            },
         }
+        i += 1;
     }
-    Ok(ApplyResult::Emit(val))
+    Ok(Some(val))
+}
+
+fn expand(iter: &mut IterHandle, op_index: usize, mut items: VecDeque<Value>) -> Option<Value> {
+    let first = items.pop_front()?;
+    iter.expansions.push(ExpansionFrame {
+        next_op: op_index + 1,
+        items,
+    });
+    Some(first)
 }
 
 // ── Interpreter — thin entry point ──────────────────────────────────

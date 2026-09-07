@@ -8,7 +8,7 @@ use acvus_interpreter::builtins::build_builtins;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::{CastRule, Effect, Param, ParamTerm, Poly, Ty, TypeRegistry, UserDefinedDecl, lift_to_poly};
+use acvus_mir::ty::{CastRule, Param, ParamTerm, Poly, Ty, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -69,10 +69,8 @@ async fn run_ext_with_registry(
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
                 hint: None,
             },
-            effect_constraint: None,
         });
     }
 
@@ -163,7 +161,6 @@ fn infer_value_ty(v: &Value) -> Ty {
         Value::Opaque(o) => Ty::UserDefined {
             id: o.type_id,
             type_args: vec![],
-            effect_args: vec![],
         },
         _ => Ty::Unit,
     }
@@ -390,7 +387,6 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> acvus_mir::ty::PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
@@ -406,13 +402,11 @@ fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRe
     tr.register(UserDefinedDecl {
         qref: my_num_qref,
         type_params: vec![],
-        effect_params: vec![],
     });
 
     let my_num_ty = Ty::UserDefined {
         id: my_num_qref,
         type_args: vec![],
-        effect_args: vec![],
     };
 
     // We need to register ExternFns first to get FunctionIds, then register CastRule.
@@ -487,7 +481,6 @@ async fn extern_cast_auto_coercion() {
     let my_num_ty = Ty::UserDefined {
         id: my_num_qref,
         type_args: vec![],
-        effect_args: vec![],
     };
 
     // Register CastRule: MyNum → Int
@@ -515,10 +508,8 @@ async fn extern_cast_auto_coercion() {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: acvus_mir::ty::lift_effect_to_poly(&Effect::pure()),
                 hint: None,
             },
-            effect_constraint: None,
         });
     }
 

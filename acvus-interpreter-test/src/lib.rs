@@ -82,10 +82,8 @@ pub fn compile_source_with_externs(
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     });
 
     // Register ExternFns.

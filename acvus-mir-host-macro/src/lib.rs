@@ -2,12 +2,6 @@
 //!
 //! - `#[extern_fn]`: ExternFn → struct + `constraint()` (PolyTy::Fn) + `function()`.
 //! - `#[derive(ExternType)]`: UserDefined type → `ITy` impl (Ty::UserDefined).
-//!
-//! NOTE (post Effect/host removal): generates ONLY the solver-facing constraint.
-//! Call wrapper / Registrar / Effect are gone. mir's Function/UserDefined/PolyTy
-//! field shapes are assumed effect-free; may not yet compile against mir until
-//! re-confirmed — this is the structure-reference stage. Identity/Token will be
-//! layered onto `constraint()` next.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -36,7 +30,6 @@ pub fn derive_extern_type(input: TokenStream) -> TokenStream {
 fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let struct_name = &input.ident;
 
-    // Parse #[extern_type(name = "...", ns = "...")]. (effects(...) ignored — Effect removed)
     let attr = parse::parse_extern_type_attr(&input.attrs)?;
     let ty_name = &attr.name;
 
@@ -283,7 +276,7 @@ fn build_poly_param_ty(ty: &syn::Type, generics: &[parse::GenericInfo]) -> proc_
             let seg = &type_path.path.segments[0];
             if matches!(seg.arguments, syn::PathArguments::None) {
                 for g in generics {
-                    if g.is_type && seg.ident == g.name {
+                    if seg.ident == g.name {
                         if let Some(callable) = &g.callable {
                             return build_poly_callable_ty(callable, generics);
                         }
@@ -341,7 +334,7 @@ fn generate_constraint(
     params: &parse::ParsedParams,
     ret: &parse::ReturnInfo,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let n_type_vars = generics.iter().filter(|g| g.is_type).count();
+    let n_type_vars = generics.len();
 
     let type_var_allocs: Vec<_> = (0..n_type_vars).map(|_| {
         quote! { __builder.fresh_ty_var() }
@@ -455,7 +448,7 @@ fn substitute_generics(ty: &syn::Type, generics: &[parse::GenericInfo]) -> syn::
                 let seg = &type_path.path.segments[0];
                 if matches!(seg.arguments, syn::PathArguments::None) {
                     for g in generics {
-                        if g.is_type && seg.ident == g.name {
+                        if seg.ident == g.name {
                             let idx = g.index;
                             return syn::parse_quote! { ::acvus_mir_host::Typeck<#idx> };
                         }

@@ -471,20 +471,8 @@ impl Clone for Value {
             })),
             Value::Range(r) => Value::Range(r.clone()),
             Value::Fn(f) => Value::Fn(f.clone()),
-            Value::Iterator(ih) => {
-                if ih.effect().is_pure() {
-                    Value::Iterator(Box::new(ih.as_ref().clone()))
-                } else {
-                    panic!("clone: effectful Iterator is move-only")
-                }
-            }
-            Value::Sequence(sc) => {
-                if sc.effect().is_pure() {
-                    Value::Sequence(sc.clone())
-                } else {
-                    panic!("clone: effectful Sequence is move-only")
-                }
-            }
+            Value::Iterator(_) => panic!("clone: Iterator is move-only"),
+            Value::Sequence(_) => panic!("clone: Sequence is move-only"),
             Value::Handle(_) => panic!("clone: Handle is move-only"),
             Value::Opaque(o) => Value::Opaque(o.clone()),
         }
@@ -858,30 +846,10 @@ mod tests {
         assert_eq!(v, v2);
     }
 
-    #[ignore = "pending identity integration"]
-    #[test]
-    fn share_pure_iterator_ok() {
-        use acvus_mir::ty::Effect;
-        let v = Value::iterator(IterHandle::done(Effect::pure()));
-        let v2 = v.share();
-        // Pure iterator can be shared.
-        drop(v2);
-    }
-
-    #[ignore = "pending identity integration"]
     #[test]
     #[should_panic(expected = "move-only")]
-    fn share_effectful_iterator_panics() {
-        use std::collections::BTreeSet;
-        use acvus_mir::graph::QualifiedRef;
-        use acvus_mir::ty::{Effect, EffectSet, EffectTarget};
-        use acvus_utils::Interner;
-        let interner = Interner::new();
-        let effectful = Effect::Resolved(EffectSet {
-            reads: BTreeSet::new(),
-            writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
-        });
-        let v = Value::iterator(IterHandle::done(effectful));
+    fn share_iterator_panics() {
+        let v = Value::iterator(IterHandle::done());
         let _ = v.share();
     }
 

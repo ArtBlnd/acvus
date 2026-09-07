@@ -1,7 +1,5 @@
 //! Parsing logic for #[extern_fn] and #[derive(ExternType)] attributes.
 
-use proc_macro2::TokenStream;
-use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, FnArg, GenericParam, Ident, LitStr, Pat, ReturnType, Signature, Token, Type, TypeParamBound};
 
@@ -69,30 +67,22 @@ pub struct ReturnInfo {
 
 // ── Generic parameter info ──────────────────────────────────────────
 
-/// A generic parameter mapped to a Typeck<N> or Eff<N> index.
+/// A generic parameter mapped to a Typeck<N> index.
 #[derive(Clone)]
 pub struct GenericInfo {
-    /// The parameter name (e.g., `T`, `U`, `E`).
     pub name: Ident,
-    /// Index within its category (type_vars or effect_vars).
     pub index: usize,
-    /// true = type variable (Hosted bound), false = effect variable (EffectParam bound).
-    pub is_type: bool,
     /// If this param has a Callable<Args, Ret, E> bound.
     pub callable: Option<CallableInfo>,
     /// If this param has a Monomorphize<(T1, T2, ...)> bound.
     pub monomorphize: Option<Vec<Type>>,
 }
 
-/// Extracted Callable<Args, Ret, E> bound info.
+/// Extracted Callable<Args, Ret> bound info.
 #[derive(Clone)]
 pub struct CallableInfo {
-    /// The Args type (e.g., `(T,)` or `(T, U)`).
     pub args_ty: Type,
-    /// The Ret type (e.g., `bool`).
     pub ret_ty: Type,
-    /// The Effect type (e.g., `E`).
-    pub effect_ty: Type,
 }
 
 /// Parse generic type parameters from the function signature.
@@ -108,7 +98,6 @@ pub struct GenericsResult {
 pub fn parse_generics(sig: &Signature) -> syn::Result<GenericsResult> {
     let mut generics = Vec::new();
     let mut type_index = 0usize;
-    let mut effect_index = 0usize;
     let mut scope_param = None;
 
     for param in &sig.generics.params {
@@ -129,28 +118,15 @@ pub fn parse_generics(sig: &Signature) -> syn::Result<GenericsResult> {
                 continue;
             }
 
-            if has_bound("EffectParam") {
-                generics.push(GenericInfo {
-                    name: type_param.ident.clone(),
-                    index: effect_index,
-                    is_type: false,
-                    callable: None,
-                    monomorphize: None,
-                });
-                effect_index += 1;
-            } else {
-                let callable = extract_callable_bound(&type_param.bounds);
-                let monomorphize = extract_monomorphize_bound(&type_param.bounds);
-
-                generics.push(GenericInfo {
-                    name: type_param.ident.clone(),
-                    index: type_index,
-                    is_type: true,
-                    callable,
-                    monomorphize,
-                });
-                type_index += 1;
-            }
+            let callable = extract_callable_bound(&type_param.bounds);
+            let monomorphize = extract_monomorphize_bound(&type_param.bounds);
+            generics.push(GenericInfo {
+                name: type_param.ident.clone(),
+                index: type_index,
+                callable,
+                monomorphize,
+            });
+            type_index += 1;
         }
     }
 
@@ -189,22 +165,15 @@ fn extract_callable_bound(
             }
             if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
                 let mut iter = args.args.iter();
-                // First arg: Args type (e.g., `(T,)`)
                 let args_ty = match iter.next() {
                     Some(syn::GenericArgument::Type(ty)) => ty.clone(),
                     _ => continue,
                 };
-                // Second arg: Ret type (e.g., `bool`)
                 let ret_ty = match iter.next() {
                     Some(syn::GenericArgument::Type(ty)) => ty.clone(),
                     _ => continue,
                 };
-                // Third arg: Effect type (e.g., `E`)
-                let effect_ty = match iter.next() {
-                    Some(syn::GenericArgument::Type(ty)) => ty.clone(),
-                    _ => continue,
-                };
-                return Some(CallableInfo { args_ty, ret_ty, effect_ty });
+                return Some(CallableInfo { args_ty, ret_ty });
             }
         }
     }
@@ -274,87 +243,15 @@ pub fn parse_return(sig: &Signature) -> syn::Result<ReturnInfo> {
     }
 }
 
-// ── Registration code generation ───────────────────────────────────
-
-impl ParsedParams {
-    pub fn registration_tokens(&self, generics: &[GenericInfo]) -> TokenStream {
-        let mut tokens = TokenStream::new();
-        for p in &self.params {
-            // Skip types that contain generic params — they're opaque at registration time.
-            if !contains_generic(&p.ty, generics) {
-                tokens.extend(autoreg(&p.ty));
-            }
-        }
-        tokens
-    }
-}
-
-impl ReturnInfo {
-    pub fn registration_tokens(&self, generics: &[GenericInfo]) -> TokenStream {
-        let mut tokens = TokenStream::new();
-        for ty in &self.types {
-            if !contains_generic(ty, generics) {
-                tokens.extend(autoreg(ty));
-            }
-        }
-        tokens
-    }
-}
-
-/// Check if a type references any generic parameter name (type or effect).
-fn contains_generic(ty: &Type, generics: &[GenericInfo]) -> bool {
-    match ty {
-        Type::Path(type_path) => {
-            if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
-                let seg = &type_path.path.segments[0];
-                if generics.iter().any(|g| seg.ident == g.name) {
-                    return true;
-                }
-            }
-            for seg in &type_path.path.segments {
-                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                    for arg in &args.args {
-                        if let syn::GenericArgument::Type(inner) = arg {
-                            if contains_generic(inner, generics) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            false
-        }
-        Type::Tuple(tuple) => tuple.elems.iter().any(|e| contains_generic(e, generics)),
-        _ => false,
-    }
-}
-
-/// Autoref-based type registration.
-/// Rust's method resolution picks the most specific impl:
-/// Copy → register_drop + register_copy
-/// Clone → register_drop + register_clone
-/// fallback → register_drop only
-fn autoreg(ty: &Type) -> TokenStream {
-    quote! {
-        {
-            use ::acvus_mir_host::AutoregCopy as _;
-            use ::acvus_mir_host::AutoregClone as _;
-            use ::acvus_mir_host::AutoregMove as _;
-            (&&&::acvus_mir_host::TypeMarker::<#ty>::new()).__register_type(reg);
-        }
-    }
-}
-
 // ── ExternType attribute parsing ───────────────────────────────────
 
 /// Parsed ExternType attribute info.
 pub struct ExternTypeAttr {
     pub name: String,
     pub ns: Option<String>,
-    pub effects: Vec<Ident>,
 }
 
-/// Parse `#[extern_type(name = "Iterator", ns = "core", effects(E))]` from derive attributes.
+/// Parse `#[extern_type(name = "Iterator", ns = "core")]` from derive attributes.
 pub fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
     for attr in attrs {
         if !attr.path().is_ident("extern_type") {
@@ -362,7 +259,6 @@ pub fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr
         }
         let mut name = None;
         let mut ns = None;
-        let mut effects = Vec::new();
 
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("name") {
@@ -373,20 +269,14 @@ pub fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr
                 let _eq: Token![=] = meta.input.parse()?;
                 let lit: LitStr = meta.input.parse()?;
                 ns = Some(lit.value());
-            } else if meta.path.is_ident("effects") {
-                let content;
-                syn::parenthesized!(content in meta.input);
-                let names: syn::punctuated::Punctuated<Ident, Token![,]> =
-                    content.parse_terminated(Ident::parse, Token![,])?;
-                effects = names.into_iter().collect();
             } else {
-                return Err(meta.error("expected `name`, `ns`, or `effects`"));
+                return Err(meta.error("expected `name` or `ns`"));
             }
             Ok(())
         })?;
 
         let name = name.ok_or_else(|| syn::Error::new_spanned(attr, "missing `name` in #[extern_type]"))?;
-        return Ok(ExternTypeAttr { name, ns, effects });
+        return Ok(ExternTypeAttr { name, ns });
     }
     Err(syn::Error::new(
         proc_macro2::Span::call_site(),

@@ -6,14 +6,13 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
-        effect_args: vec![],
     }
 }
 
@@ -61,7 +60,6 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
@@ -74,7 +72,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
     type_registry.register(UserDefinedDecl {
         qref,
         type_params: vec![],
-        effect_params: vec![],
     });
 
     let ty = user_defined_ty(qref);
@@ -112,7 +109,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ok((result, Defs(())))
                 },
             ),
-            // regex_find_all(re, text) -> Iterator<String, SelfModifying>
+            // regex_find_all(re, text) -> Iterator<String>
             ExternFnBuilder::new(
                 "regex_find_all",
                 sig(
@@ -121,7 +118,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
                     },
                 ),
             )
@@ -129,7 +125,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
+                        Value::iterator(IterHandle::from_fn(move || {
                             let m = re.find_at(&text, start)?;
                             start = m.end();
                             Some(Value::string(m.as_str()))
@@ -153,7 +149,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ok((re.replace_all(&text, rep.as_str()).into_owned(), Defs(())))
                 },
             ),
-            // regex_split(re, text) -> Iterator<String, SelfModifying>
+            // regex_split(re, text) -> Iterator<String>
             ExternFnBuilder::new(
                 "regex_split",
                 sig(
@@ -162,7 +158,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
                     },
                 ),
             )
@@ -171,7 +166,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     let mut last_end = 0;
                     let mut done = false;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
+                        Value::iterator(IterHandle::from_fn(move || {
                             if done {
                                 return None;
                             }
@@ -190,7 +185,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ok((iter, Defs(())))
                 },
             ),
-            // regex_extract(text, re) -> Iterator<String, SelfModifying>  (capture group 1)
+            // regex_extract(text, re) -> Iterator<String>  (capture group 1)
             ExternFnBuilder::new(
                 "regex_extract",
                 sig(
@@ -199,7 +194,6 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
-                        effect_args: vec![Effect::pure() /* TODO: Token(iter_qref) */],
                     },
                 ),
             )
@@ -207,7 +201,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (text, Re(re, _)): (String, Re), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(Effect::pure() /* TODO: Token(iter_qref) */, move || {
+                        Value::iterator(IterHandle::from_fn(move || {
                             loop {
                                 let caps = re.captures_at(&text, start)?;
                                 let full = caps.get(0)?;

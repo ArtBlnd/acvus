@@ -3,7 +3,7 @@
 //! Each test compiles a script source → MIR and snapshots the printed IR.
 //! Tests are grouped by category with both soundness and completeness direction.
 
-use acvus_mir::ty::{Effect, Param, Ty};
+use acvus_mir::ty::{Param, Ty};
 use acvus_mir_test::compile_script_ir;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;

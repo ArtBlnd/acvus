@@ -1,16 +1,19 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
-use std::collections::BTreeSet;
 
 use acvus_interpreter::{Defs, Executable, ExternFnBuilder, ExternRegistry, Uses, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Effect, EffectSet, EffectTarget, Hint, Param, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, lift_to_poly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
+    sig_hint(interner, params, ret, None)
+}
+
+fn sig_hint(interner: &Interner, params: Vec<Ty>, ret: Ty, hint: Option<Hint>) -> PolyTy {
     let named: Vec<ParamTerm<Poly>> = params
         .iter()
         .enumerate()
@@ -20,32 +23,6 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
-        hint: None,
-    }
-}
-
-fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> PolyTy {
-    sig_effect_hint(interner, params, ret, effect, None)
-}
-
-fn sig_effect_hint(
-    interner: &Interner,
-    params: Vec<Ty>,
-    ret: Ty,
-    effect: Effect,
-    hint: Option<Hint>,
-) -> PolyTy {
-    let named: Vec<ParamTerm<Poly>> = params
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-        .collect();
-    TyTerm::Fn {
-        params: named,
-        ret: Box::new(lift_to_poly(&ret)),
-        captures: vec![],
-        effect: lift_effect_to_poly(&effect),
         hint,
     }
 }
@@ -116,14 +93,10 @@ async fn extern_reads_context() {
         vec![
             ExternFnBuilder::new(
                 "add_offset",
-                sig_effect(
+                sig(
                     interner,
                     vec![Ty::Int],
                     Ty::Int,
-                    Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::new(),
-                    }),
                 ),
             )
             .handler(
@@ -153,14 +126,10 @@ async fn extern_writes_context() {
         vec![
             ExternFnBuilder::new(
                 "increment",
-                sig_effect(
+                sig(
                     interner,
                     vec![],
                     Ty::Unit,
-                    Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
                 ),
             )
             .handler(
@@ -191,14 +160,10 @@ async fn extern_reads_and_writes_context() {
         vec![
             ExternFnBuilder::new(
                 "record",
-                sig_effect(
+                sig(
                     interner,
                     vec![Ty::Int],
                     Ty::Int,
-                    Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
                 ),
             )
             .handler(
@@ -235,14 +200,10 @@ async fn extern_multiple_calls_sequential() {
         vec![
             ExternFnBuilder::new(
                 "add_to_acc",
-                sig_effect(
+                sig(
                     interner,
                     vec![Ty::Int],
                     Ty::Unit,
-                    Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
                 ),
             )
             .handler(
@@ -354,14 +315,10 @@ fn ir_function_call_has_context_bindings() {
         vec![
             ExternFnBuilder::new(
                 "bump",
-                sig_effect(
+                sig(
                     interner,
                     vec![],
                     Ty::Unit,
-                    Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
                 ),
             )
             .handler(|_interner: &Interner, (): (), Uses((n,)): Uses<(i64,)>| {
@@ -521,40 +478,34 @@ fn ir_pure_function_call_no_context_bindings() {
 //
 // Each test dumps the optimized MIR to stderr (--nocapture) for inspection.
 
-fn io_effect(_interner: &acvus_utils::Interner) -> Effect {
-    // IO functions have no context reads/writes — their IO-ness is expressed
-    // via Hint::Io, not through the effect system.
-    Effect::pure()
-}
-
 /// Registry with 4 independent IO functions (no args) + 1 parameterized.
 fn io_registry() -> ExternRegistry {
     ExternRegistry::new(|interner| {
         vec![
             ExternFnBuilder::new(
                 "fetch_a",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
+                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((100i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_b",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
+                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((200i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_c",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
+                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((300i64, Defs(())))),
             ExternFnBuilder::new(
                 "fetch_d",
-                sig_effect_hint(interner, vec![], Ty::Int, io_effect(interner), Some(Hint::Io)),
+                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
             )
             .handler(|_: &Interner, (): (), Uses(()): Uses<()>| Ok((400i64, Defs(())))),
             // Parameterized: fetch_by(x) = x * 10
             ExternFnBuilder::new(
                 "fetch_by",
-                sig_effect_hint(interner, vec![Ty::Int], Ty::Int, io_effect(interner), Some(Hint::Io)),
+                sig_hint(interner, vec![Ty::Int], Ty::Int, Some(Hint::Io)),
             )
             .handler(|_: &Interner, (x,): (i64,), Uses(()): Uses<()>| Ok((x * 10, Defs(())))),
         ]

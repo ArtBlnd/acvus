@@ -22,11 +22,9 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: acvus_mir::ty::lift_effect_to_poly(&acvus_mir::ty::Effect::pure()),
                 hint: None,
             }
         },
-        effect_constraint: None,
     }];
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();

@@ -1,6 +1,6 @@
 //! ExternFn — unified declaration of external functions.
 //!
-//! Bundles type signature + runtime handler + effect in one place.
+//! Bundles type signature + runtime handler in one place.
 //! On registration, allocates a FunctionId and produces both the compile-time
 //! `Function` (for the graph) and the runtime `Executable` (for the interpreter).
 //!
@@ -287,7 +287,7 @@ impl ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_mir::ty::{Effect, Param, Poly, PolyEffect, PolyParam, Ty, TyTerm, lift_to_poly, lift_effect};
+    use acvus_mir::ty::{PolyParam, Ty, TyTerm, lift_to_poly};
 
     fn interner() -> Interner {
         Interner::new()
@@ -303,7 +303,6 @@ mod tests {
             params: named,
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
-            effect: lift_effect(&Effect::pure()),
             hint: None,
         }
     }

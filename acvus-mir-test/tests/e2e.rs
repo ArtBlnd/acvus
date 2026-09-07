@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::{
     graph::infer,
-    ty::{Effect, EffectSet, EffectTarget, Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_to_poly, lift_effect_to_poly},
+    ty::{Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_to_poly},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
@@ -58,10 +58,8 @@ fn compile_analysis(
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
@@ -418,10 +416,8 @@ fn extern_async_call() {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
-            effect: lift_effect_to_poly(&Effect::pure()),
             hint: None,
         },
-        effect_constraint: None,
     };
     let ir = compile_to_ir_with(
         &i,
@@ -1542,7 +1538,6 @@ fn extern_fn_object_return() {
                 params: vec![Param::new(i.intern("_0"), Ty::Int)],
                 ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
                 captures: vec![],
-                effect: Effect::pure(),
                 hint: None,
             },
         )],
@@ -2066,7 +2061,6 @@ fn migrated_pipe_extern_fn_ok() {
                     params: vec![Param::new(i.intern("_"), Ty::Int)],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    effect: Effect::pure(),
                     hint: None,
                 },
             ),
@@ -2236,19 +2230,17 @@ fn migrated_ssa_iter_no_write_no_phi() {
     );
 }
 
-// ── Effect propagation through Iterator combinators ─────────────────
+// ── Iterator values are move-only through combinators ───────────────
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_map_impure_propagates() {
-    // iter(list) | map(impure_fn) should produce an effectful Iterator.
-    // Reusing the result should be rejected (move-only).
+fn iter_map_reuse_rejected() {
+    // iter(list) | map(f) is an Iterator; reusing it is a use-after-move.
     let i = Interner::new();
     let context = ctx(
         &i,
         &[("items", Ty::List(Box::new(Ty::Int))), ("counter", Ty::Int)],
     );
-    // map with context write → effectful. Using result twice → use-after-move.
     let result = compile_script_ir(
         &i,
         r#"it = @items | iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
@@ -2256,14 +2248,14 @@ fn effect_map_impure_propagates() {
     );
     assert!(
         result.is_err(),
-        "effectful iter reuse should be rejected: {result:?}"
+        "iter reuse should be rejected: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_map_impure_single_use_ok() {
-    // Single use of effectful iterator should compile.
+fn iter_map_single_use_ok() {
+    // Single use of an iterator compiles.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2276,15 +2268,14 @@ fn effect_map_impure_single_use_ok() {
     );
     assert!(
         result.is_ok(),
-        "single use of effectful iter should compile: {result:?}"
+        "single use of iter should compile: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_chain_multiple_impure_combines() {
-    // map(impure_a) | filter(impure_b) → both effects combined.
-    // Reusing should be rejected.
+fn iter_chain_reuse_rejected() {
+    // map | filter is still one Iterator value; reusing it is rejected.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2301,14 +2292,14 @@ fn effect_chain_multiple_impure_combines() {
     );
     assert!(
         result.is_err(),
-        "chained impure iter reuse should be rejected: {result:?}"
+        "chained iter reuse should be rejected: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_chain_multiple_impure_single_use_ok() {
-    // Single use of chained impure should compile.
+fn iter_chain_single_use_ok() {
+    // Single use of a chained iterator compiles.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2325,15 +2316,14 @@ fn effect_chain_multiple_impure_single_use_ok() {
     );
     assert!(
         result.is_ok(),
-        "single use of chained impure should compile: {result:?}"
+        "single use of chained iter should compile: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_pure_iter_is_reusable() {
-    // Pure iterator: iter(list) | map(pure_fn). Should be reusable (not move-only).
-    // Wait — UserDefined is always move-only now. So even pure iter can't be reused.
+fn iter_pure_map_reuse_rejected() {
+    // A pure map does not make an Iterator copyable.
     let i = Interner::new();
     let context = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
     let result = compile_script_ir(
@@ -2341,18 +2331,16 @@ fn effect_pure_iter_is_reusable() {
         r#"it = @items | iter | map(|x| -> x + 1); it | collect; it | collect"#,
         &context,
     );
-    // UserDefined is always move-only, even when pure.
     assert!(
         result.is_err(),
-        "even pure UserDefined iter reuse should be rejected: {result:?}"
+        "pure iter reuse should be rejected: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_reject_collect_impure_reuse_after_collect() {
-    // After collecting an impure iterator, the iterator variable is consumed (move-only).
-    // Attempting to collect again from the same variable should fail with use-after-move.
+fn iter_reuse_after_collect_rejected() {
+    // collect consumes the iterator variable; a second collect is a use-after-move.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2365,7 +2353,7 @@ fn effect_reject_collect_impure_reuse_after_collect() {
     );
     assert!(
         result.is_err(),
-        "reuse of impure iter after collect should be rejected: {result:?}"
+        "reuse of iter after collect should be rejected: {result:?}"
     );
     assert!(
         has_use_after_move(&result.unwrap_err()),
@@ -2375,9 +2363,8 @@ fn effect_reject_collect_impure_reuse_after_collect() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn effect_collect_result_is_reusable() {
-    // The result of collect (List) should be freely reusable even when the source
-    // iterator was impure. List is not move-only.
+fn iter_collect_result_is_reusable() {
+    // The List produced by collect is freely reusable.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2390,34 +2377,17 @@ fn effect_collect_result_is_reusable() {
     );
     assert!(
         result.is_ok(),
-        "collected List from impure iter should be reusable: {result:?}"
+        "collected List should be reusable: {result:?}"
     );
 }
 
 // ── From move_check.rs (e2e) ────────────────────────────────────────
 
-fn iter_ty_with(interner: &Interner, effect: Effect) -> Ty {
-    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
-        id: iter_qref,
+        id: QualifiedRef::root(interner.intern("Iterator")),
         type_args: vec![Ty::Int],
-        effect_args: vec![effect],
     }
-}
-
-fn test_effectful(interner: &Interner) -> Effect {
-    Effect::Resolved(EffectSet {
-        reads: BTreeSet::new(),
-        writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
-    })
-}
-
-fn eff_iter_ty(interner: &Interner) -> Ty {
-    iter_ty_with(interner, test_effectful(interner))
-}
-
-fn pure_iter_ty(interner: &Interner) -> Ty {
-    iter_ty_with(interner, Effect::pure())
 }
 
 fn has_use_after_move(err: &str) -> bool {
@@ -2428,7 +2398,7 @@ fn has_use_after_move(err: &str) -> bool {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_effectful_iter_reuse() {
+fn migrated_move_reject_iter_reuse() {
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2439,7 +2409,7 @@ fn migrated_move_reject_effectful_iter_reuse() {
         r#"x = @items | iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
         &context,
     );
-    assert!(result.is_err(), "should reject effectful iter reuse");
+    assert!(result.is_err(), "should reject iter reuse");
     assert!(
         has_use_after_move(&result.unwrap_err()),
         "expected use-after-move error"
@@ -2465,7 +2435,7 @@ fn migrated_move_reject_var_double_load() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_effectful_pipe_reuse() {
+fn migrated_move_reject_iter_pipe_reuse() {
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2485,14 +2455,11 @@ fn migrated_move_reject_effectful_pipe_reuse() {
 
 // -- Completeness: should ACCEPT --
 
-// NOTE: With Iterator now represented as UserDefined, ALL iterators are move-only
-// regardless of effect. The old `pure_iter_reuse` test (which expected reuse to be
-// allowed for pure iterators) no longer applies. UserDefined types are always move-only.
 #[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_pure_iter_reuse() {
     let i = Interner::new();
-    let context = ctx(&i, &[("src", pure_iter_ty(&i))]);
+    let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
         "x = @src; a = x | collect; b = x | collect; a",
@@ -2506,7 +2473,7 @@ fn migrated_move_reject_pure_iter_reuse() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_accept_effectful_single_use() {
+fn migrated_move_accept_iter_single_use() {
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2519,7 +2486,7 @@ fn migrated_move_accept_effectful_single_use() {
     );
     assert!(
         result.is_ok(),
-        "single use of effectful should be allowed: {result:?}"
+        "single use of iter should be allowed: {result:?}"
     );
 }
 
@@ -2563,7 +2530,7 @@ fn migrated_move_accept_var_reassign() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_accept_effectful_pipe_chain() {
+fn migrated_move_accept_iter_pipe_chain() {
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -2582,48 +2549,47 @@ fn migrated_move_accept_effectful_pipe_chain() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_accept_effectful_fn_multiple_calls() {
+fn migrated_move_accept_fn_multiple_calls() {
     let i = Interner::new();
     let fn_ty = Ty::Fn {
         params: vec![Param::new(i.intern("_"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: test_effectful(&i),
         hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);
     assert!(
         result.is_ok(),
-        "effectful fn without move-only captures should be callable multiple times: {result:?}"
+        "fn without move-only captures should be callable multiple times: {result:?}"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_list_of_effectful_reuse() {
+fn migrated_move_reject_list_of_iter_reuse() {
     let i = Interner::new();
-    let ty = Ty::List(Box::new(eff_iter_ty(&i)));
+    let ty = Ty::List(Box::new(iter_int_ty(&i)));
     let context = ctx(&i, &[("src", ty)]);
     let result = compile_script_ir(&i, "x = @src; a = x | len; b = x | len; a + b", &context);
     assert!(
         result.is_err(),
-        "List containing effectful should be move-only"
+        "List containing an Iterator should be move-only"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_option_effectful_reuse() {
+fn migrated_move_reject_option_iter_reuse() {
     let i = Interner::new();
-    let ty = Ty::Option(Box::new(eff_iter_ty(&i)));
+    let ty = Ty::Option(Box::new(iter_int_ty(&i)));
     let context = ctx(&i, &[("src", ty)]);
     let result = compile_script_ir(
         &i,
         "x = @src; a = x | unwrap | collect; b = x | unwrap | collect; a",
         &context,
     );
-    assert!(result.is_err(), "Option<Effectful> should be move-only");
+    assert!(result.is_err(), "Option<Iterator> should be move-only");
 }
 
 #[ignore = "pending identity integration"]
@@ -2653,7 +2619,7 @@ fn migrated_move_reject_branch_move_then_use() {
 #[test]
 fn migrated_move_reject_both_branches_move_then_use() {
     let i = Interner::new();
-    let context = ctx(&i, &[("flag", Ty::Bool), ("src", eff_iter_ty(&i))]);
+    let context = ctx(&i, &[("flag", Ty::Bool), ("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
         "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}{{ a | collect | len | to_string }}{{/}}{{ a | collect | len | to_string }}",
@@ -2816,7 +2782,7 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
 #[test]
 fn migrated_move_reject_fnonce_local_capture_double() {
     let i = Interner::new();
-    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
         "x = @src; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
@@ -2830,9 +2796,9 @@ fn migrated_move_reject_fnonce_local_capture_double() {
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_effectful_without_purify() {
+fn migrated_move_reject_iter_without_purify() {
     let i = Interner::new();
-    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
         "x = @src; a = x | collect; b = x | collect; a",
@@ -2840,15 +2806,15 @@ fn migrated_move_reject_effectful_without_purify() {
     );
     assert!(
         result.is_err(),
-        "effectful without purify should still be rejected"
+        "iter without purify should still be rejected"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
-fn migrated_move_reject_effectful_var_without_purify() {
+fn migrated_move_reject_iter_var_without_purify() {
     let i = Interner::new();
-    let context = ctx(&i, &[("src", eff_iter_ty(&i))]);
+    let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
         "{{ a = @src }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
@@ -2856,7 +2822,7 @@ fn migrated_move_reject_effectful_var_without_purify() {
     );
     assert!(
         result.is_err(),
-        "effectful var without purify should be rejected"
+        "iter var without purify should be rejected"
     );
 }
 
@@ -2995,7 +2961,6 @@ fn projection_soundness_reject_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: acvus_mir::ty::Effect::pure(),
         hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);
@@ -3012,7 +2977,6 @@ fn projection_soundness_reject_list_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: acvus_mir::ty::Effect::pure(),
         hint: None,
     };
     let context = ctx(&i, &[("xs", Ty::List(Box::new(fn_ty)))]);
@@ -3194,7 +3158,6 @@ fn sroa_soundness_reject_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        effect: acvus_mir::ty::Effect::pure(),
         hint: None,
     };
     let context = ctx(&i, &[("f", fn_ty)]);

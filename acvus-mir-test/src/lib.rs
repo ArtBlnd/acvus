@@ -17,10 +17,8 @@ fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -
             params,
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     }
 }
 
