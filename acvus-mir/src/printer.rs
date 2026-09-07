@@ -374,8 +374,6 @@ fn write_body(
                 dst,
                 callee,
                 args,
-                context_uses,
-                context_defs,
                 ..
             } => {
                 let callee_str = match callee {
@@ -389,26 +387,6 @@ fn write_body(
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
                 )?;
-                if !context_uses.is_empty() {
-                    write!(f, " uses[")?;
-                    for (i, (ctx_id, vid)) in context_uses.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{:?}={}", ctx_id, vn.fmt_use(*vid, &consts, &texts))?;
-                    }
-                    write!(f, "]")?;
-                }
-                if !context_defs.is_empty() {
-                    write!(f, " defs[")?;
-                    for (i, (ctx_id, vid)) in context_defs.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{:?}={}", ctx_id, vn.fmt_val(*vid))?;
-                    }
-                    write!(f, "]")?;
-                }
                 writeln!(f)?
             }
 
@@ -417,25 +395,13 @@ fn write_body(
                 dst,
                 callee,
                 args,
-                context_uses,
                 ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
                 };
-                let ctx_str = if context_uses.is_empty() {
-                    String::new()
-                } else {
-                    let bindings: Vec<String> = context_uses
-                        .iter()
-                        .map(|(qref, val)| {
-                            let name = ctx_ref_to_name.get(qref).map(|s| s.as_str()).unwrap_or("?");
-                            format!("@{}={}", name, vn.fmt_val(*val))
-                        })
-                        .collect();
-                    format!(" use({})", bindings.join(", "))
-                };
+                let ctx_str = String::new();
                 writeln!(
                     f,
                     "{} = spawn {}({}){ctx_str}",
@@ -447,20 +413,8 @@ fn write_body(
             InstKind::Eval {
                 dst,
                 src,
-                context_defs,
             } => {
-                let ctx_str = if context_defs.is_empty() {
-                    String::new()
-                } else {
-                    let bindings: Vec<String> = context_defs
-                        .iter()
-                        .map(|(qref, val)| {
-                            let name = ctx_ref_to_name.get(qref).map(|s| s.as_str()).unwrap_or("?");
-                            format!("@{}={}", name, vn.fmt_val(*val))
-                        })
-                        .collect();
-                    format!(" def({})", bindings.join(", "))
-                };
+                let ctx_str = String::new();
                 writeln!(
                     f,
                     "{} = eval {}{ctx_str}",

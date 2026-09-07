@@ -1027,14 +1027,11 @@ impl CheckCtx {
                 callee,
                 callee_ty,
                 args,
-                context_uses,
-                context_defs,
                 ..
             } => {
                 match callee {
                     Callee::Direct(_) => {
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
-                        // context_uses/context_defs validation pending identity integration.
                     }
                     Callee::Indirect(closure) => {
                         let closure_ty = ty!(*closure);
@@ -1086,12 +1083,10 @@ impl CheckCtx {
                 callee,
                 callee_ty,
                 args,
-                context_uses,
                 ..
             } => {
                 match callee {
                     Callee::Direct(_) => {
-                        // context_uses validation pending identity integration.
                         let dst_ty = ty!(*dst);
                         if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_)) {
                             errors.push(ValidationError {

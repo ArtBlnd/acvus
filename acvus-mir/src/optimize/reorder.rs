@@ -277,24 +277,20 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
-                    context_defs: vec![],
                 },
                 InstKind::Spawn {
                     dst: v(2),
                     callee: Callee::Direct(fb),
                     callee_ty: fb_ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Eval {
                     dst: v(3),
                     src: v(2),
-                    context_defs: vec![],
                 },
                 InstKind::BinOp {
                     dst: v(4),
@@ -371,12 +367,10 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -421,12 +415,10 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
-                    context_defs: vec![],
                 },
                 InstKind::BinOp {
                     dst: v(7),

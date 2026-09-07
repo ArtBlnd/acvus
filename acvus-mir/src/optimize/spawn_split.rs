@@ -2,8 +2,8 @@
 //!
 //! This is a pure IR transformation with no reordering.
 //! After this pass, IO calls are expressed as:
-//!   handle = Spawn { callee, args, context_uses }
-//!   result = Eval { src: handle, context_defs }
+//!   handle = Spawn { callee, args }
+//!   result = Eval { src: handle }
 //!
 //! The Spawn is pure (no side effects). Effects happen at Eval.
 //! Reordering is left to a separate pass that can move independent
@@ -25,8 +25,6 @@ pub fn run(cfg: &mut CfgBody) {
                     callee: Callee::Direct(ref callee_id),
                     ref callee_ty,
                     ref args,
-                    ref context_uses,
-                    ref context_defs,
                 } if is_io_call(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
@@ -44,7 +42,6 @@ pub fn run(cfg: &mut CfgBody) {
                             callee: Callee::Direct(*callee_id),
                             callee_ty: callee_ty.clone(),
                             args: args.clone(),
-                            context_uses: context_uses.clone(),
                         },
                     });
                     new_insts.push(Inst {
@@ -52,7 +49,6 @@ pub fn run(cfg: &mut CfgBody) {
                         kind: InstKind::Eval {
                             dst,
                             src: handle,
-                            context_defs: context_defs.clone(),
                         },
                     });
                 }
@@ -143,8 +139,6 @@ mod tests {
                     callee: Callee::Direct(fetch_id),
                     callee_ty: fetch_ty,
                     args: vec![v(0)],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -205,8 +199,6 @@ mod tests {
                 callee: Callee::Direct(add_id),
                 callee_ty: Ty::error(),
                 args: vec![v(1), v(2)],
-                context_uses: vec![],
-                context_defs: vec![],
             }],
             3,
         );
@@ -228,8 +220,6 @@ mod tests {
                 callee: Callee::Indirect(v(1)),
                 callee_ty: Ty::error(),
                 args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
             }],
             2,
         );
@@ -239,59 +229,6 @@ mod tests {
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 1);
         assert!(matches!(insts[0].kind, InstKind::FunctionCall { .. }));
-    }
-
-    #[test]
-    fn context_uses_defs_distributed() {
-        let i = Interner::new();
-        let fetch_id = QualifiedRef::root(i.intern("fetch"));
-        let ctx_a = QualifiedRef::root(i.intern("a"));
-        let ctx_b = QualifiedRef::root(i.intern("b"));
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            fetch_id,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-
-                hint: Some(Hint::Io),
-            },
-        );
-
-        let fetch_ty = fn_metadata[&fetch_id].clone();
-        let mut cfg = make_cfg(
-            vec![InstKind::FunctionCall {
-                dst: v(0),
-                callee: Callee::Direct(fetch_id),
-                callee_ty: fetch_ty,
-                args: vec![],
-                context_uses: vec![(ctx_a, v(1))],
-                context_defs: vec![(ctx_b, v(2))],
-            }],
-            3,
-        );
-
-        run(&mut cfg);
-
-        let insts = all_insts(&cfg);
-        assert_eq!(insts.len(), 2);
-
-        // Spawn gets context_uses, Eval gets context_defs.
-        if let InstKind::Spawn { context_uses, .. } = &insts[0].kind {
-            assert_eq!(context_uses.len(), 1);
-            assert_eq!(context_uses[0].0, ctx_a);
-        } else {
-            panic!("expected Spawn");
-        }
-
-        if let InstKind::Eval { context_defs, .. } = &insts[1].kind {
-            assert_eq!(context_defs.len(), 1);
-            assert_eq!(context_defs[0].0, ctx_b);
-        } else {
-            panic!("expected Eval");
-        }
     }
 
     #[test]
@@ -322,16 +259,12 @@ mod tests {
                     callee: Callee::Direct(fetch_a),
                     callee_ty: io_fn_ty.clone(),
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(fetch_b),
                     callee_ty: io_fn_ty,
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::BinOp {
                     dst: v(2),

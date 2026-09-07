@@ -4,7 +4,7 @@
 //! All functions except `now()` are pure — DateTime is immutable.
 
 use acvus_interpreter::{
-    Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
+    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError,
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
@@ -87,17 +87,15 @@ fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
 fn h_format_date(
     _interner: &Interner,
     (Dt(dt, _), fmt): (Dt, String),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((dt.format(&fmt).to_string(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(dt.format(&fmt).to_string())
 }
 
 fn h_timestamp(
     _interner: &Interner,
     (Dt(dt, _),): (Dt,),
-    Uses(()): Uses<()>,
-) -> Result<(i64, Defs<()>), RuntimeError> {
-    Ok((dt.timestamp(), Defs(())))
+) -> Result<i64, RuntimeError> {
+    Ok(dt.timestamp())
 }
 
 /// Build the datetime ExternRegistry.
@@ -117,8 +115,8 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         #[cfg(not(target_arch = "wasm32"))]
         fns.push(
             ExternFnBuilder::new("now", sig_io(interner, vec![], ty.clone())).handler(
-                move |_interner: &Interner, (): (), Uses(()): Uses<()>| {
-                    Ok((Dt(chrono::Utc::now(), qref), Defs(())))
+                move |_interner: &Interner, (): ()| {
+                    Ok(Dt(chrono::Utc::now(), qref))
                 },
             ),
         );
@@ -136,13 +134,13 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 sig(interner, vec![Ty::String, Ty::String], ty.clone()),
             )
             .handler(
-                move |_interner: &Interner, (s, fmt): (String, String), Uses(()): Uses<()>| {
+                move |_interner: &Interner, (s, fmt): (String, String)| {
                     let dt = chrono::NaiveDateTime::parse_from_str(&s, &fmt)
                         .map(|ndt| ndt.and_utc())
                         .unwrap_or_else(|e| {
                             panic!("parse_date: invalid input '{s}' with format '{fmt}': {e}")
                         });
-                    Ok((Dt(dt, qref), Defs(())))
+                    Ok(Dt(dt, qref))
                 },
             ),
             // timestamp(dt) -> Int  (Unix epoch seconds)
@@ -151,10 +149,10 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             // from_timestamp(epoch) -> DateTime
             ExternFnBuilder::new("from_timestamp", sig(interner, vec![Ty::Int], ty.clone()))
                 .handler(
-                    move |_interner: &Interner, (epoch,): (i64,), Uses(()): Uses<()>| {
+                    move |_interner: &Interner, (epoch,): (i64,)| {
                         let dt = chrono::DateTime::from_timestamp(epoch, 0)
                             .unwrap_or_else(|| panic!("from_timestamp: invalid epoch {epoch}"));
-                        Ok((Dt(dt, qref), Defs(())))
+                        Ok(Dt(dt, qref))
                     },
                 ),
             // add_days(dt, n) -> DateTime
@@ -163,8 +161,8 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 sig(interner, vec![ty.clone(), Ty::Int], ty.clone()),
             )
             .handler(
-                move |_interner: &Interner, (Dt(dt, _), n): (Dt, i64), Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::days(n), qref), Defs(())))
+                move |_interner: &Interner, (Dt(dt, _), n): (Dt, i64)| {
+                    Ok(Dt(dt + chrono::Duration::days(n), qref))
                 },
             ),
             // add_hours(dt, n) -> DateTime
@@ -173,8 +171,8 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 sig(interner, vec![ty.clone(), Ty::Int], ty.clone()),
             )
             .handler(
-                move |_interner: &Interner, (Dt(dt, _), n): (Dt, i64), Uses(()): Uses<()>| {
-                    Ok((Dt(dt + chrono::Duration::hours(n), qref), Defs(())))
+                move |_interner: &Interner, (Dt(dt, _), n): (Dt, i64)| {
+                    Ok(Dt(dt + chrono::Duration::hours(n), qref))
                 },
             ),
         ]);

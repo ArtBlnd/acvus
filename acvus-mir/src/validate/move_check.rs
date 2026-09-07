@@ -486,8 +486,6 @@ fn process_inst(
             dst,
             callee,
             args,
-            context_uses,
-            context_defs,
             ..
         } => {
             if let Callee::Indirect(closure) = callee {
@@ -496,13 +494,7 @@ fn process_inst(
             for arg in args {
                 try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
             }
-            for (_, vid) in context_uses {
-                try_consume_value(scope, inst_idx, span, *vid, val_types, state, errors);
-            }
             state.set_value(*dst, Liveness::Alive);
-            for (_, vid) in context_defs {
-                state.set_value(*vid, Liveness::Alive);
-            }
         }
 
         // Constructors — elements are consumed
@@ -739,16 +731,12 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v0],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v0],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
             ],
             val_types,
@@ -778,8 +766,6 @@ mod tests {
                 callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                 callee_ty: Ty::error(),
                 args: vec![v0],
-                context_uses: vec![],
-                context_defs: vec![],
             })],
             val_types,
         );
@@ -842,8 +828,6 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v1],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
                 // $a = v2 (new value) → revives $a
                 inst(InstKind::Ref {
@@ -873,8 +857,6 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v3],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
             ],
             val_types,
@@ -935,8 +917,6 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v1],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
                 // Second load — $a already moved
                 inst(InstKind::Ref {
@@ -954,8 +934,6 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v2],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 }),
             ],
             val_types,

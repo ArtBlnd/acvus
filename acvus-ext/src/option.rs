@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, TyTerm};
 use acvus_utils::Interner;
 
@@ -11,13 +11,12 @@ use acvus_utils::Interner;
 fn h_unwrap(
     _: &Interner,
     (val,): (Value,),
-    Uses(()): Uses<()>,
-) -> Result<(Value, Defs<()>), RuntimeError> {
+) -> Result<Value, RuntimeError> {
     match val {
         Value::Variant(v) if v.payload.is_some() => {
             let inner =
                 Arc::try_unwrap(v.payload.unwrap()).unwrap_or_else(|arc| arc.as_ref().share());
-            Ok((inner, Defs(())))
+            Ok(inner)
         }
         Value::Variant(_) => panic!("unwrap: called on None"),
         other => panic!("unwrap: expected Variant, got {other:?}"),
@@ -27,15 +26,14 @@ fn h_unwrap(
 fn h_unwrap_or(
     _: &Interner,
     (val, default): (Value, Value),
-    Uses(()): Uses<()>,
-) -> Result<(Value, Defs<()>), RuntimeError> {
+) -> Result<Value, RuntimeError> {
     match val {
         Value::Variant(v) if v.payload.is_some() => {
             let inner =
                 Arc::try_unwrap(v.payload.unwrap()).unwrap_or_else(|arc| arc.as_ref().share());
-            Ok((inner, Defs(())))
+            Ok(inner)
         }
-        Value::Variant(_) => Ok((default, Defs(()))),
+        Value::Variant(_) => Ok(default),
         other => panic!("unwrap_or: expected Variant, got {other:?}"),
     }
 }

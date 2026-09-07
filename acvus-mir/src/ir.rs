@@ -122,34 +122,26 @@ pub enum InstKind {
     },
     /// Unified function call. Callee can be a direct graph function or an indirect value.
     /// Semantically equivalent to Spawn + Eval (synchronous call = spawn then immediately eval).
-    /// `context_uses` binds context SSA values the callee reads.
-    /// `context_defs` captures new SSA values for contexts the callee writes.
     FunctionCall {
         dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
-        context_uses: Vec<(QualifiedRef, ValueId)>,
-        context_defs: Vec<(QualifiedRef, ValueId)>,
     },
     /// Spawn a deferred computation. Creates a Handle<T> without executing.
     /// Pure instruction — no side effects. The actual execution happens at Eval.
     /// `dst` receives a Handle whose type carries the callee's return type.
-    /// `context_uses` binds context SSA values that the callee will read from.
     Spawn {
         dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
-        context_uses: Vec<(QualifiedRef, ValueId)>,
     },
     /// Evaluate (force) a Handle, consuming it.
     /// `src` must be a Handle<T>. `dst` receives T.
-    /// `context_defs` captures new SSA values for contexts the callee wrote.
     Eval {
         dst: ValueId,
         src: ValueId,
-        context_defs: Vec<(QualifiedRef, ValueId)>,
     },
 
     // Composite constructors

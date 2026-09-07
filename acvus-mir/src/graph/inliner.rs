@@ -361,8 +361,6 @@ fn remap_inst(
             callee,
             callee_ty,
             args,
-            context_uses,
-            context_defs,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
@@ -373,8 +371,6 @@ fn remap_inst(
                 callee,
                 callee_ty: callee_ty.clone(),
                 args: rv(args),
-                context_uses: context_uses.iter().map(|(id, v)| (*id, r(*v))).collect(),
-                context_defs: context_defs.iter().map(|(id, v)| (*id, r(*v))).collect(),
             }
         }
         InstKind::Spawn {
@@ -382,31 +378,25 @@ fn remap_inst(
             callee,
             callee_ty,
             args,
-            context_uses,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
                 Callee::Indirect(v) => Callee::Indirect(r(*v)),
             };
-            let ctx = context_uses.iter().map(|(id, v)| (*id, r(*v))).collect();
             InstKind::Spawn {
                 dst: r(*dst),
                 callee,
                 callee_ty: callee_ty.clone(),
                 args: rv(args),
-                context_uses: ctx,
             }
         }
         InstKind::Eval {
             dst,
             src,
-            context_defs,
         } => {
-            let ctx = context_defs.iter().map(|(id, v)| (*id, r(*v))).collect();
             InstKind::Eval {
                 dst: r(*dst),
                 src: r(*src),
-                context_defs: ctx,
             }
         }
 
@@ -628,8 +618,6 @@ mod tests {
                     callee: Callee::Direct(callee_id),
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -685,8 +673,6 @@ mod tests {
                     callee: Callee::Direct(extern_id),
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -732,8 +718,6 @@ mod tests {
                     callee: Callee::Direct(rec_id),
                     callee_ty: Ty::error(),
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -788,8 +772,6 @@ mod tests {
                     callee: Callee::Direct(g_id),
                     callee_ty: Ty::error(),
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -803,8 +785,6 @@ mod tests {
                     callee: Callee::Direct(f_id),
                     callee_ty: Ty::error(),
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(0)),
             ],
@@ -844,8 +824,6 @@ mod tests {
                     callee: Callee::Indirect(v(0)),
                     callee_ty: Ty::error(),
                     args: vec![],
-                    context_uses: vec![],
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],

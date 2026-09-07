@@ -2,7 +2,7 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::ty::{Hint, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 
@@ -242,8 +242,7 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
         vec![
             ExternFnBuilder::new("google_llm", ty).handler_async(
                 move |interner: Interner,
-                      (messages, config): (Value, Value),
-                      Uses(()): Uses<()>| {
+                      (messages, config): (Value, Value)| {
                     let fetch = Arc::clone(&fetch);
                     async move {
                         let messages_list = match &messages {
@@ -326,7 +325,7 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                             .map_err(|e| acvus_interpreter::RuntimeError::fetch(e.to_string()))?;
 
                         let result = response_to_value(&response, &interner);
-                        Ok((result, Defs(())))
+                        Ok(result)
                     }
                 },
             ),

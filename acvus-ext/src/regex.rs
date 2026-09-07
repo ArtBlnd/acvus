@@ -2,7 +2,7 @@
 
 use crate::iter_pipeline::{IterHandle, iter_value};
 use acvus_interpreter::{
-    Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
+    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError,
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
@@ -79,10 +79,10 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
         vec![
             // regex(pattern) -> Regex
             ExternFnBuilder::new("regex", sig(interner, vec![Ty::String], ty.clone())).handler(
-                move |_interner: &Interner, (pattern,): (String,), Uses(()): Uses<()>| {
+                move |_interner: &Interner, (pattern,): (String,)| {
                     let re = regex::Regex::new(&pattern)
                         .unwrap_or_else(|e| panic!("regex: invalid pattern '{pattern}': {e}"));
-                    Ok((Re(re, qref), Defs(())))
+                    Ok(Re(re, qref))
                 },
             ),
             // regex_match(re, text) -> Bool
@@ -91,8 +91,8 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 sig(interner, vec![ty.clone(), Ty::String], Ty::Bool),
             )
             .handler(
-                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
-                    Ok((re.is_match(&text), Defs(())))
+                |_interner: &Interner, (Re(re, _), text): (Re, String)| {
+                    Ok(re.is_match(&text))
                 },
             ),
             // regex_find(re, text) -> Option<String>
@@ -101,12 +101,12 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 sig(interner, vec![ty.clone(), Ty::String], Ty::String), // TODO: proper Option<String> return type
             )
             .handler(
-                |interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                |interner: &Interner, (Re(re, _), text): (Re, String)| {
                     let result = match re.find(&text) {
                         Some(m) => Value::some(interner, Value::string(m.as_str())),
                         None => Value::none(interner),
                     };
-                    Ok((result, Defs(())))
+                    Ok(result)
                 },
             ),
             // regex_find_all(re, text) -> Iterator<String>
@@ -122,7 +122,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 ),
             )
             .handler(
-                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                |_interner: &Interner, (Re(re, _), text): (Re, String)| {
                     let mut start = 0;
                     let iter =
                         iter_value(_interner, IterHandle::from_fn(move || {
@@ -130,7 +130,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                             start = m.end();
                             Some(Value::string(m.as_str()))
                         }));
-                    Ok((iter, Defs(())))
+                    Ok(iter)
                 },
             ),
             // regex_replace(text, re, replacement) -> String
@@ -144,9 +144,8 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
             )
             .handler(
                 |_interner: &Interner,
-                 (text, Re(re, _), rep): (String, Re, String),
-                 Uses(()): Uses<()>| {
-                    Ok((re.replace_all(&text, rep.as_str()).into_owned(), Defs(())))
+                 (text, Re(re, _), rep): (String, Re, String)| {
+                    Ok(re.replace_all(&text, rep.as_str()).into_owned())
                 },
             ),
             // regex_split(re, text) -> Iterator<String>
@@ -162,7 +161,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 ),
             )
             .handler(
-                |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
+                |_interner: &Interner, (Re(re, _), text): (Re, String)| {
                     let mut last_end = 0;
                     let mut done = false;
                     let iter =
@@ -182,7 +181,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                                 }
                             }
                         }));
-                    Ok((iter, Defs(())))
+                    Ok(iter)
                 },
             ),
             // regex_extract(text, re) -> Iterator<String>  (capture group 1)
@@ -198,7 +197,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 ),
             )
             .handler(
-                |_interner: &Interner, (text, Re(re, _)): (String, Re), Uses(()): Uses<()>| {
+                |_interner: &Interner, (text, Re(re, _)): (String, Re)| {
                     let mut start = 0;
                     let iter =
                         iter_value(_interner, IterHandle::from_fn(move || {
@@ -211,7 +210,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                                 }
                             }
                         }));
-                    Ok((iter, Defs(())))
+                    Ok(iter)
                 },
             ),
         ]

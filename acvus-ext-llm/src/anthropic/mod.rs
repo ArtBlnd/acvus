@@ -2,7 +2,7 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::ty::{Hint, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -191,8 +191,7 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
 
         vec![ExternFnBuilder::new("anthropic", ty).handler_async(
             move |interner: Interner,
-                  (messages_val, config_val): (Value, Value),
-                  Uses(()): Uses<()>| {
+                  (messages_val, config_val): (Value, Value)| {
                 let fetch = Arc::clone(&fetch);
                 async move {
                     // Extract messages from Value::List
@@ -268,7 +267,7 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
                         .map_err(|e| RuntimeError::fetch(e.to_string()))?;
 
                     let result = response_to_value(&response, &interner);
-                    Ok((result, Defs(())))
+                    Ok(result)
                 }
             },
         )]

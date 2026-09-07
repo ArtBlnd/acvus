@@ -14,7 +14,6 @@
 //!
 //! 3. **Forward context values** (`forward_context_values`): dominator-tree-scoped
 //!    store-load forwarding for context variables. Eliminates redundant ContextLoads
-//!    and populates `context_uses`/`context_defs` on FunctionCall instructions.
 //!    At merge points (>1 predecessor), written contexts are cleared from the
 //!    forwarding state; unwritten (immutable) contexts remain forwarded.
 //!
@@ -264,7 +263,6 @@ fn forward_context_values(
                     }
                 }
 
-                // FunctionCall context_uses/context_defs population removed
                 // (was Effect-based). Step 3 will re-populate via Identity analysis.
 
                 _ => {}
@@ -356,34 +354,27 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::FunctionCall {
             callee,
             args,
-            context_uses,
-            context_defs,
             ..
         } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
-            context_uses.iter_mut().for_each(|(_, v)| s(v));
-            context_defs.iter_mut().for_each(|(_, v)| s(v));
         }
         InstKind::Spawn {
             callee,
             args,
-            context_uses,
             ..
         } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
-            context_uses.iter_mut().for_each(|(_, v)| s(v));
         }
         InstKind::Eval {
-            src, context_defs, ..
+            src, ..
         } => {
             s(src);
-            context_defs.iter_mut().for_each(|(_, v)| s(v));
         }
         InstKind::MakeList { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),

@@ -316,14 +316,6 @@ fn context_of_store(kind: &InstKind, ref_to_ctx: &FxHashMap<ValueId, QualifiedRe
     }
 }
 
-/// Contexts written by Eval's context_defs.
-fn eval_write_contexts(kind: &InstKind) -> Vec<QualifiedRef> {
-    match kind {
-        InstKind::Eval { context_defs, .. } => context_defs.iter().map(|(qref, _)| *qref).collect(),
-        _ => vec![],
-    }
-}
-
 /// Run the sink pass — move Eval, non-volatile Load, and non-volatile Store
 /// as late as possible within their block.
 ///
@@ -369,7 +361,6 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
             };
 
             let defs: Vec<ValueId> = inst_info::defs(kind).to_vec();
-            let eval_contexts = eval_write_contexts(kind);
 
             // Scan forward for barrier.
             let mut barrier = cfg.blocks[bi].insts.len();
@@ -386,15 +377,6 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                 if let SinkKind::Load(ctx) = &sink_kind {
                     if let Some(store_ctx) = context_of_store(other, &ref_to_ctx) {
                         if store_ctx == *ctx {
-                            barrier = jj;
-                            break;
-                        }
-                    }
-                }
-
-                if matches!(sink_kind, SinkKind::Eval) {
-                    if let Some(load_ctx) = context_of_load(other, &ref_to_ctx) {
-                        if eval_contexts.contains(&load_ctx) {
                             barrier = jj;
                             break;
                         }
@@ -569,7 +551,6 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![v(0)],
-                    context_uses: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -639,7 +620,6 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![v(3)],
-                    context_uses: vec![],
                 },
                 InstKind::Return(v(4)),
             ],
@@ -680,7 +660,6 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Const {
                     dst: v(5),
@@ -719,7 +698,6 @@ mod tests {
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
-                    context_defs: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -762,7 +740,6 @@ mod tests {
                     callee: Callee::Direct(qref1),
                     callee_ty: ty1,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Const {
                     dst: v(5),
@@ -803,7 +780,6 @@ mod tests {
                     callee: Callee::Direct(qref2),
                     callee_ty: ty2,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -913,7 +889,6 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![v(0)],
-                    context_uses: vec![],
                 },
                 InstKind::Return(v(1)),
             ],
@@ -1026,12 +1001,10 @@ mod tests {
                     callee: Callee::Direct(fetch_id),
                     callee_ty: fetch_ty,
                     args: vec![],
-                    context_uses: vec![],
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
-                    context_defs: vec![],
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1074,75 +1047,6 @@ mod tests {
         assert!(
             eval_idx < use_idx,
             "eval should be before its use (eval at {eval_idx}, use at {use_idx})"
-        );
-    }
-
-    /// Eval is NOT sunk past a Load of a context it writes.
-    ///
-    /// Eval writes @ctx, Load reads @ctx → order must be preserved.
-    #[test]
-    fn eval_not_sunk_past_context_load() {
-        let i = Interner::new();
-        let ctx = QualifiedRef::root(i.intern("ctx"));
-        let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
-
-        // v0 = Spawn fetch
-        // v1 = Eval v0, context_defs=[(ctx, v5)]
-        // v2 = Ref @ctx
-        // v3 = Load v2          ← reads ctx that Eval writes
-        // v4 = BinOp(v3, v3)   ← uses load result
-        // Return v4
-        let mut cfg = make_cfg(
-            vec![
-                InstKind::Spawn {
-                    dst: v(0),
-                    callee: Callee::Direct(fetch_id),
-                    callee_ty: fetch_ty,
-                    args: vec![],
-                    context_uses: vec![],
-                },
-                InstKind::Eval {
-                    dst: v(1),
-                    src: v(0),
-                    context_defs: vec![(ctx, v(5))],
-                },
-                InstKind::Ref {
-                    dst: v(2),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(3),
-                    src: v(2),
-                    volatile: false,
-                },
-                InstKind::BinOp {
-                    dst: v(4),
-                    op: acvus_ast::BinOp::Add,
-                    left: v(3),
-                    right: v(3),
-                },
-                InstKind::Return(v(4)),
-            ],
-            10,
-        );
-
-        run(&mut cfg);
-        let body = demoted(cfg);
-        let k = kinds(&body);
-
-        let eval_idx = k
-            .iter()
-            .position(|k| matches!(k, InstKind::Eval { .. }))
-            .unwrap();
-        let load_idx = k
-            .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
-            .unwrap();
-
-        assert!(
-            eval_idx < load_idx,
-            "eval must stay before load of written context (eval {eval_idx}, load {load_idx})"
         );
     }
 

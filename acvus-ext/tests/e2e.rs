@@ -416,27 +416,24 @@ fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRe
         vec![
             // make_num() → MyNum (wrapping 42)
             ExternFnBuilder::new("make_num", sig(interner, vec![], ty_clone.clone())).handler(
-                move |_interner: &acvus_utils::Interner, (): (), Uses(()): Uses<()>| {
-                    Ok((
-                        Value::opaque(OpaqueValue::new(my_num_qref, 42i64)),
-                        Defs(()),
-                    ))
+                move |_interner: &acvus_utils::Interner, (): ()| {
+                    Ok(Value::opaque(OpaqueValue::new(my_num_qref, 42i64)))
                 },
             ),
             // to_int(MyNum) → Int
             ExternFnBuilder::new("to_int", sig(interner, vec![ty_clone.clone()], Ty::Int)).handler(
-                |_interner: &acvus_utils::Interner, (v,): (Value,), Uses(()): Uses<()>| match v {
+                |_interner: &acvus_utils::Interner, (v,): (Value,)| match v {
                     Value::Opaque(o) => {
                         let n = *o.downcast_ref::<i64>().unwrap();
-                        Ok((n, Defs(())))
+                        Ok(n)
                     }
                     _ => panic!("expected Opaque"),
                 },
             ),
             // double(Int) → Int
             ExternFnBuilder::new("double", sig(interner, vec![Ty::Int], Ty::Int)).handler(
-                |_interner: &acvus_utils::Interner, (n,): (i64,), Uses(()): Uses<()>| {
-                    Ok((n * 2, Defs(())))
+                |_interner: &acvus_utils::Interner, (n,): (i64,)| {
+                    Ok(n * 2)
                 },
             ),
         ]

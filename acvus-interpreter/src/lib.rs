@@ -9,7 +9,7 @@ mod value;
 pub use error::{RuntimeError, RuntimeErrorKind, ValueKind};
 pub use executor::{Executor, SequentialExecutor};
 pub use extern_fn::{
-    Defs, ExternFn, ExternFnBuilder, ExternHandler, ExternOutput, ExternRegistry, Registered, Uses,
+    ExternFn, ExternFnBuilder, ExternHandler, ExternRegistry, Registered,
 };
 pub use interpreter::{
     Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Executable, Interpreter, InterpreterContext,

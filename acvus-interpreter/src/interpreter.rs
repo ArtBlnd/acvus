@@ -310,7 +310,6 @@ use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub struct ExecResult {
     pub value: Value,
     pub writes: Vec<ContextWrite>,
-    pub defs: Vec<Value>,
 }
 
 /// A single executable unit — MIR module, builtin handler, or extern function.
@@ -386,41 +385,6 @@ fn resolve_context_key(
         .get(qref)
         .ok_or_else(|| RuntimeError::internal(format!("no context name for {qref:?}")))?;
     Ok(shared.interner.resolve(*name).to_string())
-}
-
-/// Collect context values from SSA context_uses.
-/// context_uses is authoritative — if empty, the function doesn't read context.
-fn collect_context_uses(context_uses: &[(QualifiedRef, ValueId)], frame: &Frame) -> Vec<Value> {
-    context_uses
-        .iter()
-        .map(|(_, vid)| frame.share(*vid))
-        .collect()
-}
-
-/// Apply context defs from SSA context_defs.
-/// context_defs is authoritative — if empty, the function doesn't write context.
-fn apply_context_defs(
-    shared: &InterpreterContext,
-    page: &InMemoryContext,
-    context_defs: &[(QualifiedRef, ValueId)],
-    defs: Vec<Value>,
-    frame: &mut Frame,
-    projection_map: &mut FxHashMap<ValueId, RuntimeRef>,
-) -> Result<(), RuntimeError> {
-    for ((ctx_id, vid), def_value) in context_defs.iter().zip(defs) {
-        let key = resolve_context_key(shared, ctx_id)?;
-        let for_page = def_value.share();
-        frame.set(*vid, def_value);
-        page.set(&key, for_page);
-        projection_map.insert(
-            *vid,
-            RuntimeRef::Context {
-                qref: *ctx_id,
-                path: vec![],
-            },
-        );
-    }
-    Ok(())
 }
 
 fn lookup_function<'a>(shared: &'a InterpreterContext, id: &QualifiedRef) -> &'a Executable {
@@ -722,8 +686,6 @@ async fn execute_inst(
             dst,
             callee,
             args,
-            context_uses,
-            context_defs,
             ..
         } => {
             let result = match callee {
@@ -737,28 +699,15 @@ async fn execute_inst(
                         };
                         let arg_vals: Vec<Value> =
                             args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                        let uses = collect_context_uses(context_uses, frame);
-
-                        let output = match &handler {
+                        match &handler {
                             crate::extern_fn::ExternHandler::Sync(f) => {
-                                f(arg_vals, uses, &ctx.shared.interner)?
+                                f(arg_vals, &ctx.shared.interner)?
                             }
                             crate::extern_fn::ExternHandler::Async(f) => {
                                 let interner = ctx.shared.interner.clone();
-                                f(arg_vals, uses, interner).await?
+                                f(arg_vals, interner).await?
                             }
-                        };
-
-                        apply_context_defs(
-                            &ctx.shared,
-                            &ctx.page,
-                            context_defs,
-                            output.defs,
-                            frame,
-                            projection_map,
-                        )?;
-
-                        output.rets.into_iter().next().unwrap_or(Value::Unit)
+                        }
                     } else {
                         let arg_vals: Args =
                             args.iter().map(|a| frame.use_val(*a, val_types)).collect();
@@ -778,7 +727,6 @@ async fn execute_inst(
             dst,
             callee,
             args,
-            context_uses,
             ..
         } => {
             let callee_id = match callee {
@@ -791,7 +739,6 @@ async fn execute_inst(
             );
             let handle = if is_extern {
                 let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
-                let uses = collect_context_uses(context_uses, frame);
                 let handler = match lookup_function(&ctx.shared, &callee_id) {
                     Executable::Extern(h) => h.clone(),
                     _ => unreachable!(),
@@ -801,22 +748,20 @@ async fn execute_inst(
                     crate::extern_fn::ExternHandler::Sync(f) => {
                         let f = Arc::clone(f);
                         ctx.shared.executor.spawn_blocking(Box::new(move || {
-                            let output = f(spawn_args, uses, &interner)?;
+                            let value = f(spawn_args, &interner)?;
                             Ok(ExecResult {
-                                value: output.rets.into_iter().next().unwrap_or(Value::Unit),
+                                value,
                                 writes: Vec::new(),
-                                defs: output.defs,
                             })
                         }))
                     }
                     crate::extern_fn::ExternHandler::Async(f) => {
                         let f = Arc::clone(f);
                         ctx.shared.executor.spawn_async(Box::pin(async move {
-                            let output = f(spawn_args, uses, interner).await?;
+                            let value = f(spawn_args, interner).await?;
                             Ok(ExecResult {
-                                value: output.rets.into_iter().next().unwrap_or(Value::Unit),
+                                value,
                                 writes: Vec::new(),
-                                defs: output.defs,
                             })
                         }))
                     }
@@ -835,11 +780,7 @@ async fn execute_inst(
             };
             frame.set(*dst, Value::Handle(Box::new(handle)));
         }
-        InstKind::Eval {
-            dst,
-            src,
-            context_defs,
-        } => {
+        InstKind::Eval { dst, src } => {
             let handle = match frame.take(*src) {
                 Value::Handle(h) => *h,
                 other => panic!("eval: expected Handle, got {other:?}"),
@@ -854,32 +795,6 @@ async fn execute_inst(
                         ctx.page.set_field(&key, &path_refs, value);
                     }
                 }
-            }
-
-            let defs = result.defs;
-            let defs_count = defs.len();
-            for ((ctx_id, vid), def_value) in context_defs.iter().zip(defs) {
-                let key = resolve_context_key(&ctx.shared, ctx_id)?;
-                let for_page = def_value.share();
-                frame.set(*vid, def_value);
-                ctx.page.set(&key, for_page);
-                projection_map.insert(
-                    *vid,
-                    RuntimeRef::Context {
-                        qref: *ctx_id,
-                        path: vec![],
-                    },
-                );
-            }
-
-            for (ctx_id, vid) in context_defs.iter().skip(defs_count) {
-                projection_map.insert(
-                    *vid,
-                    RuntimeRef::Context {
-                        qref: *ctx_id,
-                        path: vec![],
-                    },
-                );
             }
 
             frame.set(*dst, result.value);
@@ -965,10 +880,7 @@ async fn dispatch_call(
             execute_function(ctx, id, &arg_values).await
         }
         Executable::Extern(_) => {
-            panic!(
-                "extern function {id:?} called via FunctionCall; \
-                 use Spawn+Eval for extern functions with uses/defs",
-            )
+            panic!("extern function {id:?} reached dispatch_call; FunctionCall handles externs directly")
         }
     }
 }
@@ -1083,11 +995,7 @@ impl Interpreter {
         let value = execute_function(&mut run_ctx, &entry, &args).await?;
 
         let writes = run_ctx.page.into_writes();
-        Ok(ExecResult {
-            value,
-            writes,
-            defs: Vec::new(),
-        })
+        Ok(ExecResult { value, writes })
     }
 }
 

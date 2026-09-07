@@ -1150,8 +1150,6 @@ impl<'a> Lowerer<'a> {
                             callee: Callee::Direct(*fn_ref),
                             callee_ty: callee_ty.clone(),
                             args: vec![val],
-                            context_uses: vec![],
-                            context_defs: vec![],
                         },
                     );
                     cast_dst
@@ -1480,8 +1478,6 @@ impl<'a> Lowerer<'a> {
                                 callee: Callee::Indirect(r),
                                 callee_ty: fn_ty,
                                 args: vec![l],
-                                context_uses: vec![],
-                                context_defs: vec![],
                             },
                         );
                         dst
@@ -1813,8 +1809,6 @@ impl<'a> Lowerer<'a> {
                                 callee: Callee::Direct(qref),
                                 callee_ty,
                                 args: arg_regs,
-                                context_uses: vec![],
-                                context_defs: vec![],
                             },
                         );
                         return dst;
@@ -1838,8 +1832,6 @@ impl<'a> Lowerer<'a> {
                                 callee: Callee::Indirect(closure_reg),
                                 callee_ty: closure_ty,
                                 args: arg_regs,
-                                context_uses: vec![],
-                                context_defs: vec![],
                             },
                         );
                         return dst;
@@ -1866,8 +1858,6 @@ impl<'a> Lowerer<'a> {
                 callee: Callee::Indirect(func_reg),
                 callee_ty: fn_ty,
                 args: arg_regs,
-                context_uses: vec![],
-                context_defs: vec![],
             },
         );
         dst

@@ -40,23 +40,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => smallvec![*dst],
 
-        // FunctionCall defines dst + context_defs (new SSA values for contexts after call).
-        InstKind::FunctionCall {
-            dst, context_defs, ..
-        } => {
-            let mut d: SmallVec<[ValueId; 2]> = smallvec![*dst];
-            d.extend(context_defs.iter().map(|(_, v)| *v));
-            d
-        }
-
-        // Eval defines dst + context_defs.
-        InstKind::Eval {
-            dst, context_defs, ..
-        } => {
-            let mut d: SmallVec<[ValueId; 2]> = smallvec![*dst];
-            d.extend(context_defs.iter().map(|(_, v)| *v));
-            d
-        }
+        InstKind::FunctionCall { dst, .. } | InstKind::Eval { dst, .. } => smallvec![*dst],
 
 
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
@@ -121,11 +105,10 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Closure
         InstKind::MakeClosure { captures, .. } => captures.iter().copied().collect(),
 
-        // Function calls — context_defs are DEFS, not uses.
+        // Function calls
         InstKind::FunctionCall {
             callee,
             args,
-            context_uses,
             ..
         } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
@@ -133,13 +116,11 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
                 v.push(*f);
             }
             v.extend(args.iter().copied());
-            v.extend(context_uses.iter().map(|(_, val)| *val));
             v
         }
         InstKind::Spawn {
             callee,
             args,
-            context_uses,
             ..
         } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
@@ -147,10 +128,8 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
                 v.push(*f);
             }
             v.extend(args.iter().copied());
-            v.extend(context_uses.iter().map(|(_, val)| *val));
             v
         }
-        // Eval — context_defs are DEFS, not uses.
         InstKind::Eval { src, .. } => smallvec![*src],
 
         // Iterator
@@ -223,14 +202,11 @@ mod tests {
             callee: crate::ir::Callee::Direct(qref),
             callee_ty: Ty::error(),
             args: vec![v(0), v(1)],
-            context_uses: vec![(qref, v(2))],
-            context_defs: vec![],
         };
         assert_eq!(defs(&inst).as_slice(), &[v(3)]);
         let u = uses(&inst);
         assert!(u.contains(&v(0)));
         assert!(u.contains(&v(1)));
-        assert!(u.contains(&v(2)));
     }
 
     #[test]
@@ -243,7 +219,6 @@ mod tests {
             callee: crate::ir::Callee::Direct(qref),
             callee_ty: Ty::error(),
             args: vec![v(0)],
-            context_uses: vec![],
         };
         assert_eq!(defs(&spawn).as_slice(), &[v(1)]);
         assert_eq!(uses(&spawn).as_slice(), &[v(0)]);
@@ -251,7 +226,6 @@ mod tests {
         let eval = InstKind::Eval {
             dst: v(2),
             src: v(1),
-            context_defs: vec![],
         };
         assert_eq!(defs(&eval).as_slice(), &[v(2)]);
         assert_eq!(uses(&eval).as_slice(), &[v(1)]);
@@ -277,48 +251,6 @@ mod tests {
         }));
     }
 
-    /// Regression: ListStep is a CFG terminator and must be classified as control flow.
-    /// Regression: FunctionCall context_defs are defs (caller's new SSA values),
-    /// not uses. They must appear in defs() and NOT in uses().
-    #[test]
-    fn function_call_context_defs_are_defs_not_uses() {
-        let i = acvus_utils::Interner::new();
-        let qref = acvus_utils::QualifiedRef::root(i.intern("f"));
-        let inst = InstKind::FunctionCall {
-            dst: v(3),
-            callee: crate::ir::Callee::Direct(qref),
-            callee_ty: Ty::error(),
-            args: vec![v(0)],
-            context_uses: vec![],
-            context_defs: vec![(qref, v(4)), (qref, v(5))],
-        };
-        let d = defs(&inst);
-        assert!(d.contains(&v(3)), "dst must be in defs");
-        assert!(d.contains(&v(4)), "context_defs[0] must be in defs");
-        assert!(d.contains(&v(5)), "context_defs[1] must be in defs");
-        let u = uses(&inst);
-        assert!(!u.contains(&v(4)), "context_defs must NOT be in uses");
-        assert!(!u.contains(&v(5)), "context_defs must NOT be in uses");
-    }
-
-    /// Regression: Eval context_defs are defs, not uses.
-    #[test]
-    fn eval_context_defs_are_defs_not_uses() {
-        let i = acvus_utils::Interner::new();
-        let qref = acvus_utils::QualifiedRef::root(i.intern("f"));
-        let inst = InstKind::Eval {
-            dst: v(2),
-            src: v(1),
-            context_defs: vec![(qref, v(3))],
-        };
-        let d = defs(&inst);
-        assert!(d.contains(&v(2)), "dst must be in defs");
-        assert!(d.contains(&v(3)), "context_defs must be in defs");
-        let u = uses(&inst);
-        assert!(u.contains(&v(1)), "src must be in uses");
-        assert!(!u.contains(&v(3)), "context_defs must NOT be in uses");
-    }
-
     #[test]
     fn indirect_call_uses_callee_value() {
         let inst = InstKind::FunctionCall {
@@ -326,8 +258,6 @@ mod tests {
             callee: crate::ir::Callee::Indirect(v(0)),
             callee_ty: Ty::error(),
             args: vec![v(1)],
-            context_uses: vec![],
-            context_defs: vec![],
         };
         let u = uses(&inst);
         assert!(u.contains(&v(0)), "indirect callee must be in uses");

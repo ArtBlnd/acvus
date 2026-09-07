@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, TyTerm};
 use acvus_utils::Interner;
 
@@ -11,21 +11,19 @@ use acvus_utils::Interner;
 fn h_len(
     _: &Interner,
     (val,): (Value,),
-    Uses(()): Uses<()>,
-) -> Result<(i64, Defs<()>), RuntimeError> {
-    Ok((val.as_list().len() as i64, Defs(())))
+) -> Result<i64, RuntimeError> {
+    Ok(val.as_list().len() as i64)
 }
 
 fn h_reverse(
     _: &Interner,
     (val,): (Value,),
-    Uses(()): Uses<()>,
-) -> Result<(Value, Defs<()>), RuntimeError> {
+) -> Result<Value, RuntimeError> {
     let list = val.into_list();
     let mut items: Vec<Value> =
         Arc::try_unwrap(list).unwrap_or_else(|arc| arc.iter().map(|v| v.share()).collect());
     items.reverse();
-    Ok((Value::list(items), Defs(())))
+    Ok(Value::list(items))
 }
 
 // ── Builders ────────────────────────────────────────────────────────

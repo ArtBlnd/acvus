@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{
-    Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value, ValueKind,
+    ExternFnBuilder, ExternRegistry, RuntimeError, Value, ValueKind,
 };
 use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
@@ -13,25 +13,23 @@ use acvus_utils::Interner;
 fn h_to_string(
     _: &Interner,
     (val,): (Value,),
-    Uses(()): Uses<()>,
-) -> Result<(Value, Defs<()>), RuntimeError> {
+) -> Result<Value, RuntimeError> {
     let s = match &val {
         Value::Int(n) => n.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::String(s) => return Ok((Value::String(Arc::clone(s)), Defs(()))),
+        Value::String(s) => return Ok(Value::String(Arc::clone(s))),
         Value::Byte(b) => format!("0x{b:02x}"),
         Value::Unit => "()".to_string(),
         other => format!("{other:?}"),
     };
-    Ok((Value::string(s), Defs(())))
+    Ok(Value::string(s))
 }
 
 fn h_to_int(
     _: &Interner,
     (val,): (Value,),
-    Uses(()): Uses<()>,
-) -> Result<(i64, Defs<()>), RuntimeError> {
+) -> Result<i64, RuntimeError> {
     let n = match &val {
         Value::Int(n) => *n,
         Value::Float(f) => *f as i64,
@@ -58,32 +56,29 @@ fn h_to_int(
             ));
         }
     };
-    Ok((n, Defs(())))
+    Ok(n)
 }
 
 fn h_to_float(
     _: &Interner,
     (n,): (i64,),
-    Uses(()): Uses<()>,
-) -> Result<(f64, Defs<()>), RuntimeError> {
-    Ok((n as f64, Defs(())))
+) -> Result<f64, RuntimeError> {
+    Ok(n as f64)
 }
 
 fn h_char_to_int(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(i64, Defs<()>), RuntimeError> {
-    Ok((s.chars().next().unwrap_or('\0') as i64, Defs(())))
+) -> Result<i64, RuntimeError> {
+    Ok(s.chars().next().unwrap_or('\0') as i64)
 }
 
 fn h_int_to_char(
     _: &Interner,
     (n,): (i64,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
+) -> Result<String, RuntimeError> {
     let ch = char::from_u32(n as u32).unwrap_or('\u{FFFD}');
-    Ok((ch.to_string(), Defs(())))
+    Ok(ch.to_string())
 }
 
 // ── Constraint builders ─────────────────────────────────────────────

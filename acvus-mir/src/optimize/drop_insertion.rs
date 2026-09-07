@@ -263,15 +263,13 @@ fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
 fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
     match kind {
         // Function calls consume all arguments (ownership transfer to callee).
-        InstKind::FunctionCall { callee, args, context_uses, .. } => {
+        InstKind::FunctionCall { callee, args, .. } => {
             args.contains(&val)
-                || context_uses.iter().any(|(_, v)| *v == val)
                 || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
         }
         // Spawn consumes args.
-        InstKind::Spawn { callee, args, context_uses, .. } => {
+        InstKind::Spawn { callee, args, .. } => {
             args.contains(&val)
-                || context_uses.iter().any(|(_, v)| *v == val)
                 || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
         }
         // Eval consumes the Handle.

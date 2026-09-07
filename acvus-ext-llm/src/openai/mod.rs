@@ -4,7 +4,7 @@ pub mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::ty::{Hint, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -258,8 +258,7 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
         vec![
             ExternFnBuilder::new("openai_chat", ty).handler_async(
                 move |interner: Interner,
-                      (messages_val, config_val): (Value, Value),
-                      Uses(()): Uses<()>| {
+                      (messages_val, config_val): (Value, Value)| {
                     let fetch = Arc::clone(&fetch);
                     async move {
                         // Extract messages from Value::List
@@ -331,7 +330,7 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                             .map_err(|e| RuntimeError::fetch(e.to_string()))?;
 
                         let result = response_to_value(&response, &usage, &interner);
-                        Ok((result, Defs(())))
+                        Ok(result)
                     }
                 },
             ),

@@ -7,8 +7,7 @@
 //! before another store overwrites it. A store is **dead** if on every path
 //! from the store, the context is written again before being read.
 //!
-//! "Read" includes: Load from context Ref, FunctionCall with context_uses,
-//! Spawn with context_uses, Eval with context_defs (implies prior read),
+//! "Read" includes: Load from context Ref,
 //! and Return (contexts are externally observable after return).
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -16,7 +15,7 @@ use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, InstKind, RefTarget, ValueId};
+use crate::ir::{InstKind, RefTarget, ValueId};
 
 // ── ref_to_ctx: ValueId → QualifiedRef mapping ─────────────────────
 
@@ -97,58 +96,6 @@ fn analyze_block(
                     // add to kills.
                     reads.remove(&qref);
                     kills.insert(qref);
-                }
-            }
-
-            // FunctionCall with context_uses → reads.
-            InstKind::FunctionCall {
-                context_uses,
-                context_defs,
-                callee: Callee::Direct(_),
-                ..
-            } => {
-                // context_defs are writes (kill).
-                for (qref, _) in context_defs {
-                    reads.remove(qref);
-                    kills.insert(*qref);
-                }
-                // context_uses are reads (gen).
-                for (qref, _) in context_uses {
-                    kills.remove(qref);
-                    reads.insert(*qref);
-                }
-                // Effect-based fallback removed; pending identity integration.
-            }
-
-            InstKind::FunctionCall {
-                context_uses,
-                context_defs,
-                ..
-            } => {
-                // Non-direct callee: only handle explicit context_uses/context_defs.
-                for (qref, _) in context_defs {
-                    reads.remove(qref);
-                    kills.insert(*qref);
-                }
-                for (qref, _) in context_uses {
-                    kills.remove(qref);
-                    reads.insert(*qref);
-                }
-            }
-
-            // Spawn with context_uses → reads.
-            InstKind::Spawn { context_uses, .. } => {
-                for (qref, _) in context_uses {
-                    kills.remove(qref);
-                    reads.insert(*qref);
-                }
-            }
-
-            // Eval with context_defs → writes (the callee wrote, we merge).
-            InstKind::Eval { context_defs, .. } => {
-                for (qref, _) in context_defs {
-                    reads.remove(qref);
-                    kills.insert(*qref);
                 }
             }
 
@@ -306,46 +253,6 @@ pub fn run(cfg: &mut CfgBody) {
                         // After processing this store (backward), remove from live.
                         // (The store kills liveness of previous stores to same context.)
                         live.remove(&qref);
-                    }
-                }
-
-                InstKind::FunctionCall {
-                    context_uses,
-                    context_defs,
-                    callee: Callee::Direct(_),
-                    ..
-                } => {
-                    for (qref, _) in context_defs {
-                        live.remove(qref);
-                    }
-                    for (qref, _) in context_uses {
-                        live.insert(*qref);
-                    }
-                    // Effect-based fallback removed; pending identity integration.
-                }
-
-                InstKind::FunctionCall {
-                    context_uses,
-                    context_defs,
-                    ..
-                } => {
-                    for (qref, _) in context_defs {
-                        live.remove(qref);
-                    }
-                    for (qref, _) in context_uses {
-                        live.insert(*qref);
-                    }
-                }
-
-                InstKind::Spawn { context_uses, .. } => {
-                    for (qref, _) in context_uses {
-                        live.insert(*qref);
-                    }
-                }
-
-                InstKind::Eval { context_defs, .. } => {
-                    for (qref, _) in context_defs {
-                        live.remove(qref);
                     }
                 }
 

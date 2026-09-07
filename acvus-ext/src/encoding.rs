@@ -2,7 +2,7 @@
 //!
 //! Provides base64 and URL encoding/decoding. All pure.
 
-use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, Uses};
+use acvus_interpreter::{ExternFnBuilder, ExternRegistry};
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 
@@ -28,45 +28,42 @@ pub fn encoding_registry() -> ExternRegistry {
             // base64_encode(s) -> String
             ExternFnBuilder::new("base64_encode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
-                    |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
-                        Ok((
-                            base64::engine::general_purpose::STANDARD.encode(&s),
-                            Defs(()),
-                        ))
+                    |_interner: &Interner, (s,): (String,)| {
+                        Ok(base64::engine::general_purpose::STANDARD.encode(&s))
                     },
                 ),
             // base64_decode(s) -> String
             ExternFnBuilder::new("base64_decode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
-                    |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
+                    |_interner: &Interner, (s,): (String,)| {
                         let bytes = base64::engine::general_purpose::STANDARD
                             .decode(&s)
                             .unwrap_or_else(|e| panic!("base64_decode: invalid input: {e}"));
                         let decoded = String::from_utf8(bytes)
                             .unwrap_or_else(|e| panic!("base64_decode: invalid UTF-8: {e}"));
-                        Ok((decoded, Defs(())))
+                        Ok(decoded)
                     },
                 ),
             // url_encode(s) -> String
             ExternFnBuilder::new("url_encode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
-                    |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
+                    |_interner: &Interner, (s,): (String,)| {
                         let encoded = percent_encoding::utf8_percent_encode(
                             &s,
                             percent_encoding::NON_ALPHANUMERIC,
                         )
                         .to_string();
-                        Ok((encoded, Defs(())))
+                        Ok(encoded)
                     },
                 ),
             // url_decode(s) -> String
             ExternFnBuilder::new("url_decode", sig(interner, vec![Ty::String], Ty::String))
                 .handler(
-                    |_interner: &Interner, (s,): (String,), Uses(()): Uses<()>| {
+                    |_interner: &Interner, (s,): (String,)| {
                         let decoded = percent_encoding::percent_decode_str(&s)
                             .decode_utf8_lossy()
                             .into_owned();
-                        Ok((decoded, Defs(())))
+                        Ok(decoded)
                     },
                 ),
         ]

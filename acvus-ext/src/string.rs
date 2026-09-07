@@ -1,7 +1,7 @@
 //! String operations as ExternFn. All pure.
 
 use acvus_interpreter::{
-    Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value, ValueKind,
+    ExternFnBuilder, ExternRegistry, RuntimeError, Value, ValueKind,
 };
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
@@ -11,139 +11,123 @@ use acvus_utils::Interner;
 fn h_len_str(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(i64, Defs<()>), RuntimeError> {
-    Ok((s.len() as i64, Defs(())))
+) -> Result<i64, RuntimeError> {
+    Ok(s.len() as i64)
 }
 
 fn h_trim(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.trim().to_owned(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.trim().to_owned())
 }
 
 fn h_trim_start(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.trim_start().to_owned(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.trim_start().to_owned())
 }
 
 fn h_trim_end(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.trim_end().to_owned(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.trim_end().to_owned())
 }
 
 fn h_upper(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.to_uppercase(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.to_uppercase())
 }
 
 fn h_lower(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.to_lowercase(), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.to_lowercase())
 }
 
 fn h_contains_str(
     _: &Interner,
     (s, pat): (String, String),
-    Uses(()): Uses<()>,
-) -> Result<(bool, Defs<()>), RuntimeError> {
-    Ok((s.contains(&*pat), Defs(())))
+) -> Result<bool, RuntimeError> {
+    Ok(s.contains(&*pat))
 }
 
 fn h_starts_with(
     _: &Interner,
     (s, pat): (String, String),
-    Uses(()): Uses<()>,
-) -> Result<(bool, Defs<()>), RuntimeError> {
-    Ok((s.starts_with(&*pat), Defs(())))
+) -> Result<bool, RuntimeError> {
+    Ok(s.starts_with(&*pat))
 }
 
 fn h_ends_with(
     _: &Interner,
     (s, pat): (String, String),
-    Uses(()): Uses<()>,
-) -> Result<(bool, Defs<()>), RuntimeError> {
-    Ok((s.ends_with(&*pat), Defs(())))
+) -> Result<bool, RuntimeError> {
+    Ok(s.ends_with(&*pat))
 }
 
 fn h_replace(
     _: &Interner,
     (s, from, to): (String, String, String),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.replace(&*from, &to), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.replace(&*from, &to))
 }
 
 fn h_split(
     _: &Interner,
     (s, sep): (String, String),
-    Uses(()): Uses<()>,
-) -> Result<(Vec<Value>, Defs<()>), RuntimeError> {
+) -> Result<Vec<Value>, RuntimeError> {
     let parts: Vec<Value> = s.split(&*sep).map(Value::string).collect();
-    Ok((parts, Defs(())))
+    Ok(parts)
 }
 
 fn h_repeat(
     _: &Interner,
     (s, n): (String, i64),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
-    Ok((s.repeat(n.max(0) as usize), Defs(())))
+) -> Result<String, RuntimeError> {
+    Ok(s.repeat(n.max(0) as usize))
 }
 
 fn h_substring(
     _: &Interner,
     (s, start, end): (String, i64, i64),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
+) -> Result<String, RuntimeError> {
     let start = start.max(0) as usize;
     let end = (end.max(0) as usize).min(s.len());
     let start = start.min(end);
-    Ok((s[start..end].to_owned(), Defs(())))
+    Ok(s[start..end].to_owned())
 }
 
 fn h_to_bytes(
     _: &Interner,
     (s,): (String,),
-    Uses(()): Uses<()>,
-) -> Result<(Vec<Value>, Defs<()>), RuntimeError> {
+) -> Result<Vec<Value>, RuntimeError> {
     let bytes: Vec<Value> = s.bytes().map(Value::byte).collect();
-    Ok((bytes, Defs(())))
+    Ok(bytes)
 }
 
 fn h_to_utf8(
     _: &Interner,
     (bytes,): (Vec<Value>,),
-    Uses(()): Uses<()>,
-) -> Result<(Value, Defs<()>), RuntimeError> {
+) -> Result<Value, RuntimeError> {
     let raw: Vec<u8> = bytes.iter().map(|v| v.as_byte()).collect();
     let s = String::from_utf8(raw).map_err(|_| {
         RuntimeError::unexpected_type("to_utf8", &[ValueKind::List], ValueKind::List)
     })?;
-    Ok((Value::string(s), Defs(())))
+    Ok(Value::string(s))
 }
 
 fn h_to_utf8_lossy(
     _: &Interner,
     (bytes,): (Vec<Value>,),
-    Uses(()): Uses<()>,
-) -> Result<(String, Defs<()>), RuntimeError> {
+) -> Result<String, RuntimeError> {
     let raw: Vec<u8> = bytes.iter().map(|v| v.as_byte()).collect();
-    Ok((String::from_utf8_lossy(&raw).into_owned(), Defs(())))
+    Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
 // ── Constraint builders ─────────────────────────────────────────────

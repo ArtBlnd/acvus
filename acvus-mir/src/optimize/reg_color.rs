@@ -524,8 +524,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             dst,
             callee,
             args,
-            context_uses,
-            context_defs,
             ..
         } => {
             r(dst);
@@ -533,14 +531,11 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(v);
             }
             args.iter_mut().for_each(&r);
-            context_uses.iter_mut().for_each(|(_, v)| r(v));
-            context_defs.iter_mut().for_each(|(_, v)| r(v));
         }
         InstKind::Spawn {
             dst,
             callee,
             args,
-            context_uses,
             ..
         } => {
             r(dst);
@@ -548,16 +543,13 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(v);
             }
             args.iter_mut().for_each(&r);
-            context_uses.iter_mut().for_each(|(_, v)| r(v));
         }
         InstKind::Eval {
             dst,
             src,
-            context_defs,
         } => {
             r(dst);
             r(src);
-            context_defs.iter_mut().for_each(|(_, v)| r(v));
         }
         InstKind::MakeList { dst, elements } => {
             r(dst);
