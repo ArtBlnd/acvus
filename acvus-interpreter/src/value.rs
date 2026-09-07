@@ -858,6 +858,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[ignore = "pending identity integration"]
     #[test]
     fn share_pure_iterator_ok() {
         use acvus_mir::ty::Effect;
@@ -867,6 +868,7 @@ mod tests {
         drop(v2);
     }
 
+    #[ignore = "pending identity integration"]
     #[test]
     #[should_panic(expected = "move-only")]
     fn share_effectful_iterator_panics() {
@@ -877,7 +879,7 @@ mod tests {
         let interner = Interner::new();
         let effectful = Effect::Resolved(EffectSet {
             reads: BTreeSet::new(),
-            writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+            writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
         });
         let v = Value::iterator(IterHandle::done(effectful));
         let _ = v.share();

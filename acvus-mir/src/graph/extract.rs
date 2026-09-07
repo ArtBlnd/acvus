@@ -1,8 +1,7 @@
 //! Phase 0: Extract
 //!
 //! Parse source ASTs and cache them for later phases.
-//! Context dependency tracking is handled by the infer phase (typeck effect propagation),
-//! not here — callee effects create transitive context deps that AST-level analysis cannot see.
+//! Context dependency tracking is handled by the infer phase, not here.
 
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -76,10 +75,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         };
@@ -110,10 +107,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         };

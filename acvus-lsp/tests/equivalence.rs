@@ -27,10 +27,8 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
@@ -229,10 +227,8 @@ fn completion_pipe_trigger() {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     });
 
     let doc = session.open("test", "{{ @name | helper }}", None);

@@ -7,9 +7,9 @@ use acvus_orchestration::spec::*;
 use acvus_orchestration::test_helpers::compile::compile_namespace;
 use acvus_utils::Interner;
 
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 // 1. Type check — Completeness (valid specs compile)
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 
 #[test]
 fn block_template_compiles() {
@@ -169,9 +169,9 @@ fn multiple_items_mixed_namespace() {
     assert!(result.is_complete(&i, "out"));
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 // 2. Type check — Soundness (invalid specs rejected)
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 
 #[test]
 fn block_undeclared_context_is_complete_if_type_resolves() {
@@ -353,9 +353,9 @@ fn display_both_sources_parse_error() {
     assert!(errors.contains(&"live"));
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 // 3. Error location accuracy (SpanMap)
-// ════════════════════════════════════════════════════════════════════
+// ====================================================================
 
 #[test]
 fn llm_inline_span_map_points_to_correct_fields() {

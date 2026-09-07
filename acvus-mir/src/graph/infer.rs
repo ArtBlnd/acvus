@@ -9,7 +9,7 @@
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{Effect, EffectSet, InferEffect, InferTy, Param, ParamTerm, PolyBuilder, PolyEffect, PolyParam, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty, lift_effect};
+use crate::ty::{InferTy, Param, ParamTerm, PolyBuilder, PolyParam, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
@@ -23,9 +23,6 @@ pub struct FunctionMeta {
     pub ty: Ty,
     /// Named parameters (free_params from source zipped with signature types).
     pub params: Vec<Param>,
-    /// Transitive effect set (reads/writes with QualifiedRef).
-    /// Includes both direct access and access through callees.
-    pub effect: EffectSet,
 }
 
 /// Per-function inference outcome.
@@ -447,12 +444,10 @@ pub fn tarjan_scc(
 /// Result of inferring a single SCC.
 #[derive(Debug, Clone)]
 pub struct SccInferResult {
-    /// Per-function metadata (type, params, effect).
+    /// Per-function metadata (type, params).
     pub fn_metas: FxHashMap<QualifiedRef, FunctionMeta>,
     /// QualifiedRef → resolved Ty::Fn (for passing to next SCC).
     pub resolved_types: FxHashMap<QualifiedRef, Ty>,
-    /// Per-function direct effects from typechecker (before call-graph propagation).
-    pub fn_direct_effects: FxHashMap<QualifiedRef, EffectSet>,
     /// Per-function type errors from typechecker.
     pub errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>>,
 }
@@ -471,7 +466,6 @@ pub fn infer_scc(
 ) -> SccInferResult {
     let mut solver = Solver::new();
     let registry = TypeRegistry::default();
-    let mut poly_builder = PolyBuilder::new();
 
     // Instantiate context types into solver-scoped InferTy.
     let known_ctx_infer: FxHashMap<QualifiedRef, InferTy> = known_ctx
@@ -480,12 +474,10 @@ pub fn infer_scc(
         .collect();
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
-    let mut fn_effect_vars: FxHashMap<QualifiedRef, InferEffect> = FxHashMap::default();
-    let mut fn_direct_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
     let mut fn_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> = FxHashMap::default();
 
     // Build PolyTy::Fn templates for functions in this SCC.
-    // Solver ret/effect vars are kept separately for unification.
+    // Solver ret vars are kept separately for unification.
     let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
 
     for &fid in scc {
@@ -504,17 +496,13 @@ pub fn infer_scc(
 
         // Solver vars for unification (InferTy).
         let ret_var: InferTy = solver.instantiate_poly(fn_ret);
-        let effect_var = solver.fresh_effect_var();
         fn_ret_vars.insert(fid, ret_var.clone());
-        fn_effect_vars.insert(fid, effect_var.clone());
 
-        // Poly template for TypeEnv: func.ty's params/ret/hint, fresh effect.
-        let poly_effect: PolyEffect = poly_builder.fresh_effect_var();
+        // Poly template for TypeEnv: func.ty's params/ret/hint.
         let fn_ty: PolyTy = TyTerm::Fn {
             params: fn_params.clone(),
             ret: fn_ret.clone(),
             captures: vec![],
-            effect: poly_effect,
             hint: *fn_hint,
         };
         scc_fn_types.insert(func.qref, fn_ty);
@@ -571,21 +559,12 @@ pub fn infer_scc(
 
         match result {
             Ok(ref unchecked) => {
-                // Unify effect var with body effect.
-                if let Some(effect_var) = fn_effect_vars.get(&fid) {
-                    let body_effect_infer = lift_effect(&unchecked.body_effect);
-                    let _ = solver.unify_infer_effects(effect_var, &body_effect_infer, crate::ty::Polarity::Invariant);
-                }
                 // Unify ret var with tail ty (for inferred return types).
                 if expected_tail_ty.is_none() {
                     if let Some(ret_var) = fn_ret_vars.get(&fid) {
                         let tail_infer = lift_ty(&unchecked.tail_ty);
                         let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, &registry);
                     }
-                }
-                match &unchecked.body_effect {
-                    Effect::Resolved(effect_set) => { fn_direct_effects.insert(fid, effect_set.clone()); }
-                    Effect::Var(v) => match *v {},
                 }
 
                 let bind: Vec<Param> = unchecked
@@ -611,10 +590,6 @@ pub fn infer_scc(
             .get(&fid)
             .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
             .unwrap_or_else(Ty::error);
-        let effect = fn_effect_vars
-            .get(&fid)
-            .and_then(|e| solver.freeze_effect(&solver.resolve_infer_effect(e)).ok())
-            .unwrap_or_else(Effect::pure);
         let bind: Vec<Param> = fn_bind_params
             .get(&fid)
             .cloned()
@@ -630,7 +605,6 @@ pub fn infer_scc(
             params: bind.clone(),
             ret: Box::new(ret),
             captures: vec![],
-            effect,
             hint,
         };
         resolved_types.insert(func.qref, fn_ty.clone());
@@ -639,7 +613,6 @@ pub fn infer_scc(
             FunctionMeta {
                 ty: fn_ty,
                 params: bind,
-                effect: EffectSet::default(), // filled by effect propagation later
             },
         );
     }
@@ -647,7 +620,6 @@ pub fn infer_scc(
     SccInferResult {
         fn_metas,
         resolved_types,
-        fn_direct_effects,
         errors: fn_errors,
     }
 }
@@ -675,7 +647,6 @@ pub fn infer(
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
-    let mut fn_direct_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
     let mut fn_unchecked: FxHashMap<
         QualifiedRef,
         Freeze<crate::typeck::TypeResolution>,
@@ -726,11 +697,9 @@ pub fn infer(
 
     for scc in &sccs {
         // 2a. Build PolyTy::Fn templates for SCC members.
-        // Solver ret/effect vars are kept separately for unification.
-        let mut poly_builder = PolyBuilder::new();
+        // Solver ret vars are kept separately for unification.
         let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         let mut scc_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
-        let mut scc_effect_vars: FxHashMap<QualifiedRef, InferEffect> = FxHashMap::default();
 
         for &fid in scc {
             let func = fn_by_id[&fid];
@@ -750,20 +719,15 @@ pub fn infer(
             // If ret is concrete (no Poly Vars) → instantiate_poly gives concrete InferTy.
             // If ret has Vars → instantiate_poly maps each Var to a fresh solver var.
             let ret_var: InferTy = solver.instantiate_poly(fn_ret);
-            let effect_var = solver.fresh_effect_var();
             scc_ret_vars.insert(fid, ret_var.clone());
-            scc_effect_vars.insert(fid, effect_var.clone());
 
-            // Poly template for TypeEnv: use func.ty's params/ret/hint,
-            // but replace effect with a fresh poly_builder var (effects are always inferred per-SCC).
-            let poly_effect: PolyEffect = poly_builder.fresh_effect_var();
+            // Poly template for TypeEnv: use func.ty's params/ret/hint.
             scc_fn_types.insert(
                 func.qref,
                 TyTerm::Fn {
                     params: fn_params.clone(),
                     ret: fn_ret.clone(),
                     captures: vec![],
-                    effect: poly_effect,
                     hint: *fn_hint,
                 },
             );
@@ -821,21 +785,12 @@ pub fn infer(
 
             match result {
                 Ok(unchecked) => {
-                    // Unify effect var with body effect.
-                    if let Some(effect_var) = scc_effect_vars.get(&fid) {
-                        let body_effect_infer = lift_effect(&unchecked.body_effect);
-                        let _ = solver.unify_infer_effects(effect_var, &body_effect_infer, crate::ty::Polarity::Invariant);
-                    }
                     // Unify ret var with tail ty (for inferred return types).
                     if expected_tail_ty.is_none() {
                         if let Some(ret_var) = scc_ret_vars.get(&fid) {
                             let tail_infer = lift_ty(&unchecked.tail_ty);
                             let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, registry_ref);
                         }
-                    }
-                    match &unchecked.body_effect {
-                        Effect::Resolved(effect_set) => { fn_direct_effects.insert(fid, effect_set.clone()); }
-                        Effect::Var(v) => match *v {},
                     }
 
                     let bind: Vec<Param> = unchecked
@@ -859,10 +814,6 @@ pub fn infer(
                 .get(&fid)
                 .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
                 .unwrap_or_else(Ty::error);
-            let effect = scc_effect_vars
-                .get(&fid)
-                .and_then(|e| solver.freeze_effect(&solver.resolve_infer_effect(e)).ok())
-                .unwrap_or_else(Effect::pure);
             let bind: Vec<Param> = fn_bind_params
                 .get(&fid)
                 .cloned()
@@ -878,7 +829,6 @@ pub fn infer(
                 params: bind.clone(),
                 ret: Box::new(ret),
                 captures: vec![],
-                effect,
                 hint,
             };
             resolved_fn_types.insert(fid, lift_to_poly(&fn_ty));
@@ -887,65 +837,12 @@ pub fn infer(
                 FunctionMeta {
                     ty: fn_ty,
                     params: bind,
-                    effect: EffectSet::default(),
                 },
             );
         }
     }
 
-    // ── STEP 3: Effect propagation ──────────────────────────────────
-
-    // Seed with direct effects + parameter-carried effects.
-    for &fid in &local_ids {
-        let mut effect = fn_direct_effects.get(&fid).cloned().unwrap_or_default();
-
-        if let Some(meta) = fn_metas.get(&fid) {
-            for param in &meta.params {
-                if let Some(param_effect) = param.ty.carried_effect()
-                    && let Effect::Resolved(param_set) = param_effect
-                {
-                    effect = effect.union(param_set);
-                }
-            }
-        }
-
-        if let Some(meta) = fn_metas.get_mut(&fid) {
-            meta.effect = effect;
-        }
-    }
-
-    // Propagate transitive effects through call graph in SCC topological order.
-    for scc in &sccs {
-        loop {
-            let mut changed = false;
-            for &fid in scc {
-                if let Some(callees) = call_graph.get(&fid) {
-                    for &callee_id in callees {
-                        let callee_effect = fn_metas
-                            .get(&callee_id)
-                            .map(|m| m.effect.clone())
-                            .unwrap_or_default();
-                        let current = fn_metas
-                            .get(&fid)
-                            .map(|m| m.effect.clone())
-                            .unwrap_or_default();
-                        let merged = current.union(&callee_effect);
-                        if merged != current
-                            && let Some(meta) = fn_metas.get_mut(&fid)
-                        {
-                            meta.effect = merged;
-                            changed = true;
-                        }
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-    }
-
-    // ── STEP 4: policy + effect constraint → outcomes ───
+    // ── STEP 3: outcomes ────────────────────────────────────────────
 
     let mut outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = FxHashMap::default();
 
@@ -953,7 +850,6 @@ pub fn infer(
         let meta = fn_metas.remove(&fid).unwrap_or(FunctionMeta {
             ty: Ty::error(),
             params: vec![],
-            effect: EffectSet::default(),
         });
 
         // If typeck failed, this function is Incomplete.
@@ -984,71 +880,7 @@ pub fn infer(
             continue;
         };
 
-        // Validate policies and effect constraints.
         let checked = unchecked;
-
-        // Check read_only policy: writes to read_only contexts are forbidden.
-        let eff = match &checked.body_effect {
-            Effect::Resolved(eff) => eff,
-            Effect::Var(v) => match *v {},
-        };
-        {
-            let ro_violations: Vec<QualifiedRef> = eff
-                .writes
-                .iter()
-                .filter_map(|target| {
-                    if let crate::ty::EffectTarget::Context(qref) = target
-                        && policies.get(qref).is_some_and(|p| p.read_only)
-                    {
-                        Some(*qref)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if !ro_violations.is_empty() {
-                let detail = ro_violations
-                    .iter()
-                    .map(|q| interner.resolve(q.name).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                outcomes.insert(
-                    fid,
-                    FnInferOutcome::Incomplete {
-                        unknown_contexts: vec![],
-                        unknown_extern_params: checked.extern_params.clone(),
-                        meta,
-                        errors: vec![crate::error::MirError {
-                            kind: crate::error::MirErrorKind::EffectViolation {
-                                detail: format!("write to read_only context: {detail}"),
-                            },
-                            span: acvus_ast::Span::ZERO,
-                        }],
-                    },
-                );
-                continue;
-            }
-        }
-
-        // Check effect constraint if present.
-        if let Some(func) = fn_by_id.get(&fid)
-            && let Some(ref allowed) = func.effect_constraint
-            && let Err(err) =
-                crate::typeck::check_effect_constraint(&checked.body_effect, allowed)
-        {
-            outcomes.insert(
-                fid,
-                FnInferOutcome::Incomplete {
-                    unknown_contexts: vec![],
-                    unknown_extern_params: checked.extern_params.clone(),
-                    meta,
-                    errors: vec![err],
-                },
-            );
-            continue;
-        }
-
         let tail_ty = checked.tail_ty.clone();
         outcomes.insert(
             fid,
@@ -1082,7 +914,7 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::{EffectTarget, EffectTerm, lift_ty, lift_effect, lift_to_poly, ParamTerm, Infer, Poly, PolyBuilder};
+    use crate::ty::{lift_to_poly, ParamTerm, Poly, PolyBuilder};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -1098,10 +930,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(vec![]),
         }
@@ -1131,10 +961,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         }
@@ -1197,488 +1025,9 @@ mod tests {
 
     }
 
-    // ── Effect propagation tests ────────────────────────────────────
-
-    /// Helper: build multi-function graph.
-    /// Each entry: (name, source, params, output_constraint)
-    fn make_multi_graph(
-        interner: &Interner,
-        fns: &[(&str, &str, Option<Vec<Ty>>)],
-        ctx: &[(&str, Ty)],
-    ) -> (CompilationGraph, Vec<(Astr, QualifiedRef)>) {
-        let mut pb = PolyBuilder::new();
-        let mut functions = Vec::new();
-        let mut ids = Vec::new();
-        for &(name, source, ref params) in fns {
-            let aname = interner.intern(name);
-            let fid = QualifiedRef::root(aname);
-            let poly_params: Vec<PolyParam> = params.as_ref().map(|p| {
-                p.iter()
-                    .enumerate()
-                    .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-                    .collect()
-            }).unwrap_or_default();
-            functions.push(Function {
-                qref: fid,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
-                ty: TyTerm::Fn {
-                    params: poly_params,
-                    ret: Box::new(pb.fresh_ty_var()),
-                    captures: vec![],
-                    effect: pb.fresh_effect_var(),
-                    hint: None,
-                },
-                effect_constraint: None,
-            });
-            ids.push((aname, fid));
-        }
-        let contexts = ctx
-            .iter()
-            .map(|(name, ty)| Context {
-                qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
-            })
-            .collect();
-        let graph = CompilationGraph {
-            functions: Freeze::new(functions),
-            contexts: Freeze::new(contexts),
-        };
-        (graph, ids)
-    }
-
-    #[test]
-    fn effect_direct_read_tracked() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[("reader", "@x + @y", Some(vec![]))],
-            &[("x", Ty::Int), ("y", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let fid = ids[0].1;
-        let effect = &result.outcomes[&fid].meta().effect;
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-        let ctx_y = QualifiedRef::root(i.intern("y"));
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "should have @x in reads"
-        );
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(ctx_y)),
-            "should have @y in reads"
-        );
-        assert!(effect.writes.is_empty(), "read-only should have no writes");
-    }
-
-    #[test]
-    fn effect_direct_write_tracked() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[("writer", "@x = 42; @x", Some(vec![]))],
-            &[("x", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let fid = ids[0].1;
-        let effect = &result.outcomes[&fid].meta().effect;
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-        assert!(
-            effect.writes.contains(&EffectTarget::Context(ctx_x)),
-            "should have @x in writes"
-        );
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "should also have @x in reads (tail)"
-        );
-    }
-
-    #[test]
-    fn effect_pure_function_empty() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(&i, &[("pure_fn", "1 + 2", Some(vec![]))], &[]);
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let fid = ids[0].1;
-        let effect = &result.outcomes[&fid].meta().effect;
-        assert!(effect.is_pure(), "pure function should have empty effect");
-    }
-
-    #[test]
-    fn effect_transitive_through_callee() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[("get_x", "@x", Some(vec![])), ("main", "get_x()", None)],
-            &[("x", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-
-        // get_x directly reads @x
-        let get_x_effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(get_x_effect.reads.contains(&EffectTarget::Context(ctx_x)));
-
-        // main calls get_x → transitive read of @x
-        let main_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(
-            main_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "caller should transitively inherit callee's reads"
-        );
-    }
-
-    #[test]
-    fn effect_transitive_deep_chain() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                ("read_x", "@x", Some(vec![])),
-                ("mid", "read_x()", Some(vec![])),
-                ("top", "mid()", None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-        // top → mid → read_x → @x. All should have @x in reads.
-        for (_, fid) in &ids {
-            let effect = &result.outcomes[fid].meta().effect;
-            assert!(
-                effect.reads.contains(&EffectTarget::Context(ctx_x)),
-                "transitive chain should propagate reads"
-            );
-        }
-    }
-
-    #[test]
-    fn effect_no_false_transitive() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                ("read_x", "@x", Some(vec![])),
-                ("pure_fn", "1 + 2", Some(vec![])),
-                ("main", "pure_fn()", None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-        // main calls pure_fn (not read_x) → should NOT have @x
-        let main_effect = &result.outcomes[&ids[2].1].meta().effect;
-        assert!(
-            !main_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "should not have false transitive reads"
-        );
-        assert!(main_effect.is_pure());
-    }
-
-    #[test]
-    fn effect_scc_cycle_converges() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                // a reads @x, calls b
-                ("a", "@x + b()", Some(vec![])),
-                // b reads @y, calls a
-                ("b", "@y + a()", Some(vec![])),
-            ],
-            &[("x", Ty::Int), ("y", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-        let ctx_y = QualifiedRef::root(i.intern("y"));
-
-        // a and b are in the same SCC.
-        // After fixpoint: both should have reads = {@x, @y}.
-        let a_effect = &result.outcomes[&ids[0].1].meta().effect;
-        let b_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(
-            a_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "a should read @x (direct)"
-        );
-        assert!(
-            a_effect.reads.contains(&EffectTarget::Context(ctx_y)),
-            "a should read @y (transitive from b)"
-        );
-        assert!(
-            b_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "b should read @x (transitive from a)"
-        );
-        assert!(
-            b_effect.reads.contains(&EffectTarget::Context(ctx_y)),
-            "b should read @y (direct)"
-        );
-    }
-
-    #[test]
-    fn effect_mixed_reads_writes() {
-        let i = Interner::new();
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                ("writer", "@x = 10; @x", Some(vec![])),
-                ("caller", "writer()", None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_x = QualifiedRef::root(i.intern("x"));
-
-        // writer writes @x → caller should transitively inherit
-        let caller_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(
-            caller_effect.writes.contains(&EffectTarget::Context(ctx_x)),
-            "transitive write"
-        );
-        assert!(
-            caller_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "transitive read"
-        );
-    }
-
-    // ── Parameter effect union tests ────────────────────────────────
-
-    // Iterator/Sequence param effect propagation tests migrated to acvus-mir-test
-    // (requires UserDefined types with effect_args + TypeRegistry).
-
-    #[test]
-    fn effect_param_effectful_fn_propagates() {
-        // Function takes a Fn param with effect → function inherits it.
-        let i = Interner::new();
-        let ctx_y = QualifiedRef::root(i.intern("effect_y"));
-        let fn_effect = Effect::Resolved(EffectSet {
-            writes: [EffectTarget::Context(ctx_y)].into_iter().collect(),
-            ..Default::default()
-        });
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[(
-                "caller",
-                "$_0",
-                Some(vec![Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: fn_effect,
-                    hint: None,
-                }]),
-            )],
-            &[],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(
-            effect.writes.contains(&EffectTarget::Context(ctx_y)),
-            "function should inherit effectful Fn param's writes"
-        );
-    }
-
-    #[test]
-    fn effect_param_plus_direct_access_union() {
-        // Two separate functions: one reads @a, one takes effectful param.
-        // Caller calls both → transitive union = reads {@a} ∪ writes {@b}.
-        let i = Interner::new();
-        let ctx_b = QualifiedRef::root(i.intern("effect_b"));
-        let fn_effect = Effect::Resolved(EffectSet {
-            writes: [EffectTarget::Context(ctx_b)].into_iter().collect(),
-            ..Default::default()
-        });
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                ("read_a", "@a", Some(vec![])),
-                (
-                    "use_fn",
-                    "$_0",
-                    Some(vec![Ty::Fn {
-                        params: vec![],
-                        ret: Box::new(Ty::Int),
-                        captures: vec![],
-                        effect: fn_effect,
-                        hint: None,
-                    }]),
-                ),
-                // caller invokes both → gets both effects transitively
-                ("caller", "read_a() + use_fn(read_a)", None),
-            ],
-            &[("a", Ty::Int)],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let ctx_a = QualifiedRef::root(i.intern("a"));
-        let caller_effect = &result.outcomes[&ids[2].1].meta().effect;
-        assert!(
-            caller_effect.reads.contains(&EffectTarget::Context(ctx_a)),
-            "transitive read of @a from read_a"
-        );
-        assert!(
-            caller_effect.writes.contains(&EffectTarget::Context(ctx_b)),
-            "param Fn's write of @b from use_fn"
-        );
-    }
-
-    #[test]
-    fn effect_multiple_effectful_params_union() {
-        // Function takes two effectful Fn params via two separate functions.
-        let i = Interner::new();
-        let ctx_x = QualifiedRef::root(i.intern("effect_x"));
-        let ctx_y = QualifiedRef::root(i.intern("effect_y"));
-        let (graph, ids) = make_multi_graph(
-            &i,
-            &[
-                (
-                    "fn_a",
-                    "$_0",
-                    Some(vec![Ty::Fn {
-                        params: vec![],
-                        ret: Box::new(Ty::Int),
-                        captures: vec![],
-                        effect: Effect::Resolved(EffectSet {
-                            reads: [EffectTarget::Context(ctx_x)].into_iter().collect(),
-                            ..Default::default()
-                        }),
-                        hint: None,
-                    }]),
-                ),
-                (
-                    "fn_b",
-                    "$_0",
-                    Some(vec![Ty::Fn {
-                        params: vec![],
-                        ret: Box::new(Ty::Int),
-                        captures: vec![],
-                        effect: Effect::Resolved(EffectSet {
-                            writes: [EffectTarget::Context(ctx_y)].into_iter().collect(),
-                            ..Default::default()
-                        }),
-                        hint: None,
-                    }]),
-                ),
-                // caller gets both effects transitively
-                ("caller", "fn_a(fn_b) + fn_b(fn_a)", None),
-            ],
-            &[],
-        );
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        // fn_a has param effect reads @x
-        let fn_a_effect = &result.outcomes[&ids[0].1].meta().effect;
-        assert!(
-            fn_a_effect.reads.contains(&EffectTarget::Context(ctx_x)),
-            "fn_a param's read"
-        );
-
-        // fn_b has param effect writes @y
-        let fn_b_effect = &result.outcomes[&ids[1].1].meta().effect;
-        assert!(
-            fn_b_effect.writes.contains(&EffectTarget::Context(ctx_y)),
-            "fn_b param's write"
-        );
-    }
-
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Migrated from resolve.rs — inter-function, soundness, edge cases
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     // ── Helpers (resolve-style: builtins + named params + output constraint) ──
 
@@ -1706,10 +1055,8 @@ mod tests {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: pb.fresh_effect_var(),
                 hint: None,
             },
-            effect_constraint: None,
         });
         CompilationGraph {
             functions: Freeze::new(functions),
@@ -1772,10 +1119,8 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             });
         }
 
@@ -1836,10 +1181,8 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             });
         }
 
@@ -1868,16 +1211,6 @@ mod tests {
             .collect()
     }
 
-    /// Helper: extract the resolved EffectSet from a TypeResolution's body_effect.
-    fn extract_effect_set(
-        resolution: &crate::typeck::TypeResolution,
-    ) -> &EffectSet {
-        match &resolution.body_effect {
-            Effect::Resolved(set) => set,
-            other => panic!("expected Effect::Resolved, got {other:?}"),
-        }
-    }
-
     /// Get the tail type (return type) of a function from InferResult.
     /// In the old resolve pipeline, fn_type() returned the tail type.
     /// In the new pipeline, fn_type() returns the full Ty::Fn.
@@ -1898,59 +1231,9 @@ mod tests {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),
                 captures: vec![],
-                effect: EffectTerm::Resolved(EffectSet::default()),
                 hint: None,
             },
-            effect_constraint: None,
         }
-    }
-
-    /// Helper: infer a single function with an effect constraint.
-    fn infer_with_effect(
-        interner: &Interner,
-        source: &str,
-        ctx: &[(&str, Ty)],
-        effect: crate::ty::EffectConstraint,
-    ) -> (InferResult, QualifiedRef) {
-        let mut pb = PolyBuilder::new();
-        let contexts: Vec<Context> = ctx
-            .iter()
-            .map(|(name, ty)| Context {
-                qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
-            })
-            .collect();
-
-        let fid = QualifiedRef::root(interner.intern("test"));
-        let parsed = ParsedAst::Script(
-            acvus_ast::parse_script(interner, source).expect("parse"),
-        );
-
-        let graph = CompilationGraph {
-            functions: Freeze::new(vec![Function {
-                qref: fid,
-                kind: FnKind::Local(parsed),
-                ty: TyTerm::Fn {
-                    params: vec![],
-                    ret: Box::new(pb.fresh_ty_var()),
-                    captures: vec![],
-                    effect: pb.fresh_effect_var(),
-                    hint: None,
-                },
-                effect_constraint: Some(effect),
-            }]),
-            contexts: Freeze::new(contexts),
-        };
-        let ext = extract::extract(interner, &graph);
-        let result = infer(
-            interner,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-        (result, fid)
     }
 
     // ── Completeness: valid single-function programs ──────────────────
@@ -2938,9 +2221,9 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::String);
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Soundness boundary tests
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     /// B1: Caller tries to use return value as wrong type.
     #[test]
@@ -3030,83 +2313,6 @@ mod tests {
         );
     }
 
-    /// B5: Effect soundness — function reading context must be Effectful.
-    #[test]
-    fn boundary_effectful_context_read_propagates() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("get_x", "@x", Some(vec![]), None),
-                ("main", "get_x()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        let main_effect = &result.outcomes[&main_id].meta().effect;
-        assert!(
-            !main_effect.is_pure(),
-            "caller of context-reading function must be effectful"
-        );
-    }
-
-    /// B6: Effect soundness — pure function call should not taint caller.
-    #[test]
-    fn boundary_pure_function_stays_pure() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                (
-                    "add",
-                    "$x + $y",
-                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
-                    None,
-                ),
-                ("main", "add(1, 2)", None, None),
-            ],
-            &[],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let main_id = ids[1].1;
-        let main_effect = &result.outcomes[&main_id].meta().effect;
-        assert!(
-            main_effect.is_pure(),
-            "caller of pure function should remain pure"
-        );
-    }
-
-    /// B7: Effect soundness — context write is Effectful.
-    #[test]
-    fn boundary_context_write_is_effectful() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("set_x", "@x = 42; @x", Some(vec![]), None),
-                ("main", "set_x()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let set_id = ids[0].1;
-        let set_effect = &result.outcomes[&set_id].meta().effect;
-        assert!(
-            !set_effect.writes.is_empty(),
-            "context-writing function must have writes in effect"
-        );
-        assert!(
-            set_effect
-                .writes
-                .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
-            "writes should contain @x"
-        );
-    }
-
     /// B8: infer produces wrong type, should be caught.
     #[test]
     fn boundary_infer_wrong_type_catches() {
@@ -3146,124 +2352,6 @@ mod tests {
             if let Some(ty) = tail_type(&result, main_id) {
                 assert_eq!(ty, Ty::Int, "if resolved, return type should be Int");
             }
-        }
-    }
-
-    // boundary_transitive_effect_propagation: migrated to acvus-mir-test (depends on ExternFn `collect`)
-
-    // ── body_effect (reads / writes) tests ─────────────────────────
-
-    /// Direct context read is tracked in body_effect reads.
-    #[test]
-    fn body_effect_tracks_context_read() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[("reader", "@x + @y", Some(vec![]), None)],
-            &[("x", Ty::Int), ("y", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let fid = ids[0].1;
-        if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(&resolution);
-            assert!(
-                effect_set
-                    .reads
-                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
-                "should track @x read"
-            );
-            assert!(
-                effect_set
-                    .reads
-                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("y")))),
-                "should track @y read"
-            );
-            assert!(
-                effect_set.writes.is_empty(),
-                "read-only function should have no writes"
-            );
-        }
-    }
-
-    /// Direct context write is tracked in body_effect writes.
-    #[test]
-    fn body_effect_tracks_context_write() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[("writer", "@x = 42; @x", Some(vec![]), None)],
-            &[("x", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let fid = ids[0].1;
-        if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(&resolution);
-            assert!(
-                effect_set
-                    .writes
-                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
-                "should track @x write"
-            );
-            assert!(
-                effect_set
-                    .reads
-                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x")))),
-                "should also track @x read from tail"
-            );
-        }
-    }
-
-    /// Pure function has empty body_effect reads and writes.
-    #[test]
-    fn body_effect_empty_for_pure() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[("pure_fn", "1 + 2", Some(vec![]), None)],
-            &[],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let fid = ids[0].1;
-        if let Some(resolution) = result.try_resolution(fid) {
-            let effect_set = extract_effect_set(&resolution);
-            assert!(effect_set.reads.is_empty());
-            assert!(effect_set.writes.is_empty());
-        }
-    }
-
-    /// Calling an effectful function propagates its effect to the caller.
-    #[test]
-    fn body_effect_propagates_from_callee() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("get_x", "@x", Some(vec![]), None),
-                ("main", "get_x()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "should resolve: {errs:?}");
-        let get_x_id = ids[0].1;
-        if let Some(resolution) = result.try_resolution(get_x_id) {
-            let effect_set = extract_effect_set(&resolution);
-            assert!(
-                effect_set
-                    .reads
-                    .contains(&EffectTarget::Context(QualifiedRef::root(i.intern("x"))))
-            );
-        }
-        let main_id = ids[1].1;
-        if let Some(resolution) = result.try_resolution(main_id) {
-            let effect_set = extract_effect_set(&resolution);
-            assert!(
-                !effect_set.is_pure(),
-                "caller of effectful function should not be pure"
-            );
         }
     }
 
@@ -3341,145 +2429,9 @@ mod tests {
         assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::String);
     }
 
-    // ── Effect constraint tests ──────────────────────────────────────
-
-    use crate::ty::{EffectCap, EffectConstraint};
-
-    /// Pure function with pure constraint: should pass.
-    #[test]
-    fn effect_constraint_pure_passes() {
-        let i = Interner::new();
-        let (result, fid) = infer_with_effect(&i, "1 + 2", &[], EffectConstraint::pure());
-        let errs = error_strings(&i, &result);
-        assert!(
-            errs.is_empty(),
-            "pure function should pass pure constraint: {errs:?}"
-        );
-        assert!(result.try_resolution(fid).is_some());
-    }
-
-    /// Context-reading function with pure constraint: should reject.
-    #[test]
-    fn effect_constraint_context_read_rejected_by_pure() {
-        let i = Interner::new();
-        let (result, _fid) =
-            infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], EffectConstraint::pure());
-        let errs = error_strings(&i, &result);
-        assert!(
-            !errs.is_empty(),
-            "context read should violate pure constraint"
-        );
-        assert!(
-            errs.iter()
-                .any(|e| e.contains("effect constraint violated"))
-        );
-    }
-
-    /// Context-reading function with read-allowed constraint: should pass.
-    #[test]
-    fn effect_constraint_context_read_passes() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let allowed = EffectConstraint {
-            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref,
-            )])),
-            writes: EffectCap::Only(std::collections::BTreeSet::new()),
-        };
-        let (result, fid) = infer_with_effect(&i, "@x + 1", &[("x", Ty::Int)], allowed);
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "read should be allowed: {errs:?}");
-        assert!(result.try_resolution(fid).is_some());
-    }
-
-    /// Context-writing function with read-only constraint: should reject.
-    #[test]
-    fn effect_constraint_context_write_rejected_by_read_only() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let allowed = EffectConstraint {
-            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref,
-            )])),
-            writes: EffectCap::Only(std::collections::BTreeSet::new()),
-        };
-        let (result, _fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
-        let errs = error_strings(&i, &result);
-        assert!(
-            !errs.is_empty(),
-            "context write should violate read-only constraint"
-        );
-        assert!(
-            errs.iter()
-                .any(|e| e.contains("effect constraint violated"))
-        );
-    }
-
-    /// Context-writing function with write-allowed constraint: should pass.
-    #[test]
-    fn effect_constraint_context_write_passes() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let allowed = EffectConstraint {
-            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref,
-            )])),
-            writes: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref,
-            )])),
-        };
-        let (result, fid) = infer_with_effect(&i, "@x = 42; @x", &[("x", Ty::Int)], allowed);
-        let errs = error_strings(&i, &result);
-        assert!(errs.is_empty(), "write should be allowed: {errs:?}");
-        assert!(result.try_resolution(fid).is_some());
-    }
-
-    /// Writing to context not in allowed set: should reject.
-    #[test]
-    fn effect_constraint_write_to_unknown_rejected() {
-        let i = Interner::new();
-        let qref_x = QualifiedRef::root(i.intern("x"));
-        let allowed = EffectConstraint {
-            reads: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref_x,
-            )])),
-            writes: EffectCap::Only(std::collections::BTreeSet::from([EffectTarget::Context(
-                qref_x,
-            )])),
-        };
-        let (result, _fid) = infer_with_effect(
-            &i,
-            "@y = 42; @x",
-            &[("x", Ty::Int), ("y", Ty::Int)],
-            allowed,
-        );
-        let errs = error_strings(&i, &result);
-        assert!(!errs.is_empty(), "write to @y should violate constraint");
-        assert!(
-            errs.iter()
-                .any(|e| e.contains("effect constraint violated"))
-        );
-    }
-
-    /// No effect constraint (None): should always pass regardless of effects.
-    #[test]
-    fn effect_constraint_none_always_passes() {
-        let i = Interner::new();
-        let (result, _ids) = infer_multi(
-            &i,
-            &[("test", "@x = 42; @x", None, None)],
-            &[("x", Ty::Int)],
-        );
-        let errs = error_strings(&i, &result);
-        assert!(
-            errs.is_empty(),
-            "no effect constraint should pass: {errs:?}"
-        );
-    }
-
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Context extraction tests
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     // -- Completeness: contexts correctly extracted and typed --
 
@@ -3515,34 +2467,6 @@ mod tests {
             &FxHashMap::default(),
         );
 
-    }
-
-    /// Context store — writes tracked in effect.
-    #[test]
-    fn context_extract_store_writes() {
-        let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "@x = 42; @x", &[("x", Ty::Int)]);
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        let fid = graph.functions[0].qref;
-        let effect = &result.outcomes[&fid].meta().effect;
-        let qref = QualifiedRef::root(i.intern("x"));
-        assert!(
-            effect.writes.contains(&EffectTarget::Context(qref)),
-            "should track context write"
-        );
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(qref)),
-            "should track context read"
-        );
     }
 
     /// Context inside nested block — still extracted.
@@ -3608,10 +2532,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         };
@@ -3709,9 +2631,9 @@ mod tests {
         );
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Param extraction tests
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     /// Single $param — discovered in extern_params.
     #[test]
@@ -3794,9 +2716,9 @@ mod tests {
         assert_eq!(meta.params[0].ty, Ty::String);
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Type constraint tests
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     /// Exact output constraint satisfied → Complete.
     #[test]
@@ -3848,145 +2770,6 @@ mod tests {
         assert!(result.outcomes[&fid].is_complete());
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // Transitive effect tests
-    // ════════════════════════════════════════════════════════════════
-
-    /// Callee reads context → caller's transitive effect includes the read.
-    #[test]
-    fn transitive_effect_callee_read_propagates() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("reader", "@x", Some(vec![]), None),
-                ("caller", "reader()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let caller_id = ids[1].1;
-        let effect = &result.outcomes[&caller_id].meta().effect;
-        let qref = QualifiedRef::root(i.intern("x"));
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(qref)),
-            "caller should inherit callee's context read in transitive effect"
-        );
-    }
-
-    /// Callee writes context → caller's transitive effect includes the write.
-    #[test]
-    fn transitive_effect_callee_write_propagates() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("writer", "@x = 42; @x", Some(vec![]), None),
-                ("caller", "writer()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let caller_id = ids[1].1;
-        let effect = &result.outcomes[&caller_id].meta().effect;
-        let qref = QualifiedRef::root(i.intern("x"));
-        assert!(
-            effect.writes.contains(&EffectTarget::Context(qref)),
-            "caller should inherit callee's context write in transitive effect"
-        );
-    }
-
-    /// Deep chain: A → B → C reads @x. A's transitive effect should include the read.
-    #[test]
-    fn transitive_effect_deep_chain() {
-        let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[
-                ("leaf", "@x", Some(vec![]), None),
-                ("mid", "leaf()", Some(vec![]), None),
-                ("top", "mid()", None, None),
-            ],
-            &[("x", Ty::Int)],
-        );
-        let top_id = ids[2].1;
-        let effect = &result.outcomes[&top_id].meta().effect;
-        let qref = QualifiedRef::root(i.intern("x"));
-        assert!(
-            effect.reads.contains(&EffectTarget::Context(qref)),
-            "top-level caller should inherit transitive effect through chain"
-        );
-    }
-
-    /// Effect constraint with transitive effect — callee reads @x,
-    /// caller has pure constraint → should be Incomplete.
-    #[test]
-    fn effect_constraint_transitive_violation() {
-        let i = Interner::new();
-        let qref_x = QualifiedRef::root(i.intern("x"));
-
-        // "reader" reads @x (no constraint).
-        // "caller" calls reader() but has pure constraint.
-        let mut pb = PolyBuilder::new();
-        let contexts: Vec<Context> = vec![Context {
-            qref: QualifiedRef::root(i.intern("x")),
-            ty: lift_to_poly(&Ty::Int),
-        }];
-        let mut functions = Vec::new();
-        let reader_id = QualifiedRef::root(i.intern("reader"));
-        functions.push(Function {
-            qref: reader_id,
-            kind: FnKind::Local(ParsedAst::Script(
-                acvus_ast::parse_script(&i, "@x").expect("parse"),
-            )),
-            ty: TyTerm::Fn {
-                params: vec![],
-                ret: Box::new(pb.fresh_ty_var()),
-                captures: vec![],
-                effect: pb.fresh_effect_var(),
-                hint: None,
-            },
-            effect_constraint: None,
-        });
-        let caller_id = QualifiedRef::root(i.intern("caller"));
-        functions.push(Function {
-            qref: caller_id,
-            kind: FnKind::Local(ParsedAst::Script(
-                acvus_ast::parse_script(&i, "reader()").expect("parse"),
-            )),
-            ty: TyTerm::Fn {
-                params: vec![],
-                ret: Box::new(pb.fresh_ty_var()),
-                captures: vec![],
-                effect: pb.fresh_effect_var(),
-                hint: None,
-            },
-            effect_constraint: Some(crate::ty::EffectConstraint::pure()), // pure constraint
-        });
-        let graph = CompilationGraph {
-            functions: Freeze::new(functions),
-            contexts: Freeze::new(contexts),
-        };
-        let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
-
-        // reader should be Complete (no constraint).
-        assert!(
-            result.outcomes[&reader_id].is_complete(),
-            "reader has no constraint"
-        );
-        // caller should be Incomplete — transitive read violates pure.
-        assert!(
-            !result.outcomes[&caller_id].is_complete(),
-            "caller with pure constraint should be Incomplete when callee reads context"
-        );
-    }
-
     // ── read_only policy tests ──────────────────────────────────────
 
     /// Helper: infer a single function with context policies.
@@ -4017,10 +2800,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         };

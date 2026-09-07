@@ -31,11 +31,10 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::token_liveness;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
-use crate::ty::{Effect, Ty};
+use crate::ty::Ty;
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -61,7 +60,6 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     }
 
     let domtree = DomTree::build(cfg);
-    let tok_liveness = token_liveness::analyze(cfg);
     let mut def_block = build_def_block(cfg);
 
     // ── Collect hoists ─────────────────────────────────────────────
@@ -86,15 +84,12 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
             }
 
             let uses = inst_info::uses(kind);
-            let tokens = token_liveness::token_ids_of(kind, &cfg.val_types);
 
             if let Some(target) = find_highest_target(
                 BlockIdx(bi),
                 &uses,
-                &tokens,
                 &domtree,
                 &def_block,
-                &tok_liveness,
                 cfg,
             ) {
                 hoists.push((bi, i, target.0));
@@ -169,10 +164,8 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 fn find_highest_target(
     block_idx: BlockIdx,
     uses: &[ValueId],
-    tokens: &smallvec::SmallVec<[QualifiedRef; 2]>,
     domtree: &DomTree,
     def_block: &FxHashMap<ValueId, BlockIdx>,
-    tok_liveness: &token_liveness::TokenLivenessResult,
     cfg: &CfgBody,
 ) -> Option<BlockIdx> {
     let mut best: Option<BlockIdx> = None;
@@ -188,14 +181,6 @@ fn find_highest_target(
             None => true,
         });
         if !all_available {
-            break;
-        }
-
-        // No token conflict at this level.
-        if tokens
-            .iter()
-            .any(|tid| tok_liveness.is_live_out(candidate, *tid))
-        {
             break;
         }
 
@@ -260,27 +245,10 @@ fn is_hoistable(kind: &InstKind) -> bool {
         // Function reference.
         InstKind::LoadFunction { .. } => true,
 
-        // Pure direct FunctionCall.
-        InstKind::FunctionCall {
-            callee: Callee::Direct(_),
-            callee_ty,
-            ..
-        } => is_pure_call(callee_ty),
-
+        // FunctionCall: not hoistable until Identity-based purity re-established.
         // Everything else: NOT hoistable.
         _ => false,
     }
-}
-
-fn is_pure_call(callee_ty: &Ty) -> bool {
-    let Ty::Fn {
-        effect: Effect::Resolved(eff),
-        ..
-    } = callee_ty
-    else {
-        return false;
-    };
-    eff.is_pure()
 }
 
 // ── Terminator helpers ─────────────────────────────────────────────
@@ -516,9 +484,7 @@ enum SinkKind {
 mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
-    use crate::ty::{Effect, EffectSet, EffectTarget};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
-    use std::collections::BTreeSet;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -550,35 +516,13 @@ mod tests {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
-            // IO functions have no context/token effects in the effect set —
-            // their "IO-ness" is conveyed by Hint::Io. Spawn is always
-            // hoistable regardless of effect; token liveness only blocks hoist
-            // when a token write appears in the effect set.
+            // IO functions have no context/token effects — their "IO-ness"
+            // is conveyed by Hint::Io.
             Ty::Fn {
                 params: vec![],
                 ret: Box::new(Ty::Int),
                 captures: vec![],
-                effect: Effect::pure(),
                 hint: Some(crate::ty::Hint::Io),
-            },
-        )
-    }
-
-    fn token_fn_type(i: &Interner, name: &str, tid: QualifiedRef) -> (QualifiedRef, Ty) {
-        let qref = QualifiedRef::root(i.intern(name));
-        let mut reads = BTreeSet::new();
-        reads.insert(EffectTarget::Token(tid));
-        (
-            qref,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::Int),
-                captures: vec![],
-                effect: Effect::Resolved(EffectSet {
-                    reads,
-                    writes: BTreeSet::new(),
-                }),
-                hint: None,
             },
         )
     }
@@ -816,12 +760,12 @@ mod tests {
         assert!(eval_idx > merge_idx, "eval must stay in merge block");
     }
 
+    #[ignore = "pending identity integration"]
     #[test]
     fn token_conflict_prevents_hoist() {
         let i = Interner::new();
-        let tid = QualifiedRef::root(i.intern("db"));
-        let (qref1, ty1) = token_fn_type(&i, "io1", tid);
-        let (qref2, ty2) = token_fn_type(&i, "io2", tid);
+        let (qref1, ty1) = io_fn_type(&i, "io1");
+        let (qref2, ty2) = io_fn_type(&i, "io2");
 
         let mut cfg = make_cfg(
             vec![

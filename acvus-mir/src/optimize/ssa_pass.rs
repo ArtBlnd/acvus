@@ -37,7 +37,7 @@ use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, Label, ValueId};
-use crate::ty::{Effect, Ty};
+use crate::ty::Ty;
 
 /// Run the SSA context pass on a CfgBody.
 ///
@@ -133,12 +133,6 @@ fn forward_context_values(
     // Collected results.
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     let mut remove: FxHashSet<(usize, usize)> = FxHashSet::default();
-    let mut call_patches: Vec<(
-        usize,
-        usize,
-        Vec<(QualifiedRef, ValueId)>,
-        Vec<(QualifiedRef, ValueId)>,
-    )> = Vec::new();
 
     // Precompute dominator tree children for each block.
     let mut dom_children: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); num_blocks];
@@ -166,12 +160,6 @@ fn forward_context_values(
         val_factory: &'a mut acvus_utils::LocalFactory<ValueId>,
         subst: &'a mut FxHashMap<ValueId, ValueId>,
         remove: &'a mut FxHashSet<(usize, usize)>,
-        call_patches: &'a mut Vec<(
-            usize,
-            usize,
-            Vec<(QualifiedRef, ValueId)>,
-            Vec<(QualifiedRef, ValueId)>,
-        )>,
         /// Per-block exit ctx_state, recorded after processing each block.
         /// `None` = not yet visited (back edge target).
         block_exit_states: Vec<Option<CtxState>>,
@@ -276,51 +264,8 @@ fn forward_context_values(
                     }
                 }
 
-                // FunctionCall with Direct callee: populate context_uses/context_defs.
-                InstKind::FunctionCall {
-                    callee: Callee::Direct(_),
-                    callee_ty,
-                    context_uses,
-                    context_defs,
-                    ..
-                } if context_uses.is_empty() && context_defs.is_empty() => {
-                    if let Some((reads, writes)) = extract_effect_refs(callee_ty) {
-                        let mut uses = Vec::new();
-                        for qref in &reads {
-                            if let Some(&val) = ctx_state.get(qref) {
-                                uses.push((*qref, val));
-                            }
-                        }
-                        let mut defs = Vec::new();
-                        for qref in &writes {
-                            // Derive type: from current forwarded value, or from Ref inner type.
-                            let ty = ctx_state
-                                .get(qref)
-                                .and_then(|v| st.val_types.get(v))
-                                .cloned()
-                                .or_else(|| {
-                                    st.val_to_ctx.iter().find_map(|(vid, ctx)| {
-                                        if ctx == qref {
-                                            if let Some(Ty::Ref(inner, _)) = st.val_types.get(vid) {
-                                                Some(*inner.clone())
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                })
-                                .expect("context_def type must be derivable");
-                            let new_val = alloc_val(st.val_factory, st.val_types, ty);
-                            defs.push((*qref, new_val));
-                            ctx_state.insert(*qref, new_val);
-                        }
-                        if !uses.is_empty() || !defs.is_empty() {
-                            st.call_patches.push((bi, ii, uses, defs));
-                        }
-                    }
-                }
+                // FunctionCall context_uses/context_defs population removed
+                // (was Effect-based). Step 3 will re-populate via Identity analysis.
 
                 _ => {}
             }
@@ -348,7 +293,6 @@ fn forward_context_values(
         val_factory: &mut val_factory,
         subst: &mut subst,
         remove: &mut remove,
-        call_patches: &mut call_patches,
         block_exit_states: vec![None; num_blocks],
     };
     walk_dom_tree(0, &mut ctx_state, &mut state);
@@ -356,16 +300,11 @@ fn forward_context_values(
     // Restore val_factory back to cfg.
     cfg.val_factory = val_factory;
 
-    if remove.is_empty() && subst.is_empty() && call_patches.is_empty() {
+    if remove.is_empty() && subst.is_empty() {
         return subst;
     }
 
     // ── Apply phase: mutate cfg.blocks with collected results ──
-
-    let patch_map: FxHashMap<(usize, usize), _> = call_patches
-        .into_iter()
-        .map(|(bi, ii, u, d)| ((bi, ii), (u, d)))
-        .collect();
 
     for (bi, block) in cfg.blocks.iter_mut().enumerate() {
         let old_insts = std::mem::take(&mut block.insts);
@@ -373,18 +312,8 @@ fn forward_context_values(
             .into_iter()
             .enumerate()
             .filter(|(ii, _)| !remove.contains(&(bi, *ii)))
-            .map(|(ii, mut inst)| {
+            .map(|(_ii, mut inst)| {
                 apply_subst(&mut inst.kind, &subst);
-                if let Some((uses, defs)) = patch_map.get(&(bi, ii))
-                    && let InstKind::FunctionCall {
-                        context_uses,
-                        context_defs,
-                        ..
-                    } = &mut inst.kind
-                {
-                    *context_uses = uses.clone();
-                    *context_defs = defs.clone();
-                }
                 inst
             })
             .collect();
@@ -393,44 +322,6 @@ fn forward_context_values(
     }
 
     subst
-}
-
-/// Extract reads/writes QualifiedRefs from a function's type effect.
-///
-/// Only `EffectTarget::Context` refs are returned — `Token` targets are NOT
-/// SSA-compatible and must never be converted to context_uses/context_defs.
-pub(crate) fn extract_effect_refs(
-    callee_ty: &Ty,
-) -> Option<(Vec<QualifiedRef>, Vec<QualifiedRef>)> {
-    use crate::ty::EffectTarget;
-
-    let Ty::Fn {
-        effect: Effect::Resolved(eff),
-        ..
-    } = callee_ty
-    else {
-        return None;
-    };
-    let reads: Vec<QualifiedRef> = eff
-        .reads
-        .iter()
-        .filter_map(|t| match t {
-            EffectTarget::Context(qref) => Some(*qref),
-            EffectTarget::Token(_) => None,
-        })
-        .collect();
-    let writes: Vec<QualifiedRef> = eff
-        .writes
-        .iter()
-        .filter_map(|t| match t {
-            EffectTarget::Context(qref) => Some(*qref),
-            EffectTarget::Token(_) => None,
-        })
-        .collect();
-    if reads.is_empty() && writes.is_empty() {
-        return None;
-    }
-    Some((reads, writes))
 }
 
 /// Apply value substitutions to an instruction's operands.
@@ -1293,14 +1184,8 @@ mod tests {
     use crate::cfg::{self, CfgBody};
     use crate::ir::MirBody;
     use crate::test::{compile_script, compile_template};
-    use crate::ty::{EffectSet, EffectTarget, Ty};
+    use crate::ty::Ty;
     use acvus_utils::Interner;
-    use std::collections::BTreeSet;
-
-    /// Empty fn_metadata — no ExternFn effect info.
-    fn no_fn_metadata() -> FxHashMap<QualifiedRef, Ty> {
-        FxHashMap::default()
-    }
 
     fn count_phi_blocks(cfg_body: &CfgBody) -> usize {
         cfg_body
@@ -1440,286 +1325,6 @@ mod tests {
         );
     }
 
-    // ── FunctionCall context_uses/context_defs population ──
-
-    /// Build a minimal CfgBody with a FunctionCall to a callee that reads and writes @ctx.
-    /// Before SSA pass: context_uses/context_defs are empty.
-    /// After SSA pass: they should be populated.
-    #[test]
-    fn function_call_populates_context_uses_defs() {
-        let interner = Interner::new();
-        let ctx_name = interner.intern("ctx");
-        let qref = QualifiedRef::root(ctx_name);
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        // Build fn_metadata: callee reads + writes @ctx.
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([EffectTarget::Context(qref)]),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
-                    hint: None,
-                },
-        );
-
-        // Build MIR manually then promote:
-        // v0 = Ref @ctx
-        // v1 = Load v0        (entry load)
-        // v2 = FunctionCall callee() uses[] defs[]   ← SSA pass should fill
-        // Return v2
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        let v1 = body.val_factory.next();
-        let v2 = body.val_factory.next();
-        body.val_types.insert(v0, Ty::Int);
-        body.val_types.insert(v1, Ty::Int);
-        body.val_types.insert(v2, Ty::Int);
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v2,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v2),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        // Find the FunctionCall and verify context_uses/context_defs are populated.
-        let call_inst = cfg_body
-            .blocks
-            .iter()
-            .flat_map(|b| &b.insts)
-            .find(|i| matches!(i.kind, InstKind::FunctionCall { .. }));
-        assert!(call_inst.is_some(), "FunctionCall should exist");
-
-        if let InstKind::FunctionCall {
-            context_uses,
-            context_defs,
-            ..
-        } = &call_inst.unwrap().kind
-        {
-            assert_eq!(context_uses.len(), 1, "should have 1 context use (@ctx)");
-            assert_eq!(context_uses[0].0, qref, "use should be @ctx");
-            assert_eq!(context_uses[0].1, v1, "use should bind to entry load v1");
-
-            assert_eq!(context_defs.len(), 1, "should have 1 context def (@ctx)");
-            assert_eq!(context_defs[0].0, qref, "def should be @ctx");
-            // def ValueId should be a fresh value (not v0, v1, or v2).
-            let def_val = context_defs[0].1;
-            assert!(
-                def_val != v0 && def_val != v1 && def_val != v2,
-                "def should be a fresh SSA value, got {def_val:?}"
-            );
-        } else {
-            panic!("expected FunctionCall");
-        }
-    }
-
-    /// FunctionCall with pure callee (no reads/writes) should NOT get context bindings.
-    #[test]
-    fn function_call_pure_no_context() {
-        let interner = Interner::new();
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        // Pure function — no reads, no writes.
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::pure(),
-                    hint: None,
-                },
-        );
-
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        body.val_types.insert(v0, Ty::Int);
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v0,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v0),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        let call_inst = cfg_body
-            .blocks
-            .iter()
-            .flat_map(|b| &b.insts)
-            .find(|i| matches!(i.kind, InstKind::FunctionCall { .. }))
-            .unwrap();
-        if let InstKind::FunctionCall {
-            context_uses,
-            context_defs,
-            ..
-        } = &call_inst.kind
-        {
-            assert!(
-                context_uses.is_empty(),
-                "pure function should have no context_uses"
-            );
-            assert!(
-                context_defs.is_empty(),
-                "pure function should have no context_defs"
-            );
-        }
-    }
-
-    /// After a FunctionCall that writes @ctx, subsequent Load should see the new value.
-    #[test]
-    fn function_call_def_forwards_to_subsequent_load() {
-        let interner = Interner::new();
-        let ctx_name = interner.intern("ctx");
-        let qref = QualifiedRef::root(ctx_name);
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Unit),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::new(),
-                        writes: BTreeSet::from([EffectTarget::Context(qref)]),
-                    }),
-                    hint: None,
-                },
-        );
-
-        // v0 = Ref @ctx
-        // v1 = Load v0
-        // v2 = FunctionCall callee()    ← writes @ctx, def = v_new
-        // v3 = Ref @ctx
-        // v4 = Load v3           ← should be replaced by v_new
-        // Return v4
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        let v1 = body.val_factory.next();
-        let v2 = body.val_factory.next();
-        let v3 = body.val_factory.next();
-        let v4 = body.val_factory.next();
-        for v in [v0, v1, v2, v3, v4] {
-            body.val_types.insert(v, Ty::Int);
-        }
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v2,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v3,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v4,
-                src: v3,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v4),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        // The second Load (v4) should be eliminated — replaced by the def from the call.
-        let remaining_loads: Vec<_> = cfg_body
-            .blocks
-            .iter()
-            .flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Load { .. }))
-            .collect();
-        // Only the entry load should remain; the second should be forwarded.
-        assert_eq!(
-            remaining_loads.len(),
-            1,
-            "second Load should be eliminated by forwarding from FunctionCall def"
-        );
-    }
-
     #[test]
     fn script_sequential_loops_no_panic() {
         // Two sequential loops writing same context must not panic.
@@ -1739,348 +1344,6 @@ mod tests {
         assert!(count_context_stores(&cfg_body) >= 1);
     }
 
-    // ── Token/Context soundness tests ──────────────────────────────
-
-    /// Token read must NOT appear in context_uses after SSA pass.
-    #[test]
-    fn token_read_not_in_context_uses() {
-        let interner = Interner::new();
-        let ctx_name = interner.intern("ctx");
-        let qref = QualifiedRef::root(ctx_name);
-        let token = QualifiedRef::root(interner.intern("net"));
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([
-                            EffectTarget::Context(qref),
-                            EffectTarget::Token(token),
-                        ]),
-                        writes: BTreeSet::new(),
-                    }),
-                    hint: None,
-                },
-        );
-
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        let v1 = body.val_factory.next();
-        let v2 = body.val_factory.next();
-        body.val_types.insert(v0, Ty::Int);
-        body.val_types.insert(v1, Ty::Int);
-        body.val_types.insert(v2, Ty::Int);
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v2,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v2),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        // context_uses should have exactly 1 entry (the Context), NOT 2.
-        for block in &cfg_body.blocks {
-            for inst in &block.insts {
-                if let InstKind::FunctionCall {
-                    callee: Callee::Direct(ref fid),
-                    ref context_uses,
-                    ..
-                } = inst.kind
-                {
-                    if fid == &callee_id {
-                        assert_eq!(
-                            context_uses.len(),
-                            1,
-                            "Token must NOT appear in context_uses; only Context should"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Token write must NOT appear in context_defs after SSA pass.
-    #[test]
-    fn token_write_not_in_context_defs() {
-        let interner = Interner::new();
-        let ctx_name = interner.intern("ctx");
-        let qref = QualifiedRef::root(ctx_name);
-        let token = QualifiedRef::root(interner.intern("fs"));
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Unit),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::new(),
-                        writes: BTreeSet::from([
-                            EffectTarget::Context(qref),
-                            EffectTarget::Token(token),
-                        ]),
-                    }),
-                    hint: None,
-                },
-        );
-
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        let v1 = body.val_factory.next();
-        let v2 = body.val_factory.next();
-        body.val_types.insert(v0, Ty::Int);
-        body.val_types.insert(v1, Ty::Int);
-        body.val_types.insert(v2, Ty::Unit);
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v2,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v2),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        for block in &cfg_body.blocks {
-            for inst in &block.insts {
-                if let InstKind::FunctionCall {
-                    callee: Callee::Direct(ref fid),
-                    ref context_defs,
-                    ..
-                } = inst.kind
-                {
-                    if fid == &callee_id {
-                        assert_eq!(
-                            context_defs.len(),
-                            1,
-                            "Token must NOT appear in context_defs; only Context should"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Mixed Context + Token: only Context appears in SSA uses/defs.
-    #[test]
-    fn mixed_context_and_token_only_context_in_ssa() {
-        let interner = Interner::new();
-        let ctx_name = interner.intern("ctx");
-        let qref = QualifiedRef::root(ctx_name);
-        let token = QualifiedRef::root(interner.intern("db"));
-        let callee_id = QualifiedRef::root(interner.intern("callee"));
-
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            callee_id,
-            Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::Int),
-                    captures: vec![],
-                    effect: Effect::Resolved(EffectSet {
-                        reads: BTreeSet::from([
-                            EffectTarget::Context(qref),
-                            EffectTarget::Token(token),
-                        ]),
-                        writes: BTreeSet::from([
-                            EffectTarget::Context(qref),
-                            EffectTarget::Token(token),
-                        ]),
-                    }),
-                    hint: None,
-                },
-        );
-
-        let mut body = MirBody::new();
-        let v0 = body.val_factory.next();
-        let v1 = body.val_factory.next();
-        let v2 = body.val_factory.next();
-        body.val_types.insert(v0, Ty::Int);
-        body.val_types.insert(v1, Ty::Int);
-        body.val_types.insert(v2, Ty::Int);
-
-        let span = acvus_ast::Span::ZERO;
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(qref),
-                path: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::FunctionCall {
-                dst: v2,
-                callee: Callee::Direct(callee_id),
-                callee_ty: fn_metadata[&callee_id].clone(),
-                args: vec![],
-                context_uses: vec![],
-                context_defs: vec![],
-            },
-        });
-        body.insts.push(Inst {
-            span,
-            kind: InstKind::Return(v2),
-        });
-
-        let mut cfg_body = cfg::promote(body);
-        run(&mut cfg_body);
-
-        for block in &cfg_body.blocks {
-            for inst in &block.insts {
-                if let InstKind::FunctionCall {
-                    callee: Callee::Direct(ref fid),
-                    ref context_uses,
-                    ref context_defs,
-                    ..
-                } = inst.kind
-                {
-                    if fid == &callee_id {
-                        assert_eq!(
-                            context_uses.len(),
-                            1,
-                            "only Context(@ctx) should be in context_uses, not Token"
-                        );
-                        assert_eq!(
-                            context_defs.len(),
-                            1,
-                            "only Context(@ctx) should be in context_defs, not Token"
-                        );
-                        // Verify the actual QualifiedRef is correct.
-                        assert_eq!(context_uses[0].0, qref);
-                        assert_eq!(context_defs[0].0, qref);
-                    }
-                }
-            }
-        }
-    }
-
-    /// EffectSet union preserves both Context and Token targets.
-    #[test]
-    fn effect_set_union_preserves_context_and_token() {
-        let interner = Interner::new();
-        let qref = QualifiedRef::root(interner.intern("ctx"));
-        let token = QualifiedRef::root(interner.intern("net"));
-
-        let a = EffectSet {
-            reads: BTreeSet::from([EffectTarget::Context(qref)]),
-            ..Default::default()
-        };
-        let b = EffectSet {
-            reads: BTreeSet::from([EffectTarget::Token(token)]),
-            ..Default::default()
-        };
-        let u = a.union(&b);
-        assert_eq!(
-            u.reads.len(),
-            2,
-            "union should contain both Context and Token"
-        );
-        assert!(u.reads.contains(&EffectTarget::Context(qref)));
-        assert!(u.reads.contains(&EffectTarget::Token(token)));
-    }
-
-    /// extract_effect_refs filters Token targets out.
-    #[test]
-    fn extract_effect_refs_filters_tokens() {
-        let interner = Interner::new();
-        let qref = QualifiedRef::root(interner.intern("ctx"));
-        let token = QualifiedRef::root(interner.intern("fs"));
-        let fid = QualifiedRef::root(interner.intern("callee"));
-
-        let fn_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::Int),
-            captures: vec![],
-            effect: Effect::Resolved(EffectSet {
-                reads: BTreeSet::from([
-                    EffectTarget::Context(qref),
-                    EffectTarget::Token(token),
-                ]),
-                writes: BTreeSet::from([EffectTarget::Token(token)]),
-            }),
-            hint: None,
-        };
-
-        let result = extract_effect_refs(&fn_ty);
-        let (reads, writes) = result.unwrap();
-        assert_eq!(reads.len(), 1, "only Context should be in reads");
-        assert_eq!(reads[0], qref);
-        assert!(writes.is_empty(), "Token-only writes should yield empty");
-    }
-
     // ── Volatile context: forwarding must be skipped ──
 
     fn count_context_loads(cfg_body: &CfgBody) -> usize {
@@ -2095,7 +1358,7 @@ mod tests {
     /// Build a minimal CfgBody with: Ref → Store → Load → Return.
     /// When volatile=false, SSA should forward the store value and eliminate the load.
     /// When volatile=true, SSA must preserve the load.
-    fn make_store_then_load(volatile: bool) -> (CfgBody, FxHashMap<QualifiedRef, Ty>) {
+    fn make_store_then_load(volatile: bool) -> CfgBody {
         use acvus_utils::LocalFactory;
         let interner = Interner::new();
         let ctx_qref = QualifiedRef::root(interner.intern("history"));
@@ -2165,12 +1428,12 @@ mod tests {
             val_factory: f,
             label_count: 0,
         };
-        (cfg::promote(body), no_fn_metadata())
+        cfg::promote(body)
     }
 
     #[test]
     fn non_volatile_context_is_forwarded() {
-        let (mut cfg, fn_metadata) = make_store_then_load(false);
+        let mut cfg = make_store_then_load(false);
         let loads_before = count_context_loads(&cfg);
         run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
@@ -2185,7 +1448,7 @@ mod tests {
 
     #[test]
     fn volatile_context_not_forwarded() {
-        let (mut cfg, fn_metadata) = make_store_then_load(true);
+        let mut cfg = make_store_then_load(true);
         let loads_before = count_context_loads(&cfg);
         run(&mut cfg);
         let loads_after = count_context_loads(&cfg);

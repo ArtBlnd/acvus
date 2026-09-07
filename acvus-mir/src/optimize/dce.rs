@@ -16,7 +16,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, ValueId};
-use crate::ty::{Effect, Ty};
 use crate::analysis::inst_info;
 
 // ── Def location ────────────────────────────────────────────────────
@@ -80,11 +79,8 @@ fn is_root(kind: &InstKind) -> bool {
         // Eval — IO execution point.
         InstKind::Eval { .. } => true,
 
-        // FunctionCall: root unless provably pure.
-        InstKind::FunctionCall { callee, callee_ty, .. } => match callee {
-            Callee::Indirect(_) => true, // Unknown effect → root.
-            Callee::Direct(_) => !is_pure_fn(callee_ty),
-        },
+        // FunctionCall: conservatively root (pending identity-based purity).
+        InstKind::FunctionCall { .. } => true,
 
         // Spawn: pure (deferred execution). The actual effect happens at Eval.
         // Dead if handle is unused (no Eval consumes it).
@@ -92,17 +88,6 @@ fn is_root(kind: &InstKind) -> bool {
 
         // Everything else: pure computation, dead if result unused.
         _ => false,
-    }
-}
-
-/// Check if a function is provably pure (no effects at all).
-fn is_pure_fn(callee_ty: &Ty) -> bool {
-    match callee_ty {
-        Ty::Fn {
-            effect: Effect::Resolved(eff),
-            ..
-        } => eff.is_pure(),
-        _ => false, // Unknown → not pure (conservative).
     }
 }
 

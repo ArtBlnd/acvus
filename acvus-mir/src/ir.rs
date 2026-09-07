@@ -159,9 +159,9 @@ pub enum InstKind {
         context_uses: Vec<(QualifiedRef, ValueId)>,
         context_defs: Vec<(QualifiedRef, ValueId)>,
     },
-    /// Spawn a deferred computation. Creates a Handle<T, E> without executing.
+    /// Spawn a deferred computation. Creates a Handle<T> without executing.
     /// Pure instruction — no side effects. The actual execution happens at Eval.
-    /// `dst` receives a Handle whose type carries the callee's return type and effect.
+    /// `dst` receives a Handle whose type carries the callee's return type.
     /// `context_uses` binds context SSA values that the callee will read from.
     Spawn {
         dst: ValueId,
@@ -170,8 +170,8 @@ pub enum InstKind {
         args: Vec<ValueId>,
         context_uses: Vec<(QualifiedRef, ValueId)>,
     },
-    /// Evaluate (force) a Handle, consuming it. This is where effects actually occur.
-    /// `src` must be a Handle<T, E>. `dst` receives T. Effect E happens here.
+    /// Evaluate (force) a Handle, consuming it.
+    /// `src` must be a Handle<T>. `dst` receives T.
     /// `context_defs` captures new SSA values for contexts the callee wrote.
     Eval {
         dst: ValueId,

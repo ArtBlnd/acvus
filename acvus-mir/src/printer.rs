@@ -909,7 +909,7 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{Effect, Param, Ty};
+    use crate::ty::{Param, Ty};
     use acvus_utils::Interner;
 
     fn compile_and_dump_ctx(
@@ -964,7 +964,6 @@ mod tests {
                 params: vec![Param::new(interner.intern("x"), Ty::Int)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                effect: Effect::pure(),
                 hint: None,
             },
         )]);

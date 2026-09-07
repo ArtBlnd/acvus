@@ -31,10 +31,10 @@ pub fn run(cfg: &mut CfgBody) {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
-                    // Register Handle type: Handle<ReturnTy, Effect>.
-                    if let Ty::Fn { ret, effect, .. } = callee_ty {
+                    // Register Handle type: Handle<ReturnTy>.
+                    if let Ty::Fn { ret, .. } = callee_ty {
                         cfg.val_types
-                            .insert(handle, Ty::Handle(ret.clone(), effect.clone()));
+                            .insert(handle, Ty::Handle(ret.clone()));
                     }
 
                     new_insts.push(Inst {
@@ -77,7 +77,7 @@ mod tests {
     use super::*;
     use crate::cfg::promote;
     use crate::graph::QualifiedRef;
-    use crate::ty::{Effect, Param};
+    use crate::ty::Param;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 
@@ -109,16 +109,6 @@ mod tests {
         })
     }
 
-    fn io_effect() -> Effect {
-        // IO functions have no context/token effects in the effect set.
-        // Their "IO-ness" is conveyed by Hint::Io, not the effect set.
-        Effect::pure()
-    }
-
-    fn pure_effect() -> Effect {
-        Effect::pure()
-    }
-
     /// Collect all instructions from all blocks (flattened).
     fn all_insts(cfg: &CfgBody) -> Vec<&Inst> {
         cfg.blocks.iter().flat_map(|b| b.insts.iter()).collect()
@@ -136,7 +126,7 @@ mod tests {
                 params: vec![Param::new(i.intern("id"), Ty::Int)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                effect: io_effect(),
+
                 hint: Some(Hint::Io),
             },
         );
@@ -204,7 +194,7 @@ mod tests {
                 ],
                 ret: Box::new(Ty::Int),
                 captures: vec![],
-                effect: pure_effect(),
+
                 hint: None,
             },
         );
@@ -265,7 +255,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(Ty::Int),
                 captures: vec![],
-                effect: io_effect(),
+
                 hint: Some(Hint::Io),
             },
         );
@@ -318,7 +308,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    effect: io_effect(),
+    
                     hint: Some(Hint::Io),
                 },
             );

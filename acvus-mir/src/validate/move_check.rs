@@ -1,9 +1,8 @@
 //! Move checking pass.
 //!
-//! Effectful values (`Iterator<T, Effectful>`, `Sequence<T, O, Effectful>`,
-//! `Opaque`) are move-only: once consumed, they cannot be used again.
-//! This pass performs forward dataflow analysis over the CFG to detect
-//! use-after-move violations.
+//! Move-only values (iterators, sequences, opaque values) cannot be used again
+//! once consumed. This pass performs forward dataflow analysis over the CFG to
+//! detect use-after-move violations.
 //!
 //! Design:
 //! - `Ty::Error` → skip (analysis mode).
@@ -688,7 +687,7 @@ mod tests {
     use super::*;
     use crate::graph::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::{Effect, Param};
+    use crate::ty::Param;
     use acvus_utils::{Interner, LocalFactory};
 
     /// Create a dummy Param for tests where parameter name is irrelevant.
@@ -727,7 +726,6 @@ mod tests {
         Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
-            effect_args: vec![],
         }
     }
 
@@ -756,7 +754,6 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![test_user_defined()],
-            effect: Effect::pure(),
             hint: None,
         };
         assert_eq!(is_move_only(&ty), Some(true));
@@ -768,7 +765,6 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
-            effect: Effect::pure(), // effect of the fn doesn't matter, only captures
             hint: None,
         };
         assert_eq!(is_move_only(&ty), Some(false));

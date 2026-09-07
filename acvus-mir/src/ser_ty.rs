@@ -17,89 +17,12 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectSet, EffectTarget, Identity, IdentityId, Ty};
-
-// ── Serializable Effect (mirrors ty::Effect without Astr) ────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum SerEffect {
-    Resolved(SerEffectSet),
-    Var(u32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SerEffectSet {
-    pub reads: Vec<SerEffectTarget>,
-    pub writes: Vec<SerEffectTarget>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum SerEffectTarget {
-    Context(SerQualifiedRef),
-    Token(SerQualifiedRef),
-}
+use crate::ty::{IdentityId, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
     pub namespace: Option<String>,
     pub name: String,
-}
-
-fn target_to_ser(t: &EffectTarget, interner: &Interner) -> SerEffectTarget {
-    match t {
-        EffectTarget::Context(qref) => SerEffectTarget::Context(qref_to_ser(qref, interner)),
-        EffectTarget::Token(qref) => SerEffectTarget::Token(qref_to_ser(qref, interner)),
-    }
-}
-
-fn ser_to_target(t: &SerEffectTarget, interner: &Interner) -> EffectTarget {
-    match t {
-        SerEffectTarget::Context(qref) => EffectTarget::Context(ser_to_qref(qref, interner)),
-        SerEffectTarget::Token(qref) => EffectTarget::Token(ser_to_qref(qref, interner)),
-    }
-}
-
-impl Effect {
-    pub fn to_ser(&self, interner: &Interner) -> SerEffect {
-        match self {
-            Effect::Resolved(set) => SerEffect::Resolved(SerEffectSet {
-                reads: set
-                    .reads
-                    .iter()
-                    .map(|r| target_to_ser(r, interner))
-                    .collect(),
-                writes: set
-                    .writes
-                    .iter()
-                    .map(|r| target_to_ser(r, interner))
-                    .collect(),
-            }),
-            Effect::Var(v) => match *v {},
-        }
-    }
-}
-
-impl SerEffect {
-    pub fn to_effect(&self, interner: &Interner) -> Effect {
-        match self {
-            SerEffect::Resolved(set) => Effect::Resolved(EffectSet {
-                reads: set
-                    .reads
-                    .iter()
-                    .map(|r| ser_to_target(r, interner))
-                    .collect(),
-                writes: set
-                    .writes
-                    .iter()
-                    .map(|r| ser_to_target(r, interner))
-                    .collect(),
-            }),
-            SerEffect::Var(_) => Effect::pure(),
-        }
-    }
 }
 
 fn qref_to_ser(r: &QualifiedRef, interner: &Interner) -> SerQualifiedRef {
@@ -116,12 +39,11 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
     }
 }
 
-/// Serializable mirror of [`Identity`].
+/// Serializable mirror of [`IdentityId`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum SerIdentity {
-    Concrete { id: u32 },
-    Fresh { id: u32 },
+#[serde(rename_all = "camelCase")]
+pub struct SerIdentity {
+    pub id: u32,
 }
 
 /// Serializable mirror of [`Ty`].
@@ -148,12 +70,10 @@ pub enum SerTy {
     Fn {
         params: Vec<SerTy>,
         ret: Box<SerTy>,
-        effect: SerEffect,
     },
     UserDefined {
         id: SerQualifiedRef,
         type_args: Vec<SerTy>,
-        effect_args: Vec<SerEffect>,
     },
     Option {
         inner: Box<SerTy>,
@@ -196,21 +116,17 @@ impl Ty {
             Ty::Fn {
                 params,
                 ret,
-                effect,
                 ..
             } => SerTy::Fn {
                 params: params.iter().map(|p| p.ty.to_ser(interner)).collect(),
                 ret: Box::new(ret.to_ser(interner)),
-                effect: effect.to_ser(interner),
             },
             Ty::UserDefined {
                 id,
                 type_args,
-                effect_args,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| e.to_ser(interner)).collect(),
             },
             Ty::Option(inner) => SerTy::Option {
                 inner: Box::new(inner.to_ser(interner)),
@@ -231,13 +147,8 @@ impl Ty {
                 elem: Box::new(elem.to_ser(interner)),
                 identity: Box::new(identity.to_ser(interner)),
             },
-            Ty::Identity(id) => SerTy::Identity(match id {
-                Identity::Concrete(cid) => SerIdentity::Concrete {
-                    id: cid.to_raw() as u32,
-                },
-                Identity::Fresh(fid) => SerIdentity::Fresh {
-                    id: fid.to_raw() as u32,
-                },
+            Ty::Identity(id) => SerTy::Identity(SerIdentity {
+                id: id.to_raw() as u32,
             }),
             Ty::Handle(..) => todo!("Handle serialization not yet implemented"),
             Ty::Ref(..) => todo!("Ref serialization not yet implemented"),
@@ -269,7 +180,6 @@ impl SerTy {
             SerTy::Fn {
                 params,
                 ret,
-                effect,
             } => Ty::Fn {
                 params: params
                     .iter()
@@ -277,17 +187,14 @@ impl SerTy {
                     .collect(),
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
-                effect: effect.to_effect(interner),
                 hint: None,
             },
             SerTy::UserDefined {
                 id,
                 type_args,
-                effect_args,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| e.to_effect(interner)).collect(),
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
             SerTy::Enum { name, variants } => Ty::Enum {
@@ -306,12 +213,9 @@ impl SerTy {
                 Box::new(elem.to_ty(interner)),
                 Box::new(identity.to_ty(interner)),
             ),
-            SerTy::Identity(ser_id) => Ty::Identity(match ser_id {
-                SerIdentity::Concrete { id } => {
-                    Identity::Concrete(IdentityId::from_raw(*id as usize))
-                }
-                SerIdentity::Fresh { id } => Identity::Fresh(IdentityId::from_raw(*id as usize)),
-            }),
+            SerTy::Identity(ser_id) => Ty::Identity(
+                IdentityId::from_raw(ser_id.id as usize),
+            ),
         }
     }
 }

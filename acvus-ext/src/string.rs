@@ -3,7 +3,7 @@
 use acvus_interpreter::{
     Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value, ValueKind,
 };
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -158,7 +158,6 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }

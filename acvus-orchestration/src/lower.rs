@@ -13,7 +13,7 @@ use acvus_ast::{AstId, Expr, Literal, ObjectExprField, RefKind, Script, Span};
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef,
 };
-use acvus_mir::ty::{EffectConstraint, PolyBuilder, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 
 use crate::spec::{Block, BlockMode, Content, DisplaySpec, Item, LlmSpec, Namespace, Provider};
@@ -282,10 +282,8 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
                 params: vec![],
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: pb.fresh_effect_var(),
                 hint: None,
             },
-            effect_constraint: Some(EffectConstraint::read_only()),
         },
         field_errors,
     }
@@ -377,10 +375,8 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None, // LLM calls involve IO — no constraint
     };
 
     LlmLowerResult {
@@ -478,10 +474,8 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     params: vec![],
                     ret: Box::new(lift_to_poly(&Ty::String)),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: Some(EffectConstraint::read_only()),
             };
             DisplayLowerResult {
                 functions: vec![func],
@@ -529,10 +523,8 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     params: vec![], // param discovered by Infer via $bind
                     ret: Box::new(lift_to_poly(&Ty::String)),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: Some(EffectConstraint::read_only()),
             };
             functions.push(tpl_func);
 
@@ -568,10 +560,8 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 params: vec![],
                                 ret: Box::new(pb.fresh_ty_var()),
                                 captures: vec![],
-                                effect: pb.fresh_effect_var(),
                                 hint: None,
                             },
-                            effect_constraint: Some(EffectConstraint::read_only()),
                         });
                     }
                     Err(err) => {
@@ -614,10 +604,8 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 params: vec![],
                                 ret: Box::new(pb.fresh_ty_var()),
                                 captures: vec![],
-                                effect: pb.fresh_effect_var(),
                                 hint: None,
                             },
-                            effect_constraint: Some(EffectConstraint::read_only()),
                         });
                     }
                     Err(err) => {
@@ -667,7 +655,6 @@ mod tests {
             TyTerm::Fn { ret, .. } => assert_eq!(**ret, lift_to_poly(&Ty::String)),
             other => panic!("expected TyTerm::Fn, got {:?}", other),
         }
-        assert!(func.effect_constraint.is_some(), "should have effect constraint");
     }
 
     #[test]
@@ -922,10 +909,8 @@ mod tests {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: pb.fresh_effect_var(),
                 hint: None,
             },
-            effect_constraint: None,
         };
         let ns = Namespace {
             name: "test".into(),
@@ -942,9 +927,9 @@ mod tests {
         assert_eq!(i.resolve(output.graph.functions[0].qref.name), "google_llm");
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     // Soundness: errors detected and collected per-field
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     // -- LLM parse errors --
 

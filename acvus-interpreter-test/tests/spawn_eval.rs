@@ -89,6 +89,7 @@ async fn spawn_eval_basic() {
             inst(InstKind::Spawn {
                 dst: vids[1],
                 callee: Callee::Direct(callee_id),
+                callee_ty: acvus_mir::ty::Ty::error(),
                 args: vec![vids[0]],
                 context_uses: vec![],
             }),
@@ -186,6 +187,7 @@ async fn spawn_eval_context_defs() {
             inst(InstKind::Spawn {
                 dst: vids[0],
                 callee: Callee::Direct(callee_id),
+                callee_ty: acvus_mir::ty::Ty::error(),
                 args: vec![],
                 context_uses: vec![],
             }),
@@ -284,6 +286,7 @@ async fn spawn_eval_multi_args() {
             inst(InstKind::Spawn {
                 dst: vids[2],
                 callee: Callee::Direct(callee_id),
+                callee_ty: acvus_mir::ty::Ty::error(),
                 args: vec![vids[0], vids[1]],
                 context_uses: vec![],
             }),

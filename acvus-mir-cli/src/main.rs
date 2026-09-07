@@ -4,7 +4,7 @@ use std::{env, fs, process};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::printer::dump;
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
@@ -135,7 +135,6 @@ fn main() {
             params,
             ret: Box::new(lift_to_poly(&def.ret.to_ty(&interner))),
             captures: vec![],
-            effect: lift_effect_to_poly(&Effect::pure()), // TODO: construct proper effect from def
             hint: None,
         };
         contexts.push(acvus_mir::graph::types::Context {
@@ -174,10 +173,8 @@ fn main() {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: pb.fresh_effect_var(),
             hint: None,
         },
-        effect_constraint: None,
     });
 
     let graph = CompilationGraph {

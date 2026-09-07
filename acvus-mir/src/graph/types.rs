@@ -7,7 +7,7 @@
 
 use acvus_utils::Freeze;
 
-use crate::ty::{EffectConstraint, PolyTy};
+use crate::ty::PolyTy;
 
 // ── Identifiers ─────────────────────────────────────────────────────
 
@@ -24,7 +24,6 @@ pub enum FnKind {
     /// Has a parsed AST. MIR typechecks and compiles.
     Local(ParsedAst),
     /// Black box. Runtime provides the value.
-    /// Effect information lives in the function's type (`Ty::Fn { effect }`).
     Extern,
 }
 
@@ -37,19 +36,16 @@ pub enum ParsedAst {
 
 /// An executable entity in the graph. Identified by `QualifiedRef`.
 ///
-/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, effect, hint }`.
+/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, hint }`.
 /// Unresolved parts use `Var(n)` placeholders (inferred by the solver).
 #[derive(Debug, Clone)]
 pub struct Function {
     /// Unique identity = namespace + name.
     pub qref: QualifiedRef,
     pub kind: FnKind,
-    /// The function's polymorphic type (Fn { params, ret, captures, effect, hint }).
+    /// The function's polymorphic type (Fn { params, ret, captures, hint }).
     /// `Var` placeholders are inferred by the solver.
     pub ty: PolyTy,
-    /// Effect upper bound. `None` = no constraint (anything allowed).
-    /// Checked post-inference: body effect must not exceed this bound.
-    pub effect_constraint: Option<EffectConstraint>,
 }
 
 // ── Context ──────────────────────────────────────────────────────────

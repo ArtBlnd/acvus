@@ -9,7 +9,7 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTarget, EffectTerm, InferEffect, InferTy, Materiality,
+    InferTy, Materiality,
     Param, ParamTerm, Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry,
     lift_ty,
 };
@@ -42,9 +42,6 @@ pub struct TypeResolution {
     /// Only contains entries for calls resolved to named functions.
     pub direct_calls: DirectCallMap,
     pub tail_ty: Ty,
-    /// Effect of the function body.
-    /// Contains reads/writes as QualifiedRef sets.
-    pub body_effect: Effect,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
 }
@@ -55,7 +52,6 @@ impl TypeResolution {
         coercion_map: CoercionMap,
         direct_calls: DirectCallMap,
         tail_ty: Ty,
-        body_effect: Effect,
         extern_params: Vec<(Astr, Ty)>,
     ) -> Self {
         Self {
@@ -63,62 +59,14 @@ impl TypeResolution {
             coercion_map,
             direct_calls,
             tail_ty,
-            body_effect,
             extern_params,
         }
-    }
-}
-
-/// Check that a function's body effect satisfies the constraint.
-/// `allowed` is the upper bound: body must not exceed it.
-pub fn check_effect_constraint(
-    body_effect: &Effect,
-    allowed: &crate::ty::EffectConstraint,
-) -> Result<(), MirError> {
-    use crate::ty::EffectCap;
-
-    let actual = match body_effect {
-        Effect::Resolved(set) => set,
-        // Concrete phase: EffectVar = Infallible — uninhabitable by construction.
-        Effect::Var(v) => match *v {},
-    };
-
-    let mut violations = Vec::new();
-
-    match &allowed.reads {
-        EffectCap::Any => {} // all reads allowed
-        EffectCap::Only(allowed_reads) => {
-            if !allowed_reads.is_superset(&actual.reads) {
-                let forbidden: Vec<_> = actual.reads.difference(allowed_reads).collect();
-                violations.push(format!("reads from {:?}", forbidden));
-            }
-        }
-    }
-    match &allowed.writes {
-        EffectCap::Any => {} // all writes allowed
-        EffectCap::Only(allowed_writes) => {
-            if !allowed_writes.is_superset(&actual.writes) {
-                let forbidden: Vec<_> = actual.writes.difference(allowed_writes).collect();
-                violations.push(format!("writes to {:?}", forbidden));
-            }
-        }
-    }
-    if violations.is_empty() {
-        Ok(())
-    } else {
-        Err(MirError {
-            kind: MirErrorKind::EffectViolation {
-                detail: violations.join(", "),
-            },
-            span: Span::ZERO,
-        })
     }
 }
 
 struct LambdaScope {
     depth: usize,
     captures: Vec<InferTy>,
-    effect: InferEffect,
 }
 
 /// State only active in analysis mode (partial inference for unknown contexts/params).
@@ -157,7 +105,7 @@ pub struct TypeChecker<'a, 's> {
     errors: Vec<MirError>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
-    /// Stack of active lambda scopes. Each entry is (scope_depth, captures, effect).
+    /// Stack of active lambda scopes. Each entry is (scope_depth, captures).
     /// Nested lambdas push onto this stack; lookups record captures in ALL
     /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
@@ -166,9 +114,6 @@ pub struct TypeChecker<'a, 's> {
     /// correct id (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
     lambda_body_ids: FxHashMap<AstId, AstId>,
-    /// Top-level body effect. Tracks reads/writes as QualifiedRef.
-    /// Starts as pure (empty EffectSet); updated as context access and effectful calls occur.
-    body_effect: InferEffect,
 }
 
 impl<'a, 's> TypeChecker<'a, 's> {
@@ -188,7 +133,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             analysis: None,
             lambda_stack: Vec::new(),
             lambda_body_ids: FxHashMap::default(),
-            body_effect: EffectTerm::Resolved(Default::default()),
         }
     }
 
@@ -244,11 +188,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .collect()
     }
 
-    /// Freeze an InferEffect to concrete Effect, defaulting to pure on failure.
-    fn freeze_effect_or_pure(&self, e: &InferEffect) -> Effect {
-        self.solver.freeze_effect(e).unwrap_or_else(|_| Effect::pure())
-    }
-
     /// Construct an InferTy error token.
     fn infer_error() -> InferTy {
         TyTerm::Error(crate::ty::ErrorToken::new())
@@ -283,13 +222,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 (*name, self.freeze_or_error(&resolved))
             })
             .collect();
-        let body_effect = self.freeze_effect_or_pure(&self.body_effect.clone());
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
             Ty::String,
-            body_effect,
             extern_params,
         )))
     }
@@ -340,13 +277,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
             })
             .collect();
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
-        let body_effect = self.freeze_effect_or_pure(&self.body_effect.clone());
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
             frozen_tail,
-            body_effect,
             extern_params,
         )))
     }
@@ -463,19 +398,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
         ty
     }
 
-    /// Record a context read in the body effect.
-    fn record_context_read(&mut self, qref: QualifiedRef) {
-        if let EffectTerm::Resolved(ref mut set) = self.body_effect {
-            set.reads.insert(EffectTarget::Context(qref));
-        }
-    }
-
-    /// Record a context write in the body effect.
-    fn record_context_write(&mut self, qref: QualifiedRef) {
-        if let EffectTerm::Resolved(ref mut set) = self.body_effect {
-            set.writes.insert(EffectTarget::Context(qref));
-        }
-    }
 
     fn resolve_context_type(&mut self, qref: QualifiedRef, span: Span) -> InferTy {
         if let Some(ty) = self.env.contexts.get(&qref) {
@@ -632,7 +554,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
             } => {
                 let ty = self.check_expr(false, expr);
-                self.record_context_write(*name);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -941,7 +862,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Literal::List(elems) => {
                         if elems.is_empty() {
                             let elem = self.solver.fresh_ty_var();
-                            let origin = self.solver.alloc_identity(false);
+                            let origin = self.solver.alloc_identity();
                             TyTerm::Deque(Box::new(elem), Box::new(origin))
                         } else {
                             let first_ty = self.literal_ty(&elems[0]);
@@ -962,7 +883,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                     );
                                 }
                             }
-                            let origin = self.solver.alloc_identity(false);
+                            let origin = self.solver.alloc_identity();
                             TyTerm::Deque(Box::new(self.solver.resolve_ty(&first_ty)), Box::new(origin))
                         }
                     }
@@ -976,7 +897,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
             } => {
                 let ty = self.resolve_context_type(*qref, *span);
-                self.record_context_read(*qref);
                 // Check materiality: need to freeze to check concrete type properties.
                 let ty = if !allow_non_pure && !Self::is_error(&ty) && !Self::is_var(&ty) {
                     let frozen = self.freeze_or_error(&ty);
@@ -1328,14 +1248,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.lambda_stack.push(LambdaScope {
                     depth: self.scopes.len() - 1,
                     captures: Vec::new(),
-                    effect: EffectTerm::Resolved(Default::default()),
                 });
 
                 let ret = self.check_expr(false, body);
 
                 // Pop this lambda's scope.
                 let ls = self.lambda_stack.pop().unwrap();
-                let effect = ls.effect;
                 let capture_types: Vec<InferTy> = ls
                     .captures
                     .into_iter()
@@ -1351,7 +1269,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     params: param_types,
                     ret: Box::new(ret),
                     captures: capture_types,
-                    effect,
                     hint: None,
                 };
                 self.record_ret(*id, ty)
@@ -1374,7 +1291,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     // Empty list `[]` — element type unknown, use fresh var.
                     // If no hint resolves it, we report the error after resolve.
                     let elem = self.solver.fresh_ty_var();
-                    let origin = self.solver.alloc_identity(false);
+                    let origin = self.solver.alloc_identity();
                     let ty = TyTerm::Deque(Box::new(elem), Box::new(origin));
                     return self.record_ret(*id, ty);
                 }
@@ -1399,7 +1316,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     }
                 }
 
-                let origin = self.solver.alloc_identity(false);
+                let origin = self.solver.alloc_identity();
                 let ty = TyTerm::Deque(Box::new(self.solver.resolve_ty(&elem_ty)), Box::new(origin));
                 self.record_ret(*id, ty)
             }
@@ -1725,10 +1642,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 TyTerm::Fn {
                     params: param_tys,
                     ret,
-                    effect,
                     ..
                 } => {
-                    self.propagate_call_effect(effect.clone());
                     let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
                     if !self.check_args(name_str, &arg_types, &arg_spans, &arg_ids, &tys, call_span)
                     {
@@ -1772,26 +1687,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             call_span,
         );
         Self::infer_error()
-    }
-
-    /// Propagate a callee's effect to the enclosing scope.
-    /// If inside a lambda, propagates to the lambda scope.
-    /// Otherwise, propagates to the top-level body_effect.
-    fn propagate_call_effect(&mut self, effect: InferEffect) {
-        let resolved = self.solver.resolve_infer_effect(&effect);
-        if let EffectTerm::Resolved(callee_set) = &resolved
-            && !callee_set.is_pure()
-        {
-            if let Some(ls) = self.lambda_stack.last_mut() {
-                if let EffectTerm::Resolved(ref mut ls_set) = ls.effect {
-                    *ls_set = ls_set.union(callee_set);
-                } else {
-                    ls.effect = resolved.clone();
-                }
-            } else if let EffectTerm::Resolved(ref mut body_set) = self.body_effect {
-                *body_set = body_set.union(callee_set);
-            }
-        }
     }
 
     fn check_callable(
@@ -1841,11 +1736,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
             TyTerm::Fn {
                 params,
                 ret,
-                effect,
                 ..
             } => {
-                // Propagate effect to enclosing scope (lambda or top-level body).
-                self.propagate_call_effect(effect.clone());
                 let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
                 if !self.check_args(
                     "<closure>",
@@ -1869,7 +1761,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         .collect(),
                     ret: Box::new(ret.clone()),
                     captures: vec![],
-                    effect: EffectTerm::Resolved(Default::default()),
                     hint: None,
                 };
                 if self.unify_covariant(func_ty, &fn_ty, None).is_err() {
@@ -1890,7 +1781,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
                 // Context write allowed — mutability will be enforced later.
-                self.record_context_write(*qref);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -1947,7 +1837,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     TyTerm::List(ref inner) | TyTerm::Deque(ref inner, _) => (**inner).clone(),
                     _ => {
                         let var = self.solver.fresh_ty_var();
-                        let origin = self.solver.alloc_identity(false);
+                        let origin = self.solver.alloc_identity();
                         let list_ty = TyTerm::Deque(Box::new(var.clone()), Box::new(origin));
                         if self.unify_covariant(source_ty, &list_ty, None).is_err() {
                             self.error(
@@ -2181,7 +2071,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Literal::Byte(_) => TyTerm::Byte,
             Literal::Unit => TyTerm::Unit,
             Literal::List(elems) => {
-                let origin = self.solver.alloc_identity(false);
+                let origin = self.solver.alloc_identity();
                 match elems.first() {
                     Some(first) => TyTerm::Deque(Box::new(self.literal_ty(first)), Box::new(origin)),
                     None => TyTerm::Deque(Box::new(Self::infer_error()), Box::new(origin)),
@@ -2363,7 +2253,7 @@ mod tests {
             Ty::Fn {
                 params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                effect: Effect::pure(),
+
                 captures: vec![],
                 hint: None,
             },
@@ -2454,7 +2344,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![p(interner, Ty::String)],
                     ret: Box::new(Ty::String),
-                    effect: Effect::pure(),
+    
                     captures: vec![],
                     hint: None,
                 },
@@ -2500,7 +2390,7 @@ mod tests {
             Ty::Fn {
                 params: vec![p(&i, Ty::String), p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                effect: Effect::pure(),
+
                 captures: vec![],
                 hint: None,
             },
@@ -2571,7 +2461,7 @@ mod tests {
             Ty::Fn {
                 params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-                effect: Effect::pure(),
+
                 captures: vec![],
                 hint: None,
             },
@@ -2589,7 +2479,7 @@ mod tests {
             Ty::List(Box::new(Ty::Fn {
                 params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::Int),
-                effect: Effect::pure(),
+
                 captures: vec![],
                 hint: None,
             })),
@@ -2609,7 +2499,7 @@ mod tests {
             Ty::UserDefined {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
-                effect_args: vec![],
+    
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
@@ -2629,7 +2519,7 @@ mod tests {
         let conn_ty = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
-            effect_args: vec![],
+
         };
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), conn_ty.clone()),
@@ -2638,7 +2528,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![p(&i, conn_ty)],
                     ret: Box::new(Ty::String),
-                    effect: Effect::pure(),
+    
                     captures: vec![],
                     hint: None,
                 },

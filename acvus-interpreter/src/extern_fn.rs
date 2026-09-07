@@ -25,7 +25,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{EffectConstraint, PolyTy};
+use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -155,11 +155,10 @@ enum HandlerKind {
 
 // ── ExternFn ────────────────────────────────────────────────────────
 
-/// A fully-specified external function: constraint + handler.
+/// A fully-specified external function: type + handler.
 pub struct ExternFn {
     pub name: String,
     pub ty: PolyTy,
-    pub effect_constraint: Option<EffectConstraint>,
     handler_kind: HandlerKind,
 }
 
@@ -167,7 +166,6 @@ pub struct ExternFn {
 pub struct ExternFnBuilder {
     name: String,
     ty: PolyTy,
-    effect_constraint: Option<EffectConstraint>,
 }
 
 impl ExternFnBuilder {
@@ -175,13 +173,7 @@ impl ExternFnBuilder {
         Self {
             name: name.into(),
             ty,
-            effect_constraint: None,
         }
-    }
-
-    pub fn with_effect_constraint(mut self, constraint: EffectConstraint) -> Self {
-        self.effect_constraint = Some(constraint);
-        self
     }
 
     /// Register a sync type-safe handler with explicit `Uses` and `Defs`.
@@ -196,7 +188,6 @@ impl ExternFnBuilder {
         ExternFn {
             name: self.name,
             ty: self.ty.clone(),
-            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Extern(into_sync_extern_handler(f)),
         }
     }
@@ -214,7 +205,6 @@ impl ExternFnBuilder {
         ExternFn {
             name: self.name,
             ty: self.ty.clone(),
-            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Extern(into_async_extern_handler(f)),
         }
     }
@@ -224,7 +214,6 @@ impl ExternFnBuilder {
         ExternFn {
             name: self.name,
             ty: self.ty.clone(),
-            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Sync(f)),
         }
     }
@@ -234,7 +223,6 @@ impl ExternFnBuilder {
         ExternFn {
             name: self.name,
             ty: self.ty.clone(),
-            effect_constraint: self.effect_constraint.clone(),
             handler_kind: HandlerKind::Legacy(BuiltinHandler::Async(f)),
         }
     }
@@ -279,7 +267,6 @@ impl ExternRegistry {
                 qref,
                 kind: FnKind::Extern,
                 ty: f.ty,
-                effect_constraint: f.effect_constraint,
             });
 
             match f.handler_kind {

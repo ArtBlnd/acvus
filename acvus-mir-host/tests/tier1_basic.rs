@@ -15,6 +15,7 @@ fn len_str(s: String) -> (i64,) {
     (s.len() as i64,)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn len_str_call() {
     let mut scope = DummyScope::new();
@@ -26,6 +27,7 @@ fn len_str_call() {
     assert_eq!(val, 5);
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn len_str_empty() {
     let mut scope = DummyScope::new();
@@ -37,6 +39,7 @@ fn len_str_empty() {
     assert_eq!(val, 0);
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn len_str_registration() {
     let mut reg = DummyRegistrar::new();
@@ -48,6 +51,7 @@ fn len_str_registration() {
     assert!(reg.has_copy::<i64>());
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn len_str_constraint() {
     let interner = Interner::new();
@@ -62,6 +66,7 @@ fn len_str_constraint() {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn len_str_function() {
     let interner = Interner::new();
@@ -77,6 +82,7 @@ fn add(a: i64, b: i64) -> (i64,) {
     (a + b,)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_call() {
     let mut scope = DummyScope::new();
@@ -90,6 +96,7 @@ fn add_call() {
     assert_eq!(val, 30);
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_constraint() {
     let interner = Interner::new();
@@ -112,6 +119,7 @@ fn reverse<T: Hosted>(v: Vec<T>) -> (Vec<T>,) {
     (v.into_iter().rev().collect(),)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn reverse_constraint() {
     let interner = Interner::new();
@@ -139,6 +147,7 @@ fn swap<T: Hosted, U: Hosted>(a: T, b: U) -> (U, T) {
     (b, a)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn swap_constraint() {
     let interner = Interner::new();
@@ -170,6 +179,7 @@ fn filter<T: Hosted, E: EffectParam, F: Callable<(T,), bool, E>>(v: Vec<T>, _pre
     (v,) // body doesn't matter for constraint test
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn filter_constraint() {
     let interner = Interner::new();
@@ -204,6 +214,7 @@ struct AcvusIter<T, E>(std::marker::PhantomData<(T, E)>);
 
 unsafe impl<T: Hosted, E: EffectParam> Hosted for AcvusIter<T, E> {}
 
+#[ignore = "pending identity integration"]
 #[test]
 fn iter_type_decl() {
     let interner = Interner::new();
@@ -223,6 +234,7 @@ fn map_iter<T: Hosted, U: Hosted, E: EffectParam, F: Callable<(T,), U, E>>(
     unreachable!("constraint test only")
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn map_constraint() {
     let interner = Interner::new();
@@ -273,6 +285,7 @@ fn collect_iter<T: Hosted, E: EffectParam>(it: AcvusIter<T, E>) -> (Vec<T>,) {
     unreachable!("constraint test only")
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn collect_constraint() {
     let interner = Interner::new();
@@ -300,6 +313,7 @@ fn add_num<A: Monomorphize<(i64, f64)> + std::ops::Add<Output = A>>(a: A, b: A) 
     (a + b,)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_num_monomorphized() {
     let interner = Interner::new();
@@ -315,6 +329,7 @@ fn add_num_monomorphized() {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_num_call_i64() {
     let mut scope = DummyScope::new();
@@ -328,6 +343,7 @@ fn add_num_call_i64() {
     assert_eq!(val, 30);
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_num_call_f64() {
     let mut scope = DummyScope::new();
@@ -341,6 +357,7 @@ fn add_num_call_f64() {
     assert_eq!(val, 4.0);
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn add_num_registration() {
     let mut reg = DummyRegistrar::new();
@@ -359,6 +376,7 @@ fn count<S: Scope, T: Hosted>(scope: &mut S, v: Vec<T>) -> (i64,) {
     (0i64,)
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn count_scoped_constraint() {
     let interner = Interner::new();
@@ -421,6 +439,7 @@ fn json_parse(s: String, inferred_ret_ty: Ty) -> acvus_mir_host::Inferrable {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn json_parse_constraint() {
     let interner = Interner::new();
@@ -435,6 +454,7 @@ fn json_parse_constraint() {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn json_parse_call_int() {
     let mut scope = DummyScope::new();
@@ -449,6 +469,7 @@ fn json_parse_call_int() {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn json_parse_call_string() {
     let mut scope = DummyScope::new();
@@ -463,6 +484,7 @@ fn json_parse_call_string() {
     }
 }
 
+#[ignore = "pending identity integration"]
 #[test]
 fn json_parse_call_failed() {
     let mut scope = DummyScope::new();

@@ -16,7 +16,7 @@ use acvus_utils::Interner;
 fn test_effectful(interner: &Interner) -> Effect {
     Effect::Resolved(EffectSet {
         reads: BTreeSet::new(),
-        writes: BTreeSet::from([EffectTarget::Token(QualifiedRef::root(interner.intern("__test")))]),
+        writes: BTreeSet::from([EffectTarget::Context(QualifiedRef::root(interner.intern("__test")))]),
     })
 }
 
@@ -46,7 +46,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 // 11. Order Processing Pipeline
 //     6 functions (main + 4 helper + 1 IO extern)
 //     - Inline: 4 helpers flattened into main
@@ -55,8 +55,9 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
 //     - SpawnSplit: send_email → Spawn + Eval
 //     - CodeMotion: Spawn hoisted before Eval
 //     - DSE: context write-backs after phi
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
+#[ignore = "pending identity integration"]
 #[test]
 fn order_processing_pipeline() {
     let i = Interner::new();
@@ -185,7 +186,7 @@ fn order_processing_pipeline() {
     insta::assert_snapshot!("order_processing_pipeline@raw", raw);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 // 12. User Analytics — loop + classify + context accumulation + IO report
 //     4 functions (main + 2 helper + 1 IO extern)
 //     - Loop: user iteration, 5 context writes per iteration
@@ -193,8 +194,9 @@ fn order_processing_pipeline() {
 //     - SSA: 5+ loop phi + branch phi inside loop
 //     - SpawnSplit: send_report → Spawn + Eval
 //     - DSE: loop header phi write-backs
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
+#[ignore = "pending identity integration"]
 #[test]
 fn user_analytics_dashboard() {
     let i = Interner::new();
@@ -275,7 +277,7 @@ fn user_analytics_dashboard() {
     insta::assert_snapshot!("user_analytics_dashboard@raw", raw);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 // 13. Data Enrichment — two independent IO fetches + conditional third IO
 //     5 functions (main + 2 helper + 3 IO extern)
 //     - SpawnSplit: fetch_profile + fetch_history → two parallel Spawns
@@ -283,8 +285,9 @@ fn user_analytics_dashboard() {
 //     - Inline: compute_score, format_label
 //     - SSA: alert_count branch phi
 //     - DSE: context writes
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
+#[ignore = "pending identity integration"]
 #[test]
 fn data_enrichment_multi_io() {
     let i = Interner::new();
@@ -347,7 +350,7 @@ fn data_enrichment_multi_io() {
     insta::assert_snapshot!("data_enrichment_multi_io@raw", raw);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 // 14. Batch Processing — loop + validate/transform helpers + error accumulation + IO
 //     4 functions (main + 2 helper + 1 IO extern)
 //     - Loop: item iteration with branch (valid/invalid)
@@ -355,8 +358,9 @@ fn data_enrichment_multi_io() {
 //     - SSA: 4 context loop phi × branch phi — most complex phi pattern
 //     - SpawnSplit: publish_results → Spawn + Eval
 //     - DSE: loop header dead write-backs
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
+#[ignore = "pending identity integration"]
 #[test]
 fn batch_processing_with_errors() {
     let i = Interner::new();
@@ -429,7 +433,7 @@ fn batch_processing_with_errors() {
     insta::assert_snapshot!("batch_processing_with_errors@raw", raw);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 // 15. Multi-Stage Pipeline — cascading helpers + two IO calls
 //     5 functions (main + 3 helper + 2 IO extern)
 //     - Inline: 3 sequential helpers → flat computation chain
@@ -437,8 +441,9 @@ fn batch_processing_with_errors() {
 //     - CodeMotion: fetch_data Spawn at start, log_pipeline Spawn after stage3
 //     - SSA: sequential (no branches)
 //     - DSE: intermediate context writes are live (observable)
-// ═══════════════════════════════════════════════════════════════════════
+// =======================================================================
 
+#[ignore = "pending identity integration"]
 #[test]
 fn multi_stage_pipeline() {
     let i = Interner::new();

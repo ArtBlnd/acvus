@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
-use crate::ty::{EffectSet, PolyTy, Ty, lift_to_poly};
+use crate::ty::{PolyTy, Ty, lift_to_poly};
 
 use super::extract::{ExtractResult, ParsedSource, extract_one};
 use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
@@ -371,9 +371,6 @@ impl IncrementalGraph {
             }
             self.infer_cache[scc_idx] = Some(result);
         }
-
-        // Effect propagation across SCCs.
-        self.propagate_effects();
     }
 
     fn dirty_propagate(&mut self, changed_fn: QualifiedRef) {
@@ -478,68 +475,6 @@ impl IncrementalGraph {
             resolved_fn_types.extend(result.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
             self.infer_cache[scc_idx] = Some(result);
         }
-
-        // Effect propagation.
-        self.propagate_effects();
-    }
-
-    fn propagate_effects(&mut self) {
-        // Seed fn_metas with direct effects computed by the typechecker during infer.
-        for scc_idx in 0..self.scc_order.len() {
-            let scc = &self.scc_order[scc_idx];
-            let Some(ref mut scc_result) = self.infer_cache[scc_idx] else {
-                continue;
-            };
-
-            for &fid in scc {
-                if let Some(direct) = scc_result.fn_direct_effects.get(&fid)
-                    && let Some(meta) = scc_result.fn_metas.get_mut(&fid)
-                {
-                    meta.effect = direct.clone();
-                }
-            }
-        }
-
-        // Propagate through call graph in SCC order (fixpoint within each SCC).
-        // We need to collect all fn_metas into one map for propagation.
-        let mut all_effects: FxHashMap<QualifiedRef, EffectSet> = FxHashMap::default();
-        for scc_result in self.infer_cache.iter().flatten() {
-            for (&fid, meta) in &scc_result.fn_metas {
-                all_effects.insert(fid, meta.effect.clone());
-            }
-        }
-
-        for scc in &self.scc_order {
-            loop {
-                let mut changed = false;
-                for &fid in scc {
-                    if let Some(callees) = self.call_edges.get(&fid) {
-                        for &callee_id in callees {
-                            let callee_effect =
-                                all_effects.get(&callee_id).cloned().unwrap_or_default();
-                            let current = all_effects.get(&fid).cloned().unwrap_or_default();
-                            let merged = current.union(&callee_effect);
-                            if merged != current {
-                                all_effects.insert(fid, merged);
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-        }
-
-        // Write back to infer_cache.
-        for scc_result in self.infer_cache.iter_mut().flatten() {
-            for (fid, meta) in scc_result.fn_metas.iter_mut() {
-                if let Some(effect) = all_effects.get(fid) {
-                    meta.effect = effect.clone();
-                }
-            }
-        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
@@ -572,8 +507,7 @@ impl IncrementalGraph {
             FxHashMap::default();
 
         for scc_result in self.infer_cache.iter().flatten() {
-            // Convert SccInferResult metas to Incomplete outcomes (temporary — incremental
-            // Incremental does not yet verify effect constraints; will be reworked in Step 6).
+            // Convert SccInferResult metas to Incomplete outcomes (temporary).
             for (&fid, meta) in &scc_result.fn_metas {
                 outcomes.insert(
                     fid,

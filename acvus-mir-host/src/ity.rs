@@ -1,9 +1,8 @@
 //! ITy: Bridge between Rust host types and MIR compiler types.
 //! Hosted: Runtime opaque type marker.
 //! Typeck<N>: Compile-time stand-in for generic type parameters.
-//! EffectParam + Eff<N>: Effect variable system.
 
-use acvus_mir::ty::{Effect, InferEffect, InferTy, PolyEffect, PolyTy, Ty, lift_effect, lift_to_poly, lift_effect_to_poly, lift_ty};
+use acvus_mir::ty::{InferTy, PolyTy, Ty, lift_to_poly, lift_ty};
 use acvus_utils::Interner;
 
 // ── ITy ────────────────────────────────────────────────────────────
@@ -11,72 +10,70 @@ use acvus_utils::Interner;
 /// Bridge between Rust host types and MIR compiler types.
 ///
 /// `type_vars`: pre-allocated type entries (from Solver::fresh_ty_var).
-/// `effect_vars`: pre-allocated effect entries (from Solver::fresh_effect_var).
 ///
-/// Concrete types ignore both slices. Typeck<N> indexes into type_vars.
-/// Eff<N> indexes into effect_vars.
+/// Concrete types ignore the slice. Typeck<N> indexes into type_vars.
 pub trait ITy: Sized + 'static {
-    fn ty(interner: &Interner, type_vars: &[Ty], effect_vars: &[Effect]) -> Ty;
+    fn ty(interner: &Interner, type_vars: &[Ty]) -> Ty;
 
     /// Infer-phase version: returns `InferTy` with solver variables.
     /// Default: lifts the concrete type (works for non-generic types).
-    fn infer_ty(interner: &Interner, type_vars: &[InferTy], effect_vars: &[InferEffect]) -> InferTy {
-        let _ = (type_vars, effect_vars);
-        lift_ty(&Self::ty(interner, &[], &[]))
+    fn infer_ty(interner: &Interner, type_vars: &[InferTy]) -> InferTy {
+        let _ = type_vars;
+        lift_ty(&Self::ty(interner, &[]))
     }
 
     /// Poly-phase version: returns `PolyTy` with positional Var placeholders.
     /// Default: lifts the concrete type (works for non-generic types).
-    fn poly_ty(interner: &Interner, type_vars: &[PolyTy], effect_vars: &[PolyEffect]) -> PolyTy {
-        let _ = (type_vars, effect_vars);
-        lift_to_poly(&Self::ty(interner, &[], &[]))
+    fn poly_ty(interner: &Interner, type_vars: &[PolyTy]) -> PolyTy {
+        let _ = type_vars;
+        lift_to_poly(&Self::ty(interner, &[]))
     }
 }
 
 // ── Builtin ITy impls ─────────────────────────────────────────────
 
-impl ITy for i64    { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Int } }
-impl ITy for f64    { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Float } }
-impl ITy for String { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::String } }
-impl ITy for bool   { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Bool } }
-impl ITy for u8     { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Byte } }
-impl ITy for ()     { fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Unit } }
+impl ITy for i64    { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Int } }
+impl ITy for f64    { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Float } }
+impl ITy for String { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::String } }
+impl ITy for bool   { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Bool } }
+impl ITy for u8     { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Byte } }
+impl ITy for ()     { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Unit } }
 
 impl<T: ITy> ITy for Vec<T> {
-    fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
-        Ty::List(Box::new(T::ty(i, tv, ev)))
+    fn ty(i: &Interner, tv: &[Ty]) -> Ty {
+        Ty::List(Box::new(T::ty(i, tv)))
     }
-    fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
-        InferTy::List(Box::new(T::infer_ty(i, tv, ev)))
+    fn infer_ty(i: &Interner, tv: &[InferTy]) -> InferTy {
+        InferTy::List(Box::new(T::infer_ty(i, tv)))
     }
-    fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
-        PolyTy::List(Box::new(T::poly_ty(i, tv, ev)))
+    fn poly_ty(i: &Interner, tv: &[PolyTy]) -> PolyTy {
+        PolyTy::List(Box::new(T::poly_ty(i, tv)))
     }
 }
 
 impl<T: ITy> ITy for Option<T> {
-    fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
-        Ty::Option(Box::new(T::ty(i, tv, ev)))
+    fn ty(i: &Interner, tv: &[Ty]) -> Ty {
+        Ty::Option(Box::new(T::ty(i, tv)))
     }
-    fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
-        InferTy::Option(Box::new(T::infer_ty(i, tv, ev)))
+    fn infer_ty(i: &Interner, tv: &[InferTy]) -> InferTy {
+        InferTy::Option(Box::new(T::infer_ty(i, tv)))
     }
-    fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
-        PolyTy::Option(Box::new(T::poly_ty(i, tv, ev)))
+    fn poly_ty(i: &Interner, tv: &[PolyTy]) -> PolyTy {
+        PolyTy::Option(Box::new(T::poly_ty(i, tv)))
     }
 }
 
 macro_rules! impl_ity_tuple {
     ($($T:ident),+) => {
         impl<$($T: ITy),+> ITy for ($($T,)+) {
-            fn ty(i: &Interner, tv: &[Ty], ev: &[Effect]) -> Ty {
-                Ty::Tuple(vec![$($T::ty(i, tv, ev)),+])
+            fn ty(i: &Interner, tv: &[Ty]) -> Ty {
+                Ty::Tuple(vec![$($T::ty(i, tv)),+])
             }
-            fn infer_ty(i: &Interner, tv: &[InferTy], ev: &[InferEffect]) -> InferTy {
-                InferTy::Tuple(vec![$($T::infer_ty(i, tv, ev)),+])
+            fn infer_ty(i: &Interner, tv: &[InferTy]) -> InferTy {
+                InferTy::Tuple(vec![$($T::infer_ty(i, tv)),+])
             }
-            fn poly_ty(i: &Interner, tv: &[PolyTy], ev: &[PolyEffect]) -> PolyTy {
-                PolyTy::Tuple(vec![$($T::poly_ty(i, tv, ev)),+])
+            fn poly_ty(i: &Interner, tv: &[PolyTy]) -> PolyTy {
+                PolyTy::Tuple(vec![$($T::poly_ty(i, tv)),+])
             }
         }
     }
@@ -126,7 +123,7 @@ pub enum Inferrable {
 }
 
 impl ITy for Inferrable {
-    fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty {
+    fn ty(_: &Interner, _: &[Ty]) -> Ty {
         // Inferrable is system-internal. Its Ty is determined by the system, not by ITy.
         panic!("Inferrable::ty should not be called — type is determined by infer system")
     }
@@ -134,27 +131,20 @@ impl ITy for Inferrable {
 
 // ── Callable: function signature constraint ────────────────────────
 
-/// Declares that a type is callable with the given argument/return/effect types.
+/// Declares that a type is callable with the given argument/return types.
 ///
-/// Used in ExternFn signatures to express function parameter constraints:
-/// ```ignore
-/// fn filter<T: Hosted, E: EffectParam, F: Callable<(T,), bool, E>>(v: Vec<T>, pred: F) -> Vec<T>
-/// fn map<T: Hosted, U: Hosted, E: EffectParam, F: Callable<(T,), U, E>>(
-///     it: AcvusIter<T, E>, f: F
-/// ) -> AcvusIter<U, E>
-/// ```
+/// Used in ExternFn signatures to express function parameter constraints.
 ///
-/// Same `E` across params → same `Effect::Var` → unification merges effects.
 /// Supertrait: `Hosted`. At runtime, F = S::Owned (just a value).
 ///
 /// # Safety
 /// Same as Hosted — implementors must be valid runtime opaque representations.
-pub unsafe trait Callable<Args, Ret: ITy, E: EffectParam>: Hosted {}
+pub unsafe trait Callable<Args, Ret: ITy>: Hosted {}
 
-// All Hosted types implement Callable for all Args/Ret/E.
+// All Hosted types implement Callable for all Args/Ret.
 // SAFETY: Hosted types are opaque runtime values. Callable is a constraint marker,
 // not a runtime dispatch mechanism. The acvus type system guarantees correctness.
-unsafe impl<T: Hosted, Args, Ret: ITy, E: EffectParam> Callable<Args, Ret, E> for T {}
+unsafe impl<T: Hosted, Args, Ret: ITy> Callable<Args, Ret> for T {}
 
 // ── Monomorphize: constrained type marker ──────────────────────────
 
@@ -182,28 +172,6 @@ impl_monomorphize!(A, B, C, D);
 impl_monomorphize!(A, B, C, D, E);
 impl_monomorphize!(A, B, C, D, E, F);
 
-// ── EffectParam: effect variable marker ────────────────────────────
-
-/// Marker for types that represent effect variables in ExternFn signatures.
-///
-/// Only `Eff<N>` implements this. The macro uses this bound to distinguish
-/// effect parameters from type parameters.
-pub trait EffectParam: 'static {
-    fn effect(effect_vars: &[Effect]) -> Effect;
-
-    /// Infer-phase version: returns `InferEffect` with solver variables.
-    fn infer_effect(effect_vars: &[InferEffect]) -> InferEffect {
-        let _ = effect_vars;
-        lift_effect(&Effect::pure())
-    }
-
-    /// Poly-phase version: returns `PolyEffect` with positional Var placeholders.
-    fn poly_effect(effect_vars: &[PolyEffect]) -> PolyEffect {
-        let _ = effect_vars;
-        lift_effect_to_poly(&Effect::pure())
-    }
-}
-
 // ── Typeck<N>: type variable stand-in ──────────────────────────────
 
 /// Compile-time stand-in for generic type parameters.
@@ -214,43 +182,16 @@ pub trait EffectParam: 'static {
 pub struct Typeck<const N: usize>;
 
 impl<const N: usize> ITy for Typeck<N> {
-    fn ty(_: &Interner, type_vars: &[Ty], _: &[Effect]) -> Ty {
+    fn ty(_: &Interner, type_vars: &[Ty]) -> Ty {
         type_vars[N].clone()
     }
-    fn infer_ty(_: &Interner, type_vars: &[InferTy], _: &[InferEffect]) -> InferTy {
+    fn infer_ty(_: &Interner, type_vars: &[InferTy]) -> InferTy {
         type_vars[N].clone()
     }
-    fn poly_ty(_: &Interner, type_vars: &[PolyTy], _: &[PolyEffect]) -> PolyTy {
+    fn poly_ty(_: &Interner, type_vars: &[PolyTy]) -> PolyTy {
         type_vars[N].clone()
     }
 }
 
 // SAFETY: Typeck<N> is compile-time only. Never instantiated at runtime.
 unsafe impl<const N: usize> Hosted for Typeck<N> {}
-
-// ── Eff<N>: effect variable stand-in ───────────────────────────────
-
-/// Compile-time stand-in for effect parameters.
-///
-/// The `#[extern_fn]` macro assigns `Eff<0>`, `Eff<1>`, ... to each
-/// generic effect parameter (those with `EffectParam` bound).
-/// Indexes into the pre-allocated `effect_vars` slice.
-pub struct Eff<const N: usize>;
-
-impl<const N: usize> EffectParam for Eff<N> {
-    fn effect(effect_vars: &[Effect]) -> Effect {
-        effect_vars[N].clone()
-    }
-    fn infer_effect(effect_vars: &[InferEffect]) -> InferEffect {
-        effect_vars[N].clone()
-    }
-    fn poly_effect(effect_vars: &[PolyEffect]) -> PolyEffect {
-        effect_vars[N].clone()
-    }
-}
-
-// Eff<N> needs ITy for type-level usage (e.g., as phantom param in AcvusIter<T, E>).
-// Returns Unit — effect params don't occupy value slots.
-impl<const N: usize> ITy for Eff<N> {
-    fn ty(_: &Interner, _: &[Ty], _: &[Effect]) -> Ty { Ty::Unit }
-}

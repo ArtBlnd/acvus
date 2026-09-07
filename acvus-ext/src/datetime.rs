@@ -8,14 +8,13 @@ use acvus_interpreter::{
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Effect, Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_effect_to_poly, lift_to_poly};
+use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
-        effect_args: vec![],
     }
 }
 
@@ -65,7 +64,6 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     }
 }
@@ -80,7 +78,6 @@ fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: Some(Hint::Io),
     }
 }
@@ -110,7 +107,6 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
     type_registry.register(UserDefinedDecl {
         qref,
         type_params: vec![],
-        effect_params: vec![],
     });
 
     let ty = user_defined_ty(qref);

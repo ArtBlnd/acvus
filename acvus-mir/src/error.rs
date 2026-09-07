@@ -85,11 +85,6 @@ pub enum MirErrorKind {
         message: String,
     },
 
-    // Effect constraint errors
-    EffectViolation {
-        detail: String,
-    },
-
     // Graph engine errors
     ParseError(String),
 }
@@ -236,9 +231,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 message,
             } => {
                 write!(f, "[{scope}] inst #{inst_index}: {message}")
-            }
-            MirErrorKind::EffectViolation { detail } => {
-                write!(f, "effect constraint violated: {detail}")
             }
             MirErrorKind::ParseError(msg) => {
                 write!(f, "parse error: {msg}")

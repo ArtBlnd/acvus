@@ -4,6 +4,5 @@ pub mod domtree;
 pub mod inst_info;
 pub mod liveness;
 pub mod reachable_context;
-pub mod token_liveness;
 pub mod val_def;
 pub mod value_transfer;

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, TyTerm, lift_effect_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, TyTerm};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -53,7 +53,6 @@ fn build_unwrap(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(t),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
     ExternFnBuilder::new("unwrap", ty).handler(h_unwrap)
@@ -70,7 +69,6 @@ fn build_unwrap_or(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(t),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
     ExternFnBuilder::new("unwrap_or", ty).handler(h_unwrap_or)

@@ -105,7 +105,6 @@ fn analyze_block(
                 context_uses,
                 context_defs,
                 callee: Callee::Direct(_),
-                callee_ty,
                 ..
             } => {
                 // context_defs are writes (kill).
@@ -118,21 +117,7 @@ fn analyze_block(
                     kills.remove(qref);
                     reads.insert(*qref);
                 }
-                // If context_uses/context_defs are empty, check effect info.
-                if context_uses.is_empty() && context_defs.is_empty() {
-                    if let Some((fn_reads, fn_writes)) =
-                        crate::optimize::ssa_pass::extract_effect_refs(callee_ty)
-                    {
-                        for qref in fn_writes.iter().rev() {
-                            reads.remove(qref);
-                            kills.insert(*qref);
-                        }
-                        for qref in fn_reads.iter().rev() {
-                            kills.remove(qref);
-                            reads.insert(*qref);
-                        }
-                    }
-                }
+                // Effect-based fallback removed; pending identity integration.
             }
 
             InstKind::FunctionCall {
@@ -328,7 +313,6 @@ pub fn run(cfg: &mut CfgBody) {
                     context_uses,
                     context_defs,
                     callee: Callee::Direct(_),
-                    callee_ty,
                     ..
                 } => {
                     for (qref, _) in context_defs {
@@ -337,18 +321,7 @@ pub fn run(cfg: &mut CfgBody) {
                     for (qref, _) in context_uses {
                         live.insert(*qref);
                     }
-                    if context_uses.is_empty() && context_defs.is_empty() {
-                        if let Some((fn_reads, fn_writes)) =
-                            crate::optimize::ssa_pass::extract_effect_refs(callee_ty)
-                        {
-                            for qref in &fn_writes {
-                                live.remove(qref);
-                            }
-                            for qref in &fn_reads {
-                                live.insert(*qref);
-                            }
-                        }
-                    }
+                    // Effect-based fallback removed; pending identity integration.
                 }
 
                 InstKind::FunctionCall {

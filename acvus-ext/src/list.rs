@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{Defs, ExternFnBuilder, ExternRegistry, RuntimeError, Uses, Value};
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, TyTerm, lift_effect_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, TyTerm};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -38,7 +38,6 @@ fn build_len(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(TyTerm::Int),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
     ExternFnBuilder::new("len", ty).handler(h_len)
@@ -55,7 +54,6 @@ fn build_reverse(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(TyTerm::List(Box::new(t))),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
     ExternFnBuilder::new("reverse", ty).handler(h_reverse)

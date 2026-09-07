@@ -113,10 +113,8 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: pb.fresh_effect_var(),
                     hint: None,
                 },
-                effect_constraint: None,
             }]),
             contexts: Freeze::new(contexts),
         }

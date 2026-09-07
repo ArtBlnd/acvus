@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyBuilder, PolyEffect, PolyTy, TyTerm, lift_effect_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm};
 use acvus_utils::Interner;
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -57,7 +57,6 @@ fn make(interner: &Interner, name: &str, params: Vec<PolyTy>, ret: PolyTy) -> Ex
         params: named,
         ret: Box::new(ret),
         captures: vec![],
-        effect: lift_effect_to_poly(&Effect::pure()),
         hint: None,
     };
     ExternFnBuilder::new(name, ty)
@@ -68,11 +67,10 @@ fn make(interner: &Interner, name: &str, params: Vec<PolyTy>, ret: PolyTy) -> Ex
 pub fn deque_registry(interner: &Interner) -> ExternRegistry {
     let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
     ExternRegistry::new(move |interner| {
-        let it = |t: PolyTy, e: PolyEffect| -> PolyTy {
+        let it = |t: PolyTy| -> PolyTy {
             TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
-                effect_args: vec![e],
             }
         };
 
@@ -85,14 +83,13 @@ pub fn deque_registry(interner: &Interner) -> ExternRegistry {
             make(interner, "append", vec![deque.clone(), t], deque).sync_handler(h_append)
         };
 
-        // extend: (Deque<T, O>, Iterator<T, E>) → Deque<T, O>
+        // extend: (Deque<T, O>, Iterator<T>) → Deque<T, O>
         let extend = {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
             let o = b.fresh_ty_var();
-            let e = b.fresh_effect_var();
             let deque = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
-            make(interner, "extend", vec![deque.clone(), it(t, e)], deque).sync_handler(h_extend)
+            make(interner, "extend", vec![deque.clone(), it(t)], deque).sync_handler(h_extend)
         };
 
         // consume: (Deque<T, O>, Int) → Deque<T, O>

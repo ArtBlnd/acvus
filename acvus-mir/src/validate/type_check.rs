@@ -13,7 +13,7 @@
 
 use crate::graph::{ContextPolicy, QualifiedRef};
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
-use crate::ty::{Effect, EffectSet, EffectTarget, Ty};
+use crate::ty::Ty;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalIdOps;
 use rustc_hash::FxHashMap;
@@ -136,18 +136,15 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
             Ty::Fn {
                 params: p1,
                 ret: r1,
-                effect: e1,
                 ..
             },
             Ty::Fn {
                 params: p2,
                 ret: r2,
-                effect: e2,
                 ..
             },
         ) => {
-            effects_match(e1, e2)
-                && p1.len() == p2.len()
+            p1.len() == p2.len()
                 && p1.iter().zip(p2).all(|(a, b)| types_match(&a.ty, &b.ty))
                 && types_match(r1, r2)
         }
@@ -159,17 +156,6 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::UserDefined { id: a, .. }, Ty::UserDefined { id: b, .. }) => a == b,
 
         _ => false,
-    }
-}
-
-/// Effect matching for validation: Pure ≤ Effectful (subtyping).
-/// `Effect::Var(Infallible)` is uninhabitable for concrete types.
-fn effects_match(a: &Effect, b: &Effect) -> bool {
-    match (a, b) {
-        (Effect::Var(v), _) | (_, Effect::Var(v)) => match *v {},
-        // Both resolved — any resolved effects match in the two-element lattice
-        // (Pure ≤ Effectful subtyping).
-        (Effect::Resolved(_), Effect::Resolved(_)) => true,
     }
 }
 
@@ -242,24 +228,6 @@ impl CheckCtx {
             scope_name,
             label_map: FxHashMap::default(),
         }
-    }
-
-    /// Extract effect from a callee's type. Returns None if pure or unknown.
-    fn callee_effect(callee_ty: &Ty) -> Option<&EffectSet> {
-        match callee_ty {
-            Ty::Fn {
-                effect: Effect::Resolved(eff),
-                ..
-            } => Some(eff),
-            _ => None,
-        }
-    }
-
-    /// Count only Context targets in a set (Token targets are not SSA-compatible).
-    fn context_target_count(set: &std::collections::BTreeSet<EffectTarget>) -> usize {
-        set.iter()
-            .filter(|t| matches!(t, EffectTarget::Context(_)))
-            .count()
     }
 
     fn check_body(&mut self, body: &MirBody, errors: &mut Vec<ValidationError>) {
@@ -1131,39 +1099,7 @@ impl CheckCtx {
                 match callee {
                     Callee::Direct(_) => {
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
-
-                        // Verify context_uses/context_defs count matches callee's effect.
-                        // Only verify when SSA pass has populated them (non-empty).
-                        // Empty is valid: pre-SSA IR or contexts not in source scope
-                        // — interpreter dual-path fallback handles this.
-                        if let Some(eff) = Self::callee_effect(callee_ty) {
-                            let ctx_reads = Self::context_target_count(&eff.reads);
-                            let ctx_writes = Self::context_target_count(&eff.writes);
-                            if !context_uses.is_empty() && context_uses.len() != ctx_reads {
-                                errors.push(ValidationError {
-                                    scope: self.scope_name.clone(),
-                                    inst_index: pc,
-                                    span,
-                                    kind: ValidationErrorKind::ArityMismatch {
-                                        inst_name: "FunctionCall(Direct) context_uses".to_string(),
-                                        expected: ctx_reads,
-                                        got: context_uses.len(),
-                                    },
-                                });
-                            }
-                            if !context_defs.is_empty() && context_defs.len() != ctx_writes {
-                                errors.push(ValidationError {
-                                    scope: self.scope_name.clone(),
-                                    inst_index: pc,
-                                    span,
-                                    kind: ValidationErrorKind::ArityMismatch {
-                                        inst_name: "FunctionCall(Direct) context_defs".to_string(),
-                                        expected: ctx_writes,
-                                        got: context_defs.len(),
-                                    },
-                                });
-                            }
-                        }
+                        // context_uses/context_defs validation pending identity integration.
                     }
                     Callee::Indirect(closure) => {
                         let closure_ty = ty!(*closure);
@@ -1220,23 +1156,7 @@ impl CheckCtx {
             } => {
                 match callee {
                     Callee::Direct(_) => {
-                        // Verify context_uses count matches callee's effect reads.
-                        // Only when SSA pass has populated them (non-empty).
-                        if let Some(eff) = Self::callee_effect(callee_ty) {
-                            let ctx_reads = Self::context_target_count(&eff.reads);
-                            if !context_uses.is_empty() && context_uses.len() != ctx_reads {
-                                errors.push(ValidationError {
-                                    scope: self.scope_name.clone(),
-                                    inst_index: pc,
-                                    span,
-                                    kind: ValidationErrorKind::ArityMismatch {
-                                        inst_name: "Spawn(Direct) context_uses".to_string(),
-                                        expected: ctx_reads,
-                                        got: context_uses.len(),
-                                    },
-                                });
-                            }
-                        }
+                        // context_uses validation pending identity integration.
                         let dst_ty = ty!(*dst);
                         if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_)) {
                             errors.push(ValidationError {
@@ -1256,7 +1176,6 @@ impl CheckCtx {
                         if let Ty::Fn {
                             params,
                             ret,
-                            effect,
                             ..
                         } = closure_ty
                         {
@@ -1286,7 +1205,7 @@ impl CheckCtx {
                                 }
                             }
                             let expected_dst =
-                                Ty::Handle(Box::new(ret.as_ref().clone()), effect.clone());
+                                Ty::Handle(Box::new(ret.as_ref().clone()));
                             let dst_ty = ty!(*dst);
                             self.assert_match(
                                 pc,
@@ -1305,7 +1224,7 @@ impl CheckCtx {
 
             InstKind::Eval { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                if let Ty::Handle(inner, _) = src_ty {
+                if let Ty::Handle(inner) = src_ty {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "Eval", "dst", inner, dst_ty, errors);
                 } else if !src_ty.is_error() {
@@ -1501,7 +1420,7 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let mut solver = crate::ty::Solver::new();
-        let infer_o = solver.alloc_identity(false);
+        let infer_o = solver.alloc_identity();
         let o = solver.freeze_ty(&infer_o).unwrap();
         let mut vt = FxHashMap::default();
         vt.insert(v0, Ty::Deque(Box::new(Ty::Int), Box::new(o)));

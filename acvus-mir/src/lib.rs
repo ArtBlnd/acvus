@@ -38,7 +38,7 @@ pub fn build_context_ids(
 mod tests {
     use crate::ir::{InstKind, MirModule};
     use crate::test::{compile_script, compile_template};
-    use crate::ty::{Effect, Param, Ty};
+    use crate::ty::{Param, Ty};
     use acvus_utils::Interner;
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -80,7 +80,7 @@ mod tests {
             params: vec![Param::new(i.intern("_"), Ty::Int)],
             ret: Box::new(Ty::String),
             captures: vec![],
-            effect: Effect::pure(),
+
             hint: None,
         };
         compile_template(
@@ -219,7 +219,7 @@ mod tests {
                     ret: Box::new(Ty::String),
 
                     captures: vec![],
-                    effect: Effect::pure(),
+
                     hint: None,
                 },
             ),
@@ -265,7 +265,7 @@ mod tests {
                     params: vec![Param::new(i.intern("_"), Ty::List(Box::new(Ty::Int)))],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    effect: Effect::pure(),
+
                     hint: None,
                 },
             ),
@@ -479,7 +479,7 @@ mod tests {
     fn materiality_store_deque() {
         let i = Interner::new();
         let mut solver = crate::ty::Solver::new();
-        let infer_o = solver.alloc_identity(false);
+        let infer_o = solver.alloc_identity();
         let o = solver.freeze_ty(&infer_o).unwrap();
         assert!(
             compile_script(
@@ -516,7 +516,7 @@ mod tests {
             params: vec![Param::new(i.intern("x"), Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![],
-            effect: Effect::pure(),
+
             hint: None,
         };
         // Storing a function to context must fail.
@@ -535,7 +535,7 @@ mod tests {
             params: vec![Param::new(i.intern("x"), Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![],
-            effect: Effect::pure(),
+
             hint: None,
         };
         let list_fn_ty = Ty::List(Box::new(fn_ty));
@@ -549,7 +549,7 @@ mod tests {
             params: vec![Param::new(i.intern("x"), Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![],
-            effect: Effect::pure(),
+
             hint: None,
         };
         let obj_ty = Ty::Object(FxHashMap::from_iter([
