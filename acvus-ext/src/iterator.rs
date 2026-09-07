@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
-use acvus_interpreter::{
-    Args, ExternFnBuilder, ExternRegistry, IterHandle, RuntimeError, Value, exec_next,
-};
+use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{CastRule, ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
+
+use crate::iter_pipeline::{IterHandle, exec_next, into_iter_handle, iter_value, iterator_qref};
 
 // ── Signature helper ────────────────────────────────────────────────
 
@@ -34,99 +34,81 @@ fn make_sig(params: &[PolyTy], ret: PolyTy, interner: &Interner) -> PolyTy {
     }
 }
 // ── Sync handlers — constructors ────────────────────────────────────
-fn h_iter(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
+fn h_iter(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
     let items = match args[0].take() {
         Value::List(l) => Arc::try_unwrap(l).unwrap_or_else(|arc| arc.as_ref().clone()),
-        Value::Deque(d) => {
-            let d = Arc::try_unwrap(d).unwrap_or_else(|arc| (*arc).clone());
-            d.into_vec()
-        }
-        other => panic!("iter: expected List or Deque, got {other:?}"),
+        other => panic!("iter: expected List, got {other:?}"),
     };
-    Ok(Value::iterator(IterHandle::from_list(items)))
+    Ok(iter_value(interner, IterHandle::from_list(items)))
 }
 
-fn h_rev_iter(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
+fn h_rev_iter(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
     let mut items = match args[0].take() {
         Value::List(l) => Arc::try_unwrap(l).unwrap_or_else(|arc| arc.as_ref().clone()),
-        Value::Deque(d) => {
-            let d = Arc::try_unwrap(d).unwrap_or_else(|arc| (*arc).clone());
-            d.into_vec()
-        }
-        other => panic!("rev_iter: expected List or Deque, got {other:?}"),
+        other => panic!("rev_iter: expected List, got {other:?}"),
     };
     items.reverse();
-    Ok(Value::iterator(IterHandle::from_list(items)))
+    Ok(iter_value(interner, IterHandle::from_list(items)))
 }
 
 // ── Sync handlers — lazy combinators ────────────────────────────────
 
-fn h_map(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_map(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let f = args[1].take().into_fn();
-    Ok(Value::iterator(iter.map(*f)))
+    Ok(iter_value(interner, iter.map(*f)))
 }
 
-fn h_pmap(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_pmap(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let f = args[1].take().into_fn();
-    Ok(Value::iterator(iter.map(*f)))
+    Ok(iter_value(interner, iter.map(*f)))
 }
 
-fn h_filter(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_filter(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let f = args[1].take().into_fn();
-    Ok(Value::iterator(iter.filter(*f)))
+    Ok(iter_value(interner, iter.filter(*f)))
 }
 
-fn h_take(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_take(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let n = args[1].as_int().max(0) as usize;
-    Ok(Value::iterator(iter.take(n)))
+    Ok(iter_value(interner, iter.take(n)))
 }
 
-fn h_skip(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_skip(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let n = args[1].as_int().max(0) as usize;
-    Ok(Value::iterator(iter.skip(n)))
+    Ok(iter_value(interner, iter.skip(n)))
 }
 
-fn h_chain(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let a = args[0].take().into_iterator();
-    let b = args[1].take().into_iterator();
-    Ok(Value::iterator(a.chain(*b)))
+fn h_chain(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let a = into_iter_handle(args[0].take());
+    let b = into_iter_handle(args[1].take());
+    Ok(iter_value(interner, a.chain(b)))
 }
 
-fn h_pchain(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
+fn h_pchain(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
     // pchain = parallel chain at runtime; semantically same as collecting all iterators.
     let list = args[0].take().into_list();
-    let mut combined = Vec::new();
-    for item in list.iter() {
-        match item {
-            Value::Iterator(_) => {
-                // At this level we can't async-pull. Collect source items directly.
-                // This is the correct behavior for pchain: merge sources.
-                combined.push(item.clone());
-            }
-            _ => combined.push(item.clone()),
-        }
+    let parts = Arc::try_unwrap(list).unwrap_or_else(|arc| arc.as_ref().clone());
+    let mut chained = IterHandle::done();
+    for part in parts {
+        chained = chained.chain(into_iter_handle(part));
     }
-    // pchain: List<Iterator<T, E>> → Iterator<T, E>
-    // For now, flatten the list of iterators into a single iterator by chaining sources.
-    // Since iterators may not be collectible here, use a simpler approach:
-    // convert list to iterator directly.
-    Ok(Value::iterator(IterHandle::from_list(combined)))
+    Ok(iter_value(interner, chained))
 }
 
-fn h_flatten(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
-    Ok(Value::iterator(iter.flatten()))
+fn h_flatten(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
+    Ok(iter_value(interner, iter.flatten()))
 }
 
-fn h_flat_map(mut args: Args, _interner: &Interner) -> Result<Value, RuntimeError> {
-    let iter = args[0].take().into_iterator();
+fn h_flat_map(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
+    let iter = into_iter_handle(args[0].take());
     let f = args[1].take().into_fn();
-    Ok(Value::iterator(iter.flat_map(*f)))
+    Ok(iter_value(interner, iter.flat_map(*f)))
 }
 
 // ── Async handlers — consumers ──────────────────────────────────────
@@ -136,7 +118,7 @@ fn h_collect(
     _interner: Interner,
 ) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let mut items = Vec::new();
         while let Some(val) = exec_next(&mut iter).await? {
             items.push(val);
@@ -147,7 +129,7 @@ fn h_collect(
 
 fn h_join(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let sep = args[1].as_str().to_owned();
         let mut parts = Vec::new();
         while let Some(val) = exec_next(&mut iter).await? {
@@ -159,7 +141,7 @@ fn h_join(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Valu
 
 fn h_first(mut args: Args, interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         match exec_next(&mut iter).await? {
             Some(val) => Ok(Value::variant(interner.intern("Some"), Some(val))),
             None => Ok(Value::variant(interner.intern("None"), None)),
@@ -169,7 +151,7 @@ fn h_first(mut args: Args, interner: Interner) -> BoxFuture<'static, Result<Valu
 
 fn h_last(mut args: Args, interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let mut last = None;
         while let Some(val) = exec_next(&mut iter).await? {
             last = Some(val);
@@ -186,7 +168,7 @@ fn h_contains(
     _interner: Interner,
 ) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let needle = args[1].take();
         while let Some(val) = exec_next(&mut iter).await? {
             if val.structural_eq(&needle) {
@@ -199,10 +181,10 @@ fn h_contains(
 
 fn h_next(mut args: Args, interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         match exec_next(&mut iter).await? {
             Some(val) => {
-                let pair = Value::tuple(vec![val, Value::iterator(iter)]);
+                let pair = Value::tuple(vec![val, iter_value(&interner, iter)]);
                 Ok(Value::variant(interner.intern("Some"), Some(pair)))
             }
             None => Ok(Value::variant(interner.intern("None"), None)),
@@ -212,7 +194,7 @@ fn h_next(mut args: Args, interner: Interner) -> BoxFuture<'static, Result<Value
 
 fn h_find(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let f = args[1].take().into_fn();
         while let Some(val) = exec_next(&mut iter).await? {
             let keep = f.call(val.clone()).await?;
@@ -231,7 +213,7 @@ fn h_reduce(
     _interner: Interner,
 ) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let f = args[1].take().into_fn();
         let Some(mut acc) = exec_next(&mut iter).await? else {
             return Err(RuntimeError::empty_collection(
@@ -247,7 +229,7 @@ fn h_reduce(
 
 fn h_fold(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let mut acc = args[1].take();
         let f = args[2].take().into_fn();
         while let Some(val) = exec_next(&mut iter).await? {
@@ -259,7 +241,7 @@ fn h_fold(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Valu
 
 fn h_any(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let f = args[1].take().into_fn();
         while let Some(val) = exec_next(&mut iter).await? {
             let result = f.call(val).await?;
@@ -273,7 +255,7 @@ fn h_any(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value
 
 fn h_all(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
-        let mut iter = *args[0].take().into_iterator();
+        let mut iter = into_iter_handle(args[0].take());
         let f = args[1].take().into_fn();
         while let Some(val) = exec_next(&mut iter).await? {
             let result = f.call(val).await?;
@@ -288,13 +270,12 @@ fn h_all(mut args: Args, _interner: Interner) -> BoxFuture<'static, Result<Value
 // ── Registry ────────────────────────────────────────────────────────
 
 pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> ExternRegistry {
-    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    let iter_qref = iterator_qref(interner);
     type_registry.register(UserDefinedDecl {
         qref: iter_qref,
         type_params: vec![None],
     });
 
-    // Register CastRules: List<T> → Iterator<T, Pure>, Deque<T, O> → Iterator<T, Pure>.
     {
         let mut b = PolyBuilder::new();
         let t = b.fresh_ty_var();
@@ -305,19 +286,6 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 type_args: vec![t],
             },
             fn_ref: QualifiedRef::root(interner.intern("iter")),
-        });
-    }
-    {
-        let mut b = PolyBuilder::new();
-        let t = b.fresh_ty_var();
-        let o = b.fresh_ty_var();
-        type_registry.register_cast(CastRule {
-            from: TyTerm::Deque(Box::new(t.clone()), Box::new(o)),
-            to: TyTerm::UserDefined {
-                id: iter_qref,
-                type_args: vec![t],
-            },
-            fn_ref: QualifiedRef::root(interner.intern("__cast_deque_to_iter")),
         });
     }
 
@@ -361,23 +329,6 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                     ),
                 )
                 .sync_handler(h_rev_iter),
-            );
-        }
-        // Cast helpers (used by CastRule, not meant to be called directly).
-        {
-            let mut b = PolyBuilder::new();
-            let t = b.fresh_ty_var();
-            let o = b.fresh_ty_var();
-            fns.push(
-                ExternFnBuilder::new(
-                    "__cast_deque_to_iter",
-                    make_sig(
-                        &[TyTerm::Deque(Box::new(t.clone()), Box::new(o))],
-                        it(t),
-                        interner,
-                    ),
-                )
-                .sync_handler(h_iter),
             );
         }
 

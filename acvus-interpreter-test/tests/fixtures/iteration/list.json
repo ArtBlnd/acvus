@@ -1,5 +1,0 @@
-{
-  "template": "{{ x in @items }}{{ x | to_string }}{{/}}",
-  "context": { "items": [1, 2, 3] },
-  "expected": "123"
-}

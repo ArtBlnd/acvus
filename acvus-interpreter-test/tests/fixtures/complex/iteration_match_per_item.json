@@ -1,5 +1,0 @@
-{
-  "template": "{{ x in @items }}{{ 1..=3 = x }}s{{_}}b{{/}}{{/}}",
-  "context": { "items": [1, 2, 3, 4, 5] },
-  "expected": "sssbb"
-}

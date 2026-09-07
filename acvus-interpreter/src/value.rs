@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::MirBody;
-use acvus_utils::{Astr, Interner, TrackedDeque};
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
-pub use crate::iter::{IterHandle, SequenceChain};
 use crate::journal::{InMemoryContext, RuntimeContext};
 
 // ── Value ────────────────────────────────────────────────────────────
@@ -44,16 +43,10 @@ pub enum Value {
     List(Arc<Vec<Value>>),
     Object(Arc<FxHashMap<Astr, Value>>),
     Tuple(Arc<Vec<Value>>),
-    Deque(Arc<TrackedDeque<Value>>),
     Variant(Box<VariantValue>),
-
-    // ── Boxed (rarely used, keep enum small) ─────────────────────
-    Range(Box<RangeValue>),
 
     // ── Owned (move-only, Box) ───────────────────────────────────
     Fn(Box<FnValue>),
-    Iterator(Box<IterHandle>),
-    Sequence(Box<SequenceChain>),
     Handle(Box<HandleValue>),
 
     // ── Opaque (extern boundary) ─────────────────────────────────
@@ -66,13 +59,6 @@ pub enum Value {
 pub struct VariantValue {
     pub tag: Astr,
     pub payload: Option<Arc<Value>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RangeValue {
-    pub start: i64,
-    pub end: i64,
-    pub inclusive: bool,
 }
 
 /// A self-contained callable: execution context + body + captured values.
@@ -193,9 +179,6 @@ impl Value {
     pub fn tuple(elems: Vec<Value>) -> Self {
         Value::Tuple(Arc::new(elems))
     }
-    pub fn deque(d: TrackedDeque<Value>) -> Self {
-        Value::Deque(Arc::new(d))
-    }
     pub fn variant(tag: Astr, payload: Option<Value>) -> Self {
         Value::Variant(Box::new(VariantValue {
             tag,
@@ -217,24 +200,9 @@ impl Value {
         }))
     }
 
-    // Boxed
-    pub fn range(start: i64, end: i64, inclusive: bool) -> Self {
-        Value::Range(Box::new(RangeValue {
-            start,
-            end,
-            inclusive,
-        }))
-    }
-
     // Owned
     pub fn closure(fv: FnValue) -> Self {
         Value::Fn(Box::new(fv))
-    }
-    pub fn iterator(ih: IterHandle) -> Self {
-        Value::Iterator(Box::new(ih))
-    }
-    pub fn sequence(sc: SequenceChain) -> Self {
-        Value::Sequence(Box::new(sc))
     }
 
     // Opaque
@@ -279,12 +247,8 @@ impl Value {
             Value::List(_) => ValueKind::List,
             Value::Object(_) => ValueKind::Object,
             Value::Tuple(_) => ValueKind::Tuple,
-            Value::Deque(_) => ValueKind::Deque,
             Value::Variant(_) => ValueKind::Variant,
-            Value::Range(_) => ValueKind::Range,
             Value::Fn(_) => ValueKind::Fn,
-            Value::Iterator(_) => ValueKind::Iterator,
-            Value::Sequence(_) => ValueKind::Sequence,
             Value::Handle(_) => ValueKind::Handle,
             Value::Opaque(_) => ValueKind::Opaque,
         }
@@ -350,13 +314,6 @@ impl Value {
             other => panic!("expected Tuple, got {other:?}"),
         }
     }
-    #[inline]
-    pub fn as_range(&self) -> &RangeValue {
-        match self {
-            Value::Range(r) => r,
-            other => panic!("expected Range, got {other:?}"),
-        }
-    }
 }
 
 // ── Extraction (owned — consumes the value) ──────────────────────────
@@ -390,20 +347,6 @@ impl Value {
             other => panic!("expected Fn, got {other:?}"),
         }
     }
-    #[inline]
-    pub fn into_iterator(self) -> Box<IterHandle> {
-        match self {
-            Value::Iterator(i) => i,
-            other => panic!("expected Iterator, got {other:?}"),
-        }
-    }
-    #[inline]
-    pub fn into_sequence(self) -> Box<SequenceChain> {
-        match self {
-            Value::Sequence(s) => s,
-            other => panic!("expected Sequence, got {other:?}"),
-        }
-    }
 }
 
 // ── Structural equality ──────────────────────────────────────────────
@@ -419,7 +362,6 @@ impl Value {
             (Value::Unit, Value::Unit) => true,
             (Value::Byte(a), Value::Byte(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
-            (Value::Range(a), Value::Range(b)) => a == b,
 
             (Value::List(a), Value::List(b)) => slice_eq(a, b),
             (Value::Tuple(a), Value::Tuple(b)) => slice_eq(a, b),
@@ -428,7 +370,6 @@ impl Value {
                     && a.iter()
                         .all(|(k, v)| b.get(k).is_some_and(|bv| v.structural_eq(bv)))
             }
-            (Value::Deque(a), Value::Deque(b)) => slice_eq(a.as_slice(), b.as_slice()),
 
             (Value::Variant(a), Value::Variant(b)) => {
                 a.tag == b.tag
@@ -464,15 +405,11 @@ impl Clone for Value {
             Value::List(l) => Value::List(Arc::clone(l)),
             Value::Object(o) => Value::Object(Arc::clone(o)),
             Value::Tuple(t) => Value::Tuple(Arc::clone(t)),
-            Value::Deque(d) => Value::Deque(Arc::clone(d)),
             Value::Variant(v) => Value::Variant(Box::new(VariantValue {
                 tag: v.tag,
                 payload: v.payload.as_ref().map(Arc::clone),
             })),
-            Value::Range(r) => Value::Range(r.clone()),
             Value::Fn(f) => Value::Fn(f.clone()),
-            Value::Iterator(_) => panic!("clone: Iterator is move-only"),
-            Value::Sequence(_) => panic!("clone: Sequence is move-only"),
             Value::Handle(_) => panic!("clone: Handle is move-only"),
             Value::Opaque(o) => Value::Opaque(o.clone()),
         }
@@ -501,21 +438,11 @@ impl fmt::Debug for Value {
                 }
                 d.finish()
             }
-            Value::Deque(d) => f.debug_list().entries(d.as_slice().iter()).finish(),
             Value::Variant(v) => match &v.payload {
                 Some(p) => write!(f, "{:?}({p:?})", v.tag),
                 None => write!(f, "{:?}", v.tag),
             },
-            Value::Range(r) => {
-                if r.inclusive {
-                    write!(f, "{}..={}", r.start, r.end)
-                } else {
-                    write!(f, "{}..{}", r.start, r.end)
-                }
-            }
             Value::Fn(fv) => write!(f, "Fn({} captures)", fv.captures.len()),
-            Value::Iterator(_) => write!(f, "Iterator"),
-            Value::Sequence(_) => write!(f, "Sequence"),
             Value::Handle(_) => write!(f, "Handle"),
             Value::Opaque(o) => write!(f, "UserDefined({:?})", o.type_id),
         }
@@ -555,6 +482,16 @@ impl OpaqueValue {
 
     pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
         self.inner.downcast_ref()
+    }
+
+    /// Take the value back out. Fails when the payload is a different type or
+    /// is still shared.
+    pub fn into_owned<T: Any + Send + Sync>(self) -> Result<T, Self> {
+        let type_id = self.type_id;
+        match self.inner.downcast::<T>() {
+            Ok(arc) => Arc::try_unwrap(arc).map_err(|inner| Self { type_id, inner }),
+            Err(inner) => Err(Self { type_id, inner }),
+        }
     }
 }
 
@@ -844,13 +781,6 @@ mod tests {
         let v = Value::string("hello");
         let v2 = v.share();
         assert_eq!(v, v2);
-    }
-
-    #[test]
-    #[should_panic(expected = "move-only")]
-    fn share_iterator_panics() {
-        let v = Value::iterator(IterHandle::done());
-        let _ = v.share();
     }
 
     #[test]

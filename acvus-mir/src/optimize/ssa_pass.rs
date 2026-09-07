@@ -385,18 +385,13 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
             s(src);
             context_defs.iter_mut().for_each(|(_, v)| s(v));
         }
-        InstKind::MakeDeque { elements, .. } => elements.iter_mut().for_each(&s),
+        InstKind::MakeList { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
-        InstKind::MakeRange { start, end, .. } => {
-            s(start);
-            s(end);
-        }
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::TupleIndex { tuple, .. } => s(tuple),
         InstKind::TestLiteral { src, .. } => s(src),
         InstKind::TestListLen { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
-        InstKind::TestRange { src, .. } => s(src),
         InstKind::ListIndex { list, .. } => s(list),
         InstKind::ListGet { list, index, .. } => {
             s(list);
@@ -405,16 +400,6 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::ListSlice { list, .. } => s(list),
         InstKind::ObjectGet { object, .. } => s(object),
         InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(&s),
-        InstKind::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            s(list);
-            s(index_src);
-            done_args.iter_mut().for_each(&s);
-        }
         InstKind::MakeVariant { payload, .. } => {
             if let Some(p) = payload {
                 s(p);
@@ -437,7 +422,6 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
             else_args.iter_mut().for_each(&s);
         }
         InstKind::Return(v) => s(v),
-        InstKind::Cast { src, .. } => s(src),
         InstKind::Clone { src, .. } => s(src),
         InstKind::Drop { src } => s(src),
     }
@@ -461,20 +445,6 @@ fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, Valu
             s(cond);
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
-        }
-        Terminator::ListStep {
-            dst,
-            list,
-            index_src,
-            index_dst,
-            done_args,
-            ..
-        } => {
-            s(dst);
-            s(list);
-            s(index_src);
-            s(index_dst);
-            done_args.iter_mut().for_each(&s);
         }
         Terminator::Return(v) => s(v),
         Terminator::Fallthrough => {}
@@ -944,7 +914,6 @@ fn patch_instructions(
                 else_label,
                 ..
             } => merge_labels.contains(then_label) || merge_labels.contains(else_label),
-            Terminator::ListStep { done, .. } => merge_labels.contains(done),
             _ => false,
         };
         if jumps_to_merge && let Some(ops) = ssa_info.block_ops.get(&BlockIdx(bi)) {
@@ -1077,13 +1046,6 @@ fn patch_instructions(
                 }
                 if let Some(extra) = jump_extra_args.get(&(pred_label, *else_label)) {
                     else_args.extend_from_slice(extra);
-                }
-            }
-            Terminator::ListStep {
-                done, done_args, ..
-            } => {
-                if let Some(extra) = jump_extra_args.get(&(pred_label, *done)) {
-                    done_args.extend_from_slice(extra);
                 }
             }
             _ => {}
@@ -1241,23 +1203,6 @@ mod tests {
         assert!(count_phi_blocks(&cfg_body) >= 1);
     }
 
-    #[test]
-    fn iter_context_write_phi() {
-        let i = Interner::new();
-        let module = compile_template(
-            &i,
-            r#"{{ x in @items }}{{ @sum = @sum + x }}{{/}}"#,
-            &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
-        )
-        .unwrap();
-        let mut cfg_body = cfg::promote(module.main);
-        run(&mut cfg_body);
-        assert!(
-            count_phi_blocks(&cfg_body) >= 1,
-            "loop header should have PHI for @sum"
-        );
-    }
-
     // ── Soundness: PHI NOT inserted when not needed ──
 
     #[test]
@@ -1286,63 +1231,6 @@ mod tests {
     }
 
     // ── Script regression: entry loads + nested loops ──
-
-    #[test]
-    fn script_nested_loop_phi() {
-        // Nested loop must not panic in SSA pass (regression: ListStep CFG terminator).
-        let i = Interner::new();
-        let module = compile_script(
-            &i,
-            "row in @matrix { x in row { @sum = @sum + x; }; }; @sum",
-            &[
-                ("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
-                ("sum", Ty::Int),
-            ],
-        )
-        .unwrap();
-        let cfg_body = cfg::promote(module.main);
-        // Must have PHI for @sum (written in inner loop).
-        assert!(
-            count_phi_blocks(&cfg_body) >= 1,
-            "nested loop should produce PHI for @sum"
-        );
-    }
-
-    #[test]
-    fn script_loop_with_branch_phi() {
-        // Loop body with conditional context write — needs PHI.
-        let i = Interner::new();
-        let module = compile_script(
-            &i,
-            "x in @items { 0 = x { @count = @count + 1; }; }; @count",
-            &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
-        )
-        .unwrap();
-        let cfg_body = cfg::promote(module.main);
-        assert!(
-            count_phi_blocks(&cfg_body) >= 1,
-            "loop + branch should produce PHI"
-        );
-    }
-
-    #[test]
-    fn script_sequential_loops_no_panic() {
-        // Two sequential loops writing same context must not panic.
-        let i = Interner::new();
-        let module = compile_script(
-            &i,
-            "x in @a { @sum = @sum + x; }; y in @b { @sum = @sum + y; }; @sum",
-            &[
-                ("a", Ty::List(Box::new(Ty::Int))),
-                ("b", Ty::List(Box::new(Ty::Int))),
-                ("sum", Ty::Int),
-            ],
-        )
-        .unwrap();
-        let cfg_body = cfg::promote(module.main);
-        // Both loops write @sum — SSA pass must handle this.
-        assert!(count_context_stores(&cfg_body) >= 1);
-    }
 
     // ── Volatile context: forwarding must be skipped ──
 

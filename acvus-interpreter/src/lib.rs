@@ -3,7 +3,6 @@ pub mod error;
 pub mod executor;
 pub mod extern_fn;
 mod interpreter;
-pub mod iter;
 pub mod journal;
 mod value;
 
@@ -14,11 +13,10 @@ pub use extern_fn::{
 };
 pub use interpreter::{
     Args, AsyncBuiltinFn, BuiltinHandler, ExecResult, Executable, Interpreter, InterpreterContext,
-    SyncBuiltinFn, exec_next,
+    SyncBuiltinFn,
 };
-pub use iter::{IterHandle, SequenceChain};
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use value::{
-    FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue, RangeValue,
+    FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue,
     Value,
 };

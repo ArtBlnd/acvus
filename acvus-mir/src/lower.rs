@@ -1,5 +1,5 @@
 use acvus_ast::{
-    AstId, BinOp, ElseBranch, Expr, IndentModifier, IterBlock, Literal, MatchBlock, Node,
+    AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, Node,
     ObjectExprField, ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template,
     TupleElem, TuplePatternElem,
 };
@@ -97,19 +97,6 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
                 source: mb.source.clone(),
                 indent: mb.indent,
                 span: mb.span,
-            }),
-            Node::IterBlock(ib) => Node::IterBlock(acvus_ast::IterBlock {
-                id: acvus_ast::AstId::alloc(),
-                pattern: ib.pattern.clone(),
-                source: ib.source.clone(),
-                body: apply_indent_to_nodes(&ib.body, modifier),
-                catch_all: ib.catch_all.as_ref().map(|ca| acvus_ast::CatchAll {
-                    id: acvus_ast::AstId::alloc(),
-                    body: apply_indent_to_nodes(&ca.body, modifier),
-                    tag_span: ca.tag_span,
-                }),
-                indent: ib.indent,
-                span: ib.span,
             }),
             other => other.clone(),
         })
@@ -213,15 +200,6 @@ impl<'a> Lowerer<'a> {
             } => {
                 self.lower_stmt_match_bind(pattern, source, body, *span);
             }
-            Stmt::Iterate {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                self.lower_stmt_iterate(pattern, source, body, *span);
-            }
 
             // ── Script mode statements ──────────────────────────────
 
@@ -256,15 +234,6 @@ impl<'a> Lowerer<'a> {
                 let slot = self.lookup_var_slot(*name)
                     .expect("Assign to undefined variable — should have been caught by typeck");
                 self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
-            }
-            Stmt::For {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                self.lower_stmt_iterate(pattern, source, body, *span);
             }
             Stmt::While {
                 cond, body, span, ..
@@ -387,140 +356,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Lower an iterate statement: `pattern in source { body; };`
-    ///
-    /// No string accumulation — just executes body for each element.
-    fn lower_stmt_iterate(&mut self, pattern: &Pattern, source: &Expr, body: &[Stmt], span: Span) {
-        let source_raw = self.lower_expr(source);
-        let source_reg = self.materialize(source_raw, span);
-
-        let elem_ty = self.iterable_elem_type(source_reg);
-
-        // Convert source to List if needed (Deque→List, Range→List).
-        let list_reg = match self.body.val_types.get(&source_reg) {
-            Some(Ty::List(_)) => source_reg,
-            Some(Ty::Deque(..)) => {
-                let cast_dst = self.alloc_val();
-                self.set_val_type(cast_dst, Ty::List(Box::new(elem_ty.clone())));
-                self.emit_inst(
-                    span,
-                    InstKind::Cast {
-                        dst: cast_dst,
-                        src: source_reg,
-                        kind: CastKind::DequeToList,
-                    },
-                );
-                cast_dst
-            }
-            Some(Ty::Range) => {
-                let cast_dst = self.alloc_val();
-                self.set_val_type(cast_dst, Ty::List(Box::new(Ty::Int)));
-                self.emit_inst(
-                    span,
-                    InstKind::Cast {
-                        dst: cast_dst,
-                        src: source_reg,
-                        kind: CastKind::RangeToList,
-                    },
-                );
-                cast_dst
-            }
-            _ => source_reg,
-        };
-
-        // Initial index = 0.
-        let zero = self.alloc_val();
-        self.set_val_type(zero, Ty::Int);
-        self.emit_inst(
-            span,
-            InstKind::Const {
-                dst: zero,
-                value: Literal::Int(0),
-            },
-        );
-
-        let loop_label = self.alloc_label();
-        let end_label = self.alloc_label();
-
-        // Jump to loop with initial index.
-        self.emit_inst(
-            span,
-            InstKind::Jump {
-                label: loop_label,
-                args: vec![zero],
-            },
-        );
-
-        // Loop header — receives index as block param.
-        let index_param = self.alloc_val();
-        self.set_val_type(index_param, Ty::Int);
-        self.emit_inst(
-            span,
-            InstKind::BlockLabel {
-                label: loop_label,
-                params: vec![index_param],
-                merge_of: None,
-            },
-        );
-
-        // ListStep — if index >= len, jump to end; else dst = list[index].
-        let value_reg = self.alloc_val();
-        self.set_val_type(value_reg, elem_ty);
-        let next_index = self.alloc_val();
-        self.set_val_type(next_index, Ty::Int);
-        self.emit_inst(
-            span,
-            InstKind::ListStep {
-                dst: value_reg,
-                list: list_reg,
-                index_src: index_param,
-                index_dst: next_index,
-                done: end_label,
-                done_args: vec![],
-            },
-        );
-
-        // Body label after ListStep (ListStep is a terminator in CFG).
-        let body_label = self.alloc_label();
-        self.emit_label(span, body_label);
-
-        // Bind pattern + execute body.
-        self.push_scope();
-        self.lower_pattern_bind(pattern, value_reg, span);
-        for s in body {
-            self.lower_stmt(s);
-        }
-        self.pop_scope();
-
-        // Jump back to loop with next index.
-        self.emit_inst(
-            span,
-            InstKind::Jump {
-                label: loop_label,
-                args: vec![next_index],
-            },
-        );
-
-        // End block.
-        self.emit_inst(
-            span,
-            InstKind::BlockLabel {
-                label: end_label,
-                params: vec![],
-                merge_of: None,
-            },
-        );
-    }
-
-    /// Lower `while cond { body }`.
-    ///
-    /// loop_label:
-    ///   cond = lower(cond)
-    ///   JumpIf cond → body_label, end_label
-    /// body_label:
-    ///   body...
-    ///   Jump loop_label
-    /// end_label:
     fn lower_while(&mut self, cond: &Expr, body: &[Stmt], span: Span) {
         let loop_label = self.alloc_label();
         let body_label = self.alloc_label();
@@ -1095,7 +930,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn list_elem_type(&self, list_val: ValueId) -> Ty {
-        if let Some(Ty::List(elem) | Ty::Deque(elem, _)) = self.body.val_types.get(&list_val) {
+        if let Some(Ty::List(elem)) = self.body.val_types.get(&list_val) {
             elem.as_ref().clone()
         } else {
             Ty::error()
@@ -1115,14 +950,6 @@ impl<'a> Lowerer<'a> {
             inner.as_ref().clone()
         } else {
             Ty::error()
-        }
-    }
-
-    fn iterable_elem_type(&self, src_val: ValueId) -> Ty {
-        match self.body.val_types.get(&src_val) {
-            Some(Ty::List(elem) | Ty::Deque(elem, _)) => elem.as_ref().clone(),
-            Some(Ty::Range) => Ty::Int,
-            _ => Ty::error(),
         }
     }
 
@@ -1270,7 +1097,6 @@ impl<'a> Lowerer<'a> {
             Node::Comment { .. } => self.emit_empty_string(parent_span),
             Node::InlineExpr { expr, .. } => self.lower_expr(expr),
             Node::MatchBlock(mb) => self.lower_match_block(mb),
-            Node::IterBlock(ib) => self.lower_iter_block(ib),
         }
     }
 
@@ -1326,27 +1152,6 @@ impl<'a> Lowerer<'a> {
                             args: vec![val],
                             context_uses: vec![],
                             context_defs: vec![],
-                        },
-                    );
-                    cast_dst
-                }
-                kind => {
-                    // Native cast — inline conversion.
-                    let src_ty = self
-                        .body
-                        .val_types
-                        .get(&val)
-                        .cloned()
-                        .unwrap_or(Ty::error());
-                    let dst_ty = kind.result_ty(&src_ty);
-                    let cast_dst = self.alloc_val();
-                    self.set_val_type(cast_dst, dst_ty);
-                    self.emit_inst(
-                        span,
-                        InstKind::Cast {
-                            dst: cast_dst,
-                            src: val,
-                            kind: kind.clone(),
                         },
                     );
                     cast_dst
@@ -1818,7 +1623,7 @@ impl<'a> Lowerer<'a> {
                     .map(|e| self.lower_expr(e))
                     .collect();
                 let dst = self.alloc_typed(*id);
-                self.emit_inst(*span, InstKind::MakeDeque { dst, elements });
+                self.emit_inst(*span, InstKind::MakeList { dst, elements });
                 dst
             }
 
@@ -1841,28 +1646,6 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Expr::Range {
-                start,
-                end,
-                kind,
-                span,
-                ..
-            } => {
-                let s = self.lower_expr(start);
-                let e = self.lower_expr(end);
-                let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Range);
-                self.emit_inst(
-                    *span,
-                    InstKind::MakeRange {
-                        dst,
-                        start: s,
-                        end: e,
-                        kind: *kind,
-                    },
-                );
-                dst
-            }
 
             Expr::Tuple { id, elements, span } => {
                 let elem_vals: Vec<ValueId> = elements
@@ -2243,186 +2026,6 @@ impl<'a> Lowerer<'a> {
         merge_result
     }
 
-    // --- Iter block lowering ---
-
-    fn lower_iter_block(&mut self, ib: &IterBlock) -> ValueId {
-        // Pre-compute indent-adjusted body and catch-all body.
-        let adjusted_body: Option<Vec<Node>> = ib
-            .indent
-            .as_ref()
-            .map(|modifier| apply_indent_to_nodes(&ib.body, modifier));
-        let adjusted_catch_all_body: Option<Vec<Node>> = ib.indent.as_ref().and_then(|modifier| {
-            ib.catch_all
-                .as_ref()
-                .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
-        });
-
-        let source_raw = self.lower_expr(&ib.source);
-        let source_reg = self.materialize(source_raw, ib.span);
-
-        // Determine element type and convert source to List if needed.
-        let elem_ty = self.iterable_elem_type(source_reg);
-        let list_reg = match self.body.val_types.get(&source_reg) {
-            Some(Ty::List(_)) => source_reg,
-            Some(Ty::Deque(..)) => {
-                let cast_dst = self.alloc_val();
-                self.set_val_type(cast_dst, Ty::List(Box::new(elem_ty.clone())));
-                self.emit_inst(
-                    ib.span,
-                    InstKind::Cast {
-                        dst: cast_dst,
-                        src: source_reg,
-                        kind: CastKind::DequeToList,
-                    },
-                );
-                cast_dst
-            }
-            Some(Ty::Range) => {
-                let cast_dst = self.alloc_val();
-                self.set_val_type(cast_dst, Ty::List(Box::new(Ty::Int)));
-                self.emit_inst(
-                    ib.span,
-                    InstKind::Cast {
-                        dst: cast_dst,
-                        src: source_reg,
-                        kind: CastKind::RangeToList,
-                    },
-                );
-                cast_dst
-            }
-            _ => source_reg,
-        };
-
-        // Initial index = 0.
-        let zero = self.alloc_val();
-        self.set_val_type(zero, Ty::Int);
-        self.emit_inst(
-            ib.span,
-            InstKind::Const {
-                dst: zero,
-                value: Literal::Int(0),
-            },
-        );
-
-        let loop_label = self.alloc_label();
-        let catch_all_label = self.alloc_label();
-        let end_label = self.alloc_label();
-
-        // Initial accumulator: empty string.
-        let init_acc = self.emit_empty_string(ib.span);
-
-        // Jump to loop with initial index + accumulator.
-        self.emit_inst(
-            ib.span,
-            InstKind::Jump {
-                label: loop_label,
-                args: vec![zero, init_acc],
-            },
-        );
-
-        // Loop header — receives index + accumulator as block params.
-        let index_param = self.alloc_val();
-        self.set_val_type(index_param, Ty::Int);
-        let acc_param = self.alloc_val();
-        self.set_val_type(acc_param, Ty::String);
-        self.emit_inst(
-            ib.span,
-            InstKind::BlockLabel {
-                label: loop_label,
-                params: vec![index_param, acc_param],
-                merge_of: None,
-            },
-        );
-
-        // ListStep — if index >= len, jump to catch_all; else dst = list[index].
-        let value_reg = self.alloc_val();
-        self.set_val_type(value_reg, elem_ty);
-        let next_index = self.alloc_val();
-        self.set_val_type(next_index, Ty::Int);
-        self.emit_inst(
-            ib.span,
-            InstKind::ListStep {
-                dst: value_reg,
-                list: list_reg,
-                index_src: index_param,
-                index_dst: next_index,
-                done: catch_all_label,
-                done_args: vec![acc_param],
-            },
-        );
-
-        // Body label after ListStep (ListStep is a terminator in CFG).
-        let body_label = self.alloc_label();
-        self.emit_label(ib.span, body_label);
-
-        // Bind pattern (irrefutable — no test needed).
-        self.push_scope();
-        self.lower_pattern_bind(&ib.pattern, value_reg, ib.span);
-
-        // Lower body — concat all body nodes into a single string.
-        let body = adjusted_body.as_deref().unwrap_or(&ib.body);
-        let body_result = self.lower_nodes(body, ib.span);
-
-        // Accumulate: new_acc = acc_param + body_result.
-        let new_acc = self.emit_concat(ib.span, acc_param, body_result);
-
-        self.pop_scope();
-
-        // Jump back to loop with next index + new accumulator.
-        self.emit_inst(
-            ib.span,
-            InstKind::Jump {
-                label: loop_label,
-                args: vec![next_index, new_acc],
-            },
-        );
-
-        // Catch-all block — receives final accumulator.
-        let catch_all_acc = self.alloc_val();
-        self.set_val_type(catch_all_acc, Ty::String);
-        self.emit_inst(
-            ib.span,
-            InstKind::BlockLabel {
-                label: catch_all_label,
-                params: vec![catch_all_acc],
-                merge_of: None,
-            },
-        );
-        let final_acc = if let Some(catch_all) = &ib.catch_all {
-            self.push_scope();
-            let ca_body = adjusted_catch_all_body
-                .as_deref()
-                .unwrap_or(&catch_all.body);
-            let ca_result = self.lower_nodes(ca_body, ib.span);
-            self.pop_scope();
-            self.emit_concat(ib.span, catch_all_acc, ca_result)
-        } else {
-            catch_all_acc
-        };
-
-        // Jump to end with final result.
-        self.emit_inst(
-            ib.span,
-            InstKind::Jump {
-                label: end_label,
-                args: vec![final_acc],
-            },
-        );
-
-        // End block — receives the final string.
-        let end_result = self.alloc_val();
-        self.set_val_type(end_result, Ty::String);
-        self.emit_inst(
-            ib.span,
-            InstKind::BlockLabel {
-                label: end_label,
-                params: vec![end_result],
-                merge_of: None,
-            },
-        );
-        end_result
-    }
-
     // --- Pattern test lowering ---
 
     /// Emit instructions that test whether `src_reg` matches `pattern`.
@@ -2547,24 +2150,6 @@ impl<'a> Lowerer<'a> {
                 all_ok
             }
 
-            Pattern::Range {
-                start, end, kind, ..
-            } => {
-                let (start_val, end_val) = self.extract_range_bounds(start, end);
-                let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestRange {
-                        dst,
-                        src: src_reg,
-                        start: start_val,
-                        end: end_val,
-                        kind: *kind,
-                    },
-                );
-                dst
-            }
 
             Pattern::Tuple { elements, .. } => {
                 // Tuple length is guaranteed by the type system — always matches.
@@ -2726,7 +2311,6 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
-            Pattern::Range { .. } => {}
 
             Pattern::Tuple { elements, .. } => {
                 for (i, elem) in elements.iter().enumerate() {
@@ -2791,8 +2375,6 @@ impl<'a> Lowerer<'a> {
                     self.collect_free_vars(expr, bound, free, seen);
                 }
                 Stmt::MatchBind { source, body, .. }
-                | Stmt::Iterate { source, body, .. }
-                | Stmt::For { source, body, .. }
                 | Stmt::WhileLet { source, body, .. } => {
                     self.collect_free_vars(source, bound, free, seen);
                     let mut inner = bound.clone();
@@ -2893,10 +2475,6 @@ impl<'a> Lowerer<'a> {
                 for f in fields {
                     self.collect_free_vars(&f.value, bound, free, seen);
                 }
-            }
-            Expr::Range { start, end, .. } => {
-                self.collect_free_vars(start, bound, free, seen);
-                self.collect_free_vars(end, bound, free, seen);
             }
             Expr::Tuple { elements, .. } => {
                 for elem in elements {

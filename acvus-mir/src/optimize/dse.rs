@@ -659,47 +659,6 @@ mod tests {
         );
     }
 
-    /// Cross-block: nested loop with conditional context writes.
-    /// SSA creates phi write-back stores at loop headers.
-    /// DSE should eliminate dead write-backs that are always overwritten.
-    #[test]
-    fn cross_block_nested_loop_conditional() {
-        let i = Interner::new();
-        let module = crate::test::compile_script(
-            &i,
-            r#"
-                row in @matrix {
-                    y in row {
-                        true = y > 0 { @pos = @pos + y; };
-                        true = y < 0 { @neg = @neg + y; };
-                    };
-                };
-                @pos
-            "#,
-            &[
-                ("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
-                ("pos", Ty::Int),
-                ("neg", Ty::Int),
-            ],
-        )
-        .expect("compile failed");
-
-        // After test pipeline (SROA+SSA), run SSA again to simulate Pass 2.
-        let mut cfg = cfg::promote(module.main);
-        crate::optimize::ssa_pass::run(&mut cfg);
-
-        let stores_before = count_stores(&cfg);
-
-        run(&mut cfg);
-
-        let stores_after = count_stores(&cfg);
-        // DSE should eliminate at least some dead phi write-backs.
-        assert!(
-            stores_after < stores_before,
-            "DSE should eliminate dead stores (before={stores_before}, after={stores_after})"
-        );
-    }
-
     /// No context stores → DSE is a no-op.
     #[test]
     fn no_context_stores_noop() {

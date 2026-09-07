@@ -55,7 +55,6 @@ pub enum SerTy {
     String,
     Bool,
     Unit,
-    Range,
     Byte,
     Error,
     List {
@@ -82,10 +81,6 @@ pub enum SerTy {
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
     },
-    Deque {
-        elem: Box<SerTy>,
-        identity: Box<SerTy>,
-    },
     Identity(SerIdentity),
 }
 
@@ -98,7 +93,6 @@ impl Ty {
             Ty::String => SerTy::String,
             Ty::Bool => SerTy::Bool,
             Ty::Unit => SerTy::Unit,
-            Ty::Range => SerTy::Range,
             Ty::Byte => SerTy::Byte,
             Ty::Error(_) => SerTy::Error,
             Ty::List(elem) => SerTy::List {
@@ -143,10 +137,6 @@ impl Ty {
                     })
                     .collect(),
             },
-            Ty::Deque(elem, identity) => SerTy::Deque {
-                elem: Box::new(elem.to_ser(interner)),
-                identity: Box::new(identity.to_ser(interner)),
-            },
             Ty::Identity(id) => SerTy::Identity(SerIdentity {
                 id: id.to_raw() as u32,
             }),
@@ -166,7 +156,6 @@ impl SerTy {
             SerTy::String => Ty::String,
             SerTy::Bool => Ty::Bool,
             SerTy::Unit => Ty::Unit,
-            SerTy::Range => Ty::Range,
             SerTy::Byte => Ty::Byte,
             SerTy::Error => Ty::error(),
             SerTy::List { elem } => Ty::List(Box::new(elem.to_ty(interner))),
@@ -209,10 +198,6 @@ impl SerTy {
                     })
                     .collect(),
             },
-            SerTy::Deque { elem, identity } => Ty::Deque(
-                Box::new(elem.to_ty(interner)),
-                Box::new(identity.to_ty(interner)),
-            ),
             SerTy::Identity(ser_id) => Ty::Identity(
                 IdentityId::from_raw(ser_id.id as usize),
             ),

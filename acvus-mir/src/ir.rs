@@ -1,4 +1,4 @@
-use acvus_ast::{BinOp, Literal, RangeKind, Span, UnaryOp};
+use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -21,36 +21,9 @@ pub struct Inst {
 /// Type coercion kind — 1:1 with the subtyping rules in `try_coerce`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CastKind {
-    /// `Deque<T, O> → List<T>` — origin erased, container preserved.
-    DequeToList,
-    /// `Range → List<Int>` — materialise range into list.
-    RangeToList,
     /// ExternCast — coercion performed by a registered pure ExternFn.
     /// `callee_ty` is the full Fn type of the cast function at this call site.
     Extern { fn_ref: QualifiedRef, callee_ty: Ty },
-}
-
-impl CastKind {
-    /// Determine the CastKind needed when a value of type `from` flows into
-    /// a position expecting type `to`. Returns `None` if no cast is needed
-    /// (types are compatible without coercion).
-    pub fn between(from: &Ty, to: &Ty) -> Option<CastKind> {
-        match (from, to) {
-            (Ty::Deque(..), Ty::List(_)) => Some(CastKind::DequeToList),
-            _ => None,
-        }
-    }
-
-    /// Compute the result type of applying this cast to a value of the given
-    /// source type. Panics if `src_ty` doesn't match the expected source
-    /// constructor for this CastKind.
-    pub fn result_ty(&self, src_ty: &Ty) -> Ty {
-        match (self, src_ty) {
-            (CastKind::DequeToList, Ty::Deque(elem, _)) => Ty::List(elem.clone()),
-            (CastKind::RangeToList, Ty::Range) => Ty::List(Box::new(Ty::Int)),
-            _ => panic!("CastKind::result_ty: {self:?} incompatible with {src_ty:?}"),
-        }
-    }
 }
 
 /// The kind of named storage a Ref points to.
@@ -180,19 +153,13 @@ pub enum InstKind {
     },
 
     // Composite constructors
-    MakeDeque {
+    MakeList {
         dst: ValueId,
         elements: Vec<ValueId>,
     },
     MakeObject {
         dst: ValueId,
         fields: Vec<(Astr, ValueId)>,
-    },
-    MakeRange {
-        dst: ValueId,
-        start: ValueId,
-        end: ValueId,
-        kind: RangeKind,
     },
     MakeTuple {
         dst: ValueId,
@@ -221,13 +188,6 @@ pub enum InstKind {
         src: ValueId,
         key: Astr,
     },
-    TestRange {
-        dst: ValueId,
-        src: ValueId,
-        start: i64,
-        end: i64,
-        kind: RangeKind,
-    },
     ListIndex {
         dst: ValueId,
         list: ValueId,
@@ -255,20 +215,6 @@ pub enum InstKind {
         dst: ValueId,
         body: Label,
         captures: Vec<ValueId>,
-    },
-
-    /// Index-based iteration over List/Deque.
-    ///
-    /// If `index_src >= len(list)`, jumps to `done` with `done_args`.
-    /// Otherwise, `dst = list[index_src]`, `index_dst = index_src + 1`.
-    /// List is borrowed (not consumed). Index is a plain Int.
-    ListStep {
-        dst: ValueId,
-        list: ValueId,
-        index_src: ValueId,
-        index_dst: ValueId,
-        done: Label,
-        done_args: Vec<ValueId>,
     },
 
     // Variant (tagged union)
@@ -316,14 +262,6 @@ pub enum InstKind {
         dst: ValueId,
     },
     Nop,
-
-    /// Explicit type coercion — inserted by the lowerer when the type checker
-    /// determines a subtype cast is needed (e.g. `Deque → List`).
-    Cast {
-        dst: ValueId,
-        src: ValueId,
-        kind: CastKind,
-    },
 
     /// Clone a value. `dst` receives an independent copy of `src`.
     ///

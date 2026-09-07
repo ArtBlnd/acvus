@@ -159,12 +159,6 @@ fn debug_validate(cfg: &CfgBody) {
                 def_loc.insert(d, (bi, ii));
             }
         }
-        if let crate::cfg::Terminator::ListStep { dst, index_dst, .. } = &block.terminator {
-            defs.insert(*dst);
-            defs.insert(*index_dst);
-            def_loc.insert(*dst, (bi, usize::MAX - 1));
-            def_loc.insert(*index_dst, (bi, usize::MAX - 1));
-        }
     }
 
     let domtree = DomTree::build(cfg);
@@ -214,11 +208,6 @@ fn debug_validate(cfg: &CfgBody) {
                 let mut v = vec![*cond];
                 v.extend(then_args);
                 v.extend(else_args);
-                v
-            }
-            crate::cfg::Terminator::ListStep { list, index_src, done_args, .. } => {
-                let mut v = vec![*list, *index_src];
-                v.extend(done_args);
                 v
             }
             crate::cfg::Terminator::Fallthrough => vec![],

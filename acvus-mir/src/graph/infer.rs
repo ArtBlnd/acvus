@@ -181,8 +181,6 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
             }
             Stmt::Expr(expr) => collect_value_refs_expr(expr, refs),
             Stmt::MatchBind { source, body, .. }
-            | Stmt::Iterate { source, body, .. }
-            | Stmt::For { source, body, .. }
             | Stmt::WhileLet { source, body, .. } => {
                 collect_value_refs_expr(source, refs);
                 collect_value_refs_stmts(body, refs);
@@ -234,17 +232,6 @@ fn collect_value_refs_node(node: &acvus_ast::Node, refs: &mut Vec<Astr>) {
                 }
             }
         }
-        acvus_ast::Node::IterBlock(ib) => {
-            collect_value_refs_expr(&ib.source, refs);
-            for n in &ib.body {
-                collect_value_refs_node(n, refs);
-            }
-            if let Some(ca) = &ib.catch_all {
-                for n in &ca.body {
-                    collect_value_refs_node(n, refs);
-                }
-            }
-        }
     }
 }
 
@@ -280,10 +267,6 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
             for f in fields {
                 collect_value_refs_expr(&f.value, refs);
             }
-        }
-        Expr::Range { start, end, .. } => {
-            collect_value_refs_expr(start, refs);
-            collect_value_refs_expr(end, refs);
         }
         Expr::Tuple { elements, .. } => {
             for e in elements {

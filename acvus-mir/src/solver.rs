@@ -170,9 +170,6 @@ impl Solver {
             TyTerm::List(inner) | TyTerm::Option(inner) | TyTerm::Ref(inner, _) => {
                 self.occurs_in(id, inner)
             }
-            TyTerm::Deque(inner, identity) => {
-                self.occurs_in(id, inner) || self.occurs_in(id, identity)
-            }
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             TyTerm::Object(fields) => fields.values().any(|v| self.occurs_in(id, v)),
             TyTerm::Fn { params, ret, captures, .. } => {
@@ -250,7 +247,6 @@ impl Solver {
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
-            | (TyTerm::Range, TyTerm::Range)
             | (TyTerm::Byte, TyTerm::Byte) => Ok(None),
 
             (
@@ -383,13 +379,6 @@ impl Solver {
 
             (TyTerm::List(a), TyTerm::List(b)) => self.unify_ty(a, b, Polarity::Invariant, registry),
 
-            (TyTerm::Deque(ia, oa), TyTerm::Deque(ib, ob)) => {
-                match self.unify_ty(oa, ob, Polarity::Invariant, registry) {
-                    Ok(_) => self.unify_ty(ia, ib, Polarity::Invariant, registry),
-                    Err(_) => self.lub_or_err_infer(pol, orig_a, orig_b, &a, &b, registry),
-                }
-            }
-
             (TyTerm::Identity(a), TyTerm::Identity(b)) => {
                 if a == b { Ok(None) } else { Err((TyTerm::Identity(*a), TyTerm::Identity(*b))) }
             }
@@ -507,10 +496,6 @@ impl Solver {
 
     fn try_lub_infer(&mut self, a: &InferTy, b: &InferTy, registry: &TypeRegistry) -> Option<InferTy> {
         match (a, b) {
-            (TyTerm::Deque(ia, _), TyTerm::Deque(ib, _)) => {
-                self.unify_ty(ia, ib, Polarity::Invariant, registry).ok()?;
-                Some(TyTerm::List(Box::new(self.resolve_ty(ia))))
-            }
             (
                 TyTerm::Fn { params: pa, ret: ra, .. },
                 TyTerm::Fn { params: pb, ret: rb, .. },
@@ -622,10 +607,6 @@ impl Solver {
         registry: &TypeRegistry,
     ) -> Result<Option<QualifiedRef>, ()> {
         match (sub, sup) {
-            (TyTerm::Deque(inner_d, _), TyTerm::List(inner_l)) => self
-                .unify_ty(inner_d, inner_l, Polarity::Invariant, registry)
-                .map(|_| None)
-                .map_err(|_| ()),
             (TyTerm::UserDefined { id, .. }, _) => {
                 let rules = registry.rules_from(*id).to_vec();
                 self.try_extern_cast_rules_infer(&rules, sub, sup, registry)
@@ -720,10 +701,6 @@ impl Solver {
             TyTerm::List(inner) => TyTerm::List(Box::new(
                 self.instantiate_infer_inner(inner, var_map, fresh_map),
             )),
-            TyTerm::Deque(inner, identity) => TyTerm::Deque(
-                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map)),
-                Box::new(self.instantiate_infer_inner(identity, var_map, fresh_map)),
-            ),
             TyTerm::Identity(id) => {
                 let new_id = *fresh_map
                     .entry(*id)

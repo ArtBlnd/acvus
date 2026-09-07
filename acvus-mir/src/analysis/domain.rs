@@ -377,50 +377,6 @@ impl AbstractValue {
         }
     }
 
-    pub fn test_range(&self, start: i64, end: i64, kind: acvus_ast::RangeKind) -> AbstractValue {
-        let (range_lo, range_hi) = effective_range(start, end, kind);
-
-        match self {
-            AbstractValue::Bottom => AbstractValue::Bottom,
-            AbstractValue::Top => bool_unknown(),
-            AbstractValue::Finite(FiniteSet::Intervals(ivs)) => {
-                let any_in = ivs.iter().any(|iv| iv.hi >= range_lo && iv.lo <= range_hi);
-                let all_in =
-                    !ivs.is_empty() && ivs.iter().all(|iv| iv.lo >= range_lo && iv.hi <= range_hi);
-                if all_in {
-                    definite_bool(true)
-                } else if !any_in {
-                    definite_bool(false)
-                } else {
-                    bool_unknown()
-                }
-            }
-            AbstractValue::Finite(FiniteSet::Literals(lits)) => {
-                let mut any_in = false;
-                let mut any_out = false;
-                for lit in lits {
-                    if let Literal::Int(v) = lit {
-                        if *v >= range_lo && *v <= range_hi {
-                            any_in = true;
-                        } else {
-                            any_out = true;
-                        }
-                    } else {
-                        return bool_unknown();
-                    }
-                }
-                if any_in && !any_out {
-                    definite_bool(true)
-                } else if !any_in && any_out {
-                    definite_bool(false)
-                } else {
-                    bool_unknown()
-                }
-            }
-            _ => bool_unknown(),
-        }
-    }
-
     pub fn test_variant(&self, tag: Astr) -> AbstractValue {
         match self {
             AbstractValue::Bottom => AbstractValue::Bottom,
@@ -442,14 +398,6 @@ impl AbstractValue {
 }
 
 // ── Boolean abstract operations ────────────────────────────────────
-
-fn effective_range(start: i64, end: i64, kind: acvus_ast::RangeKind) -> (i64, i64) {
-    match kind {
-        acvus_ast::RangeKind::Exclusive => (start, end - 1),
-        acvus_ast::RangeKind::InclusiveEnd => (start, end),
-        acvus_ast::RangeKind::ExclusiveStart => (start + 1, end),
-    }
-}
 
 /// A single known boolean value.
 fn definite_bool(v: bool) -> AbstractValue {
@@ -555,20 +503,6 @@ mod tests {
             1,
         )));
         assert_eq!(v.test_literal(&Literal::Int(5)).as_definite_bool(), None);
-    }
-
-    #[test]
-    fn test_range_all_in() {
-        let v = AbstractValue::from_literal(&Literal::Int(5));
-        let result = v.test_range(1, 10, acvus_ast::RangeKind::Exclusive);
-        assert_eq!(result.as_definite_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_range_all_out() {
-        let v = AbstractValue::from_literal(&Literal::Int(15));
-        let result = v.test_range(1, 10, acvus_ast::RangeKind::Exclusive);
-        assert_eq!(result.as_definite_bool(), Some(false));
     }
 
     #[test]

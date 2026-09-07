@@ -201,19 +201,6 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
                 .collect(),
             span,
         },
-        Expr::Range {
-            start,
-            end,
-            kind,
-            span,
-            ..
-        } => Expr::Range {
-            id: AstId::alloc(),
-            start: Box::new(sub_expr(*start, subs)),
-            end: Box::new(sub_expr(*end, subs)),
-            kind,
-            span,
-        },
 
         // Tuple elements: sequence context.
         Expr::Tuple { elements, span, .. } => Expr::Tuple {
@@ -404,19 +391,6 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             span,
         },
-        Stmt::Iterate {
-            pattern,
-            source,
-            body,
-            span,
-            ..
-        } => Stmt::Iterate {
-            id: AstId::alloc(),
-            pattern,
-            source: sub_expr(source, subs),
-            body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
-            span,
-        },
         // Script mode statements
         Stmt::LetBind {
             name, expr, span, ..
@@ -437,19 +411,6 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             id: AstId::alloc(),
             name,
             expr: sub_expr(expr, subs),
-            span,
-        },
-        Stmt::For {
-            pattern,
-            source,
-            body,
-            span,
-            ..
-        } => Stmt::For {
-            id: AstId::alloc(),
-            pattern,
-            source: sub_expr(source, subs),
-            body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             span,
         },
         Stmt::While {
@@ -504,19 +465,6 @@ fn sub_node(node: Node, subs: &FxHashMap<Astr, SubstValue>) -> Node {
             }),
             indent: mb.indent,
             span: mb.span,
-        }),
-        Node::IterBlock(ib) => Node::IterBlock(IterBlock {
-            id: AstId::alloc(),
-            pattern: ib.pattern,
-            source: sub_expr(ib.source, subs),
-            body: ib.body.into_iter().map(|n| sub_node(n, subs)).collect(),
-            catch_all: ib.catch_all.map(|ca| CatchAll {
-                id: AstId::alloc(),
-                body: ca.body.into_iter().map(|n| sub_node(n, subs)).collect(),
-                tag_span: ca.tag_span,
-            }),
-            indent: ib.indent,
-            span: ib.span,
         }),
     }
 }
@@ -626,10 +574,6 @@ fn validate_splice_expr(
                 validate_splice_expr(&f.value, false, splice_names, errors);
             }
         }
-        Expr::Range { start, end, .. } => {
-            validate_splice_expr(start, false, splice_names, errors);
-            validate_splice_expr(end, false, splice_names, errors);
-        }
         Expr::Tuple { elements, .. } => {
             for e in elements {
                 match e {
@@ -722,18 +666,12 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
                 validate_splice_stmt(s, splice_names, errors);
             }
         }
-        Stmt::Iterate { source, body, .. } => {
-            validate_splice_expr(source, false, splice_names, errors);
-            for s in body {
-                validate_splice_stmt(s, splice_names, errors);
-            }
-        }
         // Script mode statements
         Stmt::LetBind { expr, .. } | Stmt::Assign { expr, .. } => {
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::LetUninit { .. } => {}
-        Stmt::For { source, body, .. } | Stmt::WhileLet { source, body, .. } => {
+        Stmt::WhileLet { source, body, .. } => {
             validate_splice_expr(source, false, splice_names, errors);
             for s in body {
                 validate_splice_stmt(s, splice_names, errors);
@@ -762,17 +700,6 @@ fn validate_splice_node(node: &Node, splice_names: &[Astr], errors: &mut Vec<(As
                 }
             }
             if let Some(ca) = &mb.catch_all {
-                for n in &ca.body {
-                    validate_splice_node(n, splice_names, errors);
-                }
-            }
-        }
-        Node::IterBlock(ib) => {
-            validate_splice_expr(&ib.source, false, splice_names, errors);
-            for n in &ib.body {
-                validate_splice_node(n, splice_names, errors);
-            }
-            if let Some(ca) = &ib.catch_all {
                 for n in &ca.body {
                     validate_splice_node(n, splice_names, errors);
                 }

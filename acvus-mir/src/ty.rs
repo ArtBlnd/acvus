@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt;
 
@@ -55,7 +54,6 @@ enum TyHead {
     String,
     Bool,
     Unit,
-    Range,
     Byte,
     List,
     Object,
@@ -64,7 +62,6 @@ enum TyHead {
     Option,
     Enum,
     Handle,
-    Deque,
     Identity,
     Ref,
     UserDefined(QualifiedRef),
@@ -78,7 +75,6 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::String => TyHead::String,
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
-        TyTerm::Range => TyHead::Range,
         TyTerm::Byte => TyHead::Byte,
         TyTerm::List(_) => TyHead::List,
         TyTerm::Object(_) => TyHead::Object,
@@ -87,7 +83,6 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::Option(_) => TyHead::Option,
         TyTerm::Enum { .. } => TyHead::Enum,
         TyTerm::Handle(..) => TyHead::Handle,
-        TyTerm::Deque(..) => TyHead::Deque,
         TyTerm::Identity(..) => TyHead::Identity,
         TyTerm::Ref(..) => TyHead::Ref,
         TyTerm::UserDefined { id, .. } => TyHead::UserDefined(*id),
@@ -280,7 +275,7 @@ impl TyTerm<Concrete> {
     /// Extract the element type from a collection type.
     pub fn elem_of(&self) -> Option<&Ty> {
         match self {
-            Ty::List(elem) | Ty::Deque(elem, _) => Some(elem),
+            Ty::List(elem) => Some(elem),
             _ => None,
         }
     }
@@ -288,11 +283,10 @@ impl TyTerm<Concrete> {
     /// Returns the purity tier of this type (shallow — does not recurse into containers).
     pub fn materiality(&self) -> Materiality {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => {
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
                 Materiality::Concrete
             }
             Ty::List(_)
-            | Ty::Deque(..)
             | Ty::Object(_)
             | Ty::Tuple(_)
             | Ty::Fn { .. }
@@ -310,10 +304,9 @@ impl TyTerm<Concrete> {
     /// Returns true if this type can be deeply converted to a pure representation.
     pub fn is_pureable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
             Ty::List(inner) => inner.is_pureable(),
             Ty::Handle(inner) => inner.is_pureable(),
-            Ty::Deque(inner, _) => inner.is_pureable(),
             Ty::Option(inner) => inner.is_pureable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
@@ -332,8 +325,8 @@ impl TyTerm<Concrete> {
     /// Returns true if this type can be materialized.
     pub fn is_materializable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => true,
-            Ty::List(inner) | Ty::Deque(inner, _) => inner.is_materializable(),
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
+            Ty::List(inner) => inner.is_materializable(),
             Ty::Option(inner) => inner.is_materializable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_materializable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_materializable()),
@@ -373,7 +366,6 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::String => write!(f, "String"),
             Ty::Bool => write!(f, "Bool"),
             Ty::Unit => write!(f, "Unit"),
-            Ty::Range => write!(f, "Range"),
             Ty::Byte => write!(f, "Byte"),
             Ty::Object(fields) => {
                 let mut sorted: Vec<_> = fields.iter().collect();
@@ -420,14 +412,6 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
             Ty::Handle(inner) => {
                 write!(f, "Handle<{}>", inner.display(self.interner))
-            }
-            Ty::Deque(inner, identity) => {
-                write!(
-                    f,
-                    "Deque<{}, {}>",
-                    inner.display(self.interner),
-                    identity.display(self.interner)
-                )
             }
             Ty::Identity(id) => write!(f, "{id}"),
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
@@ -574,14 +558,12 @@ pub enum TyTerm<V: Phase> {
     String,
     Bool,
     Unit,
-    Range,
     Byte,
     // Containers
     List(Box<TyTerm<V>>),
     Object(FxHashMap<Astr, TyTerm<V>>),
     Tuple(Vec<TyTerm<V>>),
     Option(Box<TyTerm<V>>),
-    Deque(Box<TyTerm<V>>, Box<TyTerm<V>>),
     // Functions
     Fn {
         params: Vec<ParamTerm<V>>,
@@ -644,7 +626,6 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => TyTerm::String,
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
-            TyTerm::Range => TyTerm::Range,
             TyTerm::Byte => TyTerm::Byte,
             TyTerm::List(inner) => TyTerm::List(Box::new(inner.map(on_var, on_identity))),
             TyTerm::Object(fields) => TyTerm::Object(
@@ -654,10 +635,6 @@ impl<V: Phase> TyTerm<V> {
                 elems.iter().map(|e| e.map(on_var, on_identity)).collect(),
             ),
             TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity))),
-            TyTerm::Deque(inner, identity) => TyTerm::Deque(
-                Box::new(inner.map(on_var, on_identity)),
-                Box::new(identity.map(on_var, on_identity)),
-            ),
             TyTerm::Fn { params, ret, captures, hint } => TyTerm::Fn {
                 params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity))).collect(),
                 ret: Box::new(ret.map(on_var, on_identity)),
@@ -699,7 +676,6 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => Ok(TyTerm::String),
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
-            TyTerm::Range => Ok(TyTerm::Range),
             TyTerm::Byte => Ok(TyTerm::Byte),
             TyTerm::List(inner) => Ok(TyTerm::List(Box::new(inner.try_map(on_var, on_identity)?))),
             TyTerm::Object(fields) => {
@@ -712,10 +688,6 @@ impl<V: Phase> TyTerm<V> {
                 elems.iter().map(|e| e.try_map(on_var, on_identity)).collect::<Result<_, _>>()?,
             )),
             TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity)?))),
-            TyTerm::Deque(inner, identity) => Ok(TyTerm::Deque(
-                Box::new(inner.try_map(on_var, on_identity)?),
-                Box::new(identity.try_map(on_var, on_identity)?),
-            )),
             TyTerm::Fn { params, ret, captures, hint } => Ok(TyTerm::Fn {
                 params: params.iter()
                     .map(|p| p.ty.try_map(on_var, on_identity).map(|ty| ParamTerm::new(p.name, ty)))
@@ -843,7 +815,6 @@ mod tests {
         assert!(s.unify_ty(&TyTerm::String, &TyTerm::String, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&TyTerm::Bool, &TyTerm::Bool, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&TyTerm::Unit, &TyTerm::Unit, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&TyTerm::Range, &TyTerm::Range, Invariant, &registry).is_ok());
     }
 
     #[test]
@@ -861,22 +832,6 @@ mod tests {
         let t = s.fresh_ty_var();
         assert!(s.unify_ty(&t, &TyTerm::Int, Invariant, &registry).is_ok());
         assert_eq!(s.resolve_ty(&t), TyTerm::Int);
-    }
-
-    #[test]
-    fn unify_deque_of_var() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let t = s.fresh_ty_var();
-        let deque_t = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
-        let deque_int = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o.clone()));
-        assert!(s.unify_ty(&deque_t, &deque_int, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&t), TyTerm::Int);
-        assert_eq!(
-            s.resolve_ty(&deque_t),
-            TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o))
-        );
     }
 
     #[test]
@@ -908,17 +863,6 @@ mod tests {
         )]));
         let obj2 = TyTerm::Object(FxHashMap::from_iter([(interner.intern("age"), TyTerm::Int)]));
         assert!(s.unify_ty(&obj1, &obj2, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn occurs_check() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let t = s.fresh_ty_var();
-        let deque_t = TyTerm::Deque(Box::new(t.clone()), Box::new(o));
-        // T = Deque<T, O> should fail
-        assert!(s.unify_ty(&t, &deque_t, Invariant, &registry).is_err());
     }
 
     #[test]
@@ -998,86 +942,6 @@ mod tests {
         assert!(s.unify_ty(&v, &obj2, Invariant, &registry).is_err());
     }
 
-    // -- Deque type tests --
-
-    #[test]
-    fn unify_deque_same_identity() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let t = s.fresh_ty_var();
-        let d1 = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o.clone()));
-        assert!(s.unify_ty(&d1, &d2, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&t), TyTerm::Int);
-        assert_eq!(s.resolve_ty(&d1), TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)));
-    }
-
-    #[test]
-    fn unify_deque_different_concrete_identity_fails() {
-        // Invariant: different concrete identities → error
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        assert_ne!(o1, o2);
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2));
-        assert!(
-            s.unify_ty(&d1, &d2, Invariant, &registry).is_err(),
-            "different concrete identities must not unify in Invariant"
-        );
-    }
-
-    #[test]
-    fn unify_deque_identity_param_binds_to_concrete() {
-        // Param should bind to a concrete IdentityId during unification
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let concrete = s.alloc_identity();
-        let var = s.fresh_ty_var(); // identity variable
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(concrete.clone()));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(var.clone()));
-        assert!(
-            s.unify_ty(&d1, &d2, Invariant, &registry).is_ok(),
-            "identity Param should bind to Concrete"
-        );
-        assert_eq!(s.resolve_ty(&var), concrete);
-    }
-
-    #[test]
-    fn unify_deque_identity_param_preserves_identity() {
-        // Two Deques through same identity Param should resolve to same concrete identity
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let concrete = s.alloc_identity();
-        let var = s.fresh_ty_var();
-        let d_concrete = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(concrete));
-        let d_var = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(var.clone()));
-        assert!(s.unify_ty(&d_concrete, &d_var, Invariant, &registry).is_ok());
-        // Now a second concrete identity should NOT match the same var
-        let concrete2 = s.alloc_identity();
-        let d_concrete2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(concrete2));
-        let d_var2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(var));
-        assert!(
-            s.unify_ty(&d_concrete2, &d_var2, Invariant, &registry).is_err(),
-            "var already bound to different concrete"
-        );
-    }
-
-    #[test]
-    fn unify_deque_inner_type_mismatch_fails() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o.clone()));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::String), Box::new(o));
-        assert!(
-            s.unify_ty(&d1, &d2, Invariant, &registry).is_err(),
-            "inner type mismatch with same identity must fail"
-        );
-    }
-
     #[test]
     fn fresh_param_produces_unique_ids() {
         let mut s = Solver::new();
@@ -1088,31 +952,6 @@ mod tests {
         assert_ne!(o1, o2);
         assert_ne!(o2, o3);
         assert_ne!(o1, o3);
-    }
-
-    #[test]
-    fn resolve_deque_propagates_inner() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let t = s.fresh_ty_var();
-        assert!(s.unify_ty(&t, &TyTerm::String, Invariant, &registry).is_ok());
-        let deque = TyTerm::Deque(Box::new(t.clone()), Box::new(o.clone()));
-        assert_eq!(
-            s.resolve_ty(&deque),
-            TyTerm::Deque(Box::new(TyTerm::String), Box::new(o))
-        );
-    }
-
-    #[test]
-    fn occurs_in_deque() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let t = s.fresh_ty_var();
-        let deque_t = TyTerm::Deque(Box::new(t.clone()), Box::new(o));
-        // T = Deque<T, O> should fail (occurs check)
-        assert!(s.unify_ty(&t, &deque_t, Invariant, &registry).is_err());
     }
 
     #[test]
@@ -1128,137 +967,7 @@ mod tests {
         assert_eq!(id_after, id2, "rollback should restore identity counter");
     }
 
-    #[test]
-    fn unify_deque_coerces_to_list() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(
-            s.unify_ty(&d, &l, Covariant, &registry).is_ok(),
-            "Deque should coerce to List"
-        );
-    }
-
-    #[test]
-    fn unify_list_does_not_coerce_to_deque() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        assert!(
-            s.unify_ty(&l, &d, Covariant, &registry).is_err(),
-            "List must not coerce to Deque"
-        );
-    }
-
     // -- Polarity-based subtyping tests --
-
-    #[test]
-    fn deque_identity_mismatch_covariant_demotes_to_list() {
-        // Covariant: Deque+Deque identity mismatch → List demotion
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2));
-        // Bind v to d1, then unify v with d2 in Covariant → should demote to List
-        assert!(s.unify_ty(&v, &d1, Covariant, &registry).is_ok());
-        assert!(s.unify_ty(&v, &d2, Covariant, &registry).is_ok());
-        let resolved = s.resolve_ty(&v);
-        assert_eq!(
-            resolved,
-            TyTerm::List(Box::new(TyTerm::Int)),
-            "should demote to List<Int>"
-        );
-    }
-
-    #[test]
-    fn deque_identity_mismatch_invariant_fails() {
-        // Invariant: Deque+Deque identity mismatch → error
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2));
-        assert!(s.unify_ty(&d1, &d2, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn deque_coerces_to_list_covariant() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(s.unify_ty(&d, &l, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn list_does_not_coerce_to_deque_covariant() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        assert!(s.unify_ty(&l, &d, Covariant, &registry).is_err());
-    }
-
-    #[test]
-    fn contravariant_list_deque_ok() {
-        // Contravariant: (List, Deque) → reversed: Deque ≤ List → OK
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        assert!(s.unify_ty(&l, &d, Contravariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn contravariant_deque_list_fails() {
-        // Contravariant: (Deque, List) → reversed: List ≤ Deque → invalid
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(s.unify_ty(&d, &l, Contravariant, &registry).is_err());
-    }
-
-    #[test]
-    fn invariant_deque_list_fails() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.fresh_ty_var();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(s.unify_ty(&d, &l, Invariant, &registry).is_err());
-        assert!(s.unify_ty(&l, &d, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn list_literal_mixed_deque_identities() {
-        // Simulates: multiple Deque elements with different identities → List demotion
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let elem_var = s.fresh_ty_var();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::String), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::String), Box::new(o2));
-        // First element sets the type
-        assert!(s.unify_ty(&elem_var, &d1, Covariant, &registry).is_ok());
-        // Second element with different identity → demotion
-        assert!(s.unify_ty(&elem_var, &d2, Covariant, &registry).is_ok());
-        let resolved = s.resolve_ty(&elem_var);
-        assert_eq!(resolved, TyTerm::List(Box::new(TyTerm::String)));
-    }
 
     #[test]
     fn polarity_flip() {
@@ -1269,454 +978,9 @@ mod tests {
 
     // -- Variance unsoundness edge case tests --
 
-    #[test]
-    fn demotion_then_third_deque_still_works() {
-        // [Deque(o1), Deque(o2), Deque(o3)] — after o1+o2 demotes to List,
-        // the third Deque(o3) should still unify via Deque≤List coercion.
-        // arg order: (new_elem, join_accum) → new ≤ existing.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let o3 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2));
-        let d3 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o3));
-        assert!(s.unify_ty(&d1, &v, Covariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&d2, &v, Covariant, &registry).is_ok(),
-            "second deque should trigger demotion"
-        );
-        // v is now List<Int>. Third deque: Deque≤List in Covariant should succeed.
-        assert!(
-            s.unify_ty(&d3, &v, Covariant, &registry).is_ok(),
-            "third deque should coerce to List via Deque≤List"
-        );
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-    }
-
-    #[test]
-    fn demotion_then_list_unifies() {
-        // After demotion to List, unifying with another List should succeed.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)), Covariant, &registry)
-                .is_ok()
-        );
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), Covariant, &registry)
-                .is_ok()
-        );
-        assert!(s.unify_ty(&v, &TyTerm::List(Box::new(TyTerm::Int)), Covariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-    }
-
-    #[test]
-    fn demotion_then_deque_same_inner_type_via_var() {
-        // After demotion, the Var-resolved List should accept further Deque coercion
-        // even when inner type is a Var that later resolves.
-        // arg order: (new_elem, join_accum) → new ≤ existing.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let o3 = s.alloc_identity();
-        let inner_var = s.fresh_ty_var();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &TyTerm::Deque(Box::new(inner_var.clone()), Box::new(o1)),
-                &v,
-                Covariant, &registry)
-            .is_ok()
-        );
-        assert!(
-            s.unify_ty(&TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), &v, Covariant, &registry)
-                .is_ok()
-        );
-        // inner_var should now be Int, v should be List<Int>
-        assert_eq!(s.resolve_ty(&inner_var), TyTerm::Int);
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-        // Third deque with same inner type
-        assert!(
-            s.unify_ty(&TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o3)), &v, Covariant, &registry)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn concrete_deque_deque_covariant_no_var_no_rebind() {
-        // Two concrete Deques (no Var backing) with mismatched identities.
-        // No Param to rebind → LUB cannot be applied → Err.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2));
-        assert!(
-            s.unify_ty(&d1, &d2, Covariant, &registry).is_err(),
-            "concrete Deque identity mismatch with no Param should fail"
-        );
-    }
-
-    #[test]
-    fn concrete_deque_deque_inner_mismatch_plus_identity_mismatch() {
-        // Both inner type AND identity mismatch — inner unify should fail first.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let d1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let d2 = TyTerm::Deque(Box::new(TyTerm::String), Box::new(o2));
-        assert!(
-            s.unify_ty(&d1, &d2, Covariant, &registry).is_err(),
-            "inner type mismatch must fail regardless of demotion"
-        );
-    }
-
-    #[test]
-    fn demotion_inner_type_still_var() {
-        // Demotion when inner type is an unresolved Var — should resolve to List<Var>.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let inner = s.fresh_ty_var();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(inner.clone()), Box::new(o1)),
-                Covariant, &registry)
-            .is_ok()
-        );
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(inner.clone()), Box::new(o2)),
-                Covariant, &registry)
-            .is_ok()
-        );
-        // v should be List<inner_var>, inner still unresolved
-        let resolved = s.resolve_ty(&v);
-        assert!(
-            matches!(resolved, TyTerm::List(_)),
-            "should be List, got {resolved:?}"
-        );
-        // Now bind inner to String
-        assert!(s.unify_ty(&inner, &TyTerm::String, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::String)));
-    }
-
-    #[test]
-    fn contravariant_demotion() {
-        // Contravariant: Deque+Deque identity mismatch also demotes (pol != Invariant).
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)),
-                Contravariant, &registry)
-            .is_ok()
-        );
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)),
-                Contravariant, &registry)
-            .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-    }
-
-    #[test]
-    fn object_field_deque_coercion_covariant() {
-        // {tags: Deque<String, o1>} vs {tags: List<String>} in Covariant.
-        // Object field polarity is passed through → Deque≤List OK.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o = s.alloc_identity();
-        let obj_deque = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::Deque(Box::new(TyTerm::String), Box::new(o)),
-        )]));
-        let obj_list = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::List(Box::new(TyTerm::String)),
-        )]));
-        assert!(s.unify_ty(&obj_deque, &obj_list, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn object_field_deque_coercion_invariant_fails() {
-        // Same as above but Invariant — must fail.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o = s.alloc_identity();
-        let obj_deque = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::Deque(Box::new(TyTerm::String), Box::new(o)),
-        )]));
-        let obj_list = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::List(Box::new(TyTerm::String)),
-        )]));
-        assert!(s.unify_ty(&obj_deque, &obj_list, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn object_field_deque_identity_mismatch_demotion() {
-        // {tags: Deque<S, o1>} vs {tags: Deque<S, o2>} in Covariant.
-        // Inner Deque identity mismatch → demoted to List within the field.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::Deque(Box::new(TyTerm::String), Box::new(o1)),
-        )]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("tags"),
-            TyTerm::Deque(Box::new(TyTerm::String), Box::new(o2)),
-        )]));
-        assert!(s.unify_ty(&v, &obj1, Covariant, &registry).is_ok());
-        assert!(s.unify_ty(&v, &obj2, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn option_deque_to_list_covariant_fails() {
-        // Option<Deque<Int>> vs Option<List<Int>> in Covariant.
-        // Inner item type is invariant — Deque vs List inside Option is a type error.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let opt_deque = TyTerm::Option(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o))));
-        let opt_list = TyTerm::Option(Box::new(TyTerm::List(Box::new(TyTerm::Int))));
-        assert!(s.unify_ty(&opt_deque, &opt_list, Covariant, &registry).is_err());
-    }
-
-    #[test]
-    fn option_deque_to_list_invariant_fails() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let opt_deque = TyTerm::Option(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o))));
-        let opt_list = TyTerm::Option(Box::new(TyTerm::List(Box::new(TyTerm::Int))));
-        assert!(s.unify_ty(&opt_deque, &opt_list, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn tuple_deque_coercion_covariant() {
-        // (Deque<Int>, String) vs (List<Int>, String) in Covariant.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let t1 = TyTerm::Tuple(vec![TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), TyTerm::String]);
-        let t2 = TyTerm::Tuple(vec![TyTerm::List(Box::new(TyTerm::Int)), TyTerm::String]);
-        assert!(s.unify_ty(&t1, &t2, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn tuple_deque_coercion_invariant_fails() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let t1 = TyTerm::Tuple(vec![TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), TyTerm::String]);
-        let t2 = TyTerm::Tuple(vec![TyTerm::List(Box::new(TyTerm::Int)), TyTerm::String]);
-        assert!(s.unify_ty(&t1, &t2, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn snapshot_rollback_undoes_demotion() {
-        // Demotion should be fully undone by rollback.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1.clone())),
-                Covariant, &registry)
-            .is_ok()
-        );
-        let snap = s.snapshot();
-        let o2 = s.alloc_identity();
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), Covariant, &registry)
-                .is_ok()
-        );
-        assert_eq!(
-            s.resolve_ty(&v),
-            TyTerm::List(Box::new(TyTerm::Int)),
-            "demoted after second deque"
-        );
-        s.rollback(snap);
-        // After rollback, v should be back to Deque<Int, o1>
-        assert_eq!(
-            s.resolve_ty(&v),
-            TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)),
-            "rollback should undo demotion"
-        );
-    }
-
-    #[test]
-    fn nested_list_of_deque_coercion_fails() {
-        // List<Deque<Int, o1>> vs List<List<Int>> in Covariant.
-        // Inner item type is invariant — Deque vs List inside List is a type error.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let a = TyTerm::List(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o))));
-        let b = TyTerm::List(Box::new(TyTerm::List(Box::new(TyTerm::Int))));
-        assert!(s.unify_ty(&a, &b, Covariant, &registry).is_err());
-    }
-
-    #[test]
-    fn nested_list_of_deque_invariant_fails() {
-        // List<Deque<Int, o1>> vs List<List<Int>> in Invariant.
-        // Inner: Deque vs List in Invariant → fails.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let a = TyTerm::List(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o))));
-        let b = TyTerm::List(Box::new(TyTerm::List(Box::new(TyTerm::Int))));
-        assert!(s.unify_ty(&a, &b, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn enum_variant_deque_coercion_covariant() {
-        // Enum with Deque payload vs same enum with List payload, Covariant.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o = s.alloc_identity();
-        let name = i.intern("Result");
-        let tag = i.intern("Ok");
-        let e1 = TyTerm::Enum {
-            name,
-            variants: FxHashMap::from_iter([(
-                tag,
-                Some(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)))),
-            )]),
-        };
-        let e2 = TyTerm::Enum {
-            name,
-            variants: FxHashMap::from_iter([(tag, Some(Box::new(TyTerm::List(Box::new(TyTerm::Int)))))]),
-        };
-        assert!(s.unify_ty(&e1, &e2, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn enum_variant_deque_coercion_invariant_fails() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o = s.alloc_identity();
-        let name = i.intern("Result");
-        let tag = i.intern("Ok");
-        let e1 = TyTerm::Enum {
-            name,
-            variants: FxHashMap::from_iter([(
-                tag,
-                Some(Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)))),
-            )]),
-        };
-        let e2 = TyTerm::Enum {
-            name,
-            variants: FxHashMap::from_iter([(tag, Some(Box::new(TyTerm::List(Box::new(TyTerm::Int)))))]),
-        };
-        assert!(s.unify_ty(&e1, &e2, Invariant, &registry).is_err());
-    }
-
     // ================================================================
     // Var chain + coercion 상호작용
     // ================================================================
-
-    #[test]
-    fn var_chain_coercion_propagates() {
-        // Var1 → Var2 → Deque(o1), then unify Var1 with List → Deque ≤ List via chain.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        assert!(s.unify_ty(&v1, &v2, Invariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&v2, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), Invariant, &registry)
-                .is_ok()
-        );
-        // v1 → v2 → Deque(Int, o). Now v1 as Deque ≤ List.
-        assert!(
-            s.unify_ty(&v1, &TyTerm::List(Box::new(TyTerm::Int)), Covariant, &registry)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn var_chain_demotion_rebinds_leaf() {
-        // Var1 → Var2 → Deque(o1). Unify Var1 with Deque(o2) covariant → demotion.
-        // find_leaf_param should follow chain and rebind Var2 (the leaf).
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        assert!(s.unify_ty(&v1, &v2, Invariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&v2, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)), Invariant, &registry)
-                .is_ok()
-        );
-        // Demotion via v1
-        assert!(
-            s.unify_ty(&TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), &v1, Covariant, &registry)
-                .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v1), TyTerm::List(Box::new(TyTerm::Int)));
-        assert_eq!(s.resolve_ty(&v2), TyTerm::List(Box::new(TyTerm::Int)));
-    }
-
-    #[test]
-    fn two_vars_sharing_deque_demotion_affects_both() {
-        // Chain v2 → v1 while both unbound, THEN bind v1 → Deque(o1).
-        // Demote via v2 → find_leaf_param follows v2 → v1 → rebinds v1 to List.
-        // Both Var1 and Var2 should resolve to List.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        // Must chain BEFORE binding to concrete — otherwise shallow_resolve
-        // flattens the chain and v2 binds directly to Deque, not to v1.
-        assert!(s.unify_ty(&v2, &v1, Invariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&v1, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(
-            s.unify_ty(&TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), &v2, Covariant, &registry)
-                .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v1), TyTerm::List(Box::new(TyTerm::Int)));
-        assert_eq!(s.resolve_ty(&v2), TyTerm::List(Box::new(TyTerm::Int)));
-    }
 
     // ================================================================
     // Occurs check + polarity
@@ -1732,186 +996,21 @@ mod tests {
         assert!(s.unify_ty(&v, &cyclic, Covariant, &registry).is_err());
     }
 
-    #[test]
-    fn occurs_check_through_deque_covariant() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        let cyclic = TyTerm::Deque(Box::new(v.clone()), Box::new(o));
-        assert!(s.unify_ty(&v, &cyclic, Covariant, &registry).is_err());
-    }
-
     // ================================================================
     // Deep nesting coercion
     // ================================================================
-
-    #[test]
-    fn nested_deque_in_deque_coercion() {
-        // Deque<Deque<Int, o1>, o2> vs Deque<List<Int>, o2> in Covariant.
-        // Inner item type is invariant — Deque vs List inside Deque is a type error.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let a = TyTerm::Deque(
-            Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1))),
-            Box::new(o2.clone()),
-        );
-        let b = TyTerm::Deque(Box::new(TyTerm::List(Box::new(TyTerm::Int))), Box::new(o2));
-        assert!(s.unify_ty(&a, &b, Covariant, &registry).is_err());
-    }
-
-    #[test]
-    fn nested_deque_in_deque_invariant_inner_coercion_fails() {
-        // Same structure but Invariant → inner Deque vs List fails.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let a = TyTerm::Deque(
-            Box::new(TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1))),
-            Box::new(o2.clone()),
-        );
-        let b = TyTerm::Deque(Box::new(TyTerm::List(Box::new(TyTerm::Int))), Box::new(o2));
-        assert!(s.unify_ty(&a, &b, Invariant, &registry).is_err());
-    }
-
-    #[test]
-    fn deeply_nested_option_option_deque_covariant_fails() {
-        // Option<Option<Deque<Int>>> vs Option<Option<List<Int>>> in Covariant.
-        // Inner item type is invariant — nested coercion is a type error.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let a = TyTerm::Option(Box::new(TyTerm::Option(Box::new(TyTerm::Deque(
-            Box::new(TyTerm::Int),
-            Box::new(o),
-        )))));
-        let b = TyTerm::Option(Box::new(TyTerm::Option(Box::new(TyTerm::List(Box::new(TyTerm::Int))))));
-        assert!(s.unify_ty(&a, &b, Covariant, &registry).is_err());
-    }
 
     // ================================================================
     // Object merge + coercion 동시 발생
     // ================================================================
 
-    #[test]
-    fn object_merge_plus_inner_demotion() {
-        // Var → {a: Deque(o1)} then Var → {a: Deque(o2), b: Int}.
-        // Merge adds field b, inner field a triggers demotion.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let i = Interner::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([(
-            i.intern("a"),
-            TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)),
-        )]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([
-            (i.intern("a"), TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2))),
-            (i.intern("b"), TyTerm::Int),
-        ]));
-        assert!(s.unify_ty(&v, &obj1, Covariant, &registry).is_ok());
-        assert!(s.unify_ty(&v, &obj2, Covariant, &registry).is_ok());
-        let resolved = s.resolve_ty(&v);
-        match &resolved {
-            TyTerm::Object(fields) => {
-                assert_eq!(fields.len(), 2);
-                assert!(fields.contains_key(&i.intern("b")));
-            }
-            other => panic!("expected Object, got {other:?}"),
-        }
-    }
-
     // ================================================================
     // Snapshot/rollback isolation
     // ================================================================
 
-    #[test]
-    fn snapshot_rollback_demotion_no_residue() {
-        // Snapshot → demotion → rollback → same Var with different Deque (same identity).
-        // Rollback must fully undo the demotion so the new unify works cleanly.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1.clone())),
-                Invariant, &registry)
-            .is_ok()
-        );
-
-        let snap = s.snapshot();
-        assert!(
-            s.unify_ty(&TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o2)), &v, Covariant, &registry)
-                .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-        s.rollback(snap);
-
-        // After rollback, v is still Deque(o1). Same-identity unify should work.
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1.clone())),
-                Invariant, &registry)
-            .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v), TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)));
-    }
-
     // ================================================================
     // Polarity symmetry / duality 검증
     // ================================================================
-
-    #[test]
-    fn covariant_ab_equals_contravariant_ba() {
-        // If unify(a, b, Cov) succeeds then unify(b, a, Contra) must also succeed.
-        let mut s1 = Solver::new();
-        let mut s2 = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s1.alloc_identity();
-        let _ = s2.alloc_identity(); // keep counter in sync
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(s1.unify_ty(&d, &l, Covariant, &registry).is_ok());
-        assert!(s2.unify_ty(&l, &d, Contravariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn covariant_ab_fail_equals_contravariant_ba_fail() {
-        // If unify(a, b, Cov) fails then unify(b, a, Contra) must also fail.
-        let mut s1 = Solver::new();
-        let mut s2 = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s1.alloc_identity();
-        let _ = s2.alloc_identity();
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1));
-        assert!(s1.unify_ty(&l, &d, Covariant, &registry).is_err()); // List ≤ Deque: no
-        assert!(s2.unify_ty(&d, &l, Contravariant, &registry).is_err()); // reversed: List ≤ Deque: no
-    }
-
-    #[test]
-    fn invariant_symmetric() {
-        // Invariant: unify(a, b) and unify(b, a) must both fail/succeed equally.
-        let mut s1 = Solver::new();
-        let registry = TypeRegistry::new();
-        let mut s2 = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s1.alloc_identity();
-        let _ = s2.alloc_identity();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let l = TyTerm::List(Box::new(TyTerm::Int));
-        assert!(s1.unify_ty(&d, &l, Invariant, &registry).is_err());
-        assert!(s2.unify_ty(&l, &d, Invariant, &registry).is_err());
-    }
 
     #[test]
     fn invariant_same_types_both_directions() {
@@ -1928,214 +1027,33 @@ mod tests {
     // Unresolved Var containers + coercion
     // ================================================================
 
-    #[test]
-    fn deque_var_inner_coerces_to_list_var_inner() {
-        // Deque<Var1, O> vs List<Var2> in Covariant → Deque≤List OK, Var1 binds to Var2.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        let d = TyTerm::Deque(Box::new(v1.clone()), Box::new(o));
-        let l = TyTerm::List(Box::new(v2.clone()));
-        assert!(s.unify_ty(&d, &l, Covariant, &registry).is_ok());
-        // Bind v2 to String → v1 should follow.
-        assert!(s.unify_ty(&v2, &TyTerm::String, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&v1), TyTerm::String);
-    }
-
     // ================================================================
     // Bidirectional Var binding + coercion
     // ================================================================
-
-    #[test]
-    fn two_vars_coerce_deque_to_list() {
-        // Var1 = Deque(Int, o1), Var2 = List(Int).
-        // unify(Var1, Var2, Cov) → Deque≤List → OK.
-        // After: Var1 still resolves to Deque (binding unchanged), Var2 still List.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(&v1, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(
-            s.unify_ty(&v2, &TyTerm::List(Box::new(TyTerm::Int)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(s.unify_ty(&v1, &v2, Covariant, &registry).is_ok());
-    }
-
-    #[test]
-    fn two_vars_coerce_list_to_deque_covariant_fails() {
-        // Var1 = List(Int), Var2 = Deque(Int, o).
-        // unify(Var1, Var2, Cov) → List≤Deque → fails.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v1 = s.fresh_ty_var();
-        let v2 = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(&v1, &TyTerm::List(Box::new(TyTerm::Int)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(
-            s.unify_ty(&v2, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(s.unify_ty(&v1, &v2, Covariant, &registry).is_err());
-    }
 
     // ================================================================
     // N-way demotion (large fan-out)
     // ================================================================
 
-    #[test]
-    fn five_deque_identities_join_to_list() {
-        // [d1, d2, d3, d4, d5] each with distinct identity → all join to List.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let v = s.fresh_ty_var();
-        for _ in 0..5 {
-            let o = s.alloc_identity();
-            let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-            assert!(s.unify_ty(&d, &v, Covariant, &registry).is_ok());
-        }
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-    }
-
     // ================================================================
     // Mixed concrete/param identities
     // ================================================================
-
-    #[test]
-    fn identity_param_binds_then_mismatch_demotes() {
-        // Param identity Deque binds to concrete identity, then another concrete → mismatch → demotion.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let c1 = s.alloc_identity();
-        let c2 = s.alloc_identity();
-        let ov = s.fresh_ty_var(); // identity variable
-        let v = s.fresh_ty_var();
-        let d_var_identity = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(ov.clone()));
-        let d_c1 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(c1.clone()));
-        let d_c2 = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(c2));
-        // Bind Param identity via d_var_identity = d_c1
-        assert!(s.unify_ty(&v, &d_var_identity, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&v, &d_c1, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&ov), c1);
-        // Now d_c2 has different identity → demotion in Covariant
-        assert!(s.unify_ty(&d_c2, &v, Covariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&v), TyTerm::List(Box::new(TyTerm::Int)));
-    }
 
     // ================================================================
     // Error / Param + polarity (poison / unification absorption)
     // ================================================================
 
-    #[test]
-    fn error_absorbs_any_polarity() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        assert!(s.unify_ty(&lift_ty(&Ty::error()), &d, Covariant, &registry).is_ok());
-        assert!(s.unify_ty(&d, &lift_ty(&Ty::error()), Contravariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&lift_ty(&Ty::error()), &TyTerm::List(Box::new(TyTerm::Int)), Invariant, &registry)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn param_absorbs_any_polarity() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let p1 = s.fresh_ty_var();
-        let p2 = s.fresh_ty_var();
-        let p3 = s.fresh_ty_var();
-        assert!(s.unify_ty(&p1, &d, Covariant, &registry).is_ok());
-        assert!(s.unify_ty(&d, &p2, Contravariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&p3, &TyTerm::List(Box::new(TyTerm::Int)), Invariant, &registry)
-                .is_ok()
-        );
-    }
-
     // ================================================================
     // Transitive coercion chains
     // ================================================================
-
-    #[test]
-    fn list_cannot_narrow_back_to_deque_covariant() {
-        // Var = List(Int). List ≤ Deque is invalid.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(s.unify_ty(&v, &TyTerm::List(Box::new(TyTerm::Int)), Invariant, &registry).is_ok());
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)), Covariant, &registry)
-                .is_err()
-        );
-    }
 
     // ================================================================
     // Inner type mismatch under coercion (must not be masked)
     // ================================================================
 
-    #[test]
-    fn deque_to_list_inner_type_mismatch_fails() {
-        // Deque<Int> ≤ List<String> → inner Int vs String fails.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        assert!(
-            s.unify_ty(
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)),
-                &TyTerm::List(Box::new(TyTerm::String)),
-                Covariant, &registry)
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn demotion_inner_type_mismatch_fails() {
-        // Deque<Int, o1> vs Deque<String, o2> in Covariant.
-        // Identity mismatch triggers demotion path, but inner unify Int vs String fails first.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o1 = s.alloc_identity();
-        let o2 = s.alloc_identity();
-        assert!(
-            s.unify_ty(
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o1)),
-                &TyTerm::Deque(Box::new(TyTerm::String), Box::new(o2)),
-                Covariant, &registry)
-            .is_err()
-        );
-    }
-
     // ================================================================
     // Coercion does NOT propagate across unrelated type constructors
     // ================================================================
-
-    #[test]
-    fn deque_vs_option_fails_any_polarity() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let d = TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o));
-        let opt = TyTerm::Option(Box::new(TyTerm::Int));
-        assert!(s.unify_ty(&d, &opt, Covariant, &registry).is_err());
-        assert!(s.unify_ty(&d, &opt, Contravariant, &registry).is_err());
-        assert!(s.unify_ty(&d, &opt, Invariant, &registry).is_err());
-    }
 
     #[test]
     fn list_vs_tuple_fails_any_polarity() {
@@ -2154,62 +1072,6 @@ mod tests {
     // ================================================================
     // Regression: Deque with same identity must not trigger demotion
     // ================================================================
-
-    #[test]
-    fn same_identity_no_demotion_even_covariant() {
-        // Same identity → identities unify → no demotion path, stays Deque.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let o = s.alloc_identity();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o.clone())),
-                Covariant, &registry)
-            .is_ok()
-        );
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o.clone())),
-                Covariant, &registry)
-            .is_ok()
-        );
-        assert_eq!(s.resolve_ty(&v), TyTerm::Deque(Box::new(TyTerm::Int), Box::new(o)));
-    }
-
-    #[test]
-    fn same_identity_param_no_demotion() {
-        // Identity Param binds to concrete. Second use with same Param → same concrete → no demotion.
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let c = s.alloc_identity();
-        let ov = s.fresh_ty_var();
-        let v = s.fresh_ty_var();
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(ov)), Invariant, &registry)
-                .is_ok()
-        );
-        assert!(
-            s.unify_ty(
-                &v,
-                &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(c.clone())),
-                Covariant, &registry)
-            .is_ok()
-        );
-        // ov now bound to c. Second concrete same as c → no mismatch.
-        assert!(
-            s.unify_ty(&v, &TyTerm::Deque(Box::new(TyTerm::Int), Box::new(c)), Covariant, &registry)
-                .is_ok()
-        );
-        // Still Deque, not List.
-        let resolved = s.resolve_ty(&v);
-        assert!(
-            matches!(resolved, TyTerm::Deque(_, _)),
-            "should stay Deque, got {resolved:?}"
-        );
-    }
 
     // ── Sequence identity tracking ─────────────────────────────────
 
@@ -2657,40 +1519,6 @@ mod tests {
     // ── Purity tier tests ──────────────────────────────────────────────
 
     #[test]
-    fn purity_scalars_are_pure() {
-        assert_eq!(Ty::Int.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::Float.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::String.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::Bool.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::Unit.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::Range.materiality(), Materiality::Concrete);
-        assert_eq!(Ty::Byte.materiality(), Materiality::Concrete);
-    }
-
-    #[test]
-    fn purity_containers_are_lazy() {
-        let mut s = Solver::new();
-        let infer_o = s.alloc_identity();
-        let o = s.freeze_ty(&infer_o).unwrap();
-        assert_eq!(
-            Ty::List(Box::new(Ty::Int)).materiality(),
-            Materiality::Composite
-        );
-        assert_eq!(
-            Ty::Deque(Box::new(Ty::Int), Box::new(o)).materiality(),
-            Materiality::Composite
-        );
-        assert_eq!(
-            Ty::Option(Box::new(Ty::Int)).materiality(),
-            Materiality::Composite
-        );
-        assert_eq!(
-            Ty::Tuple(vec![Ty::Int]).materiality(),
-            Materiality::Composite
-        );
-    }
-
-    #[test]
     fn purity_object_is_lazy() {
         let i = Interner::new();
         let obj = Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)]));
@@ -2741,17 +1569,6 @@ mod tests {
     // ── is_pureable() transitive tests ─────────────────────────────────
 
     #[test]
-    fn pureable_scalars() {
-        assert!(Ty::Int.is_pureable());
-        assert!(Ty::Float.is_pureable());
-        assert!(Ty::String.is_pureable());
-        assert!(Ty::Bool.is_pureable());
-        assert!(Ty::Unit.is_pureable());
-        assert!(Ty::Range.is_pureable());
-        assert!(Ty::Byte.is_pureable());
-    }
-
-    #[test]
     fn pureable_list_of_scalars() {
         assert!(Ty::List(Box::new(Ty::Int)).is_pureable());
         assert!(Ty::List(Box::new(Ty::String)).is_pureable());
@@ -2768,22 +1585,6 @@ mod tests {
         // List<List<Int>> — pureable
         let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
         assert!(nested.is_pureable());
-    }
-
-    #[test]
-    fn pureable_deque_of_scalars() {
-        let mut s = Solver::new();
-        let infer_o = s.alloc_identity();
-        let o = s.freeze_ty(&infer_o).unwrap();
-        assert!(Ty::Deque(Box::new(Ty::Int), Box::new(o)).is_pureable());
-    }
-
-    #[test]
-    fn pureable_deque_of_user_defined() {
-        let mut s = Solver::new();
-        let infer_o = s.alloc_identity();
-        let o = s.freeze_ty(&infer_o).unwrap();
-        assert!(!Ty::Deque(Box::new(test_user_defined()), Box::new(o)).is_pureable());
     }
 
     #[test]
@@ -2932,11 +1733,6 @@ mod tests {
     fn storable_byte() {
         assert!(Ty::Byte.is_materializable());
     }
-    #[test]
-    fn storable_range() {
-        assert!(Ty::Range.is_materializable());
-    }
-
     // -- Lazy containers with pure contents: storable --
 
     #[test]

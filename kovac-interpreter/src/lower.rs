@@ -5,7 +5,7 @@
 //!
 //! Bank assignment by type:
 //! - Int, Bool, Float → A bank (primary) or B bank (overflow)
-//! - String, Object, List, Tuple, Deque, Variant, etc. → M bank
+//! - String, Object, List, Tuple, Variant, etc. → M bank
 //!
 //! Register allocation: simple linear scan with LRU eviction.
 //! Not optimal — good enough to get real programs running and measure.

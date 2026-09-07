@@ -1,6 +1,6 @@
 use std::fmt;
 
-use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
+use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -101,14 +101,6 @@ fn fmt_unaryop(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
-    }
-}
-
-fn fmt_range_kind(kind: RangeKind) -> &'static str {
-    match kind {
-        RangeKind::Exclusive => "..",
-        RangeKind::InclusiveEnd => "..=",
-        RangeKind::ExclusiveStart => "=..",
     }
 }
 
@@ -478,7 +470,7 @@ fn write_body(
             }
 
             // Composite constructors
-            InstKind::MakeDeque { dst, elements } => writeln!(
+            InstKind::MakeList { dst, elements } => writeln!(
                 f,
                 "{} = list [{}]",
                 vn.fmt_val(*dst),
@@ -510,19 +502,6 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_use(*tuple, &consts, &texts)
             )?,
-            InstKind::MakeRange {
-                dst,
-                start,
-                end,
-                kind,
-            } => writeln!(
-                f,
-                "{} = range {}{}{}",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*start, &consts, &texts),
-                fmt_range_kind(*kind),
-                vn.fmt_use(*end, &consts, &texts)
-            )?,
 
             // Pattern matching
             InstKind::TestLiteral { dst, src, value } => writeln!(
@@ -552,19 +531,6 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_use(*src, &consts, &texts),
                 ctx.interner.resolve(*key),
-            )?,
-            InstKind::TestRange {
-                dst,
-                src,
-                start,
-                end,
-                kind,
-            } => writeln!(
-                f,
-                "{} = test {} in {start}{}{end}",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*src, &consts, &texts),
-                fmt_range_kind(*kind)
             )?,
             InstKind::ListIndex { dst, list, index } => writeln!(
                 f,
@@ -643,23 +609,6 @@ fn write_body(
             )?,
 
             // Iteration
-            InstKind::ListStep {
-                dst,
-                list,
-                index_src,
-                index_dst,
-                done,
-                done_args,
-            } => writeln!(
-                f,
-                "list_step {}, {} = {}[{}] else {}({})",
-                vn.fmt_val(*dst),
-                vn.fmt_val(*index_dst),
-                vn.fmt_use(*list, &consts, &texts),
-                vn.fmt_use(*index_src, &consts, &texts),
-                fmt_label(*done),
-                vn.fmt_uses(done_args, &consts, &texts)
-            )?,
 
             // Control flow
             InstKind::BlockLabel {
@@ -736,13 +685,6 @@ fn write_body(
             }
             InstKind::Return(r) => writeln!(f, "return {}", vn.fmt_use(*r, &consts, &texts))?,
             InstKind::Nop => writeln!(f, "nop")?,
-            InstKind::Cast { dst, src, kind } => writeln!(
-                f,
-                "{} = cast {:?} {}",
-                vn.fmt_val(*dst),
-                kind,
-                vn.fmt_use(*src, &consts, &texts)
-            )?,
             InstKind::Clone { dst, src } => writeln!(
                 f,
                 "{} = clone {}",
@@ -993,25 +935,6 @@ mod tests {
         let interner = Interner::new();
         let result = crate::test::compile_template(&interner, "{{ $count = 42 }}", &[]);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn snapshot_full_example() {
-        let interner = Interner::new();
-        let context = FxHashMap::from_iter([(
-            interner.intern("users"),
-            Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([(
-                interner.intern("name"),
-                Ty::String,
-            )])))),
-        )]);
-        let out = compile_and_dump_ctx(
-            r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
-            &context,
-            &interner,
-        );
-        assert!(out.contains("=== main ==="));
-        assert!(out.contains("list_step"));
     }
 
     #[test]

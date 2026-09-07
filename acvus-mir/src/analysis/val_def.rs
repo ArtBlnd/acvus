@@ -30,15 +30,13 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::FieldSet { dst, .. }
         | InstKind::FunctionCall { dst, .. }
         | InstKind::LoadFunction { dst, .. }
-        | InstKind::MakeDeque { dst, .. }
+        | InstKind::MakeList { dst, .. }
         | InstKind::MakeObject { dst, .. }
-        | InstKind::MakeRange { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
         | InstKind::TestLiteral { dst, .. }
         | InstKind::TestListLen { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
-        | InstKind::TestRange { dst, .. }
         | InstKind::ListIndex { dst, .. }
         | InstKind::ListGet { dst, .. }
         | InstKind::ListSlice { dst, .. }
@@ -47,9 +45,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
-        | InstKind::Cast { dst, .. }
         | InstKind::Clone { dst, .. }
-        | InstKind::ListStep { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Eval { dst, .. }
         | InstKind::Poison { dst }
@@ -72,7 +68,6 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
-        InstKind::ListStep { index_dst, .. } => vec![*index_dst],
         _ => vec![],
     }
 }

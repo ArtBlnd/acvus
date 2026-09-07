@@ -116,12 +116,10 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::String, Ty::String) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
-        (Ty::Range, Ty::Range) => true,
         (Ty::Byte, Ty::Byte) => true,
 
         // Containers (invariant inner)
         (Ty::List(a), Ty::List(b)) => types_match(a, b),
-        (Ty::Deque(a, o1), Ty::Deque(b, o2)) => identities_match(o1, o2) && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
@@ -185,7 +183,7 @@ fn literal_ty(lit: &Literal) -> Ty {
 /// false positives.
 fn unwrap_element_ty(ty: &Ty) -> &Ty {
     match ty {
-        Ty::List(inner) | Ty::Deque(inner, _) => inner,
+        Ty::List(inner)=> inner,
         other => other,
     }
 }
@@ -194,7 +192,7 @@ fn unwrap_element_ty(ty: &Ty) -> &Ty {
 /// The lowerer may record Deque where List is expected (pre-cast representation).
 fn as_list_inner(ty: &Ty) -> Option<&Ty> {
     match ty {
-        Ty::List(inner) | Ty::Deque(inner, _) => Some(inner),
+        Ty::List(inner)=> Some(inner),
         _ => None,
     }
 }
@@ -349,8 +347,7 @@ impl CheckCtx {
 
         match kind {
             // === Skip ===
-            InstKind::Cast { .. }
-            | InstKind::Poison { .. }
+            InstKind::Poison { .. }
             | InstKind::Undef { .. }
             | InstKind::Nop
             | InstKind::BlockLabel { .. } => {}
@@ -375,15 +372,15 @@ impl CheckCtx {
             }
 
             // === Constructors ===
-            InstKind::MakeDeque { dst, elements } => {
+            InstKind::MakeList { dst, elements } => {
                 let dst_ty = ty!(*dst);
-                if let Ty::Deque(inner, _) = dst_ty {
+                if let Ty::List(inner) = dst_ty {
                     for (i, elem) in elements.iter().enumerate() {
                         let elem_ty = ty!(*elem);
                         self.assert_match(
                             pc,
                             span,
-                            "MakeDeque",
+                            "MakeList",
                             &format!("element[{i}]"),
                             inner,
                             elem_ty,
@@ -396,7 +393,7 @@ impl CheckCtx {
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "MakeDeque".to_string(),
+                            inst_name: "MakeList".to_string(),
                             expected_constructor: "Deque".to_string(),
                             actual: dst_ty.clone(),
                         },
@@ -435,16 +432,6 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::MakeRange {
-                dst, start, end, ..
-            } => {
-                let start_ty = ty!(*start);
-                let end_ty = ty!(*end);
-                let dst_ty = ty!(*dst);
-                self.assert_match(pc, span, "MakeRange", "start", &Ty::Int, start_ty, errors);
-                self.assert_match(pc, span, "MakeRange", "end", &Ty::Int, end_ty, errors);
-                self.assert_match(pc, span, "MakeRange", "dst", &Ty::Range, dst_ty, errors);
-            }
 
             InstKind::MakeTuple { dst, elements } => {
                 let dst_ty = ty!(*dst);
@@ -942,7 +929,7 @@ impl CheckCtx {
                 let src_ty = ty!(*src);
                 if !matches!(
                     src_ty,
-                    Ty::List(_) | Ty::Deque(_, _) | Ty::Error(_)                ) {
+                    Ty::List(_) | Ty::Error(_)                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -981,12 +968,6 @@ impl CheckCtx {
                 self.assert_match(pc, span, "TestObjectKey", "dst", &Ty::Bool, dst_ty, errors);
             }
 
-            InstKind::TestRange { dst, src, .. } => {
-                let src_ty = ty!(*src);
-                let dst_ty = ty!(*dst);
-                self.assert_match(pc, span, "TestRange", "src", &Ty::Int, src_ty, errors);
-                self.assert_match(pc, span, "TestRange", "dst", &Ty::Bool, dst_ty, errors);
-            }
 
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
@@ -1035,52 +1016,6 @@ impl CheckCtx {
             }
 
             // === ListStep ===
-            InstKind::ListStep {
-                dst,
-                list,
-                index_src,
-                index_dst,
-                ..
-            } => {
-                let list_ty = ty!(*list);
-                if let Ty::List(elem) = list_ty {
-                    // dst gets the element type
-                    let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "ListStep", "dst", elem, dst_ty, errors);
-                } else if !list_ty.is_error() {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "ListStep".to_string(),
-                            expected_constructor: "List".to_string(),
-                            actual: list_ty.clone(),
-                        },
-                    });
-                }
-                // index_src and index_dst must be Int
-                let index_src_ty = ty!(*index_src);
-                self.assert_match(
-                    pc,
-                    span,
-                    "ListStep",
-                    "index_src",
-                    &Ty::Int,
-                    index_src_ty,
-                    errors,
-                );
-                let index_dst_ty = ty!(*index_dst);
-                self.assert_match(
-                    pc,
-                    span,
-                    "ListStep",
-                    "index_dst",
-                    &Ty::Int,
-                    index_dst_ty,
-                    errors,
-                );
-            }
 
             // === Calls ===
             InstKind::LoadFunction { dst, .. } => {
@@ -1352,7 +1287,7 @@ impl CheckCtx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{CastKind, DebugInfo, Inst, MirBody, MirModule};
+    use crate::ir::{DebugInfo, Inst, MirBody, MirModule};
     use acvus_ast::Literal;
     use acvus_utils::LocalFactory;
 
@@ -1411,30 +1346,6 @@ mod tests {
         );
         let errors = check_types(&module, &FxHashMap::default());
         assert!(!errors.is_empty(), "type mismatch should be caught");
-    }
-
-    #[test]
-    fn cast_skipped() {
-        // Cast should not produce type errors even though src != dst type
-        let mut vf = LocalFactory::<ValueId>::new();
-        let v0 = vf.next();
-        let v1 = vf.next();
-        let mut solver = crate::ty::Solver::new();
-        let infer_o = solver.alloc_identity();
-        let o = solver.freeze_ty(&infer_o).unwrap();
-        let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::Deque(Box::new(Ty::Int), Box::new(o)));
-        vt.insert(v1, Ty::List(Box::new(Ty::Int)));
-        let module = make_module(
-            vec![inst(InstKind::Cast {
-                dst: v1,
-                src: v0,
-                kind: CastKind::DequeToList,
-            })],
-            vt,
-        );
-        let errors = check_types(&module, &FxHashMap::default());
-        assert!(errors.is_empty(), "Cast should be skipped by type checker");
     }
 
     #[test]

@@ -15,7 +15,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{CfgBody, Terminator};
-use crate::ir::{Callee, InstKind, ValueId};
+use crate::ir::{InstKind, ValueId};
 use crate::analysis::inst_info;
 
 // ── Def location ────────────────────────────────────────────────────
@@ -55,11 +55,6 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
             }
         }
 
-        // Terminator defs.
-        if let Terminator::ListStep { dst, index_dst, .. } = &block.terminator {
-            map.insert(*dst, DefLoc::Terminator(bi));
-            map.insert(*index_dst, DefLoc::Terminator(bi));
-        }
     }
 
     map
@@ -107,16 +102,6 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             let mut v = vec![*cond];
             v.extend_from_slice(then_args);
             v.extend_from_slice(else_args);
-            v
-        }
-        Terminator::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            let mut v = vec![*list, *index_src];
-            v.extend_from_slice(done_args);
             v
         }
         Terminator::Fallthrough => vec![],
@@ -192,11 +177,6 @@ pub fn run(cfg: &mut CfgBody) {
                             } else {
                                 None
                             }
-                        }
-                        Terminator::ListStep { done, done_args, .. }
-                            if *done == block_label =>
-                        {
-                            Some(done_args)
                         }
                         _ => None,
                     };

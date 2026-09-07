@@ -33,7 +33,7 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         // Primitives — always Copy
-        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Range | Ty::Byte => {
+        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
             Some(false)
         }
 
@@ -44,7 +44,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         Ty::UserDefined { .. } => Some(true),
 
         // Containers — transitive
-        Ty::List(inner) | Ty::Deque(inner, _) | Ty::Option(inner) => is_move_only(inner),
+        Ty::List(inner) | Ty::Option(inner) => is_move_only(inner),
         Ty::Tuple(elems) => {
             let mut any_move = false;
             for e in elems {
@@ -302,39 +302,6 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
-            Terminator::ListStep {
-                dst,
-                index_dst,
-                done,
-                done_args,
-                ..
-            } => {
-                // ListStep defines dst (element) and index_dst (new index).
-                // list is borrowed (not consumed), index_src is Int (copyable).
-                block_exit[idx.0].set_value(*dst, Liveness::Alive);
-                block_exit[idx.0].set_value(*index_dst, Liveness::Alive);
-
-                // Fallthrough.
-                let next = idx.0 + 1;
-                if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
-                    worklist.push_back(BlockIdx(next));
-                }
-                // Done branch.
-                if let Some(&target_idx) = cfg.label_to_block.get(done) {
-                    propagate_args(
-                        scope,
-                        &block_exit[idx.0],
-                        done_args,
-                        &cfg.blocks[target_idx.0].params,
-                        &cfg.val_types,
-                        errors,
-                        &mut block_entry[target_idx.0],
-                    );
-                    if propagate_state(&block_exit[idx.0], &mut block_entry[target_idx.0]) {
-                        worklist.push_back(target_idx);
-                    }
-                }
-            }
             Terminator::Fallthrough => {
                 let next = idx.0 + 1;
                 if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
@@ -500,10 +467,6 @@ fn process_inst(
         InstKind::Return(v) => {
             try_consume_value(scope, inst_idx, span, *v, val_types, state, errors);
         }
-        InstKind::Cast { dst, src, .. } => {
-            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
-            state.set_value(*dst, Liveness::Alive);
-        }
         InstKind::Clone { dst, src, .. } => {
             // Clone reads src (not consumed — it's being cloned)
             // src remains alive after clone
@@ -512,11 +475,6 @@ fn process_inst(
         }
         InstKind::Drop { src } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
-        }
-        InstKind::ListStep { dst, index_dst, .. } => {
-            // list is borrowed (not consumed), index_src is Int (copyable).
-            state.set_value(*dst, Liveness::Alive);
-            state.set_value(*index_dst, Liveness::Alive);
         }
 
         // Functions
@@ -548,7 +506,7 @@ fn process_inst(
         }
 
         // Constructors — elements are consumed
-        InstKind::MakeDeque { dst, elements } => {
+        InstKind::MakeList { dst, elements } => {
             for e in elements {
                 try_consume_value(scope, inst_idx, span, *e, val_types, state, errors);
             }
@@ -565,13 +523,6 @@ fn process_inst(
                 try_consume_value(scope, inst_idx, span, *e, val_types, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::MakeRange {
-            dst, start, end, ..
-        } => {
-            // start and end are always Int (Pure) — no move check needed
-            state.set_value(*dst, Liveness::Alive);
-            let _ = (start, end);
         }
         InstKind::MakeClosure { dst, captures, .. } => {
             for cap in captures {
@@ -631,9 +582,6 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::TestObjectKey { dst, src: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::TestRange { dst, src: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::TestVariant { dst, src: _, .. } => {

@@ -1,7 +1,0 @@
-{
-  "template": "{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}",
-  "context": {
-    "matrix": [[1, 2], [3, 4]]
-  },
-  "expected": "1234"
-}

@@ -22,14 +22,12 @@ extern {
         "@ref" => Token::ContextRef(<Astr>),
         "true" => Token::True,
         "false" => Token::False,
-        "in" => Token::In,
         "_" => Token::Underscore,
         "Some" => Token::Some,
         "None" => Token::None,
         "let" => Token::Let,
         "if" => Token::If,
         "else" => Token::Else,
-        "for" => Token::For,
         "while" => Token::While,
         "+" => Token::Plus,
         "-" => Token::Minus,
@@ -47,8 +45,6 @@ extern {
         ">=" => Token::Gte,
         "=" => Token::Assign,
         "->" => Token::Arrow,
-        "..=" => Token::DotDotEq,
-        "=.." => Token::EqDotDot,
         ".." => Token::DotDot,
         "." => Token::Dot,
         "|" => Token::Pipe,
@@ -132,15 +128,6 @@ ScriptModeStmt: Stmt = {
     // let x;
     <l:@L> "let" <name:"ident"> ";" <r:@R> =>
         Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
-    // for pattern in source { body }
-    <l:@L> "for" <lhs:Expr> "in" <rhs:ScriptExpr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>?
-        Ok(Stmt::For {
-            id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
-            source: rhs,
-            body,
-            span: Span::new(l, r),
-        }),
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>
         Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) },
@@ -199,15 +186,6 @@ ScriptStmt: Stmt = {
             body,
             span: Span::new(l, r),
         }),
-    // iterate (for): pattern in source { body };
-    <l:@L> <lhs:Expr> "in" <rhs:Expr> "{" <body:ScriptStmt*> "}" ";" <r:@R> =>?
-        Ok(Stmt::Iterate {
-            id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
-            source: rhs,
-            body,
-            span: Span::new(l, r),
-        }),
     // bind / context-store / field-store: lhs = rhs;
     <l:@L> <lhs:Expr> "=" <rhs:Expr> ";" <r:@R> =>? {
         let span = Span::new(l, r);
@@ -250,8 +228,6 @@ pub TagContent: TagContent = {
         TagContent::Binding { lhs, rhs, span: Span::new(l, r) },
     <l:@L> <lhs:Expr> "=" <r:@R> =>
         TagContent::ContinuationArm { pattern: lhs, span: Span::new(l, r) },
-    <l:@L> <lhs:Expr> "in" <rhs:Expr> <r:@R> =>
-        TagContent::Iteration { lhs, rhs, span: Span::new(l, r) },
     <e:Expr> =>
         TagContent::Expr(e),
 };
@@ -302,29 +278,18 @@ AndExpr: Expr = {
 
 // Comparison: ==, !=, <, >, <=, >=
 CompExpr: Expr = {
-    <l:@L> <left:CompExpr> "==" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> "==" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "!=" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> "!=" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "<" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> "<" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> ">" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> ">" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "<=" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> "<=" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> ">=" <right:RangeExpr> <r:@R> =>
+    <l:@L> <left:CompExpr> ">=" <right:AddExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
-    RangeExpr,
-};
-
-// Range: 0..10, 0..=10, 0=..10 (non-associative)
-RangeExpr: Expr = {
-    <l:@L> <start:AddExpr> ".." <end:AddExpr> <r:@R> =>
-        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::Exclusive, span: Span::new(l, r) },
-    <l:@L> <start:AddExpr> "..=" <end:AddExpr> <r:@R> =>
-        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::InclusiveEnd, span: Span::new(l, r) },
-    <l:@L> <start:AddExpr> "=.." <end:AddExpr> <r:@R> =>
-        Expr::Range { id: AstId::alloc(), start: Box::new(start), end: Box::new(end), kind: RangeKind::ExclusiveStart, span: Span::new(l, r) },
     AddExpr,
 };
 

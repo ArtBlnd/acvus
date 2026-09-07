@@ -314,24 +314,6 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                 worklist.push_back(t);
             }
         }
-        Terminator::ListStep {
-            done, done_args, ..
-        } => {
-            let next = idx.0 + 1;
-            if next < n && block_entry[next].join_from(exit_state) {
-                worklist.push_back(BlockIdx(next));
-            }
-            if let Some(&t) = cfg.label_to_block.get(done)
-                && analysis.propagate_forward(
-                    exit_state,
-                    &cfg.blocks[t.0].params,
-                    done_args,
-                    &mut block_entry[t.0],
-                )
-            {
-                worklist.push_back(t);
-            }
-        }
         Terminator::Fallthrough => {
             let next = idx.0 + 1;
             if next < n && block_entry[next].join_from(exit_state) {
@@ -384,22 +366,6 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
                     else_args,
-                    exit_state,
-                );
-            }
-        }
-        Terminator::ListStep {
-            done, done_args, ..
-        } => {
-            let next = idx.0 + 1;
-            if next < n {
-                exit_state.join_from(&block_entry[next]);
-            }
-            if let Some(&t) = cfg.label_to_block.get(done) {
-                analysis.propagate_backward(
-                    &block_entry[t.0],
-                    &cfg.blocks[t.0].params,
-                    done_args,
                     exit_state,
                 );
             }

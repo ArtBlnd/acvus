@@ -476,22 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn materiality_store_deque() {
-        let i = Interner::new();
-        let mut solver = crate::ty::Solver::new();
-        let infer_o = solver.alloc_identity();
-        let o = solver.freeze_ty(&infer_o).unwrap();
-        assert!(
-            compile_script(
-                &i,
-                "@x = [1, 2, 3]; @x",
-                &[("x", Ty::Deque(Box::new(Ty::Int), Box::new(o)))]
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
     fn materiality_store_object() {
         let i = Interner::new();
         let obj_ty = Ty::Object(FxHashMap::from_iter([

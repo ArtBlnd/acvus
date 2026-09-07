@@ -1,5 +1,5 @@
 use acvus_ast::{
-    AstId, BinOp, Expr, IterBlock, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
+    AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
     Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
@@ -317,16 +317,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Ty::error()
                 };
                 self.coercion_map.push((id, CastKind::Extern { fn_ref: *fn_ref, callee_ty }));
-            } else {
-                let resolved_val = self.solver.resolve_ty(value_ty);
-                let resolved_exp = self.solver.resolve_ty(expected_ty);
-                if let (Ok(frozen_val), Ok(frozen_exp)) =
-                    (self.solver.freeze_ty(&resolved_val), self.solver.freeze_ty(&resolved_exp))
-                {
-                    if let Some(kind) = CastKind::between(&frozen_val, &frozen_exp) {
-                        self.coercion_map.push((id, kind));
-                    }
-                }
             }
         }
         result.map(|_| ())
@@ -466,41 +456,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 );
             }
 
-            // Detect Fn return-type coercion: when arg is a lambda whose
-            // return type was coerced (e.g. Deque → Iterator), register the
-            // coercion on the lambda body expression's id so the lowerer
-            // can insert a Cast at the return site.
-            if let Some(&arg_id) = arg_ids.get(i) {
-                self.detect_fn_ret_coercion(at, pt, arg_id);
-            }
         }
         true
-    }
-
-    /// If `arg_ty` and `param_ty` are both `Fn` and their resolved return
-    /// types require a Cast, look up the lambda body span from the type_map
-    /// and register the coercion there.
-    fn detect_fn_ret_coercion(&mut self, arg_ty: &InferTy, param_ty: &InferTy, lambda_id: AstId) {
-        let resolved_arg = self.solver.resolve_ty(arg_ty);
-        let resolved_param = self.solver.resolve_ty(param_ty);
-        let (TyTerm::Fn { ret: arg_ret, .. }, TyTerm::Fn { ret: param_ret, .. }) =
-            (&resolved_arg, &resolved_param)
-        else {
-            return;
-        };
-        if let (Ok(frozen_arg_ret), Ok(frozen_param_ret)) =
-            (self.solver.freeze_ty(arg_ret), self.solver.freeze_ty(param_ret))
-        {
-            if let Some(kind) = CastKind::between(&frozen_arg_ret, &frozen_param_ret) {
-                // Register the coercion on the lambda BODY span (not the lambda
-                // expression span). This way the lowerer's `lower_expr(body)` →
-                // `maybe_cast(body.span(), val)` naturally picks it up and inserts
-                // a Cast before Return.
-                if let Some(&body_id) = self.lambda_body_ids.get(&lambda_id) {
-                    self.coercion_map.push((body_id, kind));
-                }
-            }
-        }
     }
 
     fn check_nodes(&mut self, nodes: &[Node]) {
@@ -529,7 +486,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
             Node::MatchBlock(mb) => self.check_match_block(mb),
-            Node::IterBlock(ib) => self.check_iter_block(ib),
         }
     }
 
@@ -616,31 +572,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
                 self.pop_scope();
             }
-            acvus_ast::Stmt::Iterate {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                let source_ty = self.check_expr(false, source);
-                let resolved = self.solver.resolve_ty(&source_ty);
-                let elem_ty = match &resolved {
-                    TyTerm::List(inner) | TyTerm::Deque(inner, _) => inner.as_ref().clone(),
-                    TyTerm::Range => TyTerm::Int,
-                    TyTerm::Error(_) => Self::infer_error(),
-                    _ => {
-                        self.error(MirErrorKind::SourceNotIterable { actual: self.freeze_or_error(&resolved) }, *span);
-                        return;
-                    }
-                };
-                self.push_scope();
-                self.check_pattern(pattern, &elem_ty, *span);
-                for s in body {
-                    self.check_stmt(s);
-                }
-                self.pop_scope();
-            }
 
             // ── Script mode statements ──────────────────────────────
 
@@ -684,31 +615,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     );
                 }
                 self.record(*id, ty);
-            }
-            acvus_ast::Stmt::For {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                let source_ty = self.check_expr(false, source);
-                let resolved = self.solver.resolve_ty(&source_ty);
-                let elem_ty = match &resolved {
-                    TyTerm::List(inner) | TyTerm::Deque(inner, _) => inner.as_ref().clone(),
-                    TyTerm::Range => TyTerm::Int,
-                    TyTerm::Error(_) => Self::infer_error(),
-                    _ => {
-                        self.error(MirErrorKind::SourceNotIterable { actual: self.freeze_or_error(&resolved) }, *span);
-                        return;
-                    }
-                };
-                self.push_scope();
-                self.check_pattern(pattern, &elem_ty, *span);
-                for s in body {
-                    self.check_stmt(s);
-                }
-                self.pop_scope();
             }
             acvus_ast::Stmt::While {
                 cond, body, span, ..
@@ -793,36 +699,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
         }
     }
 
-    fn check_iter_block(&mut self, ib: &IterBlock) {
-        let source_ty = self.check_expr(false, &ib.source);
-        let resolved = self.solver.resolve_ty(&source_ty);
-
-        let elem_ty = match &resolved {
-            TyTerm::List(inner) | TyTerm::Deque(inner, _) => inner.as_ref().clone(),
-            TyTerm::Range => TyTerm::Int,
-            TyTerm::Error(_) => Self::infer_error(),
-            _ => {
-                self.error(
-                    MirErrorKind::SourceNotIterable { actual: self.freeze_or_error(&resolved) },
-                    ib.span,
-                );
-                return;
-            }
-        };
-
-        self.push_scope();
-        self.check_pattern(&ib.pattern, &elem_ty, ib.span);
-        self.check_nodes(&ib.body);
-        self.pop_scope();
-
-        if let Some(catch_all) = &ib.catch_all {
-            self.push_scope();
-            self.check_nodes(&catch_all.body);
-            self.pop_scope();
-        }
-    }
-
-    /// Check if a match block is a body-less variable binding.
     fn is_bodyless_var_binding(&self, mb: &MatchBlock) -> bool {
         mb.arms.len() == 1
             && mb.arms[0].body.is_empty()
@@ -841,8 +717,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             _ => {
                 // Other patterns match iterated elements.
                 match source_ty {
-                    TyTerm::List(inner) | TyTerm::Deque(inner, _) => inner.as_ref().clone(),
-                    TyTerm::Range => TyTerm::Int,
+                    TyTerm::List(inner)=> inner.as_ref().clone(),
                     _ => source_ty.clone(),
                 }
             }
@@ -861,9 +736,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Literal::Unit => TyTerm::Unit,
                     Literal::List(elems) => {
                         if elems.is_empty() {
-                            let elem = self.solver.fresh_ty_var();
-                            let origin = self.solver.alloc_identity();
-                            TyTerm::Deque(Box::new(elem), Box::new(origin))
+                            TyTerm::List(Box::new(self.solver.fresh_ty_var()))
                         } else {
                             let first_ty = self.literal_ty(&elems[0]);
                             for elem in &elems[1..] {
@@ -883,8 +756,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                     );
                                 }
                             }
-                            let origin = self.solver.alloc_identity();
-                            TyTerm::Deque(Box::new(self.solver.resolve_ty(&first_ty)), Box::new(origin))
+                            TyTerm::List(Box::new(self.solver.resolve_ty(&first_ty)))
                         }
                     }
                 };
@@ -1290,9 +1162,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 if all_elems.is_empty() && rest.is_none() {
                     // Empty list `[]` — element type unknown, use fresh var.
                     // If no hint resolves it, we report the error after resolve.
-                    let elem = self.solver.fresh_ty_var();
-                    let origin = self.solver.alloc_identity();
-                    let ty = TyTerm::Deque(Box::new(elem), Box::new(origin));
+                    let ty = TyTerm::List(Box::new(self.solver.fresh_ty_var()));
                     return self.record_ret(*id, ty);
                 }
 
@@ -1316,8 +1186,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     }
                 }
 
-                let origin = self.solver.alloc_identity();
-                let ty = TyTerm::Deque(Box::new(self.solver.resolve_ty(&elem_ty)), Box::new(origin));
+                let ty = TyTerm::List(Box::new(self.solver.resolve_ty(&elem_ty)));
                 self.record_ret(*id, ty)
             }
 
@@ -1335,25 +1204,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.record_ret(*id, ty)
             }
 
-            Expr::Range {
-                id,
-                start,
-                end,
-                kind: _,
-                span,
-            } => {
-                let st = self.check_expr(false, start);
-                let et = self.check_expr(false, end);
-                let st = self.solver.resolve_ty(&st);
-                let et = self.solver.resolve_ty(&et);
-                if !matches!(&st, TyTerm::Int | TyTerm::Error(_)) {
-                    self.error(MirErrorKind::RangeBoundsNotInt { actual: self.freeze_or_error(&st) }, *span);
-                }
-                if !matches!(&et, TyTerm::Int | TyTerm::Error(_)) {
-                    self.error(MirErrorKind::RangeBoundsNotInt { actual: self.freeze_or_error(&et) }, *span);
-                }
-                self.record_ret(*id, TyTerm::Range)
-            }
 
             Expr::Tuple {
                 id,
@@ -1834,11 +1684,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 // List. Same rationale as Tuple above.
                 let shallow = self.solver.shallow_resolve_ty(source_ty);
                 let elem_ty = match shallow {
-                    TyTerm::List(ref inner) | TyTerm::Deque(ref inner, _) => (**inner).clone(),
+                    TyTerm::List(ref inner)=> (**inner).clone(),
                     _ => {
                         let var = self.solver.fresh_ty_var();
-                        let origin = self.solver.alloc_identity();
-                        let list_ty = TyTerm::Deque(Box::new(var.clone()), Box::new(origin));
+                        let list_ty = TyTerm::List(Box::new(var.clone()));
                         if self.unify_covariant(source_ty, &list_ty, None).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
@@ -1896,29 +1745,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
 
-            Pattern::Range {
-                start,
-                end,
-                kind: _,
-                ..
-            } => {
-                // Range pattern matches Int source.
-                if self
-                    .unify_covariant(&source_resolved, &TyTerm::Int, None)
-                    .is_err()
-                {
-                    self.error(
-                        MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: Ty::Int,
-                            source_ty: self.freeze_or_error(&source_resolved),
-                        },
-                        span,
-                    );
-                }
-                // Range bounds must be literal Ints (validated at pattern level).
-                self.check_pattern_is_int(start, span);
-                self.check_pattern_is_int(end, span);
-            }
 
             Pattern::Tuple { elements, .. } => {
                 // Reuse existing element Vars when source already resolves to a
@@ -2070,13 +1896,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Literal::Bool(_) => TyTerm::Bool,
             Literal::Byte(_) => TyTerm::Byte,
             Literal::Unit => TyTerm::Unit,
-            Literal::List(elems) => {
-                let origin = self.solver.alloc_identity();
-                match elems.first() {
-                    Some(first) => TyTerm::Deque(Box::new(self.literal_ty(first)), Box::new(origin)),
-                    None => TyTerm::Deque(Box::new(Self::infer_error()), Box::new(origin)),
-                }
-            }
+            Literal::List(elems) => match elems.first() {
+                Some(first) => TyTerm::List(Box::new(self.literal_ty(first))),
+                None => TyTerm::List(Box::new(Self::infer_error())),
+            },
         }
     }
 
@@ -2198,18 +2021,6 @@ mod tests {
         let src = r#"{{ x = 1 + 2.0 }}{{_}}{{/}}"#;
         let result = check(src);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn range_bounds_int() {
-        let src = "{{ x = 0..10 }}{{_}}{{/}}";
-        check(src).unwrap();
-    }
-
-    #[test]
-    fn range_bounds_float_fails() {
-        let src = "{{ x = 1.0..2.0 }}{{_}}{{/}}";
-        assert!(check(src).is_err());
     }
 
     #[test]

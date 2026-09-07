@@ -66,22 +66,11 @@ impl DataflowAnalysis for LivenessAnalysis {
         match term {
             Terminator::Return(val) => state.set(*val, Liveness::Live),
             Terminator::JumpIf { cond, .. } => state.set(*cond, Liveness::Live),
-            Terminator::ListStep {
-                list, index_src, ..
-            } => {
-                state.set(*list, Liveness::Live);
-                state.set(*index_src, Liveness::Live);
-            }
             _ => {}
         }
     }
 
-    fn terminator_defs(&self, term: &Terminator, state: &mut DataflowState<ValueId, Liveness>) {
-        if let Terminator::ListStep { dst, index_dst, .. } = term {
-            state.values.remove(dst);
-            state.values.remove(index_dst);
-        }
-    }
+    fn terminator_defs(&self, _term: &Terminator, _state: &mut DataflowState<ValueId, Liveness>) {}
 
     fn propagate_forward(
         &self,

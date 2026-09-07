@@ -49,16 +49,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
                 state.set(*dst, src_val.test_literal(value));
             }
 
-            InstKind::TestRange {
-                dst,
-                src,
-                start,
-                end,
-                kind,
-            } => {
-                let src_val = state.get(*src);
-                state.set(*dst, src_val.test_range(*start, *end, *kind));
-            }
 
             InstKind::TestVariant { dst, src, tag } => {
                 if let Some(ty) = self.val_types.get(src) {
@@ -147,9 +137,8 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::ObjectGet { dst, .. }
             | InstKind::FunctionCall { dst, .. }
             | InstKind::LoadFunction { dst, .. }
-            | InstKind::MakeDeque { dst, .. }
+            | InstKind::MakeList { dst, .. }
             | InstKind::MakeObject { dst, .. }
-            | InstKind::MakeRange { dst, .. }
             | InstKind::ListIndex { dst, .. }
             | InstKind::ListGet { dst, .. }
             | InstKind::ListSlice { dst, .. }
@@ -157,7 +146,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::UnwrapVariant { dst, .. }
             | InstKind::TestListLen { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
-            | InstKind::Cast { dst, .. }
             | InstKind::Clone { dst, .. }
             | InstKind::Spawn { dst, .. }
             | InstKind::Eval { dst, .. }
@@ -166,10 +154,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
                 state.set(*dst, AbstractValue::Top);
             }
 
-            InstKind::ListStep { dst, index_dst, .. } => {
-                state.set(*dst, AbstractValue::Top);
-                state.set(*index_dst, AbstractValue::Top);
-            }
 
             InstKind::BinOp { dst, .. } => {
                 state.set(*dst, AbstractValue::Top);

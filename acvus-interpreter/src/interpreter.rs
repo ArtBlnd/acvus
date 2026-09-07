@@ -1,19 +1,17 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 
-use acvus_ast::{BinOp, Literal, RangeKind, UnaryOp};
+use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId,
+    Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId,
 };
 use acvus_mir::ty::Ty;
-use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec, TrackedDeque};
+use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec};
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::error::RuntimeError;
-use crate::iter::{ExpansionFrame, IterHandle, IterOp, IterSource};
 use crate::value::{FnValue, Value};
 
 /// Runtime representation of a Ref instruction's target.
@@ -582,27 +580,14 @@ async fn execute_inst(
         }
 
         // ── Constructors ─────────────────────────────────
-        InstKind::MakeDeque { dst, elements } => {
+        InstKind::MakeList { dst, elements } => {
             let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
-            frame.set(*dst, Value::deque(TrackedDeque::from_vec(items)));
+            frame.set(*dst, Value::list(items));
         }
         InstKind::MakeObject { dst, fields } => {
             let obj: FxHashMap<Astr, Value> =
                 fields.iter().map(|(k, v)| (*k, frame.share(*v))).collect();
             frame.set(*dst, Value::object(obj));
-        }
-        InstKind::MakeRange {
-            dst,
-            start,
-            end,
-            kind,
-        } => {
-            let s = frame.get(*start).as_int();
-            let e = frame.get(*end).as_int();
-            frame.set(
-                *dst,
-                Value::range(s, e, matches!(kind, RangeKind::InclusiveEnd)),
-            );
         }
         InstKind::MakeTuple { dst, elements } => {
             let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
@@ -671,7 +656,6 @@ async fn execute_inst(
         } => {
             let len = match frame.get(*src) {
                 Value::List(l) => l.len(),
-                Value::Deque(d) => d.len(),
                 _ => 0,
             };
             let matches = if *exact {
@@ -688,26 +672,7 @@ async fn execute_inst(
             };
             frame.set(*dst, Value::bool_(has));
         }
-        InstKind::TestRange {
-            dst,
-            src,
-            start,
-            end,
-            kind,
-        } => {
-            let inclusive = matches!(kind, RangeKind::InclusiveEnd);
-            let in_range = match frame.get(*src) {
-                Value::Int(n) => *n >= *start && if inclusive { *n <= *end } else { *n < *end },
-                _ => false,
-            };
-            frame.set(*dst, Value::bool_(in_range));
-        }
 
-        // ── Cast ─────────────────────────────────────────
-        InstKind::Cast { dst, src, kind } => {
-            let val = eval_cast(kind.clone(), frame.share(*src));
-            frame.set(*dst, val);
-        }
         InstKind::Clone { dst, src } => {
             let val = frame.share(*src);
             frame.set(*dst, val);
@@ -715,34 +680,6 @@ async fn execute_inst(
         InstKind::Drop { src } => {
             // Consume the value, releasing its resources.
             let _ = frame.take(*src);
-        }
-
-        // ── List iteration ───────────────────────────────
-        InstKind::ListStep {
-            dst,
-            list,
-            index_src,
-            index_dst,
-            done,
-            done_args,
-        } => {
-            let idx = frame.get(*index_src).as_int();
-            let len = match frame.get(*list) {
-                Value::List(l) => l.len() as i64,
-                Value::Deque(d) => d.len() as i64,
-                other => panic!("ListStep: expected List or Deque, got {other:?}"),
-            };
-            if idx >= len {
-                let target = frame.jump(insts, done, done_args);
-                return Ok(Flow::Jump(target));
-            }
-            let val = match frame.get(*list) {
-                Value::List(l) => l[idx as usize].share(),
-                Value::Deque(d) => d.as_slice()[idx as usize].share(),
-                _ => unreachable!(),
-            };
-            frame.set(*dst, val);
-            frame.set(*index_dst, Value::Int(idx + 1));
         }
 
         // ── Control flow ─────────────────────────────────
@@ -1098,113 +1035,6 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     .await
 }
 
-// ── Iterator pulling ────────────────────────────────────────────────
-
-/// Pull one element from an iterator. Standalone — no Interpreter needed.
-/// FnValues in IterOps are self-contained and execute via fn_value_call.
-pub fn exec_next(iter: &mut IterHandle) -> BoxFuture<'_, Result<Option<Value>, RuntimeError>> {
-    Box::pin(async move {
-        loop {
-            let Some((start_op, val)) = next_input(iter).await? else {
-                return Ok(None);
-            };
-            if let Some(out) = run_ops(iter, start_op, val).await? {
-                return Ok(Some(out));
-            }
-        }
-    })
-}
-
-async fn next_input(iter: &mut IterHandle) -> Result<Option<(usize, Value)>, RuntimeError> {
-    while let Some(frame) = iter.expansions.last_mut() {
-        if let Some(val) = frame.items.pop_front() {
-            return Ok(Some((frame.next_op, val)));
-        }
-        iter.expansions.pop();
-    }
-    if iter.exhausted {
-        return Ok(None);
-    }
-
-    let raw = match &mut iter.source {
-        IterSource::Leaf(leaf) => leaf.pull(),
-        IterSource::Chain(parts) => loop {
-            let Some(front) = parts.front_mut() else {
-                break None;
-            };
-            match exec_next(front).await? {
-                Some(val) => break Some(val),
-                None => {
-                    parts.pop_front();
-                }
-            }
-        },
-    };
-    Ok(raw.map(|val| (0, val)))
-}
-
-async fn run_ops(
-    iter: &mut IterHandle,
-    start_op: usize,
-    mut val: Value,
-) -> Result<Option<Value>, RuntimeError> {
-    let mut i = start_op;
-    while i < iter.ops.len() {
-        match &mut iter.ops[i] {
-            IterOp::Map(f) => val = f.call(val).await?,
-            IterOp::Filter(f) => {
-                if !f.call(val.clone()).await?.as_bool() {
-                    return Ok(None);
-                }
-            }
-            IterOp::Skip { remaining } => {
-                if *remaining > 0 {
-                    *remaining -= 1;
-                    return Ok(None);
-                }
-            }
-            IterOp::Take { remaining } => {
-                if *remaining == 0 {
-                    return Ok(None);
-                }
-                *remaining -= 1;
-                if *remaining == 0 {
-                    iter.exhausted = true;
-                }
-            }
-            IterOp::Flatten => match val {
-                Value::List(l) => {
-                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
-                        return Ok(None);
-                    };
-                    val = first;
-                }
-                other => val = other,
-            },
-            IterOp::FlatMap(f) => match f.call(val).await? {
-                Value::List(l) => {
-                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
-                        return Ok(None);
-                    };
-                    val = first;
-                }
-                other => val = other,
-            },
-        }
-        i += 1;
-    }
-    Ok(Some(val))
-}
-
-fn expand(iter: &mut IterHandle, op_index: usize, mut items: VecDeque<Value>) -> Option<Value> {
-    let first = items.pop_front()?;
-    iter.expansions.push(ExpansionFrame {
-        next_op: op_index + 1,
-        items,
-    });
-    Some(first)
-}
-
 // ── Interpreter — thin entry point ──────────────────────────────────
 
 pub struct Interpreter {
@@ -1356,27 +1186,3 @@ fn eval_unaryop(op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
     }
 }
 
-// ── Cast ─────────────────────────────────────────────────────────────
-
-fn eval_cast(kind: CastKind, val: Value) -> Value {
-    match kind {
-        CastKind::DequeToList => match val {
-            Value::Deque(d) => Value::list(d.as_slice().to_vec()),
-            other => panic!("DequeToList on {other:?}"),
-        },
-        CastKind::RangeToList => match val {
-            Value::Range(r) => {
-                let items: Vec<Value> = if r.inclusive {
-                    (r.start..=r.end).map(Value::Int).collect()
-                } else {
-                    (r.start..r.end).map(Value::Int).collect()
-                };
-                Value::list(items)
-            }
-            other => panic!("RangeToList on {other:?}"),
-        },
-        CastKind::Extern { fn_ref, .. } => {
-            panic!("ExternCast({fn_ref:?}) should have been lowered to a FunctionCall")
-        }
-    }
-}

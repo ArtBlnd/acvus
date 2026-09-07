@@ -14,8 +14,6 @@ pub enum TagContent {
     Binding { lhs: Expr, rhs: Expr, span: Span },
     /// A continuation arm: `{{ pattern = }}`.
     ContinuationArm { pattern: Expr, span: Span },
-    /// An iteration: `{{ lhs in rhs }}`.
-    Iteration { lhs: Expr, rhs: Expr, span: Span },
 }
 
 /// Intermediate type for parsing list elements before splitting into head/rest/tail.

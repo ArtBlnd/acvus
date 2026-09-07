@@ -313,18 +313,6 @@ fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
             v.extend(else_args.iter().copied());
             v
         }
-        Terminator::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            let mut v = smallvec::SmallVec::new();
-            v.push(*list);
-            v.push(*index_src);
-            v.extend(done_args.iter().copied());
-            v
-        }
         Terminator::Return(val) => smallvec::smallvec![*val],
         Terminator::Fallthrough => smallvec::SmallVec::new(),
     }
@@ -332,7 +320,6 @@ fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
 
 fn terminator_defs(term: &Terminator) -> smallvec::SmallVec<[ValueId; 2]> {
     match term {
-        Terminator::ListStep { dst, index_dst, .. } => smallvec::smallvec![*dst, *index_dst],
         _ => smallvec::SmallVec::new(),
     }
 }
@@ -572,20 +559,13 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(src);
             context_defs.iter_mut().for_each(|(_, v)| r(v));
         }
-        InstKind::MakeDeque { dst, elements } => {
+        InstKind::MakeList { dst, elements } => {
             r(dst);
             elements.iter_mut().for_each(&r);
         }
         InstKind::MakeObject { dst, fields } => {
             r(dst);
             fields.iter_mut().for_each(|(_, v)| r(v));
-        }
-        InstKind::MakeRange {
-            dst, start, end, ..
-        } => {
-            r(dst);
-            r(start);
-            r(end);
         }
         InstKind::MakeTuple { dst, elements } => {
             r(dst);
@@ -604,10 +584,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(src);
         }
         InstKind::TestObjectKey { dst, src, .. } => {
-            r(dst);
-            r(src);
-        }
-        InstKind::TestRange { dst, src, .. } => {
             r(dst);
             r(src);
         }
@@ -646,10 +622,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             r(src);
         }
-        InstKind::Cast { dst, src, .. } => {
-            r(dst);
-            r(src);
-        }
         InstKind::Clone { dst, src } => {
             r(dst);
             r(src);
@@ -661,7 +633,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         InstKind::BlockLabel { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
-        | InstKind::ListStep { .. }
         | InstKind::Return(..) => {
             unreachable!("CF instructions must not appear in CfgBody block.insts")
         }
@@ -681,20 +652,6 @@ fn rewrite_terminator(term: &mut Terminator, remap: &impl Fn(ValueId) -> ValueId
             r(cond);
             then_args.iter_mut().for_each(&r);
             else_args.iter_mut().for_each(&r);
-        }
-        Terminator::ListStep {
-            dst,
-            list,
-            index_src,
-            index_dst,
-            done_args,
-            ..
-        } => {
-            r(dst);
-            r(list);
-            r(index_src);
-            r(index_dst);
-            done_args.iter_mut().for_each(&r);
         }
         Terminator::Return(v) => r(v),
         Terminator::Fallthrough => {}

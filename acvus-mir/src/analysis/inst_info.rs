@@ -20,15 +20,13 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::FieldGet { dst, .. }
         | InstKind::FieldSet { dst, .. }
         | InstKind::LoadFunction { dst, .. }
-        | InstKind::MakeDeque { dst, .. }
+        | InstKind::MakeList { dst, .. }
         | InstKind::MakeObject { dst, .. }
-        | InstKind::MakeRange { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
         | InstKind::TestLiteral { dst, .. }
         | InstKind::TestListLen { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
-        | InstKind::TestRange { dst, .. }
         | InstKind::ListIndex { dst, .. }
         | InstKind::ListGet { dst, .. }
         | InstKind::ListSlice { dst, .. }
@@ -37,7 +35,6 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
-        | InstKind::Cast { dst, .. }
         | InstKind::Clone { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Poison { dst }
@@ -61,7 +58,6 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
             d
         }
 
-        InstKind::ListStep { dst, index_dst, .. } => smallvec![*dst, *index_dst],
 
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
@@ -92,8 +88,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
-        InstKind::Cast { src, .. }
-        | InstKind::Clone { src, .. }
+        InstKind::Clone { src, .. }
         | InstKind::Drop { src } => smallvec![*src],
         InstKind::Return(val) => smallvec![*val],
         InstKind::TestLiteral { src, .. } => smallvec![*src],
@@ -108,14 +103,12 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
 
         // TestListLen / TestRange
         InstKind::TestListLen { src, .. } => smallvec![*src],
-        InstKind::TestRange { src, .. } => smallvec![*src],
         InstKind::ListIndex { list, .. } => smallvec![*list],
         InstKind::ListSlice { list, .. } => smallvec![*list],
 
         // Composite constructors
-        InstKind::MakeDeque { elements, .. } => elements.iter().copied().collect(),
+        InstKind::MakeList { elements, .. } => elements.iter().copied().collect(),
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
-        InstKind::MakeRange { start, end, .. } => smallvec![*start, *end],
         InstKind::MakeTuple { elements, .. } => elements.iter().copied().collect(),
         InstKind::TupleIndex { tuple, .. } => smallvec![*tuple],
 
@@ -161,16 +154,6 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::Eval { src, .. } => smallvec![*src],
 
         // Iterator
-        InstKind::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            let mut v: SmallVec<[ValueId; 4]> = smallvec![*list, *index_src];
-            v.extend(done_args.iter().copied());
-            v
-        }
 
         // Control flow
         InstKind::Jump { args, .. } => args.iter().copied().collect(),
@@ -195,7 +178,6 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
         InstKind::BlockLabel { .. }
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
-            | InstKind::ListStep { .. }
             | InstKind::Return(_)
     )
 }
@@ -283,25 +265,6 @@ mod tests {
     }
 
     #[test]
-    fn list_step_multiple_defs() {
-        let inst = InstKind::ListStep {
-            dst: v(0),
-            list: v(1),
-            index_src: v(2),
-            index_dst: v(3),
-            done: crate::ir::Label(0),
-            done_args: vec![v(4)],
-        };
-        let d = defs(&inst);
-        assert!(d.contains(&v(0)));
-        assert!(d.contains(&v(3)));
-        let u = uses(&inst);
-        assert!(u.contains(&v(1)));
-        assert!(u.contains(&v(2)));
-        assert!(u.contains(&v(4)));
-    }
-
-    #[test]
     fn control_flow_detection() {
         assert!(is_control_flow(&InstKind::Return(v(0))));
         assert!(is_control_flow(&InstKind::Jump {
@@ -315,19 +278,6 @@ mod tests {
     }
 
     /// Regression: ListStep is a CFG terminator and must be classified as control flow.
-    #[test]
-    fn list_step_is_control_flow() {
-        let inst = InstKind::ListStep {
-            dst: v(0),
-            list: v(1),
-            index_src: v(2),
-            index_dst: v(3),
-            done: crate::ir::Label(0),
-            done_args: vec![],
-        };
-        assert!(is_control_flow(&inst), "ListStep must be control flow");
-    }
-
     /// Regression: FunctionCall context_defs are defs (caller's new SSA values),
     /// not uses. They must appear in defs() and NOT in uses().
     #[test]

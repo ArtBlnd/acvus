@@ -1,5 +1,0 @@
-{
-  "template": "{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}",
-  "context": { "age": 5 },
-  "expected": "child"
-}

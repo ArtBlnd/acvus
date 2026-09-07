@@ -33,7 +33,6 @@ enum TypeDef {
     String,
     Bool,
     Unit,
-    Range,
     List(Box<TypeDef>),
     Object(FxHashMap<String, TypeDef>),
 }
@@ -46,7 +45,6 @@ impl TypeDef {
             TypeDef::String => Ty::String,
             TypeDef::Bool => Ty::Bool,
             TypeDef::Unit => Ty::Unit,
-            TypeDef::Range => Ty::Range,
             TypeDef::List(inner) => Ty::List(Box::new(inner.to_ty(interner))),
             TypeDef::Object(fields) => Ty::Object(
                 fields

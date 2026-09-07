@@ -411,24 +411,13 @@ fn remap_inst(
         }
 
         // Composite constructors
-        InstKind::MakeDeque { dst, elements } => InstKind::MakeDeque {
+        InstKind::MakeList { dst, elements } => InstKind::MakeList {
             dst: r(*dst),
             elements: rv(elements),
         },
         InstKind::MakeObject { dst, fields } => InstKind::MakeObject {
             dst: r(*dst),
             fields: fields.iter().map(|(name, v)| (*name, r(*v))).collect(),
-        },
-        InstKind::MakeRange {
-            dst,
-            start,
-            end,
-            kind,
-        } => InstKind::MakeRange {
-            dst: r(*dst),
-            start: r(*start),
-            end: r(*end),
-            kind: *kind,
         },
         InstKind::MakeTuple { dst, elements } => InstKind::MakeTuple {
             dst: r(*dst),
@@ -461,19 +450,6 @@ fn remap_inst(
             dst: r(*dst),
             src: r(*src),
             key: *key,
-        },
-        InstKind::TestRange {
-            dst,
-            src,
-            start,
-            end,
-            kind,
-        } => InstKind::TestRange {
-            dst: r(*dst),
-            src: r(*src),
-            start: *start,
-            end: *end,
-            kind: *kind,
         },
         InstKind::ListIndex { dst, list, index } => InstKind::ListIndex {
             dst: r(*dst),
@@ -514,21 +490,6 @@ fn remap_inst(
         },
 
         // Iterator
-        InstKind::ListStep {
-            dst,
-            list,
-            index_src,
-            index_dst,
-            done,
-            done_args,
-        } => InstKind::ListStep {
-            dst: r(*dst),
-            list: r(*list),
-            index_src: r(*index_src),
-            index_dst: r(*index_dst),
-            done: rl(*done),
-            done_args: done_args.iter().map(|v| r(*v)).collect(),
-        },
 
         // Variant
         InstKind::MakeVariant { dst, tag, payload } => InstKind::MakeVariant {
@@ -577,11 +538,6 @@ fn remap_inst(
         InstKind::Nop => InstKind::Nop,
 
         // Cast
-        InstKind::Cast { dst, src, kind } => InstKind::Cast {
-            dst: r(*dst),
-            src: r(*src),
-            kind: kind.clone(),
-        },
 
         // Clone / Drop
         InstKind::Clone { dst, src } => InstKind::Clone {

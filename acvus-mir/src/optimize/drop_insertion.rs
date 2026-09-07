@@ -221,16 +221,6 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             uses.extend(then_args.iter().copied());
             uses.extend(else_args.iter().copied());
         }
-        Terminator::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            uses.insert(*list);
-            uses.insert(*index_src);
-            uses.extend(done_args.iter().copied());
-        }
         Terminator::Fallthrough => {}
     }
     uses
@@ -253,14 +243,6 @@ fn terminator_edges(term: &Terminator) -> Vec<(Label, FxHashSet<ValueId>)> {
                 (*then_label, then_args.iter().copied().collect()),
                 (*else_label, else_args.iter().copied().collect()),
             ]
-        }
-        Terminator::ListStep {
-            done, done_args, ..
-        } => {
-            // The "continue" edge is the fallthrough to the next block —
-            // dst and index_dst are defined by the terminator and available in the next block.
-            // The "done" edge forwards done_args.
-            vec![(*done, done_args.iter().copied().collect())]
         }
         Terminator::Return(_) | Terminator::Fallthrough => vec![],
     }
@@ -297,13 +279,11 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // Store consumes the value (not the dst Ref).
         InstKind::Store { value, .. } => *value == val,
         // Cast consumes src (transforms it).
-        InstKind::Cast { src, .. } => *src == val,
         // Container constructors consume their elements.
-        InstKind::MakeDeque { elements, .. } => elements.contains(&val),
+        InstKind::MakeList { elements, .. } => elements.contains(&val),
         InstKind::MakeTuple { elements, .. } => elements.contains(&val),
         InstKind::MakeObject { fields, .. } => fields.iter().any(|(_, v)| *v == val),
         InstKind::MakeVariant { payload, .. } => payload.as_ref() == Some(&val),
-        InstKind::MakeRange { start, end, .. } => *start == val || *end == val,
         // Closure captures are consumed (moved into closure).
         InstKind::MakeClosure { captures, .. } => captures.contains(&val),
         // FieldSet consumes both object and value (produces new object).
@@ -322,13 +302,11 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::UnwrapVariant { .. }
         | InstKind::TestListLen { .. }
         | InstKind::TestObjectKey { .. }
-        | InstKind::TestRange { .. }
         | InstKind::ListIndex { .. }
         | InstKind::ListGet { .. }
         | InstKind::ListSlice { .. }
         | InstKind::ObjectGet { .. }
-        | InstKind::TupleIndex { .. }
-        | InstKind::ListStep { .. } => false,
+        | InstKind::TupleIndex { .. }=> false,
 
         // These don't use values at all.
         InstKind::Const { .. }
@@ -358,7 +336,6 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
             then_args.contains(&val) || else_args.contains(&val)
         }
         // ListStep: list and index_src are read, done_args are transferred.
-        Terminator::ListStep { done_args, .. } => done_args.contains(&val),
         Terminator::Fallthrough => false,
     }
 }

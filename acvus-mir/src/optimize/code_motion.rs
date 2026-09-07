@@ -34,7 +34,6 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
-use crate::ty::Ty;
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -143,10 +142,6 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
                 def_block.insert(d, idx);
             }
         }
-        if let crate::cfg::Terminator::ListStep { dst, index_dst, .. } = &block.terminator {
-            def_block.insert(*dst, idx);
-            def_block.insert(*index_dst, idx);
-        }
     }
 
     for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
@@ -204,14 +199,13 @@ fn find_highest_target(
 fn is_hoistable(kind: &InstKind) -> bool {
     match kind {
         // Arithmetic / logic.
-        InstKind::BinOp { .. } | InstKind::UnaryOp { .. } | InstKind::Cast { .. } => true,
+        InstKind::BinOp { .. } | InstKind::UnaryOp { .. }=> true,
 
         // Value construction.
         InstKind::Const { .. }
-        | InstKind::MakeDeque { .. }
+        | InstKind::MakeList { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
-        | InstKind::MakeRange { .. }
         | InstKind::MakeVariant { .. }
         | InstKind::MakeClosure { .. } => true,
 
@@ -230,7 +224,6 @@ fn is_hoistable(kind: &InstKind) -> bool {
 
         // Test predicates.
         InstKind::TestLiteral { .. }
-        | InstKind::TestRange { .. }
         | InstKind::TestVariant { .. }
         | InstKind::TestListLen { .. }
         | InstKind::TestObjectKey { .. } => true,
@@ -255,7 +248,6 @@ fn is_hoistable(kind: &InstKind) -> bool {
 
 fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
     match term {
-        crate::cfg::Terminator::ListStep { dst, index_dst, .. } => val == *dst || val == *index_dst,
         _ => false,
     }
 }
@@ -282,11 +274,6 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
             let mut v = vec![*cond];
             v.extend_from_slice(then_args);
             v.extend_from_slice(else_args);
-            v
-        }
-        Terminator::ListStep { list, index_src, done_args, .. } => {
-            let mut v = vec![*list, *index_src];
-            v.extend_from_slice(done_args);
             v
         }
         Terminator::Fallthrough => vec![],
@@ -484,6 +471,7 @@ enum SinkKind {
 mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
+    use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {

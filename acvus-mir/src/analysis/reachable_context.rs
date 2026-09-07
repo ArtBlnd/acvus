@@ -286,7 +286,7 @@ mod tests {
     use crate::graph::QualifiedRef;
     use crate::ir::{DebugInfo, Inst, Label, MirBody};
     use crate::ty::Ty;
-    use acvus_ast::{Literal, RangeKind, Span};
+    use acvus_ast::{Literal, Span};
     use acvus_utils::{Interner, LocalFactory};
 
     fn make_module(insts: Vec<Inst>) -> MirModule {
@@ -634,67 +634,6 @@ mod tests {
     }
 
     /// Range test with known value.
-    #[test]
-    fn range_condition_evaluated() {
-        let id0 = alloc_qref();
-        let id1 = alloc_qref();
-        let id2 = alloc_qref();
-        let mut vf = LocalFactory::<ValueId>::new();
-        let v0 = vf.next();
-        let v1 = vf.next();
-        let v2 = vf.next();
-        let v3 = vf.next();
-        let module = make_module(vec![
-            inst(InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(id0),
-                path: vec![],
-            }),
-            inst(InstKind::TestRange {
-                dst: v1,
-                src: v0,
-                start: 1,
-                end: 10,
-                kind: RangeKind::Exclusive,
-            }),
-            inst(InstKind::JumpIf {
-                cond: v1,
-                then_label: Label(1),
-                then_args: vec![],
-                else_label: Label(2),
-                else_args: vec![],
-            }),
-            inst(InstKind::BlockLabel {
-                label: Label(1),
-                params: vec![],
-                merge_of: None,
-            }),
-            inst(InstKind::Ref {
-                dst: v2,
-                target: crate::ir::RefTarget::Context(id1),
-                path: vec![],
-            }),
-            inst(InstKind::Return(v2)),
-            inst(InstKind::BlockLabel {
-                label: Label(2),
-                params: vec![],
-                merge_of: None,
-            }),
-            inst(InstKind::Ref {
-                dst: v3,
-                target: crate::ir::RefTarget::Context(id2),
-                path: vec![],
-            }),
-            inst(InstKind::Return(v3)),
-        ]);
-
-        let known = FxHashMap::from_iter([(id0, KnownValue::Literal(Literal::Int(5)))]);
-        let needed = reachable_context_keys(&module, &known);
-
-        assert!(needed.contains(&id1));
-        assert!(!needed.contains(&id2));
-    }
-
     /// Multi-arm match -- chained tests, middle arm matched.
     #[test]
     fn multi_arm_match_middle() {
@@ -1883,90 +1822,4 @@ mod tests {
         assert!(!needed.contains(&id4));
     }
 
-    /// Tuple destructuring with second element: TupleIndex(_, 1) extracts the
-    /// second context value and uses it for range testing.
-    #[test]
-    fn tuple_destructure_second_element_range() {
-        let id0 = alloc_qref();
-        let id1 = alloc_qref();
-        let id2 = alloc_qref();
-        let id3 = alloc_qref();
-        let mut vf = LocalFactory::<ValueId>::new();
-        let v0 = vf.next();
-        let v1 = vf.next();
-        let v2 = vf.next();
-        let v3 = vf.next();
-        let v4 = vf.next();
-        let v5 = vf.next();
-        let v6 = vf.next();
-        let module = make_module(vec![
-            inst(InstKind::Ref {
-                dst: v0,
-                target: crate::ir::RefTarget::Context(id0),
-                path: vec![],
-            }),
-            inst(InstKind::Ref {
-                dst: v1,
-                target: crate::ir::RefTarget::Context(id1),
-                path: vec![],
-            }),
-            inst(InstKind::MakeTuple {
-                dst: v2,
-                elements: vec![v0, v1],
-            }),
-            // Extract second element (score)
-            inst(InstKind::TupleIndex {
-                dst: v3,
-                tuple: v2,
-                index: 1,
-            }),
-            inst(InstKind::TestRange {
-                dst: v4,
-                src: v3,
-                start: 0,
-                end: 50,
-                kind: RangeKind::Exclusive,
-            }),
-            inst(InstKind::JumpIf {
-                cond: v4,
-                then_label: Label(1),
-                then_args: vec![],
-                else_label: Label(2),
-                else_args: vec![],
-            }),
-            // low arm -> dead (score = 80, not in [0, 50))
-            inst(InstKind::BlockLabel {
-                label: Label(1),
-                params: vec![],
-                merge_of: None,
-            }),
-            inst(InstKind::Ref {
-                dst: v5,
-                target: crate::ir::RefTarget::Context(id2),
-                path: vec![],
-            }),
-            inst(InstKind::Return(v5)),
-            // high arm -> live
-            inst(InstKind::BlockLabel {
-                label: Label(2),
-                params: vec![],
-                merge_of: None,
-            }),
-            inst(InstKind::Ref {
-                dst: v6,
-                target: crate::ir::RefTarget::Context(id3),
-                path: vec![],
-            }),
-            inst(InstKind::Return(v6)),
-        ]);
-
-        let known = FxHashMap::from_iter([
-            (id0, KnownValue::Literal(Literal::String("alice".into()))),
-            (id1, KnownValue::Literal(Literal::Int(80))),
-        ]);
-        let needed = reachable_context_keys(&module, &known);
-
-        assert!(!needed.contains(&id2));
-        assert!(needed.contains(&id3));
-    }
 }

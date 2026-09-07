@@ -842,17 +842,6 @@ mod tests {
     }
 
     #[test]
-    fn tokenize_range_operators() {
-        let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("..= =..", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(tokens.len(), 2);
-        assert!(matches!(&tokens[0].1, Token::DotDotEq));
-        assert!(matches!(&tokens[1].1, Token::EqDotDot));
-    }
-
-    #[test]
     fn tokenize_complex_expr() {
         let interner = Interner::new();
         let tokens: Vec<_> = ExprTokenizer::new("list | filter(|x| -> x != 0)", 0, &interner)

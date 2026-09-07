@@ -1,6 +1,6 @@
 //! Regex extension functions via ExternRegistry.
 
-use acvus_interpreter::iter::IterHandle;
+use crate::iter_pipeline::{IterHandle, iter_value};
 use acvus_interpreter::{
     Defs, ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError, Uses,
     Value, ValueKind,
@@ -125,7 +125,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (Re(re, _), text): (Re, String), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(move || {
+                        iter_value(_interner, IterHandle::from_fn(move || {
                             let m = re.find_at(&text, start)?;
                             start = m.end();
                             Some(Value::string(m.as_str()))
@@ -166,7 +166,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     let mut last_end = 0;
                     let mut done = false;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(move || {
+                        iter_value(_interner, IterHandle::from_fn(move || {
                             if done {
                                 return None;
                             }
@@ -201,7 +201,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                 |_interner: &Interner, (text, Re(re, _)): (String, Re), Uses(()): Uses<()>| {
                     let mut start = 0;
                     let iter =
-                        Value::iterator(IterHandle::from_fn(move || {
+                        iter_value(_interner, IterHandle::from_fn(move || {
                             loop {
                                 let caps = re.captures_at(&text, start)?;
                                 let full = caps.get(0)?;

@@ -54,14 +54,6 @@ pub enum Terminator {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
-    ListStep {
-        dst: ValueId,
-        list: ValueId,
-        index_src: ValueId,
-        index_dst: ValueId,
-        done: Label,
-        done_args: Vec<ValueId>,
-    },
     Return(ValueId),
     /// Implicit fallthrough to next block.
     Fallthrough,
@@ -103,16 +95,6 @@ impl CfgBody {
                     succs.push(bi);
                 }
                 if let Some(&bi) = self.label_to_block.get(else_label) {
-                    succs.push(bi);
-                }
-            }
-            Terminator::ListStep { done, .. } => {
-                // Fallthrough (element available) + done branch (exhausted).
-                let next = idx.0 + 1;
-                if next < self.blocks.len() {
-                    succs.push(BlockIdx(next));
-                }
-                if let Some(&bi) = self.label_to_block.get(done) {
                     succs.push(bi);
                 }
             }
@@ -259,25 +241,6 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
-            InstKind::ListStep {
-                dst,
-                list,
-                index_src,
-                index_dst,
-                done,
-                done_args,
-            } => {
-                let term = Terminator::ListStep {
-                    dst: *dst,
-                    list: *list,
-                    index_src: *index_src,
-                    index_dst: *index_dst,
-                    done: *done,
-                    done_args: done_args.clone(),
-                };
-                insts.pop();
-                return term;
-            }
             _ => {}
         }
     }
@@ -337,26 +300,6 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     kind: InstKind::Return(val),
                 });
             }
-            Terminator::ListStep {
-                dst,
-                list,
-                index_src,
-                index_dst,
-                done,
-                done_args,
-            } => {
-                insts.push(Inst {
-                    span: acvus_ast::Span::ZERO,
-                    kind: InstKind::ListStep {
-                        dst,
-                        list,
-                        index_src,
-                        index_dst,
-                        done,
-                        done_args,
-                    },
-                });
-            }
             Terminator::Fallthrough => {
                 // No instruction — implicit fallthrough.
             }
@@ -378,7 +321,6 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 else_label,
                 ..
             } => Some(then_label.0.max(else_label.0) + 1),
-            InstKind::ListStep { done, .. } => Some(done.0 + 1),
             _ => None,
         })
         .max()

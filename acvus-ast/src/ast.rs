@@ -58,14 +58,6 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
-    /// Iteration (for): `pattern : source { body };`
-    Iterate {
-        id: AstId,
-        pattern: Pattern,
-        source: Expr,
-        body: Vec<Stmt>,
-        span: Span,
-    },
 
     // ── Script mode statements ──────────────────────────────────────
 
@@ -87,14 +79,6 @@ pub enum Stmt {
         id: AstId,
         name: Astr,
         expr: Expr,
-        span: Span,
-    },
-    /// `for pattern in source { body }` — iteration (Script mode).
-    For {
-        id: AstId,
-        pattern: Pattern,
-        source: Expr,
-        body: Vec<Stmt>,
         span: Span,
     },
     /// `while cond { body }` — conditional loop (Script mode).
@@ -144,8 +128,6 @@ pub enum Node {
     /// MatchBlock with a single arm whose pattern is
     /// `Pattern::Binding { ref_kind: Variable, .. }` and an empty body.
     MatchBlock(MatchBlock),
-    /// An iteration block `{{ pattern in expr }} ... {{/}}`.
-    IterBlock(IterBlock),
 }
 
 /// A match block with one or more arms and optional catch-all.
@@ -166,18 +148,6 @@ pub struct MatchArm {
     pub pattern: Pattern,
     pub body: Vec<Node>,
     pub tag_span: Span,
-}
-
-/// An iteration block with a single irrefutable pattern.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IterBlock {
-    pub id: AstId,
-    pub pattern: Pattern,
-    pub source: Expr,
-    pub body: Vec<Node>,
-    pub catch_all: Option<CatchAll>,
-    pub indent: Option<IndentModifier>,
-    pub span: Span,
 }
 
 /// The catch-all `{{_}}` arm.
@@ -276,14 +246,6 @@ pub enum Expr {
         fields: Vec<ObjectExprField>,
         span: Span,
     },
-    /// A range: `0..10`, `0..=10`, `0=..10`.
-    Range {
-        id: AstId,
-        start: Box<Expr>,
-        end: Box<Expr>,
-        kind: RangeKind,
-        span: Span,
-    },
     /// A tuple: `(a, b, c)` — 0 or 2+ elements.
     /// Elements can be expressions or wildcards `_`.
     Tuple {
@@ -371,7 +333,6 @@ impl Expr {
             | Expr::List { id, .. }
             | Expr::Group { id, .. }
             | Expr::Object { id, .. }
-            | Expr::Range { id, .. }
             | Expr::Tuple { id, .. }
             | Expr::ContextRef { id, .. }
             | Expr::Variant { id, .. }
@@ -395,7 +356,6 @@ impl Expr {
             | Expr::List { span, .. }
             | Expr::Group { span, .. }
             | Expr::Object { span, .. }
-            | Expr::Range { span, .. }
             | Expr::Tuple { span, .. }
             | Expr::ContextRef { span, .. }
             | Expr::Variant { span, .. }
@@ -463,14 +423,6 @@ pub enum Pattern {
         fields: Vec<ObjectPatternField>,
         span: Span,
     },
-    /// A range pattern: `0..10`, `0..=10`, `0=..10`.
-    Range {
-        id: AstId,
-        start: Box<Pattern>,
-        end: Box<Pattern>,
-        kind: RangeKind,
-        span: Span,
-    },
     /// A tuple pattern: `(a, b, c)`.
     Tuple {
         id: AstId,
@@ -495,7 +447,6 @@ impl Pattern {
             | Pattern::Literal { id, .. }
             | Pattern::List { id, .. }
             | Pattern::Object { id, .. }
-            | Pattern::Range { id, .. }
             | Pattern::Tuple { id, .. }
             | Pattern::Variant { id, .. } => *id,
         }
@@ -508,7 +459,6 @@ impl Pattern {
             | Pattern::Literal { span, .. }
             | Pattern::List { span, .. }
             | Pattern::Object { span, .. }
-            | Pattern::Range { span, .. }
             | Pattern::Tuple { span, .. }
             | Pattern::Variant { span, .. } => *span,
         }
@@ -538,17 +488,6 @@ pub struct ObjectPatternField {
 pub enum IndentModifier {
     Increase(u32),
     Decrease(u32),
-}
-
-/// The kind of range: `..`, `..=`, or `=..`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RangeKind {
-    /// `0..10` — exclusive end: [start, end)
-    Exclusive,
-    /// `0..=10` — inclusive end: [start, end]
-    InclusiveEnd,
-    /// `0=..10` — exclusive start: (start, end]
-    ExclusiveStart,
 }
 
 /// A binary operator.
@@ -634,26 +573,10 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
                 walk_expr(source, refs);
                 walk_stmts(body, refs);
             }
-            Stmt::Iterate {
-                pattern,
-                source,
-                body,
-                ..
-            } => {
-                walk_pattern(pattern, refs);
-                walk_expr(source, refs);
-                walk_stmts(body, refs);
-            }
             // Script mode statements
             Stmt::LetBind { expr, .. } | Stmt::Assign { expr, .. } => walk_expr(expr, refs),
             Stmt::LetUninit { .. } => {}
-            Stmt::For {
-                pattern,
-                source,
-                body,
-                ..
-            }
-            | Stmt::WhileLet {
+            Stmt::WhileLet {
                 pattern,
                 source,
                 body,
@@ -693,13 +616,6 @@ fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
                     walk_nodes(&ca.body, refs);
                 }
             }
-            Node::IterBlock(ib) => {
-                walk_expr(&ib.source, refs);
-                walk_nodes(&ib.body, refs);
-                if let Some(ca) = &ib.catch_all {
-                    walk_nodes(&ca.body, refs);
-                }
-            }
         }
     }
 }
@@ -717,10 +633,6 @@ fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef
             for p in tail {
                 walk_pattern(p, refs);
             }
-        }
-        Pattern::Range { start, end, .. } => {
-            walk_pattern(start, refs);
-            walk_pattern(end, refs);
         }
         Pattern::Object { fields, .. } => {
             for f in fields {
@@ -749,13 +661,7 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
             refs.insert(*name);
         }
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}
-        Expr::BinaryOp { left, right, .. }
-        | Expr::Pipe { left, right, .. }
-        | Expr::Range {
-            start: left,
-            end: right,
-            ..
-        } => {
+        Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
             walk_expr(left, refs);
             walk_expr(right, refs);
         }

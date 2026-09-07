@@ -28,6 +28,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "rustc-hash",
+ "sync_wrapper",
  "tokio",
 ]
 

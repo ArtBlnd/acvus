@@ -145,7 +145,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::TestObjectKey { src, .. } => remap_val(src, remap),
 
-        InstKind::TestRange { src, .. } => remap_val(src, remap),
 
         InstKind::ListIndex { list, .. } => remap_val(list, remap),
 
@@ -159,10 +158,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_val(right, remap);
         }
 
-        InstKind::MakeRange { start, end, .. } => {
-            remap_val(start, remap);
-            remap_val(end, remap);
-        }
 
         InstKind::ListGet { list, index, .. } => {
             remap_val(list, remap);
@@ -177,7 +172,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_vec(args, remap);
         }
 
-        InstKind::MakeDeque { elements, .. } | InstKind::MakeTuple { elements, .. } => {
+        InstKind::MakeList { elements, .. } | InstKind::MakeTuple { elements, .. } => {
             remap_vec(elements, remap);
         }
 
@@ -220,22 +215,11 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::UnwrapVariant { src, .. } => remap_val(src, remap),
 
-        InstKind::Cast { src, .. } => remap_val(src, remap),
 
         InstKind::Clone { src, .. } => remap_val(src, remap),
 
         InstKind::Drop { src } => remap_val(src, remap),
 
-        InstKind::ListStep {
-            list,
-            index_src,
-            done_args,
-            ..
-        } => {
-            remap_val(list, remap);
-            remap_val(index_src, remap);
-            remap_vec(done_args, remap);
-        }
 
         InstKind::Spawn { callee, args, .. } => {
             if let Callee::Indirect(val) = callee {

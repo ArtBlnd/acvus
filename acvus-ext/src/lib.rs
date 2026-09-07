@@ -1,12 +1,11 @@
 mod conversion;
 mod datetime;
-mod deque;
 mod encoding;
+mod iter_pipeline;
 mod iterator;
 mod list;
 mod option;
 mod regex;
-mod sequence;
 mod string;
 
 pub use conversion::conversion_registry;
@@ -33,7 +32,5 @@ pub fn std_registries(
         list::list_registry(),
         option::option_registry(),
         iterator::iterator_registry(interner, type_registry),
-        sequence::sequence_registry(interner, type_registry),
-        deque::deque_registry(interner),
     ]
 }

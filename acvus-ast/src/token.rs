@@ -36,8 +36,6 @@ pub enum Token {
     True,
     #[token("false")]
     False,
-    #[token("in", priority = 3)]
-    In,
     #[token("_", priority = 3)]
     Underscore,
     #[token("Some", priority = 3)]
@@ -52,8 +50,6 @@ pub enum Token {
     If,
     #[token("else", priority = 3)]
     Else,
-    #[token("for", priority = 3)]
-    For,
     #[token("while", priority = 3)]
     While,
 
@@ -94,10 +90,6 @@ pub enum Token {
     Gte,
     #[token("->")]
     Arrow,
-    #[token("..=")]
-    DotDotEq,
-    #[token("=..")]
-    EqDotDot,
     #[token("..")]
     DotDot,
 
@@ -162,14 +154,12 @@ impl fmt::Display for Token {
             Token::ContextRef(_) => write!(f, "@<ref>"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
-            Token::In => write!(f, "in"),
             Token::Underscore => write!(f, "_"),
             Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
             Token::Let => write!(f, "let"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
-            Token::For => write!(f, "for"),
             Token::While => write!(f, "while"),
             Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),
@@ -188,8 +178,6 @@ impl fmt::Display for Token {
             Token::Gte => write!(f, ">="),
             Token::Assign => write!(f, "="),
             Token::Arrow => write!(f, "->"),
-            Token::DotDotEq => write!(f, "..="),
-            Token::EqDotDot => write!(f, "=.."),
             Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Pipe => write!(f, "|"),
