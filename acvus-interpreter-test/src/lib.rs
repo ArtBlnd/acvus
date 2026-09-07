@@ -326,17 +326,28 @@ pub async fn run_script_with_externs(
     context: FxHashMap<Astr, Value>,
     extern_registries: Vec<ExternRegistry>,
 ) -> ExecResult {
+    run_script_with_externs_and_types(
+        interner,
+        source,
+        context,
+        extern_registries,
+        acvus_mir::ty::TypeRegistry::new(),
+    )
+    .await
+}
+
+pub async fn run_script_with_externs_and_types(
+    interner: &Interner,
+    source: &str,
+    context: FxHashMap<Astr, Value>,
+    extern_registries: Vec<ExternRegistry>,
+    type_registry: acvus_mir::ty::TypeRegistry,
+) -> ExecResult {
     let context_types: FxHashMap<Astr, Ty> =
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    let cr = compile_source_with_externs(
-        interner,
-        ast,
-        &context_types,
-        extern_registries,
-        acvus_mir::ty::TypeRegistry::new(),
-    );
+    let cr = compile_source_with_externs(interner, ast, &context_types, extern_registries, type_registry);
 
     let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;

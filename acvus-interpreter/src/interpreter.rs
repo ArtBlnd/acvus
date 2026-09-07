@@ -738,7 +738,7 @@ async fn execute_inst(
                 Executable::Extern(_)
             );
             let handle = if is_extern {
-                let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
+                let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
                 let handler = match lookup_function(&ctx.shared, &callee_id) {
                     Executable::Extern(h) => h.clone(),
                     _ => unreachable!(),
@@ -768,7 +768,7 @@ async fn execute_inst(
                 }
             } else {
                 // Fork interpreter for Module/Builtin spawn.
-                let spawn_args: Vec<Value> = args.iter().map(|a| frame.share(*a)).collect();
+                let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
                 let child = Interpreter {
                     shared: ctx.shared.clone(),
                     entry: callee_id,

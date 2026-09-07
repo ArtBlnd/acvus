@@ -99,6 +99,11 @@ fn analyze_block(
                 }
             }
 
+            InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. } => {
+                kills.clear();
+                reads.extend(written_contexts.iter().copied());
+            }
+
             _ => {}
         }
     }
@@ -254,6 +259,10 @@ pub fn run(cfg: &mut CfgBody) {
                         // (The store kills liveness of previous stores to same context.)
                         live.remove(&qref);
                     }
+                }
+
+                InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. } => {
+                    live.extend(written_contexts.iter().copied());
                 }
 
                 _ => {}
@@ -471,6 +480,59 @@ mod tests {
             stores_before,
             "store before load must not be removed"
         );
+    }
+
+    #[test]
+    fn store_then_call_then_store_keeps_first() {
+        let i = Interner::new();
+        let ctx = QualifiedRef::root(i.intern("x"));
+        let f = QualifiedRef::root(i.intern("f"));
+
+        let mut val_types = FxHashMap::default();
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(1), Ty::Int);
+        val_types.insert(v(2), Ty::Int);
+        val_types.insert(v(3), Ty::Ref(Box::new(Ty::Int), false));
+
+        let body = make_body(
+            vec![
+                InstKind::Ref {
+                    dst: v(0),
+                    target: RefTarget::Context(ctx),
+                    path: vec![],
+                },
+                InstKind::Store {
+                    dst: v(0),
+                    value: v(1),
+                    volatile: false,
+                },
+                InstKind::FunctionCall {
+                    dst: v(2),
+                    callee: crate::ir::Callee::Direct(f),
+                    callee_ty: Ty::error(),
+                    args: vec![],
+                },
+                InstKind::Ref {
+                    dst: v(3),
+                    target: RefTarget::Context(ctx),
+                    path: vec![],
+                },
+                InstKind::Store {
+                    dst: v(3),
+                    value: v(2),
+                    volatile: false,
+                },
+                InstKind::Return(v(2)),
+            ],
+            val_types,
+        );
+
+        let mut cfg = cfg::promote(body);
+        assert_eq!(count_stores(&cfg), 2);
+
+        run(&mut cfg);
+
+        assert_eq!(count_stores(&cfg), 2, "the call may read @x, so the first store stays");
     }
 
     /// Volatile store is never removed.

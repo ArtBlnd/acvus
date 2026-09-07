@@ -1,10 +1,11 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
 
-use acvus_interpreter::{Executable, ExternFnBuilder, ExternRegistry, Value};
+use acvus_interpreter::{Executable, ExternFnBuilder, ExternRegistry, OpaqueValue, RuntimeError, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, lift_to_poly};
+use acvus_mir::graph::QualifiedRef;
+use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -631,4 +632,51 @@ fn io_compiler_pipeline_mir() {
         spawns_before_first_eval >= 3,
         "at least 3 independent IO spawns should precede first eval, got {spawns_before_first_eval}"
     );
+}
+
+// =======================================================================
+//  Move-only opaque value through an IO ExternFn (Spawn + Eval path)
+// =======================================================================
+
+#[tokio::test]
+async fn io_extern_consumes_move_only_opaque() {
+    let i = Interner::new();
+    let tok_qref = QualifiedRef::root(i.intern("Tok"));
+    let mut type_registry = TypeRegistry::new();
+    type_registry.register(UserDefinedDecl {
+        qref: tok_qref,
+        type_params: vec![],
+    });
+    let tok_ty = Ty::UserDefined {
+        id: tok_qref,
+        type_args: vec![],
+    };
+
+    let registry = ExternRegistry::new(move |interner| {
+        vec![
+            ExternFnBuilder::new("mk_tok", sig(interner, vec![], tok_ty.clone())).handler(
+                move |_: &Interner, (): ()| Ok(Value::opaque(OpaqueValue::new(tok_qref, 7i64))),
+            ),
+            ExternFnBuilder::new(
+                "consume_tok",
+                sig_hint(interner, vec![tok_ty.clone()], Ty::Int, Some(Hint::Io)),
+            )
+            .handler(|_: &Interner, (v,): (Value,)| match v {
+                Value::Opaque(o) => o
+                    .into_owned::<i64>()
+                    .map_err(|_| RuntimeError::internal("Tok was shared, not moved")),
+                other => panic!("expected Tok, got {other:?}"),
+            }),
+        ]
+    });
+
+    let result = run_script_with_externs_and_types(
+        &i,
+        "t = mk_tok(); consume_tok(t)",
+        ctx(&i, &[]),
+        vec![registry],
+        type_registry,
+    )
+    .await;
+    assert_eq!(result.value, Value::Int(7));
 }

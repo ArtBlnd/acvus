@@ -228,18 +228,9 @@ fn is_hoistable(kind: &InstKind) -> bool {
         | InstKind::TestListLen { .. }
         | InstKind::TestObjectKey { .. } => true,
 
-        // Spawn (async start, no side-effect until Eval).
-        // Only Direct: Indirect callee tokens can't be tracked.
-        InstKind::Spawn {
-            callee: Callee::Direct(..),
-            ..
-        } => true,
-
         // Function reference.
         InstKind::LoadFunction { .. } => true,
 
-        // FunctionCall: not hoistable until Identity-based purity re-established.
-        // Everything else: NOT hoistable.
         _ => false,
     }
 }
@@ -374,6 +365,19 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                     break;
                 }
 
+                if is_call(other) {
+                    barrier = jj;
+                    break;
+                }
+
+                if matches!(sink_kind, SinkKind::Eval)
+                    && (context_of_load(other, &ref_to_ctx).is_some()
+                        || context_of_store(other, &ref_to_ctx).is_some())
+                {
+                    barrier = jj;
+                    break;
+                }
+
                 if let SinkKind::Load(ctx) = &sink_kind {
                     if let Some(store_ctx) = context_of_store(other, &ref_to_ctx) {
                         if store_ctx == *ctx {
@@ -447,6 +451,13 @@ enum SinkKind {
     Store(QualifiedRef),
 }
 
+fn is_call(kind: &InstKind) -> bool {
+    matches!(
+        kind,
+        InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+    )
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -506,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_hoisted_above_branch() {
+    fn spawn_stays_below_branch() {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
 
@@ -569,8 +580,8 @@ mod tests {
             .position(|k| matches!(k, InstKind::JumpIf { .. }))
             .unwrap();
         assert!(
-            spawn_idx < jumpif_idx,
-            "spawn should be hoisted before branch"
+            spawn_idx > jumpif_idx,
+            "spawn stays in its block (spawn {spawn_idx}, branch {jumpif_idx})"
         );
     }
 
@@ -813,11 +824,8 @@ mod tests {
 
     #[test]
     fn multi_level_hoist() {
-        let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
-
         // B0 → diamond → B3 → diamond → B6
-        // Spawn in B6 should hoist directly to B0 in one pass.
+        // The pure op in B6 hoists directly to B0 in one pass.
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -884,11 +892,10 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 },
-                InstKind::Spawn {
+                InstKind::UnaryOp {
                     dst: v(1),
-                    callee: Callee::Direct(qref),
-                    callee_ty: ty,
-                    args: vec![v(0)],
+                    op: acvus_ast::UnaryOp::Not,
+                    operand: v(0),
                 },
                 InstKind::Return(v(1)),
             ],
@@ -898,17 +905,17 @@ mod tests {
         run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
-        let spawn_idx = k
+        let op_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Spawn { .. }))
+            .position(|k| matches!(k, InstKind::UnaryOp { .. }))
             .unwrap();
         let first_jumpif = k
             .iter()
             .position(|k| matches!(k, InstKind::JumpIf { .. }))
             .unwrap();
         assert!(
-            spawn_idx < first_jumpif,
-            "spawn should be hoisted to B0 via highest-target"
+            op_idx < first_jumpif,
+            "pure op should be hoisted to B0 via highest-target"
         );
     }
 
@@ -1048,6 +1055,103 @@ mod tests {
             eval_idx < use_idx,
             "eval should be before its use (eval at {eval_idx}, use at {use_idx})"
         );
+    }
+
+    #[test]
+    fn load_not_sunk_past_call() {
+        let i = Interner::new();
+        let ctx = QualifiedRef::root(i.intern("x"));
+        let f = QualifiedRef::root(i.intern("f"));
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Ref {
+                    dst: v(0),
+                    target: crate::ir::RefTarget::Context(ctx),
+                    path: vec![],
+                },
+                InstKind::Load {
+                    dst: v(1),
+                    src: v(0),
+                    volatile: false,
+                },
+                InstKind::BinOp {
+                    dst: v(2),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(5),
+                    right: v(5),
+                },
+                InstKind::FunctionCall {
+                    dst: v(3),
+                    callee: Callee::Direct(f),
+                    callee_ty: Ty::error(),
+                    args: vec![],
+                },
+                InstKind::BinOp {
+                    dst: v(6),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(1),
+                    right: v(2),
+                },
+                InstKind::Return(v(6)),
+            ],
+            10,
+        );
+
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let load_idx = k.iter().position(|k| matches!(k, InstKind::Load { .. })).unwrap();
+        let call_idx = k.iter().position(|k| matches!(k, InstKind::FunctionCall { .. })).unwrap();
+        assert!(load_idx < call_idx, "load must stay before the call (load {load_idx}, call {call_idx})");
+    }
+
+    #[test]
+    fn eval_not_sunk_past_context_load() {
+        let i = Interner::new();
+        let ctx = QualifiedRef::root(i.intern("x"));
+        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Spawn {
+                    dst: v(0),
+                    callee: Callee::Direct(qref),
+                    callee_ty: ty,
+                    args: vec![],
+                },
+                InstKind::Eval { dst: v(1), src: v(0) },
+                InstKind::BinOp {
+                    dst: v(2),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(5),
+                    right: v(5),
+                },
+                InstKind::Ref {
+                    dst: v(3),
+                    target: crate::ir::RefTarget::Context(ctx),
+                    path: vec![],
+                },
+                InstKind::Load {
+                    dst: v(4),
+                    src: v(3),
+                    volatile: false,
+                },
+                InstKind::BinOp {
+                    dst: v(6),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(1),
+                    right: v(4),
+                },
+                InstKind::Return(v(6)),
+            ],
+            10,
+        );
+
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let eval_idx = k.iter().position(|k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let load_idx = k.iter().position(|k| matches!(k, InstKind::Load { .. })).unwrap();
+        assert!(eval_idx < load_idx, "eval must stay before the context load (eval {eval_idx}, load {load_idx})");
     }
 
     /// Load is sunk past independent computation but NOT past a Store to the same context.
