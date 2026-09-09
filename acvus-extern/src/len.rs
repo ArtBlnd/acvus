@@ -6,20 +6,20 @@
 
 use std::marker::PhantomData;
 
-use acvus_interpreter::{FromValue, IntoValue, RuntimeError, Value, ValueKind};
 use acvus_mir::ty::{LenTerm, Poly, PolyTy};
 use acvus_utils::Interner;
-use std::sync::Arc;
 
+use crate::convert::{FromValue, IntoValue};
+use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
-pub trait LenArg: 'static {
+pub trait LenArg: Send + Sync + 'static {
     fn poly_len(vars: &PolyVars) -> LenTerm<Poly>;
 }
 
-pub trait LenVar: 'static {}
+pub trait LenVar: Send + Sync + 'static {}
 
-impl<N> LenVar for N where N: LenArg {}
+impl<N: LenArg> LenVar for N {}
 impl LenVar for () {}
 
 /// The K-th length variable of a declaration. Uninhabited.
@@ -47,6 +47,18 @@ where
     }
 }
 
+impl<T, N> IntoIterator for Arr<T, N>
+where
+    T: TyVar,
+    N: LenVar,
+{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 impl<T, N> TyArg for Arr<T, N>
 where
     T: TyArg + TyVar,
@@ -57,36 +69,29 @@ where
     }
 }
 
-impl<T, N> FromValue for Arr<T, N>
+impl<R, T, N> FromValue<R> for Arr<T, N>
 where
-    T: TyVar,
+    R: Runtime,
+    T: TyVar + FromValue<R>,
     N: LenVar,
 {
-    fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
-        match value {
-            Value::Array(items) => {
-                let items = Arc::try_unwrap(items).unwrap_or_else(|arc| (*arc).clone());
-                let mut out = Vec::with_capacity(items.len());
-                for item in items {
-                    out.push(T::from_value(item, interner)?);
-                }
-                Ok(Self::new(out))
-            }
-            other => Err(RuntimeError::unexpected_type(
-                "FromValue<Arr>",
-                &[ValueKind::Array],
-                other.kind(),
-            )),
+    fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
+        let items = R::into_array(value)?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            out.push(T::from_value(item, interner)?);
         }
+        Ok(Self::new(out))
     }
 }
 
-impl<T, N> IntoValue for Arr<T, N>
+impl<R, T, N> IntoValue<R> for Arr<T, N>
 where
-    T: TyVar,
+    R: Runtime,
+    T: TyVar + IntoValue<R>,
     N: LenVar,
 {
-    fn into_value(self, interner: &Interner) -> Value {
-        Value::array(self.0.into_iter().map(|v| v.into_value(interner)).collect())
+    fn into_value(self, interner: &Interner) -> R::Value {
+        R::array(self.0.into_iter().map(|v| v.into_value(interner)).collect())
     }
 }

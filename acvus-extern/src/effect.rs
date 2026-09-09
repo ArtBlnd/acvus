@@ -7,11 +7,11 @@
 use crate::ty_arg::PolyVars;
 use acvus_mir::ty::{Effect, EffectTerm, Poly};
 
-pub trait EffectArg: 'static {
+pub trait EffectArg: Send + Sync + 'static {
     fn poly_effect(vars: &PolyVars) -> EffectTerm<Poly>;
 }
 
-pub trait EffectVar: 'static {}
+pub trait EffectVar: Send + Sync + 'static {}
 
 impl<E> EffectVar for E where E: EffectArg {}
 impl EffectVar for () {}

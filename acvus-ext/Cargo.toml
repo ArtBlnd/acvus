@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 acvus-extern = { path = "../acvus-extern" }
 acvus-mir = { path = "../acvus-mir" }
-acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-utils = { path = "../acvus-utils" }
 futures = "0.3"
 sync_wrapper = "1"
@@ -17,5 +16,6 @@ base64 = "0.22"
 percent-encoding = "2"
 
 [dev-dependencies]
+acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-ast = { path = "../acvus-ast" }
 tokio = { version = "1", features = ["macros", "rt"] }

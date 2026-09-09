@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ir::{
-    Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId,
-};
+use acvus_mir::ir::{Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec};
 use futures::future::BoxFuture;
@@ -17,18 +15,9 @@ use crate::value::{FnValue, Value};
 /// Runtime representation of a Ref instruction's target.
 #[derive(Debug, Clone)]
 enum RuntimeRef {
-    Var {
-        slot: ValueId,
-        path: Vec<Astr>,
-    },
-    Param {
-        slot: ValueId,
-        path: Vec<Astr>,
-    },
-    Context {
-        qref: QualifiedRef,
-        path: Vec<Astr>,
-    },
+    Var { slot: ValueId, path: Vec<Astr> },
+    Param { slot: ValueId, path: Vec<Astr> },
+    Context { qref: QualifiedRef, path: Vec<Astr> },
 }
 
 impl RuntimeRef {
@@ -98,9 +87,7 @@ fn store_path(target: &mut Value, path: &[Astr], value: Value, interner: &Intern
             Value::Object(obj) => {
                 let inner = Arc::make_mut(obj)
                     .get_mut(&path[0])
-                    .unwrap_or_else(|| {
-                        panic!("missing field {}", interner.resolve(path[0]))
-                    });
+                    .unwrap_or_else(|| panic!("missing field {}", interner.resolve(path[0])));
                 store_path(inner, &path[1..], value, interner);
             }
             other => panic!("field store on non-object: {other:?}"),
@@ -282,7 +269,7 @@ fn build_label_map_from_insts(insts: &[Inst]) -> FxHashMap<Label, usize> {
 }
 
 enum SpawnKind {
-    Extern(crate::extern_fn::ExternHandler),
+    Extern(crate::runtime::ExternHandler),
     Module,
 }
 
@@ -306,7 +293,7 @@ pub struct ExecResult {
 /// A single executable unit - MIR module or extern function.
 pub enum Executable {
     Module(MirModule),
-    Extern(crate::extern_fn::ExternHandler),
+    Extern(crate::runtime::ExternHandler),
 }
 
 impl Executable {
@@ -655,10 +642,7 @@ async fn execute_inst(
             todo!("LoadFunction: graph-level function references not yet supported at runtime");
         }
         InstKind::FunctionCall {
-            dst,
-            callee,
-            args,
-            ..
+            dst, callee, args, ..
         } => {
             let result = match callee {
                 Callee::Direct(id) => {
@@ -672,10 +656,10 @@ async fn execute_inst(
                         let arg_vals: Vec<Value> =
                             args.iter().map(|a| frame.use_val(*a, val_types)).collect();
                         match &handler {
-                            crate::extern_fn::ExternHandler::Sync(f) => {
+                            crate::runtime::ExternHandler::Sync(f) => {
                                 f(arg_vals, &ctx.shared.interner)?
                             }
-                            crate::extern_fn::ExternHandler::Async(f) => {
+                            crate::runtime::ExternHandler::Async(f) => {
                                 let interner = ctx.shared.interner.clone();
                                 f(arg_vals, interner).await?
                             }
@@ -696,10 +680,7 @@ async fn execute_inst(
             frame.set(*dst, result);
         }
         InstKind::Spawn {
-            dst,
-            callee,
-            args,
-            ..
+            dst, callee, args, ..
         } => {
             let callee_id = match callee {
                 Callee::Direct(id) => *id,
@@ -709,12 +690,13 @@ async fn execute_inst(
                 Executable::Extern(h) => SpawnKind::Extern(h.clone()),
                 Executable::Module(_) => SpawnKind::Module,
             };
-            let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+            let spawn_args: Vec<Value> =
+                args.iter().map(|a| frame.use_val(*a, val_types)).collect();
             let handle = match spawn_kind {
                 SpawnKind::Extern(handler) => {
                     let interner = ctx.shared.interner.clone();
                     match &handler {
-                        crate::extern_fn::ExternHandler::Sync(f) => {
+                        crate::runtime::ExternHandler::Sync(f) => {
                             let f = Arc::clone(f);
                             ctx.shared.executor.spawn_blocking(Box::new(move || {
                                 let value = f(spawn_args, &interner)?;
@@ -724,7 +706,7 @@ async fn execute_inst(
                                 })
                             }))
                         }
-                        crate::extern_fn::ExternHandler::Async(f) => {
+                        crate::runtime::ExternHandler::Async(f) => {
                             let f = Arc::clone(f);
                             ctx.shared.executor.spawn_async(Box::pin(async move {
                                 let value = f(spawn_args, interner).await?;
@@ -743,7 +725,7 @@ async fn execute_inst(
                         page: ctx.page.fork(),
                         variables: FxHashMap::default(),
                         spawn_args,
-                        };
+                    };
                     ctx.shared.executor.spawn_interpreter(child)
                 }
             };
@@ -812,7 +794,9 @@ async fn dispatch_call(
             execute_function(ctx, id, &arg_values).await
         }
         Executable::Extern(_) => {
-            panic!("extern function {id:?} reached dispatch_call; FunctionCall handles externs directly")
+            panic!(
+                "extern function {id:?} reached dispatch_call; FunctionCall handles externs directly"
+            )
         }
     }
 }
@@ -1025,4 +1009,3 @@ fn eval_unaryop(op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
         _ => Err(RuntimeError::unary_op_mismatch(op, val.kind())),
     }
 }
-

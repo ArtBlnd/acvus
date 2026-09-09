@@ -2,7 +2,6 @@
 //! `TyVar`: a generic parameter that is an acvus type variable.
 //! `Typeck<N>`: the compile-time stand-in for the N-th type variable.
 
-use acvus_interpreter::{FromValue, IntoValue, RuntimeError, Value};
 use acvus_mir::ty::{EffectTerm, LenTerm, Poly, PolyBuilder, PolyTy};
 use acvus_utils::Interner;
 
@@ -38,13 +37,13 @@ pub trait TyArg: 'static {
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
 }
 
-/// A generic parameter that is an acvus type variable: anything that
-/// crosses the runtime boundary. Filled by any convertible `TyArg` in a
-/// signature, by `Typeck<N>` while the type is built, and by `Value` at
-/// runtime.
-pub trait TyVar: FromValue + IntoValue + 'static {}
+/// A generic parameter that is an acvus type variable. The body never opens
+/// it; a body that must cross the runtime boundary says so with `FromValue`
+/// or `IntoValue`. Filled by `Typeck<N>` while the type is built and by the
+/// runtime's value at runtime.
+pub trait TyVar: Send + Sync + 'static {}
 
-impl<T> TyVar for T where T: FromValue + IntoValue + 'static {}
+impl<T: Send + Sync + 'static> TyVar for T {}
 
 /// Compile-time stand-in for the N-th type variable of a declaration.
 /// Uninhabited: it names a type and is never a value.
@@ -53,20 +52,6 @@ pub enum Typeck<const N: usize> {}
 impl<const N: usize> TyArg for Typeck<N> {
     fn poly_ty(_: &Interner, vars: &PolyVars) -> PolyTy {
         vars.tys[N].clone()
-    }
-}
-
-impl<const N: usize> FromValue for Typeck<N> {
-    fn from_value(_: Value, _: &Interner) -> Result<Self, RuntimeError> {
-        Err(RuntimeError::internal(
-            "Typeck is a compile-time stand-in, never a runtime value",
-        ))
-    }
-}
-
-impl<const N: usize> IntoValue for Typeck<N> {
-    fn into_value(self, _: &Interner) -> Value {
-        match self {}
     }
 }
 

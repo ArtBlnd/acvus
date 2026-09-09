@@ -7,6 +7,7 @@ edition = "2024"
 acvus-ast = { path = "../acvus-ast" }
 acvus-utils = { path = "../acvus-utils" }
 acvus-mir = { path = "../acvus-mir" }
+acvus-extern = { path = "../acvus-extern" }
 futures = "0.3"
 parking_lot = "0.12"
 rust_decimal = "1.40.0"

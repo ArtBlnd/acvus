@@ -1,7 +1,7 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
 use acvus_extern::{
-    ExternRegistry, ExternType, Interner, RuntimeError, extern_fn, extern_registry,
+    ExternError, ExternRegistry, ExternType, Interner, Runtime, extern_fn, extern_registry,
 };
 
 #[derive(ExternType)]
@@ -19,11 +19,11 @@ fn format_date(_: &Interner, dt: DateTime, fmt: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn parse_date(_: &Interner, s: String, fmt: String) -> Result<DateTime, RuntimeError> {
+fn parse_date(_: &Interner, s: String, fmt: String) -> Result<DateTime, ExternError> {
     chrono::NaiveDateTime::parse_from_str(&s, &fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
         .map_err(|e| {
-            RuntimeError::extern_call(
+            ExternError::call(
                 "parse_date",
                 format!("invalid input '{s}' with format '{fmt}': {e}"),
             )
@@ -37,12 +37,10 @@ fn timestamp(_: &Interner, dt: DateTime) -> i64 {
 }
 
 #[extern_fn(effect = pure)]
-fn from_timestamp(_: &Interner, epoch: i64) -> Result<DateTime, RuntimeError> {
+fn from_timestamp(_: &Interner, epoch: i64) -> Result<DateTime, ExternError> {
     chrono::DateTime::from_timestamp(epoch, 0)
         .map(DateTime)
-        .ok_or_else(|| {
-            RuntimeError::extern_call("from_timestamp", format!("invalid epoch {epoch}"))
-        })
+        .ok_or_else(|| ExternError::call("from_timestamp", format!("invalid epoch {epoch}")))
 }
 
 #[extern_fn(effect = pure)]
@@ -56,7 +54,7 @@ fn add_hours(_: &Interner, dt: DateTime, n: i64) -> DateTime {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn datetime_registry() -> ExternRegistry {
+pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         types: [DateTime],
         fns: [now, format_date, parse_date, timestamp, from_timestamp, add_days, add_hours],
@@ -64,7 +62,7 @@ pub fn datetime_registry() -> ExternRegistry {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn datetime_registry() -> ExternRegistry {
+pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         types: [DateTime],
         fns: [format_date, parse_date, timestamp, from_timestamp, add_days, add_hours],
@@ -74,13 +72,13 @@ pub fn datetime_registry() -> ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::TypeRegistry;
+    use acvus_extern::{TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let registered = datetime_registry().register(&i, &mut TypeRegistry::new());
+        let registered = datetime_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
         assert_eq!(registered.functions.len(), 7);
-        assert_eq!(registered.functions.len(), registered.executables.len());
+        assert_eq!(registered.functions.len(), registered.handlers.len());
     }
 }

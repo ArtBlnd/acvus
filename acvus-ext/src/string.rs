@@ -1,6 +1,6 @@
 //! String operations. All pure.
 
-use acvus_extern::{ExternRegistry, Interner, RuntimeError, extern_fn, extern_registry};
+use acvus_extern::{ExternError, ExternRegistry, Interner, Runtime, extern_fn, extern_registry};
 
 use crate::list::List;
 
@@ -60,9 +60,9 @@ fn split_str(_: &Interner, s: String, sep: String) -> List<String> {
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(_: &Interner, s: String, n: i64) -> Result<String, RuntimeError> {
+fn repeat_str(_: &Interner, s: String, n: i64) -> Result<String, ExternError> {
     let n = usize::try_from(n)
-        .map_err(|_| RuntimeError::extern_call("repeat_str", format!("negative count {n}")))?;
+        .map_err(|_| ExternError::call("repeat_str", format!("negative count {n}")))?;
     Ok(s.repeat(n))
 }
 
@@ -90,7 +90,7 @@ fn to_utf8_lossy(_: &Interner, bytes: List<u8>) -> String {
     String::from_utf8_lossy(&bytes.0).into_owned()
 }
 
-pub fn string_registry() -> ExternRegistry {
+pub fn string_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         fns: [
             len_str, trim, trim_start, trim_end, upper, lower, contains_str,
@@ -103,15 +103,15 @@ pub fn string_registry() -> ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::TypeRegistry;
+    use acvus_extern::{TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
         let mut tr = TypeRegistry::new();
-        crate::list::list_registry().register(&i, &mut tr);
-        let reg = string_registry().register(&i, &mut tr);
+        crate::list::list_registry::<TypesOnly>().register(&i, &mut tr);
+        let reg = string_registry::<TypesOnly>().register(&i, &mut tr);
         assert_eq!(reg.functions.len(), 16);
-        assert_eq!(reg.executables.len(), 16);
+        assert_eq!(reg.handlers.len(), 16);
     }
 }

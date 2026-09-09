@@ -1,14 +1,13 @@
-//! `List<T>`: the dynamic-length sequence, an extension type over `Vec<Value>`.
-
-use std::sync::Arc;
+//! `List<T>`: the dynamic-length sequence, an extension type whose payload
+//! is the runtime's own values.
 
 use acvus_extern::{
-    Arr, ExternRegistry, ExternTypeDecl, ExternTypeName, ExternValue, FromValue, Interner,
-    IntoValue, LenVar, PayloadMismatch, PolyTy, PolyVars, QualifiedRef, RuntimeError, TyArg, TyVar,
-    UserDefinedDecl, Value, ValueKind, extern_fn, extern_registry,
+    Arr, ExternError, ExternRegistry, ExternTypeDecl, ExternTypeName, ExternValue, FromValue,
+    Interner, IntoValue, LenVar, PayloadMismatch, PolyTy, PolyVars, QualifiedRef, Runtime, TyArg,
+    TyVar, UserDefinedDecl, extern_fn, extern_registry,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct List<T>(pub Vec<T>)
 where
     T: TyVar;
@@ -21,6 +20,17 @@ where
         ns: None,
         name: "List",
     };
+}
+
+impl<T> IntoIterator for List<T>
+where
+    T: TyVar,
+{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
 }
 
 impl<T> TyArg for List<T>
@@ -49,12 +59,26 @@ where
     }
 }
 
-impl<T> FromValue for List<T>
+impl<R, T> FromValue<R> for List<T>
 where
-    T: TyVar,
+    R: Runtime,
+    T: TyVar + FromValue<R>,
 {
-    fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
-        let items = list_items(value)?;
+    fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
+        let o = R::into_extern(value)?;
+        if o.type_name != Self::TYPE_NAME {
+            return Err(ExternError::UnexpectedExtern {
+                expected: Self::TYPE_NAME,
+                got: o.type_name,
+            }
+            .into());
+        }
+        let items = o.into_cloned::<Vec<R::Value>>().map_err(|e| match e {
+            PayloadMismatch::OtherType => {
+                ExternError::internal("List payload is not the runtime's values")
+            }
+            PayloadMismatch::Shared(_) => ExternError::internal("into_cloned never reports Shared"),
+        })?;
         let mut out = Vec::with_capacity(items.len());
         for item in items {
             out.push(T::from_value(item, interner)?);
@@ -63,13 +87,14 @@ where
     }
 }
 
-impl<T> IntoValue for List<T>
+impl<R, T> IntoValue<R> for List<T>
 where
-    T: TyVar,
+    R: Runtime,
+    T: TyVar + IntoValue<R>,
 {
-    fn into_value(self, interner: &Interner) -> Value {
-        let items: Vec<Value> = self.0.into_iter().map(|v| v.into_value(interner)).collect();
-        list_value(items)
+    fn into_value(self, interner: &Interner) -> R::Value {
+        let items: Vec<R::Value> = self.0.into_iter().map(|v| v.into_value(interner)).collect();
+        R::extern_value(ExternValue::new(Self::TYPE_NAME, items))
     }
 }
 
@@ -79,46 +104,6 @@ pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::T
         id: QualifiedRef::root(interner.intern("List")),
         type_args: vec![elem],
         effect_args: vec![],
-    }
-}
-
-pub fn list_value(items: Vec<Value>) -> Value {
-    Value::extern_value(ExternValue::new(List::<Value>::TYPE_NAME, items))
-}
-
-fn list_items(value: Value) -> Result<Vec<Value>, RuntimeError> {
-    match value {
-        Value::Extern(o) => {
-            if o.type_name != List::<Value>::TYPE_NAME {
-                return Err(RuntimeError::unexpected_extern(
-                    List::<Value>::TYPE_NAME,
-                    o.type_name,
-                ));
-            }
-            o.into_cloned::<Vec<Value>>().map_err(|e| match e {
-                PayloadMismatch::OtherType => {
-                    RuntimeError::internal("List payload is not Vec<Value>")
-                }
-                PayloadMismatch::Shared(_) => {
-                    RuntimeError::internal("into_cloned never reports Shared")
-                }
-            })
-        }
-        other => Err(RuntimeError::unexpected_type(
-            "FromValue<List>",
-            &[ValueKind::Extern],
-            other.kind(),
-        )),
-    }
-}
-
-/// The elements of an `Array` or a `List`, as the flatten combinators see them.
-pub fn sequence_items(value: Value) -> Result<Vec<Value>, RuntimeError> {
-    match value {
-        Value::Array(items) => {
-            Ok(Arc::try_unwrap(items).unwrap_or_else(|arc| arc.as_ref().clone()))
-        }
-        other => list_items(other),
     }
 }
 
@@ -150,7 +135,7 @@ where
     List(items.0)
 }
 
-pub fn list_registry() -> ExternRegistry {
+pub fn list_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         types: [List<_>],
         fns: [len, reverse, list],

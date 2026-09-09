@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use acvus_ext::*;
 use acvus_extern::{ExternRegistry, ExternType, Registered, extern_fn, extern_registry};
+use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
@@ -17,7 +18,7 @@ async fn run_ext(
     interner: &Interner,
     source: &str,
     context: FxHashMap<Astr, Value>,
-    registries: Vec<ExternRegistry>,
+    registries: Vec<ExternRegistry<AcvusRuntime>>,
 ) -> Value {
     run_ext_with_registry(interner, source, context, registries, TypeRegistry::new()).await
 }
@@ -27,7 +28,7 @@ async fn run_ext_with_registry(
     interner: &Interner,
     source: &str,
     context: FxHashMap<Astr, Value>,
-    registries: Vec<ExternRegistry>,
+    registries: Vec<ExternRegistry<AcvusRuntime>>,
     mut type_registry: TypeRegistry,
 ) -> Value {
     let context_types: FxHashMap<Astr, Ty> = context
@@ -36,9 +37,9 @@ async fn run_ext_with_registry(
         .collect();
 
     // Register all ext functions (stdlib + caller-provided).
-    let mut all_registries = std_registries();
+    let mut all_registries = std_registries::<AcvusRuntime>();
     all_registries.extend(registries);
-    let registered: Vec<Registered> = all_registries
+    let registered: Vec<Registered<AcvusRuntime>> = all_registries
         .into_iter()
         .map(|r| r.register(interner, &mut type_registry))
         .collect();
@@ -107,7 +108,11 @@ async fn run_ext_with_registry(
         .map(|(qref, module)| (qref, Executable::Module(module)))
         .collect();
     for reg in registered {
-        exec_fns.extend(reg.executables);
+        exec_fns.extend(
+            reg.handlers
+                .into_iter()
+                .map(|(q, h)| (q, Executable::Extern(h))),
+        );
     }
 
     // Execute.
@@ -173,7 +178,7 @@ async fn regex_match_true() {
         &i,
         r#"re = regex("\\d+"); regex_match(re, "abc123")"#,
         c,
-        vec![regex_registry()],
+        vec![regex_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::Bool(true));
@@ -187,7 +192,7 @@ async fn regex_match_false() {
         &i,
         r#"re = regex("\\d+"); regex_match(re, "abc")"#,
         FxHashMap::default(),
-        vec![regex_registry()],
+        vec![regex_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::Bool(false));
@@ -201,7 +206,7 @@ async fn regex_find_all_collect() {
         &i,
         r#"re = regex("\\d+"); regex_find_all(re, "a1b22c333") | collect"#,
         FxHashMap::default(),
-        vec![regex_registry()],
+        vec![regex_registry::<AcvusRuntime>()],
     )
     .await;
     let Value::Extern(list) = result else {
@@ -222,7 +227,7 @@ async fn regex_replace() {
         &i,
         r#"re = regex("\\s+"); regex_replace("hello   world", re, " ")"#,
         FxHashMap::default(),
-        vec![regex_registry()],
+        vec![regex_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::string("hello world"));
@@ -236,7 +241,7 @@ async fn regex_split_collect() {
         &i,
         r#"re = regex("[,;]\\s*"); regex_split(re, "a, b;c") | collect"#,
         FxHashMap::default(),
-        vec![regex_registry()],
+        vec![regex_registry::<AcvusRuntime>()],
     )
     .await;
     let Value::Extern(list) = result else {
@@ -261,7 +266,7 @@ async fn base64_roundtrip() {
         &i,
         r#"base64_decode(base64_encode("hello world"))"#,
         FxHashMap::default(),
-        vec![encoding_registry()],
+        vec![encoding_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::string("hello world"));
@@ -275,7 +280,7 @@ async fn url_roundtrip() {
         &i,
         r#"url_decode(url_encode("hello world&foo=bar"))"#,
         FxHashMap::default(),
-        vec![encoding_registry()],
+        vec![encoding_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::string("hello world&foo=bar"));
@@ -294,7 +299,7 @@ async fn datetime_format_from_timestamp() {
         &i,
         r#"dt = from_timestamp(1704067200); format_date(dt, "%Y-%m-%d")"#,
         FxHashMap::default(),
-        vec![datetime_registry()],
+        vec![datetime_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::string("2024-01-01"));
@@ -308,7 +313,7 @@ async fn datetime_timestamp_roundtrip() {
         &i,
         r#"dt = from_timestamp(1704067200); timestamp(dt)"#,
         FxHashMap::default(),
-        vec![datetime_registry()],
+        vec![datetime_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::Int(1704067200));
@@ -322,7 +327,7 @@ async fn datetime_add_days() {
         &i,
         r#"dt = from_timestamp(1704067200); dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d")"#,
         FxHashMap::default(),
-        vec![datetime_registry()],
+        vec![datetime_registry::<AcvusRuntime>()],
     )
     .await;
     assert_eq!(result, Value::string("2024-01-02"));
@@ -336,7 +341,7 @@ async fn datetime_parse_and_format() {
         &i,
         r#"dt = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S"); format_date(dt, "%m/%d/%Y")"#,
         FxHashMap::default(),
-        vec![datetime_registry()],
+        vec![datetime_registry::<AcvusRuntime>()],
     ).await;
     assert_eq!(result, Value::string("06/15/2024"));
 }
@@ -353,7 +358,10 @@ async fn mixed_regex_and_encoding() {
         &i,
         r#"base64_encode("hello") + " " + to_string(regex_match(regex("\\d+"), "abc123"))"#,
         FxHashMap::default(),
-        vec![regex_registry(), encoding_registry()],
+        vec![
+            regex_registry::<AcvusRuntime>(),
+            encoding_registry::<AcvusRuntime>(),
+        ],
     )
     .await;
     assert_eq!(result, Value::string("aGVsbG8= true"));
@@ -382,7 +390,7 @@ fn double(_: &Interner, n: i64) -> i64 {
     n * 2
 }
 
-fn extern_cast_registry() -> ExternRegistry {
+fn extern_cast_registry() -> ExternRegistry<AcvusRuntime> {
     extern_registry! {
         types: [MyNum],
         fns: [make_num, num_to_int, double],

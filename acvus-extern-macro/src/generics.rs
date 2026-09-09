@@ -2,6 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::spanned::Spanned;
 use syn::{GenericParam, Generics, Ident, Type, TypeParam, TypeParamBound, WherePredicate};
 
 use crate::{bound_ident, span_of, subst};
@@ -11,6 +12,8 @@ pub enum VarKind {
     Ty,
     Effect,
     Len,
+    /// The runtime parameter: at most one, bounded by `Runtime`.
+    Runtime,
 }
 
 /// One generic parameter, its kind, and its index among that kind.
@@ -46,12 +49,12 @@ fn bounds_of<'a>(
 impl Vars {
     pub fn from_generics(generics: &Generics) -> syn::Result<Self> {
         let mut vars = Vec::new();
-        let mut counts = [0usize; 3];
+        let mut counts = [0usize; 4];
         for param in &generics.params {
             let GenericParam::Type(tp) = param else {
                 return Err(syn::Error::new(
                     span_of(param),
-                    "only type parameters bounded by TyVar, EffectVar, or LenVar are allowed",
+                    "only type parameters bounded by TyVar, EffectVar, LenVar, or Runtime are allowed",
                 ));
             };
             let kinds: Vec<VarKind> = bounds_of(generics, tp)
@@ -60,13 +63,14 @@ impl Vars {
                     "TyVar" => Some(VarKind::Ty),
                     "EffectVar" => Some(VarKind::Effect),
                     "LenVar" => Some(VarKind::Len),
+                    "Runtime" => Some(VarKind::Runtime),
                     _ => None,
                 })
                 .collect();
             let [kind] = kinds.as_slice() else {
                 return Err(syn::Error::new(
                     tp.ident.span(),
-                    "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar",
+                    "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, Runtime",
                 ));
             };
             let slot = *kind as usize;
@@ -76,6 +80,12 @@ impl Vars {
                 index: counts[slot],
             });
             counts[slot] += 1;
+        }
+        if counts[VarKind::Runtime as usize] > 1 {
+            return Err(syn::Error::new(
+                generics.params.span(),
+                "at most one generic parameter is bounded by Runtime",
+            ));
         }
         Ok(Self(vars))
     }
@@ -100,19 +110,45 @@ impl Vars {
         self.0.iter().any(|v| v.kind == VarKind::Len)
     }
 
+    /// Whether `ty` mentions a type, effect, or length variable.
+    pub fn mentions_var(&self, ty: &Type) -> bool {
+        let found = std::cell::Cell::new(false);
+        subst::substitute(ty, &|ident| {
+            if self
+                .0
+                .iter()
+                .any(|v| v.kind != VarKind::Runtime && v.ident == *ident)
+            {
+                found.set(true);
+            }
+            None
+        });
+        found.get()
+    }
+
+    /// The declared runtime parameter, if the item names one.
+    pub fn runtime_param(&self) -> Option<&Ident> {
+        self.0
+            .iter()
+            .find(|v| v.kind == VarKind::Runtime)
+            .map(|v| &v.ident)
+    }
+
     fn compile_time_stand_in(v: &Var) -> Type {
         let k = v.index;
         match v.kind {
             VarKind::Ty => syn::parse_quote! { ::acvus_extern::Typeck<#k> },
             VarKind::Effect => syn::parse_quote! { ::acvus_extern::Eff<#k> },
             VarKind::Len => syn::parse_quote! { ::acvus_extern::Len<#k> },
+            VarKind::Runtime => syn::parse_quote! { __R },
         }
     }
 
     fn runtime_stand_in(v: &Var) -> Type {
         match v.kind {
-            VarKind::Ty => syn::parse_quote! { ::acvus_extern::Value },
+            VarKind::Ty => syn::parse_quote! { <__R as ::acvus_extern::Runtime>::Value },
             VarKind::Effect | VarKind::Len => syn::parse_quote! { () },
+            VarKind::Runtime => syn::parse_quote! { __R },
         }
     }
 
@@ -134,8 +170,8 @@ impl Vars {
         })
     }
 
-    /// `::<Value, (), ()>` in declaration order; empty when there are no
-    /// generic parameters.
+    /// `::<<__R as Runtime>::Value, (), (), __R>` in declaration order; empty
+    /// when there are no generic parameters.
     pub fn runtime_turbofish(&self) -> TokenStream {
         if self.0.is_empty() {
             return TokenStream::new();
@@ -155,6 +191,7 @@ impl Vars {
                 VarKind::Ty => quote! { #ident: ::acvus_extern::TyArg + ::acvus_extern::TyVar },
                 VarKind::Effect => quote! { #ident: ::acvus_extern::EffectArg },
                 VarKind::Len => quote! { #ident: ::acvus_extern::LenArg },
+                VarKind::Runtime => quote! { #ident: ::acvus_extern::Runtime },
             }
         });
         quote! { <#(#params),*> }

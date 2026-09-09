@@ -5,7 +5,7 @@ pub mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
+use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Interner, Runtime, TyArg};
 
 use crate::extract::input_messages;
 use crate::http::{Fetch, HttpRequest, RequestError};
@@ -175,7 +175,11 @@ fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
 }
 
 /// Create an ExternRegistry for the OpenAI chat completion handler.
-pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
+pub fn openai_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+where
+    F: Fetch + Send + Sync + 'static,
+    R: Runtime,
+{
     ExternRegistry::new(move |interner| {
         let handler = move |_: Interner, messages: List<InputMessage>, config: OpenAiConfig| {
             let fetch = Arc::clone(&fetch);
@@ -198,14 +202,17 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                         ("Content-Type".into(), "application/json".into()),
                     ],
                     body: serde_json::to_value(&request_body).map_err(|e| {
-                        RuntimeError::fetch(format!("openai_chat: serialization failed: {e}"))
+                        ExternError::call("openai_chat", format!("serialization failed: {e}"))
                     })?,
                 };
 
-                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
-                let (response, usage) =
-                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
-                Ok(chat_response(response, usage))
+                let response_json = fetch
+                    .fetch(&http_request)
+                    .await
+                    .map_err(|e| ExternError::call("openai_chat", e))?;
+                let (response, usage) = parse_response(response_json)
+                    .map_err(|e| ExternError::call("openai_chat", e.to_string()))?;
+                Ok::<_, R::Error>(chat_response(response, usage))
             }
         };
         ExternItems {
@@ -350,10 +357,10 @@ mod tests {
             response: serde_json::json!({}),
         });
         let interner = Interner::new();
-        let registry = openai_registry(fetch);
+        let registry = openai_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
-        assert_eq!(registered.executables.len(), 1);
+        assert_eq!(registered.handlers.len(), 1);
 
         let func = &registered.functions[0];
         assert_eq!(interner.resolve(func.qref.name), "openai_chat");

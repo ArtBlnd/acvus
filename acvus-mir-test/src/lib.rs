@@ -171,7 +171,7 @@ pub fn compile_to_ir_with(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -243,7 +243,7 @@ pub fn compile_script_ir(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -280,7 +280,7 @@ pub fn compile_script_raw(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -347,7 +347,7 @@ pub fn compile_script_mode_raw(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -414,7 +414,7 @@ pub fn compile_script_optimized(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -527,7 +527,7 @@ pub fn compile_inline_ir_with(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -627,7 +627,7 @@ pub fn compile_multi_fn_raw(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -728,7 +728,7 @@ pub fn compile_multi_fn_optimized(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);

@@ -11,17 +11,17 @@ mod string;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
 pub use encoding::encoding_registry;
-pub use iter_pipeline::{Iter, IterHandle};
+pub use iter_pipeline::Iter;
 pub use iterator::iterator_registry;
-pub use list::{List, list_registry, list_ty, list_value, sequence_items};
+pub use list::{List, list_registry, list_ty};
 pub use option::option_registry;
 pub use regex::regex_registry;
 pub use string::string_registry;
 
-use acvus_extern::ExternRegistry;
+use acvus_extern::{ExternRegistry, Runtime};
 
 /// The standard registries. Each registers its own types when registered.
-pub fn std_registries() -> Vec<ExternRegistry> {
+pub fn std_registries<R: Runtime>() -> Vec<ExternRegistry<R>> {
     vec![
         string_registry(),
         conversion_registry(),

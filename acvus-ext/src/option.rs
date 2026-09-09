@@ -1,13 +1,15 @@
 //! Option operations. All pure, polymorphic.
 
-use acvus_extern::{ExternRegistry, Interner, RuntimeError, TyVar, extern_fn, extern_registry};
+use acvus_extern::{
+    ExternError, ExternRegistry, Interner, Runtime, TyVar, extern_fn, extern_registry,
+};
 
 #[extern_fn(effect = pure)]
-fn unwrap<T>(_: &Interner, val: Option<T>) -> Result<T, RuntimeError>
+fn unwrap<T>(_: &Interner, val: Option<T>) -> Result<T, ExternError>
 where
     T: TyVar,
 {
-    val.ok_or_else(|| RuntimeError::extern_call("unwrap", "called on None"))
+    val.ok_or_else(|| ExternError::call("unwrap", "called on None"))
 }
 
 #[extern_fn(effect = pure)]
@@ -18,7 +20,7 @@ where
     val.unwrap_or(default)
 }
 
-pub fn option_registry() -> ExternRegistry {
+pub fn option_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         fns: [unwrap, unwrap_or],
     }
@@ -27,13 +29,13 @@ pub fn option_registry() -> ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::TypeRegistry;
+    use acvus_extern::{TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = option_registry().register(&i, &mut TypeRegistry::new());
+        let reg = option_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
         assert_eq!(reg.functions.len(), 2);
-        assert_eq!(reg.executables.len(), 2);
+        assert_eq!(reg.handlers.len(), 2);
     }
 }

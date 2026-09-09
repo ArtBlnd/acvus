@@ -18,7 +18,7 @@ use Polarity::*;
 fn setup() -> (Interner, TypeRegistry) {
     let interner = Interner::new();
     let mut type_registry = TypeRegistry::new();
-    let _std_regs = acvus_ext::std_registries();
+    let _std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     (interner, type_registry)
 }
 

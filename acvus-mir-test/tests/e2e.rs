@@ -62,7 +62,7 @@ fn compile_analysis(
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);

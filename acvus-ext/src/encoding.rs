@@ -1,6 +1,6 @@
 //! Base64 and URL encoding. All pure.
 
-use acvus_extern::{ExternRegistry, Interner, RuntimeError, extern_fn, extern_registry};
+use acvus_extern::{ExternError, ExternRegistry, Interner, Runtime, extern_fn, extern_registry};
 use base64::Engine;
 
 #[extern_fn(effect = pure)]
@@ -9,12 +9,12 @@ fn base64_encode(_: &Interner, s: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn base64_decode(_: &Interner, s: String) -> Result<String, RuntimeError> {
+fn base64_decode(_: &Interner, s: String) -> Result<String, ExternError> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&s)
-        .map_err(|e| RuntimeError::extern_call("base64_decode", format!("invalid input: {e}")))?;
+        .map_err(|e| ExternError::call("base64_decode", format!("invalid input: {e}")))?;
     String::from_utf8(bytes)
-        .map_err(|e| RuntimeError::extern_call("base64_decode", format!("invalid UTF-8: {e}")))
+        .map_err(|e| ExternError::call("base64_decode", format!("invalid UTF-8: {e}")))
 }
 
 #[extern_fn(effect = pure)]
@@ -29,7 +29,7 @@ fn url_decode(_: &Interner, s: String) -> String {
         .into_owned()
 }
 
-pub fn encoding_registry() -> ExternRegistry {
+pub fn encoding_registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         fns: [base64_encode, base64_decode, url_encode, url_decode],
     }
@@ -38,13 +38,13 @@ pub fn encoding_registry() -> ExternRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::TypeRegistry;
+    use acvus_extern::{TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = encoding_registry().register(&i, &mut TypeRegistry::new());
+        let reg = encoding_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
         assert_eq!(reg.functions.len(), 4);
-        assert_eq!(reg.executables.len(), 4);
+        assert_eq!(reg.handlers.len(), 4);
     }
 }

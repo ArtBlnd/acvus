@@ -1,12 +1,8 @@
 //! An ExternFn joined to its handler, and the registry that hands a set of
-//! them, with their types, to the compiler and the interpreter.
+//! them, with their types, to the compiler and a runtime.
 
 use std::future::Future;
 
-use acvus_interpreter::{
-    Executable, ExternHandler, FromValue, IntoValue, RuntimeError, into_async_extern_handler,
-    into_sync_extern_handler,
-};
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyTy, TypeRegistry, UserDefinedDecl,
@@ -14,21 +10,23 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
+use crate::convert::{FromValue, IntoValue};
+use crate::handler::{ExternHandler, into_async_extern_handler, into_sync_extern_handler};
+use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
 
 /// One external function: its acvus type and its runtime handler.
-pub struct ExternFn {
+pub struct ExternFn<R: Runtime> {
     pub qref: QualifiedRef,
     pub ty: PolyTy,
-    pub handler: ExternHandler,
+    pub handler: ExternHandler<R>,
     /// A cast is registered as a coercion rule from its parameter type to
     /// its return type as well as a function.
     pub cast: bool,
 }
 
-/// What a declared item contributes to a registry.
-pub trait ExternFnDecl {
-    fn decl(interner: &Interner) -> ExternFn;
+pub trait ExternFnDecl<R: Runtime> {
+    fn decl(interner: &Interner) -> ExternFn<R>;
 }
 
 pub trait ExternTypeDecl {
@@ -36,36 +34,36 @@ pub trait ExternTypeDecl {
 }
 
 /// Everything one registry contributes.
-pub struct ExternItems {
+pub struct ExternItems<R: Runtime> {
     pub types: Vec<UserDefinedDecl>,
-    pub fns: Vec<ExternFn>,
+    pub fns: Vec<ExternFn<R>>,
 }
 
-pub struct ExternRegistry {
-    factory: Box<dyn FnOnce(&Interner) -> ExternItems>,
+pub struct ExternRegistry<R: Runtime> {
+    factory: Box<dyn FnOnce(&Interner) -> ExternItems<R>>,
 }
 
 /// The two halves of a registered registry: functions for the graph and
-/// executables for the interpreter.
-pub struct Registered {
+/// handlers for the runtime.
+pub struct Registered<R: Runtime> {
     pub functions: Vec<Function>,
-    pub executables: FxHashMap<QualifiedRef, Executable>,
+    pub handlers: FxHashMap<QualifiedRef, ExternHandler<R>>,
 }
 
-impl ExternRegistry {
-    pub fn new(factory: impl FnOnce(&Interner) -> ExternItems + 'static) -> Self {
+impl<R: Runtime> ExternRegistry<R> {
+    pub fn new(factory: impl FnOnce(&Interner) -> ExternItems<R> + 'static) -> Self {
         Self {
             factory: Box::new(factory),
         }
     }
 
-    pub fn register(self, interner: &Interner, type_registry: &mut TypeRegistry) -> Registered {
+    pub fn register(self, interner: &Interner, type_registry: &mut TypeRegistry) -> Registered<R> {
         let items = (self.factory)(interner);
         for decl in items.types {
             type_registry.register(decl);
         }
         let mut functions = Vec::with_capacity(items.fns.len());
-        let mut executables = FxHashMap::default();
+        let mut handlers = FxHashMap::default();
         for f in items.fns {
             if f.cast {
                 type_registry.register_cast(cast_rule(&f));
@@ -75,16 +73,16 @@ impl ExternRegistry {
                 kind: FnKind::Extern,
                 ty: f.ty,
             });
-            executables.insert(f.qref, Executable::Extern(f.handler));
+            handlers.insert(f.qref, f.handler);
         }
         Registered {
             functions,
-            executables,
+            handlers,
         }
     }
 }
 
-fn cast_rule(f: &ExternFn) -> CastRule {
+fn cast_rule<R: Runtime>(f: &ExternFn<R>) -> CastRule {
     let PolyTy::Fn {
         params,
         ret,
@@ -114,19 +112,17 @@ fn cast_rule(f: &ExternFn) -> CastRule {
     }
 }
 
-// -- Declaring a concrete ExternFn from a closure ---------------------
+// Declaring a concrete ExternFn from a closure.
 
 /// A closure whose parameter types name the acvus parameter types.
-pub trait SyncHandler<Args> {
-    type Ret: TyArg + IntoValue + 'static;
+pub trait SyncHandler<R: Runtime, Args> {
     fn signature(interner: &Interner) -> PolyTy;
-    fn into_handler(self) -> ExternHandler;
+    fn into_handler(self) -> ExternHandler<R>;
 }
 
-pub trait AsyncHandler<Args> {
-    type Ret: TyArg + IntoValue + 'static;
+pub trait AsyncHandler<R: Runtime, Args> {
     fn signature(interner: &Interner) -> PolyTy;
-    fn into_handler(self) -> ExternHandler;
+    fn into_handler(self) -> ExternHandler<R>;
 }
 
 fn signature_of(interner: &Interner, params: Vec<PolyTy>, ret: PolyTy, effect: Effect) -> PolyTy {
@@ -144,45 +140,45 @@ fn signature_of(interner: &Interner, params: Vec<PolyTy>, ret: PolyTy, effect: E
 
 macro_rules! impl_handlers {
     ($($A:ident : $a:ident),*) => {
-        impl<F, $($A,)* R> SyncHandler<($($A,)*)> for F
+        impl<R, F, $($A,)* Ret> SyncHandler<R, ($($A,)*)> for F
         where
-            F: Fn(&Interner, $($A),*) -> Result<R, RuntimeError> + Send + Sync + 'static,
-            $($A: TyArg + FromValue + 'static,)*
-            R: TyArg + IntoValue + 'static,
+            R: Runtime,
+            F: Fn(&Interner, $($A),*) -> Result<Ret, R::Error> + Send + Sync + 'static,
+            $($A: TyArg + FromValue<R> + 'static,)*
+            Ret: TyArg + IntoValue<R> + 'static,
         {
-            type Ret = R;
             fn signature(interner: &Interner) -> PolyTy {
                 let vars = PolyVars::empty();
                 signature_of(
                     interner,
                     vec![$($A::poly_ty(interner, &vars)),*],
-                    R::poly_ty(interner, &vars),
+                    Ret::poly_ty(interner, &vars),
                     Effect::Opaque,
                 )
             }
-            fn into_handler(self) -> ExternHandler {
+            fn into_handler(self) -> ExternHandler<R> {
                 into_sync_extern_handler(move |i: &Interner, ($($a,)*): ($($A,)*)| self(i, $($a),*))
             }
         }
 
-        impl<F, Fut, $($A,)* R> AsyncHandler<($($A,)*)> for F
+        impl<R, F, Fut, $($A,)* Ret> AsyncHandler<R, ($($A,)*)> for F
         where
+            R: Runtime,
             F: Fn(Interner, $($A),*) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<R, RuntimeError>> + Send + 'static,
-            $($A: TyArg + FromValue + 'static,)*
-            R: TyArg + IntoValue + 'static,
+            Fut: Future<Output = Result<Ret, R::Error>> + Send + 'static,
+            $($A: TyArg + FromValue<R> + 'static,)*
+            Ret: TyArg + IntoValue<R> + 'static,
         {
-            type Ret = R;
             fn signature(interner: &Interner) -> PolyTy {
                 let vars = PolyVars::empty();
                 signature_of(
                     interner,
                     vec![$($A::poly_ty(interner, &vars)),*],
-                    R::poly_ty(interner, &vars),
+                    Ret::poly_ty(interner, &vars),
                     Effect::Opaque,
                 )
             }
-            fn into_handler(self) -> ExternHandler {
+            fn into_handler(self) -> ExternHandler<R> {
                 into_async_extern_handler(move |i: Interner, ($($a,)*): ($($A,)*)| self(i, $($a),*))
             }
         }
@@ -195,12 +191,12 @@ impl_handlers!(A: a, B: b);
 impl_handlers!(A: a, B: b, C: c);
 impl_handlers!(A: a, B: b, C: c, D: d);
 
-impl ExternFn {
+impl<R: Runtime> ExternFn<R> {
     /// A concrete, stateful ExternFn from a synchronous closure. The effect
     /// is set afterwards with `with_effect`; undeclared is Opaque.
     pub fn sync<Args, F>(interner: &Interner, name: &str, f: F) -> Self
     where
-        F: SyncHandler<Args>,
+        F: SyncHandler<R, Args>,
     {
         Self {
             qref: QualifiedRef::root(interner.intern(name)),
@@ -210,7 +206,10 @@ impl ExternFn {
         }
     }
 
-    pub fn r#async<Args, F: AsyncHandler<Args>>(interner: &Interner, name: &str, f: F) -> Self {
+    pub fn r#async<Args, F>(interner: &Interner, name: &str, f: F) -> Self
+    where
+        F: AsyncHandler<R, Args>,
+    {
         Self {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: F::signature(interner),

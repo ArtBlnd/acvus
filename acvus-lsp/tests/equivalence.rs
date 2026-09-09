@@ -31,7 +31,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
@@ -71,7 +71,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
 fn register_std(session: &mut LspSession) {
     let interner = session.interner().clone();
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
     for registry in std_regs {
         let registered = registry.register(&interner, &mut type_registry);
         for func in registered.functions {

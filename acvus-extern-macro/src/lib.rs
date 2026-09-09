@@ -162,26 +162,30 @@ fn generate_extern_fn(
 
     let handler = match (is_async, ret.is_result) {
         (false, true) => quote! {
-            ::acvus_extern::__private::into_sync_extern_handler(
+            ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
                 |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
-                    -> ::core::result::Result<#rt_ret, ::acvus_extern::RuntimeError> { #call }
+                    -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> {
+                        (#call).map_err(::core::convert::Into::into)
+                    }
             )
         },
         (false, false) => quote! {
-            ::acvus_extern::__private::into_sync_extern_handler(
+            ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
                 |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
-                    -> ::core::result::Result<#rt_ret, ::acvus_extern::RuntimeError> { Ok(#call) }
+                    -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> { Ok(#call) }
             )
         },
         (true, true) => quote! {
-            ::acvus_extern::__private::into_async_extern_handler(
-                |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| #call
+            ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
+                |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
+                    (#call).await.map_err(::core::convert::Into::into)
+                }
             )
         },
         (true, false) => quote! {
-            ::acvus_extern::__private::into_async_extern_handler(
+            ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
                 |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
-                    ::core::result::Result::<#rt_ret, ::acvus_extern::RuntimeError>::Ok(#call.await)
+                    ::core::result::Result::<#rt_ret, <__R as ::acvus_extern::Runtime>::Error>::Ok(#call.await)
                 }
             )
         },
@@ -192,7 +196,10 @@ fn generate_extern_fn(
         #func
 
         #[doc(hidden)]
-        #vis fn #decl_ident(__i: &::acvus_extern::Interner) -> ::acvus_extern::ExternFn {
+        #vis fn #decl_ident<__R>(__i: &::acvus_extern::Interner) -> ::acvus_extern::ExternFn<__R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
             let __vars = ::acvus_extern::PolyVars::fresh(#n_tys, #n_effects, #n_lens);
             ::acvus_extern::ExternFn {
                 qref: #qref,
@@ -422,8 +429,25 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
     let phantom_inits = (0..phantoms).map(|_| quote! { ::core::marker::PhantomData });
 
+    if vars.mentions_var(payload_ty) {
+        return Err(syn::Error::new_spanned(
+            payload_ty,
+            "the payload type names no type, effect, or length parameter; every instantiation shares one payload",
+        ));
+    }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let arg_impl_generics = vars.arg_impl_generics();
+    let runtime: Ident = match vars.runtime_param() {
+        Some(rt) => rt.clone(),
+        None => format_ident!("__R"),
+    };
+    let conv_impl_generics = match vars.runtime_param() {
+        Some(_) => quote! { #impl_generics },
+        None => {
+            let params = input.generics.params.iter();
+            quote! { <__R: ::acvus_extern::Runtime, #(#params),*> }
+        }
+    };
     let type_arg_exprs = vars.type_arg_exprs();
     let effect_arg_exprs = vars.effect_arg_exprs();
     let (n_tys, n_effects, _) = vars.counts();
@@ -435,12 +459,12 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             match __o.into_owned::<#payload_ty>() {
                 Ok(p) => p,
                 Err(::acvus_extern::PayloadMismatch::Shared(_)) => {
-                    return Err(::acvus_extern::RuntimeError::shared_move_only(Self::TYPE_NAME));
+                    return Err(::acvus_extern::ExternError::SharedMoveOnly { type_name: Self::TYPE_NAME }.into());
                 }
                 Err(::acvus_extern::PayloadMismatch::OtherType) => {
-                    return Err(::acvus_extern::RuntimeError::internal(
+                    return Err(::acvus_extern::ExternError::internal(
                         ::std::format!("payload of {} is not {}", Self::TYPE_NAME, stringify!(#payload_ty)),
-                    ));
+                    ).into());
                 }
             }
         }
@@ -449,9 +473,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             match __o.into_cloned::<#payload_ty>() {
                 Ok(p) => p,
                 Err(_) => {
-                    return Err(::acvus_extern::RuntimeError::internal(
+                    return Err(::acvus_extern::ExternError::internal(
                         ::std::format!("payload of {} is not {}", Self::TYPE_NAME, stringify!(#payload_ty)),
-                    ));
+                    ).into());
                 }
             }
         }
@@ -485,34 +509,27 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
 
-        impl #impl_generics ::acvus_extern::FromValue for #ident #ty_generics #where_clause {
+        impl #conv_impl_generics ::acvus_extern::FromValue<#runtime> for #ident #ty_generics #where_clause {
             fn from_value(
-                __value: ::acvus_extern::Value,
+                __value: <#runtime as ::acvus_extern::Runtime>::Value,
                 _: &::acvus_extern::Interner,
-            ) -> ::core::result::Result<Self, ::acvus_extern::RuntimeError> {
-                match __value {
-                    ::acvus_extern::Value::Extern(__o) => {
-                        if __o.type_name != Self::TYPE_NAME {
-                            return Err(::acvus_extern::RuntimeError::unexpected_extern(
-                                Self::TYPE_NAME,
-                                __o.type_name,
-                            ));
-                        }
-                        let __payload = #take_payload;
-                        Ok(Self(__payload #(, #phantom_inits)*))
+            ) -> ::core::result::Result<Self, <#runtime as ::acvus_extern::Runtime>::Error> {
+                let __o = <#runtime as ::acvus_extern::Runtime>::into_extern(__value)?;
+                if __o.type_name != Self::TYPE_NAME {
+                    return Err(::acvus_extern::ExternError::UnexpectedExtern {
+                        expected: Self::TYPE_NAME,
+                        got: __o.type_name,
                     }
-                    __other => Err(::acvus_extern::RuntimeError::unexpected_type(
-                        concat!("FromValue<", stringify!(#ident), ">"),
-                        &[::acvus_extern::ValueKind::Extern],
-                        __other.kind(),
-                    )),
+                    .into());
                 }
+                let __payload = #take_payload;
+                Ok(Self(__payload #(, #phantom_inits)*))
             }
         }
 
-        impl #impl_generics ::acvus_extern::IntoValue for #ident #ty_generics #where_clause {
-            fn into_value(self, _: &::acvus_extern::Interner) -> ::acvus_extern::Value {
-                ::acvus_extern::Value::extern_value(
+        impl #conv_impl_generics ::acvus_extern::IntoValue<#runtime> for #ident #ty_generics #where_clause {
+            fn into_value(self, _: &::acvus_extern::Interner) -> <#runtime as ::acvus_extern::Runtime>::Value {
+                <#runtime as ::acvus_extern::Runtime>::extern_value(
                     ::acvus_extern::ExternValue::new(Self::TYPE_NAME, self.0),
                 )
             }
@@ -576,37 +593,30 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             }
         }
 
-        impl ::acvus_extern::FromValue for #ident {
+        impl<__R: ::acvus_extern::Runtime> ::acvus_extern::FromValue<__R> for #ident {
             fn from_value(
-                __value: ::acvus_extern::Value,
+                __value: <__R as ::acvus_extern::Runtime>::Value,
                 __i: &::acvus_extern::Interner,
-            ) -> ::core::result::Result<Self, ::acvus_extern::RuntimeError> {
-                match __value {
-                    ::acvus_extern::Value::Object(__fields) => {
-                        let mut __fields = ::std::sync::Arc::try_unwrap(__fields)
-                            .unwrap_or_else(|__arc| (*__arc).clone());
-                        Ok(Self {
-                            #(#field_idents: match __fields.remove(&__i.intern(#field_names)) {
-                                Some(__v) => <#field_tys as ::acvus_extern::FromValue>::from_value(__v, __i)?,
-                                None => return Err(::acvus_extern::RuntimeError::missing_field(#field_names)),
-                            },)*
-                        })
-                    }
-                    __other => Err(::acvus_extern::RuntimeError::unexpected_type(
-                        concat!("FromValue<", stringify!(#ident), ">"),
-                        &[::acvus_extern::ValueKind::Object],
-                        __other.kind(),
-                    )),
-                }
+            ) -> ::core::result::Result<Self, <__R as ::acvus_extern::Runtime>::Error> {
+                let mut __fields = <__R as ::acvus_extern::Runtime>::into_object(__value)?;
+                Ok(Self {
+                    #(#field_idents: match __fields.remove(&__i.intern(#field_names)) {
+                        Some(__v) => <#field_tys as ::acvus_extern::FromValue<__R>>::from_value(__v, __i)?,
+                        None => return Err(::acvus_extern::ExternError::MissingField {
+                            field: #field_names.to_owned(),
+                        }
+                        .into()),
+                    },)*
+                })
             }
         }
 
-        impl ::acvus_extern::IntoValue for #ident {
-            fn into_value(self, __i: &::acvus_extern::Interner) -> ::acvus_extern::Value {
-                ::acvus_extern::Value::object(
+        impl<__R: ::acvus_extern::Runtime> ::acvus_extern::IntoValue<__R> for #ident {
+            fn into_value(self, __i: &::acvus_extern::Interner) -> <__R as ::acvus_extern::Runtime>::Value {
+                <__R as ::acvus_extern::Runtime>::object(
                     [#((
                         __i.intern(#field_names),
-                        <#field_tys as ::acvus_extern::IntoValue>::into_value(self.#field_idents, __i),
+                        <#field_tys as ::acvus_extern::IntoValue<__R>>::into_value(self.#field_idents, __i),
                     )),*]
                     .into_iter()
                     .collect(),

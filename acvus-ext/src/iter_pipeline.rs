@@ -1,87 +1,72 @@
 //! The `Iterator` extension type: a lazy, move-only pipeline.
+//!
+//! The pipeline itself is erased: it moves the runtime's values and calls
+//! the runtime's closures. `Iter<T, E, Rt>` is the typed view on it. A
+//! typed source enters through `from_items` or `from_fn`, and a typed
+//! consumer pulls through `next`; those two edges and the closure calls are
+//! the only places a value changes representation.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use acvus_extern::{EffectVar, ExternType, FnValue, RuntimeError, TyVar, Value};
-use futures::future::BoxFuture;
+use acvus_extern::{
+    BoxFuture, EffectVar, ExternType, FromValue, Interner, IntoValue, Runtime, TyVar,
+};
 use sync_wrapper::SyncWrapper;
 
-/// `Iterator<T, E>`: elements of type T, pulled with effect E.
 #[derive(ExternType)]
 #[extern_type(name = "Iterator", move_only)]
-pub struct Iter<T, E>(pub IterHandle, PhantomData<(T, E)>)
-where
-    T: TyVar,
-    E: EffectVar;
-
-impl<T, E> Iter<T, E>
+pub struct Iter<T, E, Rt>(Pipeline<Rt>, PhantomData<(T, E)>)
 where
     T: TyVar,
     E: EffectVar,
-{
-    pub fn new(handle: IterHandle) -> Self {
-        Self(handle, PhantomData)
-    }
-}
+    Rt: Runtime;
 
-pub enum IterOp {
-    Map(FnValue),
-    Filter(FnValue),
+/// How one item becomes many, for Flatten and FlatMap: the typed layer
+/// supplies it, since only the typed layer knows the item's shape.
+type Expand<Rt> = Box<
+    dyn Fn(
+            <Rt as Runtime>::Value,
+            &Interner,
+        ) -> Result<Vec<<Rt as Runtime>::Value>, <Rt as Runtime>::Error>
+        + Send
+        + Sync,
+>;
+
+enum Op<Rt: Runtime> {
+    Map(Rt::Closure),
+    Filter(Rt::Closure),
     Take { remaining: usize },
     Skip { remaining: usize },
-    Flatten,
-    FlatMap(FnValue),
+    Flatten(Expand<Rt>),
+    FlatMap(Rt::Closure, Expand<Rt>),
 }
 
-pub enum IterSource {
-    Leaf(LeafSource),
-    Chain(VecDeque<IterHandle>),
-}
+type Generator<Rt> =
+    SyncWrapper<Box<dyn FnMut(&Interner) -> Option<<Rt as Runtime>::Value> + Send>>;
 
-pub enum LeafSource {
-    Values {
-        items: Vec<Value>,
-        offset: usize,
-    },
-    Generator {
-        next_fn: SyncWrapper<Box<dyn FnMut() -> Option<Value> + Send>>,
-    },
+enum Source<Rt: Runtime> {
+    Generator(Generator<Rt>),
+    Chain(VecDeque<Pipeline<Rt>>),
     Done,
 }
 
-impl LeafSource {
-    fn pull(&mut self) -> Option<Value> {
-        match self {
-            Self::Values { items, offset } => {
-                let val = items.get(*offset).cloned();
-                if val.is_some() {
-                    *offset += 1;
-                }
-                val
-            }
-            Self::Generator { next_fn } => next_fn.get_mut()(),
-            Self::Done => None,
-        }
-    }
-}
-
-/// Items produced by one Flatten/FlatMap expansion, still to be fed to the
-/// ops after it.
-struct ExpansionFrame {
+/// Items produced by one Flatten or FlatMap expansion, still to be fed to
+/// the ops after it.
+struct ExpansionFrame<Rt: Runtime> {
     next_op: usize,
-    items: VecDeque<Value>,
+    items: VecDeque<Rt::Value>,
 }
 
-pub struct IterHandle {
-    source: IterSource,
-    ops: Vec<IterOp>,
-    expansions: Vec<ExpansionFrame>,
+pub struct Pipeline<Rt: Runtime> {
+    source: Source<Rt>,
+    ops: Vec<Op<Rt>>,
+    expansions: Vec<ExpansionFrame<Rt>>,
     exhausted: bool,
 }
 
-impl IterHandle {
-    fn from_source(source: IterSource) -> Self {
+impl<Rt: Runtime> Pipeline<Rt> {
+    fn from_source(source: Source<Rt>) -> Self {
         Self {
             source,
             ops: Vec::new(),
@@ -90,116 +75,171 @@ impl IterHandle {
         }
     }
 
-    pub fn from_list(items: Vec<Value>) -> Self {
-        Self::from_source(IterSource::Leaf(LeafSource::Values { items, offset: 0 }))
+    fn push_op(mut self, op: Op<Rt>) -> Self {
+        self.ops.push(op);
+        self
     }
 
-    pub fn from_fn(f: impl FnMut() -> Option<Value> + Send + 'static) -> Self {
-        Self::from_source(IterSource::Leaf(LeafSource::Generator {
-            next_fn: SyncWrapper::new(Box::new(f)),
-        }))
-    }
-
-    pub fn done() -> Self {
-        Self::from_source(IterSource::Leaf(LeafSource::Done))
-    }
-
-    pub fn map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Map(f))
-    }
-    pub fn filter(self, f: FnValue) -> Self {
-        self.push_op(IterOp::Filter(f))
-    }
-    pub fn take(self, n: usize) -> Self {
-        self.push_op(IterOp::Take { remaining: n })
-    }
-    pub fn skip(self, n: usize) -> Self {
-        self.push_op(IterOp::Skip { remaining: n })
-    }
-    pub fn flatten(self) -> Self {
-        self.push_op(IterOp::Flatten)
-    }
-    pub fn flat_map(self, f: FnValue) -> Self {
-        self.push_op(IterOp::FlatMap(f))
-    }
-
-    pub fn chain(self, other: IterHandle) -> Self {
+    fn chain(self, other: Pipeline<Rt>) -> Self {
         match self {
-            IterHandle {
-                source: IterSource::Chain(mut parts),
+            Pipeline {
+                source: Source::Chain(mut parts),
                 ops,
                 expansions,
                 exhausted,
             } if ops.is_empty() => {
                 parts.push_back(other);
-                IterHandle {
-                    source: IterSource::Chain(parts),
+                Pipeline {
+                    source: Source::Chain(parts),
                     ops,
                     expansions,
                     exhausted,
                 }
             }
-            first => Self::from_source(IterSource::Chain(VecDeque::from([first, other]))),
+            first => Self::from_source(Source::Chain(VecDeque::from([first, other]))),
         }
     }
+}
 
-    fn push_op(mut self, op: IterOp) -> Self {
-        self.ops.push(op);
-        self
+impl<T, E, Rt> Iter<T, E, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    fn erased(pipeline: Pipeline<Rt>) -> Self {
+        Self(pipeline, PhantomData)
+    }
+
+    fn retype<U: TyVar>(self) -> Iter<U, E, Rt> {
+        Iter(self.0, PhantomData)
+    }
+
+    pub fn empty() -> Self {
+        Self::erased(Pipeline::from_source(Source::Done))
+    }
+
+    pub fn from_items(items: Vec<T>) -> Self
+    where
+        T: IntoValue<Rt>,
+    {
+        let mut items = items.into_iter();
+        Self::from_fn(move |i| items.next().map(|item| item.into_value(i)))
+    }
+
+    pub fn from_fn(f: impl FnMut(&Interner) -> Option<Rt::Value> + Send + 'static) -> Self {
+        Self::erased(Pipeline::from_source(Source::Generator(SyncWrapper::new(
+            Box::new(f),
+        ))))
+    }
+
+    /// A typed generator: each item crosses into the runtime as it is pulled.
+    pub fn generate(mut f: impl FnMut() -> Option<T> + Send + 'static) -> Self
+    where
+        T: IntoValue<Rt>,
+    {
+        Self::from_fn(move |i| f().map(|item| item.into_value(i)))
+    }
+
+    pub fn map<U: TyVar>(self, f: Rt::Closure) -> Iter<U, E, Rt> {
+        Self::erased(self.0.push_op(Op::Map(f))).retype()
+    }
+
+    pub fn filter(self, f: Rt::Closure) -> Self {
+        Self::erased(self.0.push_op(Op::Filter(f)))
+    }
+
+    pub fn take(self, n: usize) -> Self {
+        Self::erased(self.0.push_op(Op::Take { remaining: n }))
+    }
+
+    pub fn skip(self, n: usize) -> Self {
+        Self::erased(self.0.push_op(Op::Skip { remaining: n }))
+    }
+
+    pub fn chain(self, other: Self) -> Self {
+        Self::erased(self.0.chain(other.0))
+    }
+
+    /// Flatten items that are themselves sequences of `U`.
+    pub fn flatten<U>(self) -> Iter<U, E, Rt>
+    where
+        T: FromValue<Rt> + IntoIterator<Item = U>,
+        U: TyVar + IntoValue<Rt>,
+    {
+        Self::erased(self.0.push_op(Op::Flatten(expand_as::<T, U, Rt>()))).retype()
+    }
+
+    /// Map each item to a sequence of `U` and flatten.
+    pub fn flat_map<S, U>(self, f: Rt::Closure) -> Iter<U, E, Rt>
+    where
+        S: FromValue<Rt> + IntoIterator<Item = U>,
+        U: TyVar + IntoValue<Rt>,
+    {
+        Self::erased(self.0.push_op(Op::FlatMap(f, expand_as::<S, U, Rt>()))).retype()
+    }
+
+    pub async fn next(&mut self, interner: &Interner) -> Result<Option<T>, Rt::Error>
+    where
+        T: FromValue<Rt>,
+    {
+        match pull(&mut self.0, interner).await? {
+            Some(value) => Ok(Some(T::from_value(value, interner)?)),
+            None => Ok(None),
+        }
     }
 }
 
-impl std::fmt::Debug for IterHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let src = match &self.source {
-            IterSource::Leaf(LeafSource::Values { items, offset }) => {
-                format!("values(len={}, off={offset})", items.len())
-            }
-            IterSource::Leaf(LeafSource::Generator { .. }) => "generator".to_string(),
-            IterSource::Leaf(LeafSource::Done) => "done".to_string(),
-            IterSource::Chain(parts) => format!("chain({})", parts.len()),
-        };
-        write!(
-            f,
-            "Iter({src}, ops={}, expansions={}, exhausted={})",
-            self.ops.len(),
-            self.expansions.len(),
-            self.exhausted
-        )
-    }
+fn expand_as<S, U, Rt>() -> Expand<Rt>
+where
+    S: FromValue<Rt> + IntoIterator<Item = U>,
+    U: IntoValue<Rt>,
+    Rt: Runtime,
+{
+    Box::new(|value, i| {
+        let items = S::from_value(value, i)?;
+        Ok(items.into_iter().map(|u| u.into_value(i)).collect())
+    })
 }
 
-pub fn exec_next(iter: &mut IterHandle) -> BoxFuture<'_, Result<Option<Value>, RuntimeError>> {
+fn pull<'a, Rt: Runtime>(
+    pipeline: &'a mut Pipeline<Rt>,
+    interner: &'a Interner,
+) -> BoxFuture<'a, Result<Option<Rt::Value>, Rt::Error>> {
     Box::pin(async move {
         loop {
-            let Some((start_op, val)) = next_input(iter).await? else {
+            let Some((start_op, val)) = next_input(pipeline, interner).await? else {
                 return Ok(None);
             };
-            if let Some(out) = run_ops(iter, start_op, val).await? {
+            if let Some(out) = run_ops(pipeline, start_op, val, interner).await? {
                 return Ok(Some(out));
             }
         }
     })
 }
 
-async fn next_input(iter: &mut IterHandle) -> Result<Option<(usize, Value)>, RuntimeError> {
-    while let Some(frame) = iter.expansions.last_mut() {
+async fn next_input<Rt: Runtime>(
+    pipeline: &mut Pipeline<Rt>,
+    interner: &Interner,
+) -> Result<Option<(usize, Rt::Value)>, Rt::Error> {
+    while let Some(frame) = pipeline.expansions.last_mut() {
         if let Some(val) = frame.items.pop_front() {
             return Ok(Some((frame.next_op, val)));
         }
-        iter.expansions.pop();
+        pipeline.expansions.pop();
     }
-    if iter.exhausted {
+    if pipeline.exhausted {
         return Ok(None);
     }
 
-    let raw = match &mut iter.source {
-        IterSource::Leaf(leaf) => leaf.pull(),
-        IterSource::Chain(parts) => loop {
+    let raw = match &mut pipeline.source {
+        Source::Generator(next_fn) => next_fn.get_mut()(interner),
+        Source::Done => None,
+        Source::Chain(parts) => loop {
             let Some(front) = parts.front_mut() else {
                 break None;
             };
-            match exec_next(front).await? {
+            match pull(front, interner).await? {
                 Some(val) => break Some(val),
                 None => {
                     parts.pop_front();
@@ -210,45 +250,48 @@ async fn next_input(iter: &mut IterHandle) -> Result<Option<(usize, Value)>, Run
     Ok(raw.map(|val| (0, val)))
 }
 
-async fn run_ops(
-    iter: &mut IterHandle,
+async fn run_ops<Rt: Runtime>(
+    pipeline: &mut Pipeline<Rt>,
     start_op: usize,
-    mut val: Value,
-) -> Result<Option<Value>, RuntimeError> {
+    mut val: Rt::Value,
+    interner: &Interner,
+) -> Result<Option<Rt::Value>, Rt::Error> {
     let mut i = start_op;
-    while i < iter.ops.len() {
-        match &mut iter.ops[i] {
-            IterOp::Map(f) => val = f.call(val).await?,
-            IterOp::Filter(f) => {
-                if !f.call(val.clone()).await?.as_bool() {
+    while i < pipeline.ops.len() {
+        match &mut pipeline.ops[i] {
+            Op::Map(f) => val = Rt::call(f, vec![val]).await?,
+            Op::Filter(f) => {
+                let keep = Rt::call(f, vec![val.clone()]).await?;
+                if !Rt::into_bool(keep)? {
                     return Ok(None);
                 }
             }
-            IterOp::Skip { remaining } => {
+            Op::Skip { remaining } => {
                 if *remaining > 0 {
                     *remaining -= 1;
                     return Ok(None);
                 }
             }
-            IterOp::Take { remaining } => {
+            Op::Take { remaining } => {
                 if *remaining == 0 {
                     return Ok(None);
                 }
                 *remaining -= 1;
                 if *remaining == 0 {
-                    iter.exhausted = true;
+                    pipeline.exhausted = true;
                 }
             }
-            IterOp::Flatten => {
-                let items = crate::list::sequence_items(val)?;
-                let Some(first) = expand(iter, i, items.into()) else {
+            Op::Flatten(expand) => {
+                let items = expand(val, interner)?;
+                let Some(first) = push_expansion(pipeline, i, items.into()) else {
                     return Ok(None);
                 };
                 val = first;
             }
-            IterOp::FlatMap(f) => {
-                let items = crate::list::sequence_items(f.call(val).await?)?;
-                let Some(first) = expand(iter, i, items.into()) else {
+            Op::FlatMap(f, expand) => {
+                let mapped = Rt::call(f, vec![val]).await?;
+                let items = expand(mapped, interner)?;
+                let Some(first) = push_expansion(pipeline, i, items.into()) else {
                     return Ok(None);
                 };
                 val = first;
@@ -259,9 +302,13 @@ async fn run_ops(
     Ok(Some(val))
 }
 
-fn expand(iter: &mut IterHandle, op_index: usize, mut items: VecDeque<Value>) -> Option<Value> {
+fn push_expansion<Rt: Runtime>(
+    pipeline: &mut Pipeline<Rt>,
+    op_index: usize,
+    mut items: VecDeque<Rt::Value>,
+) -> Option<Rt::Value> {
     let first = items.pop_front()?;
-    iter.expansions.push(ExpansionFrame {
+    pipeline.expansions.push(ExpansionFrame {
         next_op: op_index + 1,
         items,
     });

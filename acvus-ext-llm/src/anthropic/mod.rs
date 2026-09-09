@@ -3,7 +3,7 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
+use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Interner, Runtime, TyArg};
 
 use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, HttpRequest, RequestError};
@@ -111,16 +111,21 @@ pub struct AnthropicConfig {
     pub max_tokens: i64,
 }
 
-fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, RuntimeError> {
+fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, ExternError> {
     match resp {
         ModelResponse::Content(parts) => Ok(List(parts.iter().map(OutputMessage::text).collect())),
-        ModelResponse::ToolCalls(_) => Err(RuntimeError::fetch(
+        ModelResponse::ToolCalls(_) => Err(ExternError::call(
+            "anthropic",
             "anthropic: tool calls are not representable as messages",
         )),
     }
 }
 
-pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
+pub fn anthropic_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+where
+    F: Fetch + Send + Sync + 'static,
+    R: Runtime,
+{
     ExternRegistry::new(move |interner| {
         let handler = move |_: Interner, messages: List<InputMessage>, config: AnthropicConfig| {
             let fetch = Arc::clone(&fetch);
@@ -128,7 +133,10 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
                 let messages = input_messages(messages.0);
                 let (system, rest) = split_system(&messages);
                 let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
-                    RuntimeError::fetch(format!("anthropic: max_tokens {} out of range", config.max_tokens))
+                    ExternError::call(
+                        "anthropic",
+                        format!("max_tokens {} out of range", config.max_tokens),
+                    )
                 })?;
 
                 let request_body = schema::Request {
@@ -151,14 +159,17 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
                         ("Content-Type".into(), "application/json".into()),
                     ],
                     body: serde_json::to_value(&request_body).map_err(|e| {
-                        RuntimeError::fetch(format!("anthropic: serialization failed: {e}"))
+                        ExternError::call("anthropic", format!("serialization failed: {e}"))
                     })?,
                 };
 
-                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
-                let (response, _usage) =
-                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
-                response_messages(response)
+                let response_json = fetch
+                    .fetch(&http_request)
+                    .await
+                    .map_err(|e| ExternError::call("anthropic", e))?;
+                let (response, _usage) = parse_response(response_json)
+                    .map_err(|e| ExternError::call("anthropic", e.to_string()))?;
+                response_messages(response).map_err(R::Error::from)
             }
         };
         ExternItems {
@@ -318,10 +329,10 @@ mod tests {
             response: serde_json::json!({}),
         });
         let interner = Interner::new();
-        let registry = anthropic_registry(fetch);
+        let registry = anthropic_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
-        assert_eq!(registered.executables.len(), 1);
+        assert_eq!(registered.handlers.len(), 1);
 
         let func = &registered.functions[0];
         assert_eq!(interner.resolve(func.qref.name), "anthropic");

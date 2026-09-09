@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_extern::ExternRegistry;
+use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
     ExecResult, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
     Value,
@@ -30,7 +31,7 @@ fn compile(
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -41,7 +42,7 @@ fn compile_script(
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -53,7 +54,7 @@ fn compile_script_mode(
     let ast =
         ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries();
+    let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -61,7 +62,7 @@ pub fn compile_source_with_externs(
     interner: &Interner,
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
-    extern_registries: Vec<ExternRegistry>,
+    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     mut type_registry: acvus_mir::ty::TypeRegistry,
 ) -> CompileResult {
     let contexts: Vec<Context> = context_types
@@ -99,7 +100,12 @@ pub fn compile_source_with_externs(
             }
         }
         functions.extend(registered.functions);
-        extern_executables.extend(registered.executables);
+        extern_executables.extend(
+            registered
+                .handlers
+                .into_iter()
+                .map(|(qref, h)| (qref, Executable::Extern(h))),
+        );
     }
 
     let graph = CompilationGraph {
@@ -302,7 +308,7 @@ pub async fn run_script_with_externs(
     interner: &Interner,
     source: &str,
     context: FxHashMap<Astr, Value>,
-    extern_registries: Vec<ExternRegistry>,
+    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
 ) -> ExecResult {
     run_script_with_externs_and_types(
         interner,
@@ -318,7 +324,7 @@ pub async fn run_script_with_externs_and_types(
     interner: &Interner,
     source: &str,
     context: FxHashMap<Astr, Value>,
-    extern_registries: Vec<ExternRegistry>,
+    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
 ) -> ExecResult {
     let context_types: FxHashMap<Astr, Ty> =

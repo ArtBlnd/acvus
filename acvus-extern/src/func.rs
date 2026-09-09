@@ -1,28 +1,33 @@
-//! Function-typed parameters: `Fn0<R, E>`, `Fn1<A, R, E>`, `Fn2<A, B, R, E>`.
-//! Each names `Fn(...) -> R with E` and holds the closure at runtime.
+//! Function-typed parameters: `Fn0<R, E, Rt>`, `Fn1<A, R, E, Rt>`,
+//! `Fn2<A, B, R, E, Rt>`. Each names `Fn(...) -> R with E` and holds the
+//! runtime's closure. Calling one is the one place a generic body crosses
+//! back into the runtime.
 
 use std::marker::PhantomData;
 
-use acvus_interpreter::{FnValue, FromValue, IntoValue, RuntimeError, Value, ValueKind};
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
+use crate::convert::{FromValue, IntoValue};
 use crate::effect::{EffectArg, EffectVar};
+use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
 macro_rules! define_fn_arg {
     ($name:ident; $($A:ident : $slot:literal),*) => {
-        pub struct $name<$($A,)* R, E>(pub FnValue, PhantomData<($($A,)* R, E)>)
+        pub struct $name<$($A,)* R, E, Rt>(pub Rt::Closure, PhantomData<($($A,)* R, E)>)
         where
             $($A: TyVar,)*
             R: TyVar,
-            E: EffectVar;
+            E: EffectVar,
+            Rt: Runtime;
 
-        impl<$($A,)* R, E> TyArg for $name<$($A,)* R, E>
+        impl<$($A,)* R, E, Rt> TyArg for $name<$($A,)* R, E, Rt>
         where
             $($A: TyArg + TyVar,)*
             R: TyArg + TyVar,
             E: EffectArg,
+            Rt: Runtime,
         {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::Fn {
@@ -34,32 +39,27 @@ macro_rules! define_fn_arg {
             }
         }
 
-        impl<$($A,)* R, E> FromValue for $name<$($A,)* R, E>
+        impl<$($A,)* R, E, Rt> FromValue<Rt> for $name<$($A,)* R, E, Rt>
         where
             $($A: TyVar,)*
             R: TyVar,
             E: EffectVar,
+            Rt: Runtime,
         {
-            fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
-                match value {
-                    Value::Fn(f) => Ok(Self(*f, PhantomData)),
-                    other => Err(RuntimeError::unexpected_type(
-                        concat!("FromValue<", stringify!($name), ">"),
-                        &[ValueKind::Fn],
-                        other.kind(),
-                    )),
-                }
+            fn from_value(value: Rt::Value, _: &Interner) -> Result<Self, Rt::Error> {
+                Ok(Self(Rt::into_closure(value)?, PhantomData))
             }
         }
 
-        impl<$($A,)* R, E> IntoValue for $name<$($A,)* R, E>
+        impl<$($A,)* R, E, Rt> IntoValue<Rt> for $name<$($A,)* R, E, Rt>
         where
             $($A: TyVar,)*
             R: TyVar,
             E: EffectVar,
+            Rt: Runtime,
         {
-            fn into_value(self, _: &Interner) -> Value {
-                Value::Fn(Box::new(self.0))
+            fn into_value(self, _: &Interner) -> Rt::Value {
+                Rt::closure(self.0)
             }
         }
     };
@@ -69,41 +69,45 @@ define_fn_arg!(Fn0;);
 define_fn_arg!(Fn1; A: "_0");
 define_fn_arg!(Fn2; A: "_0", B: "_1");
 
-impl<R, E> Fn0<R, E>
+impl<R, E, Rt> Fn0<R, E, Rt>
 where
-    R: TyVar,
+    R: TyVar + FromValue<Rt>,
     E: EffectVar,
+    Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner) -> Result<R, RuntimeError> {
-        let out = acvus_interpreter::fn_value_call(&self.0, vec![]).await?;
+    pub async fn call(&self, interner: &Interner) -> Result<R, Rt::Error> {
+        let out = Rt::call(&self.0, vec![]).await?;
         R::from_value(out, interner)
     }
 }
 
-impl<A, R, E> Fn1<A, R, E>
+impl<A, R, E, Rt> Fn1<A, R, E, Rt>
 where
-    A: TyVar,
-    R: TyVar,
+    A: TyVar + IntoValue<Rt>,
+    R: TyVar + FromValue<Rt>,
     E: EffectVar,
+    Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner, a: A) -> Result<R, RuntimeError> {
-        let out = self.0.call(a.into_value(interner)).await?;
+    pub async fn call(&self, interner: &Interner, a: A) -> Result<R, Rt::Error> {
+        let out = Rt::call(&self.0, vec![a.into_value(interner)]).await?;
         R::from_value(out, interner)
     }
 }
 
-impl<A, B, R, E> Fn2<A, B, R, E>
+impl<A, B, R, E, Rt> Fn2<A, B, R, E, Rt>
 where
-    A: TyVar,
-    B: TyVar,
-    R: TyVar,
+    A: TyVar + IntoValue<Rt>,
+    B: TyVar + IntoValue<Rt>,
+    R: TyVar + FromValue<Rt>,
     E: EffectVar,
+    Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner, a: A, b: B) -> Result<R, RuntimeError> {
-        let out = self
-            .0
-            .call2(a.into_value(interner), b.into_value(interner))
-            .await?;
+    pub async fn call(&self, interner: &Interner, a: A, b: B) -> Result<R, Rt::Error> {
+        let out = Rt::call(
+            &self.0,
+            vec![a.into_value(interner), b.into_value(interner)],
+        )
+        .await?;
         R::from_value(out, interner)
     }
 }

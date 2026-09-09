@@ -2,7 +2,7 @@ use std::fmt;
 
 use acvus_ast::{BinOp, UnaryOp};
 
-use crate::value::ExternTypeName;
+use acvus_extern::{ExternError, ExternTypeName};
 
 // -- ValueKind - lightweight discriminant for error reporting ---------
 
@@ -315,7 +315,10 @@ impl fmt::Display for RuntimeError {
                 write!(f, "expected extension type {expected}, got {got}")
             }
             RuntimeErrorKind::SharedMoveOnly { type_name } => {
-                write!(f, "move-only extension value of type {type_name} is still shared")
+                write!(
+                    f,
+                    "move-only extension value of type {type_name} is still shared"
+                )
             }
             RuntimeErrorKind::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -323,3 +326,23 @@ impl fmt::Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
+
+impl From<ExternError> for RuntimeError {
+    fn from(e: ExternError) -> Self {
+        let kind = match e {
+            ExternError::Call { name, message } => RuntimeErrorKind::ExternCallFailed {
+                name,
+                source: message,
+            },
+            ExternError::UnexpectedExtern { expected, got } => {
+                RuntimeErrorKind::UnexpectedExtern { expected, got }
+            }
+            ExternError::SharedMoveOnly { type_name } => {
+                RuntimeErrorKind::SharedMoveOnly { type_name }
+            }
+            ExternError::MissingField { field } => RuntimeErrorKind::MissingField { field },
+            ExternError::Internal { message } => RuntimeErrorKind::Internal { message },
+        };
+        Self { kind }
+    }
+}

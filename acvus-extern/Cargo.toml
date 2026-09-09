@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 acvus-extern-macro = { path = "../acvus-extern-macro" }
 acvus-mir = { path = "../acvus-mir" }
-acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
+futures = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

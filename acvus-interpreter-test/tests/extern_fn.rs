@@ -2,7 +2,7 @@
 
 
 use acvus_extern::{ExternFn, ExternItems, ExternRegistry, ExternType, extern_fn, extern_registry};
-use acvus_interpreter::{Executable, Value};
+use acvus_interpreter::{AcvusRuntime, Executable, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
 use acvus_mir::ty::{Effect, Ty, TypeRegistry};
@@ -10,7 +10,10 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 /// A registry of stateless, concrete closures with one effect.
-fn closures(effect: Effect, fns: impl Fn(&Interner) -> Vec<ExternFn> + 'static) -> ExternRegistry {
+fn closures(
+    effect: Effect,
+    fns: impl Fn(&Interner) -> Vec<ExternFn<AcvusRuntime>> + 'static,
+) -> ExternRegistry<AcvusRuntime> {
     ExternRegistry::new(move |i| ExternItems {
         types: vec![],
         fns: fns(i).into_iter().map(|f| f.with_effect(effect)).collect(),
@@ -213,7 +216,7 @@ fn fetch_by(_: &Interner, x: i64) -> i64 {
 }
 
 /// Four independent Opaque fetches and one parameterized.
-fn io_registry() -> ExternRegistry {
+fn io_registry() -> ExternRegistry<AcvusRuntime> {
     extern_registry! {
         fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by],
     }
@@ -235,7 +238,7 @@ fn compile_io_script_with_ctx(
         .collect();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
-    let mut regs = acvus_ext::std_registries();
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
     let cr = compile_source_with_externs(&i, ast, &context_types, regs, TypeRegistry::new());
     (i, cr)
@@ -616,7 +619,7 @@ fn consume_tok(_: &Interner, tok: Tok) -> i64 {
 #[tokio::test]
 async fn io_extern_consumes_move_only_opaque() {
     let i = Interner::new();
-    let registry = extern_registry! {
+    let registry: ExternRegistry<AcvusRuntime> = extern_registry! {
         types: [Tok],
         fns: [mk_tok, consume_tok],
     };
@@ -639,7 +642,7 @@ async fn io_inside_iterator_pipeline() {
         &i,
         &[("items", Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
     );
-    let mut regs = acvus_ext::std_registries();
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
         &i,

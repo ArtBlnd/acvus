@@ -39,7 +39,6 @@ version = "0.1.0"
 dependencies = [
  "acvus-ext",
  "acvus-extern",
- "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
  "rust_decimal",
@@ -55,9 +54,9 @@ name = "acvus-extern"
 version = "0.1.0"
 dependencies = [
  "acvus-extern-macro",
- "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
+ "futures",
  "rustc-hash",
  "tokio",
 ]
@@ -76,6 +75,7 @@ name = "acvus-interpreter"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "blake3",
@@ -117,6 +117,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-ext",
+ "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
@@ -152,6 +153,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-ext",
+ "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
@@ -165,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-ext",
+ "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "insta",
@@ -946,6 +949,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-ext",
+ "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",

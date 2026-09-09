@@ -3,7 +3,7 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
+use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Interner, Runtime, TyArg};
 
 use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, HttpRequest, RequestError};
@@ -130,13 +130,14 @@ pub struct GoogleConfig {
     pub model: String,
 }
 
-fn first_message(resp: ModelResponse) -> Result<OutputMessage, RuntimeError> {
+fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
     match resp {
         ModelResponse::Content(parts) => parts
             .first()
             .map(OutputMessage::text)
-            .ok_or_else(|| RuntimeError::fetch("google_llm: response has no content parts")),
-        ModelResponse::ToolCalls(_) => Err(RuntimeError::fetch(
+            .ok_or_else(|| ExternError::call("google_llm", "response has no content parts")),
+        ModelResponse::ToolCalls(_) => Err(ExternError::call(
+            "google_llm",
             "google_llm: tool calls are not representable as a message",
         )),
     }
@@ -148,7 +149,11 @@ fn first_message(resp: ModelResponse) -> Result<OutputMessage, RuntimeError> {
 /// - API key goes in URL query param: `{endpoint}/models/{model}:generateContent?key={api_key}`
 /// - System messages are extracted into the `system_instruction` field (separate from `contents`)
 /// - Role `"assistant"` is mapped to `"model"` for the Gemini API
-pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
+pub fn google_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+where
+    F: Fetch + Send + Sync + 'static,
+    R: Runtime,
+{
     ExternRegistry::new(move |interner| {
         let handler = move |_: Interner, messages: List<InputMessage>, config: GoogleConfig| {
             let fetch = Arc::clone(&fetch);
@@ -170,7 +175,7 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                     config.endpoint, config.model, config.api_key
                 );
                 let body = serde_json::to_value(&request_body).map_err(|e| {
-                    RuntimeError::fetch(format!("google_llm: serialization failed: {e}"))
+                    ExternError::call("google_llm", format!("serialization failed: {e}"))
                 })?;
                 let http_request = HttpRequest {
                     url,
@@ -178,10 +183,13 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                     body,
                 };
 
-                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
-                let (response, _usage) =
-                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
-                first_message(response)
+                let response_json = fetch
+                    .fetch(&http_request)
+                    .await
+                    .map_err(|e| ExternError::call("google_llm", e))?;
+                let (response, _usage) = parse_response(response_json)
+                    .map_err(|e| ExternError::call("google_llm", e.to_string()))?;
+                first_message(response).map_err(R::Error::from)
             }
         };
         ExternItems {
@@ -338,10 +346,10 @@ mod tests {
             response: serde_json::json!({}),
         });
         let interner = Interner::new();
-        let registry = google_registry(fetch);
+        let registry = google_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
-        assert_eq!(registered.executables.len(), 1);
+        assert_eq!(registered.handlers.len(), 1);
 
         let func = &registered.functions[0];
         assert_eq!(interner.resolve(func.qref.name), "google_llm");
