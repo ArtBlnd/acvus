@@ -248,24 +248,20 @@ async fn run_ops(
                     iter.exhausted = true;
                 }
             }
-            IterOp::Flatten => match val {
-                Value::List(l) => {
-                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
-                        return Ok(None);
-                    };
-                    val = first;
-                }
-                other => val = other,
-            },
-            IterOp::FlatMap(f) => match f.call(val).await? {
-                Value::List(l) => {
-                    let Some(first) = expand(iter, i, l.iter().cloned().collect()) else {
-                        return Ok(None);
-                    };
-                    val = first;
-                }
-                other => val = other,
-            },
+            IterOp::Flatten => {
+                let items = crate::list::sequence_items(val)?;
+                let Some(first) = expand(iter, i, items.into()) else {
+                    return Ok(None);
+                };
+                val = first;
+            }
+            IterOp::FlatMap(f) => {
+                let items = crate::list::sequence_items(f.call(val).await?)?;
+                let Some(first) = expand(iter, i, items.into()) else {
+                    return Ok(None);
+                };
+                val = first;
+            }
         }
         i += 1;
     }

@@ -311,7 +311,7 @@ fn inline_callee_returns_closure_result() {
         &[(
             "apply_double",
             "$xs | map(|x| -> x + x)",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
         )],
         &[],
     )
@@ -332,7 +332,7 @@ fn inline_callee_takes_lambda_arg() {
         &[(
             "transform",
             "$xs | map(|x| -> x * 2)",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
         )],
         &[],
     )
@@ -351,7 +351,7 @@ fn inline_callee_with_filter_lambda() {
         &[(
             "positives",
             "$xs | filter(|x| -> x > 0)",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
         )],
         &[],
     )
@@ -370,9 +370,9 @@ fn inline_callee_lambda_captures_param() {
         &[(
             "add_n",
             "$xs | map(|x| -> x + $n)",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int))), ("n", Ty::Int)]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("n", Ty::Int)]),
         )],
-        &[("items", Ty::List(Box::new(Ty::Int)))],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -392,12 +392,12 @@ fn inline_chain_with_lambda() {
             (
                 "double_all",
                 "$xs | map(|x| -> x * 2)",
-                sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+                sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
             ),
             (
                 "sum_list",
                 "$xs | fold(0, |a, b| -> a + b)",
-                sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+                sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
             ),
         ],
         &[],
@@ -619,7 +619,7 @@ fn inline_list_collect_pattern() {
         &[(
             "to_list",
             "$xs | map(|x| -> x * 2) | collect",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
         )],
         &[],
     )
@@ -656,7 +656,7 @@ fn inline_callee_uses_builtin_len() {
         &[(
             "count",
             "$xs | len",
-            sig(&i, &[("xs", Ty::List(Box::new(Ty::Int)))]),
+            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
         )],
         &[],
     )

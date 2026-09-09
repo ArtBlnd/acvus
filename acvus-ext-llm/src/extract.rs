@@ -29,7 +29,7 @@ pub fn obj_get_u32(obj: &FxHashMap<Astr, Value>, key: Astr) -> Option<u32> {
     }
 }
 
-/// Convert a `Value::List` of Objects (role/content) into `Vec<Message>`.
+/// Convert message Objects (role/content) into `Vec<Message>`.
 pub fn values_to_messages(
     list: &[Value],
     interner: &Interner,

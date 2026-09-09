@@ -56,7 +56,7 @@ enum TyHead {
     Bool,
     Unit,
     Byte,
-    List,
+    Array,
     Object,
     Tuple,
     Fn,
@@ -77,7 +77,7 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
         TyTerm::Byte => TyHead::Byte,
-        TyTerm::List(_) => TyHead::List,
+        TyTerm::Array(..) => TyHead::Array,
         TyTerm::Object(_) => TyHead::Object,
         TyTerm::Tuple(_) => TyHead::Tuple,
         TyTerm::Fn { .. } => TyHead::Fn,
@@ -292,6 +292,40 @@ impl EffectTerm<Concrete> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LenTerm<V: Phase> {
+    Known(usize),
+    Var(V::LenVar),
+}
+
+impl<V: Phase> LenTerm<V> {
+    pub fn map<W: Phase>(&self, on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>) -> LenTerm<W> {
+        match self {
+            LenTerm::Known(n) => LenTerm::Known(*n),
+            LenTerm::Var(v) => on_len(*v),
+        }
+    }
+
+    pub fn try_map<W: Phase, E>(
+        &self,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
+    ) -> Result<LenTerm<W>, E> {
+        match self {
+            LenTerm::Known(n) => Ok(LenTerm::Known(*n)),
+            LenTerm::Var(v) => on_len(*v),
+        }
+    }
+}
+
+impl LenTerm<Concrete> {
+    pub fn get(&self) -> usize {
+        match self {
+            LenTerm::Known(n) => *n,
+            LenTerm::Var(v) => match *v {},
+        }
+    }
+}
+
 // ── Identity system ──────────────────────────────────────────────────
 
 acvus_utils::declare_local_id!(pub IdentityId);
@@ -325,7 +359,7 @@ impl TyTerm<Concrete> {
     /// Extract the element type from a collection type.
     pub fn elem_of(&self) -> Option<&Ty> {
         match self {
-            Ty::List(elem) => Some(elem),
+            Ty::Array(elem, _) => Some(elem),
             _ => None,
         }
     }
@@ -336,7 +370,7 @@ impl TyTerm<Concrete> {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
                 Materiality::Concrete
             }
-            Ty::List(_)
+            Ty::Array(..)
             | Ty::Object(_)
             | Ty::Tuple(_)
             | Ty::Fn { .. }
@@ -355,7 +389,7 @@ impl TyTerm<Concrete> {
     pub fn is_pureable(&self) -> bool {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
-            Ty::List(inner) => inner.is_pureable(),
+            Ty::Array(inner, _) => inner.is_pureable(),
             Ty::Handle(inner) => inner.is_pureable(),
             Ty::Option(inner) => inner.is_pureable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
@@ -376,7 +410,7 @@ impl TyTerm<Concrete> {
     pub fn is_materializable(&self) -> bool {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
-            Ty::List(inner) => inner.is_materializable(),
+            Ty::Array(inner, _) => inner.is_materializable(),
             Ty::Option(inner) => inner.is_materializable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_materializable()),
             Ty::Object(fields) => fields.values().all(|v| v.is_materializable()),
@@ -391,11 +425,6 @@ impl TyTerm<Concrete> {
             | Ty::Error(_) => false,
             Ty::Var(v) => match *v {},
         }
-    }
-
-    /// Convenience: `List<Byte>` (byte array type).
-    pub fn bytes() -> Ty {
-        Ty::List(Box::new(Ty::Byte))
     }
 
     pub fn display<'a>(&'a self, interner: &'a Interner) -> TyDisplay<'a> {
@@ -463,7 +492,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     other => write!(f, " with {other:?}"),
                 }
             }
-            Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
+            Ty::Array(inner, len) => write!(f, "Array<{}, {}>", inner.display(self.interner), len.get()),
             Ty::Handle(inner) => {
                 write!(f, "Handle<{}>", inner.display(self.interner))
             }
@@ -564,6 +593,8 @@ pub trait Phase: 'static + Clone {
     type TyVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
     /// Effect inference variable. `Infallible` for concrete (uninhabitable).
     type EffectVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
+    /// Array length inference variable. `Infallible` for concrete (uninhabitable).
+    type LenVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
 }
 
 /// Post-inference phase — all types fully resolved.
@@ -574,6 +605,7 @@ pub struct Concrete;
 impl Phase for Concrete {
     type TyVar = Infallible;
     type EffectVar = Infallible;
+    type LenVar = Infallible;
 }
 
 /// Polymorphic declaration phase — type templates stored in the graph.
@@ -585,6 +617,7 @@ pub struct Poly;
 impl Phase for Poly {
     type TyVar = u32;
     type EffectVar = u32;
+    type LenVar = u32;
 }
 
 /// During-inference phase — types may contain unresolved variables.
@@ -595,6 +628,7 @@ pub struct Infer;
 impl Phase for Infer {
     type TyVar = TypeBoundId;
     type EffectVar = EffectVarId;
+    type LenVar = LenVarId;
 }
 
 /// Polymorphic type — template with positional placeholders.
@@ -611,6 +645,10 @@ pub struct TypeBoundId(pub u32);
 /// Index into `Solver::effect_vars`. Identifies an effect inference variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EffectVarId(pub u32);
+
+/// Index into `Solver::len_vars`. Identifies an array length inference variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LenVarId(pub u32);
 
 // Re-export solver types — these were historically in ty.rs.
 pub use crate::solver::{Capability, TypeBound, Solver, SolverSnapshot, FreezeError};
@@ -632,7 +670,7 @@ pub enum TyTerm<V: Phase> {
     Unit,
     Byte,
     // Containers
-    List(Box<TyTerm<V>>),
+    Array(Box<TyTerm<V>>, LenTerm<V>),
     Object(FxHashMap<Astr, TyTerm<V>>),
     Tuple(Vec<TyTerm<V>>),
     Option(Box<TyTerm<V>>),
@@ -693,6 +731,7 @@ impl<V: Phase> TyTerm<V> {
         on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
         on_identity: &mut impl FnMut(IdentityId) -> TyTerm<W>,
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
     ) -> TyTerm<W> {
         match self {
             TyTerm::Int => TyTerm::Int,
@@ -701,37 +740,37 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
             TyTerm::Byte => TyTerm::Byte,
-            TyTerm::List(inner) => TyTerm::List(Box::new(inner.map(on_var, on_identity, on_effect))),
+            TyTerm::Array(inner, len) => TyTerm::Array(Box::new(inner.map(on_var, on_identity, on_effect, on_len)), len.map(on_len)),
             TyTerm::Object(fields) => TyTerm::Object(
-                fields.iter().map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect))).collect(),
+                fields.iter().map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len))).collect(),
             ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
-                elems.iter().map(|e| e.map(on_var, on_identity, on_effect)).collect(),
+                elems.iter().map(|e| e.map(on_var, on_identity, on_effect, on_len)).collect(),
             ),
-            TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect))),
+            TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect, on_len))),
             TyTerm::Fn { params, ret, captures, effect } => TyTerm::Fn {
-                params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect))).collect(),
-                ret: Box::new(ret.map(on_var, on_identity, on_effect)),
-                captures: captures.iter().map(|c| c.map(on_var, on_identity, on_effect)).collect(),
+                params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect, on_len))).collect(),
+                ret: Box::new(ret.map(on_var, on_identity, on_effect, on_len)),
+                captures: captures.iter().map(|c| c.map(on_var, on_identity, on_effect, on_len)).collect(),
                 effect: effect.map(on_effect),
             },
             TyTerm::UserDefined { id, type_args, effect_args } => TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.map(on_var, on_identity, on_effect)).collect(),
+                type_args: type_args.iter().map(|t| t.map(on_var, on_identity, on_effect, on_len)).collect(),
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
             },
             TyTerm::Enum { name, variants } => TyTerm::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| {
-                    (*tag, payload.as_ref().map(|ty| Box::new(ty.map(on_var, on_identity, on_effect))))
+                    (*tag, payload.as_ref().map(|ty| Box::new(ty.map(on_var, on_identity, on_effect, on_len))))
                 }).collect(),
             },
             TyTerm::Handle(inner) => TyTerm::Handle(
-                Box::new(inner.map(on_var, on_identity, on_effect)),
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
             ),
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
-                Box::new(inner.map(on_var, on_identity, on_effect)),
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
                 *volatile,
             ),
             TyTerm::Error(token) => TyTerm::Error(*token),
@@ -745,6 +784,7 @@ impl<V: Phase> TyTerm<V> {
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
         on_identity: &mut impl FnMut(IdentityId) -> Result<TyTerm<W>, E>,
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
     ) -> Result<TyTerm<W>, E> {
         match self {
             TyTerm::Int => Ok(TyTerm::Int),
@@ -753,35 +793,35 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
             TyTerm::Byte => Ok(TyTerm::Byte),
-            TyTerm::List(inner) => Ok(TyTerm::List(Box::new(inner.try_map(on_var, on_identity, on_effect)?))),
+            TyTerm::Array(inner, len) => Ok(TyTerm::Array(Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?), len.try_map(on_len)?)),
             TyTerm::Object(fields) => {
                 let mapped: Result<FxHashMap<_, _>, E> = fields.iter()
-                    .map(|(k, v)| v.try_map(on_var, on_identity, on_effect).map(|mv| (*k, mv)))
+                    .map(|(k, v)| v.try_map(on_var, on_identity, on_effect, on_len).map(|mv| (*k, mv)))
                     .collect();
                 Ok(TyTerm::Object(mapped?))
             }
             TyTerm::Tuple(elems) => Ok(TyTerm::Tuple(
-                elems.iter().map(|e| e.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
+                elems.iter().map(|e| e.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
             )),
-            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity, on_effect)?))),
+            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?))),
             TyTerm::Fn { params, ret, captures, effect } => Ok(TyTerm::Fn {
                 params: params.iter()
-                    .map(|p| p.ty.try_map(on_var, on_identity, on_effect).map(|ty| ParamTerm::new(p.name, ty)))
+                    .map(|p| p.ty.try_map(on_var, on_identity, on_effect, on_len).map(|ty| ParamTerm::new(p.name, ty)))
                     .collect::<Result<_, _>>()?,
-                ret: Box::new(ret.try_map(on_var, on_identity, on_effect)?),
-                captures: captures.iter().map(|c| c.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
+                ret: Box::new(ret.try_map(on_var, on_identity, on_effect, on_len)?),
+                captures: captures.iter().map(|c| c.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
                 effect: effect.try_map(on_effect)?,
             }),
             TyTerm::UserDefined { id, type_args, effect_args } => Ok(TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
+                type_args: type_args.iter().map(|t| t.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
                 effect_args: effect_args.iter().map(|e| e.try_map(on_effect)).collect::<Result<_, _>>()?,
             }),
             TyTerm::Enum { name, variants } => {
                 let mapped: Result<FxHashMap<_, _>, E> = variants.iter()
                     .map(|(tag, payload)| {
                         let mp = match payload {
-                            Some(ty) => Some(Box::new(ty.try_map(on_var, on_identity, on_effect)?)),
+                            Some(ty) => Some(Box::new(ty.try_map(on_var, on_identity, on_effect, on_len)?)),
                             None => None,
                         };
                         Ok((*tag, mp))
@@ -790,11 +830,11 @@ impl<V: Phase> TyTerm<V> {
                 Ok(TyTerm::Enum { name: *name, variants: mapped? })
             }
             TyTerm::Handle(inner) => Ok(TyTerm::Handle(
-                Box::new(inner.try_map(on_var, on_identity, on_effect)?),
+                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
             )),
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => Ok(TyTerm::Ref(
-                Box::new(inner.try_map(on_var, on_identity, on_effect)?),
+                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
                 *volatile,
             )),
             TyTerm::Error(token) => Ok(TyTerm::Error(*token)),
@@ -812,6 +852,7 @@ pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
         &mut |v: Infallible| match v {},
         &mut |id| TyTerm::Identity(id),
         &mut |v: Infallible| match v {},
+        &mut |v: Infallible| match v {},
     )
 }
 
@@ -825,6 +866,7 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
         &mut |_: u32| Err(()),
         &mut |id| Ok(TyTerm::Identity(id)),
         &mut |_: u32| Err(()),
+        &mut |_: u32| Err(()),
     ).ok()
 }
 
@@ -835,11 +877,18 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
 pub struct PolyBuilder {
     next_ty: u32,
     next_effect: u32,
+    next_len: u32,
 }
 
 impl PolyBuilder {
     pub fn new() -> Self {
-        Self { next_ty: 0, next_effect: 0 }
+        Self { next_ty: 0, next_effect: 0, next_len: 0 }
+    }
+
+    pub fn fresh_len_var(&mut self) -> LenTerm<Poly> {
+        let id = self.next_len;
+        self.next_len += 1;
+        LenTerm::Var(id)
     }
 
     pub fn fresh_effect_var(&mut self) -> EffectTerm<Poly> {
@@ -871,6 +920,10 @@ mod tests {
     use acvus_utils::Interner;
 
     use Polarity::*;
+
+    fn arr<V: Phase>(elem: TyTerm<V>, n: usize) -> TyTerm<V> {
+        TyTerm::Array(Box::new(elem), LenTerm::Known(n))
+    }
 
     /// Test helper: create a unique `QualifiedRef` for each call.
     /// Uses a thread-local counter to ensure uniqueness across tests.
@@ -1079,7 +1132,7 @@ mod tests {
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
         let v = s.fresh_ty_var();
-        let cyclic = TyTerm::List(Box::new(v.clone()));
+        let cyclic = arr(v.clone(), 3);
         assert!(s.unify_ty(&v, &cyclic, Covariant, &registry).is_err());
     }
 
@@ -1104,8 +1157,8 @@ mod tests {
         // Same concrete type: Invariant must succeed regardless of order.
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
-        let l1 = TyTerm::List(Box::new(TyTerm::Int));
-        let l2 = TyTerm::List(Box::new(TyTerm::Int));
+        let l1 = arr(TyTerm::Int, 3);
+        let l2 = arr(TyTerm::Int, 3);
         assert!(s.unify_ty(&l1, &l2, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&l2, &l1, Invariant, &registry).is_ok());
     }
@@ -1146,7 +1199,7 @@ mod tests {
     fn list_vs_tuple_fails_any_polarity() {
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
-        let l = TyTerm::List(Box::new(TyTerm::Int));
+        let l = arr(TyTerm::Int, 3);
         let t = TyTerm::Tuple(vec![TyTerm::Int]);
         assert!(s.unify_ty(&l, &t, Covariant, &registry).is_err());
         assert!(s.unify_ty(&l, &t, Invariant, &registry).is_err());
@@ -1224,8 +1277,8 @@ mod tests {
         let p = s.fresh_ty_var();
         assert!(
             s.unify_ty(
-                &ud(id, vec![TyTerm::List(Box::new(p.clone()))]),
-                &ud(id, vec![TyTerm::List(Box::new(TyTerm::Int))]),
+                &ud(id, vec![arr(p.clone(), 3)]),
+                &ud(id, vec![arr(TyTerm::Int, 3)]),
                 Invariant, &registry)
             .is_ok()
         );
@@ -1286,14 +1339,14 @@ mod tests {
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         let p = s.fresh_ty_var();
-        let ty = TyTerm::List(Box::new(ud(id, vec![p.clone()])));
+        let ty = arr(ud(id, vec![p.clone()]), 3);
         assert!(s.unify_ty(&p, &TyTerm::Int, Invariant, &registry).is_ok());
         match s.resolve_ty(&ty) {
-            TyTerm::List(inner) => match *inner {
+            TyTerm::Array(inner, _) => match *inner {
                 TyTerm::UserDefined { type_args, .. } => assert_eq!(type_args, vec![TyTerm::Int]),
                 other => panic!("expected UserDefined, got {other:?}"),
             },
-            other => panic!("expected List, got {other:?}"),
+            other => panic!("expected Array, got {other:?}"),
         }
     }
 
@@ -1382,7 +1435,7 @@ mod tests {
     #[test]
     fn extern_cast_basic_coercion() {
         // UserDefined(A, [T]) → List<T>
-        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| TyTerm::List(Box::new(p[0].clone())));
+        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
             id,
@@ -1390,7 +1443,7 @@ mod tests {
             effect_args: vec![],
 
         };
-        let to = TyTerm::List(Box::new(TyTerm::Int));
+        let to = arr(TyTerm::Int, 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
     }
 
@@ -1398,7 +1451,7 @@ mod tests {
     #[test]
     fn extern_cast_with_param_resolution() {
         // UserDefined(A, [T]) → List<T>, where T is a fresh param on the consumer side
-        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| TyTerm::List(Box::new(p[0].clone())));
+        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
             id,
@@ -1407,7 +1460,7 @@ mod tests {
 
         };
         let consumer_param = s.fresh_ty_var();
-        let to = TyTerm::List(Box::new(consumer_param.clone()));
+        let to = arr(consumer_param.clone(), 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
         assert_eq!(s.resolve_ty(&consumer_param), TyTerm::Int);
     }
@@ -1433,7 +1486,7 @@ mod tests {
     #[test]
     fn extern_cast_wrong_target_fails() {
         // Rule: A → List<T>, but expected String
-        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| TyTerm::List(Box::new(p[0].clone())));
+        let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
             id,
@@ -1499,7 +1552,7 @@ mod tests {
                 effect_args: vec![],
     
             },
-            to: TyTerm::List(Box::new(t1)),
+            to: arr(t1, 3),
             fn_ref: fn_id_a,
         };
         let t2 = builder.fresh_ty_var();
@@ -1510,7 +1563,7 @@ mod tests {
                 effect_args: vec![],
     
             },
-            to: TyTerm::List(Box::new(t2)),
+            to: arr(t2, 3),
             fn_ref: fn_id_b,
         };
 
@@ -1532,7 +1585,7 @@ mod tests {
 
         };
         assert!(
-            s.unify_ty(&from, &TyTerm::List(Box::new(TyTerm::Int)), Covariant, &reg)
+            s.unify_ty(&from, &arr(TyTerm::Int, 3), Covariant, &reg)
                 .is_err()
         );
     }
@@ -1564,7 +1617,7 @@ mod tests {
                 effect_args: vec![],
     
             },
-            to: TyTerm::List(Box::new(t.clone())),
+            to: arr(t.clone(), 3),
             fn_ref: fn_id_a,
         });
         // Same from_id + same to head (List) → panic
@@ -1577,7 +1630,7 @@ mod tests {
                 effect_args: vec![],
     
             },
-            to: TyTerm::List(Box::new(t2)),
+            to: arr(t2, 3),
             fn_ref: fn_id_b,
         });
     }
@@ -1606,7 +1659,7 @@ mod tests {
                 effect_args: vec![],
     
             },
-            to: TyTerm::List(Box::new(t1)),
+            to: arr(t1, 3),
             fn_ref: fn_id_a,
         });
         // Different to head (Option vs List) → ok
@@ -1679,20 +1732,20 @@ mod tests {
 
     #[test]
     fn pureable_list_of_scalars() {
-        assert!(Ty::List(Box::new(Ty::Int)).is_pureable());
-        assert!(Ty::List(Box::new(Ty::String)).is_pureable());
+        assert!(arr(Ty::Int, 3).is_pureable());
+        assert!(arr(Ty::String, 3).is_pureable());
     }
 
     #[test]
     fn pureable_list_of_user_defined_is_not_pureable() {
-        let list_ud = Ty::List(Box::new(test_user_defined()));
+        let list_ud = arr(test_user_defined(), 3);
         assert!(!list_ud.is_pureable());
     }
 
     #[test]
     fn pureable_nested_list_of_scalars() {
         // List<List<Int>> — pureable
-        let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Int))));
+        let nested = arr(arr(Ty::Int, 3), 3);
         assert!(nested.is_pureable());
     }
 
@@ -1783,7 +1836,7 @@ mod tests {
         // (Int, List<String>, Option<Bool>) — all pureable
         let ty = Ty::Tuple(vec![
             Ty::Int,
-            Ty::List(Box::new(Ty::String)),
+            arr(Ty::String, 3),
             Ty::Option(Box::new(Ty::Bool)),
         ]);
         assert!(ty.is_pureable());
@@ -1792,15 +1845,15 @@ mod tests {
     #[test]
     fn pureable_mixed_tuple_list_user_defined() {
         // (Int, List<UserDefined>) — not pureable
-        let ty = Ty::Tuple(vec![Ty::Int, Ty::List(Box::new(test_user_defined()))]);
+        let ty = Ty::Tuple(vec![Ty::Int, arr(test_user_defined(), 3)]);
         assert!(!ty.is_pureable());
     }
 
     #[test]
     fn pureable_deeply_nested_containers() {
         // List<Option<Tuple<(Int, List<String>)>>> — pureable
-        let inner = Ty::Tuple(vec![Ty::Int, Ty::List(Box::new(Ty::String))]);
-        let ty = Ty::List(Box::new(Ty::Option(Box::new(inner))));
+        let inner = Ty::Tuple(vec![Ty::Int, arr(Ty::String, 3)]);
+        let ty = arr(Ty::Option(Box::new(inner)), 3);
         assert!(ty.is_pureable());
     }
 
@@ -1808,7 +1861,7 @@ mod tests {
     fn pureable_deeply_nested_with_user_defined_leaf() {
         // List<Option<Tuple<(Int, UserDefined)>>> — not pureable
         let inner = Ty::Tuple(vec![Ty::Int, test_user_defined()]);
-        let ty = Ty::List(Box::new(Ty::Option(Box::new(inner))));
+        let ty = arr(Ty::Option(Box::new(inner)), 3);
         assert!(!ty.is_pureable());
     }
 
@@ -1846,7 +1899,7 @@ mod tests {
 
     #[test]
     fn storable_list_of_int() {
-        assert!(Ty::List(Box::new(Ty::Int)).is_materializable());
+        assert!(arr(Ty::Int, 3).is_materializable());
     }
     #[test]
     fn storable_option_string() {
@@ -1872,6 +1925,6 @@ mod tests {
 
     #[test]
     fn not_storable_list_of_user_defined() {
-        assert!(!Ty::List(Box::new(test_user_defined())).is_materializable());
+        assert!(!arr(test_user_defined(), 3).is_materializable());
     }
 }

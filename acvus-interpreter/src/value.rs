@@ -40,7 +40,7 @@ pub enum Value {
 
     // ── Shared (Arc, clone = refcount bump) ──────────────────────
     String(Arc<String>),
-    List(Arc<Vec<Value>>),
+    Array(Arc<Vec<Value>>),
     Object(Arc<FxHashMap<Astr, Value>>),
     Tuple(Arc<Vec<Value>>),
     Variant(Box<VariantValue>),
@@ -170,8 +170,8 @@ impl Value {
     pub fn string(s: impl Into<String>) -> Self {
         Value::String(Arc::new(s.into()))
     }
-    pub fn list(items: Vec<Value>) -> Self {
-        Value::List(Arc::new(items))
+    pub fn array(items: Vec<Value>) -> Self {
+        Value::Array(Arc::new(items))
     }
     pub fn object(fields: FxHashMap<Astr, Value>) -> Self {
         Value::Object(Arc::new(fields))
@@ -244,7 +244,7 @@ impl Value {
             Value::Unit => ValueKind::Unit,
             Value::Byte(_) => ValueKind::Byte,
             Value::String(_) => ValueKind::String,
-            Value::List(_) => ValueKind::List,
+            Value::Array(_) => ValueKind::Array,
             Value::Object(_) => ValueKind::Object,
             Value::Tuple(_) => ValueKind::Tuple,
             Value::Variant(_) => ValueKind::Variant,
@@ -294,10 +294,10 @@ impl Value {
         }
     }
     #[inline]
-    pub fn as_list(&self) -> &[Value] {
+    pub fn as_array(&self) -> &[Value] {
         match self {
-            Value::List(l) => l,
-            other => panic!("expected List, got {other:?}"),
+            Value::Array(l) => l,
+            other => panic!("expected Array, got {other:?}"),
         }
     }
     #[inline]
@@ -327,10 +327,10 @@ impl Value {
         }
     }
     #[inline]
-    pub fn into_list(self) -> Arc<Vec<Value>> {
+    pub fn into_array(self) -> Arc<Vec<Value>> {
         match self {
-            Value::List(l) => l,
-            other => panic!("expected List, got {other:?}"),
+            Value::Array(l) => l,
+            other => panic!("expected Array, got {other:?}"),
         }
     }
     #[inline]
@@ -363,7 +363,7 @@ impl Value {
             (Value::Byte(a), Value::Byte(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
 
-            (Value::List(a), Value::List(b)) => slice_eq(a, b),
+            (Value::Array(a), Value::Array(b)) => slice_eq(a, b),
             (Value::Tuple(a), Value::Tuple(b)) => slice_eq(a, b),
             (Value::Object(a), Value::Object(b)) => {
                 a.len() == b.len()
@@ -402,7 +402,7 @@ impl Clone for Value {
             Value::Unit => Value::Unit,
             Value::Byte(b) => Value::Byte(*b),
             Value::String(s) => Value::String(Arc::clone(s)),
-            Value::List(l) => Value::List(Arc::clone(l)),
+            Value::Array(l) => Value::Array(Arc::clone(l)),
             Value::Object(o) => Value::Object(Arc::clone(o)),
             Value::Tuple(t) => Value::Tuple(Arc::clone(t)),
             Value::Variant(v) => Value::Variant(Box::new(VariantValue {
@@ -429,7 +429,7 @@ impl fmt::Debug for Value {
             Value::Unit => write!(f, "()"),
             Value::Byte(b) => write!(f, "0x{b:02x}"),
             Value::String(s) => write!(f, "{s:?}"),
-            Value::List(l) => f.debug_list().entries(l.iter()).finish(),
+            Value::Array(l) => f.debug_list().entries(l.iter()).finish(),
             Value::Object(o) => f.debug_map().entries(o.iter()).finish(),
             Value::Tuple(t) => {
                 let mut d = f.debug_tuple("");
@@ -681,10 +681,10 @@ impl IntoValue for Arc<String> {
 impl FromValue for Vec<Value> {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
         match value {
-            Value::List(l) => Ok(Arc::try_unwrap(l).unwrap_or_else(|arc| (*arc).clone())),
+            Value::Array(l) => Ok(Arc::try_unwrap(l).unwrap_or_else(|arc| (*arc).clone())),
             other => Err(RuntimeError::unexpected_type(
                 "FromValue<Vec<Value>>",
-                &[crate::error::ValueKind::List],
+                &[crate::error::ValueKind::Array],
                 other.kind(),
             )),
         }
@@ -693,7 +693,7 @@ impl FromValue for Vec<Value> {
 
 impl IntoValue for Vec<Value> {
     fn into_value(self) -> Value {
-        Value::list(self)
+        Value::array(self)
     }
 }
 

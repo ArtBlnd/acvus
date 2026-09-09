@@ -247,7 +247,7 @@ fn user_analytics_dashboard() {
         ),
     ];
     let contexts: &[_] = &[
-        ("users", Ty::List(Box::new(user_ty))),
+        ("users", Ty::Array(Box::new(user_ty), acvus_mir::ty::LenTerm::Known(3))),
         ("senior_count", Ty::Int),
         ("adult_count", Ty::Int),
         ("minor_count", Ty::Int),
@@ -402,7 +402,7 @@ fn batch_processing_with_errors() {
         ),
     ];
     let contexts: &[_] = &[
-        ("items", Ty::List(Box::new(item_ty))),
+        ("items", Ty::Array(Box::new(item_ty), acvus_mir::ty::LenTerm::Known(3))),
         ("min_val", Ty::Int),
         ("max_val", Ty::Int),
         ("multiplier", Ty::Int),

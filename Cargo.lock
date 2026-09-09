@@ -36,6 +36,7 @@ dependencies = [
 name = "acvus-ext-llm"
 version = "0.1.0"
 dependencies = [
+ "acvus-ext",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",

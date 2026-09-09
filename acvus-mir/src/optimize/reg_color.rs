@@ -551,7 +551,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             r(src);
         }
-        InstKind::MakeList { dst, elements } => {
+        InstKind::MakeArray { dst, elements } => {
             r(dst);
             elements.iter_mut().for_each(&r);
         }
@@ -571,26 +571,18 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             r(src);
         }
-        InstKind::TestListLen { dst, src, .. } => {
-            r(dst);
-            r(src);
-        }
         InstKind::TestObjectKey { dst, src, .. } => {
             r(dst);
             r(src);
         }
-        InstKind::ListIndex { dst, list, .. } => {
+        InstKind::ArrayIndex { dst, array: list, .. } => {
             r(dst);
             r(list);
         }
-        InstKind::ListGet { dst, list, index } => {
+        InstKind::ArrayGet { dst, array: list, index } => {
             r(dst);
             r(list);
             r(index);
-        }
-        InstKind::ListSlice { dst, list, .. } => {
-            r(dst);
-            r(list);
         }
         InstKind::ObjectGet { dst, object, .. } => {
             r(dst);

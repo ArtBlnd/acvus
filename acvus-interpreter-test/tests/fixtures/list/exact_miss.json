@@ -1,5 +1,0 @@
-{
-  "template": "{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}",
-  "context": { "items": [10, 20, 30] },
-  "expected": "wrong length"
-}

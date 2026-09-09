@@ -148,9 +148,9 @@ fn infer_value_ty(v: &Value) -> Ty {
         Value::String(_) => Ty::String,
         Value::Unit => Ty::Unit,
         Value::Byte(_) => Ty::Byte,
-        Value::List(items) => {
+        Value::Array(items) => {
             let elem = items.first().map(infer_value_ty).unwrap_or(Ty::Int);
-            Ty::List(Box::new(elem))
+            Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
         }
         Value::Object(fields) => Ty::Object(
             fields
@@ -214,9 +214,10 @@ async fn regex_find_all_collect() {
         vec![regex_registry(&i, &mut tr)],
     )
     .await;
-    let Value::List(items) = result else {
+    let Value::Extern(list) = result else {
         panic!("expected List")
     };
+    let items = list.downcast_ref::<Vec<Value>>().expect("List payload");
     assert_eq!(items.len(), 3);
     assert_eq!(items[0], Value::string("1"));
     assert_eq!(items[1], Value::string("22"));
@@ -250,9 +251,10 @@ async fn regex_split_collect() {
         vec![regex_registry(&i, &mut tr)],
     )
     .await;
-    let Value::List(items) = result else {
+    let Value::Extern(list) = result else {
         panic!("expected List")
     };
+    let items = list.downcast_ref::<Vec<Value>>().expect("List payload");
     assert_eq!(
         *items,
         vec![Value::string("a"), Value::string("b"), Value::string("c"),]

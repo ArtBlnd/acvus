@@ -119,7 +119,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Byte, Ty::Byte) => true,
 
         // Containers (invariant inner)
-        (Ty::List(a), Ty::List(b)) => types_match(a, b),
+        (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
@@ -168,10 +168,7 @@ fn literal_ty(lit: &Literal) -> Ty {
         Literal::Float(_) => Ty::Float,
         Literal::Bool(_) => Ty::Bool,
         Literal::Byte(_) => Ty::Byte,
-        // Literal::List produces Deque at runtime, but the *type* from the
-        // typechecker perspective depends on context.  We check dst type
-        // via val_types instead of inferring from the literal.
-        Literal::List(_) => Ty::error(), // skip — heterogeneous check not possible here
+        Literal::List(_) => Ty::error(),
         Literal::Unit => Ty::Unit,
     }
 }
@@ -179,20 +176,18 @@ fn literal_ty(lit: &Literal) -> Ty {
 /// When the lowerer reuses a ValueId for both a collection and its iterated
 /// element (e.g. pattern-match iteration over a List), the val_types map may
 /// record the collection type rather than the element type.  This helper
-/// unwraps one level of List/Deque so pattern-match checks don't produce
+/// unwraps one level of Array so pattern-match checks don't produce
 /// false positives.
 fn unwrap_element_ty(ty: &Ty) -> &Ty {
     match ty {
-        Ty::List(inner)=> inner,
+        Ty::Array(inner, _) => inner,
         other => other,
     }
 }
 
-/// Returns `true` if the type is list-like (List or Deque), extracting the inner type.
-/// The lowerer may record Deque where List is expected (pre-cast representation).
-fn as_list_inner(ty: &Ty) -> Option<&Ty> {
+fn as_array_inner(ty: &Ty) -> Option<&Ty> {
     match ty {
-        Ty::List(inner)=> Some(inner),
+        Ty::Array(inner, _) => Some(inner),
         _ => None,
     }
 }
@@ -372,15 +367,27 @@ impl CheckCtx {
             }
 
             // === Constructors ===
-            InstKind::MakeList { dst, elements } => {
+            InstKind::MakeArray { dst, elements } => {
                 let dst_ty = ty!(*dst);
-                if let Ty::List(inner) = dst_ty {
+                if let Ty::Array(inner, len) = dst_ty {
+                    if len.get() != elements.len() {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "MakeArray".to_string(),
+                                expected_constructor: format!("Array of length {}", elements.len()),
+                                actual: dst_ty.clone(),
+                            },
+                        });
+                    }
                     for (i, elem) in elements.iter().enumerate() {
                         let elem_ty = ty!(*elem);
                         self.assert_match(
                             pc,
                             span,
-                            "MakeList",
+                            "MakeArray",
                             &format!("element[{i}]"),
                             inner,
                             elem_ty,
@@ -393,7 +400,7 @@ impl CheckCtx {
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "MakeList".to_string(),
+                            inst_name: "MakeArray".to_string(),
                             expected_constructor: "Deque".to_string(),
                             actual: dst_ty.clone(),
                         },
@@ -860,59 +867,40 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::ListIndex { dst, list, .. } => {
+            InstKind::ArrayIndex { dst, array: list, .. } => {
                 let list_ty = ty!(*list);
-                if let Some(inner) = as_list_inner(list_ty) {
+                if let Some(inner) = as_array_inner(list_ty) {
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "ListIndex", "dst", inner, dst_ty, errors);
+                    self.assert_match(pc, span, "ArrayIndex", "dst", inner, dst_ty, errors);
                 } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "ListIndex".to_string(),
-                            expected_constructor: "List".to_string(),
+                            inst_name: "ArrayIndex".to_string(),
+                            expected_constructor: "Array".to_string(),
                             actual: list_ty.clone(),
                         },
                     });
                 }
             }
 
-            InstKind::ListGet { dst, list, index } => {
+            InstKind::ArrayGet { dst, array: list, index } => {
                 let list_ty = ty!(*list);
                 let index_ty = ty!(*index);
-                self.assert_match(pc, span, "ListGet", "index", &Ty::Int, index_ty, errors);
-                if let Some(inner) = as_list_inner(list_ty) {
+                self.assert_match(pc, span, "ArrayGet", "index", &Ty::Int, index_ty, errors);
+                if let Some(inner) = as_array_inner(list_ty) {
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "ListGet", "dst", inner, dst_ty, errors);
+                    self.assert_match(pc, span, "ArrayGet", "dst", inner, dst_ty, errors);
                 } else if !list_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "ListGet".to_string(),
-                            expected_constructor: "List".to_string(),
-                            actual: list_ty.clone(),
-                        },
-                    });
-                }
-            }
-
-            InstKind::ListSlice { dst, list, .. } => {
-                let list_ty = ty!(*list);
-                let dst_ty = ty!(*dst);
-                if as_list_inner(list_ty).is_some() {
-                    self.assert_match(pc, span, "ListSlice", "dst ≡ list", list_ty, dst_ty, errors);
-                } else if !list_ty.is_error() {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "ListSlice".to_string(),
-                            expected_constructor: "List".to_string(),
+                            inst_name: "ArrayGet".to_string(),
+                            expected_constructor: "Array".to_string(),
                             actual: list_ty.clone(),
                         },
                     });
@@ -923,26 +911,6 @@ impl CheckCtx {
             InstKind::TestLiteral { dst, .. } => {
                 let dst_ty = ty!(*dst);
                 self.assert_match(pc, span, "TestLiteral", "dst", &Ty::Bool, dst_ty, errors);
-            }
-
-            InstKind::TestListLen { dst, src, .. } => {
-                let src_ty = ty!(*src);
-                if !matches!(
-                    src_ty,
-                    Ty::List(_) | Ty::Error(_)                ) {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "TestListLen".to_string(),
-                            expected_constructor: "List".to_string(),
-                            actual: src_ty.clone(),
-                        },
-                    });
-                }
-                let dst_ty = ty!(*dst);
-                self.assert_match(pc, span, "TestListLen", "dst", &Ty::Bool, dst_ty, errors);
             }
 
             InstKind::TestObjectKey { dst, src, .. } => {

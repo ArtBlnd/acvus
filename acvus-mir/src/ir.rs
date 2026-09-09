@@ -145,7 +145,7 @@ pub enum InstKind {
     },
 
     // Composite constructors
-    MakeList {
+    MakeArray {
         dst: ValueId,
         elements: Vec<ValueId>,
     },
@@ -169,32 +169,20 @@ pub enum InstKind {
         src: ValueId,
         value: Literal,
     },
-    TestListLen {
-        dst: ValueId,
-        src: ValueId,
-        min_len: usize,
-        exact: bool,
-    },
     TestObjectKey {
         dst: ValueId,
         src: ValueId,
         key: Astr,
     },
-    ListIndex {
+    ArrayIndex {
         dst: ValueId,
-        list: ValueId,
-        index: i32,
+        array: ValueId,
+        index: usize,
     },
-    ListGet {
+    ArrayGet {
         dst: ValueId,
-        list: ValueId,
+        array: ValueId,
         index: ValueId,
-    },
-    ListSlice {
-        dst: ValueId,
-        list: ValueId,
-        skip_head: usize,
-        skip_tail: usize,
     },
     ObjectGet {
         dst: ValueId,

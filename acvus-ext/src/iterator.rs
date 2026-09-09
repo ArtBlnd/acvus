@@ -4,8 +4,6 @@
 //! - Lazy combinators: map, pmap, filter, take, skip, chain, pchain, flatten, flat_map
 //! - Consumers (async): collect, join, first, last, contains, next, find, reduce, fold, any, all
 
-use std::sync::Arc;
-
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm, TypeRegistry, UserDefinedDecl};
@@ -13,6 +11,7 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::iter_pipeline::{IterHandle, exec_next, into_iter_handle, iter_value, iterator_qref};
+use crate::list::{list_poly_ty, list_value, sequence_items};
 
 // ── Signature helper ────────────────────────────────────────────────
 
@@ -35,18 +34,12 @@ fn make_sig(params: &[PolyTy], ret: PolyTy, effect: EffectTerm<Poly>, interner: 
 }
 // ── Sync handlers — constructors ────────────────────────────────────
 fn h_iter(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
-    let items = match args[0].take() {
-        Value::List(l) => Arc::try_unwrap(l).unwrap_or_else(|arc| arc.as_ref().clone()),
-        other => panic!("iter: expected List, got {other:?}"),
-    };
+    let items = sequence_items(args[0].take())?;
     Ok(iter_value(interner, IterHandle::from_list(items)))
 }
 
 fn h_rev_iter(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
-    let mut items = match args[0].take() {
-        Value::List(l) => Arc::try_unwrap(l).unwrap_or_else(|arc| arc.as_ref().clone()),
-        other => panic!("rev_iter: expected List, got {other:?}"),
-    };
+    let mut items = sequence_items(args[0].take())?;
     items.reverse();
     Ok(iter_value(interner, IterHandle::from_list(items)))
 }
@@ -91,8 +84,7 @@ fn h_chain(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
 
 fn h_pchain(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError> {
     // pchain = parallel chain at runtime; semantically same as collecting all iterators.
-    let list = args[0].take().into_list();
-    let parts = Arc::try_unwrap(list).unwrap_or_else(|arc| arc.as_ref().clone());
+    let parts = sequence_items(args[0].take())?;
     let mut chained = IterHandle::done();
     for part in parts {
         chained = chained.chain(into_iter_handle(part));
@@ -115,7 +107,7 @@ fn h_flat_map(mut args: Args, interner: &Interner) -> Result<Value, RuntimeError
 
 fn h_collect(
     mut args: Args,
-    _interner: Interner,
+    interner: Interner,
 ) -> BoxFuture<'static, Result<Value, RuntimeError>> {
     Box::pin(async move {
         let mut iter = into_iter_handle(args[0].take());
@@ -123,7 +115,7 @@ fn h_collect(
         while let Some(val) = exec_next(&mut iter).await? {
             items.push(val);
         }
-        Ok(Value::list(items))
+        Ok(list_value(&interner, items))
     })
 }
 
@@ -281,13 +273,27 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         let mut b = PolyBuilder::new();
         let t = b.fresh_ty_var();
         type_registry.register_cast(CastRule {
-            from: TyTerm::List(Box::new(t.clone())),
+            from: list_poly_ty(interner, t.clone()),
             to: TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
                 effect_args: vec![b.fresh_effect_var()],
             },
             fn_ref: QualifiedRef::root(interner.intern("iter")),
+        });
+    }
+    {
+        let mut b = PolyBuilder::new();
+        let t = b.fresh_ty_var();
+        let n = b.fresh_len_var();
+        type_registry.register_cast(CastRule {
+            from: TyTerm::Array(Box::new(t.clone()), n),
+            to: TyTerm::UserDefined {
+                id: iter_qref,
+                type_args: vec![t],
+                effect_args: vec![b.fresh_effect_var()],
+            },
+            fn_ref: QualifiedRef::root(interner.intern("iter_array")),
         });
     }
 
@@ -313,7 +319,25 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 ExternFnBuilder::new(
                     "iter",
                     make_sig(
-                        &[TyTerm::List(Box::new(t.clone()))],
+                        &[list_poly_ty(interner, t.clone())],
+                        it(t, e),
+                        pure,
+                        interner,
+                    ),
+                )
+                .sync_handler(h_iter),
+            );
+        }
+        {
+            let mut b = PolyBuilder::new();
+            let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
+            let n = b.fresh_len_var();
+            fns.push(
+                ExternFnBuilder::new(
+                    "iter_array",
+                    make_sig(
+                        &[TyTerm::Array(Box::new(t.clone()), n)],
                         it(t, e),
                         pure,
                         interner,
@@ -330,7 +354,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 ExternFnBuilder::new(
                     "rev_iter",
                     make_sig(
-                        &[TyTerm::List(Box::new(t.clone()))],
+                        &[list_poly_ty(interner, t.clone())],
                         it(t, e),
                         pure,
                         interner,
@@ -444,7 +468,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             fns.push(
                 ExternFnBuilder::new(
                     "pchain",
-                    make_sig(&[TyTerm::List(Box::new(iter_ty.clone()))], iter_ty, pure, interner),
+                    make_sig(&[list_poly_ty(interner, iter_ty.clone())], iter_ty, pure, interner),
                 )
                 .sync_handler(h_pchain),
             );
@@ -457,7 +481,25 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
                 ExternFnBuilder::new(
                     "flatten",
                     make_sig(
-                        &[it(TyTerm::List(Box::new(t.clone())), e)],
+                        &[it(list_poly_ty(interner, t.clone()), e)],
+                        it(t, e),
+                        pure,
+                        interner,
+                    ),
+                )
+                .sync_handler(h_flatten),
+            );
+        }
+        {
+            let mut b = PolyBuilder::new();
+            let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
+            let n = b.fresh_len_var();
+            fns.push(
+                ExternFnBuilder::new(
+                    "flatten_arrays",
+                    make_sig(
+                        &[it(TyTerm::Array(Box::new(t.clone()), n), e)],
                         it(t, e),
                         pure,
                         interner,
@@ -494,7 +536,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             fns.push(
                 ExternFnBuilder::new(
                     "collect",
-                    make_sig(&[it(t.clone(), e)], TyTerm::List(Box::new(t)), e, interner),
+                    make_sig(&[it(t.clone(), e)], list_poly_ty(interner, t), e, interner),
                 )
                 .async_handler(h_collect),
             );

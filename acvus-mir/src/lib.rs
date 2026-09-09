@@ -104,10 +104,10 @@ mod tests {
     #[test]
     fn integration_nested_match() {
         let i = Interner::new();
-        let users_ty = Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
+        let users_ty = Ty::Array(Box::new(Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
-        ]))));
+        ]))), crate::ty::LenTerm::Known(3));
         compile_template(
             &i,
             r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
@@ -223,7 +223,7 @@ mod tests {
                     effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
         ]
     }
 
@@ -262,14 +262,14 @@ mod tests {
             (
                 "mapper",
                 Ty::Fn {
-                    params: vec![Param::new(i.intern("_"), Ty::List(Box::new(Ty::Int)))],
+                    params: vec![Param::new(i.intern("_"), Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)))],
                     ret: Box::new(Ty::String),
                     captures: vec![],
 
                     effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
         ];
         compile_script(&i, "@items | @mapper", &ctx).unwrap();
     }
@@ -522,7 +522,7 @@ mod tests {
 
             effect: crate::ty::Effect::Opaque.into(),
         };
-        let list_fn_ty = Ty::List(Box::new(fn_ty));
+        let list_fn_ty = Ty::Array(Box::new(fn_ty), crate::ty::LenTerm::Known(3));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
     }
 

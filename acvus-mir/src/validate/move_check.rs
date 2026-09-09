@@ -44,7 +44,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         Ty::UserDefined { .. } => Some(true),
 
         // Containers — transitive
-        Ty::List(inner) | Ty::Option(inner) => is_move_only(inner),
+        Ty::Array(inner, _) | Ty::Option(inner) => is_move_only(inner),
         Ty::Tuple(elems) => {
             let mut any_move = false;
             for e in elems {
@@ -498,7 +498,7 @@ fn process_inst(
         }
 
         // Constructors — elements are consumed
-        InstKind::MakeList { dst, elements } => {
+        InstKind::MakeArray { dst, elements } => {
             for e in elements {
                 try_consume_value(scope, inst_idx, span, *e, val_types, state, errors);
             }
@@ -549,17 +549,14 @@ fn process_inst(
         InstKind::TupleIndex { dst, tuple: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ListIndex { dst, list: _, .. } => {
+        InstKind::ArrayIndex { dst, array: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ListGet {
+        InstKind::ArrayGet {
             dst,
-            list: _,
+            array: _,
             index: _,
         } => {
-            state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::ListSlice { dst, list: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::UnwrapVariant { dst, src: _ } => {
@@ -568,9 +565,6 @@ fn process_inst(
 
         // Pattern tests — read-only, always produce Bool
         InstKind::TestLiteral { dst, src: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::TestListLen { dst, src: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::TestObjectKey { dst, src: _, .. } => {
@@ -675,7 +669,7 @@ mod tests {
         assert_eq!(is_move_only(&Ty::Int), Some(false));
         assert_eq!(is_move_only(&Ty::String), Some(false));
         assert_eq!(is_move_only(&Ty::Bool), Some(false));
-        assert_eq!(is_move_only(&Ty::List(Box::new(Ty::Int))), Some(false));
+        assert_eq!(is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))), Some(false));
     }
 
     #[test]
@@ -722,8 +716,8 @@ mod tests {
         // v0 = UserDefined (move-only), used twice → ERROR
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
-        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
-        val_types.insert(v2, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(v2, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
 
         let module = make_module(
             vec![
@@ -759,7 +753,7 @@ mod tests {
         // v0 = UserDefined, used once → OK
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
-        val_types.insert(v1, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
 
         let module = make_module(
             vec![inst(InstKind::FunctionCall {
@@ -796,8 +790,8 @@ mod tests {
         val_types.insert(v1, move_ty.clone());
         val_types.insert(v2, move_ty.clone());
         val_types.insert(v3, move_ty.clone());
-        val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
-        val_types.insert(v5, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v4, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(v5, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
 
         let module = make_module(
             vec![
@@ -888,8 +882,8 @@ mod tests {
         val_types.insert(v0, move_ty.clone());
         val_types.insert(v1, move_ty.clone());
         val_types.insert(v2, move_ty.clone());
-        val_types.insert(v3, Ty::List(Box::new(Ty::Int)));
-        val_types.insert(v4, Ty::List(Box::new(Ty::Int)));
+        val_types.insert(v3, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(v4, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
 
         let module = make_module(
             vec![

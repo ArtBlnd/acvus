@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, LenTerm, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -57,7 +57,8 @@ pub enum SerTy {
     Unit,
     Byte,
     Error,
-    List {
+    Array {
+        len: usize,
         elem: Box<SerTy>,
     },
     Object {
@@ -97,7 +98,8 @@ impl Ty {
             Ty::Unit => SerTy::Unit,
             Ty::Byte => SerTy::Byte,
             Ty::Error(_) => SerTy::Error,
-            Ty::List(elem) => SerTy::List {
+            Ty::Array(elem, len) => SerTy::Array {
+                len: len.get(),
                 elem: Box::new(elem.to_ser(interner)),
             },
             Ty::Object(fields) => SerTy::Object {
@@ -164,7 +166,7 @@ impl SerTy {
             SerTy::Unit => Ty::Unit,
             SerTy::Byte => Ty::Byte,
             SerTy::Error => Ty::error(),
-            SerTy::List { elem } => Ty::List(Box::new(elem.to_ty(interner))),
+            SerTy::Array { len, elem } => Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len)),
             SerTy::Object { fields } => Ty::Object(
                 fields
                     .iter()

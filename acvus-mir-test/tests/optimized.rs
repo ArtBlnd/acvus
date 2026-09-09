@@ -47,7 +47,7 @@ fn nested_loop_conditional_accum() {
     let c = ctx(
         &i,
         &[
-            ("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
+            ("matrix", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
             ("pos_sum", Ty::Int),
             ("neg_sum", Ty::Int),
         ],
@@ -217,7 +217,7 @@ fn loop_search_with_accumulator() {
     let c = ctx(
         &i,
         &[
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
             ("target", Ty::Int),
             ("found", Ty::Bool),
             ("idx", Ty::Int),
@@ -325,7 +325,7 @@ fn iter_stateful_accum_with_side_effects() {
     let c = ctx(
         &i,
         &[
-            ("transactions", Ty::List(Box::new(tx_ty))),
+            ("transactions", Ty::Array(Box::new(tx_ty), acvus_mir::ty::LenTerm::Known(3))),
             ("balance", Ty::Int),
             ("overdraft_count", Ty::Int),
             ("last_overdraft", Ty::String),
@@ -364,7 +364,7 @@ fn loop_invariant_hoisting() {
                 "config",
                 obj(&i, &[("base_rate", Ty::Int), ("multiplier", Ty::Int)]),
             ),
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
             ("result", Ty::Int),
         ],
     );

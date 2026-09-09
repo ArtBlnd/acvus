@@ -474,7 +474,7 @@ pub fn desc_to_ty(interner: &Interner, desc: &TypeDesc) -> Ty {
             _ => panic!("DO NOT FALLBACK"),
         },
         TypeDesc::Option { inner } => Ty::Option(Box::new(desc_to_ty(interner, inner))),
-        TypeDesc::List { elem } => Ty::List(Box::new(desc_to_ty(interner, elem))),
+        TypeDesc::List { elem } => Ty::Array(Box::new(desc_to_ty(interner, elem)), acvus_mir::ty::LenTerm::Known(3)),
         TypeDesc::Deque { elem, origin } => {
             let o = match origin {
                 TypeDescOrigin::Concrete { id } => acvus_mir::ty::Origin::Concrete(*id),

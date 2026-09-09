@@ -137,14 +137,12 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::ObjectGet { dst, .. }
             | InstKind::FunctionCall { dst, .. }
             | InstKind::LoadFunction { dst, .. }
-            | InstKind::MakeList { dst, .. }
+            | InstKind::MakeArray { dst, .. }
             | InstKind::MakeObject { dst, .. }
-            | InstKind::ListIndex { dst, .. }
-            | InstKind::ListGet { dst, .. }
-            | InstKind::ListSlice { dst, .. }
+            | InstKind::ArrayIndex { dst, .. }
+            | InstKind::ArrayGet { dst, .. }
             | InstKind::MakeClosure { dst, .. }
             | InstKind::UnwrapVariant { dst, .. }
-            | InstKind::TestListLen { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
             | InstKind::Clone { dst, .. }
             | InstKind::Spawn { dst, .. }

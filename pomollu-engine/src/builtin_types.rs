@@ -22,7 +22,7 @@ fn context_entry_type(interner: &Interner) -> Ty {
     fields.insert(interner.intern("description"), Ty::String);
     fields.insert(
         interner.intern("tags"),
-        Ty::List(Box::new(tag_entry_type(interner))),
+        Ty::Array(Box::new(tag_entry_type(interner)), acvus_mir::ty::LenTerm::Known(3)),
     );
     fields.insert(interner.intern("content"), Ty::String);
     fields.insert(interner.intern("content_type"), Ty::String);
@@ -36,7 +36,7 @@ fn context_custom_entry_type(interner: &Interner) -> Ty {
     fields.insert(interner.intern("description"), Ty::String);
     fields.insert(
         interner.intern("tags"),
-        Ty::List(Box::new(tag_entry_type(interner))),
+        Ty::Array(Box::new(tag_entry_type(interner)), acvus_mir::ty::LenTerm::Known(3)),
     );
     fields.insert(interner.intern("content"), Ty::String);
     fields.insert(interner.intern("content_type"), Ty::String);
@@ -61,21 +61,21 @@ pub fn context_type(interner: &Interner) -> Ty {
     let entry = context_entry_type(interner);
     let custom_entry = context_custom_entry_type(interner);
     let mut fields = FxHashMap::default();
-    fields.insert(interner.intern("system"), Ty::List(Box::new(entry.clone())));
+    fields.insert(interner.intern("system"), Ty::Array(Box::new(entry.clone()), acvus_mir::ty::LenTerm::Known(3)));
     fields.insert(
         interner.intern("character"),
-        Ty::List(Box::new(entry.clone())),
+        Ty::Array(Box::new(entry.clone()), acvus_mir::ty::LenTerm::Known(3)),
     );
     fields.insert(
         interner.intern("world_info"),
-        Ty::List(Box::new(entry.clone())),
+        Ty::Array(Box::new(entry.clone()), acvus_mir::ty::LenTerm::Known(3)),
     );
     fields.insert(
         interner.intern("lorebook"),
-        Ty::List(Box::new(entry.clone())),
+        Ty::Array(Box::new(entry.clone()), acvus_mir::ty::LenTerm::Known(3)),
     );
-    fields.insert(interner.intern("memory"), Ty::List(Box::new(entry)));
-    fields.insert(interner.intern("custom"), Ty::List(Box::new(custom_entry)));
+    fields.insert(interner.intern("memory"), Ty::Array(Box::new(entry), acvus_mir::ty::LenTerm::Known(3)));
+    fields.insert(interner.intern("custom"), Ty::Array(Box::new(custom_entry), acvus_mir::ty::LenTerm::Known(3)));
     fields.insert(interner.intern("bot_name"), Ty::String);
     Ty::Object(fields)
 }
@@ -86,7 +86,7 @@ pub fn history_entry_type(interner: &Interner) -> Ty {
     fields.insert(interner.intern("content"), Ty::String);
     fields.insert(interner.intern("content_type"), Ty::String);
     fields.insert(interner.intern("role"), Ty::String);
-    Ty::List(Box::new(Ty::Object(fields)))
+    Ty::Array(Box::new(Ty::Object(fields)), acvus_mir::ty::LenTerm::Known(3))
 }
 
 /// Builtin context refs — automatically injected, NOT user-defined params.

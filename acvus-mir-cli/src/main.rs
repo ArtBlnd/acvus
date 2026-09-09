@@ -45,7 +45,7 @@ impl TypeDef {
             TypeDef::String => Ty::String,
             TypeDef::Bool => Ty::Bool,
             TypeDef::Unit => Ty::Unit,
-            TypeDef::List(inner) => Ty::List(Box::new(inner.to_ty(interner))),
+            TypeDef::List(inner) => acvus_ext::list_ty(interner, inner.to_ty(interner)),
             TypeDef::Object(fields) => Ty::Object(
                 fields
                     .iter()

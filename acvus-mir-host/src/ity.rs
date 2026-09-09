@@ -2,7 +2,8 @@
 //! Hosted: Runtime opaque type marker.
 //! Typeck<N>: Compile-time stand-in for generic type parameters.
 
-use acvus_mir::ty::{InferTy, PolyTy, Ty, lift_to_poly, lift_ty};
+use acvus_mir::graph::QualifiedRef;
+use acvus_mir::ty::{InferTy, LenTerm, PolyTy, Ty, lift_to_poly, lift_ty};
 use acvus_utils::Interner;
 
 // ── ITy ────────────────────────────────────────────────────────────
@@ -41,13 +42,37 @@ impl ITy for ()     { fn ty(_: &Interner, _: &[Ty]) -> Ty { Ty::Unit } }
 
 impl<T: ITy> ITy for Vec<T> {
     fn ty(i: &Interner, tv: &[Ty]) -> Ty {
-        Ty::List(Box::new(T::ty(i, tv)))
+        Ty::UserDefined {
+            id: QualifiedRef::root(i.intern("List")),
+            type_args: vec![T::ty(i, tv)],
+            effect_args: vec![],
+        }
     }
     fn infer_ty(i: &Interner, tv: &[InferTy]) -> InferTy {
-        InferTy::List(Box::new(T::infer_ty(i, tv)))
+        InferTy::UserDefined {
+            id: QualifiedRef::root(i.intern("List")),
+            type_args: vec![T::infer_ty(i, tv)],
+            effect_args: vec![],
+        }
     }
     fn poly_ty(i: &Interner, tv: &[PolyTy]) -> PolyTy {
-        PolyTy::List(Box::new(T::poly_ty(i, tv)))
+        PolyTy::UserDefined {
+            id: QualifiedRef::root(i.intern("List")),
+            type_args: vec![T::poly_ty(i, tv)],
+            effect_args: vec![],
+        }
+    }
+}
+
+impl<T: ITy, const N: usize> ITy for [T; N] {
+    fn ty(i: &Interner, tv: &[Ty]) -> Ty {
+        Ty::Array(Box::new(T::ty(i, tv)), LenTerm::Known(N))
+    }
+    fn infer_ty(i: &Interner, tv: &[InferTy]) -> InferTy {
+        InferTy::Array(Box::new(T::infer_ty(i, tv)), LenTerm::Known(N))
+    }
+    fn poly_ty(i: &Interner, tv: &[PolyTy]) -> PolyTy {
+        PolyTy::Array(Box::new(T::poly_ty(i, tv)), LenTerm::Known(N))
     }
 }
 

@@ -9,7 +9,7 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, Materiality,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality,
     Param, ParamTerm, Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry,
     lift_ty,
 };
@@ -754,7 +754,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             _ => {
                 // Other patterns match iterated elements.
                 match source_ty {
-                    TyTerm::List(inner)=> inner.as_ref().clone(),
+                    TyTerm::Array(inner, _) => inner.as_ref().clone(),
                     _ => source_ty.clone(),
                 }
             }
@@ -773,7 +773,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Literal::Unit => TyTerm::Unit,
                     Literal::List(elems) => {
                         if elems.is_empty() {
-                            TyTerm::List(Box::new(self.solver.fresh_ty_var()))
+                            TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0))
                         } else {
                             let first_ty = self.literal_ty(&elems[0]);
                             for elem in &elems[1..] {
@@ -793,7 +793,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                     );
                                 }
                             }
-                            TyTerm::List(Box::new(self.solver.resolve_ty(&first_ty)))
+                            TyTerm::Array(
+                                Box::new(self.solver.resolve_ty(&first_ty)),
+                                LenTerm::Known(elems.len()),
+                            )
                         }
                     }
                 };
@@ -1200,17 +1203,15 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
             } => {
                 let all_elems: Vec<_> = head.iter().chain(tail.iter()).collect();
-                if all_elems.is_empty() && rest.is_none() {
-                    // Empty list `[]` — element type unknown, use fresh var.
-                    // If no hint resolves it, we report the error after resolve.
-                    let ty = TyTerm::List(Box::new(self.solver.fresh_ty_var()));
+                if let Some(rest_span) = rest {
+                    self.error(MirErrorKind::RestInArrayLiteral, *rest_span);
+                }
+                if all_elems.is_empty() {
+                    let ty = TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0));
                     return self.record_ret(*id, ty);
                 }
 
-                let elem_ty = match all_elems.first() {
-                    Some(first) => self.check_expr(false, first),
-                    None => self.solver.fresh_ty_var(), // Only `..` with no elements: fresh var.
-                };
+                let elem_ty = self.check_expr(false, all_elems[0]);
 
                 for elem in all_elems.iter().skip(1) {
                     let et = self.check_expr(false, elem);
@@ -1227,7 +1228,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     }
                 }
 
-                let ty = TyTerm::List(Box::new(self.solver.resolve_ty(&elem_ty)));
+                let ty = TyTerm::Array(
+                    Box::new(self.solver.resolve_ty(&elem_ty)),
+                    LenTerm::Known(all_elems.len()),
+                );
                 self.record_ret(*id, ty)
             }
 
@@ -1728,28 +1732,38 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
 
-            Pattern::List { head, tail, .. } => {
-                // Reuse existing element Var when source already resolves to a
-                // List. Same rationale as Tuple above.
+            Pattern::List { head, rest, tail, .. } => {
                 let shallow = self.solver.shallow_resolve_ty(source_ty);
-                let elem_ty = match shallow {
-                    TyTerm::List(ref inner)=> (**inner).clone(),
+                let (elem_ty, len) = match shallow {
+                    TyTerm::Array(ref inner, len) => ((**inner).clone(), len),
                     _ => {
                         let var = self.solver.fresh_ty_var();
-                        let list_ty = TyTerm::List(Box::new(var.clone()));
-                        if self.unify_covariant(source_ty, &list_ty, None).is_err() {
+                        let len = self.solver.fresh_len_var();
+                        let array_ty = TyTerm::Array(Box::new(var.clone()), len);
+                        if self.unify_covariant(source_ty, &array_ty, None).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
-                                    pattern_ty: self.freeze_or_error(&list_ty),
+                                    pattern_ty: self.freeze_or_error(&array_ty),
                                     source_ty: self.freeze_or_error(&source_resolved),
                                 },
                                 span,
                             );
                             return;
                         }
-                        var
+                        (var, len)
                     }
                 };
+                let pattern_min = head.len() + tail.len();
+                let exact = rest.is_none();
+                match self.solver.resolve_len(&len) {
+                    LenTerm::Known(got) => {
+                        let fits = if exact { got == pattern_min } else { got >= pattern_min };
+                        if !fits {
+                            self.error(MirErrorKind::ArrayLengthMismatch { pattern_min, exact, got }, span);
+                        }
+                    }
+                    LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
+                }
                 for p in head.iter().chain(tail.iter()) {
                     self.check_pattern(p, &elem_ty, span);
                 }
@@ -1946,8 +1960,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Literal::Byte(_) => TyTerm::Byte,
             Literal::Unit => TyTerm::Unit,
             Literal::List(elems) => match elems.first() {
-                Some(first) => TyTerm::List(Box::new(self.literal_ty(first))),
-                None => TyTerm::List(Box::new(Self::infer_error())),
+                Some(first) => TyTerm::Array(Box::new(self.literal_ty(first)), LenTerm::Known(elems.len())),
+                None => TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0)),
             },
         }
     }
@@ -2308,7 +2322,7 @@ mod tests {
     fn lazy_list_context_load_ok() {
         // @items : List<Int> — Lazy tier, allowed in non-call position.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::List(Box::new(Ty::Int)))]);
+        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)))]);
         let src = "{{ x = @items }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
     }
@@ -2370,13 +2384,13 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("fns"),
-            Ty::List(Box::new(Ty::Fn {
+            Ty::Array(Box::new(Ty::Fn {
                 params: vec![p(&i, Ty::Int)],
                 ret: Box::new(Ty::Int),
 
                 captures: vec![],
                 effect: crate::ty::Effect::Opaque.into(),
-            })),
+            }), LenTerm::Known(3)),
         )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();

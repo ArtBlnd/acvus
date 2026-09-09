@@ -6,6 +6,8 @@ use acvus_interpreter::{
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_to_poly};
 use acvus_utils::Interner;
 
+use crate::list::{List, list_ty, list_value};
+
 // ── Handlers ────────────────────────────────────────────────────────
 
 fn h_len_str(
@@ -79,11 +81,11 @@ fn h_replace(
 }
 
 fn h_split(
-    _: &Interner,
+    interner: &Interner,
     (s, sep): (String, String),
-) -> Result<Vec<Value>, RuntimeError> {
+) -> Result<Value, RuntimeError> {
     let parts: Vec<Value> = s.split(&*sep).map(Value::string).collect();
-    Ok(parts)
+    Ok(list_value(interner, parts))
 }
 
 fn h_repeat(
@@ -104,29 +106,29 @@ fn h_substring(
 }
 
 fn h_to_bytes(
-    _: &Interner,
+    interner: &Interner,
     (s,): (String,),
-) -> Result<Vec<Value>, RuntimeError> {
+) -> Result<Value, RuntimeError> {
     let bytes: Vec<Value> = s.bytes().map(Value::byte).collect();
-    Ok(bytes)
+    Ok(list_value(interner, bytes))
 }
 
 fn h_to_utf8(
     _: &Interner,
-    (bytes,): (Vec<Value>,),
+    (bytes,): (List,),
 ) -> Result<Value, RuntimeError> {
-    let raw: Vec<u8> = bytes.iter().map(|v| v.as_byte()).collect();
+    let raw: Vec<u8> = bytes.0.iter().map(|v| v.as_byte()).collect();
     let s = String::from_utf8(raw).map_err(|_| {
-        RuntimeError::unexpected_type("to_utf8", &[ValueKind::List], ValueKind::List)
+        RuntimeError::unexpected_type("to_utf8", &[ValueKind::Extern], ValueKind::Extern)
     })?;
     Ok(Value::string(s))
 }
 
 fn h_to_utf8_lossy(
     _: &Interner,
-    (bytes,): (Vec<Value>,),
+    (bytes,): (List,),
 ) -> Result<String, RuntimeError> {
-    let raw: Vec<u8> = bytes.iter().map(|v| v.as_byte()).collect();
+    let raw: Vec<u8> = bytes.0.iter().map(|v| v.as_byte()).collect();
     Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
@@ -192,7 +194,7 @@ pub fn string_registry() -> ExternRegistry {
                 sig(
                     interner,
                     vec![Ty::String, Ty::String],
-                    Ty::List(Box::new(Ty::String)),
+                    list_ty(interner, Ty::String),
                 ),
             )
             .handler(h_split),
@@ -206,20 +208,20 @@ pub fn string_registry() -> ExternRegistry {
                 sig(interner, vec![Ty::String, Ty::Int, Ty::Int], Ty::String),
             )
             .handler(h_substring),
-            ExternFnBuilder::new("to_bytes", sig(interner, vec![Ty::String], Ty::bytes()))
+            ExternFnBuilder::new("to_bytes", sig(interner, vec![Ty::String], list_ty(interner, Ty::Byte)))
                 .handler(h_to_bytes),
             ExternFnBuilder::new(
                 "to_utf8",
                 sig(
                     interner,
-                    vec![Ty::bytes()],
+                    vec![list_ty(interner, Ty::Byte)],
                     Ty::Option(Box::new(Ty::String)),
                 ),
             )
             .handler(h_to_utf8),
             ExternFnBuilder::new(
                 "to_utf8_lossy",
-                sig(interner, vec![Ty::bytes()], Ty::String),
+                sig(interner, vec![list_ty(interner, Ty::Byte)], Ty::String),
             )
             .handler(h_to_utf8_lossy),
         ]

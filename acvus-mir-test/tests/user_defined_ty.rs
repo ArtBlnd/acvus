@@ -108,7 +108,7 @@ fn iterator_not_materializable() {
 #[test]
 fn list_of_iterator_not_materializable() {
     let (i, _reg) = setup();
-    let list = Ty::List(Box::new(iter_ty(&i, Ty::Int)));
+    let list = Ty::Array(Box::new(iter_ty(&i, Ty::Int)), acvus_mir::ty::LenTerm::Known(3));
     assert!(!list.is_materializable());
 }
 
@@ -160,7 +160,7 @@ fn instantiate_pair_shares_params() {
         type_args: vec![t.clone()],
         effect_args: vec![],
     };
-    let to = PolyTy::List(Box::new(t));
+    let to = PolyTy::Array(Box::new(t), acvus_mir::ty::LenTerm::Known(3));
 
     let mut s = Solver::new();
     let (inst_from, inst_to) = s.instantiate_poly_pair(&from, &to);
@@ -175,7 +175,7 @@ fn instantiate_pair_shares_params() {
 
     // inst_to should now resolve to List<Int> (shared T)
     let resolved_to = s.resolve_ty(&inst_to);
-    assert_eq!(resolved_to, InferTy::List(Box::new(it(&Ty::Int))));
+    assert_eq!(resolved_to, InferTy::Array(Box::new(it(&Ty::Int)), acvus_mir::ty::LenTerm::Known(3)));
 }
 
 // ================================================================
@@ -188,7 +188,7 @@ fn coerce_list_to_iterator_completeness() {
     // List<Int> ≤ Iterator<Int> via CastRule
     let (i, reg) = setup();
     let mut s = Solver::new();
-    let list = it(&Ty::List(Box::new(Ty::Int)));
+    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
     let iter = iter_ity(&i, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Covariant, &reg).is_ok(),
@@ -203,7 +203,7 @@ fn coerce_iterator_to_list_soundness_rejected() {
     let (i, reg) = setup();
     let mut s = Solver::new();
     let iter = iter_ity(&i, it(&Ty::Int));
-    let list = it(&Ty::List(Box::new(Ty::Int)));
+    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
     assert!(
         s.unify_ty(&iter, &list, Covariant, &reg).is_err(),
         "Iterator → List coercion must be rejected"
@@ -216,7 +216,7 @@ fn coerce_invariant_rejects_list_to_iterator() {
     // Invariant polarity: no coercion allowed
     let (i, reg) = setup();
     let mut s = Solver::new();
-    let list = it(&Ty::List(Box::new(Ty::Int)));
+    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
     let iter = iter_ity(&i, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Invariant, &reg).is_err(),

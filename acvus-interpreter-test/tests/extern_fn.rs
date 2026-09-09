@@ -286,9 +286,9 @@ fn infer_ty(v: &Value) -> Ty {
         Value::Float(_) => Ty::Float,
         Value::Bool(_) => Ty::Bool,
         Value::String(_) => Ty::String,
-        Value::List(items) => {
+        Value::Array(items) => {
             let elem = items.first().map(infer_ty).unwrap_or(Ty::Int);
-            Ty::List(Box::new(elem))
+            Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
         }
         _ => Ty::Unit,
     }
@@ -566,7 +566,7 @@ async fn io_in_iteration() {
         &[
             (
                 "items",
-                Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+                Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
             ),
             ("sum", Value::Int(0)),
         ],
@@ -688,7 +688,7 @@ async fn io_inside_iterator_pipeline() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
+        &[("items", Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
     );
     let mut tr = TypeRegistry::new();
     let mut regs = acvus_ext::std_registries(&i, &mut tr);
@@ -701,8 +701,11 @@ async fn io_inside_iterator_pipeline() {
         tr,
     )
     .await;
+    let Value::Extern(list) = result.value else {
+        panic!("collect returns a List, got {:?}", result.value);
+    };
     assert_eq!(
-        result.value,
-        Value::list(vec![Value::Int(10), Value::Int(20), Value::Int(30)])
+        list.downcast_ref::<Vec<Value>>().expect("List payload"),
+        &vec![Value::Int(10), Value::Int(20), Value::Int(30)]
     );
 }

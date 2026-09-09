@@ -37,6 +37,13 @@ pub enum MirErrorKind {
         got: Ty,
     },
     EffectExceeded(crate::ty::EffectConflict),
+    ArrayLengthMismatch {
+        pattern_min: usize,
+        exact: bool,
+        got: usize,
+    },
+    ArrayLengthUnknown,
+    RestInArrayLiteral,
 
     // Name errors
     UndefinedVariable(String),
@@ -152,6 +159,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::EffectExceeded(c) => {
                 write!(f, "effect {:?} exceeds the allowed {:?}", c.required, c.allowed)
             }
+            MirErrorKind::ArrayLengthMismatch { pattern_min, exact, got } => {
+                if *exact {
+                    write!(f, "array pattern needs length {pattern_min}, got {got}")
+                } else {
+                    write!(f, "array pattern needs length at least {pattern_min}, got {got}")
+                }
+            }
+            MirErrorKind::ArrayLengthUnknown => write!(f, "array length is not known here"),
+            MirErrorKind::RestInArrayLiteral => write!(f, "`..` is a pattern, not an array element"),
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")
             }

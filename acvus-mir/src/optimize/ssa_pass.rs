@@ -376,19 +376,17 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         } => {
             s(src);
         }
-        InstKind::MakeList { elements, .. } => elements.iter_mut().for_each(&s),
+        InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::TupleIndex { tuple, .. } => s(tuple),
         InstKind::TestLiteral { src, .. } => s(src),
-        InstKind::TestListLen { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
-        InstKind::ListIndex { list, .. } => s(list),
-        InstKind::ListGet { list, index, .. } => {
+        InstKind::ArrayIndex { array: list, .. } => s(list),
+        InstKind::ArrayGet { array: list, index, .. } => {
             s(list);
             s(index);
         }
-        InstKind::ListSlice { list, .. } => s(list),
         InstKind::ObjectGet { object, .. } => s(object),
         InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(&s),
         InstKind::MakeVariant { payload, .. } => {

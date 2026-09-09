@@ -388,7 +388,7 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
         serde_json::Value::Bool(b) => Value::Bool(*b),
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Array(items) => {
-            Value::list(items.iter().map(|v| value_from_json(interner, v)).collect())
+            Value::array(items.iter().map(|v| value_from_json(interner, v)).collect())
         }
         serde_json::Value::Object(fields) => Value::object(
             fields
@@ -408,9 +408,9 @@ fn infer_ty(v: &Value) -> Ty {
         Value::String(_) => Ty::String,
         Value::Unit => Ty::Unit,
         Value::Byte(_) => Ty::Byte,
-        Value::List(items) => {
+        Value::Array(items) => {
             let elem = items.first().map(infer_ty).unwrap_or(Ty::Int);
-            Ty::List(Box::new(elem))
+            Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
         }
         Value::Object(fields) => {
             let field_types = fields.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
@@ -481,6 +481,6 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
 pub fn items_context(interner: &Interner, items: Vec<i64>) -> FxHashMap<Astr, Value> {
     FxHashMap::from_iter([(
         interner.intern("items"),
-        Value::list(items.into_iter().map(Value::Int).collect()),
+        Value::array(items.into_iter().map(Value::Int).collect()),
     )])
 }

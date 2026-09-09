@@ -401,7 +401,7 @@ fn remap_inst(
         }
 
         // Composite constructors
-        InstKind::MakeList { dst, elements } => InstKind::MakeList {
+        InstKind::MakeArray { dst, elements } => InstKind::MakeArray {
             dst: r(*dst),
             elements: rv(elements),
         },
@@ -425,42 +425,20 @@ fn remap_inst(
             src: r(*src),
             value: value.clone(),
         },
-        InstKind::TestListLen {
-            dst,
-            src,
-            min_len,
-            exact,
-        } => InstKind::TestListLen {
-            dst: r(*dst),
-            src: r(*src),
-            min_len: *min_len,
-            exact: *exact,
-        },
         InstKind::TestObjectKey { dst, src, key } => InstKind::TestObjectKey {
             dst: r(*dst),
             src: r(*src),
             key: *key,
         },
-        InstKind::ListIndex { dst, list, index } => InstKind::ListIndex {
+        InstKind::ArrayIndex { dst, array: list, index } => InstKind::ArrayIndex {
             dst: r(*dst),
-            list: r(*list),
+            array: r(*list),
             index: *index,
         },
-        InstKind::ListGet { dst, list, index } => InstKind::ListGet {
+        InstKind::ArrayGet { dst, array: list, index } => InstKind::ArrayGet {
             dst: r(*dst),
-            list: r(*list),
+            array: r(*list),
             index: r(*index),
-        },
-        InstKind::ListSlice {
-            dst,
-            list,
-            skip_head,
-            skip_tail,
-        } => InstKind::ListSlice {
-            dst: r(*dst),
-            list: r(*list),
-            skip_head: *skip_head,
-            skip_tail: *skip_tail,
         },
         InstKind::ObjectGet { dst, object, key } => InstKind::ObjectGet {
             dst: r(*dst),

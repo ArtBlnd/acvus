@@ -205,15 +205,18 @@ pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
 pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(
         interner.intern("users"),
-        Ty::List(Box::new(Ty::Object(FxHashMap::from_iter([
-            (interner.intern("name"), Ty::String),
-            (interner.intern("age"), Ty::Int),
-        ])))),
+        Ty::Array(
+            Box::new(Ty::Object(FxHashMap::from_iter([
+                (interner.intern("name"), Ty::String),
+                (interner.intern("age"), Ty::Int),
+            ]))),
+            acvus_mir::ty::LenTerm::Known(3),
+        ),
     )])
 }
 
 pub fn items_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
-    FxHashMap::from_iter([(interner.intern("items"), Ty::List(Box::new(Ty::Int)))])
+    FxHashMap::from_iter([(interner.intern("items"), Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))])
 }
 
 /// Compile a **script** source via the graph pipeline and return printed IR.

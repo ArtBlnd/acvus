@@ -25,7 +25,7 @@ fn loop_simple_iteration() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::List(Box::new(Ty::Int))), ("sum", Ty::Int)],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("sum", Ty::Int)],
     );
     let ir = compile_script_ir(&i, "x in @items { @sum = @sum + x; }; @sum", &c).unwrap();
     insta::assert_snapshot!(ir);
@@ -38,7 +38,7 @@ fn loop_nested_iteration() {
     let c = ctx(
         &i,
         &[
-            ("matrix", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
+            ("matrix", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
             ("sum", Ty::Int),
         ],
     );
@@ -58,7 +58,7 @@ fn loop_context_write_phi() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("count", Ty::Int)],
     );
     let ir = compile_script_ir(&i, "x in @items { @count = @count + 1; }; @count", &c).unwrap();
     insta::assert_snapshot!(ir);
@@ -71,7 +71,7 @@ fn loop_with_function_call() {
     let c = ctx(
         &i,
         &[
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
             ("result", Ty::String),
         ],
     );
@@ -180,7 +180,7 @@ fn ssa_write_in_loop_phi() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::List(Box::new(Ty::Int))), ("acc", Ty::Int)],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("acc", Ty::Int)],
     );
     let ir = compile_script_ir(&i, "x in @items { @acc = @acc + x; }; @acc", &c).unwrap();
     insta::assert_snapshot!(ir);
@@ -216,7 +216,7 @@ fn func_builtin_in_loop() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::List(Box::new(Ty::Int))), ("out", Ty::String)],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("out", Ty::String)],
     );
     let ir = compile_script_ir(
         &i,
@@ -231,7 +231,7 @@ fn func_builtin_in_loop() {
 #[test]
 fn func_pipe_chain() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", Ty::List(Box::new(Ty::Int)))]);
+    let c = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
     let ir = compile_script_ir(&i, "@items | filter(|x| -> x > 0) | collect", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -256,7 +256,7 @@ fn combined_loop_with_branch() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::List(Box::new(Ty::Int))), ("count", Ty::Int)],
+        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("count", Ty::Int)],
     );
     let ir = compile_script_ir(
         &i,
@@ -274,7 +274,7 @@ fn combined_accumulate_in_loop() {
     let c = ctx(
         &i,
         &[
-            ("items", Ty::List(Box::new(Ty::Int))),
+            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
             ("sum", Ty::Int),
             ("product", Ty::Int),
         ],
@@ -296,7 +296,7 @@ fn combined_nested_loop_context() {
     let c = ctx(
         &i,
         &[
-            ("outer", Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))),
+            ("outer", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
             ("total", Ty::Int),
         ],
     );
@@ -321,7 +321,7 @@ fn combined_bind_then_iterate() {
                 "data",
                 Ty::Object(FxHashMap::from_iter([(
                     i.intern("items"),
-                    Ty::List(Box::new(Ty::Int)),
+                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
                 )])),
             ),
             ("sum", Ty::Int),
@@ -344,8 +344,8 @@ fn combined_multiple_loops_sequential() {
     let c = ctx(
         &i,
         &[
-            ("a", Ty::List(Box::new(Ty::Int))),
-            ("b", Ty::List(Box::new(Ty::Int))),
+            ("a", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            ("b", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
             ("sum", Ty::Int),
         ],
     );

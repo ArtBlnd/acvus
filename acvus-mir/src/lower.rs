@@ -929,11 +929,18 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn list_elem_type(&self, list_val: ValueId) -> Ty {
-        if let Some(Ty::List(elem)) = self.body.val_types.get(&list_val) {
+    fn array_elem_type(&self, array_val: ValueId) -> Ty {
+        if let Some(Ty::Array(elem, _)) = self.body.val_types.get(&array_val) {
             elem.as_ref().clone()
         } else {
             Ty::error()
+        }
+    }
+
+    fn array_len(&self, array_val: ValueId) -> Option<usize> {
+        match self.body.val_types.get(&array_val) {
+            Some(Ty::Array(_, len)) => Some(len.get()),
+            _ => None,
         }
     }
 
@@ -982,10 +989,10 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    fn emit_list_index(&mut self, span: Span, list: ValueId, index: i32, elem_ty: Ty) -> ValueId {
+    fn emit_array_index(&mut self, span: Span, array: ValueId, index: usize, elem_ty: Ty) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, elem_ty);
-        self.emit_inst(span, InstKind::ListIndex { dst, list, index });
+        self.emit_inst(span, InstKind::ArrayIndex { dst, array, index });
         dst
     }
 
@@ -1619,7 +1626,7 @@ impl<'a> Lowerer<'a> {
                     .map(|e| self.lower_expr(e))
                     .collect();
                 let dst = self.alloc_typed(*id);
-                self.emit_inst(*span, InstKind::MakeList { dst, elements });
+                self.emit_inst(*span, InstKind::MakeArray { dst, elements });
                 dst
             }
 
@@ -2048,62 +2055,25 @@ impl<'a> Lowerer<'a> {
                 dst
             }
 
-            Pattern::List {
-                head, rest, tail, ..
-            } => {
-                let min_len = head.len() + tail.len();
-                let exact = rest.is_none();
-
-                let len_ok = self.alloc_val();
-                self.set_val_type(len_ok, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestListLen {
-                        dst: len_ok,
-                        src: src_reg,
-                        min_len,
-                        exact,
-                    },
-                );
-
-                // If length doesn't match, short-circuit.
-                let check_elems_label = self.alloc_label();
-                let fail_label = self.alloc_label();
-
-                self.emit_inst(
-                    span,
-                    InstKind::JumpIf {
-                        cond: len_ok,
-                        then_label: check_elems_label,
-                        then_args: vec![],
-                        else_label: fail_label,
-                        else_args: vec![],
-                    },
-                );
-                self.emit_label(span, check_elems_label);
-
-                // Check each head element.
-                let mut all_ok = len_ok;
-                let elem_ty = self.list_elem_type(src_reg);
+            Pattern::List { head, tail, .. } => {
+                let Some(len) = self.array_len(src_reg) else {
+                    let dst = self.alloc_val();
+                    self.emit_inst(span, InstKind::Poison { dst });
+                    return dst;
+                };
+                let elem_ty = self.array_elem_type(src_reg);
+                let mut all_ok = self.emit_const_bool(span, true);
                 for (i, p) in head.iter().enumerate() {
-                    let elem = self.emit_list_index(span, src_reg, i as i32, elem_ty.clone());
+                    let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
                     let value_id = self.lower_pattern_test(p, elem, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
-
-                // Check each tail element (indexed from end).
                 for (i, p) in tail.iter().enumerate() {
-                    let elem = self.emit_list_index(
-                        span,
-                        src_reg,
-                        -((tail.len() - i) as i32),
-                        elem_ty.clone(),
-                    );
+                    let elem = self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
                     let value_id = self.lower_pattern_test(p, elem, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
-
-                self.emit_fail_merge(span, all_ok, fail_label)
+                all_ok
             }
 
             Pattern::Object { fields, .. } => {
@@ -2263,24 +2233,17 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::Literal { .. } => {}
 
-            Pattern::List {
-                head,
-                rest: _,
-                tail,
-                ..
-            } => {
-                let elem_ty = self.list_elem_type(src_reg);
+            Pattern::List { head, tail, .. } => {
+                let Some(len) = self.array_len(src_reg) else {
+                    return;
+                };
+                let elem_ty = self.array_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
-                    let elem = self.emit_list_index(span, src_reg, i as i32, elem_ty.clone());
+                    let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
                     self.lower_pattern_bind(p, elem, span);
                 }
                 for (i, p) in tail.iter().enumerate() {
-                    let elem = self.emit_list_index(
-                        span,
-                        src_reg,
-                        -((tail.len() - i) as i32),
-                        elem_ty.clone(),
-                    );
+                    let elem = self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
                     self.lower_pattern_bind(p, elem, span);
                 }
             }

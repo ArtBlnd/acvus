@@ -30,16 +30,14 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::FieldSet { dst, .. }
         | InstKind::FunctionCall { dst, .. }
         | InstKind::LoadFunction { dst, .. }
-        | InstKind::MakeList { dst, .. }
+        | InstKind::MakeArray { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
         | InstKind::TestLiteral { dst, .. }
-        | InstKind::TestListLen { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
-        | InstKind::ListIndex { dst, .. }
-        | InstKind::ListGet { dst, .. }
-        | InstKind::ListSlice { dst, .. }
+        | InstKind::ArrayIndex { dst, .. }
+        | InstKind::ArrayGet { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
         | InstKind::MakeVariant { dst, .. }

@@ -11,7 +11,7 @@ mod string;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
 pub use encoding::encoding_registry;
-pub use list::list_registry;
+pub use list::{List, list_poly_ty, list_qref, list_registry, list_ty, list_value, sequence_items};
 pub use option::option_registry;
 pub use regex::regex_registry;
 pub use string::string_registry;
@@ -29,7 +29,7 @@ pub fn std_registries(
     vec![
         string::string_registry(),
         conversion::conversion_registry(),
-        list::list_registry(),
+        list::list_registry(interner, type_registry),
         option::option_registry(),
         iterator::iterator_registry(interner, type_registry),
     ]

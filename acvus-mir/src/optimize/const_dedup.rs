@@ -141,14 +141,12 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::TestLiteral { src, .. } => remap_val(src, remap),
 
-        InstKind::TestListLen { src, .. } => remap_val(src, remap),
 
         InstKind::TestObjectKey { src, .. } => remap_val(src, remap),
 
 
-        InstKind::ListIndex { list, .. } => remap_val(list, remap),
+        InstKind::ArrayIndex { array: list, .. } => remap_val(list, remap),
 
-        InstKind::ListSlice { list, .. } => remap_val(list, remap),
 
         InstKind::ObjectGet { object, .. } => remap_val(object, remap),
 
@@ -159,7 +157,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         }
 
 
-        InstKind::ListGet { list, index, .. } => {
+        InstKind::ArrayGet { array: list, index, .. } => {
             remap_val(list, remap);
             remap_val(index, remap);
         }
@@ -172,7 +170,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_vec(args, remap);
         }
 
-        InstKind::MakeList { elements, .. } | InstKind::MakeTuple { elements, .. } => {
+        InstKind::MakeArray { elements, .. } | InstKind::MakeTuple { elements, .. } => {
             remap_vec(elements, remap);
         }
 

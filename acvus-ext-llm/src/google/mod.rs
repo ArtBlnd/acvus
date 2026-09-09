@@ -220,11 +220,11 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
         let fetch = Arc::clone(&fetch);
 
         let params = vec![
-            Ty::List(Box::new(Ty::Object(
+            acvus_ext::list_ty(interner, Ty::Object(
                 [(role_key, Ty::String), (content_key, Ty::String)]
                     .into_iter()
                     .collect(),
-            ))),
+            )),
             config_ty,
         ];
         let named: Vec<ParamTerm<Poly>> = params
@@ -245,15 +245,8 @@ pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                       (messages, config): (Value, Value)| {
                     let fetch = Arc::clone(&fetch);
                     async move {
-                        let messages_list = match &messages {
-                            Value::List(l) => l.as_slice(),
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "google_llm: expected List for messages, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
+                        let messages_owned = acvus_ext::sequence_items(messages.clone())?;
+                        let messages_list = messages_owned.as_slice();
                         let msgs = values_to_messages(messages_list, &interner, "google_llm")?;
                         let (system, rest) = split_system(&msgs);
 

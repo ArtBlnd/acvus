@@ -127,9 +127,9 @@ fn response_to_value(resp: &ModelResponse, interner: &Interner) -> Value {
                     ]))
                 })
                 .collect();
-            Value::list(items)
+            acvus_ext::list_value(&interner, items)
         }
-        ModelResponse::ToolCalls(_) => Value::list(vec![]),
+        ModelResponse::ToolCalls(_) => acvus_ext::list_value(&interner, vec![]),
     }
 }
 
@@ -175,8 +175,8 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
 
         let fetch = Arc::clone(&fetch);
 
-        let params = vec![Ty::List(Box::new(input_msg_ty)), config_ty];
-        let ret = Ty::List(Box::new(msg_elem_ty));
+        let params = vec![acvus_ext::list_ty(interner, input_msg_ty), config_ty];
+        let ret = acvus_ext::list_ty(interner, msg_elem_ty);
         let named: Vec<ParamTerm<Poly>> = params
             .iter()
             .enumerate()
@@ -194,16 +194,8 @@ pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Ex
                   (messages_val, config_val): (Value, Value)| {
                 let fetch = Arc::clone(&fetch);
                 async move {
-                    // Extract messages from Value::List
-                    let messages_list = match &messages_val {
-                        Value::List(l) => l.as_slice(),
-                        other => {
-                            return Err(RuntimeError::fetch(format!(
-                                "anthropic: expected List for messages, got {:?}",
-                                other.kind()
-                            )));
-                        }
-                    };
+                    let messages_owned = acvus_ext::sequence_items(messages_val.clone())?;
+                        let messages_list = messages_owned.as_slice();
                     let messages = values_to_messages(messages_list, &interner, "anthropic")?;
 
                     // Split system message (first "system" role -> system param)

@@ -278,7 +278,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Store { value, .. } => *value == val,
         // Cast consumes src (transforms it).
         // Container constructors consume their elements.
-        InstKind::MakeList { elements, .. } => elements.contains(&val),
+        InstKind::MakeArray { elements, .. } => elements.contains(&val),
         InstKind::MakeTuple { elements, .. } => elements.contains(&val),
         InstKind::MakeObject { fields, .. } => fields.iter().any(|(_, v)| *v == val),
         InstKind::MakeVariant { payload, .. } => payload.as_ref() == Some(&val),
@@ -298,11 +298,9 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }
         | InstKind::UnwrapVariant { .. }
-        | InstKind::TestListLen { .. }
         | InstKind::TestObjectKey { .. }
-        | InstKind::ListIndex { .. }
-        | InstKind::ListGet { .. }
-        | InstKind::ListSlice { .. }
+        | InstKind::ArrayIndex { .. }
+        | InstKind::ArrayGet { .. }
         | InstKind::ObjectGet { .. }
         | InstKind::TupleIndex { .. }=> false,
 
@@ -740,7 +738,7 @@ mod tests {
                 InstKind::Return(v(1)),
             ],
             vec![
-                (v(0), Ty::List(Box::new(user_defined_ty()))), // List<MoveOnly> = move-only
+                (v(0), Ty::Array(Box::new(user_defined_ty()), crate::ty::LenTerm::Known(3))), // List<MoveOnly> = move-only
                 (v(1), Ty::Int),
             ],
         );
@@ -767,7 +765,7 @@ mod tests {
                 InstKind::Return(v(1)),
             ],
             vec![
-                (v(0), Ty::List(Box::new(Ty::Int))), // List<Int> = copy
+                (v(0), Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))), // List<Int> = copy
                 (v(1), Ty::Int),
             ],
         );

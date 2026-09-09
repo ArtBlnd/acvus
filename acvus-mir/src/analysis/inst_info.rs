@@ -20,16 +20,14 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::FieldGet { dst, .. }
         | InstKind::FieldSet { dst, .. }
         | InstKind::LoadFunction { dst, .. }
-        | InstKind::MakeList { dst, .. }
+        | InstKind::MakeArray { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
         | InstKind::TestLiteral { dst, .. }
-        | InstKind::TestListLen { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
-        | InstKind::ListIndex { dst, .. }
-        | InstKind::ListGet { dst, .. }
-        | InstKind::ListSlice { dst, .. }
+        | InstKind::ArrayIndex { dst, .. }
+        | InstKind::ArrayGet { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
         | InstKind::MakeVariant { dst, .. }
@@ -83,15 +81,13 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Two uses
         InstKind::BinOp { left, right, .. } => smallvec![*left, *right],
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
-        InstKind::ListGet { list, index, .. } => smallvec![*list, *index],
+        InstKind::ArrayGet { array: list, index, .. } => smallvec![*list, *index],
 
         // TestListLen / TestRange
-        InstKind::TestListLen { src, .. } => smallvec![*src],
-        InstKind::ListIndex { list, .. } => smallvec![*list],
-        InstKind::ListSlice { list, .. } => smallvec![*list],
+        InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 
         // Composite constructors
-        InstKind::MakeList { elements, .. } => elements.iter().copied().collect(),
+        InstKind::MakeArray { elements, .. } => elements.iter().copied().collect(),
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         InstKind::MakeTuple { elements, .. } => elements.iter().copied().collect(),
         InstKind::TupleIndex { tuple, .. } => smallvec![*tuple],

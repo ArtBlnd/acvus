@@ -551,9 +551,9 @@ async fn execute_inst(
         }
 
         // ── Constructors ─────────────────────────────────
-        InstKind::MakeList { dst, elements } => {
+        InstKind::MakeArray { dst, elements } => {
             let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
-            frame.set(*dst, Value::list(items));
+            frame.set(*dst, Value::array(items));
         }
         InstKind::MakeObject { dst, fields } => {
             let obj: FxHashMap<Astr, Value> =
@@ -616,23 +616,6 @@ async fn execute_inst(
                 (Value::Bool(a), Literal::Bool(b)) => *a == *b,
                 (Value::String(a), Literal::String(b)) => a.as_ref() == b.as_str(),
                 _ => false,
-            };
-            frame.set(*dst, Value::bool_(matches));
-        }
-        InstKind::TestListLen {
-            dst,
-            src,
-            min_len,
-            exact,
-        } => {
-            let len = match frame.get(*src) {
-                Value::List(l) => l.len(),
-                _ => 0,
-            };
-            let matches = if *exact {
-                len == *min_len
-            } else {
-                len >= *min_len
             };
             frame.set(*dst, Value::bool_(matches));
         }
@@ -837,46 +820,18 @@ async fn execute_inst(
             };
             frame.set(*dst, val);
         }
-        InstKind::ListIndex { dst, list, index } => {
-            let val = match frame.get(*list) {
-                Value::List(l) => {
-                    let idx = if *index < 0 {
-                        (l.len() as i32 + *index) as usize
-                    } else {
-                        *index as usize
-                    };
-                    l[idx].share()
-                }
-                other => panic!("ListIndex on non-list: {other:?}"),
+        InstKind::ArrayIndex { dst, array, index } => {
+            let val = match frame.get(*array) {
+                Value::Array(items) => items[*index].share(),
+                other => panic!("ArrayIndex on non-array: {other:?}"),
             };
             frame.set(*dst, val);
         }
-        InstKind::ListGet { dst, list, index } => {
+        InstKind::ArrayGet { dst, array, index } => {
             let idx = frame.get(*index).as_int() as usize;
-            let val = match frame.get(*list) {
-                Value::List(l) => l[idx].share(),
-                other => panic!("ListGet on non-list: {other:?}"),
-            };
-            frame.set(*dst, val);
-        }
-        InstKind::ListSlice {
-            dst,
-            list,
-            skip_head,
-            skip_tail,
-        } => {
-            let val = match frame.take(*list) {
-                Value::List(l) => {
-                    let len = l.len();
-                    let start = *skip_head;
-                    let end = len.saturating_sub(*skip_tail);
-                    if start >= end {
-                        Value::list(vec![])
-                    } else {
-                        Value::list(l[start..end].iter().map(|v| v.share()).collect())
-                    }
-                }
-                other => panic!("ListSlice on non-list: {other:?}"),
+            let val = match frame.get(*array) {
+                Value::Array(items) => items[idx].share(),
+                other => panic!("ArrayGet on non-array: {other:?}"),
             };
             frame.set(*dst, val);
         }
@@ -1034,7 +989,7 @@ fn literal_to_value(lit: &Literal) -> Value {
         Literal::String(s) => Value::string(s.as_str()),
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Byte(b) => Value::Byte(*b),
-        Literal::List(items) => Value::list(items.iter().map(literal_to_value).collect()),
+        Literal::List(items) => Value::array(items.iter().map(literal_to_value).collect()),
         Literal::Unit => Value::Unit,
     }
 }

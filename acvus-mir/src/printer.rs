@@ -424,7 +424,7 @@ fn write_body(
             }
 
             // Composite constructors
-            InstKind::MakeList { dst, elements } => writeln!(
+            InstKind::MakeArray { dst, elements } => writeln!(
                 f,
                 "{} = list [{}]",
                 vn.fmt_val(*dst),
@@ -465,20 +465,6 @@ fn write_body(
                 vn.fmt_use(*src, &consts, &texts),
                 fmt_literal(value)
             )?,
-            InstKind::TestListLen {
-                dst,
-                src,
-                min_len,
-                exact,
-            } => {
-                let op = if *exact { "==" } else { ">=" };
-                writeln!(
-                    f,
-                    "{} = test len({}) {op} {min_len}",
-                    vn.fmt_val(*dst),
-                    vn.fmt_use(*src, &consts, &texts)
-                )?
-            }
             InstKind::TestObjectKey { dst, src, key } => writeln!(
                 f,
                 "{} = test has_key({}, \"{}\")",
@@ -486,29 +472,18 @@ fn write_body(
                 vn.fmt_use(*src, &consts, &texts),
                 ctx.interner.resolve(*key),
             )?,
-            InstKind::ListIndex { dst, list, index } => writeln!(
+            InstKind::ArrayIndex { dst, array: list, index } => writeln!(
                 f,
                 "{} = {}[{index}]",
                 vn.fmt_val(*dst),
                 vn.fmt_use(*list, &consts, &texts)
             )?,
-            InstKind::ListGet { dst, list, index } => writeln!(
+            InstKind::ArrayGet { dst, array: list, index } => writeln!(
                 f,
                 "{} = {}[{}]",
                 vn.fmt_val(*dst),
                 vn.fmt_use(*list, &consts, &texts),
                 vn.fmt_use(*index, &consts, &texts)
-            )?,
-            InstKind::ListSlice {
-                dst,
-                list,
-                skip_head,
-                skip_tail,
-            } => writeln!(
-                f,
-                "{} = {}[{skip_head}..-{skip_tail}]",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*list, &consts, &texts)
             )?,
             InstKind::ObjectGet { dst, object, key } => writeln!(
                 f,

@@ -163,8 +163,8 @@ fn response_to_value(resp: &ModelResponse, usage: &Usage, interner: &Interner) -
             let usage_obj = usage_to_value(usage, input_tokens_key, output_tokens_key);
 
             Value::object(FxHashMap::from_iter([
-                (content_key, Value::list(items)),
-                (tool_calls_key, Value::list(vec![])),
+                (content_key, acvus_ext::list_value(&interner, items)),
+                (tool_calls_key, acvus_ext::list_value(&interner, vec![])),
                 (usage_key, usage_obj),
             ]))
         }
@@ -187,8 +187,8 @@ fn response_to_value(resp: &ModelResponse, usage: &Usage, interner: &Interner) -
             let usage_obj = usage_to_value(usage, input_tokens_key, output_tokens_key);
 
             Value::object(FxHashMap::from_iter([
-                (content_key, Value::list(vec![])),
-                (tool_calls_key, Value::list(tc_values)),
+                (content_key, acvus_ext::list_value(&interner, vec![])),
+                (tool_calls_key, acvus_ext::list_value(&interner, tc_values)),
                 (usage_key, usage_obj),
             ]))
         }
@@ -241,8 +241,8 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
             .collect(),
         );
 
-        let params = vec![Ty::List(Box::new(input_msg_ty)), config_ty];
-        let ret = Ty::List(Box::new(msg_elem_ty));
+        let params = vec![acvus_ext::list_ty(interner, input_msg_ty), config_ty];
+        let ret = acvus_ext::list_ty(interner, msg_elem_ty);
         let named: Vec<ParamTerm<Poly>> = params
             .iter()
             .enumerate()
@@ -261,16 +261,8 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
                       (messages_val, config_val): (Value, Value)| {
                     let fetch = Arc::clone(&fetch);
                     async move {
-                        // Extract messages from Value::List
-                        let messages_list = match &messages_val {
-                            Value::List(l) => l.as_slice(),
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "openai_chat: expected List for messages, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
+                        let messages_owned = acvus_ext::sequence_items(messages_val.clone())?;
+                        let messages_list = messages_owned.as_slice();
                         let messages = values_to_messages(messages_list, &interner, "openai_chat")?;
 
                         // Extract config from Value::Object

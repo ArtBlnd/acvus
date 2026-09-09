@@ -203,7 +203,7 @@ fn is_hoistable(kind: &InstKind) -> bool {
 
         // Value construction.
         InstKind::Const { .. }
-        | InstKind::MakeList { .. }
+        | InstKind::MakeArray { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
         | InstKind::MakeVariant { .. }
@@ -216,16 +216,14 @@ fn is_hoistable(kind: &InstKind) -> bool {
         InstKind::FieldGet { .. }
         | InstKind::FieldSet { .. }
         | InstKind::ObjectGet { .. }
-        | InstKind::ListIndex { .. }
-        | InstKind::ListGet { .. }
-        | InstKind::ListSlice { .. }
+        | InstKind::ArrayIndex { .. }
+        | InstKind::ArrayGet { .. }
         | InstKind::TupleIndex { .. }
         | InstKind::UnwrapVariant { .. } => true,
 
         // Test predicates.
         InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }
-        | InstKind::TestListLen { .. }
         | InstKind::TestObjectKey { .. } => true,
 
         // Function reference.
