@@ -58,7 +58,7 @@ fn compile_analysis(
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -416,7 +416,7 @@ fn extern_async_call() {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     };
     let ir = compile_to_ir_with(
@@ -1538,7 +1538,7 @@ fn extern_fn_object_return() {
                 params: vec![Param::new(i.intern("_0"), Ty::Int)],
                 ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
                 captures: vec![],
-                hint: None,
+                effect: acvus_mir::ty::Effect::Opaque.into(),
             },
         )],
     );
@@ -2061,7 +2061,7 @@ fn migrated_pipe_extern_fn_ok() {
                     params: vec![Param::new(i.intern("_"), Ty::Int)],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    hint: None,
+                    effect: acvus_mir::ty::Effect::Opaque.into(),
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -2387,6 +2387,7 @@ fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
         id: QualifiedRef::root(interner.intern("Iterator")),
         type_args: vec![Ty::Int],
+        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
     }
 }
 
@@ -2555,7 +2556,7 @@ fn migrated_move_accept_fn_multiple_calls() {
         params: vec![Param::new(i.intern("_"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);
@@ -2961,7 +2962,7 @@ fn projection_soundness_reject_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);
@@ -2977,7 +2978,7 @@ fn projection_soundness_reject_list_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     };
     let context = ctx(&i, &[("xs", Ty::List(Box::new(fn_ty)))]);
     let result = compile_script_ir(&i, "@xs = @xs; @xs", &context);
@@ -3158,7 +3159,7 @@ fn sroa_soundness_reject_fn_in_context() {
         params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
         ret: Box::new(Ty::Int),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);

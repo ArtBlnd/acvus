@@ -69,7 +69,7 @@ async fn run_ext_with_registry(
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                hint: None,
+                effect: acvus_mir::ty::Effect::Opaque.into(),
             },
         });
     }
@@ -158,9 +158,10 @@ fn infer_value_ty(v: &Value) -> Ty {
                 .map(|(k, v)| (*k, infer_value_ty(v)))
                 .collect(),
         ),
-        Value::Opaque(o) => Ty::UserDefined {
+        Value::Extern(o) => Ty::UserDefined {
             id: o.type_id,
             type_args: vec![],
+            effect_args: vec![],
         },
         _ => Ty::Unit,
     }
@@ -387,7 +388,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> acvus_mir::ty::PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     }
 }
 
@@ -402,11 +403,13 @@ fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRe
     tr.register(UserDefinedDecl {
         qref: my_num_qref,
         type_params: vec![],
+        effect_params: 0,
     });
 
     let my_num_ty = Ty::UserDefined {
         id: my_num_qref,
         type_args: vec![],
+        effect_args: vec![],
     };
 
     // We need to register ExternFns first to get FunctionIds, then register CastRule.
@@ -417,13 +420,13 @@ fn extern_cast_setup(interner: &Interner, tr: &mut TypeRegistry) -> Vec<ExternRe
             // make_num() → MyNum (wrapping 42)
             ExternFnBuilder::new("make_num", sig(interner, vec![], ty_clone.clone())).handler(
                 move |_interner: &acvus_utils::Interner, (): ()| {
-                    Ok(Value::opaque(OpaqueValue::new(my_num_qref, 42i64)))
+                    Ok(Value::extern_value(ExternValue::new(my_num_qref, 42i64)))
                 },
             ),
             // to_int(MyNum) → Int
             ExternFnBuilder::new("to_int", sig(interner, vec![ty_clone.clone()], Ty::Int)).handler(
                 |_interner: &acvus_utils::Interner, (v,): (Value,)| match v {
-                    Value::Opaque(o) => {
+                    Value::Extern(o) => {
                         let n = *o.downcast_ref::<i64>().unwrap();
                         Ok(n)
                     }
@@ -478,6 +481,7 @@ async fn extern_cast_auto_coercion() {
     let my_num_ty = Ty::UserDefined {
         id: my_num_qref,
         type_args: vec![],
+        effect_args: vec![],
     };
 
     // Register CastRule: MyNum → Int
@@ -505,7 +509,7 @@ async fn extern_cast_auto_coercion() {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                hint: None,
+                effect: acvus_mir::ty::Effect::Opaque.into(),
             },
         });
     }

@@ -2,7 +2,7 @@
 
 use crate::iter_pipeline::{IterHandle, iter_value};
 use acvus_interpreter::{
-    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError,
+    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, ExternValue, RuntimeError,
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
@@ -13,6 +13,7 @@ fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
+        effect_args: vec![],
     }
 }
 
@@ -22,20 +23,20 @@ struct Re(regex::Regex, QualifiedRef);
 impl FromValue for Re {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
         match value {
-            Value::Opaque(o) => {
+            Value::Extern(o) => {
                 let id = o.type_id;
                 let r = o.downcast_ref::<regex::Regex>().ok_or_else(|| {
                     RuntimeError::unexpected_type(
                         "FromValue<Re>",
-                        &[ValueKind::Opaque],
-                        ValueKind::Opaque,
+                        &[ValueKind::Extern],
+                        ValueKind::Extern,
                     )
                 })?;
                 Ok(Re(r.clone(), id))
             }
             other => Err(RuntimeError::unexpected_type(
                 "FromValue<Re>",
-                &[ValueKind::Opaque],
+                &[ValueKind::Extern],
                 other.kind(),
             )),
         }
@@ -44,7 +45,7 @@ impl FromValue for Re {
 
 impl IntoValue for Re {
     fn into_value(self) -> Value {
-        Value::opaque(OpaqueValue::new(self.1, self.0))
+        Value::extern_value(ExternValue::new(self.1, self.0))
     }
 }
 
@@ -60,7 +61,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     }
 }
 
@@ -72,6 +73,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
     type_registry.register(UserDefinedDecl {
         qref,
         type_params: vec![],
+        effect_params: 0,
     });
 
     let ty = user_defined_ty(qref);
@@ -118,6 +120,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
+                        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
                     },
                 ),
             )
@@ -157,6 +160,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
+                        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
                     },
                 ),
             )
@@ -193,6 +197,7 @@ pub fn regex_registry(interner: &Interner, type_registry: &mut TypeRegistry) -> 
                     Ty::UserDefined {
                         id: iter_qref,
                         type_args: vec![Ty::String],
+                        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
                     },
                 ),
             )

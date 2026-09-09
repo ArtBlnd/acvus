@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::types::QualifiedRef;
 use crate::ty::{
-    CastRule, IdentityId, InferTy,
+    CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, Infer, InferTy,
     ParamTerm, Polarity, PolyTy, Ty, TyTerm, TypeRegistry,
     TypeBoundId,
 };
@@ -43,11 +43,26 @@ pub enum TypeBound {
     Forward(TypeBoundId),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectBound {
+    /// `lower <= var <= upper` on the chain.
+    Range { lower: Effect, upper: Effect },
+    Bound(Effect),
+    Forward(EffectVarId),
+}
+
+impl EffectBound {
+    fn free() -> Self {
+        EffectBound::Range { lower: Effect::Pure, upper: Effect::Opaque }
+    }
+}
+
 // ── Solver ──────────────────────────────────────────────────────────
 
 /// Snapshot for solver rollback during overload resolution.
 pub struct SolverSnapshot {
     ty_bounds: Vec<TypeBound>,
+    effect_vars: Vec<EffectBound>,
     identity_factory: acvus_utils::LocalFactory<IdentityId>,
 }
 
@@ -57,6 +72,7 @@ pub struct SolverSnapshot {
 /// state lives here — no inference state leaks into `Ty`.
 pub struct Solver {
     pub(crate) ty_bounds: Vec<TypeBound>,
+    pub(crate) effect_vars: Vec<EffectBound>,
     pub(crate) identity_factory: acvus_utils::LocalFactory<IdentityId>,
 }
 
@@ -64,7 +80,177 @@ impl Solver {
     pub fn new() -> Self {
         Self {
             ty_bounds: Vec::new(),
+            effect_vars: Vec::new(),
             identity_factory: acvus_utils::LocalFactory::new(),
+        }
+    }
+
+    // ── Effect variables ────────────────────────────────────────────
+
+    pub fn fresh_effect_var(&mut self) -> EffectTerm<Infer> {
+        let id = EffectVarId(self.effect_vars.len() as u32);
+        self.effect_vars.push(EffectBound::free());
+        EffectTerm::Var(id)
+    }
+
+    fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>) -> EffectVarId {
+        let id = EffectVarId(effect_vars.len() as u32);
+        effect_vars.push(EffectBound::free());
+        id
+    }
+
+    pub fn find_effect_root(&self, id: EffectVarId) -> EffectVarId {
+        match &self.effect_vars[id.0 as usize] {
+            EffectBound::Forward(next) => self.find_effect_root(*next),
+            _ => id,
+        }
+    }
+
+    pub fn resolve_effect(&self, term: &EffectTerm<Infer>) -> EffectTerm<Infer> {
+        match term {
+            EffectTerm::Known(e) => EffectTerm::Known(*e),
+            EffectTerm::Var(id) => {
+                let root = self.find_effect_root(*id);
+                match &self.effect_vars[root.0 as usize] {
+                    EffectBound::Bound(e) => EffectTerm::Known(*e),
+                    EffectBound::Range { .. } => EffectTerm::Var(root),
+                    EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
+                }
+            }
+        }
+    }
+
+    fn range_of(&self, root: EffectVarId) -> (Effect, Effect) {
+        match &self.effect_vars[root.0 as usize] {
+            EffectBound::Range { lower, upper } => (*lower, *upper),
+            EffectBound::Bound(e) => (*e, *e),
+            EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
+        }
+    }
+
+    /// RFC-0008: an effect variable that inference left open freezes to the
+    /// top of what its constraints allow, Opaque when nothing constrained it.
+    pub fn freeze_effect(&self, term: &EffectTerm<Infer>) -> Effect {
+        match self.resolve_effect(term) {
+            EffectTerm::Known(e) => e,
+            EffectTerm::Var(root) => self.range_of(root).1,
+        }
+    }
+
+    /// The join of everything constrained below the variable. A function's
+    /// effect is defined as this join over its body.
+    pub fn effect_lower_bound(&self, term: &EffectTerm<Infer>) -> Effect {
+        match self.resolve_effect(term) {
+            EffectTerm::Known(e) => e,
+            EffectTerm::Var(root) => self.range_of(root).0,
+        }
+    }
+
+    pub fn bind_effect(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
+        let root = self.find_effect_root(id);
+        let (lower, upper) = self.range_of(root);
+        if effect < lower {
+            return Err(EffectConflict { required: lower, allowed: effect });
+        }
+        if effect > upper {
+            return Err(EffectConflict { required: effect, allowed: upper });
+        }
+        self.effect_vars[root.0 as usize] = EffectBound::Bound(effect);
+        Ok(())
+    }
+
+    fn raise_lower(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
+        let root = self.find_effect_root(id);
+        let (lower, upper) = self.range_of(root);
+        let lower = lower.join(effect);
+        if lower > upper {
+            return Err(EffectConflict { required: lower, allowed: upper });
+        }
+        self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
+        Ok(())
+    }
+
+    fn lower_upper(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
+        let root = self.find_effect_root(id);
+        let (lower, upper) = self.range_of(root);
+        let upper = upper.min(effect);
+        if lower > upper {
+            return Err(EffectConflict { required: lower, allowed: upper });
+        }
+        self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
+        Ok(())
+    }
+
+    fn forward_effect(&mut self, from: EffectVarId, to: EffectVarId) -> Result<(), EffectConflict> {
+        let from_root = self.find_effect_root(from);
+        let to_root = self.find_effect_root(to);
+        if from_root == to_root {
+            return Ok(());
+        }
+        let (la, ua) = self.range_of(from_root);
+        let (lb, ub) = self.range_of(to_root);
+        let lower = la.join(lb);
+        let upper = ua.min(ub);
+        if lower > upper {
+            return Err(EffectConflict { required: lower, allowed: upper });
+        }
+        self.effect_vars[to_root.0 as usize] = EffectBound::Range { lower, upper };
+        self.effect_vars[from_root.0 as usize] = EffectBound::Forward(to_root);
+        Ok(())
+    }
+
+    pub fn unify_effect(
+        &mut self,
+        a: &EffectTerm<Infer>,
+        b: &EffectTerm<Infer>,
+        pol: Polarity,
+    ) -> Result<(), EffectConflict> {
+        let a = self.resolve_effect(a);
+        let b = self.resolve_effect(b);
+        match (a, b) {
+            (EffectTerm::Known(ea), EffectTerm::Known(eb)) => {
+                let (required, allowed) = match pol {
+                    Polarity::Invariant => (ea.join(eb), ea.min(eb)),
+                    Polarity::Covariant => (ea, eb),
+                    Polarity::Contravariant => (eb, ea),
+                };
+                if required <= allowed {
+                    Ok(())
+                } else {
+                    Err(EffectConflict { required, allowed })
+                }
+            }
+            (EffectTerm::Var(va), EffectTerm::Known(eb)) => match pol {
+                Polarity::Invariant => self.bind_effect(va, eb),
+                Polarity::Covariant => self.lower_upper(va, eb),
+                Polarity::Contravariant => self.raise_lower(va, eb),
+            },
+            (EffectTerm::Known(ea), EffectTerm::Var(vb)) => match pol {
+                Polarity::Invariant => self.bind_effect(vb, ea),
+                Polarity::Covariant => self.raise_lower(vb, ea),
+                Polarity::Contravariant => self.lower_upper(vb, ea),
+            },
+            (EffectTerm::Var(va), EffectTerm::Var(vb)) => self.forward_effect(va, vb),
+        }
+    }
+
+    pub fn lub_effect(
+        &mut self,
+        a: &EffectTerm<Infer>,
+        b: &EffectTerm<Infer>,
+    ) -> Result<EffectTerm<Infer>, EffectConflict> {
+        let a = self.resolve_effect(a);
+        let b = self.resolve_effect(b);
+        match (a, b) {
+            (EffectTerm::Known(ea), EffectTerm::Known(eb)) => Ok(EffectTerm::Known(ea.join(eb))),
+            (EffectTerm::Var(v), EffectTerm::Known(e)) | (EffectTerm::Known(e), EffectTerm::Var(v)) => {
+                self.raise_lower(v, e)?;
+                Ok(EffectTerm::Var(self.find_effect_root(v)))
+            }
+            (EffectTerm::Var(va), EffectTerm::Var(vb)) => {
+                self.forward_effect(va, vb)?;
+                Ok(EffectTerm::Var(self.find_effect_root(vb)))
+            }
         }
     }
 
@@ -86,6 +272,7 @@ impl Solver {
     pub fn snapshot(&self) -> SolverSnapshot {
         SolverSnapshot {
             ty_bounds: self.ty_bounds.clone(),
+            effect_vars: self.effect_vars.clone(),
             identity_factory: self.identity_factory.clone(),
         }
     }
@@ -93,6 +280,7 @@ impl Solver {
     /// Rollback to a snapshot: restore entire state.
     pub fn rollback(&mut self, snap: SolverSnapshot) {
         self.ty_bounds = snap.ty_bounds;
+        self.effect_vars = snap.effect_vars;
         self.identity_factory = snap.identity_factory;
     }
 
@@ -119,6 +307,7 @@ impl Solver {
                 }
             },
             &mut |id| Ok(TyTerm::Identity(id)),
+            &mut |id: EffectVarId| Ok(EffectTerm::Known(self.freeze_effect(&EffectTerm::Var(id)))),
         )
     }
 
@@ -149,6 +338,7 @@ impl Solver {
                 }
             },
             &mut |id| TyTerm::Identity(id),
+            &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
         )
     }
 
@@ -250,14 +440,17 @@ impl Solver {
             | (TyTerm::Byte, TyTerm::Byte) => Ok(None),
 
             (
-                TyTerm::UserDefined { id: id_a, type_args: ta_args },
-                TyTerm::UserDefined { id: id_b, type_args: tb_args },
+                TyTerm::UserDefined { id: id_a, type_args: ta_args, effect_args: ea_args },
+                TyTerm::UserDefined { id: id_b, type_args: tb_args, effect_args: eb_args },
             ) if id_a == id_b => {
                 assert_eq!(ta_args.len(), tb_args.len());
+                assert_eq!(ea_args.len(), eb_args.len());
                 let snap = self.snapshot();
                 let type_ok = ta_args.iter().zip(tb_args.iter())
                     .all(|(a, b)| self.unify_ty(a, b, Polarity::Invariant, registry).is_ok());
-                if type_ok {
+                let effect_ok = ea_args.iter().zip(eb_args.iter())
+                    .all(|(a, b)| self.unify_effect(a, b, pol).is_ok());
+                if type_ok && effect_ok {
                     Ok(None)
                 } else {
                     self.rollback(snap);
@@ -461,8 +654,8 @@ impl Solver {
             }
 
             (
-                TyTerm::Fn { params: pa, ret: ra, .. },
-                TyTerm::Fn { params: pb, ret: rb, .. },
+                TyTerm::Fn { params: pa, ret: ra, effect: ea, .. },
+                TyTerm::Fn { params: pb, ret: rb, effect: eb, .. },
             ) => {
                 if pa.len() != pb.len() {
                     return Err((a.clone(), b.clone()));
@@ -472,6 +665,9 @@ impl Solver {
                     self.unify_ty(&ta.ty, &tb.ty, param_pol, registry)?;
                 }
                 self.unify_ty(ra, rb, pol, registry)?;
+                if self.unify_effect(ea, eb, pol).is_err() {
+                    return Err((a.clone(), b.clone()));
+                }
                 Ok(None)
             }
 
@@ -497,33 +693,39 @@ impl Solver {
     fn try_lub_infer(&mut self, a: &InferTy, b: &InferTy, registry: &TypeRegistry) -> Option<InferTy> {
         match (a, b) {
             (
-                TyTerm::Fn { params: pa, ret: ra, .. },
-                TyTerm::Fn { params: pb, ret: rb, .. },
+                TyTerm::Fn { params: pa, ret: ra, effect: ea, .. },
+                TyTerm::Fn { params: pb, ret: rb, effect: eb, .. },
             ) => {
                 if pa.len() != pb.len() { return None; }
                 for (a, b) in pa.iter().zip(pb.iter()) {
                     self.unify_ty(&a.ty, &b.ty, Polarity::Invariant, registry).ok()?;
                 }
                 self.unify_ty(ra, rb, Polarity::Invariant, registry).ok()?;
+                let effect = self.lub_effect(ea, eb).ok()?;
                 Some(TyTerm::Fn {
                     params: pa.iter().map(|p| ParamTerm::new(p.name, self.resolve_ty(&p.ty))).collect(),
                     ret: Box::new(self.resolve_ty(ra)),
                     captures: vec![],
-                    hint: None,
+                    effect,
                 })
             }
             (
-                TyTerm::UserDefined { id: id_a, type_args: ta_a },
-                TyTerm::UserDefined { id: id_b, type_args: ta_b },
+                TyTerm::UserDefined { id: id_a, type_args: ta_a, effect_args: ea_a },
+                TyTerm::UserDefined { id: id_b, type_args: ta_b, effect_args: ea_b },
             ) if id_a == id_b => {
                 assert_eq!(ta_a.len(), ta_b.len());
                 let snap = self.snapshot();
                 let type_args_ok = ta_a.iter().zip(ta_b.iter())
                     .all(|(a, b)| self.unify_ty(a, b, Polarity::Invariant, registry).is_ok());
                 if type_args_ok {
+                    let mut effect_args = Vec::with_capacity(ea_a.len());
+                    for (a, b) in ea_a.iter().zip(ea_b.iter()) {
+                        effect_args.push(self.lub_effect(a, b).ok()?);
+                    }
                     Some(TyTerm::UserDefined {
                         id: *id_a,
                         type_args: ta_a.iter().map(|t| self.resolve_ty(t)).collect(),
+                        effect_args,
                     })
                 } else {
                     self.rollback(snap);
@@ -657,15 +859,17 @@ impl Solver {
     pub fn instantiate_infer(&mut self, ty: &InferTy) -> InferTy {
         let mut var_map: FxHashMap<TypeBoundId, TypeBoundId> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
-        self.instantiate_infer_inner(ty, &mut var_map, &mut fresh_map)
+        let mut effect_map: FxHashMap<EffectVarId, EffectVarId> = FxHashMap::default();
+        self.instantiate_infer_inner(ty, &mut var_map, &mut fresh_map, &mut effect_map)
     }
 
     /// Instantiate two InferTy sharing the same variable mappings.
     pub fn instantiate_pair_infer(&mut self, a: &InferTy, b: &InferTy) -> (InferTy, InferTy) {
         let mut var_map: FxHashMap<TypeBoundId, TypeBoundId> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
-        let ia = self.instantiate_infer_inner(a, &mut var_map, &mut fresh_map);
-        let ib = self.instantiate_infer_inner(b, &mut var_map, &mut fresh_map);
+        let mut effect_map: FxHashMap<EffectVarId, EffectVarId> = FxHashMap::default();
+        let ia = self.instantiate_infer_inner(a, &mut var_map, &mut fresh_map, &mut effect_map);
+        let ib = self.instantiate_infer_inner(b, &mut var_map, &mut fresh_map, &mut effect_map);
         (ia, ib)
     }
 
@@ -674,6 +878,7 @@ impl Solver {
         ty: &InferTy,
         var_map: &mut FxHashMap<TypeBoundId, TypeBoundId>,
         fresh_map: &mut FxHashMap<IdentityId, IdentityId>,
+        effect_map: &mut FxHashMap<EffectVarId, EffectVarId>,
     ) -> InferTy {
         match ty {
             TyTerm::Var(id) => {
@@ -682,7 +887,7 @@ impl Solver {
                 let bound = self.ty_bounds[root.0 as usize].clone();
                 match bound {
                     TypeBound::Resolved(inner) => {
-                        self.instantiate_infer_inner(&inner, var_map, fresh_map)
+                        self.instantiate_infer_inner(&inner, var_map, fresh_map, effect_map)
                     }
                     TypeBound::Unresolved { caps, allowed } => {
                         let new_id = *var_map.entry(root).or_insert_with(|| {
@@ -699,7 +904,7 @@ impl Solver {
                 }
             }
             TyTerm::List(inner) => TyTerm::List(Box::new(
-                self.instantiate_infer_inner(inner, var_map, fresh_map),
+                self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
             TyTerm::Identity(id) => {
                 let new_id = *fresh_map
@@ -708,40 +913,41 @@ impl Solver {
                 TyTerm::Identity(new_id)
             }
             TyTerm::Option(inner) => TyTerm::Option(Box::new(
-                self.instantiate_infer_inner(inner, var_map, fresh_map),
+                self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
-                elems.iter().map(|e| self.instantiate_infer_inner(e, var_map, fresh_map)).collect(),
+                elems.iter().map(|e| self.instantiate_infer_inner(e, var_map, fresh_map, effect_map)).collect(),
             ),
             TyTerm::Object(fields) => TyTerm::Object(
-                fields.iter().map(|(k, v)| (*k, self.instantiate_infer_inner(v, var_map, fresh_map))).collect(),
+                fields.iter().map(|(k, v)| (*k, self.instantiate_infer_inner(v, var_map, fresh_map, effect_map))).collect(),
             ),
-            TyTerm::Fn { params, ret, captures, hint } => TyTerm::Fn {
+            TyTerm::Fn { params, ret, captures, effect } => TyTerm::Fn {
                 params: params.iter().map(|p| ParamTerm::new(
                     p.name,
-                    self.instantiate_infer_inner(&p.ty, var_map, fresh_map),
+                    self.instantiate_infer_inner(&p.ty, var_map, fresh_map, effect_map),
                 )).collect(),
-                ret: Box::new(self.instantiate_infer_inner(ret, var_map, fresh_map)),
-                captures: captures.iter().map(|c| self.instantiate_infer_inner(c, var_map, fresh_map)).collect(),
-                hint: *hint,
+                ret: Box::new(self.instantiate_infer_inner(ret, var_map, fresh_map, effect_map)),
+                captures: captures.iter().map(|c| self.instantiate_infer_inner(c, var_map, fresh_map, effect_map)).collect(),
+                effect: self.instantiate_effect_inner(effect, effect_map),
             },
             TyTerm::Enum { name, variants } => TyTerm::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| {
                     (*tag, payload.as_ref().map(|ty| Box::new(
-                        self.instantiate_infer_inner(ty, var_map, fresh_map),
+                        self.instantiate_infer_inner(ty, var_map, fresh_map, effect_map),
                     )))
                 }).collect(),
             },
-            TyTerm::UserDefined { id, type_args } => TyTerm::UserDefined {
+            TyTerm::UserDefined { id, type_args, effect_args } => TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| self.instantiate_infer_inner(t, var_map, fresh_map)).collect(),
+                type_args: type_args.iter().map(|t| self.instantiate_infer_inner(t, var_map, fresh_map, effect_map)).collect(),
+                effect_args: effect_args.iter().map(|e| self.instantiate_effect_inner(e, effect_map)).collect(),
             },
             TyTerm::Handle(inner) => TyTerm::Handle(
-                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map)),
+                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
             ),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
-                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map)),
+                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
                 *volatile,
             ),
             other => other.clone(),
@@ -766,10 +972,28 @@ pub enum FreezeError {
 impl Solver {
     /// Instantiate a PolyTy template into InferTy, replacing each positional
     /// placeholder with a fresh Solver variable.
+    fn instantiate_effect_inner(
+        &mut self,
+        term: &EffectTerm<Infer>,
+        effect_map: &mut FxHashMap<EffectVarId, EffectVarId>,
+    ) -> EffectTerm<Infer> {
+        match self.resolve_effect(term) {
+            EffectTerm::Known(e) => EffectTerm::Known(e),
+            EffectTerm::Var(root) => {
+                let fresh = *effect_map
+                    .entry(root)
+                    .or_insert_with(|| Self::alloc_effect_var(&mut self.effect_vars));
+                EffectTerm::Var(fresh)
+            }
+        }
+    }
+
     pub fn instantiate_poly(&mut self, ty: &PolyTy) -> InferTy {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
+        let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
         let ty_bounds = &mut self.ty_bounds;
+        let effect_vars = &mut self.effect_vars;
         let identity_factory = &mut self.identity_factory;
         ty.map(
             &mut |id: u32| {
@@ -786,6 +1010,12 @@ impl Solver {
                     .or_insert_with(|| identity_factory.next());
                 TyTerm::Identity(new_id)
             },
+            &mut |id: u32| {
+                let var = *effect_map
+                    .entry(id)
+                    .or_insert_with(|| Self::alloc_effect_var(effect_vars));
+                EffectTerm::Var(var)
+            },
         )
     }
 
@@ -794,8 +1024,16 @@ impl Solver {
     pub fn instantiate_poly_pair(&mut self, a: &PolyTy, b: &PolyTy) -> (InferTy, InferTy) {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
+        let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
         let ty_bounds = &mut self.ty_bounds;
+        let effect_vars = &mut self.effect_vars;
         let identity_factory = &mut self.identity_factory;
+        let mut on_effect = |id: u32| {
+            let var = *effect_map
+                .entry(id)
+                .or_insert_with(|| Self::alloc_effect_var(effect_vars));
+            EffectTerm::Var(var)
+        };
         let mut on_var = |id: u32| {
             let bound_id = *var_map.entry(id).or_insert_with(|| {
                 let fresh = TypeBoundId(ty_bounds.len() as u32);
@@ -810,8 +1048,8 @@ impl Solver {
                 .or_insert_with(|| identity_factory.next());
             TyTerm::Identity(new_id)
         };
-        let ia = a.map(&mut on_var, &mut on_identity);
-        let ib = b.map(&mut on_var, &mut on_identity);
+        let ia = a.map(&mut on_var, &mut on_identity, &mut on_effect);
+        let ib = b.map(&mut on_var, &mut on_identity, &mut on_effect);
         (ia, ib)
     }
 }

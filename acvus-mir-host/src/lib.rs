@@ -17,7 +17,7 @@ pub use ity::{Callable, Hosted, ITy, Inferrable, Monomorphize, Typeck};
 
 pub use acvus_mir::graph::types::{FnKind, Function};
 pub use acvus_mir::ty::UserDefinedDecl;
-pub use acvus_mir::ty::{Hint, Param, Ty};
+pub use acvus_mir::ty::{Param, Ty};
 pub use acvus_mir::ty::{Infer, InferTy, ParamTerm, Solver, lift_ty};
 pub use acvus_mir::ty::{Poly, PolyBuilder, PolyParam, PolyTy, lift_to_poly};
 pub use acvus_utils::{Interner, QualifiedRef};

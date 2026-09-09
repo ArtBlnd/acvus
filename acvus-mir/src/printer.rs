@@ -860,7 +860,7 @@ mod tests {
                 params: vec![Param::new(interner.intern("x"), Ty::Int)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         )]);
         let out = compile_and_dump_ctx("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);

@@ -5,7 +5,7 @@ pub mod schema;
 use std::sync::Arc;
 
 use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
-use acvus_mir::ty::{Hint, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -252,7 +252,7 @@ pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> Exter
             params: named,
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
-            hint: Some(Hint::Io),
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         };
 
         vec![

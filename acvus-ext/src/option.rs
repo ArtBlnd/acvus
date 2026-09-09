@@ -51,7 +51,7 @@ fn build_unwrap(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(t),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     };
     ExternFnBuilder::new("unwrap", ty).handler(h_unwrap)
 }
@@ -67,7 +67,7 @@ fn build_unwrap_or(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(t),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     };
     ExternFnBuilder::new("unwrap_or", ty).handler(h_unwrap_or)
 }

@@ -4,17 +4,18 @@
 //! All functions except `now()` are pure — DateTime is immutable.
 
 use acvus_interpreter::{
-    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, OpaqueValue, RuntimeError,
+    ExternFnBuilder, ExternRegistry, FromValue, IntoValue, ExternValue, RuntimeError,
     Value, ValueKind,
 };
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
+use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::Interner;
 
 fn user_defined_ty(id: QualifiedRef) -> Ty {
     Ty::UserDefined {
         id,
         type_args: vec![],
+        effect_args: vec![],
     }
 }
 
@@ -24,22 +25,22 @@ struct Dt(chrono::DateTime<chrono::Utc>, QualifiedRef);
 impl FromValue for Dt {
     fn from_value(value: Value) -> Result<Self, RuntimeError> {
         match value {
-            Value::Opaque(o) => {
+            Value::Extern(o) => {
                 let id = o.type_id;
                 let dt = o
                     .downcast_ref::<chrono::DateTime<chrono::Utc>>()
                     .ok_or_else(|| {
                         RuntimeError::unexpected_type(
                             "FromValue<Dt>",
-                            &[ValueKind::Opaque],
-                            ValueKind::Opaque,
+                            &[ValueKind::Extern],
+                            ValueKind::Extern,
                         )
                     })?;
                 Ok(Dt(*dt, id))
             }
             other => Err(RuntimeError::unexpected_type(
                 "FromValue<Dt>",
-                &[ValueKind::Opaque],
+                &[ValueKind::Extern],
                 other.kind(),
             )),
         }
@@ -48,7 +49,7 @@ impl FromValue for Dt {
 
 impl IntoValue for Dt {
     fn into_value(self) -> Value {
-        Value::opaque(OpaqueValue::new(self.1, self.0))
+        Value::extern_value(ExternValue::new(self.1, self.0))
     }
 }
 
@@ -64,7 +65,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     }
 }
 
@@ -78,7 +79,7 @@ fn sig_io(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint: Some(Hint::Io),
+        effect: acvus_mir::ty::Effect::Opaque.into(),
     }
 }
 
@@ -105,6 +106,7 @@ pub fn datetime_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
     type_registry.register(UserDefinedDecl {
         qref,
         type_params: vec![],
+        effect_params: 0,
     });
 
     let ty = user_defined_ty(qref);

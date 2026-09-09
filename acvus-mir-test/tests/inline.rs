@@ -439,7 +439,7 @@ fn inline_io_extern_inside() {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     };
     let ir = compile_inline_ir_with(

@@ -14,6 +14,7 @@ pub struct UserDefinedDecl {
     pub qref: QualifiedRef,
     /// Type parameter constraints. `None` = unconstrained. `Some(vec)` = allowed types.
     pub type_params: Vec<Option<Vec<Ty>>>,
+    pub effect_params: usize,
 }
 
 /// Immutable registry of all UserDefined type declarations and ExternCast rules.
@@ -230,15 +231,65 @@ pub enum Materiality {
     Ephemeral,
 }
 
-/// Scheduling hint for ExternFn execution.
-/// Not an effect — does not affect SSA ordering or correctness.
-/// Used by spawn-split and scheduler decisions.
+/// Effect level of a call. The derived order is the chain `Pure < Idempotent < Opaque`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Effect {
+    Pure,
+    Idempotent,
+    Opaque,
+}
+
+impl Effect {
+    pub fn join(self, other: Effect) -> Effect {
+        self.max(other)
+    }
+}
+
+/// A required effect level that exceeds the level allowed at that point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectConflict {
+    pub required: Effect,
+    pub allowed: Effect,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Hint {
-    /// Function performs I/O (network, disk, etc.)
-    Io,
-    /// Function is CPU-intensive.
-    CpuHeavy,
+pub enum EffectTerm<V: Phase> {
+    Known(Effect),
+    Var(V::EffectVar),
+}
+
+impl<V: Phase> From<Effect> for EffectTerm<V> {
+    fn from(effect: Effect) -> Self {
+        EffectTerm::Known(effect)
+    }
+}
+
+impl<V: Phase> EffectTerm<V> {
+    pub fn map<W: Phase>(&self, on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>) -> EffectTerm<W> {
+        match self {
+            EffectTerm::Known(e) => EffectTerm::Known(*e),
+            EffectTerm::Var(v) => on_effect(*v),
+        }
+    }
+
+    pub fn try_map<W: Phase, E>(
+        &self,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+    ) -> Result<EffectTerm<W>, E> {
+        match self {
+            EffectTerm::Known(e) => Ok(EffectTerm::Known(*e)),
+            EffectTerm::Var(v) => on_effect(*v),
+        }
+    }
+}
+
+impl EffectTerm<Concrete> {
+    pub fn get(&self) -> Effect {
+        match self {
+            EffectTerm::Known(e) => *e,
+            EffectTerm::Var(v) => match *v {},
+        }
+    }
 }
 
 // ── Identity system ──────────────────────────────────────────────────
@@ -264,10 +315,9 @@ impl TyTerm<Concrete> {
         matches!(self, Ty::Error(_))
     }
 
-    /// Extract the scheduling hint, if this is a Fn type with a hint.
-    pub fn hint(&self) -> Option<Hint> {
+    pub fn effect(&self) -> Option<Effect> {
         match self {
-            Ty::Fn { hint, .. } => *hint,
+            Ty::Fn { effect, .. } => Some(effect.get()),
             _ => None,
         }
     }
@@ -398,7 +448,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 params,
                 ret,
                 captures: _,
-                hint: _,
+                effect,
             } => {
                 write!(f, "Fn(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -407,7 +457,11 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     }
                     write!(f, "{}", p.ty.display(self.interner))?;
                 }
-                write!(f, ") -> {}", ret.display(self.interner))
+                write!(f, ") -> {}", ret.display(self.interner))?;
+                match effect.get() {
+                    Effect::Pure => Ok(()),
+                    other => write!(f, " with {other:?}"),
+                }
             }
             Ty::List(inner) => write!(f, "List<{}>", inner.display(self.interner)),
             Ty::Handle(inner) => {
@@ -418,17 +472,26 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::UserDefined {
                 id,
                 type_args,
-                ..
+                effect_args,
             } => {
                 let name = self.interner.resolve(id.name);
                 write!(f, "{name}")?;
-                if !type_args.is_empty() {
+                if !type_args.is_empty() || !effect_args.is_empty() {
                     write!(f, "<")?;
-                    for (i, arg) in type_args.iter().enumerate() {
-                        if i > 0 {
+                    let mut first = true;
+                    for arg in type_args {
+                        if !first {
                             write!(f, ", ")?;
                         }
+                        first = false;
                         write!(f, "{}", arg.display(self.interner))?;
+                    }
+                    for arg in effect_args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                        write!(f, "{:?}", arg.get())?;
                     }
                     write!(f, ">")?;
                 }
@@ -499,6 +562,8 @@ impl Default for TypeEnv {
 pub trait Phase: 'static + Clone {
     /// Type inference variable. `Infallible` for concrete (uninhabitable).
     type TyVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
+    /// Effect inference variable. `Infallible` for concrete (uninhabitable).
+    type EffectVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
 }
 
 /// Post-inference phase — all types fully resolved.
@@ -508,6 +573,7 @@ pub struct Concrete;
 
 impl Phase for Concrete {
     type TyVar = Infallible;
+    type EffectVar = Infallible;
 }
 
 /// Polymorphic declaration phase — type templates stored in the graph.
@@ -518,6 +584,7 @@ pub struct Poly;
 
 impl Phase for Poly {
     type TyVar = u32;
+    type EffectVar = u32;
 }
 
 /// During-inference phase — types may contain unresolved variables.
@@ -527,6 +594,7 @@ pub struct Infer;
 
 impl Phase for Infer {
     type TyVar = TypeBoundId;
+    type EffectVar = EffectVarId;
 }
 
 /// Polymorphic type — template with positional placeholders.
@@ -539,6 +607,10 @@ pub type PolyParam = ParamTerm<Poly>;
 /// Index into `Solver::ty_bounds`. Identifies a type inference variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeBoundId(pub u32);
+
+/// Index into `Solver::effect_vars`. Identifies an effect inference variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EffectVarId(pub u32);
 
 // Re-export solver types — these were historically in ty.rs.
 pub use crate::solver::{Capability, TypeBound, Solver, SolverSnapshot, FreezeError};
@@ -569,12 +641,13 @@ pub enum TyTerm<V: Phase> {
         params: Vec<ParamTerm<V>>,
         ret: Box<TyTerm<V>>,
         captures: Vec<TyTerm<V>>,
-        hint: Option<Hint>,
+        effect: EffectTerm<V>,
     },
     // Nominal
     UserDefined {
         id: QualifiedRef,
         type_args: Vec<TyTerm<V>>,
+        effect_args: Vec<EffectTerm<V>>,
     },
     Enum {
         name: Astr,
@@ -619,6 +692,7 @@ impl<V: Phase> TyTerm<V> {
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
         on_identity: &mut impl FnMut(IdentityId) -> TyTerm<W>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
     ) -> TyTerm<W> {
         match self {
             TyTerm::Int => TyTerm::Int,
@@ -627,36 +701,37 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
             TyTerm::Byte => TyTerm::Byte,
-            TyTerm::List(inner) => TyTerm::List(Box::new(inner.map(on_var, on_identity))),
+            TyTerm::List(inner) => TyTerm::List(Box::new(inner.map(on_var, on_identity, on_effect))),
             TyTerm::Object(fields) => TyTerm::Object(
-                fields.iter().map(|(k, v)| (*k, v.map(on_var, on_identity))).collect(),
+                fields.iter().map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect))).collect(),
             ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
-                elems.iter().map(|e| e.map(on_var, on_identity)).collect(),
+                elems.iter().map(|e| e.map(on_var, on_identity, on_effect)).collect(),
             ),
-            TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity))),
-            TyTerm::Fn { params, ret, captures, hint } => TyTerm::Fn {
-                params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity))).collect(),
-                ret: Box::new(ret.map(on_var, on_identity)),
-                captures: captures.iter().map(|c| c.map(on_var, on_identity)).collect(),
-                hint: *hint,
+            TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect))),
+            TyTerm::Fn { params, ret, captures, effect } => TyTerm::Fn {
+                params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect))).collect(),
+                ret: Box::new(ret.map(on_var, on_identity, on_effect)),
+                captures: captures.iter().map(|c| c.map(on_var, on_identity, on_effect)).collect(),
+                effect: effect.map(on_effect),
             },
-            TyTerm::UserDefined { id, type_args } => TyTerm::UserDefined {
+            TyTerm::UserDefined { id, type_args, effect_args } => TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.map(on_var, on_identity)).collect(),
+                type_args: type_args.iter().map(|t| t.map(on_var, on_identity, on_effect)).collect(),
+                effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
             },
             TyTerm::Enum { name, variants } => TyTerm::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| {
-                    (*tag, payload.as_ref().map(|ty| Box::new(ty.map(on_var, on_identity))))
+                    (*tag, payload.as_ref().map(|ty| Box::new(ty.map(on_var, on_identity, on_effect))))
                 }).collect(),
             },
             TyTerm::Handle(inner) => TyTerm::Handle(
-                Box::new(inner.map(on_var, on_identity)),
+                Box::new(inner.map(on_var, on_identity, on_effect)),
             ),
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
-                Box::new(inner.map(on_var, on_identity)),
+                Box::new(inner.map(on_var, on_identity, on_effect)),
                 *volatile,
             ),
             TyTerm::Error(token) => TyTerm::Error(*token),
@@ -669,6 +744,7 @@ impl<V: Phase> TyTerm<V> {
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
         on_identity: &mut impl FnMut(IdentityId) -> Result<TyTerm<W>, E>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
     ) -> Result<TyTerm<W>, E> {
         match self {
             TyTerm::Int => Ok(TyTerm::Int),
@@ -677,34 +753,35 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
             TyTerm::Byte => Ok(TyTerm::Byte),
-            TyTerm::List(inner) => Ok(TyTerm::List(Box::new(inner.try_map(on_var, on_identity)?))),
+            TyTerm::List(inner) => Ok(TyTerm::List(Box::new(inner.try_map(on_var, on_identity, on_effect)?))),
             TyTerm::Object(fields) => {
                 let mapped: Result<FxHashMap<_, _>, E> = fields.iter()
-                    .map(|(k, v)| v.try_map(on_var, on_identity).map(|mv| (*k, mv)))
+                    .map(|(k, v)| v.try_map(on_var, on_identity, on_effect).map(|mv| (*k, mv)))
                     .collect();
                 Ok(TyTerm::Object(mapped?))
             }
             TyTerm::Tuple(elems) => Ok(TyTerm::Tuple(
-                elems.iter().map(|e| e.try_map(on_var, on_identity)).collect::<Result<_, _>>()?,
+                elems.iter().map(|e| e.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
             )),
-            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity)?))),
-            TyTerm::Fn { params, ret, captures, hint } => Ok(TyTerm::Fn {
+            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity, on_effect)?))),
+            TyTerm::Fn { params, ret, captures, effect } => Ok(TyTerm::Fn {
                 params: params.iter()
-                    .map(|p| p.ty.try_map(on_var, on_identity).map(|ty| ParamTerm::new(p.name, ty)))
+                    .map(|p| p.ty.try_map(on_var, on_identity, on_effect).map(|ty| ParamTerm::new(p.name, ty)))
                     .collect::<Result<_, _>>()?,
-                ret: Box::new(ret.try_map(on_var, on_identity)?),
-                captures: captures.iter().map(|c| c.try_map(on_var, on_identity)).collect::<Result<_, _>>()?,
-                hint: *hint,
+                ret: Box::new(ret.try_map(on_var, on_identity, on_effect)?),
+                captures: captures.iter().map(|c| c.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
+                effect: effect.try_map(on_effect)?,
             }),
-            TyTerm::UserDefined { id, type_args } => Ok(TyTerm::UserDefined {
+            TyTerm::UserDefined { id, type_args, effect_args } => Ok(TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.try_map(on_var, on_identity)).collect::<Result<_, _>>()?,
+                type_args: type_args.iter().map(|t| t.try_map(on_var, on_identity, on_effect)).collect::<Result<_, _>>()?,
+                effect_args: effect_args.iter().map(|e| e.try_map(on_effect)).collect::<Result<_, _>>()?,
             }),
             TyTerm::Enum { name, variants } => {
                 let mapped: Result<FxHashMap<_, _>, E> = variants.iter()
                     .map(|(tag, payload)| {
                         let mp = match payload {
-                            Some(ty) => Some(Box::new(ty.try_map(on_var, on_identity)?)),
+                            Some(ty) => Some(Box::new(ty.try_map(on_var, on_identity, on_effect)?)),
                             None => None,
                         };
                         Ok((*tag, mp))
@@ -713,11 +790,11 @@ impl<V: Phase> TyTerm<V> {
                 Ok(TyTerm::Enum { name: *name, variants: mapped? })
             }
             TyTerm::Handle(inner) => Ok(TyTerm::Handle(
-                Box::new(inner.try_map(on_var, on_identity)?),
+                Box::new(inner.try_map(on_var, on_identity, on_effect)?),
             )),
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => Ok(TyTerm::Ref(
-                Box::new(inner.try_map(on_var, on_identity)?),
+                Box::new(inner.try_map(on_var, on_identity, on_effect)?),
                 *volatile,
             )),
             TyTerm::Error(token) => Ok(TyTerm::Error(*token)),
@@ -734,6 +811,7 @@ pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
     ty.map(
         &mut |v: Infallible| match v {},
         &mut |id| TyTerm::Identity(id),
+        &mut |v: Infallible| match v {},
     )
 }
 
@@ -746,6 +824,7 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
     ty.try_map(
         &mut |_: u32| Err(()),
         &mut |id| Ok(TyTerm::Identity(id)),
+        &mut |_: u32| Err(()),
     ).ok()
 }
 
@@ -755,11 +834,18 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
 /// Creates positional placeholders (Var(0), Var(1), ...) for type variables.
 pub struct PolyBuilder {
     next_ty: u32,
+    next_effect: u32,
 }
 
 impl PolyBuilder {
     pub fn new() -> Self {
-        Self { next_ty: 0 }
+        Self { next_ty: 0, next_effect: 0 }
+    }
+
+    pub fn fresh_effect_var(&mut self) -> EffectTerm<Poly> {
+        let id = self.next_effect;
+        self.next_effect += 1;
+        EffectTerm::Var(id)
     }
 
     /// Create a fresh type placeholder.
@@ -803,6 +889,7 @@ mod tests {
         TyTerm::UserDefined {
             id: fresh_qref(),
             type_args: vec![],
+            effect_args: vec![],
         }
     }
 
@@ -1081,6 +1168,7 @@ mod tests {
         TyTerm::UserDefined {
             id,
             type_args,
+            effect_args: vec![],
         }
     }
 
@@ -1218,6 +1306,7 @@ mod tests {
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![None],
+            effect_params: 0,
         });
         let decl = reg.get(id);
         assert_eq!(decl.qref, id);
@@ -1232,10 +1321,12 @@ mod tests {
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![],
+            effect_params: 0,
         });
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![],
+            effect_params: 0,
         });
     }
 
@@ -1267,12 +1358,14 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: params.clone(),
+            effect_args: vec![],
         };
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![None; type_param_count],
+            effect_params: 0,
         });
         reg.register_cast(CastRule {
             from,
@@ -1294,6 +1387,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![TyTerm::Int],
+            effect_args: vec![],
 
         };
         let to = TyTerm::List(Box::new(TyTerm::Int));
@@ -1309,6 +1403,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![TyTerm::Int],
+            effect_args: vec![],
 
         };
         let consumer_param = s.fresh_ty_var();
@@ -1326,6 +1421,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![],
+            effect_args: vec![],
 
         };
         assert!(s.unify_ty(&from, &TyTerm::Int, Covariant, &registry).is_ok());
@@ -1342,6 +1438,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![TyTerm::Int],
+            effect_args: vec![],
 
         };
         assert!(s.unify_ty(&from, &TyTerm::String, Covariant, &registry).is_err());
@@ -1358,6 +1455,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![],
+            effect_args: vec![],
 
         };
         assert!(s.unify_ty(&from, &TyTerm::Int, Covariant, &registry).is_err());
@@ -1372,6 +1470,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![],
+            effect_args: vec![],
 
         };
         assert!(s.unify_ty(&from, &TyTerm::Int, Invariant, &registry).is_err());
@@ -1397,6 +1496,7 @@ mod tests {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t1.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::List(Box::new(t1)),
@@ -1407,6 +1507,7 @@ mod tests {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t2.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::List(Box::new(t2)),
@@ -1418,6 +1519,7 @@ mod tests {
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![None],
+            effect_params: 0,
 
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
@@ -1426,6 +1528,7 @@ mod tests {
         let from = TyTerm::UserDefined {
             id,
             type_args: vec![TyTerm::Int],
+            effect_args: vec![],
 
         };
         assert!(
@@ -1451,12 +1554,14 @@ mod tests {
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![None],
+            effect_params: 0,
 
         });
         reg.register_cast(CastRule {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::List(Box::new(t.clone())),
@@ -1469,6 +1574,7 @@ mod tests {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t2.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::List(Box::new(t2)),
@@ -1488,6 +1594,7 @@ mod tests {
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![None],
+            effect_params: 0,
 
         });
         let mut builder1 = PolyBuilder::new();
@@ -1496,6 +1603,7 @@ mod tests {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t1.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::List(Box::new(t1)),
@@ -1508,6 +1616,7 @@ mod tests {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t2.clone()],
+                effect_args: vec![],
     
             },
             to: TyTerm::Option(Box::new(t2)),

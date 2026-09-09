@@ -354,6 +354,7 @@ mod tests {
         Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
+            effect_args: vec![],
         }
     }
 

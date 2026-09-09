@@ -36,14 +36,14 @@ pub enum ParsedAst {
 
 /// An executable entity in the graph. Identified by `QualifiedRef`.
 ///
-/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, hint }`.
+/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, effect }`.
 /// Unresolved parts use `Var(n)` placeholders (inferred by the solver).
 #[derive(Debug, Clone)]
 pub struct Function {
     /// Unique identity = namespace + name.
     pub qref: QualifiedRef,
     pub kind: FnKind,
-    /// The function's polymorphic type (Fn { params, ret, captures, hint }).
+    /// The function's polymorphic type (Fn { params, ret, captures, effect }).
     /// `Var` placeholders are inferred by the solver.
     pub ty: PolyTy,
 }

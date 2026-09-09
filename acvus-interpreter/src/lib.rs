@@ -17,6 +17,6 @@ pub use interpreter::{
 };
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use value::{
-    FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, OpaqueValue,
+    FnValue, FromValue, FromValues, HandleValue, IntoValue, IntoValues, ExternValue,
     Value,
 };

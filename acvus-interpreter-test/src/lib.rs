@@ -82,7 +82,7 @@ pub fn compile_source_with_externs(
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     });
 

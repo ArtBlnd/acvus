@@ -666,6 +666,7 @@ mod tests {
         Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
+            effect_args: vec![],
         }
     }
 
@@ -694,7 +695,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![test_user_defined()],
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -705,7 +706,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }

@@ -28,6 +28,7 @@ fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
     Ty::UserDefined {
         id: iter_qref,
         type_args: vec![elem],
+        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
     }
 }
 
@@ -37,6 +38,7 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
     InferTy::UserDefined {
         id: iter_qref,
         type_args: vec![elem],
+        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
     }
 }
 
@@ -149,12 +151,14 @@ fn instantiate_pair_shares_params() {
     reg.register(acvus_mir::ty::UserDefinedDecl {
         qref: id,
         type_params: vec![None],
+        effect_params: 0,
     });
     let mut builder = PolyBuilder::new();
     let t = builder.fresh_ty_var();
     let from = PolyTy::UserDefined {
         id,
         type_args: vec![t.clone()],
+        effect_args: vec![],
     };
     let to = PolyTy::List(Box::new(t));
 
@@ -165,6 +169,7 @@ fn instantiate_pair_shares_params() {
     let concrete_from = InferTy::UserDefined {
         id,
         type_args: vec![it(&Ty::Int)],
+        effect_args: vec![],
     };
     assert!(s.unify_ty(&concrete_from, &inst_from, Invariant, &reg).is_ok());
 

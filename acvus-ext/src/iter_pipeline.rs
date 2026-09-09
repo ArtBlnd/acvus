@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use acvus_interpreter::{FnValue, OpaqueValue, RuntimeError, Value};
+use acvus_interpreter::{FnValue, ExternValue, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
@@ -163,12 +163,12 @@ pub fn iterator_qref(interner: &Interner) -> QualifiedRef {
 }
 
 pub fn iter_value(interner: &Interner, handle: IterHandle) -> Value {
-    Value::opaque(OpaqueValue::new(iterator_qref(interner), handle))
+    Value::extern_value(ExternValue::new(iterator_qref(interner), handle))
 }
 
 pub fn into_iter_handle(value: Value) -> IterHandle {
     match value {
-        Value::Opaque(o) => match o.into_owned::<IterHandle>() {
+        Value::Extern(o) => match o.into_owned::<IterHandle>() {
             Ok(handle) => handle,
             Err(o) => panic!("expected a uniquely owned Iterator, got {o:?}"),
         },

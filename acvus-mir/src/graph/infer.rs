@@ -9,7 +9,7 @@
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{InferTy, Param, ParamTerm, PolyBuilder, PolyParam, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty};
+use crate::ty::{EffectTerm, Infer, InferTy, Param, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
@@ -457,6 +457,7 @@ pub fn infer_scc(
         .collect();
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
+    let mut fn_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
     let mut fn_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> = FxHashMap::default();
 
     // Build PolyTy::Fn templates for functions in this SCC.
@@ -470,7 +471,7 @@ pub fn infer_scc(
         let TyTerm::Fn {
             params: ref fn_params,
             ret: ref fn_ret,
-            hint: ref fn_hint,
+            effect: ref fn_effect,
             ..
         } = func.ty
         else {
@@ -480,13 +481,14 @@ pub fn infer_scc(
         // Solver vars for unification (InferTy).
         let ret_var: InferTy = solver.instantiate_poly(fn_ret);
         fn_ret_vars.insert(fid, ret_var.clone());
+        let effect_var = solver.fresh_effect_var();
+        fn_effect_vars.insert(fid, effect_var);
 
-        // Poly template for TypeEnv: func.ty's params/ret/hint.
         let fn_ty: PolyTy = TyTerm::Fn {
             params: fn_params.clone(),
             ret: fn_ret.clone(),
             captures: vec![],
-            hint: *fn_hint,
+            effect: *fn_effect,
         };
         scc_fn_types.insert(func.qref, fn_ty);
     }
@@ -534,7 +536,8 @@ pub fn infer_scc(
 
         let checker = crate::typeck::TypeChecker::new(interner, &env, &registry, &mut solver)
             .with_analysis_mode()
-            .with_declared_param_types(declared_types);
+            .with_declared_param_types(declared_types)
+            .with_body_effect(fn_effect_vars[&fid]);
         let result = match parsed {
             ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
             ParsedSource::Template(template) => checker.check_template(template),
@@ -549,6 +552,10 @@ pub fn infer_scc(
                         let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, &registry);
                     }
                 }
+                let closed = EffectTerm::Known(unchecked.effect);
+                solver
+                    .unify_effect(&fn_effect_vars[&fid], &closed, crate::ty::Polarity::Invariant)
+                    .expect("the closed effect is the variable's own lower bound");
 
                 let bind: Vec<Param> = unchecked
                     .extern_params
@@ -578,17 +585,13 @@ pub fn infer_scc(
             .cloned()
             .unwrap_or_default();
 
-        // Preserve hint from the original func.ty.
-        let hint = match &func.ty {
-            TyTerm::Fn { hint, .. } => *hint,
-            _ => None,
-        };
+        let effect = EffectTerm::Known(solver.freeze_effect(&fn_effect_vars[&fid]));
 
         let fn_ty = Ty::Fn {
             params: bind.clone(),
             ret: Box::new(ret),
             captures: vec![],
-            hint,
+            effect,
         };
         resolved_types.insert(func.qref, fn_ty.clone());
         fn_metas.insert(
@@ -683,6 +686,7 @@ pub fn infer(
         // Solver ret vars are kept separately for unification.
         let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         let mut scc_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
+        let mut scc_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
 
         for &fid in scc {
             let func = fn_by_id[&fid];
@@ -691,7 +695,7 @@ pub fn infer(
             let TyTerm::Fn {
                 params: ref fn_params,
                 ret: ref fn_ret,
-                hint: ref fn_hint,
+                effect: ref fn_effect,
                 ..
             } = func.ty
             else {
@@ -703,15 +707,15 @@ pub fn infer(
             // If ret has Vars → instantiate_poly maps each Var to a fresh solver var.
             let ret_var: InferTy = solver.instantiate_poly(fn_ret);
             scc_ret_vars.insert(fid, ret_var.clone());
+            scc_effect_vars.insert(fid, solver.fresh_effect_var());
 
-            // Poly template for TypeEnv: use func.ty's params/ret/hint.
             scc_fn_types.insert(
                 func.qref,
                 TyTerm::Fn {
                     params: fn_params.clone(),
                     ret: fn_ret.clone(),
                     captures: vec![],
-                    hint: *fn_hint,
+                    effect: *fn_effect,
                 },
             );
         }
@@ -760,7 +764,8 @@ pub fn infer(
 
             let checker = crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
                 .with_analysis_mode()
-                .with_declared_param_types(declared_types);
+                .with_declared_param_types(declared_types)
+                .with_body_effect(scc_effect_vars[&fid]);
             let result = match parsed {
                 ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
                 ParsedSource::Template(template) => checker.check_template(template),
@@ -775,6 +780,10 @@ pub fn infer(
                             let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, registry_ref);
                         }
                     }
+                    let closed = EffectTerm::Known(unchecked.effect);
+                    solver
+                        .unify_effect(&scc_effect_vars[&fid], &closed, crate::ty::Polarity::Invariant)
+                        .expect("the closed effect is the variable's own lower bound");
 
                     let bind: Vec<Param> = unchecked
                         .extern_params
@@ -792,7 +801,6 @@ pub fn infer(
 
         // 2c. Resolve SCC: freeze InferTy → Ty, build resolved fn types + fn_metas.
         for &fid in scc {
-            let func = fn_by_id[&fid];
             let ret = scc_ret_vars
                 .get(&fid)
                 .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
@@ -802,17 +810,13 @@ pub fn infer(
                 .cloned()
                 .unwrap_or_default();
 
-            // Preserve hint from the original func.ty.
-            let hint = match &func.ty {
-                TyTerm::Fn { hint, .. } => *hint,
-                _ => None,
-            };
+            let effect = EffectTerm::Known(solver.freeze_effect(&scc_effect_vars[&fid]));
 
             let fn_ty = Ty::Fn {
                 params: bind.clone(),
                 ret: Box::new(ret),
                 captures: vec![],
-                hint,
+                effect,
             };
             resolved_fn_types.insert(fid, lift_to_poly(&fn_ty));
             fn_metas.insert(
@@ -897,7 +901,7 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::{lift_to_poly, ParamTerm, Poly, PolyBuilder};
+    use crate::ty::{lift_to_poly, ParamTerm, Poly, PolyBuilder, PolyParam};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -913,7 +917,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             }]),
             contexts: Freeze::new(vec![]),
@@ -944,7 +948,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -1038,7 +1042,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         });
         CompilationGraph {
@@ -1102,7 +1106,7 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             });
         }
@@ -1164,7 +1168,7 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             });
         }
@@ -1214,7 +1218,7 @@ mod tests {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         }
     }
@@ -2515,7 +2519,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -2783,7 +2787,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),

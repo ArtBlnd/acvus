@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use acvus_interpreter::{Args, ExternFnBuilder, ExternRegistry, RuntimeError, Value};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{CastRule, ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm, TypeRegistry, UserDefinedDecl};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
@@ -20,7 +20,7 @@ fn p(interner: &Interner, idx: usize, ty: PolyTy) -> ParamTerm<Poly> {
     ParamTerm::<Poly>::new(interner.intern(&format!("_{idx}")), ty)
 }
 
-fn make_sig(params: &[PolyTy], ret: PolyTy, interner: &Interner) -> PolyTy {
+fn make_sig(params: &[PolyTy], ret: PolyTy, effect: EffectTerm<Poly>, interner: &Interner) -> PolyTy {
     let named: Vec<ParamTerm<Poly>> = params
         .iter()
         .enumerate()
@@ -30,7 +30,7 @@ fn make_sig(params: &[PolyTy], ret: PolyTy, interner: &Interner) -> PolyTy {
         params: named,
         ret: Box::new(ret),
         captures: vec![],
-        hint: None,
+        effect,
     }
 }
 // ── Sync handlers — constructors ────────────────────────────────────
@@ -274,6 +274,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
     type_registry.register(UserDefinedDecl {
         qref: iter_qref,
         type_params: vec![None],
+        effect_params: 1,
     });
 
     {
@@ -284,6 +285,7 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             to: TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
+                effect_args: vec![b.fresh_effect_var()],
             },
             fn_ref: QualifiedRef::root(interner.intern("iter")),
         });
@@ -291,12 +293,14 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
 
     ExternRegistry::new(move |interner| {
         // Helper: Iterator<T, E>
-        let it = |t: PolyTy| -> PolyTy {
+        let it = |t: PolyTy, e: EffectTerm<Poly>| -> PolyTy {
             TyTerm::UserDefined {
                 id: iter_qref,
                 type_args: vec![t],
+                effect_args: vec![e],
             }
         };
+        let pure: EffectTerm<Poly> = Effect::Pure.into();
 
         let mut fns = Vec::new();
 
@@ -304,12 +308,14 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "iter",
                     make_sig(
                         &[TyTerm::List(Box::new(t.clone()))],
-                        it(t),
+                        it(t, e),
+                        pure,
                         interner,
                     ),
                 )
@@ -319,12 +325,14 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "rev_iter",
                     make_sig(
                         &[TyTerm::List(Box::new(t.clone()))],
-                        it(t),
+                        it(t, e),
+                        pure,
                         interner,
                     ),
                 )
@@ -337,16 +345,17 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
             let u = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(u.clone()),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
                 ExternFnBuilder::new(
                     "map",
-                    make_sig(&[it(t), fn_ty], it(u), interner),
+                    make_sig(&[it(t, e), fn_ty], it(u, e), pure, interner),
                 )
                 .sync_handler(h_map),
             );
@@ -355,16 +364,17 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
             let u = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(u.clone()),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
                 ExternFnBuilder::new(
                     "pmap",
-                    make_sig(&[it(t), fn_ty], it(u), interner),
+                    make_sig(&[it(t, e), fn_ty], it(u, e), pure, interner),
                 )
                 .sync_handler(h_pmap),
             );
@@ -372,16 +382,17 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(TyTerm::Bool),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
                 ExternFnBuilder::new(
                     "filter",
-                    make_sig(&[it(t.clone()), fn_ty], it(t), interner),
+                    make_sig(&[it(t.clone(), e), fn_ty], it(t, e), pure, interner),
                 )
                 .sync_handler(h_filter),
             );
@@ -389,11 +400,12 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
-            let iter_ty = it(t);
+            let e = b.fresh_effect_var();
+            let iter_ty = it(t, e);
             fns.push(
                 ExternFnBuilder::new(
                     "take",
-                    make_sig(&[iter_ty.clone(), TyTerm::Int], iter_ty, interner),
+                    make_sig(&[iter_ty.clone(), TyTerm::Int], iter_ty, pure, interner),
                 )
                 .sync_handler(h_take),
             );
@@ -401,11 +413,12 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
-            let iter_ty = it(t);
+            let e = b.fresh_effect_var();
+            let iter_ty = it(t, e);
             fns.push(
                 ExternFnBuilder::new(
                     "skip",
-                    make_sig(&[iter_ty.clone(), TyTerm::Int], iter_ty, interner),
+                    make_sig(&[iter_ty.clone(), TyTerm::Int], iter_ty, pure, interner),
                 )
                 .sync_handler(h_skip),
             );
@@ -413,11 +426,12 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
-            let iter_ty = it(t);
+            let e = b.fresh_effect_var();
+            let iter_ty = it(t, e);
             fns.push(
                 ExternFnBuilder::new(
                     "chain",
-                    make_sig(&[iter_ty.clone(), iter_ty.clone()], iter_ty, interner),
+                    make_sig(&[iter_ty.clone(), iter_ty.clone()], iter_ty, pure, interner),
                 )
                 .sync_handler(h_chain),
             );
@@ -425,11 +439,12 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
-            let iter_ty = it(t);
+            let e = b.fresh_effect_var();
+            let iter_ty = it(t, e);
             fns.push(
                 ExternFnBuilder::new(
                     "pchain",
-                    make_sig(&[TyTerm::List(Box::new(iter_ty.clone()))], iter_ty, interner),
+                    make_sig(&[TyTerm::List(Box::new(iter_ty.clone()))], iter_ty, pure, interner),
                 )
                 .sync_handler(h_pchain),
             );
@@ -437,12 +452,14 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "flatten",
                     make_sig(
-                        &[it(TyTerm::List(Box::new(t.clone())))],
-                        it(t),
+                        &[it(TyTerm::List(Box::new(t.clone())), e)],
+                        it(t, e),
+                        pure,
                         interner,
                     ),
                 )
@@ -453,16 +470,17 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
             let u = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
-                ret: Box::new(it(u.clone())),
+                ret: Box::new(it(u.clone(), e)),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
                 ExternFnBuilder::new(
                     "flat_map",
-                    make_sig(&[it(t), fn_ty], it(u), interner),
+                    make_sig(&[it(t, e), fn_ty], it(u, e), pure, interner),
                 )
                 .sync_handler(h_flat_map),
             );
@@ -472,19 +490,22 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "collect",
-                    make_sig(&[it(t.clone())], TyTerm::List(Box::new(t)), interner),
+                    make_sig(&[it(t.clone(), e)], TyTerm::List(Box::new(t)), e, interner),
                 )
                 .async_handler(h_collect),
             );
         }
         {
+            let mut b = PolyBuilder::new();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "join",
-                    make_sig(&[it(TyTerm::String), TyTerm::String], TyTerm::String, interner),
+                    make_sig(&[it(TyTerm::String, e), TyTerm::String], TyTerm::String, e, interner),
                 )
                 .async_handler(h_join),
             );
@@ -492,10 +513,11 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "first",
-                    make_sig(&[it(t.clone())], TyTerm::Option(Box::new(t)), interner),
+                    make_sig(&[it(t.clone(), e)], TyTerm::Option(Box::new(t)), e, interner),
                 )
                 .async_handler(h_first),
             );
@@ -503,10 +525,11 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "last",
-                    make_sig(&[it(t.clone())], TyTerm::Option(Box::new(t)), interner),
+                    make_sig(&[it(t.clone(), e)], TyTerm::Option(Box::new(t)), e, interner),
                 )
                 .async_handler(h_last),
             );
@@ -514,10 +537,11 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             fns.push(
                 ExternFnBuilder::new(
                     "contains",
-                    make_sig(&[it(t.clone()), t], TyTerm::Bool, interner),
+                    make_sig(&[it(t.clone(), e), t], TyTerm::Bool, e, interner),
                 )
                 .async_handler(h_contains),
             );
@@ -525,13 +549,15 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
-            let iter_ty = it(t.clone());
+            let e = b.fresh_effect_var();
+            let iter_ty = it(t.clone(), e);
             fns.push(
                 ExternFnBuilder::new(
                     "next",
                     make_sig(
                         &[iter_ty.clone()],
                         TyTerm::Option(Box::new(TyTerm::Tuple(vec![t, iter_ty]))),
+                        e,
                         interner,
                     ),
                 )
@@ -541,28 +567,30 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(TyTerm::Bool),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
-                ExternFnBuilder::new("find", make_sig(&[it(t.clone()), fn_ty], t, interner))
+                ExternFnBuilder::new("find", make_sig(&[it(t.clone(), e), fn_ty], t, e, interner))
                     .async_handler(h_find),
             );
         }
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone()), p(interner, 1, t.clone())],
                 ret: Box::new(t.clone()),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
-                ExternFnBuilder::new("reduce", make_sig(&[it(t.clone()), fn_ty], t, interner))
+                ExternFnBuilder::new("reduce", make_sig(&[it(t.clone(), e), fn_ty], t, e, interner))
                     .async_handler(h_reduce),
             );
         }
@@ -570,42 +598,45 @@ pub fn iterator_registry(interner: &Interner, type_registry: &mut TypeRegistry) 
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
             let u = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, u.clone()), p(interner, 1, t.clone())],
                 ret: Box::new(u.clone()),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
-                ExternFnBuilder::new("fold", make_sig(&[it(t), u.clone(), fn_ty], u, interner))
+                ExternFnBuilder::new("fold", make_sig(&[it(t, e), u.clone(), fn_ty], u, e, interner))
                     .async_handler(h_fold),
             );
         }
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(TyTerm::Bool),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
-                ExternFnBuilder::new("any", make_sig(&[it(t), fn_ty], TyTerm::Bool, interner))
+                ExternFnBuilder::new("any", make_sig(&[it(t, e), fn_ty], TyTerm::Bool, e, interner))
                     .async_handler(h_any),
             );
         }
         {
             let mut b = PolyBuilder::new();
             let t = b.fresh_ty_var();
+            let e = b.fresh_effect_var();
             let fn_ty = TyTerm::Fn {
                 params: vec![p(interner, 0, t.clone())],
                 ret: Box::new(TyTerm::Bool),
                 captures: vec![],
-                hint: None,
+                effect: e,
             };
             fns.push(
-                ExternFnBuilder::new("all", make_sig(&[it(t), fn_ty], TyTerm::Bool, interner))
+                ExternFnBuilder::new("all", make_sig(&[it(t, e), fn_ty], TyTerm::Bool, e, interner))
                     .async_handler(h_all),
             );
         }

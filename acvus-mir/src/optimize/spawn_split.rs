@@ -11,7 +11,7 @@
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
-use crate::ty::{Hint, Ty};
+use crate::ty::{Effect, Ty};
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
 pub fn run(cfg: &mut CfgBody) {
@@ -63,9 +63,8 @@ pub fn run(cfg: &mut CfgBody) {
     }
 }
 
-/// Check if a Direct callee has Hint::Io (candidates for spawn-split).
 fn is_io_call(callee_ty: &Ty) -> bool {
-    matches!(callee_ty.hint(), Some(Hint::Io))
+    matches!(callee_ty.effect(), Some(e) if e != Effect::Pure)
 }
 
 #[cfg(test)]
@@ -123,7 +122,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
 
-                hint: Some(Hint::Io),
+                effect: crate::ty::Effect::Opaque.into(),
             },
         );
 
@@ -189,7 +188,7 @@ mod tests {
                 ret: Box::new(Ty::Int),
                 captures: vec![],
 
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         );
 
@@ -246,7 +245,7 @@ mod tests {
                     ret: Box::new(Ty::String),
                     captures: vec![],
     
-                    hint: Some(Hint::Io),
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             );
         }

@@ -65,6 +65,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 ::acvus_mir_host::Ty::UserDefined {
                     id: #qref_expr,
                     type_args: vec![#(#ty_arg_exprs),*],
+                    effect_args: vec![],
                 }
             }
 
@@ -75,6 +76,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 ::acvus_mir_host::PolyTy::UserDefined {
                     id: #qref_expr,
                     type_args: vec![#(#poly_arg_exprs),*],
+                    effect_args: vec![],
                 }
             }
         }
@@ -87,6 +89,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 ::acvus_mir_host::UserDefinedDecl {
                     qref: #qref_expr,
                     type_params: vec![None; #n_type_params],
+                    effect_params: 0,
                 }
             }
         }
@@ -319,7 +322,7 @@ fn build_poly_callable_ty(
                 params: vec![#(#param_exprs),*],
                 ret: Box::new(#ret_expr),
                 captures: vec![],
-                hint: None,
+                effect: acvus_mir::ty::Effect::Opaque.into(),
             }
         }
     }
@@ -370,7 +373,7 @@ fn generate_constraint(
                 params: __params,
                 ret: Box::new(#ret_ty),
                 captures: vec![],
-                hint: None,
+                effect: acvus_mir::ty::Effect::Opaque.into(),
             }
         }
     })
@@ -419,7 +422,7 @@ fn generate_infer(
                     params: __params,
                     ret: Box::new(__builder.fresh_ty_var()),
                     captures: vec![],
-                    hint: None,
+                    effect: acvus_mir::ty::Effect::Opaque.into(),
                 }
             }
         }

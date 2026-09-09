@@ -36,6 +36,7 @@ pub enum MirErrorKind {
         expected: Ty,
         got: Ty,
     },
+    EffectExceeded(crate::ty::EffectConflict),
 
     // Name errors
     UndefinedVariable(String),
@@ -147,6 +148,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     expected.display(interner),
                     got.display(interner)
                 )
+            }
+            MirErrorKind::EffectExceeded(c) => {
+                write!(f, "effect {:?} exceeds the allowed {:?}", c.required, c.allowed)
             }
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")

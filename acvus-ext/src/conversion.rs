@@ -93,7 +93,7 @@ fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     }
 }
 
@@ -107,7 +107,7 @@ fn sig_poly(interner: &Interner, params: Vec<PolyTy>, ret: PolyTy) -> PolyTy {
         params: named,
         ret: Box::new(ret),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     }
 }
 

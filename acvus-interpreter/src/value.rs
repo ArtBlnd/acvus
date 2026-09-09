@@ -22,7 +22,7 @@ use crate::journal::{InMemoryContext, RuntimeContext};
 ///   clone = refcount bump. CoW via `Arc::make_mut` when mutation needed.
 /// - **Owned**: Fn, Iterator, Sequence, Handle — `Box` wrapped, move-only.
 ///   SSA guarantees single use; `take()` replaces with `Empty`.
-/// - **Opaque**: extern boundary values.
+/// - **Extern**: extern boundary values.
 ///
 /// `Empty` is the moved-out sentinel. Accessing an `Empty` register is a
 /// programmer bug (SSA guarantees this cannot happen). Debug-asserted.
@@ -49,8 +49,8 @@ pub enum Value {
     Fn(Box<FnValue>),
     Handle(Box<HandleValue>),
 
-    // ── Opaque (extern boundary) ─────────────────────────────────
-    Opaque(Box<OpaqueValue>),
+    // ── Extern (extern boundary) ─────────────────────────────────
+    Extern(Box<ExternValue>),
 }
 
 // ── Satellite types ──────────────────────────────────────────────────
@@ -141,7 +141,7 @@ impl std::fmt::Debug for HandleValue {
 
 /// A user-defined value from extern boundary.
 /// Identified by `QualifiedRef` (matching `Ty::UserDefined`).
-pub struct OpaqueValue {
+pub struct ExternValue {
     pub type_id: QualifiedRef,
     inner: Arc<dyn Any + Send + Sync>,
 }
@@ -205,9 +205,9 @@ impl Value {
         Value::Fn(Box::new(fv))
     }
 
-    // Opaque
-    pub fn opaque(ov: OpaqueValue) -> Self {
-        Value::Opaque(Box::new(ov))
+    // Extern
+    pub fn extern_value(ov: ExternValue) -> Self {
+        Value::Extern(Box::new(ov))
     }
 }
 
@@ -250,7 +250,7 @@ impl Value {
             Value::Variant(_) => ValueKind::Variant,
             Value::Fn(_) => ValueKind::Fn,
             Value::Handle(_) => ValueKind::Handle,
-            Value::Opaque(_) => ValueKind::Opaque,
+            Value::Extern(_) => ValueKind::Extern,
         }
     }
 }
@@ -411,7 +411,7 @@ impl Clone for Value {
             })),
             Value::Fn(f) => Value::Fn(f.clone()),
             Value::Handle(_) => panic!("clone: Handle is move-only"),
-            Value::Opaque(o) => Value::Opaque(o.clone()),
+            Value::Extern(o) => Value::Extern(o.clone()),
         }
     }
 }
@@ -444,7 +444,7 @@ impl fmt::Debug for Value {
             },
             Value::Fn(fv) => write!(f, "Fn({} captures)", fv.captures.len()),
             Value::Handle(_) => write!(f, "Handle"),
-            Value::Opaque(o) => write!(f, "UserDefined({:?})", o.type_id),
+            Value::Extern(o) => write!(f, "UserDefined({:?})", o.type_id),
         }
     }
 }
@@ -461,9 +461,9 @@ impl PartialEq for FnValue {
     }
 }
 
-// ── OpaqueValue ──────────────────────────────────────────────────────
+// ── ExternValue ──────────────────────────────────────────────────────
 
-impl Clone for OpaqueValue {
+impl Clone for ExternValue {
     fn clone(&self) -> Self {
         Self {
             type_id: self.type_id,
@@ -472,7 +472,7 @@ impl Clone for OpaqueValue {
     }
 }
 
-impl OpaqueValue {
+impl ExternValue {
     pub fn new<T: Any + Send + Sync>(type_id: QualifiedRef, value: T) -> Self {
         Self {
             type_id,
@@ -495,13 +495,13 @@ impl OpaqueValue {
     }
 }
 
-impl fmt::Debug for OpaqueValue {
+impl fmt::Debug for ExternValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "UserDefined({:?})", self.type_id)
     }
 }
 
-impl PartialEq for OpaqueValue {
+impl PartialEq for ExternValue {
     fn eq(&self, _other: &Self) -> bool {
         false
     }

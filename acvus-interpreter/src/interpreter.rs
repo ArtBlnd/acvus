@@ -295,6 +295,13 @@ fn build_label_map_from_insts(insts: &[Inst]) -> FxHashMap<Label, usize> {
         .collect()
 }
 
+enum SpawnKind {
+    Extern(crate::extern_fn::ExternHandler),
+    BuiltinSync(SyncBuiltinFn),
+    BuiltinAsync(AsyncBuiltinFn),
+    Module,
+}
+
 /// Control flow after executing one instruction.
 enum Flow {
     Next,
@@ -733,50 +740,69 @@ async fn execute_inst(
                 Callee::Direct(id) => *id,
                 Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
             };
-            let is_extern = matches!(
-                lookup_function(&ctx.shared, &callee_id),
-                Executable::Extern(_)
-            );
-            let handle = if is_extern {
-                let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                let handler = match lookup_function(&ctx.shared, &callee_id) {
-                    Executable::Extern(h) => h.clone(),
-                    _ => unreachable!(),
-                };
-                let interner = ctx.shared.interner.clone();
-                match &handler {
-                    crate::extern_fn::ExternHandler::Sync(f) => {
-                        let f = Arc::clone(f);
-                        ctx.shared.executor.spawn_blocking(Box::new(move || {
-                            let value = f(spawn_args, &interner)?;
-                            Ok(ExecResult {
-                                value,
-                                writes: Vec::new(),
-                            })
-                        }))
-                    }
-                    crate::extern_fn::ExternHandler::Async(f) => {
-                        let f = Arc::clone(f);
-                        ctx.shared.executor.spawn_async(Box::pin(async move {
-                            let value = f(spawn_args, interner).await?;
-                            Ok(ExecResult {
-                                value,
-                                writes: Vec::new(),
-                            })
-                        }))
+            let spawn_kind = match lookup_function(&ctx.shared, &callee_id) {
+                Executable::Extern(h) => SpawnKind::Extern(h.clone()),
+                Executable::Builtin(BuiltinHandler::Sync(f)) => SpawnKind::BuiltinSync(*f),
+                Executable::Builtin(BuiltinHandler::Async(f)) => SpawnKind::BuiltinAsync(*f),
+                Executable::Module(_) => SpawnKind::Module,
+            };
+            let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+            let handle = match spawn_kind {
+                SpawnKind::BuiltinSync(f) => {
+                    let interner = ctx.shared.interner.clone();
+                    ctx.shared.executor.spawn_blocking(Box::new(move || {
+                        let value = f(spawn_args.into(), &interner)?;
+                        Ok(ExecResult {
+                            value,
+                            writes: Vec::new(),
+                        })
+                    }))
+                }
+                SpawnKind::BuiltinAsync(f) => {
+                    let interner = ctx.shared.interner.clone();
+                    ctx.shared.executor.spawn_async(Box::pin(async move {
+                        let value = f(spawn_args.into(), interner).await?;
+                        Ok(ExecResult {
+                            value,
+                            writes: Vec::new(),
+                        })
+                    }))
+                }
+                SpawnKind::Extern(handler) => {
+                    let interner = ctx.shared.interner.clone();
+                    match &handler {
+                        crate::extern_fn::ExternHandler::Sync(f) => {
+                            let f = Arc::clone(f);
+                            ctx.shared.executor.spawn_blocking(Box::new(move || {
+                                let value = f(spawn_args, &interner)?;
+                                Ok(ExecResult {
+                                    value,
+                                    writes: Vec::new(),
+                                })
+                            }))
+                        }
+                        crate::extern_fn::ExternHandler::Async(f) => {
+                            let f = Arc::clone(f);
+                            ctx.shared.executor.spawn_async(Box::pin(async move {
+                                let value = f(spawn_args, interner).await?;
+                                Ok(ExecResult {
+                                    value,
+                                    writes: Vec::new(),
+                                })
+                            }))
+                        }
                     }
                 }
-            } else {
-                // Fork interpreter for Module/Builtin spawn.
-                let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                let child = Interpreter {
-                    shared: ctx.shared.clone(),
-                    entry: callee_id,
-                    page: ctx.page.fork(),
-                    variables: FxHashMap::default(),
-                    spawn_args,
-                };
-                ctx.shared.executor.spawn_interpreter(child)
+                SpawnKind::Module => {
+                    let child = Interpreter {
+                        shared: ctx.shared.clone(),
+                        entry: callee_id,
+                        page: ctx.page.fork(),
+                        variables: FxHashMap::default(),
+                        spawn_args,
+                        };
+                    ctx.shared.executor.spawn_interpreter(child)
+                }
             };
             frame.set(*dst, Value::Handle(Box::new(handle)));
         }

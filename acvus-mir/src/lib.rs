@@ -81,7 +81,7 @@ mod tests {
             ret: Box::new(Ty::String),
             captures: vec![],
 
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         compile_template(
             &i,
@@ -220,7 +220,7 @@ mod tests {
 
                     captures: vec![],
 
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -266,7 +266,7 @@ mod tests {
                     ret: Box::new(Ty::String),
                     captures: vec![],
 
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
             ("items", Ty::List(Box::new(Ty::Int))),
@@ -501,7 +501,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
 
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         // Storing a function to context must fail.
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
@@ -520,7 +520,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
 
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         let list_fn_ty = Ty::List(Box::new(fn_ty));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
@@ -534,7 +534,7 @@ mod tests {
             ret: Box::new(Ty::Int),
             captures: vec![],
 
-            hint: None,
+            effect: crate::ty::Effect::Opaque.into(),
         };
         let obj_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),

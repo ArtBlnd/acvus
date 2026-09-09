@@ -36,7 +36,7 @@ fn build_len(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(TyTerm::Int),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     };
     ExternFnBuilder::new("len", ty).handler(h_len)
 }
@@ -52,7 +52,7 @@ fn build_reverse(interner: &Interner) -> acvus_interpreter::ExternFn {
         params: named,
         ret: Box::new(TyTerm::List(Box::new(t))),
         captures: vec![],
-        hint: None,
+        effect: acvus_mir::ty::Effect::Pure.into(),
     };
     ExternFnBuilder::new("reverse", ty).handler(h_reverse)
 }

@@ -497,13 +497,11 @@ mod tests {
         let qref = QualifiedRef::root(i.intern(name));
         (
             qref,
-            // IO functions have no context/token effects — their "IO-ness"
-            // is conveyed by Hint::Io.
             Ty::Fn {
                 params: vec![],
                 ret: Box::new(Ty::Int),
                 captures: vec![],
-                hint: Some(crate::ty::Hint::Io),
+                effect: crate::ty::Effect::Opaque.into(),
             },
         )
     }

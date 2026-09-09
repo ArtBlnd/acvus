@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{IdentityId, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -69,10 +69,12 @@ pub enum SerTy {
     Fn {
         params: Vec<SerTy>,
         ret: Box<SerTy>,
+        effect: Effect,
     },
     UserDefined {
         id: SerQualifiedRef,
         type_args: Vec<SerTy>,
+        effect_args: Vec<Effect>,
     },
     Option {
         inner: Box<SerTy>,
@@ -110,17 +112,21 @@ impl Ty {
             Ty::Fn {
                 params,
                 ret,
+                effect,
                 ..
             } => SerTy::Fn {
                 params: params.iter().map(|p| p.ty.to_ser(interner)).collect(),
                 ret: Box::new(ret.to_ser(interner)),
+                effect: effect.get(),
             },
             Ty::UserDefined {
                 id,
                 type_args,
+                effect_args,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
+                effect_args: effect_args.iter().map(|e| e.get()).collect(),
             },
             Ty::Option(inner) => SerTy::Option {
                 inner: Box::new(inner.to_ser(interner)),
@@ -169,6 +175,7 @@ impl SerTy {
             SerTy::Fn {
                 params,
                 ret,
+                effect,
             } => Ty::Fn {
                 params: params
                     .iter()
@@ -176,14 +183,16 @@ impl SerTy {
                     .collect(),
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
-                hint: None,
+                effect: EffectTerm::Known(*effect),
             },
             SerTy::UserDefined {
                 id,
                 type_args,
+                effect_args,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
+                effect_args: effect_args.iter().map(|e| EffectTerm::Known(*e)).collect(),
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
             SerTy::Enum { name, variants } => Ty::Enum {
@@ -202,5 +211,30 @@ impl SerTy {
                 IdentityId::from_raw(ser_id.id as usize),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::QualifiedRef;
+
+    #[test]
+    fn effect_survives_serialization() {
+        let i = Interner::new();
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: Effect::Idempotent.into(),
+        };
+        assert_eq!(fn_ty.to_ser(&i).to_ty(&i).effect(), Some(Effect::Idempotent));
+
+        let ud = Ty::UserDefined {
+            id: QualifiedRef::root(i.intern("Iterator")),
+            type_args: vec![Ty::Int],
+            effect_args: vec![Effect::Opaque.into()],
+        };
+        assert_eq!(ud.to_ser(&i).to_ty(&i), ud);
     }
 }

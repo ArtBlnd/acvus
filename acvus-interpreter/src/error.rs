@@ -23,7 +23,7 @@ pub enum ValueKind {
     Fn,
     ExternFn,
     Handle,
-    Opaque,
+    Extern,
 }
 
 impl fmt::Display for ValueKind {
@@ -42,7 +42,7 @@ impl fmt::Display for ValueKind {
             ValueKind::Fn => write!(f, "Fn"),
             ValueKind::ExternFn => write!(f, "ExternFn"),
             ValueKind::Handle => write!(f, "Handle"),
-            ValueKind::Opaque => write!(f, "Opaque"),
+            ValueKind::Extern => write!(f, "Extern"),
         }
     }
 }

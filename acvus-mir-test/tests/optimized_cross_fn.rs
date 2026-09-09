@@ -31,7 +31,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
             params: infer_params,
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     }
 }

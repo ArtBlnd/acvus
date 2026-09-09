@@ -27,7 +27,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
@@ -227,7 +227,7 @@ fn completion_pipe_trigger() {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     });
 

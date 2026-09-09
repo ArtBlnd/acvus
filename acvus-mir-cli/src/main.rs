@@ -133,7 +133,7 @@ fn main() {
             params,
             ret: Box::new(lift_to_poly(&def.ret.to_ty(&interner))),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         };
         contexts.push(acvus_mir::graph::types::Context {
             qref: QualifiedRef::root(interner.intern(name)),
@@ -171,7 +171,7 @@ fn main() {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            hint: None,
+            effect: acvus_mir::ty::Effect::Opaque.into(),
         },
     });
 

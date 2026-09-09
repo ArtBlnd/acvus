@@ -1,19 +1,19 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
 
-use acvus_interpreter::{Executable, ExternFnBuilder, ExternRegistry, OpaqueValue, RuntimeError, Value};
+use acvus_interpreter::{Executable, ExternFnBuilder, ExternRegistry, ExternValue, RuntimeError, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Hint, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
+use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
-    sig_hint(interner, params, ret, None)
+    sig_effect(interner, params, ret, Effect::Pure)
 }
 
-fn sig_hint(interner: &Interner, params: Vec<Ty>, ret: Ty, hint: Option<Hint>) -> PolyTy {
+fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> PolyTy {
     let named: Vec<ParamTerm<Poly>> = params
         .iter()
         .enumerate()
@@ -23,7 +23,7 @@ fn sig_hint(interner: &Interner, params: Vec<Ty>, ret: Ty, hint: Option<Hint>) -
         params: named,
         ret: Box::new(lift_to_poly(&ret)),
         captures: vec![],
-        hint,
+        effect: effect.into(),
     }
 }
 
@@ -228,28 +228,28 @@ fn io_registry() -> ExternRegistry {
         vec![
             ExternFnBuilder::new(
                 "fetch_a",
-                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (): ()| Ok(100i64)),
             ExternFnBuilder::new(
                 "fetch_b",
-                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (): ()| Ok(200i64)),
             ExternFnBuilder::new(
                 "fetch_c",
-                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (): ()| Ok(300i64)),
             ExternFnBuilder::new(
                 "fetch_d",
-                sig_hint(interner, vec![], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (): ()| Ok(400i64)),
             // Parameterized: fetch_by(x) = x * 10
             ExternFnBuilder::new(
                 "fetch_by",
-                sig_hint(interner, vec![Ty::Int], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![Ty::Int], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (x,): (i64,)| Ok(x * 10)),
         ]
@@ -646,23 +646,25 @@ async fn io_extern_consumes_move_only_opaque() {
     type_registry.register(UserDefinedDecl {
         qref: tok_qref,
         type_params: vec![],
+        effect_params: 0,
     });
     let tok_ty = Ty::UserDefined {
         id: tok_qref,
         type_args: vec![],
+        effect_args: vec![],
     };
 
     let registry = ExternRegistry::new(move |interner| {
         vec![
             ExternFnBuilder::new("mk_tok", sig(interner, vec![], tok_ty.clone())).handler(
-                move |_: &Interner, (): ()| Ok(Value::opaque(OpaqueValue::new(tok_qref, 7i64))),
+                move |_: &Interner, (): ()| Ok(Value::extern_value(ExternValue::new(tok_qref, 7i64))),
             ),
             ExternFnBuilder::new(
                 "consume_tok",
-                sig_hint(interner, vec![tok_ty.clone()], Ty::Int, Some(Hint::Io)),
+                sig_effect(interner, vec![tok_ty.clone()], Ty::Int, Effect::Opaque),
             )
             .handler(|_: &Interner, (v,): (Value,)| match v {
-                Value::Opaque(o) => o
+                Value::Extern(o) => o
                     .into_owned::<i64>()
                     .map_err(|_| RuntimeError::internal("Tok was shared, not moved")),
                 other => panic!("expected Tok, got {other:?}"),
@@ -679,4 +681,28 @@ async fn io_extern_consumes_move_only_opaque() {
     )
     .await;
     assert_eq!(result.value, Value::Int(7));
+}
+
+#[tokio::test]
+async fn io_inside_iterator_pipeline() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[("items", Value::list(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
+    );
+    let mut tr = TypeRegistry::new();
+    let mut regs = acvus_ext::std_registries(&i, &mut tr);
+    regs.push(io_registry());
+    let result = run_script_with_externs_and_types(
+        &i,
+        "@items | iter | map(|x| -> fetch_by(x)) | collect",
+        c,
+        regs,
+        tr,
+    )
+    .await;
+    assert_eq!(
+        result.value,
+        Value::list(vec![Value::Int(10), Value::Int(20), Value::Int(30)])
+    );
 }

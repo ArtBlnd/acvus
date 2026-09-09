@@ -9,7 +9,7 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    InferTy, Materiality,
+    Effect, EffectTerm, Infer, InferTy, Materiality,
     Param, ParamTerm, Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry,
     lift_ty,
 };
@@ -44,6 +44,8 @@ pub struct TypeResolution {
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
+    /// Join of the effects of every call in the body.
+    pub effect: Effect,
 }
 
 impl TypeResolution {
@@ -53,6 +55,7 @@ impl TypeResolution {
         direct_calls: DirectCallMap,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
+        effect: Effect,
     ) -> Self {
         Self {
             type_map,
@@ -60,6 +63,7 @@ impl TypeResolution {
             direct_calls,
             tail_ty,
             extern_params,
+            effect,
         }
     }
 }
@@ -67,6 +71,13 @@ impl TypeResolution {
 struct LambdaScope {
     depth: usize,
     captures: Vec<InferTy>,
+}
+
+/// The expression a coercion is recorded on.
+#[derive(Debug, Clone, Copy)]
+struct CoerceSite {
+    id: AstId,
+    span: Span,
 }
 
 /// State only active in analysis mode (partial inference for unknown contexts/params).
@@ -114,10 +125,13 @@ pub struct TypeChecker<'a, 's> {
     /// correct id (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
     lambda_body_ids: FxHashMap<AstId, AstId>,
+    /// Effect variable of the body being checked; every call raises its lower bound.
+    body_effect: EffectTerm<Infer>,
 }
 
 impl<'a, 's> TypeChecker<'a, 's> {
     pub fn new(interner: &'a Interner, env: &'a TypeEnv, registry: &'a TypeRegistry, solver: &'s mut Solver) -> Self {
+        let body_effect = solver.fresh_effect_var();
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
@@ -133,7 +147,24 @@ impl<'a, 's> TypeChecker<'a, 's> {
             analysis: None,
             lambda_stack: Vec::new(),
             lambda_body_ids: FxHashMap::default(),
+            body_effect,
         }
+    }
+
+    pub fn with_body_effect(mut self, effect: EffectTerm<Infer>) -> Self {
+        self.body_effect = effect;
+        self
+    }
+
+    fn note_call_effect(&mut self, callee: &EffectTerm<Infer>, span: Span) {
+        let body = self.body_effect;
+        if let Err(conflict) = self.solver.unify_effect(callee, &body, Polarity::Covariant) {
+            self.error(MirErrorKind::EffectExceeded(conflict), span);
+        }
+    }
+
+    fn close_body_effect(&self) -> Effect {
+        self.solver.effect_lower_bound(&self.body_effect)
     }
 
     /// Pre-bind function parameters as local variables.
@@ -222,12 +253,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 (*name, self.freeze_or_error(&resolved))
             })
             .collect();
+        let effect = self.close_body_effect();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
             Ty::String,
             extern_params,
+            effect,
         )))
     }
 
@@ -246,7 +279,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             if let Some(expected) = expected_tail {
                 let expected_infer = lift_ty(expected);
                 if self
-                    .unify_covariant(&ty, &expected_infer, Some(tail.id()))
+                    .unify_covariant(&ty, &expected_infer, Some(CoerceSite { id: tail.id(), span: tail.span() }))
                     .is_err()
                 {
                     let resolved = self.solver.resolve_ty(&ty);
@@ -277,12 +310,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
             })
             .collect();
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
+        let effect = self.close_body_effect();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
             frozen_tail,
             extern_params,
+            effect,
         )))
     }
 
@@ -293,11 +328,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
         &mut self,
         value_ty: &InferTy,
         expected_ty: &InferTy,
-        coerce_id: Option<AstId>,
+        coerce_at: Option<CoerceSite>,
     ) -> Result<(), (InferTy, InferTy)> {
         let result = self.solver.unify_ty(value_ty, expected_ty, Polarity::Covariant, self.registry);
         if let Ok(maybe_fn) = &result
-            && let Some(id) = coerce_id
+            && let Some(CoerceSite { id, span }) = coerce_at
         {
             if let Some(fn_ref) = maybe_fn {
                 // Build callee_ty: instantiate the cast function's PolyTy and unify
@@ -305,11 +340,13 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let callee_ty = if let Some(poly) = self.env.functions.get(fn_ref) {
                     let inst = self.solver.instantiate_poly(poly);
                     // Unify param with value_ty, ret with expected_ty to concretize.
-                    if let TyTerm::Fn { params, ret, .. } = &inst {
+                    if let TyTerm::Fn { params, ret, effect, .. } = &inst {
                         if let Some(p) = params.first() {
                             let _ = self.solver.unify_ty(&p.ty, value_ty, Polarity::Invariant, self.registry);
                         }
                         let _ = self.solver.unify_ty(ret, expected_ty, Polarity::Invariant, self.registry);
+                        let effect = *effect;
+                        self.note_call_effect(&effect, span);
                     }
                     let resolved = self.solver.resolve_ty(&inst);
                     self.solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error())
@@ -442,9 +479,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
             return false;
         }
         for (i, (at, pt)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
-            let _span = arg_spans.get(i).copied().unwrap_or(call_span);
-            let coerce_id = arg_ids.get(i).copied();
-            if self.unify_covariant(at, pt, coerce_id).is_err() {
+            let span = arg_spans.get(i).copied().unwrap_or(call_span);
+            let coerce_at = arg_ids.get(i).map(|&id| CoerceSite { id, span });
+            if self.unify_covariant(at, pt, coerce_at).is_err() {
                 let resolved_pt = self.solver.resolve_ty(pt);
                 let resolved_at = self.solver.resolve_ty(at);
                 self.error(
@@ -476,7 +513,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     TyTerm::String | TyTerm::Error(_) => {}
                     TyTerm::Var(_) => {
                         if self
-                            .unify_covariant(&ty, &TyTerm::String, Some(expr.id()))
+                            .unify_covariant(&ty, &TyTerm::String, Some(CoerceSite { id: expr.id(), span: expr.span() }))
                             .is_err()
                         {
                             self.error(MirErrorKind::EmitNotString { actual: self.freeze_or_error(&resolved) }, *span);
@@ -742,7 +779,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             for elem in &elems[1..] {
                                 let elem_ty = self.literal_ty(elem);
                                 if self
-                                    .unify_covariant(&elem_ty, &first_ty, Some(*id))
+                                    .unify_covariant(&elem_ty, &first_ty, Some(CoerceSite { id: *id, span: *span }))
                                     .is_err()
                                 {
                                     let resolved_first = self.solver.resolve_ty(&first_ty);
@@ -1122,7 +1159,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     captures: Vec::new(),
                 });
 
+                let outer_effect = self.body_effect;
+                self.body_effect = self.solver.fresh_effect_var();
                 let ret = self.check_expr(false, body);
+                let lambda_effect = self.body_effect;
+                self.body_effect = outer_effect;
 
                 // Pop this lambda's scope.
                 let ls = self.lambda_stack.pop().unwrap();
@@ -1141,7 +1182,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     params: param_types,
                     ret: Box::new(ret),
                     captures: capture_types,
-                    hint: None,
+                    effect: lambda_effect,
                 };
                 self.record_ret(*id, ty)
             }
@@ -1492,6 +1533,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 TyTerm::Fn {
                     params: param_tys,
                     ret,
+                    effect,
                     ..
                 } => {
                     let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
@@ -1499,6 +1541,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     {
                         return Self::infer_error();
                     }
+                    let effect = *effect;
+                    self.note_call_effect(&effect, call_span);
                     // Record callee's full Fn type on the callee's AstId.
                     self.record(func.id(), self.solver.resolve_ty(&fn_ty));
                     // Record direct call resolution.
@@ -1586,6 +1630,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             TyTerm::Fn {
                 params,
                 ret,
+                effect,
                 ..
             } => {
                 let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
@@ -1599,10 +1644,13 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 ) {
                     return Self::infer_error();
                 }
+                let effect = *effect;
+                self.note_call_effect(&effect, call_span);
                 self.solver.resolve_ty(ret)
             }
             TyTerm::Var(_) => {
                 let ret = self.solver.fresh_ty_var();
+                let effect = self.solver.fresh_effect_var();
                 let dummy = self.interner.intern("_");
                 let fn_ty = TyTerm::Fn {
                     params: arg_types
@@ -1611,8 +1659,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         .collect(),
                     ret: Box::new(ret.clone()),
                     captures: vec![],
-                    hint: None,
+                    effect,
                 };
+                self.note_call_effect(&effect, call_span);
                 if self.unify_covariant(func_ty, &fn_ty, None).is_err() {
                     self.error(
                         MirErrorKind::UndefinedFunction("<expr>".to_string()),
@@ -2066,7 +2115,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         )]);
         let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
@@ -2157,7 +2206,7 @@ mod tests {
                     ret: Box::new(Ty::String),
     
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
             (interner.intern("name"), Ty::String),
@@ -2171,6 +2220,40 @@ mod tests {
         let ctx = extern_fn_context(&i);
         let src = r#"{{ @my_fn("hello") }}"#;
         check_with_interner(src, &ctx, &i).unwrap();
+    }
+
+    #[test]
+    fn opaque_callback_rejected_where_pure_required() {
+        let i = Interner::new();
+        let pure_fn_ty = Ty::Fn {
+            params: vec![p(&i, Ty::Int)],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: crate::ty::Effect::Pure.into(),
+        };
+        let ctx = FxHashMap::from_iter([
+            (
+                i.intern("hof"),
+                Ty::Fn {
+                    params: vec![p(&i, pure_fn_ty.clone())],
+                    ret: Box::new(Ty::String),
+                    captures: vec![],
+                    effect: crate::ty::Effect::Pure.into(),
+                },
+            ),
+            (
+                i.intern("io_fn"),
+                Ty::Fn {
+                    params: vec![p(&i, Ty::Int)],
+                    ret: Box::new(Ty::Int),
+                    captures: vec![],
+                    effect: crate::ty::Effect::Opaque.into(),
+                },
+            ),
+        ]);
+        let err = check_with_interner("{{ @hof(@io_fn) }}", &ctx, &i).unwrap_err();
+        assert!(err.contains("with Opaque"), "{err}");
+        check_with_interner("{{ @hof(|x| -> x + 1) }}", &ctx, &i).unwrap();
     }
 
     #[test]
@@ -2203,7 +2286,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         )]);
         let src = r#"{{ "hello" | @my_fn(42) }}"#;
@@ -2274,7 +2357,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             },
         )]);
         let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
@@ -2292,7 +2375,7 @@ mod tests {
                 ret: Box::new(Ty::Int),
 
                 captures: vec![],
-                hint: None,
+                effect: crate::ty::Effect::Opaque.into(),
             })),
         )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
@@ -2310,6 +2393,7 @@ mod tests {
             Ty::UserDefined {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
+                effect_args: vec![],
     
             },
         )]);
@@ -2330,6 +2414,7 @@ mod tests {
         let conn_ty = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
+            effect_args: vec![],
 
         };
         let ctx = FxHashMap::from_iter([
@@ -2341,7 +2426,7 @@ mod tests {
                     ret: Box::new(Ty::String),
     
                     captures: vec![],
-                    hint: None,
+                    effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
         ]);
