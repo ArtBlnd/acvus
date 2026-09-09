@@ -21,19 +21,22 @@ reads a context and passes the value as an argument.
 
 ### Proposed
 
-An ExternFn author declares one of three levels, and the levels form a chain:
+An ExternFn author declares an effect level, and the levels form a chain:
 
-    Pure < Yieldable < Effectful
+    Pure < Idempotent < Opaque
 
-Pure calls are free to reorder and may be suspended before. Yieldable calls
+Pure calls are free to reorder and may be suspended before. Idempotent calls
 keep their order against other effects but may be suspended before; on resume
-the call is issued again, so a yieldable call is one whose repetition is
-harmless. Effectful calls keep their order and may not be suspended. The
-default for an undeclared ExternFn is Effectful.
+the call is issued again, and issuing it twice is the same as once. Opaque
+calls keep their order and may not be suspended. The default for an
+undeclared ExternFn is Opaque, the top of the chain.
 
 A dump point is any instruction boundary in sequential code at which no
-Effectful call is in flight. Inside an order-irrelevant block the interpreter
-suspends only when every in-flight call is Yieldable or Pure.
+Opaque call is in flight. Inside an order-irrelevant block the interpreter
+suspends only when every in-flight call is Idempotent or Pure.
+
+The name of the term in code is `Effect`. The removed effect system carried
+context read and write sets; this term carries only the chain.
 
 ## Rationale
 
@@ -47,9 +50,11 @@ the inside of an ExternFn call that has started. Whether a call may be
 repeated is a fact its author knows and the script author does not, so it is
 declared where purity is declared, and by the same person.
 
-Two independent bits, pure and yieldable, would admit "pure but not
-yieldable", which is not a real thing. A chain makes that combination
-unwritable.
+Two independent bits, pure and suspendable, would admit "pure but not
+suspendable", which is not a real thing. A chain makes that combination
+unwritable. The middle level is named for its cause, idempotence, not for its
+consequence: any asynchronous call can yield, but only one whose repetition is
+harmless can be resumed by re-issuing it.
 
 ## Not built
 
@@ -57,19 +62,24 @@ unwritable.
   not a construct the script author writes.
 - No context read/write declaration on ExternFns. The reason it existed,
   ordering of context effects, is carried by RFC-0007.
-- No suspension inside an order-irrelevant block while an Effectful call is
-  in flight, and initially no suspension inside such a block at all.
+- No suspension inside an order-irrelevant block while an Opaque call is in
+  flight, and initially no suspension inside such a block at all.
+- No suspension while a call is in flight. That would need cancel safety, a
+  property stronger than idempotence; if it is ever wanted it enters as a
+  refinement below Idempotent, not as a new level.
 
 ## Consequences
 
-- The Fn type carries the three-level declaration as a term with variables in
-  the inference phases; an unresolved variable resolves to Effectful.
+- The Fn type and UserDefined type arguments carry the effect as a term with
+  variables in the inference phases; an unresolved variable resolves to
+  Opaque.
+- The runtime value that wraps an extern Rust value is not called opaque; the
+  word belongs to the effect level.
 - Deserialized state must carry the version it was produced by, and resume
   refuses a mismatched version.
-- Passes that reorder calls treat Yieldable exactly as Effectful.
+- Passes that reorder calls treat Idempotent exactly as Opaque.
 
 ## Open questions
 
-- The exact name of the three-level term in code.
 - Whether resumption inside an order-irrelevant block is ever opened, and
   with what join semantics.
