@@ -18,10 +18,13 @@ The join of two effects is the join on each axis: the higher level, and
 commutative only if both are. A function's effect is the join of its calls,
 as before.
 
-Commutativity is used by the lowering of RFC-0007 alone. A maximal run of
-consecutive commutative calls, with no other effectful call between them,
-is lowered as an `anyorder` block would be: each takes the run's entry
-`Order`, and one `merge` at the run's end yields the order that follows.
+Commutativity is used by the lowering of RFC-0007 alone. A run is a maximal
+sequence of commutative calls that are neighbours on the `Order` chain. A
+run is lowered as an `anyorder` block would be: each call takes the run's
+entry `Order`, and one `merge` at the run's end yields the order that
+follows. Only a call on the chain can end a run; a Pure call has no
+`Order` and stands nowhere on the chain, so it neither joins a run nor
+breaks one.
 Nothing else reads the axis. A commutative call still keeps its place
 against every non-commutative call, and a commutative call is not thereby
 re-issuable: whether it may be suspended and issued again is the reissue
@@ -73,6 +76,4 @@ the knowledge was, which is the only place it can be checked.
 
 ## Open questions
 
-- Whether a run should be allowed to extend across a Pure call, which
-  observes nothing, or Pure calls simply do not break a run by virtue of
-  having no `Order` at all.
+none
