@@ -118,12 +118,7 @@ impl LspSession {
 
     // -- Context management (delegate) -------------------------------
 
-    pub fn add_context(
-        &mut self,
-        name: &str,
-        namespace: Option<Astr>,
-        ty: PolyTy,
-    ) -> QualifiedRef {
+    pub fn add_context(&mut self, name: &str, namespace: Option<Astr>, ty: PolyTy) -> QualifiedRef {
         let interned = self.graph.interner().intern(name);
         let qref = match namespace {
             Some(ns) => QualifiedRef::qualified(ns, interned),
@@ -227,10 +222,7 @@ impl LspSession {
         };
         let before = &source[..cursor.min(source.len())];
         let interner = self.graph.interner();
-        let ns = self
-            .doc_to_fn
-            .get(&id)
-            .and_then(|qref| qref.namespace);
+        let ns = self.doc_to_fn.get(&id).and_then(|qref| qref.namespace);
 
         match detect_trigger(before) {
             Trigger::Context { prefix } => self.context_completions(ns, &prefix, interner),
@@ -332,7 +324,9 @@ fn detect_trigger(before: &str) -> Trigger {
 }
 
 fn keyword_completions(prefix: &str) -> Vec<CompletionItem> {
-    let keywords = ["true", "false", "in", "Some", "None", "let", "if", "else", "for", "while"];
+    let keywords = [
+        "true", "false", "in", "Some", "None", "let", "if", "else", "for", "while",
+    ];
     keywords
         .iter()
         .filter(|kw| kw.starts_with(prefix) && **kw != prefix)

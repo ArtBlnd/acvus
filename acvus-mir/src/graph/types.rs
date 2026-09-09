@@ -65,17 +65,6 @@ pub struct Context {
 
 // -- Context policy --------------------------------------------------
 
-/// External constraints on a context, injected by the orchestration layer.
-///
-/// Analogous to memory page permissions:
-/// - `volatile`: loads/stores must not be elided by SSA (externally observable).
-/// - `read_only`: stores are forbidden (compile error).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ContextPolicy {
-    pub volatile: bool,
-    pub read_only: bool,
-}
-
 // -- Compilation graph -----------------------------------------------
 
 #[derive(Debug, Clone)]

@@ -276,30 +276,18 @@ fn write_body(
                     )?
                 }
             }
-            InstKind::Load { dst, src, volatile } => {
-                let vol = if *volatile { " volatile" } else { "" };
-                writeln!(
-                    f,
-                    "{} = load{} {}",
-                    vn.fmt_val(*dst),
-                    vol,
-                    vn.fmt_use(*src, &consts, &texts)
-                )?
-            }
-            InstKind::Store {
-                dst,
-                value,
-                volatile,
-            } => {
-                let vol = if *volatile { " volatile" } else { "" };
-                writeln!(
-                    f,
-                    "store{} {} = {}",
-                    vol,
-                    vn.fmt_use(*dst, &consts, &texts),
-                    vn.fmt_use(*value, &consts, &texts)
-                )?
-            }
+            InstKind::Load { dst, src } => writeln!(
+                f,
+                "{} = load {}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*src, &consts, &texts)
+            )?,
+            InstKind::Store { dst, value } => writeln!(
+                f,
+                "store {} = {}",
+                vn.fmt_use(*dst, &consts, &texts),
+                vn.fmt_use(*value, &consts, &texts)
+            )?,
 
             // Scalar field access
             InstKind::FieldGet {

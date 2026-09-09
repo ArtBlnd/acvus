@@ -239,7 +239,7 @@ fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
 
 // -- Sink pass -----------------------------------------------------
 //
-// Moves Eval (and non-volatile Load) as late as possible - just before
+// Moves Eval and Load as late as possible - just before
 // their result is first needed. This maximizes the distance between
 // Spawn (hoisted up) and Eval (sunk down).
 //
@@ -297,11 +297,7 @@ fn context_of_load(
     ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
 ) -> Option<QualifiedRef> {
     match kind {
-        InstKind::Load {
-            src,
-            volatile: false,
-            ..
-        } => ref_to_ctx.get(src).copied(),
+        InstKind::Load { src, .. } => ref_to_ctx.get(src).copied(),
         _ => None,
     }
 }
@@ -311,16 +307,12 @@ fn context_of_store(
     ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
 ) -> Option<QualifiedRef> {
     match kind {
-        InstKind::Store {
-            dst,
-            volatile: false,
-            ..
-        } => ref_to_ctx.get(dst).copied(),
+        InstKind::Store { dst, .. } => ref_to_ctx.get(dst).copied(),
         _ => None,
     }
 }
 
-/// Run the sink pass - move Eval, non-volatile Load, and non-volatile Store
+/// Run the sink pass - move Eval, Load, and Store
 /// as late as possible within their block.
 ///
 /// Processes ONE sinkable instruction per iteration, then re-scans.
@@ -352,12 +344,8 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
 
             let sink_info = match kind {
                 InstKind::Eval { .. } => Some(SinkKind::Eval),
-                InstKind::Load {
-                    volatile: false, ..
-                } => context_of_load(kind, &ref_to_ctx).map(SinkKind::Load),
-                InstKind::Store {
-                    volatile: false, ..
-                } => context_of_store(kind, &ref_to_ctx).map(SinkKind::Store),
+                InstKind::Load { .. } => context_of_load(kind, &ref_to_ctx).map(SinkKind::Load),
+                InstKind::Store { .. } => context_of_store(kind, &ref_to_ctx).map(SinkKind::Store),
                 _ => None,
             };
             let Some(sink_kind) = sink_info else {
@@ -1082,7 +1070,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(1),
                     src: v(0),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1155,7 +1142,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(4),
                     src: v(3),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1208,7 +1194,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(1),
                     src: v(0),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1224,7 +1209,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(3),
                     value: v(5),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1287,7 +1271,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(5),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1303,7 +1286,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(4),
                     src: v(3),
-                    volatile: false,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1340,60 +1322,6 @@ mod tests {
         assert!(
             store_idx < load_idx,
             "store must NOT sink past load of same context (store {store_idx}, load {load_idx})"
-        );
-    }
-
-    /// Volatile Load is NOT sunk.
-    #[test]
-    fn volatile_load_not_sunk() {
-        let i = Interner::new();
-        let ctx = QualifiedRef::root(i.intern("x"));
-
-        let mut cfg = make_cfg(
-            vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(1),
-                    src: v(0),
-                    volatile: true,
-                },
-                InstKind::BinOp {
-                    dst: v(2),
-                    op: acvus_ast::BinOp::Add,
-                    left: v(3),
-                    right: v(3),
-                },
-                InstKind::BinOp {
-                    dst: v(4),
-                    op: acvus_ast::BinOp::Add,
-                    left: v(1),
-                    right: v(2),
-                },
-                InstKind::Return(v(4)),
-            ],
-            10,
-        );
-
-        let body_before = demoted(cfg.clone());
-        run(&mut cfg);
-        let body_after = demoted(cfg);
-
-        let load_idx_before = kinds(&body_before)
-            .iter()
-            .position(|k| matches!(k, InstKind::Load { volatile: true, .. }))
-            .unwrap();
-        let load_idx_after = kinds(&body_after)
-            .iter()
-            .position(|k| matches!(k, InstKind::Load { volatile: true, .. }))
-            .unwrap();
-
-        assert_eq!(
-            load_idx_before, load_idx_after,
-            "volatile load must not be moved"
         );
     }
 }

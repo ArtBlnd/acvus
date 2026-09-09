@@ -88,9 +88,8 @@ async fn run_ext_with_registry(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     if result.has_errors() {
         let errs: Vec<String> = result

@@ -34,7 +34,7 @@ fn build_whole_types(
     for inst in &body.insts {
         if let InstKind::Ref { dst, target, path } = &inst.kind
             && path.is_empty()
-            && let Some(Ty::Ref(inner, _)) = body.val_types.get(dst)
+            && let Some(Ty::Ref(inner)) = body.val_types.get(dst)
         {
             map.entry(target.clone()).or_insert_with(|| *inner.clone());
         }
@@ -74,11 +74,6 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
         let ref_dst = *ref_dst;
         let span = body.insts[i].span;
 
-        let volatile = match body.val_types.get(&ref_dst) {
-            Some(Ty::Ref(_, vol)) => *vol,
-            _ => false,
-        };
-
         let whole_ty = match whole_types.get(&target) {
             Some(ty) => ty.clone(),
             None => {
@@ -98,7 +93,7 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
 
                 let identity_ref = body.val_factory.next();
                 body.val_types
-                    .insert(identity_ref, Ty::Ref(Box::new(whole_ty.clone()), volatile));
+                    .insert(identity_ref, Ty::Ref(Box::new(whole_ty.clone())));
                 new_insts.push(Inst {
                     span,
                     kind: InstKind::Ref {
@@ -115,7 +110,6 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
                     kind: InstKind::Load {
                         dst: tmp,
                         src: identity_ref,
-                        volatile,
                     },
                 });
 
@@ -142,7 +136,7 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
 
                 let ref_for_load = body.val_factory.next();
                 body.val_types
-                    .insert(ref_for_load, Ty::Ref(Box::new(whole_ty.clone()), volatile));
+                    .insert(ref_for_load, Ty::Ref(Box::new(whole_ty.clone())));
                 new_insts.push(Inst {
                     span,
                     kind: InstKind::Ref {
@@ -159,7 +153,6 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
                     kind: InstKind::Load {
                         dst: old,
                         src: ref_for_load,
-                        volatile,
                     },
                 });
 
@@ -178,7 +171,7 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
 
                 let ref_for_store = body.val_factory.next();
                 body.val_types
-                    .insert(ref_for_store, Ty::Ref(Box::new(whole_ty), volatile));
+                    .insert(ref_for_store, Ty::Ref(Box::new(whole_ty)));
                 new_insts.push(Inst {
                     span: store_span,
                     kind: InstKind::Ref {
@@ -193,7 +186,6 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
                     kind: InstKind::Store {
                         dst: ref_for_store,
                         value: updated,
-                        volatile,
                     },
                 });
 
@@ -255,7 +247,7 @@ mod tests {
 
         let mut val_types = FxHashMap::default();
         // v0 = Ref<Int, false> (field ref)
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         // v1 = Int (load result)
         val_types.insert(v(1), Ty::Int);
 
@@ -269,7 +261,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(1),
                     src: v(0),
-                    volatile: false,
                 },
             ],
             val_types,
@@ -308,11 +299,11 @@ mod tests {
         // Need an identity Ref in body so SROA can find whole type for Var("a").
         let mut val_types = FxHashMap::default();
         // v0 = identity Ref type
-        val_types.insert(v(0), Ty::Ref(Box::new(obj_ty.clone()), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(obj_ty.clone())));
         // v1 = whole object
         val_types.insert(v(1), obj_ty.clone());
         // v2 = field Ref type
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int)));
         // v3 = Int (value to store)
         val_types.insert(v(3), Ty::Int);
 
@@ -327,7 +318,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(1),
-                    volatile: false,
                 },
                 // Field store to decompose
                 InstKind::Ref {
@@ -338,7 +328,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(2),
                     value: v(3),
-                    volatile: false,
                 },
             ],
             val_types,
@@ -383,7 +372,7 @@ mod tests {
         let var_name = v(100); // storage slot ValueId
 
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(1), Ty::Int);
 
         let mut body = make_body(
@@ -396,7 +385,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(1),
                     src: v(0),
-                    volatile: false,
                 },
             ],
             val_types,

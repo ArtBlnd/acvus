@@ -110,7 +110,7 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
             }
             (Ty::Option(i), TyTerm::Option(pi)) => go(i, pi, seen),
             (Ty::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen),
-            (Ty::Ref(i, m), TyTerm::Ref(pi, pm)) => m == pm && go(i, pi, seen),
+            (Ty::Ref(i), TyTerm::Ref(pi)) => go(i, pi, seen),
             (Ty::Tuple(es), TyTerm::Tuple(ps)) => {
                 es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen))
             }
@@ -751,13 +751,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 Ok(())
             }
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
-            Ty::Ref(inner, volatile) => {
-                if *volatile {
-                    write!(f, "VolatileRef<{}>", inner.display(self.interner))
-                } else {
-                    write!(f, "Ref<{}>", inner.display(self.interner))
-                }
-            }
+            Ty::Ref(inner) => write!(f, "Ref<{}>", inner.display(self.interner)),
             Ty::Error(_) => write!(f, "<error>"),
             Ty::Var(v) => match *v {},
         }
@@ -927,7 +921,7 @@ pub enum TyTerm<V: Phase> {
     },
     // Resources
     Handle(Box<TyTerm<V>>),
-    Ref(Box<TyTerm<V>>, bool),
+    Ref(Box<TyTerm<V>>),
     // Special
     Error(ErrorToken),
     /// Inference variable - only inhabitable when `V = Infer`.
@@ -1042,10 +1036,9 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Handle(inner) => {
                 TyTerm::Handle(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
-            TyTerm::Ref(inner, volatile) => TyTerm::Ref(
-                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
-                *volatile,
-            ),
+            TyTerm::Ref(inner) => {
+                TyTerm::Ref(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
+            }
             TyTerm::Error(token) => TyTerm::Error(*token),
             TyTerm::Var(v) => on_var(*v),
         }
@@ -1159,10 +1152,12 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
             )?))),
-            TyTerm::Ref(inner, volatile) => Ok(TyTerm::Ref(
-                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
-                *volatile,
-            )),
+            TyTerm::Ref(inner) => Ok(TyTerm::Ref(Box::new(inner.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+            )?))),
             TyTerm::Error(token) => Ok(TyTerm::Error(*token)),
             TyTerm::Var(v) => on_var(*v),
         }

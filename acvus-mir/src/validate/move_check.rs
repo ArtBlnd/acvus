@@ -845,22 +845,14 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Store {
-                    dst: r0,
-                    value: v0,
-                    volatile: false,
-                }),
+                inst(InstKind::Store { dst: r0, value: v0 }),
                 // v1 = $a -> moves $a
                 inst(InstKind::Ref {
                     dst: r1,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load {
-                    dst: v1,
-                    src: r1,
-                    volatile: false,
-                }),
+                inst(InstKind::Load { dst: v1, src: r1 }),
                 // use v1
                 inst(InstKind::FunctionCall {
                     dst: v4,
@@ -874,22 +866,14 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Store {
-                    dst: r2,
-                    value: v2,
-                    volatile: false,
-                }),
+                inst(InstKind::Store { dst: r2, value: v2 }),
                 // v3 = $a -> OK (new value)
                 inst(InstKind::Ref {
                     dst: r3,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load {
-                    dst: v3,
-                    src: r3,
-                    volatile: false,
-                }),
+                inst(InstKind::Load { dst: v3, src: r3 }),
                 // use v3
                 inst(InstKind::FunctionCall {
                     dst: v5,
@@ -942,21 +926,13 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Store {
-                    dst: r0,
-                    value: v0,
-                    volatile: false,
-                }),
+                inst(InstKind::Store { dst: r0, value: v0 }),
                 inst(InstKind::Ref {
                     dst: r1,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load {
-                    dst: v1,
-                    src: r1,
-                    volatile: false,
-                }),
+                inst(InstKind::Load { dst: v1, src: r1 }),
                 inst(InstKind::FunctionCall {
                     dst: v3,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
@@ -969,11 +945,7 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load {
-                    dst: v2,
-                    src: r2,
-                    volatile: false,
-                }),
+                inst(InstKind::Load { dst: v2, src: r2 }),
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),

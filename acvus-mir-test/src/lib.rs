@@ -44,7 +44,6 @@ fn run_pipeline_with_registry(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     // Collect infer errors.
@@ -62,7 +61,7 @@ fn run_pipeline_with_registry(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, graph, &ext, &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
@@ -121,7 +120,7 @@ fn run_pipeline_with_registry(
         *closure = cfg::demote(cfg_closure);
     }
 
-    let validation_errors = acvus_mir::validate::validate(&module, &FxHashMap::default());
+    let validation_errors = acvus_mir::validate::validate(&module);
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()
@@ -300,7 +299,6 @@ pub fn compile_script_raw(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -311,7 +309,7 @@ pub fn compile_script_raw(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!("[lower] {}", e.display(interner)));
     }
@@ -367,7 +365,6 @@ pub fn compile_script_mode_raw(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -378,7 +375,7 @@ pub fn compile_script_mode_raw(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!("[lower] {}", e.display(interner)));
     }
@@ -434,7 +431,6 @@ pub fn compile_script_optimized(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -445,7 +441,7 @@ pub fn compile_script_optimized(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!("[lower] {}", e.display(interner)));
     }
@@ -550,7 +546,6 @@ pub fn compile_inline_ir_with(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -567,7 +562,7 @@ pub fn compile_inline_ir_with(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -649,7 +644,6 @@ pub fn compile_multi_fn_raw(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -660,7 +654,7 @@ pub fn compile_multi_fn_raw(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!("[lower] {}", e.display(interner)));
     }
@@ -750,7 +744,6 @@ pub fn compile_multi_fn_optimized(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     let mut errors: Vec<String> = Vec::new();
@@ -761,7 +754,7 @@ pub fn compile_multi_fn_optimized(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!("[lower] {}", e.display(interner)));
     }

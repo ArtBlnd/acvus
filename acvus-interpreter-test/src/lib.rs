@@ -120,7 +120,6 @@ pub fn compile_source_with_externs(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     // Collect all errors: infer (unresolved functions) + lower.
@@ -138,7 +137,7 @@ pub fn compile_source_with_externs(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     // Report lower-level errors.
     for e in result.errors.iter().flat_map(|e| e.errors.iter()) {
@@ -150,7 +149,11 @@ pub fn compile_source_with_externs(
     }
 
     // Run full optimization pipeline: SSA -> Inline -> SpawnSplit -> Reorder -> SSA -> RegColor -> Validate.
-    let opt_result = graph_optimize::optimize(result.modules.clone(), &inf.context_types, &FxHashSet::default());
+    let opt_result = graph_optimize::optimize(
+        result.modules.clone(),
+        &inf.context_types,
+        &FxHashSet::default(),
+    );
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {
@@ -331,7 +334,13 @@ pub async fn run_script_with_externs_and_types(
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    let cr = compile_source_with_externs(interner, ast, &context_types, extern_registries, type_registry);
+    let cr = compile_source_with_externs(
+        interner,
+        ast,
+        &context_types,
+        extern_registries,
+        type_registry,
+    );
 
     let mut functions = cr.modules;
     for (id, exec) in cr.extern_executables {

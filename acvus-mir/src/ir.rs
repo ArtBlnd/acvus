@@ -70,18 +70,14 @@ pub enum InstKind {
         path: Vec<Astr>,
     },
     /// Materialize a projection into a value (copy). `src` must be `Ref<T>`.
-    /// `volatile`: if true, SSA must not elide or forward this load.
     Load {
         dst: ValueId,
         src: ValueId,
-        volatile: bool,
     },
     /// Write a value through a projection. `dst` must be `Ref<T>`.
-    /// `volatile`: if true, SSA must not elide this store.
     Store {
         dst: ValueId,
         value: ValueId,
-        volatile: bool,
     },
 
     // -- Scalar field access --------------------------------------

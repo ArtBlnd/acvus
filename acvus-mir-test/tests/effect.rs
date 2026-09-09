@@ -49,7 +49,6 @@ fn infer_effects(i: &Interner, functions: Vec<Function>) -> FxHashMap<String, Ef
         &ext,
         &FxHashMap::default(),
         Freeze::new(acvus_mir::ty::TypeRegistry::new()),
-        &FxHashMap::default(),
     );
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
     inf.outcomes

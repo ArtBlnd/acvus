@@ -102,12 +102,10 @@ pub mod compile {
             &ext,
             &FxHashMap::default(),
             Freeze::default(),
-            &FxHashMap::default(),
         );
 
         // Phase 3: Lower to MIR
-        let mir_result =
-            graph_lower::lower(interner, &lowered.graph, &ext, &inf, &FxHashMap::default());
+        let mir_result = graph_lower::lower(interner, &lowered.graph, &ext, &inf);
 
         CompileResult {
             modules: mir_result.modules,

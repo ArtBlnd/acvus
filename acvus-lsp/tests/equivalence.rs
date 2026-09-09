@@ -47,7 +47,6 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
     let mut errs: Vec<String> = Vec::new();
     // Collect infer errors.
@@ -57,7 +56,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         }
     }
     // Collect lower errors.
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for le in &result.errors {
         for e in &le.errors {
             errs.push(format!("{}", e.display(interner)));
@@ -201,7 +200,8 @@ fn completion_context_trigger() {
     assert!(!items.is_empty(), "should get context completions");
     assert!(
         items.iter().any(|c| c.label == "@name"),
-        "should suggest @name, got: {:?}", items.iter().map(|c| &c.label).collect::<Vec<_>>()
+        "should suggest @name, got: {:?}",
+        items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
     assert!(
         !items.iter().any(|c| c.label == "@count"),
@@ -220,9 +220,7 @@ fn completion_pipe_trigger() {
     let mut pb = PolyBuilder::new();
     session.graph_mut().add_function(Function {
         qref: helper_qref,
-        kind: FnKind::Local(ParsedAst::Template(
-            acvus_ast::parse(&i, "hello").unwrap(),
-        )),
+        kind: FnKind::Local(ParsedAst::Template(acvus_ast::parse(&i, "hello").unwrap())),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
@@ -237,7 +235,8 @@ fn completion_pipe_trigger() {
     assert!(!items.is_empty(), "should get pipe completions (functions)");
     assert!(
         items.iter().any(|c| c.label == "helper"),
-        "should suggest helper, got: {:?}", items.iter().map(|c| &c.label).collect::<Vec<_>>()
+        "should suggest helper, got: {:?}",
+        items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
 }
 
@@ -251,7 +250,8 @@ fn completion_keyword_trigger() {
     let items = session.completions(doc, 5); // "{{ tr" = 5 chars
     assert!(
         items.iter().any(|c| c.label == "true"),
-        "should suggest 'true', got: {:?}", items.iter().map(|c| &c.label).collect::<Vec<_>>()
+        "should suggest 'true', got: {:?}",
+        items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
 }
 
@@ -276,13 +276,17 @@ fn completion_updates_with_source() {
 
     let doc = session.open("test", "{{ @n }}", None);
     let items = session.completions(doc, 5);
-    assert!(items.iter().any(|c| c.label == "@name"), "should match @name");
+    assert!(
+        items.iter().any(|c| c.label == "@name"),
+        "should match @name"
+    );
 
     // Update source to "@a"
     session.update_source(doc, "{{ @a }}");
     let items = session.completions(doc, 5);
     assert!(
         items.iter().any(|c| c.label == "@age"),
-        "after update should match @age, got: {:?}", items.iter().map(|c| &c.label).collect::<Vec<_>>()
+        "after update should match @age, got: {:?}",
+        items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
 }

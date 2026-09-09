@@ -106,7 +106,7 @@ fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, F
     for (val, (target, path)) in ref_map {
         if path.is_empty() {
             // Identity ref - extract fields from Ref<T>'s T.
-            if let Some(Ty::Ref(inner, _)) = cfg.val_types.get(val) {
+            if let Some(Ty::Ref(inner)) = cfg.val_types.get(val) {
                 if let Ty::Object(fields) = inner.as_ref() {
                     target_fields
                         .entry(*target)

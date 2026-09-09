@@ -10,9 +10,7 @@
 //!   No parse errors possible. Type errors here = lowerer bug -> panic.
 
 use acvus_ast::{AstId, Expr, Literal, ObjectExprField, RefKind, Script, Span};
-use acvus_mir::graph::{
-    CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef,
-};
+use acvus_mir::graph::{CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 

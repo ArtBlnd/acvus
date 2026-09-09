@@ -149,7 +149,10 @@ async fn spawn_eval_multi_args() {
             main: MirBody {
                 insts,
                 val_types: FxHashMap::default(),
-                params: vec![(interner.intern("p0"), vids[0]), (interner.intern("p1"), vids[1])],
+                params: vec![
+                    (interner.intern("p0"), vids[0]),
+                    (interner.intern("p1"), vids[1]),
+                ],
                 captures: vec![],
                 debug: DebugInfo::new(),
                 val_factory: f,

@@ -187,7 +187,10 @@ fn block_undeclared_context_is_complete_if_type_resolves() {
     };
     let result = compile_namespace(&i, &ns, &[]);
 
-    assert!(!result.has_field_errors(), "valid syntax -> no field errors");
+    assert!(
+        !result.has_field_errors(),
+        "valid syntax -> no field errors"
+    );
     assert!(
         result.is_complete(&i, "greet"),
         "undeclared context with resolvable type -> Complete"

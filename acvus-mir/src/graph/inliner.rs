@@ -293,19 +293,13 @@ fn remap_inst(
                 path: path.clone(),
             }
         }
-        InstKind::Load { dst, src, volatile } => InstKind::Load {
+        InstKind::Load { dst, src } => InstKind::Load {
             dst: r(*dst),
             src: r(*src),
-            volatile: *volatile,
         },
-        InstKind::Store {
-            dst,
-            value,
-            volatile,
-        } => InstKind::Store {
+        InstKind::Store { dst, value } => InstKind::Store {
             dst: r(*dst),
             value: r(*value),
-            volatile: *volatile,
         },
 
         // Scalar field access

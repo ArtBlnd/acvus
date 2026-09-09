@@ -575,7 +575,7 @@ impl Solver {
                     _ => false,
                 }
             }
-            TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Ref(inner, _) => {
+            TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Ref(inner) => {
                 self.occurs_in(id, inner)
             }
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
@@ -1298,10 +1298,9 @@ impl Solver {
             TyTerm::Handle(inner) => TyTerm::Handle(Box::new(
                 self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
-            TyTerm::Ref(inner, volatile) => TyTerm::Ref(
-                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
-                *volatile,
-            ),
+            TyTerm::Ref(inner) => TyTerm::Ref(Box::new(
+                self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
+            )),
             other => other.clone(),
         }
     }

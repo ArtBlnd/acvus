@@ -77,7 +77,6 @@ fn compile_analysis(
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     // Collect infer errors.
@@ -95,7 +94,7 @@ fn compile_analysis(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {

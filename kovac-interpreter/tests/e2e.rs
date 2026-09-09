@@ -46,21 +46,27 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
 
     for (qref, errs) in inf.errors() {
         if !errs.is_empty() {
             let name = interner.resolve(qref.name);
-            let msgs: Vec<_> = errs.iter().map(|e| format!("{}", e.display(interner))).collect();
+            let msgs: Vec<_> = errs
+                .iter()
+                .map(|e| format!("{}", e.display(interner)))
+                .collect();
             panic!("infer errors for {name}: {}", msgs.join(", "));
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for le in &result.errors {
         if !le.errors.is_empty() {
-            let msgs: Vec<_> = le.errors.iter().map(|e| format!("{}", e.display(interner))).collect();
+            let msgs: Vec<_> = le
+                .errors
+                .iter()
+                .map(|e| format!("{}", e.display(interner)))
+                .collect();
             panic!("lower errors: {}", msgs.join(", "));
         }
     }
@@ -116,7 +122,7 @@ fn let_binding_arithmetic() {
     let a = run_script(
         "let x = 10;
          let y = 20;
-         x + y"
+         x + y",
     );
     assert!(a.contains(&30), "expected 30 in A bank, got {:?}", a);
 }
@@ -127,7 +133,7 @@ fn multi_let_sum() {
         "let a = 10;
          let b = 20;
          let c = 30;
-         a + b + c"
+         a + b + c",
     );
     assert!(a.contains(&60), "expected 60 in A bank, got {:?}", a);
 }
@@ -150,7 +156,7 @@ fn reassign() {
     let a = run_script(
         "let x = 5;
          x = x * x;
-         x + 1"
+         x + 1",
     );
     assert!(a.contains(&26), "expected 26 in A bank, got {:?}", a);
 }
@@ -163,7 +169,7 @@ fn reassign() {
 fn if_else_true_branch() {
     let a = run_script(
         "let x = 10;
-         if x > 5 { 42 } else { 0 }"
+         if x > 5 { 42 } else { 0 }",
     );
     assert!(a.contains(&42), "expected 42 (true branch), got {:?}", a);
 }
@@ -172,7 +178,7 @@ fn if_else_true_branch() {
 fn if_else_false_branch() {
     let a = run_script(
         "let x = 3;
-         if x > 5 { 42 } else { 99 }"
+         if x > 5 { 42 } else { 99 }",
     );
     assert!(a.contains(&99), "expected 99 (false branch), got {:?}", a);
 }
@@ -186,7 +192,7 @@ fn if_else_chain() {
          if score > 90 { 4 }
          else if score > 80 { 3 }
          else if score > 70 { 2 }
-         else { 1 }"
+         else { 1 }",
     );
     assert!(a.contains(&2), "score 75 -> grade 2, got {:?}", a);
 }
@@ -198,7 +204,7 @@ fn if_else_chain_top() {
          if score > 90 { 4 }
          else if score > 80 { 3 }
          else if score > 70 { 2 }
-         else { 1 }"
+         else { 1 }",
     );
     assert!(a.contains(&4), "score 95 -> grade 4, got {:?}", a);
 }
@@ -210,7 +216,7 @@ fn if_else_chain_bottom() {
          if score > 90 { 4 }
          else if score > 80 { 3 }
          else if score > 70 { 2 }
-         else { 1 }"
+         else { 1 }",
     );
     assert!(a.contains(&1), "score 50 -> grade 1, got {:?}", a);
 }
@@ -220,7 +226,7 @@ fn if_as_expression_in_let() {
     let a = run_script(
         "let x = 10;
          let y = if x > 5 { x * 2 } else { x };
-         y + 1"
+         y + 1",
     );
     assert!(a.contains(&21), "expected 21, got {:?}", a);
 }
@@ -236,7 +242,7 @@ fn while_countdown() {
          while x > 0 {
              x = x - 1;
          }
-         x"
+         x",
     );
     assert!(a.contains(&0), "expected 0 after countdown, got {:?}", a);
 }
@@ -251,7 +257,7 @@ fn while_sum_to_10() {
              sum = sum + i;
              i = i + 1;
          }
-         sum"
+         sum",
     );
     assert!(a.contains(&55), "sum 1..10 = 55, got {:?}", a);
 }
@@ -267,7 +273,7 @@ fn while_factorial() {
              result = result * n;
              n = n - 1;
          }
-         result"
+         result",
     );
     assert!(a.contains(&120), "5! = 120, got {:?}", a);
 }
@@ -286,7 +292,7 @@ fn while_fibonacci() {
              curr = next;
              i = i + 1;
          }
-         curr"
+         curr",
     );
     assert!(a.contains(&55), "fib(10) = 55, got {:?}", a);
 }
@@ -310,7 +316,7 @@ fn collatz_steps() {
              }
              steps = steps + 1;
          }
-         steps"
+         steps",
     );
     assert!(a.contains(&8), "Collatz(6) = 8 steps, got {:?}", a);
 }

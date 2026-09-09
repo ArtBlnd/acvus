@@ -127,7 +127,12 @@ fn main() {
             .params
             .iter()
             .enumerate()
-            .map(|(i, p)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(&p.to_ty(&interner))))
+            .map(|(i, p)| {
+                ParamTerm::<Poly>::new(
+                    interner.intern(&format!("_{i}")),
+                    lift_to_poly(&p.to_ty(&interner)),
+                )
+            })
             .collect();
         let fn_ty = TyTerm::Fn {
             params,
@@ -188,9 +193,8 @@ fn main() {
         &ext,
         &FxHashMap::default(),
         Freeze::new(type_registry),
-        &FxHashMap::default(),
     );
-    let result = graph_lower::lower(&interner, &graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(&interner, &graph, &ext, &inf);
     if result.has_errors() {
         for le in &result.errors {
             for e in &le.errors {

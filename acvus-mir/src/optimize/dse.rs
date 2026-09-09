@@ -74,11 +74,7 @@ fn analyze_block(
     for inst in block.insts.iter().rev() {
         match &inst.kind {
             // Load from context Ref -> read.
-            InstKind::Load {
-                src,
-                volatile: false,
-                ..
-            } => {
+            InstKind::Load { src, .. } => {
                 if let Some(&qref) = ref_to_ctx.get(src) {
                     // This is a read. Remove from kills (if written later was tracked),
                     // add to reads.
@@ -88,11 +84,7 @@ fn analyze_block(
             }
 
             // Store to context Ref -> write (kill).
-            InstKind::Store {
-                dst,
-                volatile: false,
-                ..
-            } => {
+            InstKind::Store { dst, .. } => {
                 if let Some(&qref) = ref_to_ctx.get(dst) {
                     // This is a write. Remove from reads (if read later was tracked),
                     // add to kills.
@@ -184,12 +176,7 @@ pub fn run(cfg: &mut CfgBody) {
     let mut written_contexts = BTreeSet::new();
     for block in &cfg.blocks {
         for inst in &block.insts {
-            if let InstKind::Store {
-                dst,
-                volatile: false,
-                ..
-            } = &inst.kind
-            {
+            if let InstKind::Store { dst, .. } = &inst.kind {
                 if let Some(&qref) = ref_to_ctx.get(dst) {
                     written_contexts.insert(qref);
                 }
@@ -226,21 +213,13 @@ pub fn run(cfg: &mut CfgBody) {
 
         for (ii, inst) in block.insts.iter().enumerate().rev() {
             match &inst.kind {
-                InstKind::Load {
-                    src,
-                    volatile: false,
-                    ..
-                } => {
+                InstKind::Load { src, .. } => {
                     if let Some(&qref) = ref_to_ctx.get(src) {
                         live.insert(qref);
                     }
                 }
 
-                InstKind::Store {
-                    dst,
-                    volatile: false,
-                    ..
-                } => {
+                InstKind::Store { dst, .. } => {
                     if let Some(&qref) = ref_to_ctx.get(dst) {
                         if !live.contains(&qref) {
                             // Dead store - context will be overwritten before read.
@@ -387,9 +366,9 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
 
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(3), Ty::Int);
 
         let body = make_body(
@@ -402,7 +381,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(1),
-                    volatile: false,
                 },
                 InstKind::Ref {
                     dst: v(2),
@@ -412,7 +390,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(2),
                     value: v(3),
-                    volatile: false,
                 },
                 InstKind::Return(v(3)),
             ],
@@ -438,9 +415,9 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
 
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(3), Ty::Int);
 
         let body = make_body(
@@ -453,7 +430,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(1),
-                    volatile: false,
                 },
                 InstKind::Ref {
                     dst: v(2),
@@ -463,7 +439,6 @@ mod tests {
                 InstKind::Load {
                     dst: v(3),
                     src: v(2),
-                    volatile: false,
                 },
                 InstKind::Return(v(3)),
             ],
@@ -489,10 +464,10 @@ mod tests {
         let f = QualifiedRef::root(i.intern("f"));
 
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(1), Ty::Int);
         val_types.insert(v(2), Ty::Int);
-        val_types.insert(v(3), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(3), Ty::Ref(Box::new(Ty::Int)));
 
         let body = make_body(
             vec![
@@ -504,7 +479,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(1),
-                    volatile: false,
                 },
                 InstKind::FunctionCall {
                     dst: v(2),
@@ -520,7 +494,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(3),
                     value: v(2),
-                    volatile: false,
                 },
                 InstKind::Return(v(2)),
             ],
@@ -539,57 +512,6 @@ mod tests {
         );
     }
 
-    /// Volatile store is never removed.
-    #[test]
-    fn volatile_store_preserved() {
-        let i = Interner::new();
-        let ctx = QualifiedRef::root(i.intern("x"));
-
-        let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), true)); // volatile
-        val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int), true));
-        val_types.insert(v(3), Ty::Int);
-
-        let body = make_body(
-            vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
-                    value: v(1),
-                    volatile: true,
-                },
-                InstKind::Ref {
-                    dst: v(2),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(2),
-                    value: v(3),
-                    volatile: true,
-                },
-                InstKind::Return(v(3)),
-            ],
-            val_types,
-        );
-
-        let mut cfg = cfg::promote(body);
-        let stores_before = count_stores(&cfg);
-
-        run(&mut cfg);
-
-        assert_eq!(
-            count_stores(&cfg),
-            stores_before,
-            "volatile stores must never be removed"
-        );
-    }
-
     /// Store to context before return is live (externally observable).
     /// Ref @x -> Store @x = v1 -> Return v2
     /// Store is live because return exposes context state.
@@ -599,7 +521,7 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
 
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int), false));
+        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
         val_types.insert(v(1), Ty::Int);
         val_types.insert(v(2), Ty::Int);
 
@@ -613,7 +535,6 @@ mod tests {
                 InstKind::Store {
                     dst: v(0),
                     value: v(1),
-                    volatile: false,
                 },
                 InstKind::Return(v(2)),
             ],

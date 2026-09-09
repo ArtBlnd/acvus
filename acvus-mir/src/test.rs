@@ -62,7 +62,6 @@ fn run_pipeline(
         &ext,
         &FxHashMap::default(),
         Freeze::default(),
-        &FxHashMap::default(),
     );
 
     // Collect infer errors.
@@ -80,7 +79,7 @@ fn run_pipeline(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf, &FxHashMap::default());
+    let result = graph_lower::lower(interner, graph, &ext, &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
@@ -122,7 +121,7 @@ fn run_pipeline(
         *closure = crate::cfg::demote(cfg_body);
     }
 
-    let validation_errors = crate::validate::validate(&module, &FxHashMap::default());
+    let validation_errors = crate::validate::validate(&module);
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()

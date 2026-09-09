@@ -60,7 +60,6 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
         &ext,
         &FxHashMap::default(),
         Freeze::new(TypeRegistry::new()),
-        &FxHashMap::default(),
     );
     if inf.has_errors() {
         return Err(inf

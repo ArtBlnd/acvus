@@ -11,7 +11,7 @@
 //! - `Cast` is the *only* instruction allowed to change a value's type.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::graph::{ContextPolicy, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::ty::Ty;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
@@ -68,10 +68,7 @@ pub enum ValidationErrorKind {
 // ---------------------------------------------------------------------------
 
 /// Check type consistency of the entire module.  Returns all errors found.
-pub fn check_types(
-    module: &MirModule,
-    _policies: &FxHashMap<QualifiedRef, ContextPolicy>,
-) -> Vec<ValidationError> {
+pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let mut ctx = CheckCtx::new("main".to_string());
@@ -681,7 +678,7 @@ impl CheckCtx {
             InstKind::Load { dst, src, .. } => {
                 // src must be Ty::Ref(T), dst must be T.
                 let src_ty = ty!(*src);
-                if let Ty::Ref(inner, _) = src_ty {
+                if let Ty::Ref(inner) = src_ty {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "Load", "dst", inner.as_ref(), dst_ty, errors);
                 } else if !src_ty.is_error() {
@@ -700,7 +697,7 @@ impl CheckCtx {
             InstKind::Store { dst, value, .. } => {
                 // dst must be Ty::Ref(T), value must be T.
                 let dst_ty = ty!(*dst);
-                if let Ty::Ref(inner, _) = dst_ty {
+                if let Ty::Ref(inner) = dst_ty {
                     let val_ty = ty!(*value);
                     self.assert_match(pc, span, "Store", "value", inner.as_ref(), val_ty, errors);
                     // Context materiality check: storing non-materializable to context is an error.
@@ -1302,7 +1299,7 @@ mod tests {
             })],
             vt,
         );
-        let errors = check_types(&module, &FxHashMap::default());
+        let errors = check_types(&module);
         assert!(errors.is_empty());
     }
 
@@ -1319,7 +1316,7 @@ mod tests {
             })],
             vt,
         );
-        let errors = check_types(&module, &FxHashMap::default());
+        let errors = check_types(&module);
         assert!(!errors.is_empty(), "type mismatch should be caught");
     }
 
@@ -1342,7 +1339,7 @@ mod tests {
             })],
             vt,
         );
-        let errors = check_types(&module, &FxHashMap::default());
+        let errors = check_types(&module);
         assert!(!errors.is_empty(), "BinOp type mismatch should be caught");
     }
 
@@ -1361,7 +1358,7 @@ mod tests {
             })], // only 1
             vt,
         );
-        let errors = check_types(&module, &FxHashMap::default());
+        let errors = check_types(&module);
         assert!(!errors.is_empty(), "tuple arity mismatch should be caught");
     }
 
@@ -1388,7 +1385,7 @@ mod tests {
             ],
             vt,
         );
-        let errors = check_types(&module, &FxHashMap::default());
+        let errors = check_types(&module);
         assert!(
             errors.is_empty(),
             "matching jump arg types should pass: {errors:?}"

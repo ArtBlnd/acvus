@@ -71,7 +71,7 @@ fn optimize_inner(
             run_pass2_body(closure, context_types, untyped_scalars);
         }
 
-        let errors = validate::validate(&module, &FxHashMap::default());
+        let errors = validate::validate(&module);
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }

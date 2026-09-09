@@ -1,6 +1,5 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
-
 use acvus_extern::{ExternFn, ExternItems, ExternRegistry, ExternType, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Executable, Value};
 use acvus_interpreter_test::*;
@@ -36,7 +35,11 @@ async fn extern_pure_add() {
     let i = Interner::new();
 
     let registry = closures(Effect::Pure, |i| {
-        vec![ExternFn::sync(i, "ext_add", |_: &Interner, a: i64, b: i64| Ok(a + b))]
+        vec![ExternFn::sync(
+            i,
+            "ext_add",
+            |_: &Interner, a: i64, b: i64| Ok(a + b),
+        )]
     });
 
     let c = ctx(&i, &[]);
@@ -49,7 +52,9 @@ async fn extern_pure_string_transform() {
     let i = Interner::new();
 
     let registry = closures(Effect::Pure, |i| {
-        vec![ExternFn::sync(i, "shout", |_: &Interner, s: String| Ok(s.to_uppercase()))]
+        vec![ExternFn::sync(i, "shout", |_: &Interner, s: String| {
+            Ok(s.to_uppercase())
+        })]
     });
 
     let c = ctx(&i, &[("msg", Value::string("hello"))]);
@@ -67,7 +72,11 @@ async fn extern_captures_environment() {
     let secret = 7i64;
 
     let registry = closures(Effect::Pure, move |i| {
-        vec![ExternFn::sync(i, "multiply_secret", move |_: &Interner, x: i64| Ok(x * secret))]
+        vec![ExternFn::sync(
+            i,
+            "multiply_secret",
+            move |_: &Interner, x: i64| Ok(x * secret),
+        )]
     });
 
     let c = ctx(&i, &[]);
@@ -130,7 +139,11 @@ fn ir_pure_function_call_no_context_bindings() {
     let i = Interner::new();
 
     let registry = closures(Effect::Pure, |i| {
-        vec![ExternFn::sync(i, "double", |_: &Interner, x: i64| Ok(x * 2))]
+        vec![ExternFn::sync(
+            i,
+            "double",
+            |_: &Interner, x: i64| Ok(x * 2),
+        )]
     });
 
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = FxHashMap::default();
@@ -171,7 +184,6 @@ fn ir_pure_function_call_no_context_bindings() {
         !call_insts.is_empty(),
         "should have a FunctionCall to double"
     );
-
 }
 
 // =======================================================================
@@ -629,7 +641,10 @@ async fn io_inside_iterator_pipeline() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
+        &[(
+            "items",
+            Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        )],
     );
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());

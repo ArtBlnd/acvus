@@ -19,6 +19,14 @@ resumable.
 An ExternFn has no declaration of which contexts it reads or writes. A script
 reads a context and passes the value as an argument.
 
+A context is internal state and nothing else. Nothing observes it between
+two instructions: there is no second thread, an ExternFn cannot reach it,
+and a dump is taken to resume from, not to look at. What the host is meant
+to see goes out through an ExternFn call. The compiler therefore treats
+every context load and store as ordinary, with calls as the only barrier,
+and a context carries no policy: not volatile, not read-only. A value a
+script only reads is a function argument, not a context.
+
 ### Proposed
 
 An ExternFn author declares an effect level, and the levels form a chain:
@@ -60,6 +68,8 @@ harmless can be resumed by re-issuing it.
 
 - No yield statement in the language. Suspension is a property of the call,
   not a construct the script author writes.
+- No context policy. A volatile context would be a second door to the host
+  beside ExternFn; a read-only context is an argument.
 - No context read/write declaration on ExternFns. The reason it existed,
   ordering of context effects, is carried by RFC-0007.
 - No suspension inside an order-irrelevant block while an Opaque call is in

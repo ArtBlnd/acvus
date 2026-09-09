@@ -113,11 +113,7 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
             }),
-            inst(InstKind::Load {
-                dst: v1,
-                src: v0,
-                volatile: false,
-            }),
+            inst(InstKind::Load { dst: v1, src: v0 }),
         ]);
         let result = super::build(&module);
         assert_eq!(result.0[&v0], 0); // Ref defines v0
@@ -178,11 +174,7 @@ mod tests {
         let v99 = vf.next();
         let module = make_module(vec![
             inst(InstKind::Return(v99)),
-            inst(InstKind::Store {
-                dst: v0,
-                value: v0,
-                volatile: false,
-            }),
+            inst(InstKind::Store { dst: v0, value: v0 }),
             inst(InstKind::Nop),
         ]);
         let result = super::build(&module);

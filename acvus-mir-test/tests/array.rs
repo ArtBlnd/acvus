@@ -38,7 +38,6 @@ fn return_type(i: &Interner, source: &str) -> Ty {
         &ext,
         &FxHashMap::default(),
         Freeze::new(acvus_mir::ty::TypeRegistry::new()),
-        &FxHashMap::default(),
     );
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
     match &inf.outcomes[&qref].meta().ty {

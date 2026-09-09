@@ -664,7 +664,6 @@ pub fn infer(
     extract: &ExtractResult,
     user_context_types: &FxHashMap<QualifiedRef, PolyTy>,
     type_registry: Freeze<TypeRegistry>,
-    policies: &FxHashMap<QualifiedRef, ContextPolicy>,
 ) -> InferResult {
     let mut solver = Solver::new();
     let registry_ref: &TypeRegistry = &type_registry;
@@ -1020,14 +1019,7 @@ mod tests {
         // Undeclared contexts no longer produce InferredParam entries.
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     #[test]
@@ -1035,14 +1027,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + @y", &[("x", Ty::Int)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     // -- Soundness: no false inferences --
@@ -1052,14 +1037,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "1 + 2");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     // ================================================================
@@ -1240,7 +1218,6 @@ mod tests {
             &ext,
             &FxHashMap::default(),
             Freeze::default(),
-            &FxHashMap::default(),
         );
         (result, ids)
     }
@@ -1288,14 +1265,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_no_ctx_with_builtins(&i, "1 + 2");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         assert!(
             !result.has_errors(),
@@ -1312,14 +1282,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::Int)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         assert!(
             !result.has_errors(),
@@ -1337,14 +1300,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
         user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &user,
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &user, Freeze::default());
 
         assert!(
             !result.has_errors(),
@@ -1360,14 +1316,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@name", &[("name", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         assert!(
             !result.has_errors(),
@@ -1384,14 +1333,7 @@ mod tests {
         let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
         let graph = make_graph_with_ctx_and_builtins(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         assert!(
             !result.has_errors(),
@@ -1409,14 +1351,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         assert!(result.has_errors(), "should detect type mismatch");
     }
@@ -1428,14 +1363,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x", &[("x", Ty::Int)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let ctx_ref = graph.contexts[0].qref;
         assert_eq!(*result.context_type(&ctx_ref).unwrap(), Ty::Int);
@@ -2371,14 +2299,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     /// Multiple contexts.
@@ -2387,14 +2308,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + @y");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     /// Context inside nested block - still extracted.
@@ -2403,14 +2317,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "{ @x + 1 }");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
 
     // context_extract_in_lambda: migrated to acvus-mir-test (depends on ExternFn `map`, `collect`)
@@ -2423,14 +2330,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::Int)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2465,14 +2365,7 @@ mod tests {
             contexts: Freeze::new(contexts),
         };
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2493,14 +2386,7 @@ mod tests {
         // No contexts declared, but source uses @x. Typechecker infers @x : Int.
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2517,14 +2403,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
         user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &user,
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &user, Freeze::default());
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2542,14 +2421,7 @@ mod tests {
         // @x is String but used in arithmetic.
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(
-            &i,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            &FxHashMap::default(),
-        );
+        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2681,113 +2553,5 @@ mod tests {
         let (result, ids) = infer_multi(&i, &[("test", r#""hello""#, Some(vec![]), None)], &[]);
         let fid = ids[0].1;
         assert!(result.outcomes[&fid].is_complete());
-    }
-
-    // -- read_only policy tests --------------------------------------
-
-    /// Helper: infer a single function with context policies.
-    fn infer_with_policies(
-        interner: &Interner,
-        source: &str,
-        ctx: &[(&str, Ty)],
-        policies: &FxHashMap<QualifiedRef, ContextPolicy>,
-    ) -> (InferResult, QualifiedRef) {
-        let mut pb = PolyBuilder::new();
-        let contexts: Vec<Context> = ctx
-            .iter()
-            .map(|(name, ty)| Context {
-                qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
-            })
-            .collect();
-
-        let fid = QualifiedRef::root(interner.intern("test"));
-        let parsed = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
-        let graph = CompilationGraph {
-            functions: Freeze::new(vec![Function {
-                qref: fid,
-                kind: FnKind::Local(parsed),
-                ty: TyTerm::Fn {
-                    params: vec![],
-                    ret: Box::new(pb.fresh_ty_var()),
-                    captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
-                },
-            }]),
-            contexts: Freeze::new(contexts),
-        };
-        let ext = extract::extract(interner, &graph);
-        let result = infer(
-            interner,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-            policies,
-        );
-        (result, fid)
-    }
-
-    #[test]
-    fn read_only_context_read_passes() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let policies = FxHashMap::from_iter([(
-            qref,
-            ContextPolicy {
-                volatile: false,
-                read_only: true,
-            },
-        )]);
-        let (result, fid) = infer_with_policies(&i, "@x + 1", &[("x", Ty::Int)], &policies);
-        let errs = error_strings(&i, &result);
-        assert!(
-            errs.is_empty(),
-            "read from read_only should be allowed: {errs:?}"
-        );
-        assert!(result.try_resolution(fid).is_some());
-    }
-
-    #[test]
-    fn read_only_context_write_rejected() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let policies = FxHashMap::from_iter([(
-            qref,
-            ContextPolicy {
-                volatile: false,
-                read_only: true,
-            },
-        )]);
-        let (result, _fid) = infer_with_policies(&i, "@x = 42; @x", &[("x", Ty::Int)], &policies);
-        let errs = error_strings(&i, &result);
-        assert!(
-            !errs.is_empty(),
-            "write to read_only context should be rejected"
-        );
-        assert!(
-            errs.iter().any(|e| e.contains("read_only")),
-            "error should mention read_only: {errs:?}"
-        );
-    }
-
-    #[test]
-    fn non_read_only_context_write_passes() {
-        let i = Interner::new();
-        let qref = QualifiedRef::root(i.intern("x"));
-        let policies = FxHashMap::from_iter([(
-            qref,
-            ContextPolicy {
-                volatile: false,
-                read_only: false,
-            },
-        )]);
-        let (result, fid) = infer_with_policies(&i, "@x = 42; @x", &[("x", Ty::Int)], &policies);
-        let errs = error_strings(&i, &result);
-        assert!(
-            errs.is_empty(),
-            "write to non-read_only should pass: {errs:?}"
-        );
-        assert!(result.try_resolution(fid).is_some());
     }
 }

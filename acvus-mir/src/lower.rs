@@ -6,7 +6,7 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::graph::{ContextPolicy, QualifiedRef};
+use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValOrigin, ValueId,
 };
@@ -31,8 +31,6 @@ pub struct Lowerer<'a> {
     /// Global closure label counter - shared across nesting levels to prevent
     /// label collisions when nested closures each allocate from a sub-body.
     closure_label_count: u32,
-    /// External constraints on contexts (volatile, read_only, etc.).
-    policies: FxHashMap<QualifiedRef, ContextPolicy>,
     /// Context projection alias stack: @x -> (@a, [x]) means @x is an alias for @a.x.
     /// Pushed/popped around match-bind bodies for destructure projection.
     context_aliases: Vec<FxHashMap<QualifiedRef, (QualifiedRef, Vec<Astr>)>>,
@@ -104,11 +102,7 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(
-        interner: &'a Interner,
-        resolution: Freeze<TypeResolution>,
-        policies: FxHashMap<QualifiedRef, ContextPolicy>,
-    ) -> Self {
+    pub fn new(interner: &'a Interner, resolution: Freeze<TypeResolution>) -> Self {
         let coercion_lookup: FxHashMap<AstId, CastKind> =
             resolution.coercion_map.iter().cloned().collect();
         let initial_scope = FxHashMap::default();
@@ -132,7 +126,6 @@ impl<'a> Lowerer<'a> {
             coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
-            policies,
             context_aliases: vec![],
         }
     }
@@ -717,29 +710,14 @@ impl<'a> Lowerer<'a> {
     /// If `val` is a Ref<T>, emit Load to materialize it into T.
     /// If it's already a scalar value, return as-is.
     fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
-        if let Some(Ty::Ref(inner, volatile)) = self.body.val_types.get(&val).cloned() {
+        if let Some(Ty::Ref(inner)) = self.body.val_types.get(&val).cloned() {
             let dst = self.alloc_val();
             self.set_val_type(dst, *inner);
-            self.emit_inst(
-                span,
-                InstKind::Load {
-                    dst,
-                    src: val,
-                    volatile,
-                },
-            );
+            self.emit_inst(span, InstKind::Load { dst, src: val });
             dst
         } else {
             val
         }
-    }
-
-    fn context_policy(&self, ctx: &QualifiedRef) -> ContextPolicy {
-        // Resolve alias first: if @x -> @a.x, use @a's policy.
-        if let Some((real_ctx, _)) = self.resolve_context_alias(ctx) {
-            return self.policies.get(&real_ctx).copied().unwrap_or_default();
-        }
-        self.policies.get(ctx).copied().unwrap_or_default()
     }
 
     /// Resolve a context alias. Returns (real_context, path) if aliased.
@@ -771,14 +749,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Determine volatile flag from a RefTarget.
-    fn ref_volatile(&self, target: &RefTarget) -> bool {
-        match target {
-            RefTarget::Context(qref) => self.context_policy(qref).volatile,
-            RefTarget::Var(_) | RefTarget::Param(_) => false,
-        }
-    }
-
     /// Emit Ref + Store: write `value` to the given storage target.
     fn emit_ref_store(&mut self, span: Span, target: RefTarget, path: Vec<Astr>, value: ValueId) {
         let val_ty = self
@@ -787,9 +757,8 @@ impl<'a> Lowerer<'a> {
             .get(&value)
             .cloned()
             .unwrap_or(Ty::error());
-        let volatile = self.ref_volatile(&target);
         let ref_dst = self.alloc_val();
-        self.set_val_type(ref_dst, Ty::Ref(Box::new(val_ty), volatile));
+        self.set_val_type(ref_dst, Ty::Ref(Box::new(val_ty)));
         // Set origin on Ref dst for printer context name resolution.
         match &target {
             RefTarget::Context(qref) => self.set_origin(ref_dst, ValOrigin::Context(qref.name)),
@@ -812,7 +781,6 @@ impl<'a> Lowerer<'a> {
             InstKind::Store {
                 dst: ref_dst,
                 value,
-                volatile,
             },
         );
     }
@@ -825,9 +793,8 @@ impl<'a> Lowerer<'a> {
         path: Vec<Astr>,
         result_ty: Ty,
     ) -> ValueId {
-        let volatile = self.ref_volatile(&target);
         let ref_dst = self.alloc_val();
-        self.set_val_type(ref_dst, Ty::Ref(Box::new(result_ty.clone()), volatile));
+        self.set_val_type(ref_dst, Ty::Ref(Box::new(result_ty.clone())));
         // Set origin on Ref dst for printer context name resolution.
         match &target {
             RefTarget::Context(qref) => self.set_origin(ref_dst, ValOrigin::Context(qref.name)),
@@ -845,31 +812,17 @@ impl<'a> Lowerer<'a> {
         );
         let dst = self.alloc_val();
         self.set_val_type(dst, result_ty);
-        self.emit_inst(
-            span,
-            InstKind::Load {
-                dst,
-                src: ref_dst,
-                volatile,
-            },
-        );
+        self.emit_inst(span, InstKind::Load { dst, src: ref_dst });
         dst
     }
 
     /// If val is a Ref<T>, emit Load to materialize it.
     /// Otherwise return val unchanged.
     fn materialize(&mut self, val: ValueId, span: Span) -> ValueId {
-        if let Some(Ty::Ref(inner, volatile)) = self.body.val_types.get(&val).cloned() {
+        if let Some(Ty::Ref(inner)) = self.body.val_types.get(&val).cloned() {
             let dst = self.alloc_val();
             self.set_val_type(dst, *inner);
-            self.emit_inst(
-                span,
-                InstKind::Load {
-                    dst,
-                    src: val,
-                    volatile,
-                },
-            );
+            self.emit_inst(span, InstKind::Load { dst, src: val });
             dst
         } else {
             val
@@ -1278,10 +1231,9 @@ impl<'a> Lowerer<'a> {
                 } else {
                     (*qref, vec![])
                 };
-                let policy = self.context_policy(&real_ctx);
                 let inner_ty = self.type_of_id(*id);
                 let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Ref(Box::new(inner_ty), policy.volatile));
+                self.set_val_type(dst, Ty::Ref(Box::new(inner_ty)));
                 if path.is_empty() {
                     self.set_origin(dst, ValOrigin::Context(real_ctx.name));
                 } else {
@@ -1412,9 +1364,8 @@ impl<'a> Lowerer<'a> {
 
                 match root {
                     Expr::ContextRef { name: qref, .. } => {
-                        let policy = self.context_policy(qref);
                         let dst = self.alloc_val();
-                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty), policy.volatile));
+                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
                         self.set_origin(
                             dst,
                             ValOrigin::RefField(RefTarget::Context(*qref), path.clone()),
@@ -1436,7 +1387,7 @@ impl<'a> Lowerer<'a> {
                     } if self.is_defined(name.name) => {
                         let slot = self.var_slot(name.name);
                         let dst = self.alloc_val();
-                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty), false));
+                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
                         self.set_origin(
                             dst,
                             ValOrigin::RefField(RefTarget::Var(slot), path.clone()),
@@ -1458,7 +1409,7 @@ impl<'a> Lowerer<'a> {
                     } => {
                         if let Some(param_reg) = self.try_param_slot(name.name) {
                             let dst = self.alloc_val();
-                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty), false));
+                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
                             self.set_origin(
                                 dst,
                                 ValOrigin::RefField(RefTarget::Param(param_reg), path.clone()),
@@ -1476,7 +1427,7 @@ impl<'a> Lowerer<'a> {
                             // Captured param - treat as local variable.
                             let slot = self.var_slot(name.name);
                             let dst = self.alloc_val();
-                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty), false));
+                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
                             self.set_origin(
                                 dst,
                                 ValOrigin::RefField(RefTarget::Var(slot), path.clone()),

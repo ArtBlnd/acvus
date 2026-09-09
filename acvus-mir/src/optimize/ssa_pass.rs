@@ -224,11 +224,7 @@ fn forward_context_values(
                 }
 
                 // Load from context Ref -> context forwarding.
-                InstKind::Load { dst, src, volatile } => {
-                    // Volatile loads must not be forwarded.
-                    if *volatile {
-                        continue;
-                    }
+                InstKind::Load { dst, src } => {
                     let src_resolved = st.subst.get(src).copied().unwrap_or(*src);
                     if let Some(&ctx_id) = st.val_to_ctx.get(&src_resolved) {
                         if let Some(&known_val) = ctx_state.get(&ctx_id) {
@@ -246,15 +242,7 @@ fn forward_context_values(
                 }
 
                 // Store to context Ref -> update forwarding state.
-                InstKind::Store {
-                    dst,
-                    value,
-                    volatile,
-                } => {
-                    // Volatile stores must not record into forwarding state.
-                    if *volatile {
-                        continue;
-                    }
+                InstKind::Store { dst, value } => {
                     let dst_resolved = st.subst.get(dst).copied().unwrap_or(*dst);
                     let value_resolved = st.subst.get(value).copied().unwrap_or(*value);
                     if let Some(&ctx_id) = st.val_to_ctx.get(&dst_resolved) {
@@ -556,18 +544,14 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     path,
                 } if path.is_empty() => {
                     if !non_promotable_contexts.contains(ctx)
-                        && let Some(Ty::Ref(inner, _)) = cfg.val_types.get(dst)
+                        && let Some(Ty::Ref(inner)) = cfg.val_types.get(dst)
                     {
                         ctx_types.entry(*ctx).or_insert_with(|| *inner.clone());
                     }
                 }
 
                 // Load from identity Ref -> entry defs or SsaOp.
-                InstKind::Load {
-                    dst,
-                    src,
-                    volatile: false,
-                } => {
+                InstKind::Load { dst, src } => {
                     match ref_target.get(src) {
                         Some(RefTarget::Context(ctx)) if !non_promotable_contexts.contains(ctx) => {
                             if bi == 0 {
@@ -595,39 +579,33 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                                 slot: *slot,
                             });
                         }
-                        _ => {} // volatile, field Ref, or unknown -> skip
+                        _ => {}
                     }
                 }
 
                 // Store to identity Ref -> SsaOp.
-                InstKind::Store {
-                    dst,
-                    value,
-                    volatile: false,
-                } => {
-                    match ref_target.get(dst) {
-                        Some(RefTarget::Context(ctx)) if !non_promotable_contexts.contains(ctx) => {
-                            ops.ops.push(SsaOp::CtxStore {
-                                block_idx: bi,
-                                local_idx: ii,
-                                ctx: *ctx,
-                                value: *value,
-                            });
-                            written_contexts.insert(*ctx);
-                        }
-                        Some(RefTarget::Var(slot)) if !non_promotable_vars.contains(slot) => {
-                            ops.ops.push(SsaOp::VarStore {
-                                slot: *slot,
-                                value: *value,
-                            });
-                            written_vars.insert(*slot);
-                            if let Some(ty) = cfg.val_types.get(value) {
-                                var_types.entry(*slot).or_insert_with(|| ty.clone());
-                            }
-                        }
-                        _ => {} // volatile, field Ref, param store (shouldn't happen), or unknown
+                InstKind::Store { dst, value } => match ref_target.get(dst) {
+                    Some(RefTarget::Context(ctx)) if !non_promotable_contexts.contains(ctx) => {
+                        ops.ops.push(SsaOp::CtxStore {
+                            block_idx: bi,
+                            local_idx: ii,
+                            ctx: *ctx,
+                            value: *value,
+                        });
+                        written_contexts.insert(*ctx);
                     }
-                }
+                    Some(RefTarget::Var(slot)) if !non_promotable_vars.contains(slot) => {
+                        ops.ops.push(SsaOp::VarStore {
+                            slot: *slot,
+                            value: *value,
+                        });
+                        written_vars.insert(*slot);
+                        if let Some(ty) = cfg.val_types.get(value) {
+                            var_types.entry(*slot).or_insert_with(|| ty.clone());
+                        }
+                    }
+                    _ => {}
+                },
 
                 _ => {}
             }
@@ -944,7 +922,7 @@ fn patch_instructions(
         let ref_dst = alloc_val(
             &mut cfg.val_factory,
             &mut cfg.val_types,
-            Ty::Ref(Box::new(inner_ty), false),
+            Ty::Ref(Box::new(inner_ty)),
         );
         canonical_ref_insts.push(Inst {
             span: acvus_ast::Span::ZERO,
@@ -987,7 +965,6 @@ fn patch_instructions(
                     kind: InstKind::Store {
                         dst: ref_dst,
                         value: phi.result,
-                        volatile: false,
                     },
                 });
             }
@@ -1215,9 +1192,8 @@ mod tests {
     }
 
     /// Build a minimal CfgBody with: Ref -> Store -> Load -> Return.
-    /// When volatile=false, SSA should forward the store value and eliminate the load.
-    /// When volatile=true, SSA must preserve the load.
-    fn make_store_then_load(volatile: bool) -> CfgBody {
+    /// A context store followed by a load of the same context.
+    fn make_store_then_load() -> CfgBody {
         use acvus_utils::LocalFactory;
         let interner = Interner::new();
         let ctx_qref = QualifiedRef::root(interner.intern("history"));
@@ -1250,7 +1226,6 @@ mod tests {
                 kind: InstKind::Store {
                     dst: v[1],
                     value: v[0],
-                    volatile,
                 },
             },
             Inst {
@@ -1266,7 +1241,6 @@ mod tests {
                 kind: InstKind::Load {
                     dst: v[3],
                     src: v[2],
-                    volatile,
                 },
             },
             Inst {
@@ -1291,31 +1265,16 @@ mod tests {
     }
 
     #[test]
-    fn non_volatile_context_is_forwarded() {
-        let mut cfg = make_store_then_load(false);
+    fn context_store_is_forwarded_to_its_load() {
+        let mut cfg = make_store_then_load();
         let loads_before = count_context_loads(&cfg);
         run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
-        // Non-volatile: SSA should forward the store -> load is eliminated.
         assert!(
             loads_after < loads_before,
-            "non-volatile context load should be forwarded (before={}, after={})",
+            "a context load after its store is forwarded (before={}, after={})",
             loads_before,
             loads_after
-        );
-    }
-
-    #[test]
-    fn volatile_context_not_forwarded() {
-        let mut cfg = make_store_then_load(true);
-        let loads_before = count_context_loads(&cfg);
-        run(&mut cfg);
-        let loads_after = count_context_loads(&cfg);
-        // Volatile: SSA must NOT forward - load is preserved.
-        assert_eq!(
-            loads_before, loads_after,
-            "volatile context load must not be forwarded (before={}, after={})",
-            loads_before, loads_after
         );
     }
 }

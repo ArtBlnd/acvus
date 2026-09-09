@@ -184,7 +184,10 @@ impl<'a> Lowerer<'a> {
                 if m_idx < 4 {
                     (Bank::M, m_idx as u8)
                 } else {
-                    panic!("too many M ValueIds ({}) for kovac 4 M registers", m_idx + 1);
+                    panic!(
+                        "too many M ValueIds ({}) for kovac 4 M registers",
+                        m_idx + 1
+                    );
                 }
             }
         }
@@ -275,15 +278,14 @@ impl<'a> Lowerer<'a> {
                     self.pb.emit(encode(HALT, 0, 0, 0));
                 }
                 InstKind::FieldGet {
-                    dst,
-                    object,
-                    field,
-                    ..
+                    dst, object, field, ..
                 } => {
                     // TODO: implement properly with M bank
                     let _ = (dst, object, field);
                 }
-                InstKind::FunctionCall { dst, callee, args, .. } => {
+                InstKind::FunctionCall {
+                    dst, callee, args, ..
+                } => {
                     // TODO: implement function calls
                     let _ = (dst, callee, args);
                 }
@@ -351,13 +353,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_binop(
-        &mut self,
-        dst: ValueId,
-        op: &acvus_ast::BinOp,
-        left: ValueId,
-        right: ValueId,
-    ) {
+    fn lower_binop(&mut self, dst: ValueId, op: &acvus_ast::BinOp, left: ValueId, right: ValueId) {
         let (l_bank, l_reg) = self.reg(left);
         let (r_bank, r_reg) = self.reg(right);
         let (d_bank, d_reg) = self.reg(dst);
@@ -420,10 +416,18 @@ impl<'a> Lowerer<'a> {
             }
             // Emit MOV.
             match (a_bank, p_bank) {
-                (Bank::A, Bank::A) => { self.pb.emit(encode2(MOV_A, p_reg, a_reg)); }
-                (Bank::B, Bank::B) => { self.pb.emit(encode2(MOV_B, p_reg, a_reg)); }
-                (Bank::A, Bank::B) => { self.pb.emit(encode2(MOV_A2B, p_reg, a_reg)); }
-                (Bank::B, Bank::A) => { self.pb.emit(encode2(MOV_B2A, p_reg, a_reg)); }
+                (Bank::A, Bank::A) => {
+                    self.pb.emit(encode2(MOV_A, p_reg, a_reg));
+                }
+                (Bank::B, Bank::B) => {
+                    self.pb.emit(encode2(MOV_B, p_reg, a_reg));
+                }
+                (Bank::A, Bank::B) => {
+                    self.pb.emit(encode2(MOV_A2B, p_reg, a_reg));
+                }
+                (Bank::B, Bank::A) => {
+                    self.pb.emit(encode2(MOV_B2A, p_reg, a_reg));
+                }
                 _ => {} // M bank moves - todo
             }
         }
