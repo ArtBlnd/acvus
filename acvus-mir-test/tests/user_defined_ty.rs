@@ -18,7 +18,9 @@ use Polarity::*;
 fn setup() -> (Interner, TypeRegistry) {
     let interner = Interner::new();
     let mut type_registry = TypeRegistry::new();
-    let _std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
+    for registry in acvus_ext::std_registries::<acvus_extern::TypesOnly>() {
+        registry.register(&interner, &mut type_registry);
+    }
     (interner, type_registry)
 }
 
@@ -29,7 +31,9 @@ fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
-        identity_args: vec![],
+        identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
+            <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+        )],
     }
 }
 
@@ -40,7 +44,20 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
-        identity_args: vec![],
+        identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
+            <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+        )],
+    }
+}
+
+/// `Iterator<T>` whose source is still open, so a coercion may name it.
+fn iter_ity_open(interner: &Interner, s: &mut Solver, elem: InferTy) -> InferTy {
+    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    InferTy::UserDefined {
+        id: iter_qref,
+        type_args: vec![elem],
+        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        identity_args: vec![s.fresh_identity_var()],
     }
 }
 
@@ -89,10 +106,7 @@ fn iterator_type_param_resolves() {
 #[test]
 fn iterator_is_ephemeral() {
     let (i, _reg) = setup();
-    assert_eq!(
-        iter_ty(&i, Ty::Int).materiality(),
-        Materiality::Ephemeral
-    );
+    assert_eq!(iter_ty(&i, Ty::Int).materiality(), Materiality::Ephemeral);
 }
 
 #[test]
@@ -104,7 +118,10 @@ fn iterator_not_materializable() {
 #[test]
 fn list_of_iterator_not_materializable() {
     let (i, _reg) = setup();
-    let list = Ty::Array(Box::new(iter_ty(&i, Ty::Int)), acvus_mir::ty::LenTerm::Known(3));
+    let list = Ty::Array(
+        Box::new(iter_ty(&i, Ty::Int)),
+        acvus_mir::ty::LenTerm::Known(3),
+    );
     assert!(!list.is_materializable());
 }
 
@@ -122,7 +139,6 @@ fn iterator_not_pureable() {
 // Move-only semantics - UserDefined is always move-only
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_is_move_only() {
     let (i, _reg) = setup();
@@ -168,25 +184,33 @@ fn instantiate_pair_shares_params() {
         effect_args: vec![],
         identity_args: vec![],
     };
-    assert!(s.unify_ty(&concrete_from, &inst_from, Invariant, &reg).is_ok());
+    assert!(
+        s.unify_ty(&concrete_from, &inst_from, Invariant, &reg)
+            .is_ok()
+    );
 
     // inst_to should now resolve to List<Int> (shared T)
     let resolved_to = s.resolve_ty(&inst_to);
-    assert_eq!(resolved_to, InferTy::Array(Box::new(it(&Ty::Int)), acvus_mir::ty::LenTerm::Known(3)));
+    assert_eq!(
+        resolved_to,
+        InferTy::Array(Box::new(it(&Ty::Int)), acvus_mir::ty::LenTerm::Known(3))
+    );
 }
 
 // ================================================================
 // ExternCast coercion: soundness + completeness
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn coerce_list_to_iterator_completeness() {
     // List<Int> <= Iterator<Int> via CastRule
     let (i, reg) = setup();
     let mut s = Solver::new();
-    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
-    let iter = iter_ity(&i, it(&Ty::Int));
+    let list = it(&Ty::Array(
+        Box::new(Ty::Int),
+        acvus_mir::ty::LenTerm::Known(3),
+    ));
+    let iter = iter_ity_open(&i, &mut s, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Covariant, &reg).is_ok(),
         "List -> Iterator coercion should succeed"
@@ -199,7 +223,10 @@ fn coerce_iterator_to_list_soundness_rejected() {
     let (i, reg) = setup();
     let mut s = Solver::new();
     let iter = iter_ity(&i, it(&Ty::Int));
-    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
+    let list = it(&Ty::Array(
+        Box::new(Ty::Int),
+        acvus_mir::ty::LenTerm::Known(3),
+    ));
     assert!(
         s.unify_ty(&iter, &list, Covariant, &reg).is_err(),
         "Iterator -> List coercion must be rejected"
@@ -211,7 +238,10 @@ fn coerce_invariant_rejects_list_to_iterator() {
     // Invariant polarity: no coercion allowed
     let (i, reg) = setup();
     let mut s = Solver::new();
-    let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
+    let list = it(&Ty::Array(
+        Box::new(Ty::Int),
+        acvus_mir::ty::LenTerm::Known(3),
+    ));
     let iter = iter_ity(&i, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Invariant, &reg).is_err(),

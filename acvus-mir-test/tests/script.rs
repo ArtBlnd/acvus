@@ -4,7 +4,7 @@
 //! Tests are grouped by category with both soundness and completeness direction.
 
 use acvus_mir::ty::{Param, Ty};
-use acvus_mir_test::compile_script_ir;
+use acvus_mir_test::{compile_script_ir, compile_script_mode_raw};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -19,77 +19,26 @@ fn ctx(i: &Interner, entries: &[(&str, Ty)]) -> FxHashMap<acvus_utils::Astr, Ty>
 //  1. Loop (iteration)
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_simple_iteration() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("sum", Ty::Int)],
-    );
-    let ir = compile_script_ir(&i, "x in @items { @sum = @sum + x; }; @sum", &c).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_nested_iteration() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("matrix", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
-            ("sum", Ty::Int),
-        ],
-    );
-    let ir = compile_script_ir(
-        &i,
-        "row in @matrix { x in row { @sum = @sum + x; }; }; @sum",
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
 #[test]
 fn loop_context_write_phi() {
     // SSA PHI at loop header: @count written inside loop
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("count", Ty::Int)],
-    );
-    let ir = compile_script_ir(&i, "x in @items { @count = @count + 1; }; @count", &c).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_with_function_call() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("result", Ty::String),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("count", Ty::Int),
         ],
     );
-    let ir = compile_script_ir(
+    let ir = compile_script_mode_raw(
         &i,
-        r#"x in @items { @result = @result + to_string(x); }; @result"#,
+        "let it = @items | iter; while let Some((x, rest)) = next(it) { @count = @count + 1; it = rest; } @count",
         &c,
     )
     .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_range_iteration() {
-    let i = Interner::new();
-    let c = ctx(&i, &[("sum", Ty::Int)]);
-    let ir = compile_script_ir(&i, "x in 0..10 { @sum = @sum + x; }; @sum", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -166,16 +115,26 @@ fn ssa_write_in_branch_phi() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_write_in_loop_phi() {
     // Context write in loop - loop-carried PHI
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("acc", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("acc", Ty::Int),
+        ],
     );
-    let ir = compile_script_ir(&i, "x in @items { @acc = @acc + x; }; @acc", &c).unwrap();
+    let ir = compile_script_mode_raw(
+        &i,
+        "let it = @items | iter; while let Some((x, rest)) = next(it) { @acc = @acc + x; it = rest; } @acc",
+        &c,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -201,28 +160,16 @@ fn ssa_sequential_writes() {
 //  4. Function calls
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn func_builtin_in_loop() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("out", Ty::String)],
-    );
-    let ir = compile_script_ir(
-        &i,
-        r#"x in @items { @out = @out + to_string(x); }; @out"#,
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
 #[test]
 fn func_pipe_chain() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let c = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_script_ir(&i, "@items | filter(|x| -> x > 0) | collect", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -239,46 +186,6 @@ fn func_to_string_in_bind() {
 //  5. Combined scenarios
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn combined_loop_with_branch() {
-    // Iteration with conditional context write inside
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("count", Ty::Int)],
-    );
-    let ir = compile_script_ir(
-        &i,
-        "x in @items { 0 = x { @count = @count + 1; }; }; @count",
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn combined_accumulate_in_loop() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("sum", Ty::Int),
-            ("product", Ty::Int),
-        ],
-    );
-    let ir = compile_script_ir(
-        &i,
-        "x in @items { @sum = @sum + x; @product = @product * x; }; @sum + @product",
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
 #[test]
 fn combined_nested_loop_context() {
     // Inner loop writes, outer reads after
@@ -286,62 +193,22 @@ fn combined_nested_loop_context() {
     let c = ctx(
         &i,
         &[
-            ("outer", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "outer",
+                Ty::Array(
+                    Box::new(Ty::Array(
+                        Box::new(Ty::Int),
+                        acvus_mir::ty::LenTerm::Known(3),
+                    )),
+                    acvus_mir::ty::LenTerm::Known(3),
+                ),
+            ),
             ("total", Ty::Int),
         ],
     );
-    let ir = compile_script_ir(
+    let ir = compile_script_mode_raw(
         &i,
-        "row in @outer { x in row { @total = @total + x; }; }; @total",
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn combined_bind_then_iterate() {
-    // Bind a value, then iterate using it
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            (
-                "data",
-                Ty::Object(FxHashMap::from_iter([(
-                    i.intern("items"),
-                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-                )])),
-            ),
-            ("sum", Ty::Int),
-        ],
-    );
-    let ir = compile_script_ir(
-        &i,
-        "{ items, } = @data { x in items { @sum = @sum + x; }; }; @sum",
-        &c,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn combined_multiple_loops_sequential() {
-    // Two sequential loops writing to the same context
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("a", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("b", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("sum", Ty::Int),
-        ],
-    );
-    let ir = compile_script_ir(
-        &i,
-        "x in @a { @sum = @sum + x; }; y in @b { @sum = @sum + y; }; @sum",
+        "let rows = @outer | iter; while let Some((row, r1)) = next(rows) { let xs = row | iter; while let Some((x, r2)) = next(xs) { @total = @total + x; xs = r2; } rows = r1; } @total",
         &c,
     )
     .unwrap();

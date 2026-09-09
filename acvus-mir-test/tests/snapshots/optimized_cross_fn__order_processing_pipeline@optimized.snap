@@ -34,44 +34,45 @@ expression: opt
     25 |   r10 = test r8 == true
     26 |   r2 = ref @default_ship
     27 |   r11 = ref @customer
-    29 |   r12 = call #0(r4)
-    31 |   r13 = call #0(r6)
-    33 |   r14 = call #0(r3)
-    36 |   r15 = ref @total_out
-    37 |   r16 = ref @receipt_out
-    38 |   jump_if r9 then L0 else L1(r0)
-    39 | L0:
-    40 |   jump L1(0 (r17))
-    41 | L1(r0: Int):
-    42 |   jump_if r10 then L2 else L3(r0)
-    43 | L2:
-    44 |   r0 = load r2
-    45 |   jump L3(r0)
-    46 | L3(r0: Int):
-    47 |   r5 = r7 + r0
-    48 |   r18 = load r11
-    49 |   r19 = r18 + T0
-    50 |   r20 = r19 + r12
-    51 |   r12 = T0 + T1
-    52 |   r20 = r12 + r13
-    53 |   r12 = T0 + T2
-    54 |   r20 = r12 + r14
-    55 |   r12 = T0 + T3
-    56 |   r20 = call #0(r0)
-    57 |   r21 = r12 + T0
-    58 |   r20 = T1 + T4
-    59 |   r12 = call #0(100 (r5))
-    60 |   r21 = T0 + r12
-    61 |   r3 = call #1(T1)
-    62 |   store r16 = T1
-    63 |   store r1 = r0
-    64 |   store r15 = 100 (r5)
-    65 |   return 100 (r5)
+    33 |   r12 = ref @total_out
+    34 |   r13 = ref @receipt_out
+    35 |   jump_if r9 then L0 else L1(r0)
+    36 | L0:
+    37 |   jump L1(0 (r14))
+    38 | L1(r0: Int):
+    39 |   jump_if r10 then L2 else L3(r0)
+    40 | L2:
+    41 |   r0 = load r2
+    42 |   jump L3(r0)
+    43 | L3(r0: Int):
+    44 |   r5 = r7 + r0
+    45 |   r15 = load r11
+    46 |   r16 = r15 + T0
+    47 |   store r1 = r0
+    48 |   r17 = call #0(r4)
+    49 |   r15 = r16 + T0
+    50 |   r17 = r15 + T1
+    51 |   r18 = call #0(r6)
+    52 |   r15 = T0 + T1
+    53 |   r17 = r15 + T2
+    54 |   r18 = call #0(r3)
+    55 |   r19 = T0 + T1
+    56 |   r17 = T2 + T3
+    57 |   r18 = call #0(r0)
+    58 |   r19 = T0 + T1
+    59 |   r17 = T2 + T4
+    60 |   r18 = call #0(100 (r5))
+    61 |   r19 = T0 + T1
+    62 |   r20 = spawn #1(T2)
+    63 |   store r12 = 100 (r5)
+    64 |   store r13 = T2
+    65 |   r0 = eval r20
+    66 |   return 100 (r5)
 
     ; r0 (@default_ship) : Int
     ; r1 (@shipping) : Ref<Int>
     ; r2 (@default_ship) : Ref<Int>
-    ; r3 (send_email(...)) : Int
+    ; r3 (@tax_rate) : Int
     ; r4 (v6) : Int
     ; r5 (@free_ship_min) : Int
     ; r6 (v7) : Int
@@ -80,16 +81,14 @@ expression: opt
     ; r9 (v10) : Bool
     ; r10 (v12) : Bool
     ; r11 (@customer) : Ref<String>
-    ; r12 (to_string(...)) : String
-    ; r13 (to_string(...)) : String
-    ; r14 (to_string(...)) : String
-    ; r15 (@total_out) : Ref<Int>
-    ; r16 (@receipt_out) : Ref<String>
-    ; r17 (v11) : Int
-    ; r18 (@customer) : String
-    ; r19 (v25) : String
-    ; r20 (to_string(...)) : String
-    ; r21 (v16) : String
+    ; r12 (@total_out) : Ref<Int>
+    ; r13 (@receipt_out) : Ref<String>
+    ; r14 (v11) : Int
+    ; r15 (@customer) : String
+    ; r16 (v22) : String
+    ; r17 (to_string(...)) : String
+    ; r18 (to_string(...)) : String
+    ; r19 (v16) : String
+    ; r20 (v23) : Handle<Int>
+    ; r21 (v17) : String
     ; r22 (v18) : String
-    ; r23 (v21) : String
-    ; r24 (v20) : String

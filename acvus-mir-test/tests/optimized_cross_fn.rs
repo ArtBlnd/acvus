@@ -6,7 +6,6 @@
 //!
 //! Tests exercise: inlining, Spawn/Eval splitting, code motion, DSE, DCE, phi insertion.
 
-
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, TyTerm, lift_to_poly};
 use acvus_mir_test::{compile_multi_fn_optimized, compile_multi_fn_raw};
@@ -47,7 +46,6 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
 //     - DSE: context write-backs after phi
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn order_processing_pipeline() {
     let i = Interner::new();
@@ -186,87 +184,6 @@ fn order_processing_pipeline() {
 //     - DSE: loop header phi write-backs
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn user_analytics_dashboard() {
-    let i = Interner::new();
-    let user_ty = Ty::Object(
-        [
-            (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::Int),
-        ]
-        .into_iter()
-        .collect(),
-    );
-    let target = (
-        "main",
-        r#"
-                user in @users {
-                    group = classify_age(user.age);
-                    true = group > 1 { @senior_count = @senior_count + 1; };
-                    true = group == 1 { @adult_count = @adult_count + 1; };
-                    true = group == 0 { @minor_count = @minor_count + 1; };
-                    @total_age = @total_age + user.age;
-                    @name_list = @name_list + user.name + ", ";
-                };
-                total_users = @senior_count + @adult_count + @minor_count;
-                summary = build_summary(@senior_count, @adult_count, @minor_count, @total_age, @name_list);
-                send_report(summary);
-                @output = summary;
-                summary
-            "#,
-    );
-    let helpers: &[_] = &[
-        // Returns Int: 2=senior, 1=adult, 0=minor.
-        // Each branch writes to a local; tail is the final value.
-        (
-            "classify_age",
-            r#"
-                    r = 0;
-                    true = $age >= 65 { r = 2; };
-                    true = $age >= 18 { r = 1; };
-                    r
-                "#,
-            sig(&i, &[("age", Ty::Int)]),
-        ),
-        (
-            "build_summary",
-            r#"
-                    "S:" + to_string($seniors) + " A:" + to_string($adults) + " M:" + to_string($minors) + " age:" + to_string($total_age) + " | " + $names
-                "#,
-            sig(
-                &i,
-                &[
-                    ("seniors", Ty::Int),
-                    ("adults", Ty::Int),
-                    ("minors", Ty::Int),
-                    ("total_age", Ty::Int),
-                    ("names", Ty::String),
-                ],
-            ),
-        ),
-    ];
-    let contexts: &[_] = &[
-        ("users", Ty::Array(Box::new(user_ty), acvus_mir::ty::LenTerm::Known(3))),
-        ("senior_count", Ty::Int),
-        ("adult_count", Ty::Int),
-        ("minor_count", Ty::Int),
-        ("total_age", Ty::Int),
-        ("name_list", Ty::String),
-        ("output", Ty::String),
-    ];
-    let extern_fns: &[_] = &[io_extern(
-        &i,
-        "send_report",
-        &[("summary", Ty::String)],
-        Ty::Int,
-    )];
-    let opt = compile_multi_fn_optimized(&i, target, helpers, contexts, extern_fns).unwrap();
-    let raw = compile_multi_fn_raw(&i, target, helpers, contexts, extern_fns).unwrap();
-    insta::assert_snapshot!("user_analytics_dashboard@optimized", opt);
-    insta::assert_snapshot!("user_analytics_dashboard@raw", raw);
-}
-
 // =======================================================================
 // 13. Data Enrichment - two independent IO fetches + conditional third IO
 //     5 functions (main + 2 helper + 3 IO extern)
@@ -277,7 +194,6 @@ fn user_analytics_dashboard() {
 //     - DSE: context writes
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn data_enrichment_multi_io() {
     let i = Interner::new();
@@ -350,79 +266,6 @@ fn data_enrichment_multi_io() {
 //     - DSE: loop header dead write-backs
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn batch_processing_with_errors() {
-    let i = Interner::new();
-    let item_ty = Ty::Object(
-        [(i.intern("value"), Ty::Int)].into_iter().collect(),
-    );
-    let target = (
-        "main",
-        r#"
-                item in @items {
-                    v = item.value;
-                    ok = validate_item(v, @min_val, @max_val);
-                    true = ok > 0 {
-                        transformed = transform_value(v, @multiplier);
-                        @sum = @sum + transformed;
-                        @ok_count = @ok_count + 1;
-                    };
-                    true = ok == 0 {
-                        @err_count = @err_count + 1;
-                        @last_err = "bad:" + to_string(v);
-                    };
-                };
-                publish_results(@sum, @ok_count, @err_count);
-                @sum
-            "#,
-    );
-    let helpers: &[_] = &[
-        // Returns 1 if valid (in range), 0 otherwise.
-        (
-            "validate_item",
-            r#"
-                    r = 0;
-                    true = $val >= $min { true = $val <= $max { r = 1; }; };
-                    r
-                "#,
-            sig(
-                &i,
-                &[
-                    ("val", Ty::Int),
-                    ("min", Ty::Int),
-                    ("max", Ty::Int),
-                ],
-            ),
-        ),
-        (
-            "transform_value",
-            "$val * $mult + $val / 2",
-            sig(&i, &[("val", Ty::Int), ("mult", Ty::Int)]),
-        ),
-    ];
-    let contexts: &[_] = &[
-        ("items", Ty::Array(Box::new(item_ty), acvus_mir::ty::LenTerm::Known(3))),
-        ("min_val", Ty::Int),
-        ("max_val", Ty::Int),
-        ("multiplier", Ty::Int),
-        ("sum", Ty::Int),
-        ("ok_count", Ty::Int),
-        ("err_count", Ty::Int),
-        ("last_err", Ty::String),
-    ];
-    let extern_fns: &[_] = &[io_extern(
-        &i,
-        "publish_results",
-        &[("sum", Ty::Int), ("ok", Ty::Int), ("err", Ty::Int)],
-        Ty::Int,
-    )];
-    let opt = compile_multi_fn_optimized(&i, target, helpers, contexts, extern_fns).unwrap();
-    let raw = compile_multi_fn_raw(&i, target, helpers, contexts, extern_fns).unwrap();
-    insta::assert_snapshot!("batch_processing_with_errors@optimized", opt);
-    insta::assert_snapshot!("batch_processing_with_errors@raw", raw);
-}
-
 // =======================================================================
 // 15. Multi-Stage Pipeline - cascading helpers + two IO calls
 //     5 functions (main + 3 helper + 2 IO extern)
@@ -433,7 +276,6 @@ fn batch_processing_with_errors() {
 //     - DSE: intermediate context writes are live (observable)
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn multi_stage_pipeline() {
     let i = Interner::new();

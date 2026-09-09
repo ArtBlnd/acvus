@@ -1,7 +1,9 @@
 //! A declared bound on an ExternFn's type variable, at the contract: the
 //! solver admits only the declared types, and defers until it knows.
 
-use acvus_mir::graph::{CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer};
+use acvus_mir::graph::{
+    CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
+};
 use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, Ty, TyTerm, TyVarBound, TypeRegistry};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -85,7 +87,8 @@ fn a_type_outside_the_bound_is_rejected_where_it_was_called() {
     let i = Interner::new();
     let errs = check(&i, "add(\"a\", \"b\")").unwrap_err();
     assert!(
-        errs.iter().any(|e| e.contains("outside the declared bound") && e.contains("String")),
+        errs.iter()
+            .any(|e| e.contains("outside the declared bound") && e.contains("String")),
         "{errs:?}"
     );
 }
@@ -96,7 +99,8 @@ fn the_bound_waits_for_the_argument_to_resolve() {
     assert_eq!(check(&i, "g = |x| -> add(x, 1); g(41)").unwrap(), Ty::Int);
     let errs = check(&i, "g = |x| -> add(x, x); g(\"a\")").unwrap_err();
     assert!(
-        errs.iter().any(|e| e.contains("outside the declared bound")),
+        errs.iter()
+            .any(|e| e.contains("outside the declared bound")),
         "{errs:?}"
     );
 }

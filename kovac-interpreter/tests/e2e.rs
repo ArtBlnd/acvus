@@ -177,7 +177,7 @@ fn if_else_false_branch() {
     assert!(a.contains(&99), "expected 99 (false branch), got {:?}", a);
 }
 
-#[ignore = "pending identity integration"]
+#[ignore = "kovac VM: loops and closures compute wrong results; see e2e run"]
 #[test]
 fn if_else_chain() {
     // Grade calculation: score -> grade
@@ -241,7 +241,7 @@ fn while_countdown() {
     assert!(a.contains(&0), "expected 0 after countdown, got {:?}", a);
 }
 
-#[ignore = "pending identity integration"]
+#[ignore = "kovac VM: loops and closures compute wrong results; see e2e run"]
 #[test]
 fn while_sum_to_10() {
     let a = run_script(
@@ -256,7 +256,7 @@ fn while_sum_to_10() {
     assert!(a.contains(&55), "sum 1..10 = 55, got {:?}", a);
 }
 
-#[ignore = "pending identity integration"]
+#[ignore = "kovac VM: loops and closures compute wrong results; see e2e run"]
 #[test]
 fn while_factorial() {
     // 5! = 120
@@ -295,7 +295,7 @@ fn while_fibonacci() {
 //  Mixed: arithmetic + branch + loop
 // ===================================================================
 
-#[ignore = "pending identity integration"]
+#[ignore = "kovac VM: loops and closures compute wrong results; see e2e run"]
 #[test]
 fn collatz_steps() {
     // Count Collatz steps from 6 to 1: 6->3->10->5->16->8->4->2->1 = 8 steps

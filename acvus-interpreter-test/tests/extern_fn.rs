@@ -502,7 +502,6 @@ fn io_two_independent_chains_mir() {
 // Iterate over list, call IO per element, accumulate.
 // Within each iteration: spawn should precede eval.
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn io_in_iteration() {
     let i = Interner::new();
@@ -519,7 +518,7 @@ async fn io_in_iteration() {
     );
     let result = run_script_with_externs(
         &i,
-        "x in @items { @sum = @sum + fetch_by(x); }; @sum",
+        "@items | iter | map(|x| -> fetch_by(x)) | fold(@sum, |a, b| -> a + b)",
         c,
         vec![io_registry()],
     )

@@ -3,7 +3,6 @@
 //! Tests compile multiple local functions, inline, and snapshot the resulting IR.
 //! Organized by category with soundness and completeness coverage.
 
-
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
 use acvus_mir_test::*;
@@ -283,7 +282,6 @@ fn inline_multiple_context_writes() {
 //  4. Closure / Lambda - capture remap, lambda as argument
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_returns_closure_result() {
     // apply_double(xs) = xs | map(|x| -> x + x); main = apply_double([1, 2, 3]) | collect
@@ -294,7 +292,13 @@ fn inline_callee_returns_closure_result() {
         &[(
             "apply_double",
             "$xs | map(|x| -> x + x)",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+            sig(
+                &i,
+                &[(
+                    "xs",
+                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                )],
+            ),
         )],
         &[],
     )
@@ -302,7 +306,6 @@ fn inline_callee_returns_closure_result() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_takes_lambda_arg() {
     // apply(f, x) = f(x) - but f is indirect, so it won't inline further
@@ -315,7 +318,7 @@ fn inline_callee_takes_lambda_arg() {
         &[(
             "transform",
             "$xs | map(|x| -> x * 2)",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+            sig(&i, &[("xs", acvus_ext::list_ty(&i, Ty::Int))]),
         )],
         &[],
     )
@@ -323,7 +326,6 @@ fn inline_callee_takes_lambda_arg() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_with_filter_lambda() {
     // positives(xs) = xs | filter(|x| -> x > 0); main = positives([1, -2, 3]) | collect
@@ -334,7 +336,13 @@ fn inline_callee_with_filter_lambda() {
         &[(
             "positives",
             "$xs | filter(|x| -> x > 0)",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+            sig(
+                &i,
+                &[(
+                    "xs",
+                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                )],
+            ),
         )],
         &[],
     )
@@ -342,7 +350,6 @@ fn inline_callee_with_filter_lambda() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_lambda_captures_param() {
     // add_n(xs, n) = xs | map(|x| -> x + n); main = add_n(@items, 10) | collect
@@ -353,15 +360,26 @@ fn inline_callee_lambda_captures_param() {
         &[(
             "add_n",
             "$xs | map(|x| -> x + $n)",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("n", Ty::Int)]),
+            sig(
+                &i,
+                &[
+                    (
+                        "xs",
+                        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    ),
+                    ("n", Ty::Int),
+                ],
+            ),
         )],
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))],
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_chain_with_lambda() {
     // double_all(xs) = xs | map(|x| -> x * 2)
@@ -375,12 +393,18 @@ fn inline_chain_with_lambda() {
             (
                 "double_all",
                 "$xs | map(|x| -> x * 2)",
-                sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+                sig(
+                    &i,
+                    &[(
+                        "xs",
+                        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    )],
+                ),
             ),
             (
                 "sum_list",
                 "$xs | fold(0, |a, b| -> a + b)",
-                sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+                sig(&i, &[("xs", acvus_ext::list_ty(&i, Ty::Int))]),
             ),
         ],
         &[],
@@ -417,7 +441,10 @@ fn inline_io_extern_inside() {
         qref: QualifiedRef::root(i.intern("fetch")),
         kind: FnKind::Extern { bounds: vec![] },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("id"),
+                lift_to_poly(&Ty::Int),
+            )],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::Opaque.into(),
@@ -457,7 +484,6 @@ fn inline_context_write_propagation() {
 //  6. Soundness rejection - things that must NOT be inlined
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_devirt_known_closure() {
     // Indirect call to a known closure (single MakeClosure def) gets devirtualized and inlined.
@@ -581,7 +607,6 @@ fn inline_field_access_after_call() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_list_collect_pattern() {
     // to_list(xs) = xs | map(|x| -> x * 2) | collect; main = to_list([1, 2, 3])
@@ -592,7 +617,13 @@ fn inline_list_collect_pattern() {
         &[(
             "to_list",
             "$xs | map(|x| -> x * 2) | collect",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+            sig(
+                &i,
+                &[(
+                    "xs",
+                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                )],
+            ),
         )],
         &[],
     )
@@ -617,7 +648,6 @@ fn inline_multiple_context_different_callees() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_uses_builtin_len() {
     // count(xs) = xs | len; main = count([1, 2, 3])
@@ -628,7 +658,13 @@ fn inline_callee_uses_builtin_len() {
         &[(
             "count",
             "$xs | len",
-            sig(&i, &[("xs", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]),
+            sig(
+                &i,
+                &[(
+                    "xs",
+                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                )],
+            ),
         )],
         &[],
     )

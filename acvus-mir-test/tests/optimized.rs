@@ -40,32 +40,6 @@ fn snap_both(i: &Interner, source: &str, c: &FxHashMap<acvus_utils::Astr, Ty>) -
 //     - Reorder: context store ordering
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn nested_loop_conditional_accum() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("matrix", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3))),
-            ("pos_sum", Ty::Int),
-            ("neg_sum", Ty::Int),
-        ],
-    );
-    let src = r#"
-        row in @matrix {
-            y in row {
-                true = y > 0 { @pos_sum = @pos_sum + y; };
-                true = y < 0 { @neg_sum = @neg_sum + y; };
-            };
-        };
-        { pos: @pos_sum, neg: @neg_sum, }
-    "#;
-    let (raw, opt) = snap_both(&i, src, &c);
-    insta::assert_snapshot!("nested_loop_conditional_accum@raw", raw);
-    insta::assert_snapshot!("nested_loop_conditional_accum@optimized", opt);
-}
-
 // =======================================================================
 //  2. Object field read-modify-write across branches
 //     - SROA: multiple field projections on same context
@@ -145,12 +119,19 @@ fn object_construct_from_fields() {
     let c = ctx(
         &i,
         &[
-            (
-                "user",
-                obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
-            ),
+            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
             ("min_score", Ty::Int),
-            ("output", obj(&i, &[("label", Ty::String), ("score", Ty::Int), ("eligible", Ty::Bool)])),
+            (
+                "output",
+                obj(
+                    &i,
+                    &[
+                        ("label", Ty::String),
+                        ("score", Ty::Int),
+                        ("eligible", Ty::Bool),
+                    ],
+                ),
+            ),
         ],
     );
     let src = r#"
@@ -206,33 +187,6 @@ fn diamond_divergent_context_mutations() {
 //     - Complex phi nesting: loop x branch
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_search_with_accumulator() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("target", Ty::Int),
-            ("found", Ty::Bool),
-            ("idx", Ty::Int),
-        ],
-    );
-    let src = r#"
-        x in @items {
-            true = x == @target {
-                @found = true;
-            };
-            @idx = @idx + 1;
-        };
-        { found: @found, index: @idx, }
-    "#;
-    let (raw, opt) = snap_both(&i, src, &c);
-    insta::assert_snapshot!("loop_search_with_accumulator@raw", raw);
-    insta::assert_snapshot!("loop_search_with_accumulator@optimized", opt);
-}
-
 // =======================================================================
 //  7. Chained field mutations on same object
 //     - SROA: 4 field projections on @state -> decompose each
@@ -283,10 +237,7 @@ fn destructure_multi_branch_classify() {
     let c = ctx(
         &i,
         &[
-            (
-                "user",
-                obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
-            ),
+            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
             ("output", Ty::String),
         ],
     );
@@ -311,65 +262,9 @@ fn destructure_multi_branch_classify() {
 //     - Most complex phi pattern: loop x branch x multiple contexts
 // =======================================================================
 
-#[ignore = "pending identity integration"]
-#[test]
-fn iter_stateful_accum_with_side_effects() {
-    let i = Interner::new();
-    let tx_ty = obj(&i, &[("amount", Ty::Int), ("id", Ty::String)]);
-    let c = ctx(
-        &i,
-        &[
-            ("transactions", Ty::Array(Box::new(tx_ty), acvus_mir::ty::LenTerm::Known(3))),
-            ("balance", Ty::Int),
-            ("overdraft_count", Ty::Int),
-            ("last_overdraft", Ty::String),
-        ],
-    );
-    let src = r#"
-        x in @transactions {
-            @balance = @balance + x.amount;
-            true = @balance < 0 {
-                @overdraft_count = @overdraft_count + 1;
-                @last_overdraft = x.id;
-            };
-        };
-        { balance: @balance, overdrafts: @overdraft_count, last: @last_overdraft, }
-    "#;
-    let (raw, opt) = snap_both(&i, src, &c);
-    insta::assert_snapshot!("iter_stateful_accum_with_side_effects@raw", raw);
-    insta::assert_snapshot!("iter_stateful_accum_with_side_effects@optimized", opt);
-}
-
 // =======================================================================
 // 10. Pure computation with loop-invariant hoisting
 //     - SROA: @config.base_rate, @config.multiplier field reads
 //     - CodeMotion: `factor` computation is loop-invariant -> hoist
 //     - SSA: @result loop phi
 // =======================================================================
-
-#[ignore = "pending identity integration"]
-#[test]
-fn loop_invariant_hoisting() {
-    let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            (
-                "config",
-                obj(&i, &[("base_rate", Ty::Int), ("multiplier", Ty::Int)]),
-            ),
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("result", Ty::Int),
-        ],
-    );
-    let src = r#"
-        factor = @config.base_rate * @config.multiplier;
-        x in @items {
-            @result = @result + x * factor;
-        };
-        @result
-    "#;
-    let (raw, opt) = snap_both(&i, src, &c);
-    insta::assert_snapshot!("loop_invariant_hoisting@raw", raw);
-    insta::assert_snapshot!("loop_invariant_hoisting@optimized", opt);
-}

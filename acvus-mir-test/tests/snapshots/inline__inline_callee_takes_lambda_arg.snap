@@ -4,23 +4,23 @@ expression: ir
 ---
 === main ===
      2 |   r0 = list [1 (r1), 2 (r2)]
-     3 |   r3 = cast DequeToList r0
+     3 |   r3 = call #0(r0)
      4 |   r4 = ref $v4
      5 |   r5 = load r4
-     6 |   r6 = call #0(r5)
+     6 |   r6 = call #1(r5)
      7 |   r7 = closure L0 []
-     8 |   r8 = call #1(r6, r7)
-     9 |   r9 = call #2(r8)
+     8 |   r8 = call #2(r6, r7)
+     9 |   r9 = call #3(r8)
     10 |   return r9
 
-    ; r0 (v3) : Deque<Int, Identity(IdentityId(0))>
+    ; r0 (v3) : Array<Int, 2>
     ; r1 (v1) : Int
     ; r2 (v2) : Int
     ; r3 (v4) : List<Int>
     ; r4 (v8) : Ref<List<Int>>
     ; r5 ($xs) : List<Int>
-    ; r6 (v10) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r7 (v11) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r6 (v10) : Iterator<Int, Opaque, #IdentityId(1)>
+    ; r7 (v11) : Fn(Int) -> Int with Opaque
+    ; r8 (map(...)) : Iterator<Int, Opaque, #IdentityId(0)>
     ; r9 (collect(...)) : List<Int>
-    ; r10 (transform(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
+    ; r10 (transform(...)) : Iterator<Int, Opaque, #IdentityId(0)>

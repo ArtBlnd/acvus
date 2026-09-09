@@ -85,21 +85,21 @@ fn run_pipeline_with_registry(
 
     // Init check: field-level definite assignment on CfgBody (pre-SROA).
     {
-        let external_contexts: rustc_hash::FxHashSet<QualifiedRef> = graph
-            .contexts
-            .iter()
-            .map(|c| c.qref)
-            .collect();
+        let external_contexts: rustc_hash::FxHashSet<QualifiedRef> =
+            graph.contexts.iter().map(|c| c.qref).collect();
         let cfg_main = cfg::promote(std::mem::take(&mut module.main));
-        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main, &external_contexts);
+        let init_errors =
+            acvus_mir::validate::init_check::check_init(&cfg_main, &external_contexts);
         module.main = cfg::demote(cfg_main);
         if !init_errors.is_empty() {
             let msgs: Vec<String> = init_errors
                 .iter()
-                .map(|e| format!(
-                    "UninitError: {:?} fields {:?} at [{},{}]",
-                    e.target, e.uninit_fields, e.span.start, e.span.end,
-                ))
+                .map(|e| {
+                    format!(
+                        "UninitError: {:?} fields {:?} at [{},{}]",
+                        e.target, e.uninit_fields, e.span.start, e.span.end,
+                    )
+                })
                 .collect();
             return Err(msgs.join("\n"));
         }
@@ -216,7 +216,10 @@ pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
 }
 
 pub fn items_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
-    FxHashMap::from_iter([(interner.intern("items"), Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))])
+    FxHashMap::from_iter([(
+        interner.intern("items"),
+        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+    )])
 }
 
 /// Compile a **script** source via the graph pipeline and return printed IR.

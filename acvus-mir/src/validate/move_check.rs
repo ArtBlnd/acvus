@@ -38,9 +38,26 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         // Handle - always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
-        // A user-defined value with an identity is a distinct source and moves;
-        // one without is a plain value and copies.
-        Ty::UserDefined { identity_args, .. } => Some(!identity_args.is_empty()),
+        // A user-defined value moves when it is a source of its own or holds
+        // one; otherwise it is a plain value and copies.
+        Ty::UserDefined {
+            identity_args,
+            type_args,
+            ..
+        } => {
+            if !identity_args.is_empty() {
+                return Some(true);
+            }
+            let mut any_move = false;
+            for arg in type_args {
+                match is_move_only(arg) {
+                    Some(true) => any_move = true,
+                    None => return None,
+                    Some(false) => {}
+                }
+            }
+            Some(any_move)
+        }
 
         // Containers - transitive
         Ty::Array(inner, _) | Ty::Option(inner) => is_move_only(inner),

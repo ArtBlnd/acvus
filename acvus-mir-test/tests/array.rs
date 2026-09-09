@@ -1,6 +1,8 @@
 //! Array<T, N> at its contracts.
 
-use acvus_mir::graph::{CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer};
+use acvus_mir::graph::{
+    CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
+};
 use acvus_mir::ty::{LenTerm, PolyBuilder, Ty, TyTerm};
 use acvus_mir_test::compile_script_ir;
 use acvus_utils::{Freeze, Interner};

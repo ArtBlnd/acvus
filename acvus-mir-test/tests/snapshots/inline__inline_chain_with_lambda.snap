@@ -4,36 +4,34 @@ expression: ir
 ---
 === main ===
      3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   r4 = cast DequeToList r0
-     5 |   r5 = ref $v5
-     6 |   r6 = load r5
-     7 |   r7 = call #0(r6)
-     8 |   r8 = closure L0 []
-     9 |   r9 = call #1(r7, r8)
-    10 |   r10 = call #2(r9)
-    11 |   r11 = ref $collect(...)
-    12 |   r12 = load r11
-    13 |   r13 = call #0(r12)
-    15 |   r14 = closure L0 []
-    16 |   r15 = call #3(r13, 0 (r16), r14)
-    17 |   return r15
+     4 |   r4 = ref $v4
+     5 |   r5 = load r4
+     6 |   r6 = call #0(r5)
+     7 |   r7 = closure L0 []
+     8 |   r8 = call #1(r6, r7)
+     9 |   r9 = call #2(r8)
+    10 |   r10 = ref $collect(...)
+    11 |   r11 = load r10
+    12 |   r12 = call #3(r11)
+    14 |   r13 = closure L0 []
+    15 |   r14 = call #4(r12, 0 (r15), r13)
+    16 |   return r14
 
-    ; r0 (v4) : Deque<Int, Identity(IdentityId(0))>
+    ; r0 (v4) : Array<Int, 3>
     ; r1 (v1) : Int
     ; r2 (v2) : Int
     ; r3 (v3) : Int
-    ; r4 (v5) : List<Int>
-    ; r5 (v10) : Ref<List<Int>>
-    ; r6 ($xs) : List<Int>
-    ; r7 (v12) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r8 (v13) : Fn(Int) -> Int
-    ; r9 (map(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r10 (collect(...)) : List<Int>
-    ; r11 (v16) : Ref<List<Int>>
-    ; r12 ($xs) : List<Int>
-    ; r13 (v18) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r14 (v20) : Fn(Int, Int) -> Int
-    ; r15 (fold(...)) : Int
-    ; r16 (v19) : Int
-    ; r17 (double_all(...)) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r18 (sum_list(...)) : Int
+    ; r4 (v9) : Ref<Array<Int, 3>>
+    ; r5 ($xs) : Array<Int, 3>
+    ; r6 (v11) : Iterator<Int, Opaque, #IdentityId(1)>
+    ; r7 (v12) : Fn(Int) -> Int with Opaque
+    ; r8 (map(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r9 (collect(...)) : List<Int>
+    ; r10 (v15) : Ref<List<Int>>
+    ; r11 ($xs) : List<Int>
+    ; r12 (v17) : Iterator<Int, Opaque, #IdentityId(3)>
+    ; r13 (v19) : Fn(Int, Int) -> Int with Opaque
+    ; r14 (fold(...)) : Int
+    ; r15 (v18) : Int
+    ; r16 (sum_list(...)) : Int
+    ; r17 (double_all(...)) : Iterator<Int, Opaque, #IdentityId(0)>

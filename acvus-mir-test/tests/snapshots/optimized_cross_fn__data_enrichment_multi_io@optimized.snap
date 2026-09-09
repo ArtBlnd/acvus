@@ -12,50 +12,55 @@ expression: opt
      1 |   r1 = ref @alert_count
      2 |   r2 = ref @alert_count
      3 |   r3 = load r2
-     4 |   r4 = call #0(r3)
-     5 |   r5 = call #1(r3)
+     4 |   r4 = spawn #0(r3)
+     5 |   r5 = spawn #1(r3)
      6 |   r2 = ref @alert_count
-     7 |   r6 = 1 (r4) + 100 (r5)
-     8 |   r5 = load r2
-     9 |   r7 = r6 * 100 (r5)
-    11 |   r6 = r7 / 100 (r5)
-    13 |   r8 = call #2(1 (r4))
-    14 |   r9 = T2 + r8
-    16 |   r8 = r9 + T2
-    17 |   r10 = call #2(r6)
-    18 |   r9 = r8 + T2
-    20 |   r8 = r9 + T2
-    21 |   r2 = ref @alert_count
-    22 |   r4 = load r2
-    23 |   r11 = r6 > 1 (r4)
-    24 |   r12 = test r11 == true
-    25 |   r2 = ref @alert_count
-    27 |   r13 = ref @result_label
-    28 |   r14 = ref @result_score
-    29 |   jump_if r12 then L0 else L1(r0)
-    30 | L0:
-    31 |   r0 = call #3(r3, r6)
-    32 |   r0 = load r2
-    33 |   r3 = r0 + 1 (r4)
-    34 |   jump L1(r3)
-    35 | L1(r0: Int):
-    36 |   store r14 = r6
-    37 |   store r1 = r0
-    38 |   store r13 = r8
-    39 |   return r6
+     7 |   r6 = eval r4
+     8 |   r7 = eval r5
+     9 |   r8 = 1 (r6) + 100 (r7)
+    10 |   r7 = load r2
+    11 |   r9 = r8 * 100 (r7)
+    13 |   r8 = r9 / 100 (r7)
+    15 |   r10 = call #2(1 (r6))
+    16 |   r11 = T2 + r10
+    18 |   r10 = r11 + T2
+    19 |   r12 = call #2(r8)
+    20 |   r11 = r10 + T2
+    22 |   r10 = r11 + T2
+    23 |   r2 = ref @alert_count
+    24 |   r6 = load r2
+    25 |   r13 = r8 > 1 (r6)
+    26 |   r14 = test r13 == true
+    27 |   r2 = ref @alert_count
+    29 |   r15 = ref @result_label
+    30 |   r16 = ref @result_score
+    31 |   jump_if r14 then L0 else L1(r0)
+    32 | L0:
+    33 |   r4 = spawn #3(r3, r8)
+    34 |   r0 = load r2
+    35 |   r3 = r0 + 1 (r6)
+    36 |   r0 = eval r4
+    37 |   jump L1(r3)
+    38 | L1(r0: Int):
+    39 |   store r16 = r8
+    40 |   store r1 = r0
+    41 |   store r15 = r10
+    42 |   return r8
 
     ; r0 (@alert_count) : Int
     ; r1 (@alert_count) : Ref<Int>
     ; r2 (@alert_count) : Ref<Int>
     ; r3 (@user_id) : Int
-    ; r4 (@threshold) : Int
-    ; r5 (@weight) : Int
-    ; r6 (v7) : Int
-    ; r7 (v8) : Int
-    ; r8 (to_string(...)) : String
-    ; r9 (v11) : String
+    ; r4 (v5) : Handle<Int>
+    ; r5 (v6) : Handle<Int>
+    ; r6 (@threshold) : Int
+    ; r7 (@weight) : Int
+    ; r8 (v9) : Int
+    ; r9 (v10) : Int
     ; r10 (to_string(...)) : String
-    ; r11 (v12) : Bool
-    ; r12 (v13) : Bool
-    ; r13 (@result_label) : Ref<String>
-    ; r14 (@result_score) : Ref<Int>
+    ; r11 (v13) : String
+    ; r12 (to_string(...)) : String
+    ; r13 (v14) : Bool
+    ; r14 (v15) : Bool
+    ; r15 (@result_label) : Ref<String>
+    ; r16 (@result_score) : Ref<Int>

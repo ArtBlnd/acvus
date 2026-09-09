@@ -124,5 +124,8 @@ fn opaque_call_is_spawn_split_and_pure_call_is_not() {
         &[extern_fn(&i, "pure_fn", Effect::Pure)],
     )
     .unwrap();
-    assert!(!pure.contains("spawn"), "a Pure call must not be split:\n{pure}");
+    assert!(
+        !pure.contains("spawn"),
+        "a Pure call must not be split:\n{pure}"
+    );
 }

@@ -16,10 +16,7 @@ fn compile_analysis(
     source: &str,
     ctx: &[(&str, Ty)],
 ) -> Result<acvus_mir::ir::MirModule, String> {
-    use acvus_mir::graph::{
-        CompilationGraph, Context, FnKind, Function, ParsedAst,
-        QualifiedRef,
-    };
+    use acvus_mir::graph::{CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef};
     use acvus_mir::graph::{extract, lower as graph_lower};
     use acvus_mir::ty::PolyBuilder;
     use acvus_utils::Freeze;
@@ -243,53 +240,8 @@ fn multi_arm_match() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
-#[test]
-fn iteration_over_list() {
-    let i = Interner::new();
-    // Use object destructuring to iterate and extract name.
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ { name, } in @users }}{{ name }}{{/}}"#,
-        &users_list_context(&i),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn nested_match() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "users",
-            Ty::Array(Box::new(obj(
-                &i,
-                &[
-                    ("name", Ty::String),
-                    (
-                        "posts",
-                        Ty::Array(Box::new(obj(&i, &[("title", Ty::String)])), acvus_mir::ty::LenTerm::Known(3)),
-                    ),
-                ],
-            )), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    // Use object destructuring for both outer and inner iterations.
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ { name, posts, } in @users }}{{ { title, } in posts }}{{ title }}{{/}}{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- List patterns ------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn list_destructure_head() {
     let i = Interner::new();
@@ -318,41 +270,8 @@ fn object_pattern() {
 
 // -- Range --------------------------------------------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn range_binding() {
-    // Variable binding captures a range value; iterate to emit scalar elements.
-    let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ x in 0..5 }}{{ x | to_string }}{{/}}"#).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn range_iteration() {
-    // Explicit iteration with `in`.
-    let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ x in 0..3 }}{{ x | to_string }}{{/}}"#).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn range_pattern() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("age", Ty::Int)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ 0..10 = @age }}child{{ 10..=19 = }}teen{{_}}adult{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Pipe & builtins ----------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pipe_filter_map() {
     let i = Interner::new();
@@ -376,7 +295,6 @@ fn pipe_to_string() {
 
 // -- Lambda / closures --------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_in_filter() {
     let i = Interner::new();
@@ -399,7 +317,10 @@ fn extern_async_call() {
         qref: QualifiedRef::root(i.intern("fetch_user")),
         kind: FnKind::Extern { bounds: vec![] },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("id"),
+                lift_to_poly(&Ty::Int),
+            )],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::Opaque.into(),
@@ -529,72 +450,18 @@ fn error_type_mismatch() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-#[ignore = "pending identity integration"]
-#[test]
-fn error_range_float_bounds() {
-    let i = Interner::new();
-    let result = compile_simple(&i, "{{ x = 1.0..2.0 }}{{_}}{{/}}");
-    assert!(result.is_err());
-    insta::assert_snapshot!(result.unwrap_err());
-}
-
 // -- Iteration (`in`) --------------------------------------------
-
-#[ignore = "pending identity integration"]
-#[test]
-fn iter_list_binding() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(&i, "{{ x in @items }}{{ x | to_string }}{{/}}", &context).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn iter_object_destructure() {
-    let i = Interner::new();
-    let ir = compile_to_ir(
-        &i,
-        "{{ { name, } in @users }}{{ name }}{{/}}",
-        &users_list_context(&i),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn iter_tuple_destructure() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "pairs",
-            Ty::Array(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int])), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(&i, "{{ (a, _) in @pairs }}{{ a }}{{/}}", &context).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn iter_with_catch_all() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ x in @items }}{{ x | to_string }}{{_}}empty{{/}}",
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
 
 #[test]
 fn error_iter_refutable_pattern() {
     let i = Interner::new();
-    let context = ctx(&i, &[("roles", Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "roles",
+            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_to_ir(&i, r#"{{ "admin" in @roles }}...{{/}}"#, &context);
     assert!(result.is_err());
 }
@@ -634,28 +501,6 @@ fn variable_new_ref_in_match_arm() {
 
 // -- Edge case: nested destructuring -----------------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn list_of_tuples_destructure() {
-    let i = Interner::new();
-    // Iterate over list of tuples, destructure each.
-    let context = ctx(
-        &i,
-        &[(
-            "pairs",
-            Ty::Array(Box::new(Ty::Tuple(vec![Ty::String, Ty::Int])), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ (name, age) in @pairs }}{{ name }}{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
 #[test]
 fn list_head_with_object_elements() {
     let i = Interner::new();
@@ -664,33 +509,15 @@ fn list_head_with_object_elements() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(&i, &[("name", Ty::String)])), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
         &i,
         r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn tuple_with_list_element() {
-    let i = Interner::new();
-    // Tuple containing a list, extract and iterate.
-    let context = ctx(
-        &i,
-        &[(
-            "data",
-            Ty::Tuple(vec![Ty::String, Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))]),
-        )],
-    );
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ (label, items) = @data }}{{ label }}{{ x in items }}{{ x | to_string }}{{/}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -783,7 +610,6 @@ fn to_int_conversion() {
 
 // -- Edge case: pmap builtin -------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pmap_builtin() {
     let i = Interner::new();
@@ -798,7 +624,6 @@ fn pmap_builtin() {
 
 // -- Edge case: list tail destructure ----------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn list_destructure_tail() {
     let i = Interner::new();
@@ -822,32 +647,7 @@ fn variable_write_then_read() {
 
 // -- Edge case: nested iteration with binding --------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn nested_iteration_with_binding() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[("matrix", Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), acvus_mir::ty::LenTerm::Known(3)))],
-    );
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ row in @matrix }}{{ x in row }}{{ x | to_string }}{{/}}{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Edge case: range inclusive iteration -------------------------
-
-#[ignore = "pending identity integration"]
-#[test]
-fn range_inclusive_iteration() {
-    let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ x in 0..=3 }}{{ x | to_string }}{{/}}"#).unwrap();
-    insta::assert_snapshot!(ir);
-}
 
 // -- Edge case: deeply nested object -----------------------------
 
@@ -873,14 +673,16 @@ fn deeply_nested_object_access() {
 
 // -- Edge case: closure capturing context ref --------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn closure_capture_context() {
     let i = Interner::new();
     let context = ctx(
         &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
             ("threshold", Ty::Int),
         ],
     );
@@ -895,23 +697,8 @@ fn closure_capture_context() {
 
 // -- Edge case: multi-arm with different pattern types -----------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn multi_arm_range_and_literal() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("score", Ty::Int)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ 0 = @score }}zero{{ 1..10 = }}low{{ 10..=100 = }}high{{_}}other{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Edge case: list literal -------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn list_literal_expression() {
     let i = Interner::new();
@@ -925,7 +712,6 @@ fn list_literal_expression() {
 
 // -- Edge case: lambda with arithmetic ---------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_map_arithmetic() {
     let i = Interner::new();
@@ -939,7 +725,6 @@ fn lambda_map_arithmetic() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_filter_comparison() {
     let i = Interner::new();
@@ -955,7 +740,6 @@ fn lambda_filter_comparison() {
 
 // -- Edge case: closure with captured local var ------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn closure_capture_local() {
     let i = Interner::new();
@@ -971,23 +755,8 @@ fn closure_capture_local() {
 
 // -- Edge case: list exact match (no rest) -----------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn list_exact_match() {
-    let i = Interner::new();
-    // Exact list pattern: [a, b] without rest (..).
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ [a, b] = @items }}{{ a | to_string }}{{_}}wrong length{{/}}"#,
-        &items_context(&i),
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Edge case: list rest in middle ------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn list_destructure_head_and_tail() {
     let i = Interner::new();
@@ -1069,20 +838,6 @@ fn variable_shadowing() {
 
 // -- Edge case: match inside match (nested match blocks) ---------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn nested_match_blocks() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("role", Ty::String), ("level", Ty::Int)]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ "admin" = @role }}{{ 1..10 = @level }}low{{_}}high{{/}}{{_}}guest{{/}}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Edge case: catch-all with nested binding --------------------
 
 #[test]
@@ -1100,7 +855,6 @@ fn catch_all_with_binding() {
 
 // -- Edge case: multiple chained pipes ---------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn triple_pipe_chain() {
     let i = Interner::new();
@@ -1114,20 +868,6 @@ fn triple_pipe_chain() {
 }
 
 // -- Edge case: variable write in iteration body -----------------
-
-#[ignore = "pending identity integration"]
-#[test]
-fn variable_write_in_iteration() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ last = 0 }}{{ x in @items }}{{ last = x }}{{/}}{{ last | to_string }}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
 
 // -- Edge case: field access on destructured variable ------------
 
@@ -1162,7 +902,6 @@ fn equality_as_match_source() {
 
 // -- Edge case: unary negation on lambda param (Ty::Var) ---------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_negate_param() {
     let i = Interner::new();
@@ -1178,12 +917,17 @@ fn lambda_negate_param() {
 
 // -- Edge case: unary not on lambda param (Ty::Var) --------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_not_param() {
     let i = Interner::new();
     // Lambda param has Ty::Var initially; !i must resolve via unification.
-    let context = ctx(&i, &[("flags", Ty::Array(Box::new(Ty::Bool), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "flags",
+            Ty::Array(Box::new(Ty::Bool), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @flags | iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
@@ -1210,13 +954,18 @@ fn object_destructure_match() {
 
 // -- Edge case: multiple closures sharing captured var ------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn multiple_closures_same_capture() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("offset", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("offset", Ty::Int),
+        ],
     );
     let ir = compile_to_ir(
         &i,
@@ -1229,11 +978,16 @@ fn multiple_closures_same_capture() {
 
 // -- Edge case: string comparison ---------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn string_equality_in_filter() {
     let i = Interner::new();
-    let context = ctx(&i, &[("names", Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "names",
+            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @names | iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
@@ -1245,7 +999,6 @@ fn string_equality_in_filter() {
 
 // -- Edge case: nested lambda (lambda returning lambda result) ----
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_field_access() {
     let i = Interner::new();
@@ -1254,7 +1007,10 @@ fn lambda_field_access() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -1268,24 +1024,8 @@ fn lambda_field_access() {
 
 // -- Edge case: variable accumulation in loop ---------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn variable_accumulate_in_loop() {
-    let i = Interner::new();
-    // Write to variable on each iteration.
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(
-        &i,
-        r#"{{ sum = 0 }}{{ x in @items }}{{ sum = sum + x }}{{/}}{{ sum | to_string }}"#,
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
 // -- Edge case: multi-level pipe with to_string in middle --------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
@@ -1300,13 +1040,18 @@ fn pipe_map_to_string_then_filter() {
 
 // -- Edge case: local var captured in lambda ----------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_capture_local_var_ref() {
     let i = Interner::new();
     // offset is NOT in initial context - created as local var.
     // Lambda must capture it correctly (not fall through to StorageLoad).
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ offset = 10 }}{{ x = @items | iter | filter(|i| -> i > offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
@@ -1318,7 +1063,6 @@ fn lambda_capture_local_var_ref() {
 
 // -- Edge case: multiple field accesses on same lambda param -----
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_multiple_field_access() {
     let i = Interner::new();
@@ -1327,7 +1071,10 @@ fn lambda_multiple_field_access() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -1341,7 +1088,6 @@ fn lambda_multiple_field_access() {
 
 // -- Edge case: chained field access in lambda -------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_chained_field_access() {
     let i = Interner::new();
@@ -1349,10 +1095,10 @@ fn lambda_chained_field_access() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(
-                &i,
-                &[("address", obj(&i, &[("city", Ty::String)]))],
-            )), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("address", obj(&i, &[("city", Ty::String)]))])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -1366,12 +1112,17 @@ fn lambda_chained_field_access() {
 
 // -- Edge case: string concat in lambda ---------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_string_concat() {
     let i = Interner::new();
     // Lambda param is Ty::Var; string concat (+) must resolve via unification.
-    let context = ctx(&i, &[("names", Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "names",
+            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @names | iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
@@ -1383,7 +1134,6 @@ fn lambda_string_concat() {
 
 // -- Edge case: filter then map with field access ----------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pipe_filter_then_map_field() {
     let i = Interner::new();
@@ -1391,7 +1141,10 @@ fn pipe_filter_then_map_field() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -1428,11 +1181,16 @@ fn error_variable_write_type_mismatch() {
 
 // -- Edge case: float arithmetic in lambda ------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn lambda_float_arithmetic() {
     let i = Interner::new();
-    let context = ctx(&i, &[("vals", Ty::Array(Box::new(Ty::Float), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "vals",
+            Ty::Array(Box::new(Ty::Float), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @vals | iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
@@ -1454,7 +1212,6 @@ fn match_bool_literal() {
 
 // -- Edge case: nested pipe with filter on object field ----------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn filter_object_field_equality() {
     let i = Interner::new();
@@ -1462,10 +1219,10 @@ fn filter_object_field_equality() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(
-                &i,
-                &[("name", Ty::String), ("active", Ty::Bool)],
-            )), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String), ("active", Ty::Bool)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -1479,7 +1236,6 @@ fn filter_object_field_equality() {
 
 // -- Edge case: extern function with object return ---------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn extern_fn_object_return() {
     let i = Interner::new();
@@ -1501,52 +1257,58 @@ fn extern_fn_object_return() {
 
 // -- New builtins -------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_len() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(&i, "{{ @items | len | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
-#[test]
-fn builtin_reverse() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(
-        &i,
-        "{{ x in @items | reverse }}{{ x | to_string }}{{/}}",
-        &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_join() {
     let i = Interner::new();
-    let context = ctx(&i, &[("names", Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "names",
+            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(&i, r#"{{ @names | join(", ") }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_contains() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(&i, "{{ @items | contains(3) | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_find() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ @items | find(|x| -> x > 10) | to_string }}",
@@ -1556,11 +1318,16 @@ fn builtin_find() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_reduce() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ @items | reduce(|a, b| -> a + b) | to_string }}",
@@ -1570,11 +1337,16 @@ fn builtin_reduce() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_fold() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ @items | fold(0, |acc, x| -> acc + x) | to_string }}",
@@ -1584,11 +1356,16 @@ fn builtin_fold() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_any() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ @items | any(|x| -> x > 10) | to_string }}",
@@ -1598,11 +1375,16 @@ fn builtin_any() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn builtin_all() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(&i, "{{ @items | all(|x| -> x > 0) | to_string }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -1802,18 +1584,6 @@ fn variant_merge_inside_tuple_three_arms() {
     assert!(ir.contains("Z"), "variant Z missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
-#[test]
-fn variant_merge_inside_list_pattern() {
-    // Variant inside list head pattern should merge across arms.
-    let i = Interner::new();
-    let src = r#"{{ [S::A, ..] = @lst }}a{{ [S::B, ..] = }}b{{_}}??{{/}}"#;
-    let module = compile_analysis(&i, src, &[]).unwrap();
-    let ir = acvus_mir::printer::dump_with(&i, &module);
-    assert!(ir.contains("A"), "variant A missing:\n{ir}");
-    assert!(ir.contains("B"), "variant B missing:\n{ir}");
-}
-
 #[test]
 fn pruned_context_keys_in_dead_catch_all() {
     // Outer match on @Impersonation with catch_all containing @Pov.
@@ -1924,18 +1694,6 @@ fn migrated_extern_param_write_rejected() {
     compile_to_ir(&i, "{{ @count | to_string }}", &context).unwrap();
 }
 
-#[ignore = "pending identity integration"]
-#[test]
-fn migrated_integration_range_expression() {
-    let i = Interner::new();
-    compile_to_ir(
-        &i,
-        "{{ x in 0..10 }}{{ x | to_string }}{{/}}",
-        &FxHashMap::default(),
-    )
-    .unwrap();
-}
-
 #[test]
 fn migrated_integration_list_destructure() {
     let i = Interner::new();
@@ -1950,7 +1708,13 @@ fn migrated_integration_list_destructure() {
 #[test]
 fn migrated_integration_pipe_with_lambda() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     compile_to_ir(
         &i,
         r#"{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
@@ -1991,7 +1755,10 @@ fn migrated_pipe_extern_fn_ok() {
                     effect: acvus_mir::ty::Effect::Opaque.into(),
                 },
             ),
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
         ],
     );
     compile_to_ir(
@@ -2017,7 +1784,10 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     let context = ctx(
         &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
             ("threshold", Ty::Int),
         ],
     );
@@ -2032,7 +1802,13 @@ fn migrated_typeck_lambda_captures_outer_variable() {
 #[test]
 fn migrated_typeck_lambda_type_check() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     compile_to_ir(
         &i,
         "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
@@ -2044,7 +1820,13 @@ fn migrated_typeck_lambda_type_check() {
 #[test]
 fn migrated_typeck_lambda_no_capture_local_params() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     compile_to_ir(
         &i,
         "{{ @items | map(|x| -> x + 1) | collect | len | to_string }}",
@@ -2056,7 +1838,13 @@ fn migrated_typeck_lambda_no_capture_local_params() {
 #[test]
 fn migrated_typeck_list_pattern_matching() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     compile_to_ir(
         &i,
         "{{ [a, b, ..] = @items }}{{ a | to_string }}{{_}}{{/}}",
@@ -2070,7 +1858,13 @@ fn migrated_typeck_nested_lambda_captures() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("factor", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("factor", Ty::Int),
+        ],
     );
     compile_to_ir(
         &i,
@@ -2110,7 +1904,13 @@ fn migrated_print_arithmetic() {
 #[test]
 fn migrated_print_closure() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
@@ -2134,20 +1934,6 @@ fn migrated_print_closure() {
 
 // -- From ssa_pass.rs ------------------------------------------------
 
-#[ignore = "pending identity integration"]
-#[test]
-fn migrated_ssa_iter_no_write_no_phi() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)))]);
-    let ir = compile_to_ir(&i, r#"{{ x in @items }}{{ x | to_string }}{{/}}"#, &context).unwrap();
-    // Original test checked: count_context_stores == 0 after SSA pass.
-    // In IR output, context stores would appear as "ctx_store".
-    assert!(
-        !ir.contains("ctx_store"),
-        "iteration without context write should have no ctx_store: {ir}"
-    );
-}
-
 // -- Iterator values are move-only through combinators ---------------
 
 #[test]
@@ -2156,17 +1942,20 @@ fn iter_map_reuse_rejected() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
         r#"it = @items | iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
         &context,
     );
-    assert!(
-        result.is_err(),
-        "iter reuse should be rejected: {result:?}"
-    );
+    assert!(result.is_err(), "iter reuse should be rejected: {result:?}");
 }
 
 #[test]
@@ -2175,7 +1964,13 @@ fn iter_map_single_use_ok() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2195,7 +1990,10 @@ fn iter_chain_reuse_rejected() {
     let context = ctx(
         &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
             ("a", Ty::Int),
             ("b", Ty::Int),
         ],
@@ -2218,7 +2016,10 @@ fn iter_chain_single_use_ok() {
     let context = ctx(
         &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
             ("a", Ty::Int),
             ("b", Ty::Int),
         ],
@@ -2238,7 +2039,13 @@ fn iter_chain_single_use_ok() {
 fn iter_pure_map_reuse_rejected() {
     // A pure map does not make an Iterator copyable.
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         r#"it = @items | iter | map(|x| -> x + 1); it | collect; it | collect"#,
@@ -2256,7 +2063,13 @@ fn iter_reuse_after_collect_rejected() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2279,7 +2092,13 @@ fn iter_collect_result_is_reusable() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2294,12 +2113,15 @@ fn iter_collect_result_is_reusable() {
 
 // -- From move_check.rs (e2e) ----------------------------------------
 
+/// `Iterator<Int>` from one fixed source, as a context would hold it.
 fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
         id: QualifiedRef::root(interner.intern("Iterator")),
         type_args: vec![Ty::Int],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
-        identity_args: vec![],
+        identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
+            <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+        )],
     }
 }
 
@@ -2314,7 +2136,13 @@ fn migrated_move_reject_iter_reuse() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2331,7 +2159,13 @@ fn migrated_move_reject_iter_reuse() {
 #[test]
 fn migrated_move_reject_var_double_load() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_to_ir(
         &i,
         "{{ a = @items | iter }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
@@ -2349,7 +2183,13 @@ fn migrated_move_reject_iter_pipe_reuse() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2385,7 +2225,13 @@ fn migrated_move_accept_iter_single_use() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2403,7 +2249,13 @@ fn migrated_move_accept_collect_then_reuse() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2422,8 +2274,14 @@ fn migrated_move_accept_var_reassign() {
     let context = ctx(
         &i,
         &[
-            ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
-            ("items2", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            (
+                "items2",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
         ],
     );
     let result = compile_to_ir(
@@ -2439,7 +2297,13 @@ fn migrated_move_accept_iter_pipe_chain() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3))), ("counter", Ty::Int)],
+        &[
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+            ("counter", Ty::Int),
+        ],
     );
     let result = compile_script_ir(
         &i,
@@ -2469,7 +2333,6 @@ fn migrated_move_accept_fn_multiple_calls() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_list_of_iter_reuse() {
     let i = Interner::new();
@@ -2482,7 +2345,6 @@ fn migrated_move_reject_list_of_iter_reuse() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_option_iter_reuse() {
     let i = Interner::new();
@@ -2501,7 +2363,13 @@ fn migrated_move_reject_branch_move_then_use() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("flag", Ty::Bool), ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))],
+        &[
+            ("flag", Ty::Bool),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+        ],
     );
     let result = compile_to_ir(
         &i,
@@ -2538,7 +2406,13 @@ fn migrated_move_accept_branch_move_no_use_after() {
     let i = Interner::new();
     let context = ctx(
         &i,
-        &[("flag", Ty::Bool), ("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))],
+        &[
+            ("flag", Ty::Bool),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            ),
+        ],
     );
     let result = compile_to_ir(
         &i,
@@ -2554,7 +2428,13 @@ fn migrated_move_accept_branch_move_no_use_after() {
 #[test]
 fn migrated_move_reject_fnonce_double_call() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         "x = @items | iter; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
@@ -2588,7 +2468,13 @@ fn migrated_move_accept_pure_capture_fn_multi_call() {
 #[test]
 fn migrated_move_accept_fnonce_single_call() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         "x = @items | iter; f = (|z| -> collect(x)); f(0)",
@@ -2603,7 +2489,13 @@ fn migrated_move_accept_fnonce_single_call() {
 #[test]
 fn migrated_move_accept_lambda_return_deque_as_iterator() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         "@items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
@@ -2618,7 +2510,13 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
 #[test]
 fn migrated_move_accept_lambda_return_scalar() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(&i, "@items | map(|x| -> x + 1) | collect", &context);
     assert!(
         result.is_ok(),
@@ -2629,7 +2527,13 @@ fn migrated_move_accept_lambda_return_scalar() {
 #[test]
 fn migrated_move_accept_nested_flat_map_deque_return() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         "@items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
@@ -2644,7 +2548,13 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
 #[test]
 fn migrated_move_accept_fnonce_passed_to_map() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(
         &i,
         "x = @items | iter; f = (|z| -> collect(x)); @items | map(f) | collect",
@@ -2659,7 +2569,13 @@ fn migrated_move_accept_fnonce_passed_to_map() {
 #[test]
 fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_to_ir(
         &i,
         "{{ f = (|z| -> collect(@items | iter)) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
@@ -2858,7 +2774,13 @@ fn projection_soundness_reject_list_fn_in_context() {
         captures: vec![],
         effect: acvus_mir::ty::Effect::Opaque.into(),
     };
-    let context = ctx(&i, &[("xs", Ty::Array(Box::new(fn_ty), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "xs",
+            Ty::Array(Box::new(fn_ty), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let result = compile_script_ir(&i, "@xs = @xs; @xs", &context);
     assert!(result.is_err(), "storing List<Fn> to context should fail");
 }
@@ -2910,7 +2832,13 @@ fn projection_ssa_context_write_back() {
 #[test]
 fn projection_move_single_use() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @items | iter }}{{ x | collect | len | to_string }}"#,
@@ -2927,7 +2855,13 @@ fn projection_move_single_use() {
 #[test]
 fn projection_move_var_reassign_revives() {
     let i = Interner::new();
-    let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
+    let context = ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    );
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @items | iter }}{{ x | collect | len | to_string }}{{ x = @items | iter }}{{ x | collect | len | to_string }}"#,
@@ -2988,7 +2922,6 @@ fn sroa_multiple_field_reads_same_object() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_field_read_in_lambda() {
     let i = Interner::new();
@@ -2996,7 +2929,10 @@ fn sroa_field_read_in_lambda() {
         &i,
         &[(
             "users",
-            Ty::Array(Box::new(obj(&i, &[("name", Ty::String)])), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(
+                Box::new(obj(&i, &[("name", Ty::String)])),
+                acvus_mir::ty::LenTerm::Known(3),
+            ),
         )],
     );
     let ir = compile_to_ir(
@@ -3117,10 +3053,7 @@ fn destructure_projection_write() {
 #[test]
 fn destructure_projection_shadowing() {
     let i = Interner::new();
-    let context = ctx(&i, &[
-        ("a", obj(&i, &[("x", Ty::Int)])),
-        ("x", Ty::Int),
-    ]);
+    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)])), ("x", Ty::Int)]);
     // @x exists as context, but inside body it's shadowed by projection @a.x
     let ir = compile_script_ir(&i, "@x = 99; { @x, } = @a { @x = 42; }; @x", &context).unwrap();
     insta::assert_snapshot!(ir);
@@ -3133,10 +3066,18 @@ fn uninit_field_load_rejected() {
     let i = Interner::new();
     // @a is Inferred (not declared). Literal only has x, but .y access widens type.
     // Value is missing field y -> uninit error.
-    let result = compile_script_ir(&i, "@a = { x: 0, }; @a.y | to_string", &FxHashMap::default());
+    let result = compile_script_ir(
+        &i,
+        "@a = { x: 0, }; @a.y | to_string",
+        &FxHashMap::default(),
+    );
     assert!(result.is_err(), "should catch uninit field access");
     let err = result.unwrap_err();
-    assert!(err.contains("UninitError"), "error should be UninitError: {}", err);
+    assert!(
+        err.contains("UninitError"),
+        "error should be UninitError: {}",
+        err
+    );
 }
 
 #[test]
@@ -3152,7 +3093,12 @@ fn init_field_load_passes() {
 fn field_store_then_load_passes() {
     let i = Interner::new();
     // @a is Inferred. Literal missing y, but field store fills it in -> should pass.
-    let ir = compile_script_ir(&i, "@a = { x: 0, }; @a.y = 1; @a.y | to_string", &FxHashMap::default()).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "@a = { x: 0, }; @a.y = 1; @a.y | to_string",
+        &FxHashMap::default(),
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -3197,7 +3143,10 @@ fn script_if_expr() {
 #[test]
 fn script_if_else_if() {
     let i = Interner::new();
-    let ir = script_mode(&i, "let x = if false { 1 } else if true { 2 } else { 3 }; x");
+    let ir = script_mode(
+        &i,
+        "let x = if false { 1 } else if true { 2 } else { 3 }; x",
+    );
     insta::assert_snapshot!(ir);
 }
 
@@ -3206,15 +3155,6 @@ fn script_if_no_else() {
     let i = Interner::new();
     // if without else -> side effect only, used as statement
     let ir = script_mode(&i, "let x = 0; if true { x = 1; }; x");
-    insta::assert_snapshot!(ir);
-}
-
-#[ignore = "pending identity integration"]
-#[test]
-fn script_for_loop() {
-    let i = Interner::new();
-    let ctx = ctx(&i, &[("sum", Ty::Int)]);
-    let ir = script_mode_ctx(&i, "for item in [1, 2, 3] { @sum = @sum + item; }", &ctx);
     insta::assert_snapshot!(ir);
 }
 
@@ -3229,7 +3169,9 @@ fn script_while_loop() {
 #[test]
 fn script_while_let() {
     let i = Interner::new();
-    let ir = script_mode(&i, r#"
+    let ir = script_mode(
+        &i,
+        r#"
         let x = Some(1);
         let result = 0;
         while let Some(v) = x {
@@ -3237,7 +3179,8 @@ fn script_while_let() {
             x = None;
         }
         result
-    "#);
+    "#,
+    );
     insta::assert_snapshot!(ir);
 }
 

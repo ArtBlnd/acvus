@@ -1,5 +1,0 @@
----
-source: acvus-mir-test/tests/e2e.rs
-expression: result.unwrap_err()
----
-parse error: ParseError { kind: UnexpectedToken("got `..`, expected one of: \"+\", \"-\", \"*\", \"/\", \"%\", \"&&\", \"||\", \"==\", \"!=\", \"<\", \">\", \"<=\", \">=\", \".\", \"|\", \"(\""), span: Span { start: 10, end: 12 } }
