@@ -293,7 +293,7 @@ pub struct ExecResult {
 /// A single executable unit - MIR module or extern function.
 pub enum Executable {
     Module(MirModule),
-    Extern(crate::runtime::ExternHandler),
+    Extern(crate::runtime::ExternEntry),
 }
 
 impl Executable {
@@ -642,17 +642,21 @@ async fn execute_inst(
             todo!("LoadFunction: graph-level function references not yet supported at runtime");
         }
         InstKind::FunctionCall {
-            dst, callee, args, ..
+            dst,
+            callee,
+            callee_ty,
+            args,
         } => {
             let result = match callee {
                 Callee::Direct(id) => {
                     let is_extern =
                         matches!(lookup_function(&ctx.shared, id), Executable::Extern(_));
                     if is_extern {
-                        let handler = match lookup_function(&ctx.shared, id) {
+                        let entry = match lookup_function(&ctx.shared, id) {
                             Executable::Extern(h) => h.clone(),
                             _ => unreachable!(),
                         };
+                        let handler = entry.select(callee_ty)?.clone();
                         let arg_vals: Vec<Value> =
                             args.iter().map(|a| frame.use_val(*a, val_types)).collect();
                         match &handler {
@@ -680,14 +684,17 @@ async fn execute_inst(
             frame.set(*dst, result);
         }
         InstKind::Spawn {
-            dst, callee, args, ..
+            dst,
+            callee,
+            callee_ty,
+            args,
         } => {
             let callee_id = match callee {
                 Callee::Direct(id) => *id,
                 Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
             };
             let spawn_kind = match lookup_function(&ctx.shared, &callee_id) {
-                Executable::Extern(h) => SpawnKind::Extern(h.clone()),
+                Executable::Extern(entry) => SpawnKind::Extern(entry.select(callee_ty)?.clone()),
                 Executable::Module(_) => SpawnKind::Module,
             };
             let spawn_args: Vec<Value> =

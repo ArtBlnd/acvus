@@ -5,13 +5,16 @@ use std::future::Future;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyTy, TypeRegistry, UserDefinedDecl,
+    CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyTy, TyVarBound, TypeRegistry,
+    UserDefinedDecl,
 };
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::convert::{FromValue, IntoValue};
-use crate::handler::{ExternHandler, into_async_extern_handler, into_sync_extern_handler};
+use crate::handler::{
+    ExternEntry, ExternHandler, into_async_extern_handler, into_sync_extern_handler,
+};
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
 
@@ -19,7 +22,9 @@ use crate::ty_arg::{PolyVars, TyArg};
 pub struct ExternFn<R: Runtime> {
     pub qref: QualifiedRef,
     pub ty: PolyTy,
-    pub handler: ExternHandler<R>,
+    /// The declared bound of each type variable of `ty`, by position.
+    pub bounds: Vec<TyVarBound>,
+    pub handler: ExternEntry<R>,
     /// A cast is registered as a coercion rule from its parameter type to
     /// its return type as well as a function.
     pub cast: bool,
@@ -47,7 +52,7 @@ pub struct ExternRegistry<R: Runtime> {
 /// handlers for the runtime.
 pub struct Registered<R: Runtime> {
     pub functions: Vec<Function>,
-    pub handlers: FxHashMap<QualifiedRef, ExternHandler<R>>,
+    pub handlers: FxHashMap<QualifiedRef, ExternEntry<R>>,
 }
 
 impl<R: Runtime> ExternRegistry<R> {
@@ -70,7 +75,7 @@ impl<R: Runtime> ExternRegistry<R> {
             }
             functions.push(Function {
                 qref: f.qref,
-                kind: FnKind::Extern,
+                kind: FnKind::Extern { bounds: f.bounds },
                 ty: f.ty,
             });
             handlers.insert(f.qref, f.handler);
@@ -201,7 +206,8 @@ impl<R: Runtime> ExternFn<R> {
         Self {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: F::signature(interner),
-            handler: f.into_handler(),
+            bounds: vec![],
+            handler: ExternEntry::Single(f.into_handler()),
             cast: false,
         }
     }
@@ -213,7 +219,8 @@ impl<R: Runtime> ExternFn<R> {
         Self {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: F::signature(interner),
-            handler: f.into_handler(),
+            bounds: vec![],
+            handler: ExternEntry::Single(f.into_handler()),
             cast: false,
         }
     }

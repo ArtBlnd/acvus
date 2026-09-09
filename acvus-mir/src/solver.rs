@@ -9,35 +9,25 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::types::QualifiedRef;
 use crate::ty::{
-    CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, Infer, InferTy, LenTerm, LenVarId,
-    ParamTerm, Polarity, PolyTy, Ty, TyTerm, TypeRegistry,
-    TypeBoundId,
+    CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, Infer, InferTy, LenTerm,
+    LenVarId, ParamTerm, Polarity, PolyTy, Scheme, Ty, TyTerm, TyVarBound, TypeBoundId,
+    TypeRegistry,
 };
 
 // -- Solver types ----------------------------------------------------
 
-/// Capability that a type may or may not possess.
-/// Used in `TypeBound::Unresolved` to constrain what a type variable can resolve to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum Capability {
-    Cloneable = 0,
-    // Future: Equatable, Hashable, ...
-}
-
-/// State of a type inference variable in the solver.
+/// State of a type inference variable in the solver. The declared bound
+/// travels with the variable and is verified when it freezes.
 #[derive(Debug, Clone)]
 pub enum TypeBound {
     /// Resolved to a (possibly partially-known) type.
     /// Inner `InferTy` may still contain `Var` references to other bounds.
-    Resolved(InferTy),
-    /// Not yet resolved - constrained by capabilities and allowed types.
-    /// `caps`: required capabilities (e.g. Cloneable).
-    /// `allowed`: concrete types this variable may resolve to (lazy, checked at freeze).
-    ///   Empty = unconstrained.
+    Resolved {
+        ty: InferTy,
+        bound: TyVarBound,
+    },
     Unresolved {
-        caps: u8, // bitset over Capability
-        allowed: Vec<Ty>,
+        bound: TyVarBound,
     },
     /// Union-find forwarding pointer.
     Forward(TypeBoundId),
@@ -46,14 +36,20 @@ pub enum TypeBound {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectBound {
     /// `lower <= var <= upper` on the chain.
-    Range { lower: Effect, upper: Effect },
+    Range {
+        lower: Effect,
+        upper: Effect,
+    },
     Bound(Effect),
     Forward(EffectVarId),
 }
 
 impl EffectBound {
     fn free() -> Self {
-        EffectBound::Range { lower: Effect::Pure, upper: Effect::Opaque }
+        EffectBound::Range {
+            lower: Effect::Pure,
+            upper: Effect::Opaque,
+        }
     }
 }
 
@@ -128,12 +124,20 @@ impl Solver {
         }
     }
 
-    pub fn unify_len(&mut self, a: &LenTerm<Infer>, b: &LenTerm<Infer>) -> Result<(), (usize, usize)> {
+    pub fn unify_len(
+        &mut self,
+        a: &LenTerm<Infer>,
+        b: &LenTerm<Infer>,
+    ) -> Result<(), (usize, usize)> {
         let a = self.resolve_len(a);
         let b = self.resolve_len(b);
         match (a, b) {
             (LenTerm::Known(na), LenTerm::Known(nb)) => {
-                if na == nb { Ok(()) } else { Err((na, nb)) }
+                if na == nb {
+                    Ok(())
+                } else {
+                    Err((na, nb))
+                }
             }
             (LenTerm::Var(v), LenTerm::Known(n)) | (LenTerm::Known(n), LenTerm::Var(v)) => {
                 self.len_vars[v.0 as usize] = LenBound::Bound(n);
@@ -213,10 +217,16 @@ impl Solver {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
         if effect < lower {
-            return Err(EffectConflict { required: lower, allowed: effect });
+            return Err(EffectConflict {
+                required: lower,
+                allowed: effect,
+            });
         }
         if effect > upper {
-            return Err(EffectConflict { required: effect, allowed: upper });
+            return Err(EffectConflict {
+                required: effect,
+                allowed: upper,
+            });
         }
         self.effect_vars[root.0 as usize] = EffectBound::Bound(effect);
         Ok(())
@@ -227,7 +237,10 @@ impl Solver {
         let (lower, upper) = self.range_of(root);
         let lower = lower.join(effect);
         if lower > upper {
-            return Err(EffectConflict { required: lower, allowed: upper });
+            return Err(EffectConflict {
+                required: lower,
+                allowed: upper,
+            });
         }
         self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
         Ok(())
@@ -238,7 +251,10 @@ impl Solver {
         let (lower, upper) = self.range_of(root);
         let upper = upper.min(effect);
         if lower > upper {
-            return Err(EffectConflict { required: lower, allowed: upper });
+            return Err(EffectConflict {
+                required: lower,
+                allowed: upper,
+            });
         }
         self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
         Ok(())
@@ -255,7 +271,10 @@ impl Solver {
         let lower = la.join(lb);
         let upper = ua.min(ub);
         if lower > upper {
-            return Err(EffectConflict { required: lower, allowed: upper });
+            return Err(EffectConflict {
+                required: lower,
+                allowed: upper,
+            });
         }
         self.effect_vars[to_root.0 as usize] = EffectBound::Range { lower, upper };
         self.effect_vars[from_root.0 as usize] = EffectBound::Forward(to_root);
@@ -306,7 +325,8 @@ impl Solver {
         let b = self.resolve_effect(b);
         match (a, b) {
             (EffectTerm::Known(ea), EffectTerm::Known(eb)) => Ok(EffectTerm::Known(ea.join(eb))),
-            (EffectTerm::Var(v), EffectTerm::Known(e)) | (EffectTerm::Known(e), EffectTerm::Var(v)) => {
+            (EffectTerm::Var(v), EffectTerm::Known(e))
+            | (EffectTerm::Known(e), EffectTerm::Var(v)) => {
                 self.raise_lower(v, e)?;
                 Ok(EffectTerm::Var(self.find_effect_root(v)))
             }
@@ -321,8 +341,7 @@ impl Solver {
     pub fn fresh_ty_var(&mut self) -> InferTy {
         let id = TypeBoundId(self.ty_bounds.len() as u32);
         self.ty_bounds.push(TypeBound::Unresolved {
-            caps: 0,
-            allowed: Vec::new(),
+            bound: TyVarBound::Any,
         });
         TyTerm::Var(id)
     }
@@ -366,7 +385,18 @@ impl Solver {
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved(inner) => self.freeze_ty(inner),
+                    TypeBound::Resolved { ty: inner, bound } => {
+                        let frozen = self.freeze_ty(inner)?;
+                        if bound.admits(&frozen) {
+                            Ok(frozen)
+                        } else {
+                            Err(FreezeError::OutOfBound {
+                                var: root,
+                                ty: frozen,
+                                bound: bound.clone(),
+                            })
+                        }
+                    }
                     TypeBound::Unresolved { .. } => Err(FreezeError::UnresolvedType(root)),
                     TypeBound::Forward(_) => unreachable!("find_ty_root should resolve forwards"),
                 }
@@ -388,7 +418,7 @@ impl Solver {
             TyTerm::Var(id) => {
                 let root = self.find_ty_root(*id);
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved(inner) => self.shallow_resolve_ty(inner),
+                    TypeBound::Resolved { ty: inner, .. } => self.shallow_resolve_ty(inner),
                     _ => TyTerm::Var(root),
                 }
             }
@@ -402,7 +432,7 @@ impl Solver {
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved(inner) => self.resolve_ty(inner),
+                    TypeBound::Resolved { ty: inner, .. } => self.resolve_ty(inner),
                     _ => TyTerm::Var(root),
                 }
             },
@@ -423,7 +453,7 @@ impl Solver {
                     return true;
                 }
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved(inner) => self.occurs_in(id, inner),
+                    TypeBound::Resolved { ty: inner, .. } => self.occurs_in(id, inner),
                     _ => false,
                 }
             }
@@ -432,7 +462,12 @@ impl Solver {
             }
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             TyTerm::Object(fields) => fields.values().any(|v| self.occurs_in(id, v)),
-            TyTerm::Fn { params, ret, captures, .. } => {
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                ..
+            } => {
                 params.iter().any(|p| self.occurs_in(id, &p.ty))
                     || self.occurs_in(id, ret)
                     || captures.iter().any(|c| self.occurs_in(id, c))
@@ -455,7 +490,7 @@ impl Solver {
             TyTerm::Var(id) => {
                 let root = self.find_ty_root(*id);
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved(inner) => match inner {
+                    TypeBound::Resolved { ty: inner, .. } => match inner {
                         TyTerm::Var(_) => self.find_leaf_var(inner),
                         _ => Some(root),
                     },
@@ -471,7 +506,16 @@ impl Solver {
     /// Bind a type variable to a resolved InferTy.
     pub fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy) {
         let root = self.find_ty_root(id);
-        self.ty_bounds[root.0 as usize] = TypeBound::Resolved(ty);
+        let bound = self.bound_of(root);
+        self.ty_bounds[root.0 as usize] = TypeBound::Resolved { ty, bound };
+    }
+
+    /// The declared bound on a variable's root.
+    fn bound_of(&self, root: TypeBoundId) -> TyVarBound {
+        match &self.ty_bounds[root.0 as usize] {
+            TypeBound::Resolved { bound, .. } | TypeBound::Unresolved { bound } => bound.clone(),
+            TypeBound::Forward(_) => unreachable!("bound_of takes a root"),
+        }
     }
 
     /// Bind a type variable to forward to another.
@@ -510,15 +554,27 @@ impl Solver {
             | (TyTerm::Byte, TyTerm::Byte) => Ok(None),
 
             (
-                TyTerm::UserDefined { id: id_a, type_args: ta_args, effect_args: ea_args },
-                TyTerm::UserDefined { id: id_b, type_args: tb_args, effect_args: eb_args },
+                TyTerm::UserDefined {
+                    id: id_a,
+                    type_args: ta_args,
+                    effect_args: ea_args,
+                },
+                TyTerm::UserDefined {
+                    id: id_b,
+                    type_args: tb_args,
+                    effect_args: eb_args,
+                },
             ) if id_a == id_b => {
                 assert_eq!(ta_args.len(), tb_args.len());
                 assert_eq!(ea_args.len(), eb_args.len());
                 let snap = self.snapshot();
-                let type_ok = ta_args.iter().zip(tb_args.iter())
+                let type_ok = ta_args
+                    .iter()
+                    .zip(tb_args.iter())
                     .all(|(a, b)| self.unify_ty(a, b, Polarity::Invariant, registry).is_ok());
-                let effect_ok = ea_args.iter().zip(eb_args.iter())
+                let effect_ok = ea_args
+                    .iter()
+                    .zip(eb_args.iter())
                     .all(|(a, b)| self.unify_effect(a, b, pol).is_ok());
                 if type_ok && effect_ok {
                     Ok(None)
@@ -529,8 +585,14 @@ impl Solver {
             }
 
             (
-                TyTerm::Enum { name: na, variants: va },
-                TyTerm::Enum { name: nb, variants: vb },
+                TyTerm::Enum {
+                    name: na,
+                    variants: va,
+                },
+                TyTerm::Enum {
+                    name: nb,
+                    variants: vb,
+                },
             ) => {
                 if na != nb {
                     return Err((a, b));
@@ -539,7 +601,9 @@ impl Solver {
                     if let Some(payload_b) = vb.get(tag) {
                         match (payload_a, payload_b) {
                             (None, None) => {}
-                            (Some(ty_a), Some(ty_b)) => { self.unify_ty(ty_a, ty_b, pol, registry)?; }
+                            (Some(ty_a), Some(ty_b)) => {
+                                self.unify_ty(ty_a, ty_b, pol, registry)?;
+                            }
                             _ => return Err((a.clone(), b.clone())),
                         }
                     }
@@ -550,7 +614,10 @@ impl Solver {
                     for (tag, payload) in vb {
                         merged.entry(*tag).or_insert_with(|| payload.clone());
                     }
-                    let merged_ty = TyTerm::Enum { name: *na, variants: merged };
+                    let merged_ty = TyTerm::Enum {
+                        name: *na,
+                        variants: merged,
+                    };
                     if let Some(leaf) = self.find_leaf_var(orig_a) {
                         self.bind_ty(leaf, merged_ty.clone());
                     }
@@ -573,57 +640,18 @@ impl Solver {
                 }
                 match other {
                     TyTerm::Var(id2) => {
-                        // Var + Var: check allowed intersection, then forward.
                         let root1 = self.find_ty_root(*id);
                         let root2 = self.find_ty_root(*id2);
-                        let (allowed1, caps1) = match &self.ty_bounds[root1.0 as usize] {
-                            TypeBound::Unresolved { allowed, caps } => (allowed.clone(), *caps),
-                            _ => (vec![], 0),
+                        let Some(merged) = self.bound_of(root1).meet(&self.bound_of(root2)) else {
+                            return Err((a.clone(), b.clone()));
                         };
-                        let (allowed2, caps2) = match &self.ty_bounds[root2.0 as usize] {
-                            TypeBound::Unresolved { allowed, caps } => (allowed.clone(), *caps),
-                            _ => (vec![], 0),
-                        };
-                        // Intersect allowed (if both non-empty).
-                        let merged_allowed = if allowed1.is_empty() {
-                            allowed2
-                        } else if allowed2.is_empty() {
-                            allowed1
-                        } else {
-                            let inter: Vec<Ty> = allowed1.into_iter()
-                                .filter(|t| allowed2.contains(t))
-                                .collect();
-                            if inter.is_empty() {
-                                return Err((a.clone(), b.clone()));
-                            }
-                            inter
-                        };
-                        let merged_caps = caps1 | caps2;
-                        // Forward id -> id2, update id2's bounds.
-                        self.ty_bounds[root2.0 as usize] = TypeBound::Unresolved {
-                            caps: merged_caps,
-                            allowed: merged_allowed,
-                        };
+                        self.ty_bounds[root2.0 as usize] = TypeBound::Unresolved { bound: merged };
                         self.forward_ty(root1, root2);
                     }
                     TyTerm::Error(_) => {
                         self.bind_ty(*id, other.clone());
                     }
                     _ => {
-                        // Var + concrete: check allowed constraint.
-                        let root = self.find_ty_root(*id);
-                        if let TypeBound::Unresolved { ref allowed, .. } = self.ty_bounds[root.0 as usize] {
-                            if !allowed.is_empty() {
-                                // Check if concrete type matches any allowed type.
-                                // We freeze `other` to compare against allowed (Vec<Ty>).
-                                if let Ok(concrete) = self.freeze_ty(other) {
-                                    if !allowed.contains(&concrete) {
-                                        return Err((a.clone(), b.clone()));
-                                    }
-                                }
-                                // If freeze fails (still has vars), defer check.
-                            }
-                        }
                         self.bind_ty(*id, other.clone());
                     }
                 }
@@ -648,10 +676,16 @@ impl Solver {
             }
 
             (TyTerm::Identity(a), TyTerm::Identity(b)) => {
-                if a == b { Ok(None) } else { Err((TyTerm::Identity(*a), TyTerm::Identity(*b))) }
+                if a == b {
+                    Ok(None)
+                } else {
+                    Err((TyTerm::Identity(*a), TyTerm::Identity(*b)))
+                }
             }
 
-            (TyTerm::Option(a), TyTerm::Option(b)) => self.unify_ty(a, b, Polarity::Invariant, registry),
+            (TyTerm::Option(a), TyTerm::Option(b)) => {
+                self.unify_ty(a, b, Polarity::Invariant, registry)
+            }
 
             (TyTerm::Object(fa), TyTerm::Object(fb)) => {
                 let snap = self.snapshot();
@@ -674,7 +708,8 @@ impl Solver {
                                 merged.insert(*key, self.resolve_ty(ty_a));
                             } else {
                                 self.rollback(fsnap);
-                                let lub = self.try_lub_infer(ty_a, ty_b, registry)
+                                let lub = self
+                                    .try_lub_infer(ty_a, ty_b, registry)
                                     .ok_or_else(|| (a.clone(), b.clone()))?;
                                 merged.insert(*key, lub);
                             }
@@ -729,8 +764,18 @@ impl Solver {
             }
 
             (
-                TyTerm::Fn { params: pa, ret: ra, effect: ea, .. },
-                TyTerm::Fn { params: pb, ret: rb, effect: eb, .. },
+                TyTerm::Fn {
+                    params: pa,
+                    ret: ra,
+                    effect: ea,
+                    ..
+                },
+                TyTerm::Fn {
+                    params: pb,
+                    ret: rb,
+                    effect: eb,
+                    ..
+                },
             ) => {
                 if pa.len() != pb.len() {
                     return Err((a.clone(), b.clone()));
@@ -765,32 +810,63 @@ impl Solver {
 
     // -- LUB ---------------------------------------------------------
 
-    fn try_lub_infer(&mut self, a: &InferTy, b: &InferTy, registry: &TypeRegistry) -> Option<InferTy> {
+    fn try_lub_infer(
+        &mut self,
+        a: &InferTy,
+        b: &InferTy,
+        registry: &TypeRegistry,
+    ) -> Option<InferTy> {
         match (a, b) {
             (
-                TyTerm::Fn { params: pa, ret: ra, effect: ea, .. },
-                TyTerm::Fn { params: pb, ret: rb, effect: eb, .. },
+                TyTerm::Fn {
+                    params: pa,
+                    ret: ra,
+                    effect: ea,
+                    ..
+                },
+                TyTerm::Fn {
+                    params: pb,
+                    ret: rb,
+                    effect: eb,
+                    ..
+                },
             ) => {
-                if pa.len() != pb.len() { return None; }
+                if pa.len() != pb.len() {
+                    return None;
+                }
                 for (a, b) in pa.iter().zip(pb.iter()) {
-                    self.unify_ty(&a.ty, &b.ty, Polarity::Invariant, registry).ok()?;
+                    self.unify_ty(&a.ty, &b.ty, Polarity::Invariant, registry)
+                        .ok()?;
                 }
                 self.unify_ty(ra, rb, Polarity::Invariant, registry).ok()?;
                 let effect = self.lub_effect(ea, eb).ok()?;
                 Some(TyTerm::Fn {
-                    params: pa.iter().map(|p| ParamTerm::new(p.name, self.resolve_ty(&p.ty))).collect(),
+                    params: pa
+                        .iter()
+                        .map(|p| ParamTerm::new(p.name, self.resolve_ty(&p.ty)))
+                        .collect(),
                     ret: Box::new(self.resolve_ty(ra)),
                     captures: vec![],
                     effect,
                 })
             }
             (
-                TyTerm::UserDefined { id: id_a, type_args: ta_a, effect_args: ea_a },
-                TyTerm::UserDefined { id: id_b, type_args: ta_b, effect_args: ea_b },
+                TyTerm::UserDefined {
+                    id: id_a,
+                    type_args: ta_a,
+                    effect_args: ea_a,
+                },
+                TyTerm::UserDefined {
+                    id: id_b,
+                    type_args: ta_b,
+                    effect_args: ea_b,
+                },
             ) if id_a == id_b => {
                 assert_eq!(ta_a.len(), ta_b.len());
                 let snap = self.snapshot();
-                let type_args_ok = ta_a.iter().zip(ta_b.iter())
+                let type_args_ok = ta_a
+                    .iter()
+                    .zip(ta_b.iter())
                     .all(|(a, b)| self.unify_ty(a, b, Polarity::Invariant, registry).is_ok());
                 if type_args_ok {
                     let mut effect_args = Vec::with_capacity(ea_a.len());
@@ -819,25 +895,42 @@ impl Solver {
         registry: &TypeRegistry,
     ) -> Option<InferTy> {
         let rules = registry.rules_from(from_id).to_vec();
-        if rules.is_empty() { return None; }
+        if rules.is_empty() {
+            return None;
+        }
 
         for rule in &rules {
             let snap = self.snapshot();
             let (inst_from_a, inst_to_a) = self.instantiate_poly_pair(&rule.from, &rule.to);
-            let a_ok = self.unify_ty(a, &inst_from_a, Polarity::Invariant, registry).is_ok();
-            let target_a = if a_ok { Some(self.resolve_ty(&inst_to_a)) } else { None };
+            let a_ok = self
+                .unify_ty(a, &inst_from_a, Polarity::Invariant, registry)
+                .is_ok();
+            let target_a = if a_ok {
+                Some(self.resolve_ty(&inst_to_a))
+            } else {
+                None
+            };
             self.rollback(snap);
             let target_a = target_a?;
 
             let snap = self.snapshot();
             let (inst_from_b, inst_to_b) = self.instantiate_poly_pair(&rule.from, &rule.to);
-            let b_ok = self.unify_ty(b, &inst_from_b, Polarity::Invariant, registry).is_ok();
-            let target_b = if b_ok { Some(self.resolve_ty(&inst_to_b)) } else { None };
+            let b_ok = self
+                .unify_ty(b, &inst_from_b, Polarity::Invariant, registry)
+                .is_ok();
+            let target_b = if b_ok {
+                Some(self.resolve_ty(&inst_to_b))
+            } else {
+                None
+            };
             self.rollback(snap);
             let target_b = target_b?;
 
             let snap = self.snapshot();
-            if self.unify_ty(&target_a, &target_b, Polarity::Covariant, registry).is_ok() {
+            if self
+                .unify_ty(&target_a, &target_b, Polarity::Covariant, registry)
+                .is_ok()
+            {
                 let result = self.resolve_ty(&target_a);
                 self.rollback(snap);
                 return Some(result);
@@ -864,7 +957,9 @@ impl Solver {
         if leaf_a.is_none() && leaf_b.is_none() {
             return Err((a.clone(), b.clone()));
         }
-        let lub = self.try_lub_infer(a, b, registry).ok_or_else(|| (a.clone(), b.clone()))?;
+        let lub = self
+            .try_lub_infer(a, b, registry)
+            .ok_or_else(|| (a.clone(), b.clone()))?;
         if let Some(leaf) = leaf_a {
             self.bind_ty(leaf, lub.clone());
         }
@@ -903,17 +998,25 @@ impl Solver {
         sup: &InferTy,
         registry: &TypeRegistry,
     ) -> Result<Option<QualifiedRef>, ()> {
-        if rules.is_empty() { return Err(()); }
+        if rules.is_empty() {
+            return Err(());
+        }
 
         let mut matched_idx = None;
         for (i, rule) in rules.iter().enumerate() {
             let snap = self.snapshot();
             let (inst_from, inst_to) = self.instantiate_poly_pair(&rule.from, &rule.to);
-            let ok = self.unify_ty(sub, &inst_from, Polarity::Invariant, registry).is_ok()
-                && self.unify_ty(&inst_to, sup, Polarity::Invariant, registry).is_ok();
+            let ok = self
+                .unify_ty(sub, &inst_from, Polarity::Invariant, registry)
+                .is_ok()
+                && self
+                    .unify_ty(&inst_to, sup, Polarity::Invariant, registry)
+                    .is_ok();
             self.rollback(snap);
             if ok {
-                if matched_idx.is_some() { return Err(()); }
+                if matched_idx.is_some() {
+                    return Err(());
+                }
                 matched_idx = Some(i);
             }
         }
@@ -922,8 +1025,10 @@ impl Solver {
         let rule = &rules[idx];
         let fn_ref = rule.fn_ref;
         let (inst_from, inst_to) = self.instantiate_poly_pair(&rule.from, &rule.to);
-        self.unify_ty(sub, &inst_from, Polarity::Invariant, registry).map_err(|_| ())?;
-        self.unify_ty(&inst_to, sup, Polarity::Invariant, registry).map_err(|_| ())?;
+        self.unify_ty(sub, &inst_from, Polarity::Invariant, registry)
+            .map_err(|_| ())?;
+        self.unify_ty(&inst_to, sup, Polarity::Invariant, registry)
+            .map_err(|_| ())?;
         Ok(Some(fn_ref))
     }
 
@@ -961,16 +1066,13 @@ impl Solver {
                 // Clone bound data before mutating to avoid borrow conflict.
                 let bound = self.ty_bounds[root.0 as usize].clone();
                 match bound {
-                    TypeBound::Resolved(inner) => {
+                    TypeBound::Resolved { ty: inner, .. } => {
                         self.instantiate_infer_inner(&inner, var_map, fresh_map, effect_map)
                     }
-                    TypeBound::Unresolved { caps, allowed } => {
+                    TypeBound::Unresolved { bound } => {
                         let new_id = *var_map.entry(root).or_insert_with(|| {
                             let fresh = TypeBoundId(self.ty_bounds.len() as u32);
-                            self.ty_bounds.push(TypeBound::Unresolved {
-                                caps,
-                                allowed,
-                            });
+                            self.ty_bounds.push(TypeBound::Unresolved { bound });
                             fresh
                         });
                         TyTerm::Var(new_id)
@@ -992,36 +1094,80 @@ impl Solver {
                 self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
-                elems.iter().map(|e| self.instantiate_infer_inner(e, var_map, fresh_map, effect_map)).collect(),
+                elems
+                    .iter()
+                    .map(|e| self.instantiate_infer_inner(e, var_map, fresh_map, effect_map))
+                    .collect(),
             ),
             TyTerm::Object(fields) => TyTerm::Object(
-                fields.iter().map(|(k, v)| (*k, self.instantiate_infer_inner(v, var_map, fresh_map, effect_map))).collect(),
+                fields
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            *k,
+                            self.instantiate_infer_inner(v, var_map, fresh_map, effect_map),
+                        )
+                    })
+                    .collect(),
             ),
-            TyTerm::Fn { params, ret, captures, effect } => TyTerm::Fn {
-                params: params.iter().map(|p| ParamTerm::new(
-                    p.name,
-                    self.instantiate_infer_inner(&p.ty, var_map, fresh_map, effect_map),
-                )).collect(),
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => TyTerm::Fn {
+                params: params
+                    .iter()
+                    .map(|p| {
+                        ParamTerm::new(
+                            p.name,
+                            self.instantiate_infer_inner(&p.ty, var_map, fresh_map, effect_map),
+                        )
+                    })
+                    .collect(),
                 ret: Box::new(self.instantiate_infer_inner(ret, var_map, fresh_map, effect_map)),
-                captures: captures.iter().map(|c| self.instantiate_infer_inner(c, var_map, fresh_map, effect_map)).collect(),
+                captures: captures
+                    .iter()
+                    .map(|c| self.instantiate_infer_inner(c, var_map, fresh_map, effect_map))
+                    .collect(),
                 effect: self.instantiate_effect_inner(effect, effect_map),
             },
-            TyTerm::Enum { name, variants } => TyTerm::Enum {
-                name: *name,
-                variants: variants.iter().map(|(tag, payload)| {
-                    (*tag, payload.as_ref().map(|ty| Box::new(
-                        self.instantiate_infer_inner(ty, var_map, fresh_map, effect_map),
-                    )))
-                }).collect(),
-            },
-            TyTerm::UserDefined { id, type_args, effect_args } => TyTerm::UserDefined {
+            TyTerm::Enum { name, variants } => {
+                TyTerm::Enum {
+                    name: *name,
+                    variants: variants
+                        .iter()
+                        .map(|(tag, payload)| {
+                            (
+                                *tag,
+                                payload.as_ref().map(|ty| {
+                                    Box::new(self.instantiate_infer_inner(
+                                        ty, var_map, fresh_map, effect_map,
+                                    ))
+                                }),
+                            )
+                        })
+                        .collect(),
+                }
+            }
+            TyTerm::UserDefined {
+                id,
+                type_args,
+                effect_args,
+            } => TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| self.instantiate_infer_inner(t, var_map, fresh_map, effect_map)).collect(),
-                effect_args: effect_args.iter().map(|e| self.instantiate_effect_inner(e, effect_map)).collect(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| self.instantiate_infer_inner(t, var_map, fresh_map, effect_map))
+                    .collect(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| self.instantiate_effect_inner(e, effect_map))
+                    .collect(),
             },
-            TyTerm::Handle(inner) => TyTerm::Handle(
-                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
-            ),
+            TyTerm::Handle(inner) => TyTerm::Handle(Box::new(
+                self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
+            )),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
                 Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
                 *volatile,
@@ -1042,6 +1188,19 @@ impl Default for Solver {
 pub enum FreezeError {
     UnresolvedType(TypeBoundId),
     UnresolvedLen(LenVarId),
+    /// The variable resolved to a type its declaration does not admit.
+    OutOfBound {
+        var: TypeBoundId,
+        ty: Ty,
+        bound: TyVarBound,
+    },
+}
+
+/// A scheme instantiated into the solver: the type, and the variables that
+/// carry a declared bound so the caller can verify them where it chose to.
+pub struct Instantiated {
+    pub ty: InferTy,
+    pub bounded: Vec<TypeBoundId>,
 }
 
 // -- Poly -> Infer instantiation (in Solver) --------------------------
@@ -1066,6 +1225,26 @@ impl Solver {
     }
 
     pub fn instantiate_poly(&mut self, ty: &PolyTy) -> InferTy {
+        self.instantiate_scheme(&Scheme::unbounded(ty.clone())).ty
+    }
+
+    pub fn instantiate_scheme(&mut self, scheme: &Scheme) -> Instantiated {
+        let mut bounded: Vec<TypeBoundId> = Vec::new();
+        let ty = self.instantiate_with(&scheme.ty, |var, fresh| {
+            let bound = scheme.bound_of(var);
+            if bound != TyVarBound::Any {
+                bounded.push(fresh);
+            }
+            bound
+        });
+        Instantiated { ty, bounded }
+    }
+
+    fn instantiate_with(
+        &mut self,
+        ty: &PolyTy,
+        mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
+    ) -> InferTy {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
         let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
         let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
@@ -1078,7 +1257,11 @@ impl Solver {
             &mut |id: u32| {
                 let bound_id = *var_map.entry(id).or_insert_with(|| {
                     let fresh = TypeBoundId(ty_bounds.len() as u32);
-                    ty_bounds.push(TypeBound::Unresolved { caps: 0, allowed: Vec::new() });
+                    ty_bounds.push(TypeBound::Unresolved {
+                        bound: TyVarBound::Any,
+                    });
+                    let bound = bound_for(id, fresh);
+                    ty_bounds[fresh.0 as usize] = TypeBound::Unresolved { bound };
                     fresh
                 });
                 TyTerm::Var(bound_id)
@@ -1130,7 +1313,9 @@ impl Solver {
         let mut on_var = |id: u32| {
             let bound_id = *var_map.entry(id).or_insert_with(|| {
                 let fresh = TypeBoundId(ty_bounds.len() as u32);
-                ty_bounds.push(TypeBound::Unresolved { caps: 0, allowed: Vec::new() });
+                ty_bounds.push(TypeBound::Unresolved {
+                    bound: TyVarBound::Any,
+                });
                 fresh
             });
             TyTerm::Var(bound_id)

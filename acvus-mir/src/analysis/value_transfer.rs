@@ -49,7 +49,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
                 state.set(*dst, src_val.test_literal(value));
             }
 
-
             InstKind::TestVariant { dst, src, tag } => {
                 if let Some(ty) = self.val_types.get(src) {
                     match ty {
@@ -151,7 +150,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::Undef { dst } => {
                 state.set(*dst, AbstractValue::Top);
             }
-
 
             InstKind::BinOp { dst, .. } => {
                 state.set(*dst, AbstractValue::Top);

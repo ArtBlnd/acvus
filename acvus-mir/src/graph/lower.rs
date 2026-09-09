@@ -53,7 +53,7 @@ pub fn lower(
     let errors = Vec::new();
 
     for func in graph.functions.iter() {
-        if matches!(func.kind, FnKind::Extern) {
+        if matches!(func.kind, FnKind::Extern { .. }) {
             continue;
         }
         let Some(parsed) = extract.parsed.get(&func.qref) else {
@@ -64,11 +64,7 @@ pub fn lower(
             continue;
         };
 
-        let lowerer = crate::lower::Lowerer::new(
-            interner,
-            resolution,
-            policies.clone(),
-        );
+        let lowerer = crate::lower::Lowerer::new(interner, resolution, policies.clone());
         let module = match parsed {
             ParsedSource::Script(script) => lowerer.lower_script(script),
             ParsedSource::Template(template) => lowerer.lower_template(template),
@@ -85,8 +81,11 @@ pub fn lower(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{graph::extract, ty::{Ty, TyTerm, PolyBuilder}};
     use crate::ir::InstKind;
+    use crate::{
+        graph::extract,
+        ty::{PolyBuilder, Ty, TyTerm},
+    };
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph_with_ctx(

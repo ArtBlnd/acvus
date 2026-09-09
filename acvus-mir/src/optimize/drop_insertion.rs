@@ -131,11 +131,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
-        let live_out = liveness
-            .live_out
-            .get(bi)
-            .cloned()
-            .unwrap_or_default();
+        let live_out = liveness.live_out.get(bi).cloned().unwrap_or_default();
 
         let block = &cfg.blocks[bi];
         let edges = terminator_edges(&block.terminator);
@@ -264,13 +260,11 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
     match kind {
         // Function calls consume all arguments (ownership transfer to callee).
         InstKind::FunctionCall { callee, args, .. } => {
-            args.contains(&val)
-                || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
+            args.contains(&val) || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
         }
         // Spawn consumes args.
         InstKind::Spawn { callee, args, .. } => {
-            args.contains(&val)
-                || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
+            args.contains(&val) || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
         }
         // Eval consumes the Handle.
         InstKind::Eval { src, .. } => *src == val,
@@ -302,7 +296,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::ArrayIndex { .. }
         | InstKind::ArrayGet { .. }
         | InstKind::ObjectGet { .. }
-        | InstKind::TupleIndex { .. }=> false,
+        | InstKind::TupleIndex { .. } => false,
 
         // These don't use values at all.
         InstKind::Const { .. }
@@ -314,9 +308,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Nop => false,
 
         // Control flow - handled by terminator, not here.
-        InstKind::Jump { .. }
-        | InstKind::JumpIf { .. }
-        | InstKind::Return(_) => false,
+        InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Return(_) => false,
     }
 }
 
@@ -328,9 +320,11 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
         // Jump args are transferred to the target block.
         Terminator::Jump { args, .. } => args.contains(&val),
         // JumpIf: args are transferred, cond is read-only.
-        Terminator::JumpIf { then_args, else_args, .. } => {
-            then_args.contains(&val) || else_args.contains(&val)
-        }
+        Terminator::JumpIf {
+            then_args,
+            else_args,
+            ..
+        } => then_args.contains(&val) || else_args.contains(&val),
         Terminator::Fallthrough => false,
     }
 }
@@ -706,11 +700,7 @@ mod tests {
                 },
                 InstKind::Return(v(2)),
             ],
-            vec![
-                (v(0), user_defined_ty()),
-                (v(1), Ty::Int),
-                (v(2), Ty::Int),
-            ],
+            vec![(v(0), user_defined_ty()), (v(1), Ty::Int), (v(2), Ty::Int)],
         );
 
         insert_drops(&mut cfg, &val_types);
@@ -737,7 +727,10 @@ mod tests {
                 InstKind::Return(v(1)),
             ],
             vec![
-                (v(0), Ty::Array(Box::new(user_defined_ty()), crate::ty::LenTerm::Known(3))), // List<MoveOnly> = move-only
+                (
+                    v(0),
+                    Ty::Array(Box::new(user_defined_ty()), crate::ty::LenTerm::Known(3)),
+                ), // List<MoveOnly> = move-only
                 (v(1), Ty::Int),
             ],
         );
@@ -764,7 +757,10 @@ mod tests {
                 InstKind::Return(v(1)),
             ],
             vec![
-                (v(0), Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))), // List<Int> = copy
+                (
+                    v(0),
+                    Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+                ), // List<Int> = copy
                 (v(1), Ty::Int),
             ],
         );
@@ -827,10 +823,18 @@ mod tests {
         insert_drops(&mut cfg, &val_types);
         // then block should drop v1 (not forwarded to then).
         let then_drops = block_drop_targets(&cfg, 1);
-        assert!(then_drops.contains(&v(1)), "v1 should drop in then: {:?}", then_drops);
+        assert!(
+            then_drops.contains(&v(1)),
+            "v1 should drop in then: {:?}",
+            then_drops
+        );
         // else block should drop v0 (not forwarded to else).
         let else_drops = block_drop_targets(&cfg, 2);
-        assert!(else_drops.contains(&v(0)), "v0 should drop in else: {:?}", else_drops);
+        assert!(
+            else_drops.contains(&v(0)),
+            "v0 should drop in else: {:?}",
+            else_drops
+        );
         // Total: 2 drops.
         assert_eq!(count_drops(&cfg), 2);
     }

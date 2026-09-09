@@ -1,6 +1,6 @@
 use acvus_ast::{
-    AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField,
-    Pattern, RefKind, Span, Template, TupleElem, TuplePatternElem,
+    AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField, Pattern,
+    RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -9,9 +9,8 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality,
-    Param, ParamTerm, Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry,
-    lift_ty,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality, Param, ParamTerm, Polarity, Solver,
+    Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -34,6 +33,12 @@ pub type DirectCallMap = FxHashMap<AstId, QualifiedRef>;
 /// Contains concrete `Ty` (frozen from `InferTy` at `check_template`/`check_script`).
 /// `Ty = TyTerm<Concrete>` cannot contain unresolved variables by construction
 /// (`TyVar = Infallible`), so completeness is guaranteed structurally.
+/// A bounded type variable and where a violation of its bound is reported.
+struct BoundSite {
+    var: crate::ty::TypeBoundId,
+    span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeResolution {
     pub type_map: TypeMap,
@@ -114,6 +119,9 @@ pub struct TypeChecker<'a, 's> {
     direct_calls: DirectCallMap,
     /// Accumulated errors.
     errors: Vec<MirError>,
+    /// Bounded variables instantiated so far, each at the span that will
+    /// report a violation.
+    bound_sites: Vec<BoundSite>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
     /// Stack of active lambda scopes. Each entry is (scope_depth, captures).
@@ -130,7 +138,12 @@ pub struct TypeChecker<'a, 's> {
 }
 
 impl<'a, 's> TypeChecker<'a, 's> {
-    pub fn new(interner: &'a Interner, env: &'a TypeEnv, registry: &'a TypeRegistry, solver: &'s mut Solver) -> Self {
+    pub fn new(
+        interner: &'a Interner,
+        env: &'a TypeEnv,
+        registry: &'a TypeRegistry,
+        solver: &'s mut Solver,
+    ) -> Self {
         let body_effect = solver.fresh_effect_var();
         Self {
             interner,
@@ -143,6 +156,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             type_map: FxHashMap::default(),
             coercion_map: CoercionMap::default(),
             direct_calls: DirectCallMap::default(),
+            bound_sites: Vec::new(),
             errors: Vec::new(),
             analysis: None,
             lambda_stack: Vec::new(),
@@ -214,7 +228,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
             .iter()
             .map(|(id, ty)| {
                 let resolved = self.solver.resolve_ty(ty);
-                (*id, self.solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error()))
+                (
+                    *id,
+                    self.solver
+                        .freeze_ty(&resolved)
+                        .unwrap_or_else(|_| Ty::error()),
+                )
             })
             .collect()
     }
@@ -241,6 +260,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         template: &Template,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         self.check_nodes(&template.body);
+        self.verify_bounds();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -279,7 +299,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
             if let Some(expected) = expected_tail {
                 let expected_infer = lift_ty(expected);
                 if self
-                    .unify_covariant(&ty, &expected_infer, Some(CoerceSite { id: tail.id(), span: tail.span() }))
+                    .unify_covariant(
+                        &ty,
+                        &expected_infer,
+                        Some(CoerceSite {
+                            id: tail.id(),
+                            span: tail.span(),
+                        }),
+                    )
                     .is_err()
                 {
                     let resolved = self.solver.resolve_ty(&ty);
@@ -297,6 +324,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         } else {
             TyTerm::Unit
         };
+        self.verify_bounds();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -330,30 +358,56 @@ impl<'a, 's> TypeChecker<'a, 's> {
         expected_ty: &InferTy,
         coerce_at: Option<CoerceSite>,
     ) -> Result<(), (InferTy, InferTy)> {
-        let result = self.solver.unify_ty(value_ty, expected_ty, Polarity::Covariant, self.registry);
+        let result =
+            self.solver
+                .unify_ty(value_ty, expected_ty, Polarity::Covariant, self.registry);
         if let Ok(maybe_fn) = &result
             && let Some(CoerceSite { id, span }) = coerce_at
         {
             if let Some(fn_ref) = maybe_fn {
                 // Build callee_ty: instantiate the cast function's PolyTy and unify
                 // with value_ty (param) and expected_ty (ret) to get concrete types.
-                let callee_ty = if let Some(poly) = self.env.functions.get(fn_ref) {
-                    let inst = self.solver.instantiate_poly(poly);
+                let callee_ty = if let Some(scheme) = self.env.functions.get(fn_ref) {
+                    let inst = self.instantiate_at(scheme, span);
                     // Unify param with value_ty, ret with expected_ty to concretize.
-                    if let TyTerm::Fn { params, ret, effect, .. } = &inst {
+                    if let TyTerm::Fn {
+                        params,
+                        ret,
+                        effect,
+                        ..
+                    } = &inst
+                    {
                         if let Some(p) = params.first() {
-                            let _ = self.solver.unify_ty(&p.ty, value_ty, Polarity::Invariant, self.registry);
+                            let _ = self.solver.unify_ty(
+                                &p.ty,
+                                value_ty,
+                                Polarity::Invariant,
+                                self.registry,
+                            );
                         }
-                        let _ = self.solver.unify_ty(ret, expected_ty, Polarity::Invariant, self.registry);
+                        let _ = self.solver.unify_ty(
+                            ret,
+                            expected_ty,
+                            Polarity::Invariant,
+                            self.registry,
+                        );
                         let effect = *effect;
                         self.note_call_effect(&effect, span);
                     }
                     let resolved = self.solver.resolve_ty(&inst);
-                    self.solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error())
+                    self.solver
+                        .freeze_ty(&resolved)
+                        .unwrap_or_else(|_| Ty::error())
                 } else {
                     Ty::error()
                 };
-                self.coercion_map.push((id, CastKind::Extern { fn_ref: *fn_ref, callee_ty }));
+                self.coercion_map.push((
+                    id,
+                    CastKind::Extern {
+                        fn_ref: *fn_ref,
+                        callee_ty,
+                    },
+                ));
             }
         }
         result.map(|_| ())
@@ -415,6 +469,29 @@ impl<'a, 's> TypeChecker<'a, 's> {
         self.errors.push(MirError { kind, span });
     }
 
+    /// Instantiate a scheme for a use at `span`; its bounded variables are
+    /// verified in `verify_bounds` once the whole body is checked.
+    fn instantiate_at(&mut self, scheme: &crate::ty::Scheme, span: Span) -> InferTy {
+        let inst = self.solver.instantiate_scheme(scheme);
+        self.bound_sites
+            .extend(inst.bounded.into_iter().map(|var| BoundSite { var, span }));
+        inst.ty
+    }
+
+    /// Report every bounded variable that resolved outside its bound. An
+    /// unresolved variable is not a bound violation; it is reported as such
+    /// wherever its type is needed.
+    fn verify_bounds(&mut self) {
+        let sites = std::mem::take(&mut self.bound_sites);
+        for site in sites {
+            if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
+                self.solver.freeze_ty(&TyTerm::Var(site.var))
+            {
+                self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+            }
+        }
+    }
+
     fn record(&mut self, id: AstId, ty: InferTy) {
         self.type_map.insert(id, ty);
     }
@@ -424,7 +501,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
         self.record(id, ty.clone());
         ty
     }
-
 
     fn resolve_context_type(&mut self, qref: QualifiedRef, span: Span) -> InferTy {
         if let Some(ty) = self.env.contexts.get(&qref) {
@@ -492,7 +568,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     call_span,
                 );
             }
-
         }
         true
     }
@@ -513,13 +588,30 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     TyTerm::String | TyTerm::Error(_) => {}
                     TyTerm::Var(_) => {
                         if self
-                            .unify_covariant(&ty, &TyTerm::String, Some(CoerceSite { id: expr.id(), span: expr.span() }))
+                            .unify_covariant(
+                                &ty,
+                                &TyTerm::String,
+                                Some(CoerceSite {
+                                    id: expr.id(),
+                                    span: expr.span(),
+                                }),
+                            )
                             .is_err()
                         {
-                            self.error(MirErrorKind::EmitNotString { actual: self.freeze_or_error(&resolved) }, *span);
+                            self.error(
+                                MirErrorKind::EmitNotString {
+                                    actual: self.freeze_or_error(&resolved),
+                                },
+                                *span,
+                            );
                         }
                     }
-                    _ => self.error(MirErrorKind::EmitNotString { actual: self.freeze_or_error(&resolved) }, *span),
+                    _ => self.error(
+                        MirErrorKind::EmitNotString {
+                            actual: self.freeze_or_error(&resolved),
+                        },
+                        *span,
+                    ),
                 }
             }
             Node::MatchBlock(mb) => self.check_match_block(mb),
@@ -555,7 +647,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
                 // Walk path to get the target field type.
                 let target_ty = self.resolve_field_path(&ctx_ty, path);
-                if self.solver.unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry).is_err() {
+                if self
+                    .solver
+                    .unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -575,11 +671,18 @@ impl<'a, 's> TypeChecker<'a, 's> {
             } => {
                 let ty = self.check_expr(false, expr);
                 let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
-                    self.error(MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()), *span);
+                    self.error(
+                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
+                        *span,
+                    );
                     Self::infer_error()
                 });
                 let target_ty = self.resolve_field_path(&var_ty, path);
-                if self.solver.unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry).is_err() {
+                if self
+                    .solver
+                    .unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -611,7 +714,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
 
             // -- Script mode statements ------------------------------
-
             acvus_ast::Stmt::LetBind {
                 id,
                 name,
@@ -622,11 +724,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.define_var(*name, ty.clone());
                 self.record(*id, ty);
             }
-            acvus_ast::Stmt::LetUninit {
-                id,
-                name,
-                span: _,
-            } => {
+            acvus_ast::Stmt::LetUninit { id, name, span: _ } => {
                 let ty = self.solver.fresh_ty_var();
                 self.define_var(*name, ty.clone());
                 self.record(*id, ty);
@@ -639,10 +737,17 @@ impl<'a, 's> TypeChecker<'a, 's> {
             } => {
                 let ty = self.check_expr(false, expr);
                 let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
-                    self.error(MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()), *span);
+                    self.error(
+                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
+                        *span,
+                    );
                     Self::infer_error()
                 });
-                if self.solver.unify_ty(&ty, &var_ty, Polarity::Invariant, self.registry).is_err() {
+                if self
+                    .solver
+                    .unify_ty(&ty, &var_ty, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&var_ty),
@@ -657,7 +762,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 cond, body, span, ..
             } => {
                 let cond_ty = self.check_expr(false, cond);
-                if self.solver.unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry).is_err() {
+                if self
+                    .solver
+                    .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
@@ -779,7 +888,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             for elem in &elems[1..] {
                                 let elem_ty = self.literal_ty(elem);
                                 if self
-                                    .unify_covariant(&elem_ty, &first_ty, Some(CoerceSite { id: *id, span: *span }))
+                                    .unify_covariant(
+                                        &elem_ty,
+                                        &first_ty,
+                                        Some(CoerceSite {
+                                            id: *id,
+                                            span: *span,
+                                        }),
+                                    )
                                     .is_err()
                                 {
                                     let resolved_first = self.solver.resolve_ty(&first_ty);
@@ -847,7 +963,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                     let ty = if state.next_declared_param
                                         < state.declared_param_types.len()
                                     {
-                                        let t = &state.declared_param_types[state.next_declared_param];
+                                        let t =
+                                            &state.declared_param_types[state.next_declared_param];
                                         let lifted = lift_ty(t);
                                         state.next_declared_param += 1;
                                         lifted
@@ -919,7 +1036,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        if self.solver.unify_ty(&lt, &rt, Polarity::Invariant, self.registry).is_err() {
+                        if self
+                            .solver
+                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
+                            .is_err()
+                        {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
@@ -933,13 +1054,22 @@ impl<'a, 's> TypeChecker<'a, 's> {
                             TyTerm::Int | TyTerm::Float | TyTerm::Var(_) => rl,
                             TyTerm::String if *op == BinOp::Add => TyTerm::String,
                             _ => {
-                                self.binop_error(op_str(*op), rl, self.solver.resolve_ty(&rt), *span);
+                                self.binop_error(
+                                    op_str(*op),
+                                    rl,
+                                    self.solver.resolve_ty(&rt),
+                                    *span,
+                                );
                                 Self::infer_error()
                             }
                         }
                     }
                     BinOp::Eq | BinOp::Neq => {
-                        if self.solver.unify_ty(&lt, &rt, Polarity::Invariant, self.registry).is_err() {
+                        if self
+                            .solver
+                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
+                            .is_err()
+                        {
                             self.binop_error(op_str(*op), lt, rt, *span);
                         }
                         TyTerm::Bool
@@ -971,7 +1101,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         TyTerm::Int
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        let ok = self.solver.unify_ty(&lt, &rt, Polarity::Invariant, self.registry).is_ok()
+                        let ok = self
+                            .solver
+                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
+                            .is_ok()
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int | TyTerm::Float | TyTerm::Var(_)
@@ -1249,7 +1382,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.record_ret(*id, ty)
             }
 
-
             Expr::Tuple {
                 id,
                 elements,
@@ -1383,7 +1515,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
             } => {
                 let cond_ty = self.check_expr(false, cond);
-                if self.solver.unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry).is_err() {
+                if self
+                    .solver
+                    .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
@@ -1404,7 +1540,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ty = self.check_else_branch(eb);
-                        if self.solver.unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry).is_err() {
+                        if self
+                            .solver
+                            .unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry)
+                            .is_err()
+                        {
                             self.error(
                                 MirErrorKind::UnificationFailure {
                                     expected: self.freeze_or_error(&then_ty),
@@ -1444,7 +1584,11 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ty = self.check_else_branch(eb);
-                        if self.solver.unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry).is_err() {
+                        if self
+                            .solver
+                            .unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry)
+                            .is_err()
+                        {
                             self.error(
                                 MirErrorKind::UnificationFailure {
                                     expected: self.freeze_or_error(&then_ty),
@@ -1532,7 +1676,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 .chain(args.iter().map(|a| a.id()))
                 .collect();
 
-            let fn_ty = self.solver.instantiate_poly(fn_sig);
+            let fn_ty = self.instantiate_at(fn_sig, call_span);
             match &fn_ty {
                 TyTerm::Fn {
                     params: param_tys,
@@ -1692,7 +1836,12 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
                 if self
                     .solver
-                    .unify_ty(&source_resolved, &ctx_ty, Polarity::Invariant, self.registry)
+                    .unify_ty(
+                        &source_resolved,
+                        &ctx_ty,
+                        Polarity::Invariant,
+                        self.registry,
+                    )
                     .is_err()
                 {
                     self.error(
@@ -1732,7 +1881,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
 
-            Pattern::List { head, rest, tail, .. } => {
+            Pattern::List {
+                head, rest, tail, ..
+            } => {
                 let shallow = self.solver.shallow_resolve_ty(source_ty);
                 let (elem_ty, len) = match shallow {
                     TyTerm::Array(ref inner, len) => ((**inner).clone(), len),
@@ -1757,9 +1908,20 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let exact = rest.is_none();
                 match self.solver.resolve_len(&len) {
                     LenTerm::Known(got) => {
-                        let fits = if exact { got == pattern_min } else { got >= pattern_min };
+                        let fits = if exact {
+                            got == pattern_min
+                        } else {
+                            got >= pattern_min
+                        };
                         if !fits {
-                            self.error(MirErrorKind::ArrayLengthMismatch { pattern_min, exact, got }, span);
+                            self.error(
+                                MirErrorKind::ArrayLengthMismatch {
+                                    pattern_min,
+                                    exact,
+                                    got,
+                                },
+                                span,
+                            );
                         }
                     }
                     LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
@@ -1808,7 +1970,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
             }
 
-
             Pattern::Tuple { elements, .. } => {
                 // Reuse existing element Vars when source already resolves to a
                 // Tuple. This preserves the Var chain so nested Variant patterns
@@ -1816,10 +1977,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 // find_leaf_var.
                 let shallow = self.solver.shallow_resolve_ty(source_ty);
                 let elem_tys = match shallow {
-                    TyTerm::Tuple(ref existing) if existing.len() == elements.len() => existing.clone(),
+                    TyTerm::Tuple(ref existing) if existing.len() == elements.len() => {
+                        existing.clone()
+                    }
                     _ => {
-                        let vars: Vec<InferTy> =
-                            elements.iter().map(|_| self.solver.fresh_ty_var()).collect();
+                        let vars: Vec<InferTy> = elements
+                            .iter()
+                            .map(|_| self.solver.fresh_ty_var())
+                            .collect();
                         let tuple_ty = TyTerm::Tuple(vars.clone());
                         if self.unify_covariant(source_ty, &tuple_ty, None).is_err() {
                             self.error(
@@ -1960,7 +2125,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
             Literal::Byte(_) => TyTerm::Byte,
             Literal::Unit => TyTerm::Unit,
             Literal::List(elems) => match elems.first() {
-                Some(first) => TyTerm::Array(Box::new(self.literal_ty(first)), LenTerm::Known(elems.len())),
+                Some(first) => TyTerm::Array(
+                    Box::new(self.literal_ty(first)),
+                    LenTerm::Known(elems.len()),
+                ),
                 None => TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0)),
             },
         }
@@ -2197,7 +2365,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![p(interner, Ty::String)],
                     ret: Box::new(Ty::String),
-    
+
                     captures: vec![],
                     effect: crate::ty::Effect::Opaque.into(),
                 },
@@ -2301,7 +2469,10 @@ mod tests {
     fn lazy_list_context_load_ok() {
         // @items : List<Int> - Lazy tier, allowed in non-call position.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)))]);
+        let ctx = FxHashMap::from_iter([(
+            i.intern("items"),
+            Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)),
+        )]);
         let src = "{{ x = @items }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
     }
@@ -2363,13 +2534,16 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("fns"),
-            Ty::Array(Box::new(Ty::Fn {
-                params: vec![p(&i, Ty::Int)],
-                ret: Box::new(Ty::Int),
+            Ty::Array(
+                Box::new(Ty::Fn {
+                    params: vec![p(&i, Ty::Int)],
+                    ret: Box::new(Ty::Int),
 
-                captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
-            }), LenTerm::Known(3)),
+                    captures: vec![],
+                    effect: crate::ty::Effect::Opaque.into(),
+                }),
+                LenTerm::Known(3),
+            ),
         )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
@@ -2387,7 +2561,6 @@ mod tests {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
                 effect_args: vec![],
-    
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
@@ -2408,7 +2581,6 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
             effect_args: vec![],
-
         };
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), conn_ty.clone()),
@@ -2417,7 +2589,7 @@ mod tests {
                 Ty::Fn {
                     params: vec![p(&i, conn_ty)],
                     ret: Box::new(Ty::String),
-    
+
                     captures: vec![],
                     effect: crate::ty::Effect::Opaque.into(),
                 },

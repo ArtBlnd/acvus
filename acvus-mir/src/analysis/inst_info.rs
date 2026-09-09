@@ -40,7 +40,6 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::FunctionCall { dst, .. } | InstKind::Eval { dst, .. } => smallvec![*dst],
 
-
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
         InstKind::Store { .. }
@@ -70,8 +69,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
-        InstKind::Clone { src, .. }
-        | InstKind::Drop { src } => smallvec![*src],
+        InstKind::Clone { src, .. } | InstKind::Drop { src } => smallvec![*src],
         InstKind::Return(val) => smallvec![*val],
         InstKind::TestLiteral { src, .. } => smallvec![*src],
         InstKind::TestVariant { src, .. } => smallvec![*src],
@@ -81,7 +79,9 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Two uses
         InstKind::BinOp { left, right, .. } => smallvec![*left, *right],
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
-        InstKind::ArrayGet { array: list, index, .. } => smallvec![*list, *index],
+        InstKind::ArrayGet {
+            array: list, index, ..
+        } => smallvec![*list, *index],
 
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 
@@ -101,11 +101,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::MakeClosure { captures, .. } => captures.iter().copied().collect(),
 
         // Function calls
-        InstKind::FunctionCall {
-            callee,
-            args,
-            ..
-        } => {
+        InstKind::FunctionCall { callee, args, .. } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
             if let Callee::Indirect(f) = callee {
                 v.push(*f);
@@ -113,11 +109,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             v.extend(args.iter().copied());
             v
         }
-        InstKind::Spawn {
-            callee,
-            args,
-            ..
-        } => {
+        InstKind::Spawn { callee, args, .. } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
             if let Callee::Indirect(f) = callee {
                 v.push(*f);
@@ -159,8 +151,8 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_utils::LocalIdOps;
     use crate::ty::Ty;
+    use acvus_utils::LocalIdOps;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)

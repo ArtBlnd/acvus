@@ -100,7 +100,10 @@ impl Coloring {
                 }
                 match self.slot_types.get(c as usize) {
                     Some(Some(slot_ty)) => {
-                        if untyped_scalars && is_scalar_ty(slot_ty) && ty.map_or(false, is_scalar_ty) {
+                        if untyped_scalars
+                            && is_scalar_ty(slot_ty)
+                            && ty.map_or(false, is_scalar_ty)
+                        {
                             true
                         } else {
                             ty == Some(slot_ty)
@@ -430,7 +433,9 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
                         debug.set(*dst, origin.clone());
                     }
                 }
-                InstKind::FieldGet { dst, object, field, .. } => {
+                InstKind::FieldGet {
+                    dst, object, field, ..
+                } => {
                     debug.set(*dst, ValOrigin::Field(*object, *field));
                 }
                 InstKind::FunctionCall { dst, callee, .. } => {
@@ -512,10 +517,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         }
         InstKind::LoadFunction { dst, .. } => r(dst),
         InstKind::FunctionCall {
-            dst,
-            callee,
-            args,
-            ..
+            dst, callee, args, ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
@@ -524,10 +526,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             args.iter_mut().for_each(&r);
         }
         InstKind::Spawn {
-            dst,
-            callee,
-            args,
-            ..
+            dst, callee, args, ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
@@ -535,10 +534,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             }
             args.iter_mut().for_each(&r);
         }
-        InstKind::Eval {
-            dst,
-            src,
-        } => {
+        InstKind::Eval { dst, src } => {
             r(dst);
             r(src);
         }
@@ -566,11 +562,17 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             r(src);
         }
-        InstKind::ArrayIndex { dst, array: list, .. } => {
+        InstKind::ArrayIndex {
+            dst, array: list, ..
+        } => {
             r(dst);
             r(list);
         }
-        InstKind::ArrayGet { dst, array: list, index } => {
+        InstKind::ArrayGet {
+            dst,
+            array: list,
+            index,
+        } => {
             r(dst);
             r(list);
             r(index);

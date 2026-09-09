@@ -1820,5 +1820,4 @@ mod tests {
         // default_data is dead (role = "user", matched above)
         assert!(!needed.contains(&id4));
     }
-
 }

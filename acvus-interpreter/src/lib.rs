@@ -12,5 +12,5 @@ pub use interpreter::{
     Args, ExecResult, Executable, Interpreter, InterpreterContext, fn_value_call,
 };
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
-pub use runtime::{AcvusRuntime, ExternHandler};
+pub use runtime::{AcvusRuntime, ExternEntry, ExternHandler};
 pub use value::{FnValue, HandleValue, Value};

@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::graph::*;
 use crate::graph::{extract, infer, lower as graph_lower};
 use crate::ir::{MirBody, MirModule};
-use crate::ty::{Ty, TyTerm, PolyBuilder};
+use crate::ty::{PolyBuilder, Ty, TyTerm};
 
 /// Build a single-unit CompilationGraph for testing.
 /// Returns the graph and the `QualifiedRef` of the test unit.

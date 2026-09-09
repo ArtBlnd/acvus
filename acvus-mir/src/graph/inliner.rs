@@ -157,7 +157,8 @@ fn inline_body(
                     callee_remap.insert(*cap_reg, *arg);
                     substituted_regs.insert(*cap_reg);
                 }
-                for ((_, param_reg), arg) in callee_body.params.iter().zip(args[n_captures..].iter())
+                for ((_, param_reg), arg) in
+                    callee_body.params.iter().zip(args[n_captures..].iter())
                 {
                     callee_remap.insert(*param_reg, *arg);
                     substituted_regs.insert(*param_reg);
@@ -390,15 +391,10 @@ fn remap_inst(
                 args: rv(args),
             }
         }
-        InstKind::Eval {
-            dst,
-            src,
-        } => {
-            InstKind::Eval {
-                dst: r(*dst),
-                src: r(*src),
-            }
-        }
+        InstKind::Eval { dst, src } => InstKind::Eval {
+            dst: r(*dst),
+            src: r(*src),
+        },
 
         // Composite constructors
         InstKind::MakeArray { dst, elements } => InstKind::MakeArray {
@@ -430,12 +426,20 @@ fn remap_inst(
             src: r(*src),
             key: *key,
         },
-        InstKind::ArrayIndex { dst, array: list, index } => InstKind::ArrayIndex {
+        InstKind::ArrayIndex {
+            dst,
+            array: list,
+            index,
+        } => InstKind::ArrayIndex {
             dst: r(*dst),
             array: r(*list),
             index: *index,
         },
-        InstKind::ArrayGet { dst, array: list, index } => InstKind::ArrayGet {
+        InstKind::ArrayGet {
+            dst,
+            array: list,
+            index,
+        } => InstKind::ArrayGet {
             dst: r(*dst),
             array: r(*list),
             index: r(*index),

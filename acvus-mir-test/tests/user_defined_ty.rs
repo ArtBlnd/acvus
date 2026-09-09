@@ -150,7 +150,7 @@ fn instantiate_pair_shares_params() {
     let id = QualifiedRef::root(i.intern("TestType"));
     reg.register(acvus_mir::ty::UserDefinedDecl {
         qref: id,
-        type_params: vec![None],
+        type_params: vec![acvus_mir::ty::TyVarBound::Any],
         effect_params: 0,
     });
     let mut builder = PolyBuilder::new();

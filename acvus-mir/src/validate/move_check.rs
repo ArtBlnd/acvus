@@ -33,9 +33,7 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         // Primitives - always Copy
-        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
-            Some(false)
-        }
+        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => Some(false),
 
         // Handle - always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
@@ -483,10 +481,7 @@ fn process_inst(
         }
         // Calls - all args are consumed; indirect callee is also consumed
         InstKind::FunctionCall {
-            dst,
-            callee,
-            args,
-            ..
+            dst, callee, args, ..
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
@@ -669,7 +664,10 @@ mod tests {
         assert_eq!(is_move_only(&Ty::Int), Some(false));
         assert_eq!(is_move_only(&Ty::String), Some(false));
         assert_eq!(is_move_only(&Ty::Bool), Some(false));
-        assert_eq!(is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))), Some(false));
+        assert_eq!(
+            is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            Some(false)
+        );
     }
 
     #[test]
@@ -716,8 +714,14 @@ mod tests {
         // v0 = UserDefined (move-only), used twice -> ERROR
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
-        val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
-        val_types.insert(v2, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(
+            v1,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
+        val_types.insert(
+            v2,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
 
         let module = make_module(
             vec![
@@ -753,7 +757,10 @@ mod tests {
         // v0 = UserDefined, used once -> OK
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
-        val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(
+            v1,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
 
         let module = make_module(
             vec![inst(InstKind::FunctionCall {
@@ -790,8 +797,14 @@ mod tests {
         val_types.insert(v1, move_ty.clone());
         val_types.insert(v2, move_ty.clone());
         val_types.insert(v3, move_ty.clone());
-        val_types.insert(v4, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
-        val_types.insert(v5, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(
+            v4,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
+        val_types.insert(
+            v5,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
 
         let module = make_module(
             vec![
@@ -882,8 +895,14 @@ mod tests {
         val_types.insert(v0, move_ty.clone());
         val_types.insert(v1, move_ty.clone());
         val_types.insert(v2, move_ty.clone());
-        val_types.insert(v3, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
-        val_types.insert(v4, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
+        val_types.insert(
+            v3,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
+        val_types.insert(
+            v4,
+            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+        );
 
         let module = make_module(
             vec![

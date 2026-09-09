@@ -191,10 +191,13 @@ pub fn promote(body: MirBody) -> CfgBody {
     }
 
     // Debug: verify uniqueness.
-    debug_assert!({
-        let mut seen = FxHashSet::default();
-        blocks.iter().all(|b| seen.insert(b.label))
-    }, "duplicate block labels after promote");
+    debug_assert!(
+        {
+            let mut seen = FxHashSet::default();
+            blocks.iter().all(|b| seen.insert(b.label))
+        },
+        "duplicate block labels after promote"
+    );
 
     CfgBody {
         blocks,

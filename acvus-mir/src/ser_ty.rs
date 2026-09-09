@@ -166,7 +166,9 @@ impl SerTy {
             SerTy::Unit => Ty::Unit,
             SerTy::Byte => Ty::Byte,
             SerTy::Error => Ty::error(),
-            SerTy::Array { len, elem } => Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len)),
+            SerTy::Array { len, elem } => {
+                Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len))
+            }
             SerTy::Object { fields } => Ty::Object(
                 fields
                     .iter()
@@ -209,9 +211,7 @@ impl SerTy {
                     })
                     .collect(),
             },
-            SerTy::Identity(ser_id) => Ty::Identity(
-                IdentityId::from_raw(ser_id.id as usize),
-            ),
+            SerTy::Identity(ser_id) => Ty::Identity(IdentityId::from_raw(ser_id.id as usize)),
         }
     }
 }
@@ -230,7 +230,10 @@ mod tests {
             captures: vec![],
             effect: Effect::Idempotent.into(),
         };
-        assert_eq!(fn_ty.to_ser(&i).to_ty(&i).effect(), Some(Effect::Idempotent));
+        assert_eq!(
+            fn_ty.to_ser(&i).to_ty(&i).effect(),
+            Some(Effect::Idempotent)
+        );
 
         let ud = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Iterator")),

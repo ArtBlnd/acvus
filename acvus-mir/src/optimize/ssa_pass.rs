@@ -94,7 +94,6 @@ pub fn run(cfg: &mut CfgBody) {
             .collect();
         apply_var_subst(cfg, &chained, &ssa_info);
     }
-
 }
 
 /// Store-load forwarding for context variables, scoped by the dominator tree.
@@ -264,7 +263,6 @@ fn forward_context_values(
                 }
 
                 // (was Effect-based). Step 3 will re-populate via Identity analysis.
-
                 _ => {}
             }
         }
@@ -351,29 +349,19 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
             s(value);
         }
         InstKind::LoadFunction { .. } => {}
-        InstKind::FunctionCall {
-            callee,
-            args,
-            ..
-        } => {
+        InstKind::FunctionCall { callee, args, .. } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
         }
-        InstKind::Spawn {
-            callee,
-            args,
-            ..
-        } => {
+        InstKind::Spawn { callee, args, .. } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
         }
-        InstKind::Eval {
-            src, ..
-        } => {
+        InstKind::Eval { src, .. } => {
             s(src);
         }
         InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(&s),
@@ -383,7 +371,9 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
         InstKind::TestLiteral { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
         InstKind::ArrayIndex { array: list, .. } => s(list),
-        InstKind::ArrayGet { array: list, index, .. } => {
+        InstKind::ArrayGet {
+            array: list, index, ..
+        } => {
             s(list);
             s(index);
         }
@@ -553,7 +543,6 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
         }
     }
 
-
     // Second pass: collect SSA ops (only for promotable identity Refs).
     for (bi, block) in cfg.blocks.iter().enumerate() {
         let ops = block_ops.entry(BlockIdx(bi)).or_default();
@@ -701,9 +690,7 @@ fn run_ssa_builder(
 ) {
     let mut ssa = SSABuilder::new();
 
-    let block_label = |bi: BlockIdx| -> Label {
-        blocks[bi.0].label
-    };
+    let block_label = |bi: BlockIdx| -> Label { blocks[bi.0].label };
 
     // -- Detect loop headers (backedge target: succ index <= current index) --
     let mut loop_headers: BTreeSet<BlockIdx> = BTreeSet::default();
@@ -733,7 +720,8 @@ fn run_ssa_builder(
     // Written contexts without entry defs need undef initial value.
     for &ctx_id in &ssa_info.written_contexts {
         if !ssa_info.entry_ctx_defs.contains_key(&ctx_id) {
-            let undef_val = alloc_var_val(val_factory, val_types, SsaVar::Context(ctx_id), ssa_info);
+            let undef_val =
+                alloc_var_val(val_factory, val_types, SsaVar::Context(ctx_id), ssa_info);
             ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), undef_val);
             undef_defs.push(undef_val);
         }
@@ -761,9 +749,8 @@ fn run_ssa_builder(
     }
 
     // Typed alloc closure for SSA builder - every ValueId gets a type at birth.
-    let mut typed_alloc = |var: SsaVar| -> ValueId {
-        alloc_var_val(val_factory, val_types, var, ssa_info)
-    };
+    let mut typed_alloc =
+        |var: SsaVar| -> ValueId { alloc_var_val(val_factory, val_types, var, ssa_info) };
 
     // Seal ENTRY_BLOCK (virtual predecessor of block 0) unless block 0 is a loop header.
     if !loop_headers.contains(&BlockIdx(0)) {
@@ -805,8 +792,7 @@ fn run_ssa_builder(
                         ssa.define(label, SsaVar::Local(*slot), *value);
                     }
                     SsaOp::VarLoad { dst, slot } | SsaOp::ParamLoad { dst, slot } => {
-                        let ssa_val =
-                            ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc);
+                        let ssa_val = ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc);
                         if ssa_val != *dst {
                             var_subst.insert(*dst, ssa_val);
                         }
@@ -1075,11 +1061,7 @@ fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, s
     let mut promoted_refs: FxHashSet<ValueId> = FxHashSet::default();
     for block in &cfg.blocks {
         for inst in &block.insts {
-            if let InstKind::Ref {
-                dst,
-                target,
-                path,
-            } = &inst.kind
+            if let InstKind::Ref { dst, target, path } = &inst.kind
                 && path.is_empty()
             {
                 let is_promoted = match target {

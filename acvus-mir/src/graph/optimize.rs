@@ -86,10 +86,7 @@ fn optimize_inner(
 }
 
 /// Pass 1: SROA -> SSA -> DSE -> DCE on a single body.
-fn run_pass1_body(
-    body: &mut crate::ir::MirBody,
-    context_types: &FxHashMap<QualifiedRef, Ty>,
-) {
+fn run_pass1_body(body: &mut crate::ir::MirBody, context_types: &FxHashMap<QualifiedRef, Ty>) {
     optimize::sroa::run_body(body, context_types);
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
@@ -131,10 +128,10 @@ fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
 /// Collects all violations and panics if any are found.
 #[cfg(debug_assertions)]
 fn debug_validate(cfg: &CfgBody) {
-    use rustc_hash::{FxHashMap, FxHashSet};
-    use crate::ir::ValueId;
     use crate::analysis::domtree::DomTree;
     use crate::cfg::BlockIdx;
+    use crate::ir::ValueId;
+    use rustc_hash::{FxHashMap, FxHashSet};
 
     let mut errors: Vec<String> = Vec::new();
 
@@ -169,16 +166,25 @@ fn debug_validate(cfg: &CfgBody) {
             // Type coverage: every def and use must have a type.
             for d in crate::analysis::inst_info::defs(&inst.kind) {
                 if !cfg.val_types.contains_key(&d) {
-                    errors.push(format!("B{bi}:{ii} DEF missing type: {d:?} in {:?}", inst.kind));
+                    errors.push(format!(
+                        "B{bi}:{ii} DEF missing type: {d:?} in {:?}",
+                        inst.kind
+                    ));
                 }
             }
             for u in crate::analysis::inst_info::uses(&inst.kind) {
                 if !cfg.val_types.contains_key(&u) {
-                    errors.push(format!("B{bi}:{ii} USE missing type: {u:?} in {:?}", inst.kind));
+                    errors.push(format!(
+                        "B{bi}:{ii} USE missing type: {u:?} in {:?}",
+                        inst.kind
+                    ));
                 }
                 // Use-def: every use must have a def.
                 let Some(&(def_bi, def_ii)) = def_loc.get(&u) else {
-                    errors.push(format!("B{bi}:{ii} use without def: {u:?} in {:?}", inst.kind));
+                    errors.push(format!(
+                        "B{bi}:{ii} use without def: {u:?} in {:?}",
+                        inst.kind
+                    ));
                     continue;
                 };
                 // SSA dominance.
@@ -204,7 +210,12 @@ fn debug_validate(cfg: &CfgBody) {
         let term_uses = match &block.terminator {
             crate::cfg::Terminator::Return(v) => vec![*v],
             crate::cfg::Terminator::Jump { args, .. } => args.clone(),
-            crate::cfg::Terminator::JumpIf { cond, then_args, else_args, .. } => {
+            crate::cfg::Terminator::JumpIf {
+                cond,
+                then_args,
+                else_args,
+                ..
+            } => {
                 let mut v = vec![*cond];
                 v.extend(then_args);
                 v.extend(else_args);
@@ -214,14 +225,20 @@ fn debug_validate(cfg: &CfgBody) {
         };
         for u in &term_uses {
             if !defs.contains(u) {
-                errors.push(format!("B{bi} TERM use without def: {u:?} in {:?}", block.terminator));
+                errors.push(format!(
+                    "B{bi} TERM use without def: {u:?} in {:?}",
+                    block.terminator
+                ));
             }
         }
     }
 
     if !errors.is_empty() {
         let msg = errors.join("\n  ");
-        panic!("CfgBody validation failed ({} errors):\n  {msg}", errors.len());
+        panic!(
+            "CfgBody validation failed ({} errors):\n  {msg}",
+            errors.len()
+        );
     }
 }
 

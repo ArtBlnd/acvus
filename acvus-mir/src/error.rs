@@ -33,6 +33,11 @@ pub enum MirErrorKind {
         expected: Ty,
         got: Ty,
     },
+    /// A declared type variable resolved to a type outside its bound.
+    TypeOutOfBound {
+        ty: Ty,
+        bound: crate::ty::TyVarBound,
+    },
     EffectExceeded(crate::ty::EffectConflict),
     ArrayLengthMismatch {
         pattern_min: usize,
@@ -140,22 +145,55 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::EffectExceeded(c) => {
-                write!(f, "effect {:?} exceeds the allowed {:?}", c.required, c.allowed)
+                write!(
+                    f,
+                    "effect {:?} exceeds the allowed {:?}",
+                    c.required, c.allowed
+                )
             }
-            MirErrorKind::ArrayLengthMismatch { pattern_min, exact, got } => {
+            MirErrorKind::ArrayLengthMismatch {
+                pattern_min,
+                exact,
+                got,
+            } => {
                 if *exact {
                     write!(f, "array pattern needs length {pattern_min}, got {got}")
                 } else {
-                    write!(f, "array pattern needs length at least {pattern_min}, got {got}")
+                    write!(
+                        f,
+                        "array pattern needs length at least {pattern_min}, got {got}"
+                    )
                 }
             }
             MirErrorKind::ArrayLengthUnknown => write!(f, "array length is not known here"),
-            MirErrorKind::RestInArrayLiteral => write!(f, "`..` is a pattern, not an array element"),
+            MirErrorKind::RestInArrayLiteral => {
+                write!(f, "`..` is a pattern, not an array element")
+            }
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")
             }
             MirErrorKind::UndefinedFunction(name) => {
                 write!(f, "undefined function `{name}`")
+            }
+            MirErrorKind::TypeOutOfBound { ty, bound } => {
+                write!(
+                    f,
+                    "type {} is outside the declared bound ",
+                    ty.display(interner)
+                )?;
+                match bound {
+                    crate::ty::TyVarBound::Any => write!(f, "(any)"),
+                    crate::ty::TyVarBound::OneOf(tys) => {
+                        write!(f, "one of ")?;
+                        for (i, t) in tys.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{}", t.display(interner))?;
+                        }
+                        Ok(())
+                    }
+                }
             }
             MirErrorKind::UndefinedField { object_ty, field } => {
                 write!(

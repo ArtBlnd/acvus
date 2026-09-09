@@ -434,7 +434,7 @@ fn inline_io_extern_inside() {
     use acvus_mir::ty::TyTerm;
     let fetch = Function {
         qref: QualifiedRef::root(i.intern("fetch")),
-        kind: FnKind::Extern,
+        kind: FnKind::Extern { bounds: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),

@@ -1,9 +1,9 @@
 use std::convert::Infallible;
 use std::fmt;
 
+use crate::graph::types::QualifiedRef;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
-use crate::graph::types::QualifiedRef;
 
 // -- UserDefined type system ------------------------------------------
 
@@ -12,9 +12,171 @@ use crate::graph::types::QualifiedRef;
 #[derive(Debug, Clone)]
 pub struct UserDefinedDecl {
     pub qref: QualifiedRef,
-    /// Type parameter constraints. `None` = unconstrained. `Some(vec)` = allowed types.
-    pub type_params: Vec<Option<Vec<Ty>>>,
+    pub type_params: Vec<TyVarBound>,
     pub effect_params: usize,
+}
+
+/// What a declaration says about one of its type variables. The solver
+/// carries it on the variable and verifies it when the variable freezes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TyVarBound {
+    Any,
+    /// The variable resolves to one of these concrete types.
+    OneOf(Vec<Ty>),
+}
+
+impl TyVarBound {
+    pub fn admits(&self, ty: &Ty) -> bool {
+        match self {
+            Self::Any => true,
+            Self::OneOf(tys) => tys.contains(ty),
+        }
+    }
+
+    /// The bound both sides satisfy; `None` when no type does.
+    pub fn meet(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Self::Any, b) | (b, Self::Any) => Some(b.clone()),
+            (Self::OneOf(a), Self::OneOf(b)) => {
+                let both: Vec<Ty> = a.iter().filter(|t| b.contains(t)).cloned().collect();
+                if both.is_empty() {
+                    None
+                } else {
+                    Some(Self::OneOf(both))
+                }
+            }
+        }
+    }
+}
+
+/// A polymorphic type with the bounds its variables were declared with.
+/// Variable `i` of `ty` has bound `bounds[i]`; a missing entry is `Any`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scheme {
+    pub ty: PolyTy,
+    pub bounds: Vec<TyVarBound>,
+}
+
+impl Scheme {
+    pub fn unbounded(ty: PolyTy) -> Self {
+        Self {
+            ty,
+            bounds: Vec::new(),
+        }
+    }
+
+    pub fn bound_of(&self, var: u32) -> TyVarBound {
+        self.bounds
+            .get(var as usize)
+            .cloned()
+            .unwrap_or(TyVarBound::Any)
+    }
+}
+
+/// Whether a concrete type has the shape of a polymorphic pattern. A
+/// pattern variable stands for any one type, the same type wherever it
+/// recurs; effect and length variables stand for any effect or length.
+pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
+    fn effect_matches(effect: &EffectTerm<Concrete>, pattern: &EffectTerm<Poly>) -> bool {
+        match pattern {
+            EffectTerm::Known(p) => *effect == EffectTerm::Known(*p),
+            EffectTerm::Var(_) => true,
+        }
+    }
+    fn go(ty: &Ty, pat: &PolyTy, seen: &mut FxHashMap<u32, Ty>) -> bool {
+        match (ty, pat) {
+            (_, TyTerm::Var(v)) => match seen.get(v) {
+                Some(bound) => bound == ty,
+                None => {
+                    seen.insert(*v, ty.clone());
+                    true
+                }
+            },
+            (Ty::Int, TyTerm::Int)
+            | (Ty::Float, TyTerm::Float)
+            | (Ty::String, TyTerm::String)
+            | (Ty::Bool, TyTerm::Bool)
+            | (Ty::Unit, TyTerm::Unit)
+            | (Ty::Byte, TyTerm::Byte) => true,
+            (Ty::Array(e, n), TyTerm::Array(pe, pn)) => {
+                let len_ok = match pn {
+                    LenTerm::Known(k) => *n == LenTerm::Known(*k),
+                    LenTerm::Var(_) => true,
+                };
+                len_ok && go(e, pe, seen)
+            }
+            (Ty::Option(i), TyTerm::Option(pi)) => go(i, pi, seen),
+            (Ty::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen),
+            (Ty::Ref(i, m), TyTerm::Ref(pi, pm)) => m == pm && go(i, pi, seen),
+            (Ty::Tuple(es), TyTerm::Tuple(ps)) => {
+                es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen))
+            }
+            (Ty::Object(fs), TyTerm::Object(pfs)) => {
+                fs.len() == pfs.len()
+                    && fs
+                        .iter()
+                        .all(|(k, v)| pfs.get(k).is_some_and(|pv| go(v, pv, seen)))
+            }
+            (
+                Ty::Fn {
+                    params,
+                    ret,
+                    effect,
+                    ..
+                },
+                TyTerm::Fn {
+                    params: pp,
+                    ret: pr,
+                    effect: pe,
+                    ..
+                },
+            ) => {
+                params.len() == pp.len()
+                    && effect_matches(effect, pe)
+                    && params.iter().zip(pp).all(|(a, b)| go(&a.ty, &b.ty, seen))
+                    && go(ret, pr, seen)
+            }
+            (
+                Ty::UserDefined {
+                    id,
+                    type_args,
+                    effect_args,
+                },
+                TyTerm::UserDefined {
+                    id: pid,
+                    type_args: pargs,
+                    effect_args: peffects,
+                },
+            ) => {
+                id == pid
+                    && type_args.len() == pargs.len()
+                    && effect_args.len() == peffects.len()
+                    && effect_args
+                        .iter()
+                        .zip(peffects)
+                        .all(|(a, b)| effect_matches(a, b))
+                    && type_args.iter().zip(pargs).all(|(a, b)| go(a, b, seen))
+            }
+            (Ty::Identity(a), TyTerm::Identity(b)) => a == b,
+            (
+                Ty::Enum { name, variants },
+                TyTerm::Enum {
+                    name: pn,
+                    variants: pv,
+                },
+            ) => {
+                name == pn
+                    && variants.len() == pv.len()
+                    && variants.iter().all(|(k, v)| match (v, pv.get(k)) {
+                        (Some(v), Some(Some(p))) => go(v, p, seen),
+                        (None, Some(None)) => true,
+                        _ => false,
+                    })
+            }
+            _ => false,
+        }
+    }
+    go(ty, pattern, &mut FxHashMap::default())
 }
 
 /// Immutable registry of all UserDefined type declarations and ExternCast rules.
@@ -232,7 +394,9 @@ pub enum Materiality {
 }
 
 /// Effect level of a call. The derived order is the chain `Pure < Idempotent < Opaque`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Effect {
     Pure,
     Idempotent,
@@ -265,7 +429,10 @@ impl<V: Phase> From<Effect> for EffectTerm<V> {
 }
 
 impl<V: Phase> EffectTerm<V> {
-    pub fn map<W: Phase>(&self, on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>) -> EffectTerm<W> {
+    pub fn map<W: Phase>(
+        &self,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+    ) -> EffectTerm<W> {
         match self {
             EffectTerm::Known(e) => EffectTerm::Known(*e),
             EffectTerm::Var(v) => on_effect(*v),
@@ -492,7 +659,9 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     other => write!(f, " with {other:?}"),
                 }
             }
-            Ty::Array(inner, len) => write!(f, "Array<{}, {}>", inner.display(self.interner), len.get()),
+            Ty::Array(inner, len) => {
+                write!(f, "Array<{}, {}>", inner.display(self.interner), len.get())
+            }
             Ty::Handle(inner) => {
                 write!(f, "Handle<{}>", inner.display(self.interner))
             }
@@ -558,8 +727,8 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
 pub struct TypeEnv {
     /// Context variable types - may contain inference variables (Solver-scoped).
     pub contexts: FxHashMap<QualifiedRef, InferTy>,
-    /// Function type templates - polymorphic, instantiated per call site.
-    pub functions: FxHashMap<QualifiedRef, PolyTy>,
+    /// Function type schemes - polymorphic, instantiated per call site.
+    pub functions: FxHashMap<QualifiedRef, Scheme>,
 }
 
 impl TypeEnv {
@@ -651,7 +820,7 @@ pub struct EffectVarId(pub u32);
 pub struct LenVarId(pub u32);
 
 // Re-export solver types - these were historically in ty.rs.
-pub use crate::solver::{Capability, TypeBound, Solver, SolverSnapshot, FreezeError};
+pub use crate::solver::{FreezeError, Solver, SolverSnapshot, TypeBound};
 
 /// Type alias - always concrete, no inference variables.
 pub type InferTy = TyTerm<Infer>;
@@ -740,34 +909,73 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
             TyTerm::Byte => TyTerm::Byte,
-            TyTerm::Array(inner, len) => TyTerm::Array(Box::new(inner.map(on_var, on_identity, on_effect, on_len)), len.map(on_len)),
+            TyTerm::Array(inner, len) => TyTerm::Array(
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
+                len.map(on_len),
+            ),
             TyTerm::Object(fields) => TyTerm::Object(
-                fields.iter().map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len))).collect(),
+                fields
+                    .iter()
+                    .map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len)))
+                    .collect(),
             ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
-                elems.iter().map(|e| e.map(on_var, on_identity, on_effect, on_len)).collect(),
+                elems
+                    .iter()
+                    .map(|e| e.map(on_var, on_identity, on_effect, on_len))
+                    .collect(),
             ),
-            TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect, on_len))),
-            TyTerm::Fn { params, ret, captures, effect } => TyTerm::Fn {
-                params: params.iter().map(|p| ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect, on_len))).collect(),
+            TyTerm::Option(inner) => {
+                TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
+            }
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => TyTerm::Fn {
+                params: params
+                    .iter()
+                    .map(|p| {
+                        ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect, on_len))
+                    })
+                    .collect(),
                 ret: Box::new(ret.map(on_var, on_identity, on_effect, on_len)),
-                captures: captures.iter().map(|c| c.map(on_var, on_identity, on_effect, on_len)).collect(),
+                captures: captures
+                    .iter()
+                    .map(|c| c.map(on_var, on_identity, on_effect, on_len))
+                    .collect(),
                 effect: effect.map(on_effect),
             },
-            TyTerm::UserDefined { id, type_args, effect_args } => TyTerm::UserDefined {
+            TyTerm::UserDefined {
+                id,
+                type_args,
+                effect_args,
+            } => TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.map(on_var, on_identity, on_effect, on_len)).collect(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| t.map(on_var, on_identity, on_effect, on_len))
+                    .collect(),
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
             },
             TyTerm::Enum { name, variants } => TyTerm::Enum {
                 name: *name,
-                variants: variants.iter().map(|(tag, payload)| {
-                    (*tag, payload.as_ref().map(|ty| Box::new(ty.map(on_var, on_identity, on_effect, on_len))))
-                }).collect(),
+                variants: variants
+                    .iter()
+                    .map(|(tag, payload)| {
+                        (
+                            *tag,
+                            payload
+                                .as_ref()
+                                .map(|ty| Box::new(ty.map(on_var, on_identity, on_effect, on_len))),
+                        )
+                    })
+                    .collect(),
             },
-            TyTerm::Handle(inner) => TyTerm::Handle(
-                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
-            ),
+            TyTerm::Handle(inner) => {
+                TyTerm::Handle(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
+            }
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
@@ -793,45 +1001,94 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
             TyTerm::Byte => Ok(TyTerm::Byte),
-            TyTerm::Array(inner, len) => Ok(TyTerm::Array(Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?), len.try_map(on_len)?)),
+            TyTerm::Array(inner, len) => Ok(TyTerm::Array(
+                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
+                len.try_map(on_len)?,
+            )),
             TyTerm::Object(fields) => {
-                let mapped: Result<FxHashMap<_, _>, E> = fields.iter()
-                    .map(|(k, v)| v.try_map(on_var, on_identity, on_effect, on_len).map(|mv| (*k, mv)))
+                let mapped: Result<FxHashMap<_, _>, E> = fields
+                    .iter()
+                    .map(|(k, v)| {
+                        v.try_map(on_var, on_identity, on_effect, on_len)
+                            .map(|mv| (*k, mv))
+                    })
                     .collect();
                 Ok(TyTerm::Object(mapped?))
             }
             TyTerm::Tuple(elems) => Ok(TyTerm::Tuple(
-                elems.iter().map(|e| e.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
+                elems
+                    .iter()
+                    .map(|e| e.try_map(on_var, on_identity, on_effect, on_len))
+                    .collect::<Result<_, _>>()?,
             )),
-            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?))),
-            TyTerm::Fn { params, ret, captures, effect } => Ok(TyTerm::Fn {
-                params: params.iter()
-                    .map(|p| p.ty.try_map(on_var, on_identity, on_effect, on_len).map(|ty| ParamTerm::new(p.name, ty)))
+            TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+            )?))),
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => Ok(TyTerm::Fn {
+                params: params
+                    .iter()
+                    .map(|p| {
+                        p.ty.try_map(on_var, on_identity, on_effect, on_len)
+                            .map(|ty| ParamTerm::new(p.name, ty))
+                    })
                     .collect::<Result<_, _>>()?,
                 ret: Box::new(ret.try_map(on_var, on_identity, on_effect, on_len)?),
-                captures: captures.iter().map(|c| c.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
+                captures: captures
+                    .iter()
+                    .map(|c| c.try_map(on_var, on_identity, on_effect, on_len))
+                    .collect::<Result<_, _>>()?,
                 effect: effect.try_map(on_effect)?,
             }),
-            TyTerm::UserDefined { id, type_args, effect_args } => Ok(TyTerm::UserDefined {
+            TyTerm::UserDefined {
+                id,
+                type_args,
+                effect_args,
+            } => Ok(TyTerm::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|t| t.try_map(on_var, on_identity, on_effect, on_len)).collect::<Result<_, _>>()?,
-                effect_args: effect_args.iter().map(|e| e.try_map(on_effect)).collect::<Result<_, _>>()?,
+                type_args: type_args
+                    .iter()
+                    .map(|t| t.try_map(on_var, on_identity, on_effect, on_len))
+                    .collect::<Result<_, _>>()?,
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| e.try_map(on_effect))
+                    .collect::<Result<_, _>>()?,
             }),
             TyTerm::Enum { name, variants } => {
-                let mapped: Result<FxHashMap<_, _>, E> = variants.iter()
+                let mapped: Result<FxHashMap<_, _>, E> = variants
+                    .iter()
                     .map(|(tag, payload)| {
                         let mp = match payload {
-                            Some(ty) => Some(Box::new(ty.try_map(on_var, on_identity, on_effect, on_len)?)),
+                            Some(ty) => Some(Box::new(ty.try_map(
+                                on_var,
+                                on_identity,
+                                on_effect,
+                                on_len,
+                            )?)),
                             None => None,
                         };
                         Ok((*tag, mp))
                     })
                     .collect();
-                Ok(TyTerm::Enum { name: *name, variants: mapped? })
+                Ok(TyTerm::Enum {
+                    name: *name,
+                    variants: mapped?,
+                })
             }
-            TyTerm::Handle(inner) => Ok(TyTerm::Handle(
-                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
-            )),
+            TyTerm::Handle(inner) => Ok(TyTerm::Handle(Box::new(inner.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+            )?))),
             TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => Ok(TyTerm::Ref(
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
@@ -857,7 +1114,9 @@ pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
 }
 
 /// Alias: lift `Ty` to `PolyTy`. Kept for call-site compatibility.
-pub fn lift_to_poly(ty: &Ty) -> PolyTy { lift_ty(ty) }
+pub fn lift_to_poly(ty: &Ty) -> PolyTy {
+    lift_ty(ty)
+}
 
 /// Try to convert a `PolyTy` to a concrete `Ty`.
 /// Returns `None` if the poly type contains any Var placeholders.
@@ -867,7 +1126,8 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
         &mut |id| Ok(TyTerm::Identity(id)),
         &mut |_: u32| Err(()),
         &mut |_: u32| Err(()),
-    ).ok()
+    )
+    .ok()
 }
 
 // -- PolyBuilder -----------------------------------------------------
@@ -882,7 +1142,11 @@ pub struct PolyBuilder {
 
 impl PolyBuilder {
     pub fn new() -> Self {
-        Self { next_ty: 0, next_effect: 0, next_len: 0 }
+        Self {
+            next_ty: 0,
+            next_effect: 0,
+            next_len: 0,
+        }
     }
 
     pub fn fresh_len_var(&mut self) -> LenTerm<Poly> {
@@ -904,13 +1168,18 @@ impl PolyBuilder {
         TyTerm::Var(id)
     }
 
-    pub fn alloc_identity(&mut self, factory: &mut acvus_utils::LocalFactory<IdentityId>) -> PolyTy {
+    pub fn alloc_identity(
+        &mut self,
+        factory: &mut acvus_utils::LocalFactory<IdentityId>,
+    ) -> PolyTy {
         TyTerm::Identity(factory.next())
     }
 }
 
 impl Default for PolyBuilder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -950,19 +1219,40 @@ mod tests {
     fn unify_same_concrete() {
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
-        assert!(s.unify_ty(&TyTerm::Int, &TyTerm::Int, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&TyTerm::Float, &TyTerm::Float, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&TyTerm::String, &TyTerm::String, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&TyTerm::Bool, &TyTerm::Bool, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&TyTerm::Unit, &TyTerm::Unit, Invariant, &registry).is_ok());
+        assert!(
+            s.unify_ty(&TyTerm::Int, &TyTerm::Int, Invariant, &registry)
+                .is_ok()
+        );
+        assert!(
+            s.unify_ty(&TyTerm::Float, &TyTerm::Float, Invariant, &registry)
+                .is_ok()
+        );
+        assert!(
+            s.unify_ty(&TyTerm::String, &TyTerm::String, Invariant, &registry)
+                .is_ok()
+        );
+        assert!(
+            s.unify_ty(&TyTerm::Bool, &TyTerm::Bool, Invariant, &registry)
+                .is_ok()
+        );
+        assert!(
+            s.unify_ty(&TyTerm::Unit, &TyTerm::Unit, Invariant, &registry)
+                .is_ok()
+        );
     }
 
     #[test]
     fn unify_different_concrete_fails() {
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
-        assert!(s.unify_ty(&TyTerm::Int, &TyTerm::Float, Invariant, &registry).is_err());
-        assert!(s.unify_ty(&TyTerm::String, &TyTerm::Bool, Invariant, &registry).is_err());
+        assert!(
+            s.unify_ty(&TyTerm::Int, &TyTerm::Float, Invariant, &registry)
+                .is_err()
+        );
+        assert!(
+            s.unify_ty(&TyTerm::String, &TyTerm::Bool, Invariant, &registry)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1001,7 +1291,10 @@ mod tests {
             interner.intern("name"),
             TyTerm::String,
         )]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([(interner.intern("age"), TyTerm::Int)]));
+        let obj2 = TyTerm::Object(FxHashMap::from_iter([(
+            interner.intern("age"),
+            TyTerm::Int,
+        )]));
         assert!(s.unify_ty(&obj1, &obj2, Invariant, &registry).is_err());
     }
 
@@ -1012,7 +1305,10 @@ mod tests {
         let t1 = s.fresh_ty_var();
         let t2 = s.fresh_ty_var();
         assert!(s.unify_ty(&t1, &t2, Invariant, &registry).is_ok());
-        assert!(s.unify_ty(&t2, &TyTerm::String, Invariant, &registry).is_ok());
+        assert!(
+            s.unify_ty(&t2, &TyTerm::String, Invariant, &registry)
+                .is_ok()
+        );
         assert_eq!(s.resolve_ty(&t1), TyTerm::String);
     }
 
@@ -1247,7 +1543,9 @@ mod tests {
             s.unify_ty(
                 &ud(id, vec![TyTerm::Int]),
                 &ud(id, vec![TyTerm::Int]),
-                Invariant, &registry)
+                Invariant,
+                &registry
+            )
             .is_ok()
         );
     }
@@ -1262,7 +1560,9 @@ mod tests {
             s.unify_ty(
                 &ud(id, vec![p.clone()]),
                 &ud(id, vec![TyTerm::Int]),
-                Invariant, &registry)
+                Invariant,
+                &registry
+            )
             .is_ok()
         );
         assert_eq!(s.resolve_ty(&p), TyTerm::Int);
@@ -1279,7 +1579,9 @@ mod tests {
             s.unify_ty(
                 &ud(id, vec![arr(p.clone(), 3)]),
                 &ud(id, vec![arr(TyTerm::Int, 3)]),
-                Invariant, &registry)
+                Invariant,
+                &registry
+            )
             .is_ok()
         );
         assert_eq!(s.resolve_ty(&p), TyTerm::Int);
@@ -1294,11 +1596,8 @@ mod tests {
         let id_a = fresh_qref();
         let id_b = fresh_qref();
         assert!(
-            s.unify_ty(
-                &ud(id_a, vec![]),
-                &ud(id_b, vec![]),
-                Invariant, &registry)
-            .is_err()
+            s.unify_ty(&ud(id_a, vec![]), &ud(id_b, vec![]), Invariant, &registry)
+                .is_err()
         );
     }
 
@@ -1311,7 +1610,9 @@ mod tests {
             s.unify_ty(
                 &ud(id, vec![TyTerm::Int]),
                 &ud(id, vec![TyTerm::String]),
-                Invariant, &registry)
+                Invariant,
+                &registry
+            )
             .is_err()
         );
     }
@@ -1358,7 +1659,7 @@ mod tests {
         let id = fresh_qref();
         reg.register(UserDefinedDecl {
             qref: id,
-            type_params: vec![None],
+            type_params: vec![TyVarBound::Any],
             effect_params: 0,
         });
         let decl = reg.get(id);
@@ -1417,7 +1718,7 @@ mod tests {
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
             qref: id,
-            type_params: vec![None; type_param_count],
+            type_params: vec![TyVarBound::Any; type_param_count],
             effect_params: 0,
         });
         reg.register_cast(CastRule {
@@ -1441,7 +1742,6 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
-
         };
         let to = arr(TyTerm::Int, 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
@@ -1457,7 +1757,6 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
-
         };
         let consumer_param = s.fresh_ty_var();
         let to = arr(consumer_param.clone(), 3);
@@ -1475,9 +1774,11 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-
         };
-        assert!(s.unify_ty(&from, &TyTerm::Int, Covariant, &registry).is_ok());
+        assert!(
+            s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
+                .is_ok()
+        );
     }
 
     // -- Soundness: invalid ExternCast --
@@ -1492,9 +1793,11 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
-
         };
-        assert!(s.unify_ty(&from, &TyTerm::String, Covariant, &registry).is_err());
+        assert!(
+            s.unify_ty(&from, &TyTerm::String, Covariant, &registry)
+                .is_err()
+        );
     }
 
     #[ignore = "pending identity integration"]
@@ -1509,9 +1812,11 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-
         };
-        assert!(s.unify_ty(&from, &TyTerm::Int, Covariant, &registry).is_err());
+        assert!(
+            s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
+                .is_err()
+        );
     }
 
     #[ignore = "pending identity integration"]
@@ -1524,9 +1829,11 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
-
         };
-        assert!(s.unify_ty(&from, &TyTerm::Int, Invariant, &registry).is_err());
+        assert!(
+            s.unify_ty(&from, &TyTerm::Int, Invariant, &registry)
+                .is_err()
+        );
     }
 
     // -- Ambiguity --
@@ -1550,7 +1857,6 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
-    
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -1561,7 +1867,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-    
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -1571,9 +1876,8 @@ mod tests {
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
             qref: id,
-            type_params: vec![None],
+            type_params: vec![TyVarBound::Any],
             effect_params: 0,
-
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
@@ -1582,7 +1886,6 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
-
         };
         assert!(
             s.unify_ty(&from, &arr(TyTerm::Int, 3), Covariant, &reg)
@@ -1606,16 +1909,14 @@ mod tests {
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
             qref: id,
-            type_params: vec![None],
+            type_params: vec![TyVarBound::Any],
             effect_params: 0,
-
         });
         reg.register_cast(CastRule {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t.clone()],
                 effect_args: vec![],
-    
             },
             to: arr(t.clone(), 3),
             fn_ref: fn_id_a,
@@ -1628,7 +1929,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-    
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -1646,9 +1946,8 @@ mod tests {
         let mut reg = TypeRegistry::new();
         reg.register(UserDefinedDecl {
             qref: id,
-            type_params: vec![None],
+            type_params: vec![TyVarBound::Any],
             effect_params: 0,
-
         });
         let mut builder1 = PolyBuilder::new();
         let t1 = builder1.fresh_ty_var();
@@ -1657,7 +1956,6 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
-    
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -1670,7 +1968,6 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
-    
             },
             to: TyTerm::Option(Box::new(t2)),
             fn_ref: fn_id_b,

@@ -136,7 +136,7 @@ impl IncrementalGraph {
         };
         match &mut func.kind {
             FnKind::Local(existing) => *existing = ast,
-            FnKind::Extern => return,
+            FnKind::Extern { .. } => return,
         }
 
         // 1. Re-extract.
@@ -323,7 +323,7 @@ impl IncrementalGraph {
         let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         // Seed with extern function types (always known upfront).
         for (qref, func) in &self.functions {
-            if let FnKind::Extern = &func.kind {
+            if let FnKind::Extern { .. } = &func.kind {
                 resolved_fn_types.insert(*qref, func.ty.clone());
             }
         }
@@ -346,7 +346,12 @@ impl IncrementalGraph {
             if self.infer_cache[scc_idx].is_some() {
                 // Still need to accumulate resolved types for subsequent SCCs.
                 if let Some(ref cached) = self.infer_cache[scc_idx] {
-                    resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
+                    resolved_fn_types.extend(
+                        cached
+                            .resolved_types
+                            .iter()
+                            .map(|(&k, v)| (k, lift_to_poly(v))),
+                    );
                 }
                 continue;
             }
@@ -363,9 +368,15 @@ impl IncrementalGraph {
                 &parsed_owned,
                 &known_ctx,
                 &resolved_fn_types,
+                &super::infer::declared_bounds(self.functions.values()),
             );
 
-            resolved_fn_types.extend(result.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
+            resolved_fn_types.extend(
+                result
+                    .resolved_types
+                    .iter()
+                    .map(|(&k, v)| (k, lift_to_poly(v))),
+            );
             for (qref, errs) in &result.errors {
                 self.diagnostics.insert(*qref, errs.clone());
             }
@@ -386,7 +397,7 @@ impl IncrementalGraph {
         let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         // Seed with extern function types.
         for (qref, func) in &self.functions {
-            if let FnKind::Extern = &func.kind {
+            if let FnKind::Extern { .. } = &func.kind {
                 resolved_fn_types.insert(*qref, func.ty.clone());
             }
         }
@@ -407,7 +418,12 @@ impl IncrementalGraph {
         // Accumulate resolved types from prior SCCs.
         for scc_idx in 0..start_scc {
             if let Some(ref cached) = self.infer_cache[scc_idx] {
-                resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
+                resolved_fn_types.extend(
+                    cached
+                        .resolved_types
+                        .iter()
+                        .map(|(&k, v)| (k, lift_to_poly(v))),
+                );
             }
         }
 
@@ -419,7 +435,12 @@ impl IncrementalGraph {
             if !dirty_sccs.contains(&scc_idx) {
                 // Not dirty - use cached result.
                 if let Some(ref cached) = self.infer_cache[scc_idx] {
-                    resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
+                    resolved_fn_types.extend(
+                        cached
+                            .resolved_types
+                            .iter()
+                            .map(|(&k, v)| (k, lift_to_poly(v))),
+                    );
                 }
                 continue;
             }
@@ -441,6 +462,7 @@ impl IncrementalGraph {
                 &parsed_for_scc,
                 &known_ctx,
                 &resolved_fn_types,
+                &super::infer::declared_bounds(self.functions.values()),
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -472,7 +494,12 @@ impl IncrementalGraph {
                 self.diagnostics.insert(*qref, errs.clone());
             }
 
-            resolved_fn_types.extend(result.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
+            resolved_fn_types.extend(
+                result
+                    .resolved_types
+                    .iter()
+                    .map(|(&k, v)| (k, lift_to_poly(v))),
+            );
             self.infer_cache[scc_idx] = Some(result);
         }
     }

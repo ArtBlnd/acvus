@@ -9,7 +9,10 @@
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{EffectTerm, Infer, InferTy, Param, PolyTy, Solver, Ty, TyTerm, TypeRegistry, lift_to_poly, lift_ty};
+use crate::ty::{
+    EffectTerm, Infer, InferTy, Param, PolyTy, Scheme, Solver, Ty, TyTerm, TyVarBound,
+    TypeRegistry, lift_to_poly, lift_ty,
+};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
@@ -158,7 +161,7 @@ fn build_call_graph(
 
     let mut edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = FxHashMap::default();
     for func in graph.functions.iter() {
-        if matches!(func.kind, FnKind::Extern) {
+        if matches!(func.kind, FnKind::Extern { .. }) {
             continue;
         }
         let Some(parsed) = extract.parsed.get(&func.qref) else {
@@ -176,12 +179,13 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
-            Stmt::Bind { expr, .. } | Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
+            Stmt::Bind { expr, .. }
+            | Stmt::ContextStore { expr, .. }
+            | Stmt::VarFieldStore { expr, .. } => {
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::Expr(expr) => collect_value_refs_expr(expr, refs),
-            Stmt::MatchBind { source, body, .. }
-            | Stmt::WhileLet { source, body, .. } => {
+            Stmt::MatchBind { source, body, .. } | Stmt::WhileLet { source, body, .. } => {
                 collect_value_refs_expr(source, refs);
                 collect_value_refs_stmts(body, refs);
             }
@@ -439,6 +443,30 @@ pub struct SccInferResult {
 ///
 /// `resolved_fn_types`: all function types already resolved by prior SCCs + builtins.
 /// `known_ctx`: declared context types from the graph.
+/// The bounds every Extern in `functions` declared for its type variables.
+pub fn declared_bounds<'a>(
+    functions: impl Iterator<Item = &'a Function>,
+) -> FxHashMap<QualifiedRef, Vec<TyVarBound>> {
+    functions
+        .filter_map(|f| match &f.kind {
+            FnKind::Extern { bounds } => Some((f.qref, bounds.clone())),
+            FnKind::Local(_) => None,
+        })
+        .collect()
+}
+
+/// The scheme a function's type is instantiated under: its declared bounds
+/// when it is an Extern, none otherwise.
+fn declared_scheme(bounds: Option<&Vec<TyVarBound>>, ty: PolyTy) -> Scheme {
+    match bounds {
+        Some(bounds) => Scheme {
+            ty,
+            bounds: bounds.clone(),
+        },
+        None => Scheme::unbounded(ty),
+    }
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
@@ -446,6 +474,7 @@ pub fn infer_scc(
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
+    declared: &FxHashMap<QualifiedRef, Vec<TyVarBound>>,
 ) -> SccInferResult {
     let mut solver = Solver::new();
     let registry = TypeRegistry::default();
@@ -493,12 +522,15 @@ pub fn infer_scc(
         scc_fn_types.insert(func.qref, fn_ty);
     }
 
-    // Build TypeEnv: already-resolved functions + this SCC's poly templates.
-    let mut env_functions: FxHashMap<QualifiedRef, PolyTy> = resolved_fn_types
+    let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
         .iter()
-        .map(|(&k, v)| (k, v.clone()))
+        .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
         .collect();
-    env_functions.extend(scc_fn_types);
+    env_functions.extend(
+        scc_fn_types
+            .into_iter()
+            .map(|(k, v)| (k, Scheme::unbounded(v))),
+    );
 
     // Typecheck each function in this SCC.
     for &fid in scc {
@@ -549,12 +581,21 @@ pub fn infer_scc(
                 if expected_tail_ty.is_none() {
                     if let Some(ret_var) = fn_ret_vars.get(&fid) {
                         let tail_infer = lift_ty(&unchecked.tail_ty);
-                        let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, &registry);
+                        let _ = solver.unify_ty(
+                            ret_var,
+                            &tail_infer,
+                            crate::ty::Polarity::Invariant,
+                            &registry,
+                        );
                     }
                 }
                 let closed = EffectTerm::Known(unchecked.effect);
                 solver
-                    .unify_effect(&fn_effect_vars[&fid], &closed, crate::ty::Polarity::Invariant)
+                    .unify_effect(
+                        &fn_effect_vars[&fid],
+                        &closed,
+                        crate::ty::Polarity::Invariant,
+                    )
                     .expect("the closed effect is the variable's own lower bound");
 
                 let bind: Vec<Param> = unchecked
@@ -580,10 +621,7 @@ pub fn infer_scc(
             .get(&fid)
             .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
             .unwrap_or_else(Ty::error);
-        let bind: Vec<Param> = fn_bind_params
-            .get(&fid)
-            .cloned()
-            .unwrap_or_default();
+        let bind: Vec<Param> = fn_bind_params.get(&fid).cloned().unwrap_or_default();
 
         let effect = EffectTerm::Known(solver.freeze_effect(&fn_effect_vars[&fid]));
 
@@ -633,10 +671,8 @@ pub fn infer(
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
-    let mut fn_unchecked: FxHashMap<
-        QualifiedRef,
-        Freeze<crate::typeck::TypeResolution>,
-    > = FxHashMap::default();
+    let mut fn_unchecked: FxHashMap<QualifiedRef, Freeze<crate::typeck::TypeResolution>> =
+        FxHashMap::default();
     let mut fn_typeck_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> =
         FxHashMap::default();
     let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = Default::default();
@@ -646,7 +682,7 @@ pub fn infer(
 
     // Extern function types are always known upfront (their PolyTy is fully concrete).
     for func in graph.functions.iter() {
-        if let FnKind::Extern = &func.kind {
+        if let FnKind::Extern { .. } = &func.kind {
             resolved_fn_types.insert(func.qref, func.ty.clone());
         }
     }
@@ -659,7 +695,11 @@ pub fn infer(
     for ctx in graph.contexts.iter() {
         known_ctx.insert(ctx.qref, solver.instantiate_poly(&ctx.ty));
     }
-    known_ctx.extend(user_context_types.iter().map(|(&k, v)| (k, solver.instantiate_poly(v))));
+    known_ctx.extend(
+        user_context_types
+            .iter()
+            .map(|(&k, v)| (k, solver.instantiate_poly(v))),
+    );
 
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
@@ -667,6 +707,7 @@ pub fn infer(
         .filter(|f| matches!(f.kind, FnKind::Local(_)))
         .map(|f| (f.qref, f))
         .collect();
+    let declared = declared_bounds(graph.functions.iter());
 
     // -- STEP 1: Call graph + SCCs ------------------------------------
 
@@ -720,12 +761,15 @@ pub fn infer(
             );
         }
 
-        // 2b. Typecheck each function with resolved + SCC-local type env.
-        let mut env_functions: FxHashMap<QualifiedRef, PolyTy> = resolved_fn_types
+        let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
             .iter()
-            .map(|(&k, v)| (k, v.clone()))
+            .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
             .collect();
-        env_functions.extend(scc_fn_types);
+        env_functions.extend(
+            scc_fn_types
+                .into_iter()
+                .map(|(k, v)| (k, Scheme::unbounded(v))),
+        );
 
         for &fid in scc {
             let func = fn_by_id[&fid];
@@ -762,12 +806,15 @@ pub fn infer(
                 })
                 .collect();
 
-            let checker = crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
-                .with_analysis_mode()
-                .with_declared_param_types(declared_types)
-                .with_body_effect(scc_effect_vars[&fid]);
+            let checker =
+                crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
+                    .with_analysis_mode()
+                    .with_declared_param_types(declared_types)
+                    .with_body_effect(scc_effect_vars[&fid]);
             let result = match parsed {
-                ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
+                ParsedSource::Script(script) => {
+                    checker.check_script(script, expected_tail_ty.as_ref())
+                }
                 ParsedSource::Template(template) => checker.check_template(template),
             };
 
@@ -777,12 +824,21 @@ pub fn infer(
                     if expected_tail_ty.is_none() {
                         if let Some(ret_var) = scc_ret_vars.get(&fid) {
                             let tail_infer = lift_ty(&unchecked.tail_ty);
-                            let _ = solver.unify_ty(ret_var, &tail_infer, crate::ty::Polarity::Invariant, registry_ref);
+                            let _ = solver.unify_ty(
+                                ret_var,
+                                &tail_infer,
+                                crate::ty::Polarity::Invariant,
+                                registry_ref,
+                            );
                         }
                     }
                     let closed = EffectTerm::Known(unchecked.effect);
                     solver
-                        .unify_effect(&scc_effect_vars[&fid], &closed, crate::ty::Polarity::Invariant)
+                        .unify_effect(
+                            &scc_effect_vars[&fid],
+                            &closed,
+                            crate::ty::Polarity::Invariant,
+                        )
                         .expect("the closed effect is the variable's own lower bound");
 
                     let bind: Vec<Param> = unchecked
@@ -805,10 +861,7 @@ pub fn infer(
                 .get(&fid)
                 .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
                 .unwrap_or_else(Ty::error);
-            let bind: Vec<Param> = fn_bind_params
-                .get(&fid)
-                .cloned()
-                .unwrap_or_default();
+            let bind: Vec<Param> = fn_bind_params.get(&fid).cloned().unwrap_or_default();
 
             let effect = EffectTerm::Known(solver.freeze_effect(&scc_effect_vars[&fid]));
 
@@ -901,7 +954,7 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::{lift_to_poly, ParamTerm, Poly, PolyBuilder, PolyParam};
+    use crate::ty::{ParamTerm, Poly, PolyBuilder, PolyParam, lift_to_poly};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -975,7 +1028,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     #[test]
@@ -991,7 +1043,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     // -- Soundness: no false inferences --
@@ -1009,7 +1060,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     // ================================================================
@@ -1088,14 +1138,17 @@ mod tests {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
             ids.push((aname, fid));
-            let poly_params: Vec<PolyParam> = sig.as_ref().map(|params| {
-                params
-                    .iter()
-                    .map(|(name, ty)| {
-                        ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
-                    })
-                    .collect()
-            }).unwrap_or_default();
+            let poly_params: Vec<PolyParam> = sig
+                .as_ref()
+                .map(|params| {
+                    params
+                        .iter()
+                        .map(|(name, ty)| {
+                            ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
             functions.push(Function {
                 qref: fid,
@@ -1150,14 +1203,17 @@ mod tests {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
             ids.push((aname, fid));
-            let poly_params: Vec<PolyParam> = sig.as_ref().map(|params| {
-                params
-                    .iter()
-                    .map(|(name, ty)| {
-                        ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
-                    })
-                    .collect()
-            }).unwrap_or_default();
+            let poly_params: Vec<PolyParam> = sig
+                .as_ref()
+                .map(|params| {
+                    params
+                        .iter()
+                        .map(|(name, ty)| {
+                            ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
             functions.push(Function {
                 qref: fid,
@@ -1209,11 +1265,13 @@ mod tests {
         let named_params: Vec<ParamTerm<Poly>> = params
             .iter()
             .enumerate()
-            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
+            .map(|(i, ty)| {
+                ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty))
+            })
             .collect();
         Function {
             qref: QualifiedRef::root(interner.intern(name)),
-            kind: FnKind::Extern,
+            kind: FnKind::Extern { bounds: vec![] },
             ty: TyTerm::Fn {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),
@@ -1392,12 +1450,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "double",
-                    "$x * 2",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("double", "$x * 2", Some(vec![("x", Ty::Int)]), None),
                 ("main", "double(21)", None, None),
             ],
             &[],
@@ -1456,12 +1509,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "inc",
-                    "$x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
                 (
                     "double_inc",
                     "inc($x) + inc($x)",
@@ -1544,12 +1592,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "double",
-                    "$x * 2",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("double", "$x * 2", Some(vec![("x", Ty::Int)]), None),
                 ("main", "10 | double", None, None),
             ],
             &[],
@@ -1569,12 +1612,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "echo",
-                    "$s",
-                    Some(vec![("s", Ty::String)]),
-                    None,
-                ),
+                ("echo", "$s", Some(vec![("s", Ty::String)]), None),
                 ("main", "echo(\"hello\")", None, None),
             ],
             &[],
@@ -1592,12 +1630,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "inc",
-                    "$x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
                 ("a", "inc(10)", None, None),
                 ("b", "inc(20)", None, None),
             ],
@@ -1616,12 +1649,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "is_positive",
-                    "$x > 0",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("is_positive", "$x > 0", Some(vec![("x", Ty::Int)]), None),
                 ("main", "is_positive(42)", None, None),
             ],
             &[],
@@ -1661,12 +1689,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "inc",
-                    "$x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
                 ("main", "inc(inc(0))", None, None),
             ],
             &[],
@@ -1761,12 +1784,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                (
-                    "double",
-                    "x * 2",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("double", "x * 2", Some(vec![("x", Ty::Int)]), None),
                 ("main", "double(\"hello\")", None, None),
             ],
             &[],
@@ -1784,12 +1802,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                (
-                    "inc",
-                    "x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), None),
                 ("main", "inc(1, 2)", None, None),
             ],
             &[],
@@ -1836,11 +1849,7 @@ mod tests {
     #[test]
     fn inter_fn_reject_undefined_function() {
         let i = Interner::new();
-        let (result, _ids) = infer_multi(
-            &i,
-            &[("main", "nonexistent(1)", None, None)],
-            &[],
-        );
+        let (result, _ids) = infer_multi(&i, &[("main", "nonexistent(1)", None, None)], &[]);
         assert!(
             result.has_errors(),
             "should reject call to undefined function"
@@ -1872,18 +1881,8 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                (
-                    "ping",
-                    "pong(x)",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
-                (
-                    "pong",
-                    "ping(x)",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), None),
+                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), None),
             ],
             &[],
         );
@@ -1898,12 +1897,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                (
-                    "needs_int",
-                    "x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), None),
                 ("main", "\"hello\" | needs_int", None, None),
             ],
             &[],
@@ -1956,12 +1950,7 @@ mod tests {
             &[
                 ("make_int", "42", Some(vec![]), None),
                 ("make_str", "\"hi\"", Some(vec![]), None),
-                (
-                    "main",
-                    "[make_int(), make_str()]",
-                    None,
-                    None,
-                ),
+                ("main", "[make_int(), make_str()]", None, None),
             ],
             &[],
         );
@@ -1979,12 +1968,7 @@ mod tests {
             &i,
             &[
                 ("make_str", "\"hi\"", Some(vec![]), None),
-                (
-                    "needs_int",
-                    "x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), None),
                 ("main", "needs_int(make_str())", None, None),
             ],
             &[],
@@ -2129,30 +2113,10 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "stage1",
-                    "$x + 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
-                (
-                    "stage2",
-                    "$x * 2",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
-                (
-                    "stage3",
-                    "$x - 1",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
-                (
-                    "main",
-                    "0 | stage1 | stage2 | stage3",
-                    None,
-                    None,
-                ),
+                ("stage1", "$x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("stage2", "$x * 2", Some(vec![("x", Ty::Int)]), None),
+                ("stage3", "$x - 1", Some(vec![("x", Ty::Int)]), None),
+                ("main", "0 | stage1 | stage2 | stage3", None, None),
             ],
             &[],
         );
@@ -2168,10 +2132,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[
-                ("a", "1 + 2", None, None),
-                ("b", "\"hello\"", None, None),
-            ],
+            &[("a", "1 + 2", None, None), ("b", "\"hello\"", None, None)],
             &[],
         );
         let errs = error_strings(&i, &result);
@@ -2191,7 +2152,12 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("get_user", "@user", Some(vec![]), Some(lift_to_poly(&obj_ty))),
+                (
+                    "get_user",
+                    "@user",
+                    Some(vec![]),
+                    Some(lift_to_poly(&obj_ty)),
+                ),
                 ("main", "get_user().name", None, None),
             ],
             &[(
@@ -2253,18 +2219,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                (
-                    "ping",
-                    "pong(x)",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
-                (
-                    "pong",
-                    "ping(x)",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), None),
+                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), None),
             ],
             &[],
         );
@@ -2284,12 +2240,7 @@ mod tests {
         let (result, _) = infer_multi(
             &i,
             &[
-                (
-                    "f",
-                    "f(x - 1)",
-                    Some(vec![("x", Ty::Int)]),
-                    None,
-                ),
+                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), None),
                 ("main", "f(10)", None, None),
             ],
             &[],
@@ -2349,12 +2300,8 @@ mod tests {
     fn extern_fn_call_resolves() {
         let i = Interner::new();
         let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
-        let (result, ids) = infer_with_extern(
-            &i,
-            &[("main", "fetch(42)", None, None)],
-            &[fetch],
-            &[],
-        );
+        let (result, ids) =
+            infer_with_extern(&i, &[("main", "fetch(42)", None, None)], &[fetch], &[]);
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "extern call should resolve: {errs:?}");
         let main_id = ids[0].1;
@@ -2366,12 +2313,8 @@ mod tests {
     fn extern_fn_call_type_mismatch() {
         let i = Interner::new();
         let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
-        let (result, _) = infer_with_extern(
-            &i,
-            &[("main", "fetch(\"bad\")", None, None)],
-            &[fetch],
-            &[],
-        );
+        let (result, _) =
+            infer_with_extern(&i, &[("main", "fetch(\"bad\")", None, None)], &[fetch], &[]);
         assert!(
             result.has_errors(),
             "should reject String where Int expected"
@@ -2436,7 +2379,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     /// Multiple contexts.
@@ -2453,7 +2395,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     /// Context inside nested block - still extracted.
@@ -2470,7 +2411,6 @@ mod tests {
             Freeze::default(),
             &FxHashMap::default(),
         );
-
     }
 
     // context_extract_in_lambda: migrated to acvus-mir-test (depends on ExternFn `map`, `collect`)
@@ -2628,12 +2568,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[(
-                "test",
-                "$x + 1",
-                Some(vec![("x", Ty::Int)]),
-                None,
-            )],
+            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), None)],
             &[],
         );
         let fid = ids[0].1;
@@ -2671,12 +2606,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[(
-                "test",
-                "$x + 1",
-                Some(vec![("x", Ty::Int)]),
-                None,
-            )],
+            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), None)],
             &[],
         );
         let fid = ids[0].1;
@@ -2748,11 +2678,7 @@ mod tests {
     #[test]
     fn type_constraint_inferred_always_complete() {
         let i = Interner::new();
-        let (result, ids) = infer_multi(
-            &i,
-            &[("test", r#""hello""#, Some(vec![]), None)],
-            &[],
-        );
+        let (result, ids) = infer_multi(&i, &[("test", r#""hello""#, Some(vec![]), None)], &[]);
         let fid = ids[0].1;
         assert!(result.outcomes[&fid].is_complete());
     }
@@ -2776,9 +2702,7 @@ mod tests {
             .collect();
 
         let fid = QualifiedRef::root(interner.intern("test"));
-        let parsed = ParsedAst::Script(
-            acvus_ast::parse_script(interner, source).expect("parse"),
-        );
+        let parsed = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: fid,

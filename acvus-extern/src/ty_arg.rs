@@ -107,3 +107,11 @@ impl_tuple_ty_arg!(A);
 impl_tuple_ty_arg!(A, B);
 impl_tuple_ty_arg!(A, B, C);
 impl_tuple_ty_arg!(A, B, C, D);
+
+/// The bound of a generic parameter that ranges over a finite set of
+/// concrete types: `A: Monomorphize<(i64, f64)>`. The declaration carries
+/// the set; the handler is compiled once per member. Every type satisfies
+/// the Rust trait; the macro reads the set.
+pub trait Monomorphize<Types>: TyVar {}
+
+impl<T: TyVar, Types> Monomorphize<Types> for T {}

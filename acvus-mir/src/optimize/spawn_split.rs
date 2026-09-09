@@ -31,8 +31,7 @@ pub fn run(cfg: &mut CfgBody) {
 
                     // Register Handle type: Handle<ReturnTy>.
                     if let Ty::Fn { ret, .. } = callee_ty {
-                        cfg.val_types
-                            .insert(handle, Ty::Handle(ret.clone()));
+                        cfg.val_types.insert(handle, Ty::Handle(ret.clone()));
                     }
 
                     new_insts.push(Inst {
@@ -46,10 +45,7 @@ pub fn run(cfg: &mut CfgBody) {
                     });
                     new_insts.push(Inst {
                         span: inst.span,
-                        kind: InstKind::Eval {
-                            dst,
-                            src: handle,
-                        },
+                        kind: InstKind::Eval { dst, src: handle },
                     });
                 }
                 // Everything else: pass through.
@@ -244,7 +240,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-    
+
                     effect: crate::ty::Effect::Opaque.into(),
                 },
             );

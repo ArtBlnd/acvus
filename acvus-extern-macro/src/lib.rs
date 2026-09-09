@@ -139,57 +139,95 @@ fn generate_extern_fn(
         }
     }
 
-    let param_terms: Vec<_> = params
-        .iter()
-        .map(|p| {
+    let signature = |member: Option<&Type>| -> proc_macro2::TokenStream {
+        let param_terms = params.iter().map(|p| {
             let name = &p.name;
-            let comp_ty = vars.to_compile_time(&p.ty);
+            let comp_ty = vars.to_compile_time_instance(&p.ty, member);
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                     __i.intern(#name),
                     <#comp_ty as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
                 )
             }
-        })
-        .collect();
-    let comp_ret = vars.to_compile_time(&ret.ty);
-
-    let rt_tys: Vec<Type> = params.iter().map(|p| vars.to_runtime(&p.ty)).collect();
-    let rt_ret = vars.to_runtime(&ret.ty);
-    let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
-    let turbofish = vars.runtime_turbofish();
-    let call = quote! { #fn_ident #turbofish (__i, #(#arg_idents),*) };
-
-    let handler = match (is_async, ret.is_result) {
-        (false, true) => quote! {
-            ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
-                |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
-                    -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> {
-                        (#call).map_err(::core::convert::Into::into)
-                    }
-            )
-        },
-        (false, false) => quote! {
-            ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
-                |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
-                    -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> { Ok(#call) }
-            )
-        },
-        (true, true) => quote! {
-            ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
-                |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
-                    (#call).await.map_err(::core::convert::Into::into)
-                }
-            )
-        },
-        (true, false) => quote! {
-            ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
-                |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
-                    ::core::result::Result::<#rt_ret, <__R as ::acvus_extern::Runtime>::Error>::Ok(#call.await)
-                }
-            )
-        },
+        });
+        let comp_ret = vars.to_compile_time_instance(&ret.ty, member);
+        quote! {
+            ::acvus_extern::PolyTy::Fn {
+                params: vec![#(#param_terms),*],
+                ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
+                captures: vec![],
+                effect: #effect,
+            }
+        }
     };
+
+    let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
+    let glue = |member: Option<&Type>| -> proc_macro2::TokenStream {
+        let rt_tys: Vec<Type> = params
+            .iter()
+            .map(|p| vars.to_runtime_instance(&p.ty, member))
+            .collect();
+        let rt_ret = vars.to_runtime_instance(&ret.ty, member);
+        let turbofish = vars.runtime_turbofish_instance(member);
+        let call = quote! { #fn_ident #turbofish (__i, #(#arg_idents),*) };
+        match (is_async, ret.is_result) {
+            (false, true) => quote! {
+                ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
+                    |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
+                        -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> {
+                            (#call).map_err(::core::convert::Into::into)
+                        }
+                )
+            },
+            (false, false) => quote! {
+                ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
+                    |__i: &::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)|
+                        -> ::core::result::Result<#rt_ret, <__R as ::acvus_extern::Runtime>::Error> { Ok(#call) }
+                )
+            },
+            (true, true) => quote! {
+                ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
+                    |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
+                        (#call).await.map_err(::core::convert::Into::into)
+                    }
+                )
+            },
+            (true, false) => quote! {
+                ::acvus_extern::into_async_extern_handler::<__R, _, _, _, _>(
+                    |__i: ::acvus_extern::Interner, (#(#arg_idents,)*): (#(#rt_tys,)*)| async move {
+                        ::core::result::Result::<#rt_ret, <__R as ::acvus_extern::Runtime>::Error>::Ok(#call.await)
+                    }
+                )
+            },
+        }
+    };
+
+    let handler = match vars.mono_var() {
+        None => {
+            let single = glue(None);
+            quote! { ::acvus_extern::ExternEntry::Single(#single) }
+        }
+        Some(mono) => {
+            let members = mono.mono.as_ref().expect("mono_var has members");
+            let instances = members.iter().map(|member| {
+                let handler = glue(Some(member));
+                let signature = signature(Some(member));
+                quote! {
+                    ::acvus_extern::MonoInstance {
+                        signature: #signature,
+                        handler: #handler,
+                    }
+                }
+            });
+            quote! {
+                ::acvus_extern::ExternEntry::Mono(::acvus_extern::MonoHandler {
+                    instances: vec![#(#instances),*],
+                })
+            }
+        }
+    };
+    let bounds = vars.bound_exprs();
+    let declared_ty = signature(None);
 
     let (n_tys, n_effects, n_lens) = vars.counts();
     Ok(quote! {
@@ -203,12 +241,8 @@ fn generate_extern_fn(
             let __vars = ::acvus_extern::PolyVars::fresh(#n_tys, #n_effects, #n_lens);
             ::acvus_extern::ExternFn {
                 qref: #qref,
-                ty: ::acvus_extern::PolyTy::Fn {
-                    params: vec![#(#param_terms),*],
-                    ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
-                    captures: vec![],
-                    effect: #effect,
-                },
+                ty: #declared_ty,
+                bounds: vec![#(#bounds),*],
                 handler: #handler,
                 cast: #is_cast,
             }
@@ -503,7 +537,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             fn type_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::UserDefinedDecl {
                 ::acvus_extern::UserDefinedDecl {
                     qref: #qref,
-                    type_params: vec![None; #n_tys],
+                    type_params: vec![::acvus_extern::TyVarBound::Any; #n_tys],
                     effect_params: #n_effects,
                 }
             }

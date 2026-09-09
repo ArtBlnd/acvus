@@ -271,7 +271,7 @@ mod tests {
             id
         }
     }
-    
+
     fn make_ctx(interner: &Interner, name: &str) -> SsaVar {
         SsaVar::Context(QualifiedRef::root(interner.intern(name)))
     }
@@ -527,7 +527,10 @@ mod tests {
             result, v0,
             "should be the same value - trivial PHI eliminated"
         );
-        assert!(ssa.finish().0.is_empty(), "trivial PHI should be eliminated");
+        assert!(
+            ssa.finish().0.is_empty(),
+            "trivial PHI should be eliminated"
+        );
     }
 
     /// Multiple contexts - independent PHIs.

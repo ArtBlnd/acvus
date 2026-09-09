@@ -12,18 +12,6 @@ use crate::convert::{FromValue, IntoValue};
 use crate::error::ExternError;
 use crate::extern_value::ExternValue;
 
-/// A scalar taken out of a runtime value, for ExternFns that act on
-/// whatever scalar they are given.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Scalar {
-    Unit,
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Byte(u8),
-    String(String),
-}
-
 pub trait Runtime: Sized + Send + Sync + 'static {
     /// The erased representation. A generic ExternFn's type variable is
     /// this at runtime, so it converts to and from itself.
@@ -31,8 +19,6 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type Closure: Send + Sync + 'static;
     type Error: From<ExternError> + Send + Sync + 'static;
 
-    /// The scalar in `value`, or the value back when it is not a scalar.
-    fn scalar(value: Self::Value) -> Result<Scalar, Self::Value>;
     /// The language's `==`.
     fn equals(a: &Self::Value, b: &Self::Value) -> bool;
 
@@ -86,9 +72,6 @@ impl Runtime for TypesOnly {
     type Closure = ();
     type Error = ExternError;
 
-    fn scalar(_: ()) -> Result<Scalar, ()> {
-        Err(())
-    }
     fn equals(_: &(), _: &()) -> bool {
         true
     }

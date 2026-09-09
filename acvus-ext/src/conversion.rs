@@ -1,45 +1,86 @@
 //! Type conversions. All pure.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, Interner, IntoValue, Runtime, Scalar, TyVar, extern_fn,
-    extern_registry,
+    ExternError, ExternRegistry, Interner, Monomorphize, Runtime, extern_fn, extern_registry,
 };
 
-#[extern_fn(effect = pure)]
-fn to_string<T, Rt>(i: &Interner, val: T) -> Result<String, Rt::Error>
-where
-    T: TyVar + IntoValue<Rt>,
-    Rt: Runtime,
-{
-    match Rt::scalar(val.into_value(i)) {
-        Ok(Scalar::Int(n)) => Ok(n.to_string()),
-        Ok(Scalar::Float(f)) => Ok(f.to_string()),
-        Ok(Scalar::Bool(b)) => Ok(b.to_string()),
-        Ok(Scalar::String(s)) => Ok(s),
-        Ok(Scalar::Byte(b)) => Ok(format!("0x{b:02x}")),
-        Ok(Scalar::Unit) => Ok("()".to_string()),
-        Err(_) => Err(ExternError::call("to_string", "not a scalar").into()),
+/// The text of a scalar, as scripts see it.
+trait ScalarText {
+    fn text(self) -> String;
+}
+
+impl ScalarText for i64 {
+    fn text(self) -> String {
+        self.to_string()
+    }
+}
+impl ScalarText for f64 {
+    fn text(self) -> String {
+        self.to_string()
+    }
+}
+impl ScalarText for bool {
+    fn text(self) -> String {
+        self.to_string()
+    }
+}
+impl ScalarText for u8 {
+    fn text(self) -> String {
+        format!("0x{self:02x}")
+    }
+}
+impl ScalarText for String {
+    fn text(self) -> String {
+        self
     }
 }
 
 #[extern_fn(effect = pure)]
-fn to_int<T, Rt>(i: &Interner, val: T) -> Result<i64, Rt::Error>
+fn to_string<A>(_: &Interner, val: A) -> String
 where
-    T: TyVar + IntoValue<Rt>,
-    Rt: Runtime,
+    A: Monomorphize<(i64, f64, bool, u8, String)> + ScalarText,
 {
-    match Rt::scalar(val.into_value(i)) {
-        Ok(Scalar::Int(n)) => Ok(n),
-        Ok(Scalar::Float(f)) => Ok(f as i64),
-        Ok(Scalar::String(s)) => s
-            .parse::<i64>()
-            .map_err(|e| ExternError::call("to_int", format!("cannot parse string: {e}")).into()),
-        Ok(Scalar::Bool(b)) => Ok(i64::from(b)),
-        Ok(Scalar::Byte(b)) => Ok(i64::from(b)),
-        Ok(Scalar::Unit) | Err(_) => {
-            Err(ExternError::call("to_int", "not a number, string, or bool").into())
-        }
+    val.text()
+}
+
+/// Whole-number reading of a scalar, as scripts see it.
+trait ToInt {
+    fn to_int(self) -> Result<i64, ExternError>;
+}
+
+impl ToInt for i64 {
+    fn to_int(self) -> Result<i64, ExternError> {
+        Ok(self)
     }
+}
+impl ToInt for f64 {
+    fn to_int(self) -> Result<i64, ExternError> {
+        Ok(self as i64)
+    }
+}
+impl ToInt for bool {
+    fn to_int(self) -> Result<i64, ExternError> {
+        Ok(i64::from(self))
+    }
+}
+impl ToInt for u8 {
+    fn to_int(self) -> Result<i64, ExternError> {
+        Ok(i64::from(self))
+    }
+}
+impl ToInt for String {
+    fn to_int(self) -> Result<i64, ExternError> {
+        self.parse::<i64>()
+            .map_err(|e| ExternError::call("to_int", format!("cannot parse string: {e}")))
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn to_int<A>(_: &Interner, val: A) -> Result<i64, ExternError>
+where
+    A: Monomorphize<(i64, f64, bool, u8, String)> + ToInt,
+{
+    val.to_int()
 }
 
 #[extern_fn(effect = pure)]

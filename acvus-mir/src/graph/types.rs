@@ -23,8 +23,9 @@ pub use acvus_utils::QualifiedRef;
 pub enum FnKind {
     /// Has a parsed AST. MIR typechecks and compiles.
     Local(ParsedAst),
-    /// Black box. Runtime provides the value.
-    Extern,
+    /// Black box. Runtime provides the value. `bounds[i]` is the declared
+    /// bound of variable `i` of the function's type.
+    Extern { bounds: Vec<crate::ty::TyVarBound> },
 }
 
 /// Parsed AST for local functions.

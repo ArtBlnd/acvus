@@ -14,9 +14,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, ValueId};
-use crate::analysis::inst_info;
 
 // -- Def location ----------------------------------------------------
 
@@ -52,7 +52,6 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
                 map.insert(d, DefLoc::Inst(bi, ii));
             }
         }
-
     }
 
     map
@@ -158,9 +157,7 @@ pub fn run(cfg: &mut CfgBody) {
                 let block_label = cfg.blocks[bi].label;
                 for pred_block in cfg.blocks.iter() {
                     let pred_args: Option<&[ValueId]> = match &pred_block.terminator {
-                        Terminator::Jump { label, args } if *label == block_label => {
-                            Some(args)
-                        }
+                        Terminator::Jump { label, args } if *label == block_label => Some(args),
                         Terminator::JumpIf {
                             then_label,
                             then_args,

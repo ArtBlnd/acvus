@@ -411,7 +411,7 @@ fn extern_async_call() {
     let i = Interner::new();
     let fetch_user = Function {
         qref: QualifiedRef::root(i.intern("fetch_user")),
-        kind: FnKind::Extern,
+        kind: FnKind::Extern { bounds: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("id"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::String)),

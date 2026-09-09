@@ -53,11 +53,8 @@ enum Priority {
     Scheduled(usize, u8),
 }
 
-
 /// Reorder instructions within a single basic block, in-place.
-fn reorder_block(
-    insts: &mut Vec<Inst>,
-) {
+fn reorder_block(insts: &mut Vec<Inst>) {
     let n = insts.len();
     if n <= 1 {
         return;
@@ -72,9 +69,7 @@ fn reorder_block(
 // -- Dependency graph -----------------------------------------------
 
 /// Build dependency edges: `deps[i]` = instructions that must execute before `i`.
-fn build_dependency_graph(
-    insts: &[Inst],
-) -> Vec<SmallVec<[usize; 4]>> {
+fn build_dependency_graph(insts: &[Inst]) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
 
@@ -301,18 +296,8 @@ mod tests {
             5,
         );
         // Set Handle types for eval.
-        cfg.val_types.insert(
-            v(0),
-            Ty::Handle(
-                Box::new(Ty::String),
-            ),
-        );
-        cfg.val_types.insert(
-            v(2),
-            Ty::Handle(
-                Box::new(Ty::String),
-            ),
-        );
+        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
+        cfg.val_types.insert(v(2), Ty::Handle(Box::new(Ty::String)));
 
         run(&mut cfg);
 
@@ -374,12 +359,7 @@ mod tests {
             ],
             2,
         );
-        cfg.val_types.insert(
-            v(0),
-            Ty::Handle(
-                Box::new(Ty::String),
-            ),
-        );
+        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
 
         run(&mut cfg);
 
@@ -428,12 +408,7 @@ mod tests {
             ],
             8,
         );
-        cfg.val_types.insert(
-            v(0),
-            Ty::Handle(
-                Box::new(Ty::String),
-            ),
-        );
+        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
 
         run(&mut cfg);
 

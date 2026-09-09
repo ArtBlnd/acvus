@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 fn extern_fn(i: &Interner, name: &str, effect: Effect) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern,
+        kind: FnKind::Extern { bounds: vec![] },
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(lift_to_poly(&Ty::Int)),

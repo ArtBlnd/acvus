@@ -4,7 +4,7 @@
 use acvus_extern::{
     Arr, ExternError, ExternRegistry, ExternTypeDecl, ExternTypeName, ExternValue, FromValue,
     Interner, IntoValue, LenVar, PayloadMismatch, PolyTy, PolyVars, QualifiedRef, Runtime, TyArg,
-    TyVar, UserDefinedDecl, extern_fn, extern_registry,
+    TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +53,7 @@ where
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
             qref: QualifiedRef::root(i.intern("List")),
-            type_params: vec![None],
+            type_params: vec![TyVarBound::Any],
             effect_params: 0,
         }
     }

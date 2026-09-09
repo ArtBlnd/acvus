@@ -20,21 +20,24 @@ pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use error::ExternError;
 pub use extern_value::{ExternTypeName, ExternValue, PayloadMismatch};
 pub use func::{Fn0, Fn1, Fn2};
-pub use handler::{ExternHandler, into_async_extern_handler, into_sync_extern_handler};
+pub use handler::{
+    ExternEntry, ExternHandler, MonoHandler, MonoInstance, into_async_extern_handler,
+    into_sync_extern_handler,
+};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use registry::{
     AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl, Registered,
     SyncHandler,
 };
-pub use runtime::{Runtime, Scalar, TypesOnly};
-pub use ty_arg::{PolyVars, TyArg, TyVar, Typeck};
+pub use runtime::{Runtime, TypesOnly};
+pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck};
 
 pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry};
 
-pub use acvus_mir::graph::Function;
+pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, TyTerm,
-    TypeRegistry, UserDefinedDecl,
+    CastRule, Effect, EffectTerm, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm,
+    TyVarBound, TypeRegistry, UserDefinedDecl, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};
 pub use futures::future::BoxFuture;

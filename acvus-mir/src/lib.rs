@@ -104,10 +104,13 @@ mod tests {
     #[test]
     fn integration_nested_match() {
         let i = Interner::new();
-        let users_ty = Ty::Array(Box::new(Ty::Object(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::Int),
-        ]))), crate::ty::LenTerm::Known(3));
+        let users_ty = Ty::Array(
+            Box::new(Ty::Object(FxHashMap::from_iter([
+                (i.intern("name"), Ty::String),
+                (i.intern("age"), Ty::Int),
+            ]))),
+            crate::ty::LenTerm::Known(3),
+        );
         compile_template(
             &i,
             r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
@@ -223,7 +226,10 @@ mod tests {
                     effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
-            ("items", Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            ),
         ]
     }
 
@@ -262,14 +268,20 @@ mod tests {
             (
                 "mapper",
                 Ty::Fn {
-                    params: vec![Param::new(i.intern("_"), Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)))],
+                    params: vec![Param::new(
+                        i.intern("_"),
+                        Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+                    )],
                     ret: Box::new(Ty::String),
                     captures: vec![],
 
                     effect: crate::ty::Effect::Opaque.into(),
                 },
             ),
-            ("items", Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            (
+                "items",
+                Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            ),
         ];
         compile_script(&i, "@items | @mapper", &ctx).unwrap();
     }

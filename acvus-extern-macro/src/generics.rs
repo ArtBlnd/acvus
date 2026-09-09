@@ -16,11 +16,14 @@ pub enum VarKind {
     Runtime,
 }
 
-/// One generic parameter, its kind, and its index among that kind.
+/// One generic parameter, its kind, and its index among that kind. A type
+/// variable bounded by `Monomorphize<(..)>` also carries the member types
+/// its handler is compiled for.
 pub struct Var {
     pub ident: Ident,
     pub kind: VarKind,
     pub index: usize,
+    pub mono: Option<Vec<Type>>,
 }
 
 pub struct Vars(Vec<Var>);
@@ -46,6 +49,43 @@ fn bounds_of<'a>(
     tp.bounds.iter().chain(from_where)
 }
 
+/// The member types of a `Monomorphize<(T0, T1, ..)>` bound, if present.
+fn mono_members<'a>(
+    bounds: impl Iterator<Item = &'a TypeParamBound>,
+) -> syn::Result<Option<Vec<Type>>> {
+    for bound in bounds {
+        let TypeParamBound::Trait(t) = bound else {
+            continue;
+        };
+        let Some(seg) = t.path.segments.last() else {
+            continue;
+        };
+        if seg.ident != "Monomorphize" {
+            continue;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+            return Err(syn::Error::new_spanned(
+                seg,
+                "Monomorphize takes a tuple of types",
+            ));
+        };
+        let Some(syn::GenericArgument::Type(Type::Tuple(members))) = args.args.first() else {
+            return Err(syn::Error::new_spanned(
+                seg,
+                "Monomorphize takes a tuple of types",
+            ));
+        };
+        if members.elems.is_empty() {
+            return Err(syn::Error::new_spanned(
+                seg,
+                "Monomorphize needs at least one type",
+            ));
+        }
+        return Ok(Some(members.elems.iter().cloned().collect()));
+    }
+    Ok(None)
+}
+
 impl Vars {
     pub fn from_generics(generics: &Generics) -> syn::Result<Self> {
         let mut vars = Vec::new();
@@ -67,19 +107,37 @@ impl Vars {
                     _ => None,
                 })
                 .collect();
-            let [kind] = kinds.as_slice() else {
+            let mono = mono_members(bounds_of(generics, tp))?;
+            let kind = match (kinds.as_slice(), &mono) {
+                ([kind], _) => *kind,
+                ([], Some(_)) => VarKind::Ty,
+                _ => {
+                    return Err(syn::Error::new(
+                        tp.ident.span(),
+                        "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, Runtime, Monomorphize",
+                    ));
+                }
+            };
+            if mono.is_some() && kind != VarKind::Ty {
                 return Err(syn::Error::new(
                     tp.ident.span(),
-                    "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, Runtime",
+                    "Monomorphize is a type-variable bound",
                 ));
-            };
-            let slot = *kind as usize;
+            }
+            let slot = kind as usize;
             vars.push(Var {
                 ident: tp.ident.clone(),
-                kind: *kind,
+                kind,
                 index: counts[slot],
+                mono,
             });
             counts[slot] += 1;
+        }
+        if vars.iter().filter(|v| v.mono.is_some()).count() > 1 {
+            return Err(syn::Error::new(
+                generics.params.span(),
+                "at most one generic parameter is bounded by Monomorphize",
+            ));
         }
         if counts[VarKind::Runtime as usize] > 1 {
             return Err(syn::Error::new(
@@ -153,30 +211,73 @@ impl Vars {
     }
 
     pub fn to_compile_time(&self, ty: &Type) -> Type {
+        self.to_compile_time_instance(ty, None)
+    }
+
+    /// Compile-time substitution with the Monomorphize variable set to `member`.
+    pub fn to_compile_time_instance(&self, ty: &Type, member: Option<&Type>) -> Type {
         subst::substitute(ty, &|ident| {
-            self.0
-                .iter()
-                .find(|v| v.ident == *ident)
-                .map(Self::compile_time_stand_in)
+            let v = self.0.iter().find(|v| v.ident == *ident)?;
+            match (&v.mono, member) {
+                (Some(_), Some(m)) => Some(m.clone()),
+                _ => Some(Self::compile_time_stand_in(v)),
+            }
         })
     }
 
     pub fn to_runtime(&self, ty: &Type) -> Type {
+        self.to_runtime_instance(ty, None)
+    }
+
+    /// Runtime substitution with the Monomorphize variable set to `member`.
+    pub fn to_runtime_instance(&self, ty: &Type, member: Option<&Type>) -> Type {
         subst::substitute(ty, &|ident| {
-            self.0
-                .iter()
-                .find(|v| v.ident == *ident)
-                .map(Self::runtime_stand_in)
+            let v = self.0.iter().find(|v| v.ident == *ident)?;
+            match (&v.mono, member) {
+                (Some(_), Some(m)) => Some(m.clone()),
+                _ => Some(Self::runtime_stand_in(v)),
+            }
         })
+    }
+
+    /// The Monomorphize variable, if any.
+    pub fn mono_var(&self) -> Option<&Var> {
+        self.0.iter().find(|v| v.mono.is_some())
+    }
+
+    /// `TyVarBound` of every type variable, by position.
+    pub fn bound_exprs(&self) -> Vec<TokenStream> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty)
+            .map(|v| match &v.mono {
+                None => quote! { ::acvus_extern::TyVarBound::Any },
+                Some(members) => quote! {
+                    ::acvus_extern::TyVarBound::OneOf(vec![#(
+                        ::acvus_extern::try_freeze_poly(
+                            &<#members as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
+                        )
+                        .expect("Monomorphize members are concrete types")
+                    ),*])
+                },
+            })
+            .collect()
     }
 
     /// `::<<__R as Runtime>::Value, (), (), __R>` in declaration order; empty
     /// when there are no generic parameters.
     pub fn runtime_turbofish(&self) -> TokenStream {
+        self.runtime_turbofish_instance(None)
+    }
+
+    pub fn runtime_turbofish_instance(&self, member: Option<&Type>) -> TokenStream {
         if self.0.is_empty() {
             return TokenStream::new();
         }
-        let args = self.0.iter().map(Self::runtime_stand_in);
+        let args = self.0.iter().map(|v| match (&v.mono, member) {
+            (Some(_), Some(m)) => m.clone(),
+            _ => Self::runtime_stand_in(v),
+        });
         quote! { ::<#(#args),*> }
     }
 

@@ -81,7 +81,6 @@ pub trait DataflowAnalysis {
     ) {
     }
 
-
     /// (Forward only) Evaluate branch condition for dead-branch pruning.
     fn eval_branch_cond(
         &self,

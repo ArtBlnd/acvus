@@ -52,14 +52,14 @@ pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource
                 Some(ParsedSource::Template(template.clone()))
             }
         },
-        FnKind::Extern => None,
+        FnKind::Extern { .. } => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{TyTerm, PolyBuilder};
+    use crate::ty::{PolyBuilder, TyTerm};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> (CompilationGraph, QualifiedRef) {
@@ -102,7 +102,7 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Extern,
+                kind: FnKind::Extern { bounds: vec![] },
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

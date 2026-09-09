@@ -70,7 +70,6 @@ impl DataflowAnalysis for LivenessAnalysis {
         }
     }
 
-
     fn propagate_forward(
         &self,
         _source_exit: &DataflowState<ValueId, Liveness>,

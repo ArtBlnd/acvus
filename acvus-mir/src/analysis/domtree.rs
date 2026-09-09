@@ -231,12 +231,7 @@ impl PostDomTree {
 
         // Find exit blocks (blocks with Return terminator).
         let exits: Vec<usize> = (0..n)
-            .filter(|&bi| {
-                matches!(
-                    cfg.blocks[bi].terminator,
-                    crate::cfg::Terminator::Return(_)
-                )
-            })
+            .filter(|&bi| matches!(cfg.blocks[bi].terminator, crate::cfg::Terminator::Return(_)))
             .collect();
 
         if exits.is_empty() {
@@ -338,7 +333,11 @@ impl PostDomTree {
 
 /// Compute dominator tree on a graph given as successor lists.
 /// `entry` is the root. Uses the same CHK01 algorithm as DomTree::build.
-fn compute_domtree_on_reverse(n: usize, entry: usize, succs: &[SmallVec<[usize; 2]>]) -> Vec<usize> {
+fn compute_domtree_on_reverse(
+    n: usize,
+    entry: usize,
+    succs: &[SmallVec<[usize; 2]>],
+) -> Vec<usize> {
     // Build predecessors from successors (in the reverse graph).
     let mut preds: Vec<SmallVec<[usize; 2]>> = vec![SmallVec::new(); n];
     for (src, dsts) in succs.iter().enumerate() {
@@ -385,8 +384,7 @@ fn compute_domtree_on_reverse(n: usize, entry: usize, succs: &[SmallVec<[usize; 
         changed = false;
         for &b in &rpo[1..] {
             let pred_list = &preds[b];
-            let Some(&first_processed) = pred_list.iter().find(|&&p| idom[p] != UNDEFINED)
-            else {
+            let Some(&first_processed) = pred_list.iter().find(|&&p| idom[p] != UNDEFINED) else {
                 continue;
             };
             let mut new_idom = first_processed;

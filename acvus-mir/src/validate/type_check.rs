@@ -439,7 +439,6 @@ impl CheckCtx {
                 }
             }
 
-
             InstKind::MakeTuple { dst, elements } => {
                 let dst_ty = ty!(*dst);
                 if let Ty::Tuple(elem_tys) = dst_ty {
@@ -622,7 +621,15 @@ impl CheckCtx {
                     );
                     self.assert_match(pc, span, "BinOp(cmp)", "dst", &Ty::Bool, dst_ty, errors);
                 } else {
-                    self.assert_match(pc, span, "BinOp", "left == right", left_ty, right_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp",
+                        "left == right",
+                        left_ty,
+                        right_ty,
+                        errors,
+                    );
                     self.assert_match(pc, span, "BinOp", "left == dst", left_ty, dst_ty, errors);
                 }
             }
@@ -725,7 +732,10 @@ impl CheckCtx {
 
             // === Scalar field access ===
             InstKind::FieldGet {
-                dst, object, field, rest,
+                dst,
+                object,
+                field,
+                rest,
             } => {
                 let obj_ty = ty!(*object);
                 // Try direct type first, then unwrap one container level.
@@ -793,7 +803,15 @@ impl CheckCtx {
                         self.assert_match(pc, span, "FieldSet", "value", &resolved, val_ty, errors);
                     }
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "FieldSet", "dst == object", obj_ty, dst_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "FieldSet",
+                        "dst == object",
+                        obj_ty,
+                        dst_ty,
+                        errors,
+                    );
                 } else if !obj_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
@@ -866,7 +884,9 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::ArrayIndex { dst, array: list, .. } => {
+            InstKind::ArrayIndex {
+                dst, array: list, ..
+            } => {
                 let list_ty = ty!(*list);
                 if let Some(inner) = as_array_inner(list_ty) {
                     let dst_ty = ty!(*dst);
@@ -885,7 +905,11 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::ArrayGet { dst, array: list, index } => {
+            InstKind::ArrayGet {
+                dst,
+                array: list,
+                index,
+            } => {
                 let list_ty = ty!(*list);
                 let index_ty = ty!(*index);
                 self.assert_match(pc, span, "ArrayGet", "index", &Ty::Int, index_ty, errors);
@@ -935,12 +959,9 @@ impl CheckCtx {
                 self.assert_match(pc, span, "TestObjectKey", "dst", &Ty::Bool, dst_ty, errors);
             }
 
-
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
-                if !matches!(
-                    src_ty,
-                    Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_)                ) {
+                if !matches!(src_ty, Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_)) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1068,12 +1089,7 @@ impl CheckCtx {
                     }
                     Callee::Indirect(closure) => {
                         let closure_ty = ty!(*closure);
-                        if let Ty::Fn {
-                            params,
-                            ret,
-                            ..
-                        } = closure_ty
-                        {
+                        if let Ty::Fn { params, ret, .. } = closure_ty {
                             if args.len() != params.len() {
                                 errors.push(ValidationError {
                                     scope: self.scope_name.clone(),
@@ -1099,8 +1115,7 @@ impl CheckCtx {
                                     );
                                 }
                             }
-                            let expected_dst =
-                                Ty::Handle(Box::new(ret.as_ref().clone()));
+                            let expected_dst = Ty::Handle(Box::new(ret.as_ref().clone()));
                             let dst_ty = ty!(*dst);
                             self.assert_match(
                                 pc,

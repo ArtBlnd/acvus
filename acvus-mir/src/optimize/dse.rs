@@ -75,7 +75,9 @@ fn analyze_block(
         match &inst.kind {
             // Load from context Ref -> read.
             InstKind::Load {
-                src, volatile: false, ..
+                src,
+                volatile: false,
+                ..
             } => {
                 if let Some(&qref) = ref_to_ctx.get(src) {
                     // This is a read. Remove from kills (if written later was tracked),
@@ -225,7 +227,9 @@ pub fn run(cfg: &mut CfgBody) {
         for (ii, inst) in block.insts.iter().enumerate().rev() {
             match &inst.kind {
                 InstKind::Load {
-                    src, volatile: false, ..
+                    src,
+                    volatile: false,
+                    ..
                 } => {
                     if let Some(&qref) = ref_to_ctx.get(src) {
                         live.insert(qref);
@@ -342,11 +346,7 @@ mod tests {
     }
 
     fn make_body(insts: Vec<InstKind>, val_types: FxHashMap<ValueId, Ty>) -> MirBody {
-        let max_val = val_types
-            .keys()
-            .map(|v| v.to_raw())
-            .max()
-            .unwrap_or(0);
+        let max_val = val_types.keys().map(|v| v.to_raw()).max().unwrap_or(0);
         let mut factory = LocalFactory::<ValueId>::new();
         for _ in 0..=max_val {
             factory.next();
@@ -532,7 +532,11 @@ mod tests {
 
         run(&mut cfg);
 
-        assert_eq!(count_stores(&cfg), 2, "the call may read @x, so the first store stays");
+        assert_eq!(
+            count_stores(&cfg),
+            2,
+            "the call may read @x, so the first store stays"
+        );
     }
 
     /// Volatile store is never removed.
@@ -654,4 +658,3 @@ mod tests {
         assert_eq!(inst_count_before, inst_count_after);
     }
 }
-

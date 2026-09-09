@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{BoxFuture, ExternValue, FromValue, IntoValue, Runtime, Scalar};
+use acvus_extern::{BoxFuture, ExternValue, FromValue, IntoValue, Runtime};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -11,6 +11,7 @@ use crate::error::{RuntimeError, ValueKind};
 use crate::value::{FnValue, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
+pub type ExternEntry = acvus_extern::ExternEntry<AcvusRuntime>;
 
 pub struct AcvusRuntime;
 
@@ -54,18 +55,6 @@ impl Runtime for AcvusRuntime {
     type Value = Value;
     type Closure = FnValue;
     type Error = RuntimeError;
-
-    fn scalar(value: Value) -> Result<Scalar, Value> {
-        match value {
-            Value::Unit => Ok(Scalar::Unit),
-            Value::Int(n) => Ok(Scalar::Int(n)),
-            Value::Float(f) => Ok(Scalar::Float(f)),
-            Value::Bool(b) => Ok(Scalar::Bool(b)),
-            Value::Byte(b) => Ok(Scalar::Byte(b)),
-            Value::String(s) => Ok(Scalar::String(unshare(s))),
-            other => Err(other),
-        }
-    }
 
     fn equals(a: &Value, b: &Value) -> bool {
         a.structural_eq(b)

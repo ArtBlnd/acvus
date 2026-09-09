@@ -8,8 +8,8 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, Astr, BoxFuture, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn, ExternHandler,
     ExternItems, ExternRegistry, ExternType, ExternValue, Fn1, FromValue, FxHashMap, Interner,
-    IntoValue, LenTerm, LenVar, PolyTy, Pure, Runtime, Scalar, TyArg, TyVar, TypeRegistry,
-    TypesOnly, extern_fn, extern_registry,
+    IntoValue, LenTerm, LenVar, PolyTy, Pure, Runtime, TyArg, TyVar, TypeRegistry, TypesOnly,
+    extern_fn, extern_registry,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -66,14 +66,6 @@ impl Runtime for Tiny {
     type Closure = Closure;
     type Error = ExternError;
 
-    fn scalar(value: V) -> Result<Scalar, V> {
-        match value {
-            V::Unit => Ok(Scalar::Unit),
-            V::Int(n) => Ok(Scalar::Int(n)),
-            V::Str(s) => Ok(Scalar::String(s)),
-            other => Err(other),
-        }
-    }
     fn equals(a: &V, b: &V) -> bool {
         a == b
     }
@@ -418,7 +410,12 @@ fn handler<'a>(
     i: &Interner,
     name: &str,
 ) -> &'a ExternHandler<Tiny> {
-    &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern(name))]
+    match &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern(name))] {
+        acvus_extern::ExternEntry::Single(h) => h,
+        acvus_extern::ExternEntry::Mono(_) => {
+            panic!("{name} is monomorphized; select by call type")
+        }
+    }
 }
 
 #[tokio::test]
@@ -534,4 +531,158 @@ fn stand_ins_name_their_positions() {
         <Arr<acvus_extern::Typeck<0>, acvus_extern::Len<0>> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Array(Box::new(PolyTy::Var(0)), LenTerm::Var(0))
     );
+}
+
+// -- Monomorphize -------------------------------------------------------
+
+/// Twice the value, as each member type defines it.
+trait Twice {
+    fn twice(self) -> Self;
+}
+
+impl Twice for i64 {
+    fn twice(self) -> Self {
+        self * 2
+    }
+}
+
+impl Twice for String {
+    fn twice(self) -> Self {
+        format!("{self}{self}")
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn double<A>(_: &Interner, a: A) -> A
+where
+    A: acvus_extern::Monomorphize<(i64, String)> + Twice,
+{
+    a.twice()
+}
+
+#[extern_fn(effect = pure)]
+fn first_or<A>(_: &Interner, v: Option<A>, fallback: A) -> A
+where
+    A: acvus_extern::Monomorphize<(i64, String)>,
+{
+    v.unwrap_or(fallback)
+}
+
+/// The member type appears only inside an extension type here.
+#[extern_fn(effect = pure)]
+fn box_count<A, Rt>(_: &Interner, v: Boxed<A, Pure, Rt>) -> i64
+where
+    A: acvus_extern::Monomorphize<(i64, String)>,
+    Rt: Runtime,
+{
+    v.0.len() as i64
+}
+
+fn mono_registry<R: Runtime>() -> ExternRegistry<R> {
+    extern_registry! {
+        fns: [double, first_or, box_count],
+    }
+}
+
+#[test]
+fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
+    let i = Interner::new();
+    let mut tr = TypeRegistry::new();
+    let reg = mono_registry::<TypesOnly>().register(&i, &mut tr);
+    let double = reg
+        .functions
+        .iter()
+        .find(|f| i.resolve(f.qref.name) == "double")
+        .expect("double");
+    let acvus_extern::FnKind::Extern { bounds } = &double.kind else {
+        panic!("double is extern");
+    };
+    assert_eq!(
+        bounds,
+        &vec![acvus_extern::TyVarBound::OneOf(vec![
+            acvus_extern::Ty::Int,
+            acvus_extern::Ty::String
+        ])]
+    );
+    let shape = fn_ty(&double.ty);
+    assert_eq!(shape.params, vec![PolyTy::Var(0)]);
+    assert_eq!(shape.ret, PolyTy::Var(0));
+}
+
+fn call_type(
+    params: Vec<acvus_extern::Ty>,
+    ret: acvus_extern::Ty,
+    i: &Interner,
+) -> acvus_extern::Ty {
+    acvus_extern::Ty::Fn {
+        params: params
+            .into_iter()
+            .enumerate()
+            .map(|(k, ty)| acvus_extern::ParamTerm::new(i.intern(&format!("_{k}")), ty))
+            .collect(),
+        ret: Box::new(ret),
+        captures: vec![],
+        effect: EffectTerm::Known(Effect::Pure),
+    }
+}
+
+#[test]
+fn the_call_type_selects_the_instance() {
+    let i = Interner::new();
+    let mut tr = TypeRegistry::new();
+    let reg = mono_registry::<Tiny>().register(&i, &mut tr);
+    let entry = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("double"))];
+
+    let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
+    let h = entry.select(&on_int).unwrap();
+    assert_eq!(call_sync(h, vec![V::Int(21)], &i).unwrap(), V::Int(42));
+
+    let on_str = call_type(vec![acvus_extern::Ty::String], acvus_extern::Ty::String, &i);
+    let h = entry.select(&on_str).unwrap();
+    assert_eq!(
+        call_sync(h, vec![V::Str("ab".into())], &i).unwrap(),
+        V::Str("abab".into())
+    );
+
+    let on_float = call_type(vec![acvus_extern::Ty::Float], acvus_extern::Ty::Float, &i);
+    assert!(entry.select(&on_float).is_err());
+
+    let nested = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("first_or"))];
+    let ty = call_type(
+        vec![
+            acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::String)),
+            acvus_extern::Ty::String,
+        ],
+        acvus_extern::Ty::String,
+        &i,
+    );
+    let h = nested.select(&ty).unwrap();
+    assert_eq!(
+        call_sync(h, vec![V::None, V::Str("x".into())], &i).unwrap(),
+        V::Str("x".into())
+    );
+
+    let inside = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("box_count"))];
+    let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
+        id: acvus_extern::QualifiedRef::root(i.intern("Box")),
+        type_args: vec![t],
+        effect_args: vec![EffectTerm::Known(Effect::Pure)],
+    };
+    let ty = call_type(
+        vec![boxed_of(acvus_extern::Ty::String)],
+        acvus_extern::Ty::Int,
+        &i,
+    );
+    let h = inside.select(&ty).unwrap();
+    let payload = V::Extern(ExternValue::new(
+        Boxed::<String, Pure, Tiny>::TYPE_NAME,
+        vec![V::Str("a".into()), V::Str("b".into())],
+    ));
+    assert_eq!(call_sync(h, vec![payload], &i).unwrap(), V::Int(2));
+    let ty = call_type(
+        vec![boxed_of(acvus_extern::Ty::Float)],
+        acvus_extern::Ty::Int,
+        &i,
+    );
+    assert!(inside.select(&ty).is_err());
 }

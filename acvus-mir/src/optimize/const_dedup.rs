@@ -141,12 +141,9 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::TestLiteral { src, .. } => remap_val(src, remap),
 
-
         InstKind::TestObjectKey { src, .. } => remap_val(src, remap),
 
-
         InstKind::ArrayIndex { array: list, .. } => remap_val(list, remap),
-
 
         InstKind::ObjectGet { object, .. } => remap_val(object, remap),
 
@@ -156,8 +153,9 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_val(right, remap);
         }
 
-
-        InstKind::ArrayGet { array: list, index, .. } => {
+        InstKind::ArrayGet {
+            array: list, index, ..
+        } => {
             remap_val(list, remap);
             remap_val(index, remap);
         }
@@ -213,11 +211,9 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::UnwrapVariant { src, .. } => remap_val(src, remap),
 
-
         InstKind::Clone { src, .. } => remap_val(src, remap),
 
         InstKind::Drop { src } => remap_val(src, remap),
-
 
         InstKind::Spawn { callee, args, .. } => {
             if let Callee::Indirect(val) = callee {

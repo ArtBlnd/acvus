@@ -32,11 +32,7 @@ fn build_whole_types(
 
     // Var/Param types from identity Refs in body.
     for inst in &body.insts {
-        if let InstKind::Ref {
-            dst,
-            target,
-            path,
-        } = &inst.kind
+        if let InstKind::Ref { dst, target, path } = &inst.kind
             && path.is_empty()
             && let Some(Ty::Ref(inner, _)) = body.val_types.get(dst)
         {
@@ -55,7 +51,8 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
     let mut i = 0;
 
     while i < body.insts.len() {
-        let is_field_ref = matches!(&body.insts[i].kind, InstKind::Ref { path, .. } if !path.is_empty());
+        let is_field_ref =
+            matches!(&body.insts[i].kind, InstKind::Ref { path, .. } if !path.is_empty());
 
         if !is_field_ref || i + 1 >= body.insts.len() {
             new_insts.push(body.insts[i].clone());

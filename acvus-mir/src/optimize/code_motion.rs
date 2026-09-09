@@ -84,13 +84,9 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 
             let uses = inst_info::uses(kind);
 
-            if let Some(target) = find_highest_target(
-                BlockIdx(bi),
-                &uses,
-                &domtree,
-                &def_block,
-                cfg,
-            ) {
+            if let Some(target) =
+                find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block, cfg)
+            {
                 hoists.push((bi, i, target.0));
                 for d in inst_info::defs(kind) {
                     def_block.insert(d, target);
@@ -199,7 +195,7 @@ fn find_highest_target(
 fn is_hoistable(kind: &InstKind) -> bool {
     match kind {
         // Arithmetic / logic.
-        InstKind::BinOp { .. } | InstKind::UnaryOp { .. }=> true,
+        InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => true,
 
         // Value construction.
         InstKind::Const { .. }
@@ -259,7 +255,12 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Return(val) => vec![*val],
         Terminator::Jump { args, .. } => args.clone(),
-        Terminator::JumpIf { cond, then_args, else_args, .. } => {
+        Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
             let mut v = vec![*cond];
             v.extend_from_slice(then_args);
             v.extend_from_slice(else_args);
@@ -291,16 +292,30 @@ fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
 }
 
 /// Which context does this Load/Store access? None if not a context op.
-fn context_of_load(kind: &InstKind, ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>) -> Option<QualifiedRef> {
+fn context_of_load(
+    kind: &InstKind,
+    ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
+) -> Option<QualifiedRef> {
     match kind {
-        InstKind::Load { src, volatile: false, .. } => ref_to_ctx.get(src).copied(),
+        InstKind::Load {
+            src,
+            volatile: false,
+            ..
+        } => ref_to_ctx.get(src).copied(),
         _ => None,
     }
 }
 
-fn context_of_store(kind: &InstKind, ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>) -> Option<QualifiedRef> {
+fn context_of_store(
+    kind: &InstKind,
+    ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
+) -> Option<QualifiedRef> {
     match kind {
-        InstKind::Store { dst, volatile: false, .. } => ref_to_ctx.get(dst).copied(),
+        InstKind::Store {
+            dst,
+            volatile: false,
+            ..
+        } => ref_to_ctx.get(dst).copied(),
         _ => None,
     }
 }
@@ -337,12 +352,12 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
 
             let sink_info = match kind {
                 InstKind::Eval { .. } => Some(SinkKind::Eval),
-                InstKind::Load { volatile: false, .. } => {
-                    context_of_load(kind, &ref_to_ctx).map(SinkKind::Load)
-                }
-                InstKind::Store { volatile: false, .. } => {
-                    context_of_store(kind, &ref_to_ctx).map(SinkKind::Store)
-                }
+                InstKind::Load {
+                    volatile: false, ..
+                } => context_of_load(kind, &ref_to_ctx).map(SinkKind::Load),
+                InstKind::Store {
+                    volatile: false, ..
+                } => context_of_store(kind, &ref_to_ctx).map(SinkKind::Store),
                 _ => None,
             };
             let Some(sink_kind) = sink_info else {
@@ -1096,9 +1111,18 @@ mod tests {
         run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
-        let load_idx = k.iter().position(|k| matches!(k, InstKind::Load { .. })).unwrap();
-        let call_idx = k.iter().position(|k| matches!(k, InstKind::FunctionCall { .. })).unwrap();
-        assert!(load_idx < call_idx, "load must stay before the call (load {load_idx}, call {call_idx})");
+        let load_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::Load { .. }))
+            .unwrap();
+        let call_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::FunctionCall { .. }))
+            .unwrap();
+        assert!(
+            load_idx < call_idx,
+            "load must stay before the call (load {load_idx}, call {call_idx})"
+        );
     }
 
     #[test]
@@ -1114,7 +1138,10 @@ mod tests {
                     callee_ty: ty,
                     args: vec![],
                 },
-                InstKind::Eval { dst: v(1), src: v(0) },
+                InstKind::Eval {
+                    dst: v(1),
+                    src: v(0),
+                },
                 InstKind::BinOp {
                     dst: v(2),
                     op: acvus_ast::BinOp::Add,
@@ -1145,9 +1172,18 @@ mod tests {
         run(&mut cfg);
         let body = demoted(cfg);
         let k = kinds(&body);
-        let eval_idx = k.iter().position(|k| matches!(k, InstKind::Eval { .. })).unwrap();
-        let load_idx = k.iter().position(|k| matches!(k, InstKind::Load { .. })).unwrap();
-        assert!(eval_idx < load_idx, "eval must stay before the context load (eval {eval_idx}, load {load_idx})");
+        let eval_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::Eval { .. }))
+            .unwrap();
+        let load_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::Load { .. }))
+            .unwrap();
+        assert!(
+            eval_idx < load_idx,
+            "eval must stay before the context load (eval {eval_idx}, load {load_idx})"
+        );
     }
 
     /// Load is sunk past independent computation but NOT past a Store to the same context.

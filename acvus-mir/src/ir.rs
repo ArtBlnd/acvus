@@ -337,15 +337,16 @@ impl DebugInfo {
                             _ => format!("var_{}", slot.0),
                         }
                     }
-                    RefTarget::Param(slot) => {
-                        match self.val_origins.get(slot) {
-                            Some(ValOrigin::ExternParam(n)) => format!("${}", interner.resolve(*n)),
-                            _ => format!("$param_{}", slot.0),
-                        }
-                    }
+                    RefTarget::Param(slot) => match self.val_origins.get(slot) {
+                        Some(ValOrigin::ExternParam(n)) => format!("${}", interner.resolve(*n)),
+                        _ => format!("$param_{}", slot.0),
+                    },
                     RefTarget::Context(qref) => format!("@{}", interner.resolve(qref.name)),
                 };
-                let fields: Vec<_> = path.iter().map(|f| interner.resolve(*f).to_string()).collect();
+                let fields: Vec<_> = path
+                    .iter()
+                    .map(|f| interner.resolve(*f).to_string())
+                    .collect();
                 format!("{}.{}", base, fields.join("."))
             }
             Some(ValOrigin::Call(func)) => format!("{}(...)", interner.resolve(*func)),
@@ -430,4 +431,3 @@ impl MirModule {
         keys
     }
 }
-

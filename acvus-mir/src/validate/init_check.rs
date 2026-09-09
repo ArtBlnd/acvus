@@ -10,13 +10,13 @@
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::dataflow::{forward_analysis, DataflowAnalysis, DataflowState};
+use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
-use acvus_ast::Span;
 use crate::ty::Ty;
+use acvus_ast::Span;
 
 // -- Domain ----------------------------------------------------------
 
@@ -116,10 +116,7 @@ fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, F
             }
         } else if let Some(field) = path.first() {
             // Field ref - this path proves the field exists on the target.
-            target_fields
-                .entry(*target)
-                .or_default()
-                .insert(*field);
+            target_fields.entry(*target).or_default().insert(*field);
         }
     }
 
@@ -139,24 +136,21 @@ impl DataflowAnalysis for InitCheckAnalysis {
     type Key = (RefTarget, Astr);
     type Domain = FieldInit;
 
-    fn transfer_inst(
-        &self,
-        inst: &Inst,
-        state: &mut DataflowState<(RefTarget, Astr), FieldInit>,
-    ) {
+    fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<(RefTarget, Astr), FieldInit>) {
         if let InstKind::Store { dst, value, .. } = &inst.kind {
             if let Some((target, path)) = self.ref_map.get(dst) {
                 if path.is_empty() {
                     // Identity store: determine which fields the value actually has.
-                    let fields: Option<Vec<Astr>> = if let Some(known) = self.value_fields.get(value) {
-                        // MakeObject/FieldSet - known exact fields.
-                        Some(known.iter().copied().collect())
-                    } else if let Some(ty) = self.val_types.get(value) {
-                        // Fallback: use type's fields (function return, Load, etc. - assume complete).
-                        extract_object_fields(ty)
-                    } else {
-                        None
-                    };
+                    let fields: Option<Vec<Astr>> =
+                        if let Some(known) = self.value_fields.get(value) {
+                            // MakeObject/FieldSet - known exact fields.
+                            Some(known.iter().copied().collect())
+                        } else if let Some(ty) = self.val_types.get(value) {
+                            // Fallback: use type's fields (function return, Load, etc. - assume complete).
+                            extract_object_fields(ty)
+                        } else {
+                            None
+                        };
                     if let Some(fields) = fields {
                         for f in fields {
                             state.set((*target, f), FieldInit::Init);
@@ -198,10 +192,7 @@ impl DataflowAnalysis for InitCheckAnalysis {
 ///
 /// `external_contexts`: contexts provided by the host - these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
-pub fn check_init(
-    cfg: &CfgBody,
-    external_contexts: &FxHashSet<QualifiedRef>,
-) -> Vec<UninitError> {
+pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) -> Vec<UninitError> {
     let (ref_map, value_fields) = build_prepass(cfg);
     let var_fields = collect_var_fields(cfg, &ref_map);
 
@@ -214,7 +205,14 @@ pub fn check_init(
             RefTarget::Context(qref) => external_contexts.contains(qref),
         };
         for f in fields {
-            initial.set((*target, *f), if is_external { FieldInit::Init } else { FieldInit::Uninit });
+            initial.set(
+                (*target, *f),
+                if is_external {
+                    FieldInit::Init
+                } else {
+                    FieldInit::Uninit
+                },
+            );
         }
     }
 
@@ -250,10 +248,16 @@ pub fn check_init(
                 }
                 // Check function calls: all required fields of args must be init.
                 InstKind::FunctionCall {
-                    callee, callee_ty, args, ..
+                    callee,
+                    callee_ty,
+                    args,
+                    ..
                 }
                 | InstKind::Spawn {
-                    callee, callee_ty, args, ..
+                    callee,
+                    callee_ty,
+                    args,
+                    ..
                 } => {
                     check_call_args(
                         &state,
@@ -347,11 +351,7 @@ fn extract_object_fields(ty: &Ty) -> Option<Vec<Astr>> {
 /// Trace a ValueId back to its source RefTarget.
 /// Looks for the pattern: `arg` was defined by `Load { dst: arg, src }`,
 /// and `src` was defined by `Ref { dst: src, target, path: [] }`.
-fn find_arg_source(
-    arg: &ValueId,
-    ref_map: &RefMap,
-    cfg: &CfgBody,
-) -> Option<RefTarget> {
+fn find_arg_source(arg: &ValueId, ref_map: &RefMap, cfg: &CfgBody) -> Option<RefTarget> {
     // Find the Load that defined arg.
     for block in &cfg.blocks {
         for inst in &block.insts {

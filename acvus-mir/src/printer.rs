@@ -246,12 +246,14 @@ fn write_body(
             // Projection
             InstKind::Ref { dst, target, path } => {
                 let base = match target {
-                    crate::ir::RefTarget::Var(slot) => {
-                        body.debug.label(*slot, ctx.interner)
-                    }
+                    crate::ir::RefTarget::Var(slot) => body.debug.label(*slot, ctx.interner),
                     crate::ir::RefTarget::Param(slot) => {
                         let name = body.debug.label(*slot, ctx.interner);
-                        if name.starts_with('$') { name } else { format!("${name}") }
+                        if name.starts_with('$') {
+                            name
+                        } else {
+                            format!("${name}")
+                        }
                     }
                     crate::ir::RefTarget::Context(qref) => {
                         let name = ctx_ref_to_name
@@ -371,10 +373,7 @@ fn write_body(
                 ctx.fmt_fn_id(*id),
             )?,
             InstKind::FunctionCall {
-                dst,
-                callee,
-                args,
-                ..
+                dst, callee, args, ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
@@ -392,10 +391,7 @@ fn write_body(
 
             // Spawn / Eval
             InstKind::Spawn {
-                dst,
-                callee,
-                args,
-                ..
+                dst, callee, args, ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
@@ -410,10 +406,7 @@ fn write_body(
                     vn.fmt_uses(args, &consts, &texts)
                 )?
             }
-            InstKind::Eval {
-                dst,
-                src,
-            } => {
+            InstKind::Eval { dst, src } => {
                 let ctx_str = String::new();
                 writeln!(
                     f,
@@ -472,13 +465,21 @@ fn write_body(
                 vn.fmt_use(*src, &consts, &texts),
                 ctx.interner.resolve(*key),
             )?,
-            InstKind::ArrayIndex { dst, array: list, index } => writeln!(
+            InstKind::ArrayIndex {
+                dst,
+                array: list,
+                index,
+            } => writeln!(
                 f,
                 "{} = {}[{index}]",
                 vn.fmt_val(*dst),
                 vn.fmt_use(*list, &consts, &texts)
             )?,
-            InstKind::ArrayGet { dst, array: list, index } => writeln!(
+            InstKind::ArrayGet {
+                dst,
+                array: list,
+                index,
+            } => writeln!(
                 f,
                 "{} = {}[{}]",
                 vn.fmt_val(*dst),
@@ -620,11 +621,7 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_use(*src, &consts, &texts)
             )?,
-            InstKind::Drop { src } => writeln!(
-                f,
-                "drop {}",
-                vn.fmt_use(*src, &consts, &texts)
-            )?,
+            InstKind::Drop { src } => writeln!(f, "drop {}", vn.fmt_use(*src, &consts, &texts))?,
             InstKind::Undef { dst } => writeln!(f, "{} = undef", vn.fmt_val(*dst))?,
             InstKind::Poison { dst } => writeln!(f, "{} = poison", vn.fmt_val(*dst))?,
         }
