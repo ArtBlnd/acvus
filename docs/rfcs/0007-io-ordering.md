@@ -79,6 +79,13 @@ block, so there is no name to collide on. A fan-out is the only place an
 `Order` value is used twice, and only the lowering of a block makes one, so
 the value needs no linearity of its own.
 
+A join as a value, rather than a pair of instructions that open and close a
+region, leaves nothing to keep well-formed. A pair is a bracket: two
+brackets that cross have no inside, and every pass that moves or copies
+code would have to preserve the nesting. A `merge` is only a dependency;
+two overlapping joins are two merges over shared inputs, a plain DAG, and
+the only well-formedness is SSA dominance.
+
 The name says what is declared. "Any order" is the whole statement; a name
 for an execution strategy would say more than the author knows.
 
