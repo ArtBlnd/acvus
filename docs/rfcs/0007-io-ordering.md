@@ -1,17 +1,16 @@
 # RFC-0007: IO ordering
 
 Status: Accepted
-Date: 2026-09-07
+Date: 2026-09-10
 Supersedes: none
 
 ## Ruling
 
-### Accepted
-
 The intent behind an IO call is known only to the script author and is not
 inferred. IO calls execute in source order by default.
 
-A block declares that order is irrelevant inside it. The rule applies to the
+A block, written `anyorder { ... }`, declares that order is irrelevant
+inside it. The rule applies to the
 region as a whole, including every iteration of a loop inside the block. The
 block boundary is a join: outside it, source order resumes. The block's name
 expresses order-irrelevance, not an execution strategy; whether the interpreter
@@ -30,13 +29,30 @@ An iterator is always lazy and move-only. There is no memoized variant.
 The IR keeps a low-level dependency relation. The block is surface syntax and
 lowers to that relation.
 
-### Proposed
+Order is a value. The IR has a type `Order` that no script can name. A call
+whose effect is not Pure takes an `Order` and yields one; a Pure call knows
+nothing of it. Everything in the IR is simultaneous until a dependency says
+otherwise, and an `Order` value is that dependency. Sequential code is a
+chain: each effectful call takes the value the previous one yielded. A local
+function or lambda whose effect is not Pure takes an `Order` first and
+yields one last; its declared type does not show this, the lowering adds it.
 
-Ordering is carried as an SSA value. An IO call consumes an ordering token and
-produces one. Sequential code threads the token through each call; inside a
-block every call consumes the block's entry token, and a join at the block exit
-merges the produced tokens into one. With the call split into spawn and
-evaluation, the spawn consumes the token and the evaluation produces it.
+One instruction joins orders, as phi joins values: `merge(o..) -> o`. It is
+associative and commutative, and to an executor it means "after all of
+these". The `anyorder` block lowers to a fan-out and one merge: every
+effectful call inside takes the block's entry value, and the exit is
+`merge` of everything they yielded. Nothing else changes; the binding that
+sequential code makes at each call moves to the block's exit. A loop inside
+the block accumulates through a loop phi on `Order` and a `merge` per
+iteration, so a dynamic number of calls needs no runtime bookkeeping.
+
+With a call split into spawn and evaluation, the spawn takes the `Order`
+and the evaluation yields it. A value is evaluated where it is used; when
+it is used matters to the order only through the `Order` chain.
+
+An executor holds no `Order` values. Once dependencies fix a schedule, the
+values have done their work. What an executor tracks is which calls have
+not yet reached the merge that awaits them.
 
 ## Rationale
 
@@ -59,7 +75,20 @@ which this layer cannot derive; a lazy pull is correct without that knowledge.
 
 Carrying order as an SSA value lets every existing dependency-driven pass
 respect it without learning a new concept; independence comes only from the
-block, so there is no name to collide on.
+block, so there is no name to collide on. A fan-out is the only place an
+`Order` value is used twice, and only the lowering of a block makes one, so
+the value needs no linearity of its own.
+
+The name says what is declared. "Any order" is the whole statement; a name
+for an execution strategy would say more than the author knows.
+
+The shape has prior art. XLA threads a `token` through side-effecting
+operations and joins tokens with `AfterAll`; JAX types each primitive's
+effect as ordered or unordered and threads tokens in its jaxpr; PyTorch's
+compiled path threads effect tokens through `with_effects` and sinks them
+before code generation. In each, whether order matters is a property of the
+operation. Here it is also a declaration the script author makes at the
+place where the intent lives, which none of them has.
 
 ## Not built
 
@@ -67,20 +96,23 @@ block, so there is no name to collide on.
   consistency declarations. The intent is not in the types.
 - No "parallel by default" mode. Its default is unsound.
 - No memoized or shareable iterator.
+- No `Order` value in the surface language. The author declares a region;
+  the compiler wires it.
+- No linear or region-typed `Order`. One type; the lowering alone decides
+  where a value fans out.
 
 ## Consequences
 
 - An ExternFn with no purity declaration is treated as effectful by every
   consumer of its type.
 - A script with no block runs its IO in source order.
-- Passes that reorder instructions must respect the ordering token as they
-  respect any other operand.
+- Passes that reorder instructions respect an `Order` operand as they
+  respect any other operand; calls are not barriers in themselves.
+- `merge` is a value instruction, not control flow: it may sit anywhere its
+  operands are available.
 - Cloning an iterator is a type error, never a runtime copy.
 
 ## Open questions
 
-- The surface name of the block.
-- Whether a callback passed to an ExternFn contributes its own purity to the
-  caller, or the caller is simply effectful.
-- Whether an ExternFn may declare the contexts it reads, and where that
-  declaration lives.
+- Whether a block may also declare an order among its own sub-blocks, or
+  nesting is the only composition.

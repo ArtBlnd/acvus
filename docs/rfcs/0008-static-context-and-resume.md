@@ -43,6 +43,12 @@ A dump point is any instruction boundary in sequential code at which no
 Opaque call is in flight. Inside an order-irrelevant block the interpreter
 suspends only when every in-flight call is Idempotent or Pure.
 
+A call that completes only on the host's input is Idempotent by nature: the
+call is the suspension. Its value arrives when the host resumes; if the
+host has not answered, the call is issued again, and the host answers each
+call at most once. Two such calls inside one order-irrelevant block are two
+questions in flight; the host may answer either or both before resuming.
+
 The name of the term in code is `Effect`. The removed effect system carried
 context read and write sets; this term carries only the chain.
 
