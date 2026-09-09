@@ -1,0 +1,67 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1353
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     5 |   r2 = T0 + T0
+     6 |   r3 = ref @items
+     7 |   r4 = load r3
+     8 |   r5 = call #0(r4)
+     9 |   r6 = call #1(r5)
+    10 |   r7 = closure L0 [10 (r8)]
+    11 |   r9 = call #2(r6, r7)
+    12 |   r10 = call #3(r9)
+    14 |   r11 = r2 + T0
+    15 |   r12 = call #4(r10)
+    16 |   r13 = call #5(r12)
+    17 |   r14 = r11 + r13
+    18 |   return r14
+
+    ; r0 (v25) : Int
+    ; r1 (v26) : List<Int>
+    ; r2 (v6) : String
+    ; r3 (@items) : Ref<Array<Int, 3>>
+    ; r4 (v8) : Array<Int, 3>
+    ; r5 (v9) : List<Int>
+    ; r6 (iter(...)) : Iterator<Int, Opaque, #IdentityId(2)>
+    ; r7 (v13) : Fn(Int) -> Bool with Opaque
+    ; r8 (v2) : Int
+    ; r9 (filter(...)) : Iterator<Int, Opaque, #IdentityId(2)>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (v19) : String
+    ; r12 (len(...)) : Int
+    ; r13 (to_string(...)) : String
+    ; r14 (v24) : String
+    ; r15 (v11) : Ref<Int>
+    ; r16 (v17) : Ref<List<Int>>
+    ; r17 (v20) : Ref<List<Int>>
+    ; r18 (v18) : String
+    ; r19 (x) : List<Int>
+    ; r20 (v1) : String
+    ; r21 (offset) : Int
+    ; r22 (v4) : Ref<Int>
+    ; r23 (v5) : String
+
+=== closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = r3 > r4
+     3 |   return r2
+
+    ; r0 (v12) : Int
+    ; r1 (v13) : Int
+    ; r2 (v11) : Bool
+    ; r3 (v2) : Int
+    ; r4 (v1) : Int
+    ; r5 (v7) : Ref<Int>
+    ; r6 (offset) : Int
+    ; r7 (v6) : Ref<Int>
+    ; r8 (v9) : Ref<Int>
+    ; r9 (i) : Int
+    ; r10 (v4) : Ref<Int>

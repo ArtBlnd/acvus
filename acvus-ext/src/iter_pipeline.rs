@@ -10,16 +10,17 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, EffectVar, ExternType, FromValue, Interner, IntoValue, Runtime, TyVar,
+    BoxFuture, EffectVar, ExternType, FromValue, IdentityVar, Interner, IntoValue, Runtime, TyVar,
 };
 use sync_wrapper::SyncWrapper;
 
 #[derive(ExternType)]
-#[extern_type(name = "Iterator", move_only)]
-pub struct Iter<T, E, Rt>(Pipeline<Rt>, PhantomData<(T, E)>)
+#[extern_type(name = "Iterator")]
+pub struct Iter<T, E, I, Rt>(Pipeline<Rt>, PhantomData<(T, E, I)>)
 where
     T: TyVar,
     E: EffectVar,
+    I: IdentityVar,
     Rt: Runtime;
 
 /// How one item becomes many, for Flatten and FlatMap: the typed layer
@@ -101,17 +102,18 @@ impl<Rt: Runtime> Pipeline<Rt> {
     }
 }
 
-impl<T, E, Rt> Iter<T, E, Rt>
+impl<T, E, I, Rt> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
+    I: IdentityVar,
     Rt: Runtime,
 {
     fn erased(pipeline: Pipeline<Rt>) -> Self {
         Self(pipeline, PhantomData)
     }
 
-    fn retype<U: TyVar>(self) -> Iter<U, E, Rt> {
+    fn retype<U: TyVar>(self) -> Iter<U, E, I, Rt> {
         Iter(self.0, PhantomData)
     }
 
@@ -141,7 +143,7 @@ where
         Self::from_fn(move |i| f().map(|item| item.into_value(i)))
     }
 
-    pub fn map<U: TyVar>(self, f: Rt::Closure) -> Iter<U, E, Rt> {
+    pub fn map<U: TyVar>(self, f: Rt::Closure) -> Iter<U, E, I, Rt> {
         Self::erased(self.0.push_op(Op::Map(f))).retype()
     }
 
@@ -157,12 +159,23 @@ where
         Self::erased(self.0.push_op(Op::Skip { remaining: n }))
     }
 
-    pub fn chain(self, other: Self) -> Self {
-        Self::erased(self.0.chain(other.0))
+    /// The two sources joined; the result is a source of its own.
+    pub fn chain<J, K>(self, other: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
+    where
+        J: IdentityVar,
+        K: IdentityVar,
+    {
+        Iter(self.0.chain(other.0), PhantomData)
+    }
+
+    /// The same pipeline under another identity: what a constructor that
+    /// makes a new source from an existing one returns.
+    pub fn reidentify<K: IdentityVar>(self) -> Iter<T, E, K, Rt> {
+        Iter(self.0, PhantomData)
     }
 
     /// Flatten items that are themselves sequences of `U`.
-    pub fn flatten<U>(self) -> Iter<U, E, Rt>
+    pub fn flatten<U>(self) -> Iter<U, E, I, Rt>
     where
         T: FromValue<Rt> + IntoIterator<Item = U>,
         U: TyVar + IntoValue<Rt>,
@@ -171,7 +184,7 @@ where
     }
 
     /// Map each item to a sequence of `U` and flatten.
-    pub fn flat_map<S, U>(self, f: Rt::Closure) -> Iter<U, E, Rt>
+    pub fn flat_map<S, U>(self, f: Rt::Closure) -> Iter<U, E, I, Rt>
     where
         S: FromValue<Rt> + IntoIterator<Item = U>,
         U: TyVar + IntoValue<Rt>,

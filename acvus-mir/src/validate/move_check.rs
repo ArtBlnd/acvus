@@ -38,8 +38,9 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         // Handle - always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
-        // UserDefined - always move-only
-        Ty::UserDefined { .. } => Some(true),
+        // A user-defined value with an identity is a distinct source and moves;
+        // one without is a plain value and copies.
+        Ty::UserDefined { identity_args, .. } => Some(!identity_args.is_empty()),
 
         // Containers - transitive
         Ty::Array(inner, _) | Ty::Option(inner) => is_move_only(inner),
@@ -89,9 +90,6 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
             }
             Some(any_move)
         }
-
-        // Identity - always copyable (just an id)
-        Ty::Identity(_) => Some(false),
 
         // Ref - ephemeral, always immediately consumed. Skip (not subject to move analysis).
         Ty::Ref(..) => None,
@@ -650,12 +648,16 @@ mod tests {
 
     // -- is_move_only tests --
 
+    /// A user-defined type with an identity: a source of its own, so move-only.
     fn test_user_defined() -> Ty {
         let i = Interner::new();
         Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![crate::ty::IdentityTerm::Known(
+                <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+            )],
         }
     }
 
@@ -668,6 +670,18 @@ mod tests {
             is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
             Some(false)
         );
+    }
+
+    #[test]
+    fn user_defined_without_identity_copies() {
+        let i = Interner::new();
+        let plain = Ty::UserDefined {
+            id: QualifiedRef::root(i.intern("Plain")),
+            type_args: vec![],
+            effect_args: vec![],
+            identity_args: vec![],
+        };
+        assert_eq!(is_move_only(&plain), Some(false));
     }
 
     #[test]

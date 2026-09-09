@@ -2,7 +2,7 @@
 //! `TyVar`: a generic parameter that is an acvus type variable.
 //! `Typeck<N>`: the compile-time stand-in for the N-th type variable.
 
-use acvus_mir::ty::{EffectTerm, LenTerm, Poly, PolyBuilder, PolyTy};
+use acvus_mir::ty::{EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy};
 use acvus_utils::Interner;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
@@ -11,23 +11,32 @@ pub struct PolyVars {
     pub tys: Vec<PolyTy>,
     pub effects: Vec<EffectTerm<Poly>>,
     pub lens: Vec<LenTerm<Poly>>,
+    pub identities: Vec<IdentityTerm<Poly>>,
+}
+
+/// How many variables of each kind a declaration has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VarCounts {
+    pub tys: usize,
+    pub effects: usize,
+    pub lens: usize,
+    pub identities: usize,
 }
 
 impl PolyVars {
     pub fn empty() -> Self {
-        Self {
-            tys: Vec::new(),
-            effects: Vec::new(),
-            lens: Vec::new(),
-        }
+        Self::fresh(VarCounts::default())
     }
 
-    pub fn fresh(tys: usize, effects: usize, lens: usize) -> Self {
+    pub fn fresh(counts: VarCounts) -> Self {
         let mut b = PolyBuilder::new();
         Self {
-            tys: (0..tys).map(|_| b.fresh_ty_var()).collect(),
-            effects: (0..effects).map(|_| b.fresh_effect_var()).collect(),
-            lens: (0..lens).map(|_| b.fresh_len_var()).collect(),
+            tys: (0..counts.tys).map(|_| b.fresh_ty_var()).collect(),
+            effects: (0..counts.effects).map(|_| b.fresh_effect_var()).collect(),
+            lens: (0..counts.lens).map(|_| b.fresh_len_var()).collect(),
+            identities: (0..counts.identities)
+                .map(|_| b.fresh_identity_var())
+                .collect(),
         }
     }
 }

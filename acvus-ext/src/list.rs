@@ -42,6 +42,7 @@ where
             id: QualifiedRef::root(i.intern("List")),
             type_args: vec![T::poly_ty(i, vars)],
             effect_args: vec![],
+            identity_args: vec![],
         }
     }
 }
@@ -55,6 +56,7 @@ where
             qref: QualifiedRef::root(i.intern("List")),
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
+            identity_params: 0,
         }
     }
 }
@@ -104,6 +106,7 @@ pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::T
         id: QualifiedRef::root(interner.intern("List")),
         type_args: vec![elem],
         effect_args: vec![],
+        identity_args: vec![],
     }
 }
 

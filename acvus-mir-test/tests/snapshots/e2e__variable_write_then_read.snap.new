@@ -1,0 +1,25 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 848
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     4 |   r1 = T0 + T0
+     5 |   r2 = call #0(42 (r3))
+     6 |   r4 = r1 + r2
+     7 |   return r4
+
+    ; r0 (v11) : Int
+    ; r1 (v6) : String
+    ; r2 (to_string(...)) : String
+    ; r3 (v2) : Int
+    ; r4 (v10) : String
+    ; r5 (v7) : Ref<Int>
+    ; r6 (v5) : String
+    ; r7 (v1) : String
+    ; r8 (x) : Int
+    ; r9 (v4) : Ref<Int>

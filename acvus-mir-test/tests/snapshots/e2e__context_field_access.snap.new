@@ -1,0 +1,21 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 203
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     1 |   r0 = ref @user
+     2 |   r1 = load r0
+     3 |   r2 = r1.name
+     4 |   r3 = T0 + r2
+     5 |   return r3
+
+    ; r0 (v5) : Ref<{age: Int, email: String, name: String}>
+    ; r1 (v6) : {age: Int, email: String, name: String}
+    ; r2 (v3) : String
+    ; r3 (v4) : String
+    ; r4 (v1) : String
+    ; r5 (@user.name) : Ref<String>

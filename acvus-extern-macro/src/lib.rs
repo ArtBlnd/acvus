@@ -229,7 +229,7 @@ fn generate_extern_fn(
     let bounds = vars.bound_exprs();
     let declared_ty = signature(None);
 
-    let (n_tys, n_effects, n_lens) = vars.counts();
+    let counts = vars.counts_expr();
     Ok(quote! {
         #func
 
@@ -238,7 +238,7 @@ fn generate_extern_fn(
         where
             __R: ::acvus_extern::Runtime,
         {
-            let __vars = ::acvus_extern::PolyVars::fresh(#n_tys, #n_effects, #n_lens);
+            let __vars = ::acvus_extern::PolyVars::fresh(#counts);
             ::acvus_extern::ExternFn {
                 qref: #qref,
                 ty: #declared_ty,
@@ -367,18 +367,16 @@ fn type_name_expr(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
 
 // -- #[derive(ExternType)] -------------------------------------------
 
-/// `#[extern_type(name = "...", ns = "...", move_only)]`.
+/// `#[extern_type(name = "...", ns = "...")]`.
 struct ExternTypeAttr {
     name: Option<String>,
     ns: Option<String>,
-    move_only: bool,
 }
 
 fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
     let mut out = ExternTypeAttr {
         name: None,
         ns: None,
-        move_only: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("extern_type") {
@@ -391,10 +389,8 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
             } else if meta.path.is_ident("ns") {
                 meta.input.parse::<Token![=]>()?;
                 out.ns = Some(meta.input.parse::<LitStr>()?.value());
-            } else if meta.path.is_ident("move_only") {
-                out.move_only = true;
             } else {
-                return Err(meta.error("expected `name`, `ns`, or `move_only`"));
+                return Err(meta.error("expected `name` or `ns`"));
             }
             Ok(())
         })?;
@@ -484,11 +480,21 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
     let type_arg_exprs = vars.type_arg_exprs();
     let effect_arg_exprs = vars.effect_arg_exprs();
-    let (n_tys, n_effects, _) = vars.counts();
+    let identity_arg_exprs = vars.identity_arg_exprs();
+    let n_tys = vars.count(VarKind::Ty);
+    let n_effects = vars.count(VarKind::Effect);
+    let n_identities = vars.count(VarKind::Identity);
+    if n_identities > 1 {
+        return Err(syn::Error::new(
+            ident.span(),
+            "an extension type has at most one identity parameter; a value is one source",
+        ));
+    }
+    let move_only = n_identities > 0;
 
     let qref = qref_expr(attr.ns.as_deref(), &name);
     let type_name = type_name_expr(attr.ns.as_deref(), &name);
-    let take_payload = if attr.move_only {
+    let take_payload = if move_only {
         quote! {
             match __o.into_owned::<#payload_ty>() {
                 Ok(p) => p,
@@ -529,6 +535,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     id: #qref,
                     type_args: vec![#(#type_arg_exprs),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
+                    identity_args: vec![#(#identity_arg_exprs),*],
                 }
             }
         }
@@ -539,6 +546,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     qref: #qref,
                     type_params: vec![::acvus_extern::TyVarBound::Any; #n_tys],
                     effect_params: #n_effects,
+                    identity_params: #n_identities,
                 }
             }
         }

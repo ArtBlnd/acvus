@@ -1,0 +1,49 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+assertion_line: 102
+expression: raw
+---
+=== main ===
+     0 |   r0 = ref @stats.count
+     1 |   r1 = load r0
+     3 |   r2 = r1 + 1 (r3)
+     4 |   r4 = ref count
+     5 |   store r4 = r2
+     6 |   r5 = ref count
+     7 |   r6 = load r5
+     8 |   r7 = ref @stats.threshold
+     9 |   r8 = load r7
+    10 |   r9 = r6 > r8
+    11 |   r10 = test r9 == true
+    12 |   jump_if r10 then L0 else L1
+    13 | L0:
+    14 |   r11 = ref count
+    15 |   r12 = load r11
+    16 |   r13 = ref @stats.count
+    17 |   store r13 = r12
+    19 |   r14 = ref @stats.exceeded
+    20 |   store r14 = true (r15)
+    21 |   jump L1
+    22 | L1:
+    23 |   r16 = ref @stats
+    24 |   r17 = load r16
+    25 |   return r17
+
+    ; r0 (@stats.count) : Ref<Int>
+    ; r1 (v2) : Int
+    ; r2 (v4) : Int
+    ; r3 (v3) : Int
+    ; r4 (v6) : Ref<Int>
+    ; r5 (v7) : Ref<Int>
+    ; r6 (count) : Int
+    ; r7 (@stats.threshold) : Ref<Int>
+    ; r8 (v10) : Int
+    ; r9 (v11) : Bool
+    ; r10 (v12) : Bool
+    ; r11 (v13) : Ref<Int>
+    ; r12 (count) : Int
+    ; r13 (@stats) : Ref<Int>
+    ; r14 (@stats) : Ref<Bool>
+    ; r15 (v16) : Bool
+    ; r16 (@stats) : Ref<{count: Int, exceeded: Bool, threshold: Int}>
+    ; r17 (v19) : {count: Int, exceeded: Bool, threshold: Int}

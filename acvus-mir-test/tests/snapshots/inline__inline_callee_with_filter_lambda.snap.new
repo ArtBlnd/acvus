@@ -1,0 +1,28 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 359
+expression: ir
+---
+=== main ===
+     2 |   r0 = -2 (r1)
+     4 |   r2 = list [1 (r3), r0, 3 (r4)]
+     5 |   r5 = ref $v5
+     6 |   r6 = load r5
+     7 |   r7 = call #0(r6)
+     8 |   r8 = closure L0 []
+     9 |   r9 = call #1(r7, r8)
+    10 |   r10 = call #2(r9)
+    11 |   return r10
+
+    ; r0 (v3) : Int
+    ; r1 (v2) : Int
+    ; r2 (v5) : Array<Int, 3>
+    ; r3 (v1) : Int
+    ; r4 (v4) : Int
+    ; r5 (v9) : Ref<Array<Int, 3>>
+    ; r6 ($xs) : Array<Int, 3>
+    ; r7 (v11) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r8 (v12) : Fn(Int) -> Bool with Opaque
+    ; r9 (filter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (positives(...)) : Iterator<Int, Opaque, #IdentityId(0)>

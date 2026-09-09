@@ -1,0 +1,23 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 473
+expression: ir
+---
+=== main ===
+     0 |   r0 = ref @counter
+     1 |   r1 = load r0
+     3 |   r2 = r1 + 1 (r3)
+     4 |   r4 = ref @counter
+     5 |   store r4 = r2
+     6 |   r5 = ref @counter
+     7 |   r6 = load r5
+     8 |   return r6
+
+    ; r0 (@counter) : Ref<Int>
+    ; r1 (v3) : Int
+    ; r2 (v5) : Int
+    ; r3 (v4) : Int
+    ; r4 (@counter) : Ref<Int>
+    ; r5 (@counter) : Ref<Int>
+    ; r6 (v8) : Int
+    ; r7 (inc_and_get(...)) : Int

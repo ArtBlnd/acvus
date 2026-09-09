@@ -1,0 +1,13 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 236
+expression: ir
+---
+=== main ===
+     0 |   r0 = ref @count
+     1 |   r1 = load r0
+     2 |   return r1
+
+    ; r0 (@count) : Ref<Int>
+    ; r1 (v3) : Int
+    ; r2 (get_count(...)) : Int

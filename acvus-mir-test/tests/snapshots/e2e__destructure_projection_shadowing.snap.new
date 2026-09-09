@@ -1,0 +1,26 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 3185
+expression: ir
+---
+=== main ===
+     1 |   r0 = ref @x
+     2 |   store r0 = 99 (r1)
+     4 |   r2 = ref @a
+     5 |   r3 = load r2
+     6 |   r4 = field_set r3.x = 42 (r5)
+     7 |   r6 = ref @a
+     8 |   store r6 = r4
+     9 |   r7 = ref @x
+    10 |   return 99 (r1)
+
+    ; r0 (@x) : Ref<Int>
+    ; r1 (v1) : Int
+    ; r2 (v7) : Ref<{x: Int}>
+    ; r3 (v8) : {x: Int}
+    ; r4 (v9) : {x: Int}
+    ; r5 (v3) : Int
+    ; r6 (v10) : Ref<{x: Int}>
+    ; r7 (@x) : Ref<Int>
+    ; r8 (v6) : Int
+    ; r9 (@a) : Ref<Int>

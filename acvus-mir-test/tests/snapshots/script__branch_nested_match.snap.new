@@ -1,0 +1,34 @@
+---
+source: acvus-mir-test/tests/script.rs
+assertion_line: 139
+expression: ir
+---
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = ref @a
+     3 |   r3 = load r2
+     4 |   r4 = ref @b
+     5 |   r5 = load r4
+     6 |   r6 = r3 + r5
+     7 |   r7 = ref @out
+     8 |   store r7 = r6
+     9 |   r8 = ref @out
+    10 |   return r6
+
+    ; r0 (v17) : Int
+    ; r1 (v18) : Int
+    ; r2 (@a) : Ref<Int>
+    ; r3 (x) : Int
+    ; r4 (@b) : Ref<Int>
+    ; r5 (y) : Int
+    ; r6 (v13) : Int
+    ; r7 (@out) : Ref<Int>
+    ; r8 (@out) : Ref<Int>
+    ; r9 (v11) : Ref<Int>
+    ; r10 (v9) : Ref<Int>
+    ; r11 (y) : Int
+    ; r12 (v4) : Ref<Int>
+    ; r13 (x) : Int
+    ; r14 (v16) : Int
+    ; r15 (v8) : Ref<Int>

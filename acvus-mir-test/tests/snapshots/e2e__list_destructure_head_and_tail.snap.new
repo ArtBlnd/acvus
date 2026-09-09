@@ -1,0 +1,61 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1030
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "empty"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @items
+     4 |   r3 = load r2
+     5 | L2:
+     7 |   r4 = r3[0]
+     9 |   r5 = true (r6) && true (r7)
+    10 |   r8 = r3[2]
+    12 |   r9 = r5 && true (r10)
+    13 |   jump_if r9 then L3 else L1
+    14 | L3:
+    15 |   r11 = r3[0]
+    16 |   r12 = r3[2]
+    18 |   r13 = call #0(r11)
+    19 |   r14 = T0 + r13
+    20 |   jump L0(r14, r11, r12)
+    21 | L1:
+    24 |   r15 = T0 + T1
+    25 |   jump L0(r15, r0, r1)
+    26 | L0(r16: String, r17: Int, r18: Int):  ; merge_of L2
+    27 |   r19 = T0 + r16
+    28 |   return r19
+
+    ; r0 (v27) : Int
+    ; r1 (v28) : Int
+    ; r2 (@items) : Ref<Array<Int, 3>>
+    ; r3 (v3) : Array<Int, 3>
+    ; r4 (v5) : Int
+    ; r5 (v7) : Bool
+    ; r6 (v4) : Bool
+    ; r7 (v6) : Bool
+    ; r8 (v8) : Int
+    ; r9 (v10) : Bool
+    ; r10 (v9) : Bool
+    ; r11 (first) : Int
+    ; r12 (last) : Int
+    ; r13 (to_string(...)) : String
+    ; r14 (v21) : String
+    ; r15 (v24) : String
+    ; r16 (v25) : String
+    ; r17 (v29) : Int
+    ; r18 (v30) : Int
+    ; r19 (v26) : String
+    ; r20 (v22) : String
+    ; r21 (v17) : String
+    ; r22 (v18) : Ref<Int>
+    ; r23 (v13) : Ref<Int>
+    ; r24 (v1) : String
+    ; r25 (v23) : String
+    ; r26 (v16) : Ref<Int>
+    ; r27 (first) : Int

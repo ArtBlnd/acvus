@@ -60,7 +60,7 @@ type. Its `TyVar` generic parameters are the type's type parameters, in
 order; its `EffectVar` generic parameters are its effect parameters. The
 derive yields the acvus type, the declaration for the type registry, and
 the two runtime conversions. The acvus name is the struct identifier unless
-`name = "..."` overrides it. A `move_only` type refuses a payload that is
+`name = "..."` overrides it. A type with an identity parameter refuses a payload that is
 still shared when a handler takes it; any other type clones it.
 
 A structural object is declared the same way:

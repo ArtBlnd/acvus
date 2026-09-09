@@ -1,0 +1,52 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1229
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     2 |   r1 = ref @flags
+     3 |   r2 = load r1
+     4 |   r3 = call #0(r2)
+     5 |   r4 = call #1(r3)
+     6 |   r5 = closure L0 []
+     7 |   r6 = call #2(r4, r5)
+     8 |   r7 = call #3(r6)
+    10 |   r8 = T0 + T0
+    11 |   r9 = call #4(r7)
+    12 |   r10 = call #5(r9)
+    13 |   r11 = r8 + r10
+    14 |   return r11
+
+    ; r0 (v18) : List<Bool>
+    ; r1 (@flags) : Ref<Array<Bool, 3>>
+    ; r2 (v3) : Array<Bool, 3>
+    ; r3 (v4) : List<Bool>
+    ; r4 (iter(...)) : Iterator<Bool, Opaque, #IdentityId(2)>
+    ; r5 (v6) : Fn(Bool) -> Bool with Opaque
+    ; r6 (map(...)) : Iterator<Bool, Opaque, #IdentityId(2)>
+    ; r7 (collect(...)) : List<Bool>
+    ; r8 (v12) : String
+    ; r9 (len(...)) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v17) : String
+    ; r12 (v11) : String
+    ; r13 (x) : List<Bool>
+    ; r14 (v1) : String
+    ; r15 (v10) : Ref<List<Bool>>
+    ; r16 (v13) : Ref<List<Bool>>
+
+=== closure L0 (ValueId(0)) ===
+     0 |   r0 = undef
+     1 |   r1 = !r2
+     2 |   return r1
+
+    ; r0 (v7) : Bool
+    ; r1 (v6) : Bool
+    ; r2 (v1) : Bool
+    ; r3 (v3) : Ref<Bool>
+    ; r4 (i) : Bool
+    ; r5 (v4) : Ref<Bool>

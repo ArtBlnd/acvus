@@ -187,9 +187,11 @@ where
     E: EffectVar,
     Rt: Runtime;
 
+/// A value that is a source of its own: it carries an identity, so it moves.
 #[derive(ExternType)]
-#[extern_type(move_only)]
-struct Token(i64);
+struct Token<I>(i64, PhantomData<I>)
+where
+    I: acvus_extern::IdentityVar;
 
 #[derive(TyArg, Debug, PartialEq)]
 struct Point {
@@ -254,13 +256,16 @@ async fn fetch(_: Interner, p: Point) -> Result<Point, ExternError> {
 }
 
 #[extern_fn(effect = idempotent)]
-fn take_token(_: &Interner, t: Token) -> i64 {
+fn take_token<I>(_: &Interner, t: Token<I>) -> i64
+where
+    I: acvus_extern::IdentityVar,
+{
     t.0
 }
 
 fn registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
-        types: [Boxed<_, _, R>, Token],
+        types: [Boxed<_, _, R>, Token<_>],
         fns: [add, identity, apply, boxed, fetch, take_token],
     }
 }
@@ -332,6 +337,7 @@ fn generic_parameters_become_positional_variables() {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![t],
         effect_args: vec![EffectTerm::Var(0)],
+        identity_args: vec![],
     };
     assert_eq!(apply.params[0], boxed_of(PolyTy::Var(0)));
     let PolyTy::Fn {
@@ -359,6 +365,7 @@ fn generic_parameters_become_positional_variables() {
             id: acvus_extern::QualifiedRef::root(i.intern("Box")),
             type_args: vec![PolyTy::Var(0)],
             effect_args: vec![EffectTerm::Known(Effect::Pure)],
+            identity_args: vec![],
         }
     );
 }
@@ -371,12 +378,9 @@ fn types_and_casts_reach_the_type_registry() {
     let decl = tr.get(acvus_extern::QualifiedRef::root(i.intern("Box")));
     assert_eq!(decl.type_params.len(), 1);
     assert_eq!(decl.effect_params, 1);
-    assert_eq!(
-        tr.get(acvus_extern::QualifiedRef::root(i.intern("Token")))
-            .type_params
-            .len(),
-        0
-    );
+    let token = tr.get(acvus_extern::QualifiedRef::root(i.intern("Token")));
+    assert_eq!(token.type_params.len(), 0);
+    assert_eq!(token.identity_params, 1);
 
     let rules = tr.rules_to(acvus_extern::QualifiedRef::root(i.intern("Box")));
     assert_eq!(rules.len(), 1);
@@ -490,7 +494,7 @@ fn move_only_value_rejects_a_shared_payload() {
     let i = Interner::new();
     let mut tr = TypeRegistry::new();
     let reg = registry::<Tiny>().register(&i, &mut tr);
-    let token = V::Extern(ExternValue::new(Token::TYPE_NAME, 5i64));
+    let token = V::Extern(ExternValue::new(Token::<()>::TYPE_NAME, 5i64));
     let shared = token.clone();
     let err = call_sync(handler(&reg, &i, "take_token"), vec![token], &i).unwrap_err();
     assert!(err.to_string().contains("still shared"), "{err}");
@@ -518,7 +522,12 @@ fn closure_declaration_takes_its_type_from_the_closure() {
 #[test]
 fn stand_ins_name_their_positions() {
     let i = Interner::new();
-    let vars = acvus_extern::PolyVars::fresh(2, 1, 1);
+    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts {
+        tys: 2,
+        effects: 1,
+        lens: 1,
+        identities: 0,
+    });
     assert_eq!(
         <acvus_extern::Typeck<1> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Var(1)
@@ -667,6 +676,7 @@ fn the_call_type_selects_the_instance() {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![t],
         effect_args: vec![EffectTerm::Known(Effect::Pure)],
+        identity_args: vec![],
     };
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::String)],

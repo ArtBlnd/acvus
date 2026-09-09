@@ -362,7 +362,6 @@ fn combined_multiple_loops_sequential() {
 //  6. Soundness - reject invalid programs
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn reject_iterate_non_iterable() {
     // Int is not iterable
@@ -372,7 +371,6 @@ fn reject_iterate_non_iterable() {
     assert!(result.is_err(), "expected error for iterating over Int");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn reject_type_mismatch_context_store() {
     // Storing String into Int context

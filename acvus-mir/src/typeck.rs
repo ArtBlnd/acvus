@@ -261,6 +261,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         self.check_nodes(&template.body);
         self.verify_bounds();
+        self.solver.settle_identities();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -325,6 +326,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             TyTerm::Unit
         };
         self.verify_bounds();
+        self.solver.settle_identities();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -2561,6 +2563,7 @@ mod tests {
                 id: QualifiedRef::root(i.intern("TestOpaque")),
                 type_args: vec![],
                 effect_args: vec![],
+                identity_args: vec![],
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
@@ -2581,6 +2584,7 @@ mod tests {
             id: QualifiedRef::root(i.intern("TestOpaque")),
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         };
         let ctx = FxHashMap::from_iter([
             (i.intern("conn"), conn_ty.clone()),

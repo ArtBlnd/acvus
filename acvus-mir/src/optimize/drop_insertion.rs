@@ -340,12 +340,16 @@ mod tests {
         ValueId::from_raw(n)
     }
 
+    /// A user-defined type with an identity: a source of its own, so move-only.
     fn user_defined_ty() -> Ty {
         let i = Interner::new();
         Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![crate::ty::IdentityTerm::Known(
+                <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+            )],
         }
     }
 

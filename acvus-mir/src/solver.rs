@@ -9,10 +9,11 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::types::QualifiedRef;
 use crate::ty::{
-    CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, Infer, InferTy, LenTerm,
-    LenVarId, ParamTerm, Polarity, PolyTy, Scheme, Ty, TyTerm, TyVarBound, TypeBoundId,
-    TypeRegistry,
+    CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
+    IdentityVarId, Infer, InferTy, LenTerm, LenVarId, ParamTerm, Polarity, PolyTy, Scheme, Ty,
+    TyTerm, TyVarBound, TypeBoundId, TypeRegistry,
 };
+use acvus_utils::LocalIdOps;
 
 // -- Solver types ----------------------------------------------------
 
@@ -62,12 +63,21 @@ pub enum LenBound {
 
 // -- Solver ----------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum IdentityBound {
+    /// Not yet tied to a source. Frozen, it becomes a source of its own.
+    Unbound,
+    Bound(IdentityId),
+    Forward(IdentityVarId),
+}
+
 /// Snapshot for solver rollback during overload resolution.
 pub struct SolverSnapshot {
     ty_bounds: Vec<TypeBound>,
     effect_vars: Vec<EffectBound>,
     len_vars: Vec<LenBound>,
-    identity_factory: acvus_utils::LocalFactory<IdentityId>,
+    identity_vars: Vec<IdentityBound>,
+    sources: acvus_utils::LocalFactory<IdentityId>,
 }
 
 /// Pure type inference solver.
@@ -78,7 +88,9 @@ pub struct Solver {
     pub(crate) ty_bounds: Vec<TypeBound>,
     pub(crate) effect_vars: Vec<EffectBound>,
     pub(crate) len_vars: Vec<LenBound>,
-    pub(crate) identity_factory: acvus_utils::LocalFactory<IdentityId>,
+    pub(crate) identity_vars: Vec<IdentityBound>,
+    /// Mints a new source for every identity a declaration introduces.
+    sources: acvus_utils::LocalFactory<IdentityId>,
 }
 
 impl Solver {
@@ -87,8 +99,113 @@ impl Solver {
             ty_bounds: Vec::new(),
             effect_vars: Vec::new(),
             len_vars: Vec::new(),
-            identity_factory: acvus_utils::LocalFactory::new(),
+            identity_vars: Vec::new(),
+            sources: acvus_utils::LocalFactory::new(),
         }
+    }
+
+    // -- Identity variables ------------------------------------------
+
+    pub fn fresh_identity_var(&mut self) -> IdentityTerm<Infer> {
+        IdentityTerm::Var(Self::alloc_identity_var(&mut self.identity_vars))
+    }
+
+    fn alloc_identity_var(identity_vars: &mut Vec<IdentityBound>) -> IdentityVarId {
+        let id = IdentityVarId(identity_vars.len() as u32);
+        identity_vars.push(IdentityBound::Unbound);
+        id
+    }
+
+    pub fn find_identity_root(&self, id: IdentityVarId) -> IdentityVarId {
+        match &self.identity_vars[id.0 as usize] {
+            IdentityBound::Forward(next) => self.find_identity_root(*next),
+            _ => id,
+        }
+    }
+
+    pub fn resolve_identity(&self, term: &IdentityTerm<Infer>) -> IdentityTerm<Infer> {
+        match term {
+            IdentityTerm::Known(id) => IdentityTerm::Known(*id),
+            IdentityTerm::Var(v) => {
+                let root = self.find_identity_root(*v);
+                match &self.identity_vars[root.0 as usize] {
+                    IdentityBound::Bound(id) => IdentityTerm::Known(*id),
+                    IdentityBound::Unbound => IdentityTerm::Var(root),
+                    IdentityBound::Forward(_) => {
+                        unreachable!("find_identity_root resolves forwards")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Identities are invariant: two values share one only when they came
+    /// from one source.
+    pub fn unify_identity(
+        &mut self,
+        a: &IdentityTerm<Infer>,
+        b: &IdentityTerm<Infer>,
+    ) -> Result<(), (IdentityId, IdentityId)> {
+        let a = self.resolve_identity(a);
+        let b = self.resolve_identity(b);
+        match (a, b) {
+            (IdentityTerm::Known(x), IdentityTerm::Known(y)) => {
+                if x == y {
+                    Ok(())
+                } else {
+                    Err((x, y))
+                }
+            }
+            (IdentityTerm::Var(v), IdentityTerm::Known(id))
+            | (IdentityTerm::Known(id), IdentityTerm::Var(v)) => {
+                self.identity_vars[v.0 as usize] = IdentityBound::Bound(id);
+                Ok(())
+            }
+            (IdentityTerm::Var(x), IdentityTerm::Var(y)) => {
+                if x != y {
+                    self.identity_vars[x.0 as usize] = IdentityBound::Forward(y);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn freeze_identity(&self, term: &IdentityTerm<Infer>) -> Result<IdentityId, FreezeError> {
+        match self.resolve_identity(term) {
+            IdentityTerm::Known(id) => Ok(id),
+            IdentityTerm::Var(root) => Err(FreezeError::UnresolvedIdentity(root)),
+        }
+    }
+
+    /// Tie every identity nothing has tied to a source to a source of its
+    /// own. Run once a body is checked, before its types freeze.
+    pub fn settle_identities(&mut self) {
+        for index in 0..self.identity_vars.len() {
+            if self.identity_vars[index] == IdentityBound::Unbound {
+                self.identity_vars[index] = IdentityBound::Bound(self.sources.next());
+            }
+        }
+    }
+
+    /// The identity variables of a polymorphic type that occur in its
+    /// parameters. Instantiated, these bind to the arguments' sources;
+    /// every other identity variable is a new source at each instantiation.
+    fn identity_vars_bound_by_params(ty: &PolyTy) -> rustc_hash::FxHashSet<u32> {
+        let mut found = rustc_hash::FxHashSet::default();
+        if let TyTerm::Fn { params, .. } = ty {
+            for p in params {
+                p.ty.map(
+                    &mut |v: u32| TyTerm::<crate::ty::Poly>::Var(v),
+                    &mut |v: u32| {
+                        found.insert(v);
+                        IdentityTerm::<crate::ty::Poly>::Var(v)
+                    },
+                    &mut |v: u32| EffectTerm::<crate::ty::Poly>::Var(v),
+                    &mut |v: u32| LenTerm::<crate::ty::Poly>::Var(v),
+                );
+            }
+        }
+        found
     }
 
     // -- Length variables --------------------------------------------
@@ -346,17 +463,14 @@ impl Solver {
         TyTerm::Var(id)
     }
 
-    pub fn alloc_identity(&mut self) -> InferTy {
-        TyTerm::Identity(self.identity_factory.next())
-    }
-
     /// Take a snapshot for later rollback.
     pub fn snapshot(&self) -> SolverSnapshot {
         SolverSnapshot {
             ty_bounds: self.ty_bounds.clone(),
             effect_vars: self.effect_vars.clone(),
             len_vars: self.len_vars.clone(),
-            identity_factory: self.identity_factory.clone(),
+            identity_vars: self.identity_vars.clone(),
+            sources: self.sources.clone(),
         }
     }
 
@@ -365,7 +479,8 @@ impl Solver {
         self.ty_bounds = snap.ty_bounds;
         self.effect_vars = snap.effect_vars;
         self.len_vars = snap.len_vars;
-        self.identity_factory = snap.identity_factory;
+        self.identity_vars = snap.identity_vars;
+        self.sources = snap.sources;
     }
 
     // -- Resolution --------------------------------------------------
@@ -401,7 +516,10 @@ impl Solver {
                     TypeBound::Forward(_) => unreachable!("find_ty_root should resolve forwards"),
                 }
             },
-            &mut |id| Ok(TyTerm::Identity(id)),
+            &mut |id: IdentityVarId| {
+                self.freeze_identity(&IdentityTerm::Var(id))
+                    .map(IdentityTerm::Known)
+            },
             &mut |id: EffectVarId| Ok(EffectTerm::Known(self.freeze_effect(&EffectTerm::Var(id)))),
             &mut |id: LenVarId| match self.resolve_len(&LenTerm::Var(id)) {
                 LenTerm::Known(n) => Ok(LenTerm::Known(n)),
@@ -436,7 +554,7 @@ impl Solver {
                     _ => TyTerm::Var(root),
                 }
             },
-            &mut |id| TyTerm::Identity(id),
+            &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
             &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
             &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
         )
@@ -558,15 +676,18 @@ impl Solver {
                     id: id_a,
                     type_args: ta_args,
                     effect_args: ea_args,
+                    identity_args: ia_args,
                 },
                 TyTerm::UserDefined {
                     id: id_b,
                     type_args: tb_args,
                     effect_args: eb_args,
+                    identity_args: ib_args,
                 },
             ) if id_a == id_b => {
                 assert_eq!(ta_args.len(), tb_args.len());
                 assert_eq!(ea_args.len(), eb_args.len());
+                assert_eq!(ia_args.len(), ib_args.len());
                 let snap = self.snapshot();
                 let type_ok = ta_args
                     .iter()
@@ -576,7 +697,11 @@ impl Solver {
                     .iter()
                     .zip(eb_args.iter())
                     .all(|(a, b)| self.unify_effect(a, b, pol).is_ok());
-                if type_ok && effect_ok {
+                let identity_ok = ia_args
+                    .iter()
+                    .zip(ib_args.iter())
+                    .all(|(a, b)| self.unify_identity(a, b).is_ok());
+                if type_ok && effect_ok && identity_ok {
                     Ok(None)
                 } else {
                     self.rollback(snap);
@@ -673,14 +798,6 @@ impl Solver {
                     return Err((a.clone(), b.clone()));
                 }
                 self.unify_ty(ea, eb, Polarity::Invariant, registry)
-            }
-
-            (TyTerm::Identity(a), TyTerm::Identity(b)) => {
-                if a == b {
-                    Ok(None)
-                } else {
-                    Err((TyTerm::Identity(*a), TyTerm::Identity(*b)))
-                }
             }
 
             (TyTerm::Option(a), TyTerm::Option(b)) => {
@@ -855,11 +972,13 @@ impl Solver {
                     id: id_a,
                     type_args: ta_a,
                     effect_args: ea_a,
+                    identity_args: ia_a,
                 },
                 TyTerm::UserDefined {
                     id: id_b,
                     type_args: ta_b,
                     effect_args: ea_b,
+                    identity_args: ia_b,
                 },
             ) if id_a == id_b => {
                 assert_eq!(ta_a.len(), ta_b.len());
@@ -868,7 +987,11 @@ impl Solver {
                     .iter()
                     .zip(ta_b.iter())
                     .all(|(a, b)| self.unify_ty(a, b, Polarity::Invariant, registry).is_ok());
-                if type_args_ok {
+                let identity_ok = ia_a
+                    .iter()
+                    .zip(ia_b.iter())
+                    .all(|(a, b)| self.unify_identity(a, b).is_ok());
+                if type_args_ok && identity_ok {
                     let mut effect_args = Vec::with_capacity(ea_a.len());
                     for (a, b) in ea_a.iter().zip(ea_b.iter()) {
                         effect_args.push(self.lub_effect(a, b).ok()?);
@@ -877,6 +1000,7 @@ impl Solver {
                         id: *id_a,
                         type_args: ta_a.iter().map(|t| self.resolve_ty(t)).collect(),
                         effect_args,
+                        identity_args: ia_a.iter().map(|i| self.resolve_identity(i)).collect(),
                     })
                 } else {
                     self.rollback(snap);
@@ -1038,7 +1162,7 @@ impl Solver {
     /// and Identity with fresh values.
     pub fn instantiate_infer(&mut self, ty: &InferTy) -> InferTy {
         let mut var_map: FxHashMap<TypeBoundId, TypeBoundId> = FxHashMap::default();
-        let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
+        let mut fresh_map: FxHashMap<IdentityVarId, IdentityVarId> = FxHashMap::default();
         let mut effect_map: FxHashMap<EffectVarId, EffectVarId> = FxHashMap::default();
         self.instantiate_infer_inner(ty, &mut var_map, &mut fresh_map, &mut effect_map)
     }
@@ -1046,7 +1170,7 @@ impl Solver {
     /// Instantiate two InferTy sharing the same variable mappings.
     pub fn instantiate_pair_infer(&mut self, a: &InferTy, b: &InferTy) -> (InferTy, InferTy) {
         let mut var_map: FxHashMap<TypeBoundId, TypeBoundId> = FxHashMap::default();
-        let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
+        let mut fresh_map: FxHashMap<IdentityVarId, IdentityVarId> = FxHashMap::default();
         let mut effect_map: FxHashMap<EffectVarId, EffectVarId> = FxHashMap::default();
         let ia = self.instantiate_infer_inner(a, &mut var_map, &mut fresh_map, &mut effect_map);
         let ib = self.instantiate_infer_inner(b, &mut var_map, &mut fresh_map, &mut effect_map);
@@ -1057,7 +1181,7 @@ impl Solver {
         &mut self,
         ty: &InferTy,
         var_map: &mut FxHashMap<TypeBoundId, TypeBoundId>,
-        fresh_map: &mut FxHashMap<IdentityId, IdentityId>,
+        fresh_map: &mut FxHashMap<IdentityVarId, IdentityVarId>,
         effect_map: &mut FxHashMap<EffectVarId, EffectVarId>,
     ) -> InferTy {
         match ty {
@@ -1084,12 +1208,6 @@ impl Solver {
                 Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
                 self.resolve_len(len),
             ),
-            TyTerm::Identity(id) => {
-                let new_id = *fresh_map
-                    .entry(*id)
-                    .or_insert_with(|| self.identity_factory.next());
-                TyTerm::Identity(new_id)
-            }
             TyTerm::Option(inner) => TyTerm::Option(Box::new(
                 self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
@@ -1154,11 +1272,23 @@ impl Solver {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => TyTerm::UserDefined {
                 id: *id,
                 type_args: type_args
                     .iter()
                     .map(|t| self.instantiate_infer_inner(t, var_map, fresh_map, effect_map))
+                    .collect(),
+                identity_args: identity_args
+                    .iter()
+                    .map(|i| match self.resolve_identity(i) {
+                        IdentityTerm::Known(id) => IdentityTerm::Known(id),
+                        IdentityTerm::Var(root) => {
+                            IdentityTerm::Var(*fresh_map.entry(root).or_insert_with(|| {
+                                Self::alloc_identity_var(&mut self.identity_vars)
+                            }))
+                        }
+                    })
                     .collect(),
                 effect_args: effect_args
                     .iter()
@@ -1188,6 +1318,7 @@ impl Default for Solver {
 pub enum FreezeError {
     UnresolvedType(TypeBoundId),
     UnresolvedLen(LenVarId),
+    UnresolvedIdentity(IdentityVarId),
     /// The variable resolved to a type its declaration does not admit.
     OutOfBound {
         var: TypeBoundId,
@@ -1246,13 +1377,15 @@ impl Solver {
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
     ) -> InferTy {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
-        let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
         let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
         let mut len_map: FxHashMap<u32, LenVarId> = FxHashMap::default();
         let ty_bounds = &mut self.ty_bounds;
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
-        let identity_factory = &mut self.identity_factory;
+        let identity_vars = &mut self.identity_vars;
+        let sources = &mut self.sources;
+        let from_params = Self::identity_vars_bound_by_params(ty);
+        let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         ty.map(
             &mut |id: u32| {
                 let bound_id = *var_map.entry(id).or_insert_with(|| {
@@ -1266,11 +1399,14 @@ impl Solver {
                 });
                 TyTerm::Var(bound_id)
             },
-            &mut |id| {
-                let new_id = *fresh_map
-                    .entry(id)
-                    .or_insert_with(|| identity_factory.next());
-                TyTerm::Identity(new_id)
+            &mut |id: u32| {
+                *identity_map.entry(id).or_insert_with(|| {
+                    if from_params.contains(&id) {
+                        IdentityTerm::Var(Self::alloc_identity_var(identity_vars))
+                    } else {
+                        IdentityTerm::Known(sources.next())
+                    }
+                })
             },
             &mut |id: u32| {
                 let var = *effect_map
@@ -1291,13 +1427,14 @@ impl Solver {
     /// Used for CastRule where `from` and `to` share placeholder variables.
     pub fn instantiate_poly_pair(&mut self, a: &PolyTy, b: &PolyTy) -> (InferTy, InferTy) {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
-        let mut fresh_map: FxHashMap<IdentityId, IdentityId> = FxHashMap::default();
         let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
         let mut len_map: FxHashMap<u32, LenVarId> = FxHashMap::default();
         let ty_bounds = &mut self.ty_bounds;
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
-        let identity_factory = &mut self.identity_factory;
+        let identity_vars = &mut self.identity_vars;
+        let sources = &mut self.sources;
+        let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         let mut on_len = |id: u32| {
             let var = *len_map
                 .entry(id)
@@ -1320,14 +1457,18 @@ impl Solver {
             });
             TyTerm::Var(bound_id)
         };
-        let mut on_identity = |id: IdentityId| {
-            let new_id = *fresh_map
+        let mut on_identity_a = |id: u32| {
+            *identity_map
                 .entry(id)
-                .or_insert_with(|| identity_factory.next());
-            TyTerm::Identity(new_id)
+                .or_insert_with(|| IdentityTerm::Var(Self::alloc_identity_var(identity_vars)))
         };
-        let ia = a.map(&mut on_var, &mut on_identity, &mut on_effect, &mut on_len);
-        let ib = b.map(&mut on_var, &mut on_identity, &mut on_effect, &mut on_len);
+        let ia = a.map(&mut on_var, &mut on_identity_a, &mut on_effect, &mut on_len);
+        let mut on_identity_b = |id: u32| {
+            *identity_map
+                .entry(id)
+                .or_insert_with(|| IdentityTerm::Known(sources.next()))
+        };
+        let ib = b.map(&mut on_var, &mut on_identity_b, &mut on_effect, &mut on_len);
         (ia, ib)
     }
 }

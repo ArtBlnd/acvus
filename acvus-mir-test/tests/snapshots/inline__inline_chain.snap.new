@@ -1,0 +1,28 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 77
+expression: ir
+---
+=== main ===
+     1 |   r0 = ref $v1
+     2 |   r1 = load r0
+     4 |   r2 = r1 + 1 (r3)
+     5 |   r4 = ref $v8
+     6 |   r5 = load r4
+     7 |   r6 = ref $v8
+     8 |   r7 = load r6
+     9 |   r8 = r5 + r7
+    10 |   return r8
+
+    ; r0 (v5) : Ref<Int>
+    ; r1 ($x) : Int
+    ; r2 (v8) : Int
+    ; r3 (v7) : Int
+    ; r4 (v10) : Ref<Int>
+    ; r5 ($x) : Int
+    ; r6 (v12) : Ref<Int>
+    ; r7 ($x) : Int
+    ; r8 (v14) : Int
+    ; r9 (double(...)) : Int
+    ; r10 (inc(...)) : Int
+    ; r11 (v1) : Int

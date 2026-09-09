@@ -1,0 +1,51 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 697
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "empty"
+
+=== main ===
+     0 |   r0 = undef
+     2 |   r1 = ref @users
+     3 |   r2 = load r1
+     4 | L2:
+     6 |   r3 = r2[0]
+     8 |   r4 = true (r5) && true (r6)
+     9 |   jump_if r4 then L3 else L1
+    10 | L3:
+    11 |   r7 = r2[0]
+    13 |   r8 = r7.name
+    14 |   r9 = T0 + r8
+    15 |   jump L0(r9, r7)
+    16 | L1:
+    19 |   r10 = T0 + T1
+    20 |   jump L0(r10, r0)
+    21 | L0(r11: String, r12: {name: String}):  ; merge_of L2
+    22 |   r13 = T0 + r11
+    23 |   return r13
+
+    ; r0 (v22) : {name: String}
+    ; r1 (@users) : Ref<Array<{name: String}, 3>>
+    ; r2 (v3) : Array<{name: String}, 3>
+    ; r3 (v5) : {name: String}
+    ; r4 (v7) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (first) : {name: String}
+    ; r8 (v13) : String
+    ; r9 (v14) : String
+    ; r10 (v17) : String
+    ; r11 (v18) : String
+    ; r12 (v23) : {name: String}
+    ; r13 (v19) : String
+    ; r14 (v11) : String
+    ; r15 (v1) : String
+    ; r16 (v20) : Ref<{name: String}>
+    ; r17 (v15) : String
+    ; r18 (v10) : Ref<{name: String}>
+    ; r19 (v21) : {name: String}
+    ; r20 (first.name) : Ref<String>
+    ; r21 (v16) : String

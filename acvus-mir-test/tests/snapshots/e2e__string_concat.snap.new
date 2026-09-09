@@ -1,0 +1,24 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 167
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "hello"
+  T2 = " "
+  T3 = "world"
+
+=== main ===
+     3 |   r0 = T1 + T2
+     5 |   r1 = r0 + T3
+     6 |   r2 = T0 + r1
+     7 |   return r2
+
+    ; r0 (v4) : String
+    ; r1 (v6) : String
+    ; r2 (v7) : String
+    ; r3 (v3) : String
+    ; r4 (v1) : String
+    ; r5 (v5) : String
+    ; r6 (v2) : String

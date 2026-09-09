@@ -29,6 +29,7 @@ fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        identity_args: vec![],
     }
 }
 
@@ -39,6 +40,7 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
         id: iter_qref,
         type_args: vec![elem],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        identity_args: vec![],
     }
 }
 
@@ -51,7 +53,6 @@ fn it(ty: &Ty) -> InferTy {
 // UserDefined unification (same id, different args)
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_same_args_unifies() {
     let (i, reg) = setup();
@@ -61,7 +62,6 @@ fn iterator_same_args_unifies() {
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_ok());
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_type_arg_mismatch_fails() {
     let (i, reg) = setup();
@@ -71,7 +71,6 @@ fn iterator_type_arg_mismatch_fails() {
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_err());
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_type_param_resolves() {
     let (i, reg) = setup();
@@ -87,7 +86,6 @@ fn iterator_type_param_resolves() {
 // Materiality - UserDefined types are Ephemeral
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_is_ephemeral() {
     let (i, _reg) = setup();
@@ -97,14 +95,12 @@ fn iterator_is_ephemeral() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_not_materializable() {
     let (i, _reg) = setup();
     assert!(!iter_ty(&i, Ty::Int).is_materializable());
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn list_of_iterator_not_materializable() {
     let (i, _reg) = setup();
@@ -116,7 +112,6 @@ fn list_of_iterator_not_materializable() {
 // is_pureable - UserDefined types are not pureable
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iterator_not_pureable() {
     let (i, _reg) = setup();
@@ -141,7 +136,6 @@ fn iterator_is_move_only() {
 // instantiate_pair: CastRule from/to share Param placeholders
 // ================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn instantiate_pair_shares_params() {
     // CastRule: UserDefined(A, [T]) -> List<T>
@@ -152,6 +146,7 @@ fn instantiate_pair_shares_params() {
         qref: id,
         type_params: vec![acvus_mir::ty::TyVarBound::Any],
         effect_params: 0,
+        identity_params: 0,
     });
     let mut builder = PolyBuilder::new();
     let t = builder.fresh_ty_var();
@@ -159,6 +154,7 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![t.clone()],
         effect_args: vec![],
+        identity_args: vec![],
     };
     let to = PolyTy::Array(Box::new(t), acvus_mir::ty::LenTerm::Known(3));
 
@@ -170,6 +166,7 @@ fn instantiate_pair_shares_params() {
         id,
         type_args: vec![it(&Ty::Int)],
         effect_args: vec![],
+        identity_args: vec![],
     };
     assert!(s.unify_ty(&concrete_from, &inst_from, Invariant, &reg).is_ok());
 
@@ -196,7 +193,6 @@ fn coerce_list_to_iterator_completeness() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn coerce_iterator_to_list_soundness_rejected() {
     // Iterator -> List is NOT valid (can't materialize lazy into eager implicitly)
@@ -210,7 +206,6 @@ fn coerce_iterator_to_list_soundness_rejected() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn coerce_invariant_rejects_list_to_iterator() {
     // Invariant polarity: no coercion allowed

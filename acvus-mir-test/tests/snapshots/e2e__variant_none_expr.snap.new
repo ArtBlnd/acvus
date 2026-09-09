@@ -1,0 +1,22 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1665
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     2 |   r1 = variant None
+     3 |   r2 = ref x
+     4 |   store r2 = r1
+     6 |   r3 = T0 + T0
+     7 |   return r3
+
+    ; r0 (v7) : <error>
+    ; r1 (v2) : <error>
+    ; r2 (v4) : Ref<<error>>
+    ; r3 (v6) : String
+    ; r4 (v5) : String
+    ; r5 (v1) : String

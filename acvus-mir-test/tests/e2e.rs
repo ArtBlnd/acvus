@@ -497,7 +497,6 @@ fn tuple_nested_destructure() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_tuple_arity_mismatch() {
     let i = Interner::new();
@@ -513,7 +512,6 @@ fn error_tuple_arity_mismatch() {
 
 // -- Error cases --------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_emit_non_string() {
     let i = Interner::new();
@@ -525,7 +523,6 @@ fn error_emit_non_string() {
 // FnRefs removed: undeclared contexts are now handled by the typechecker's infer vars
 // in analysis mode, so @unknown no longer causes an error - it gets a fresh type var
 // that may resolve during typechecking.
-#[ignore = "pending identity integration"]
 #[test]
 fn undeclared_context_resolves_via_infer_var() {
     let i = Interner::new();
@@ -536,7 +533,6 @@ fn undeclared_context_resolves_via_infer_var() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_undefined_variable() {
     let i = Interner::new();
@@ -544,7 +540,6 @@ fn error_undefined_variable() {
     assert!(result.is_err());
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_type_mismatch() {
     let i = Interner::new();
@@ -615,7 +610,6 @@ fn iter_with_catch_all() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_iter_refutable_pattern() {
     let i = Interner::new();
@@ -624,7 +618,6 @@ fn error_iter_refutable_pattern() {
     assert!(result.is_err());
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_iter_not_iterable() {
     let i = Interner::new();
@@ -1449,7 +1442,6 @@ fn pipe_filter_then_map_field() {
 
 // -- Edge case: error - field access on non-object ----------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_field_access_on_int() {
     let i = Interner::new();
@@ -1461,7 +1453,6 @@ fn error_field_access_on_int() {
 
 // -- Edge case: error - context write attempt ---------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn error_variable_write_type_mismatch() {
     let i = Interner::new();
@@ -1697,7 +1688,6 @@ fn variant_none_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_variant_merge() {
     let i = Interner::new();
@@ -1710,7 +1700,6 @@ fn structural_enum_variant_merge() {
 
 // -- Structural enum tests --------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_single_variant() {
     let i = Interner::new();
@@ -1719,7 +1708,6 @@ fn structural_enum_single_variant() {
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_three_variants_merge() {
     let i = Interner::new();
@@ -1731,7 +1719,6 @@ fn structural_enum_three_variants_merge() {
     assert!(ir.contains("Z"), "variant Z missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_with_payload() {
     let i = Interner::new();
@@ -1741,7 +1728,6 @@ fn structural_enum_with_payload() {
     assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_mixed_payload_and_unit() {
     let i = Interner::new();
@@ -1752,7 +1738,6 @@ fn structural_enum_mixed_payload_and_unit() {
     assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_same_var_different_blocks_merge() {
     // Key regression test: separate match blocks on the same context var must merge.
@@ -1764,7 +1749,6 @@ fn structural_enum_same_var_different_blocks_merge() {
     assert!(ir.contains("C"), "variant C missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_different_enums_different_vars() {
     let i = Interner::new();
@@ -1775,7 +1759,6 @@ fn structural_enum_different_enums_different_vars() {
     assert!(ir.contains("B"), "variant B missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_name_mismatch_is_error() {
     // Matching X::A and Y::B on the same var should fail (different enum names).
@@ -1788,7 +1771,6 @@ fn structural_enum_name_mismatch_is_error() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_payload_unifies_with_inner_match() {
     // Payload variable must unify with patterns inside the arm body.
@@ -1799,7 +1781,6 @@ fn structural_enum_payload_unifies_with_inner_match() {
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_payload_unifies_with_emit() {
     // Payload bound by variant pattern can be used in expressions (emit).
@@ -1810,7 +1791,6 @@ fn structural_enum_payload_unifies_with_emit() {
     assert!(ir.contains("Val"), "variant Val missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn structural_enum_payload_type_propagates_through_context() {
     // When context provides an enum type with payload, payload type should propagate.
@@ -1840,7 +1820,6 @@ fn structural_enum_payload_type_propagates_through_context() {
 // Regression: nested Variant patterns inside Tuple/List must merge
 // variant sets across match arms via the shared Var chain.
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_merge_inside_tuple_pattern() {
     // Two arms with different variants nested inside a tuple pattern.
@@ -1854,7 +1833,6 @@ fn variant_merge_inside_tuple_pattern() {
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_merge_inside_tuple_three_arms() {
     let i = Interner::new();
@@ -1878,7 +1856,6 @@ fn variant_merge_inside_list_pattern() {
     assert!(ir.contains("B"), "variant B missing:\n{ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pruned_context_keys_in_dead_catch_all() {
     // Outer match on @Impersonation with catch_all containing @Pov.
@@ -1950,7 +1927,6 @@ fn ssa_context_read_write() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_context_branch_phi() {
     let i = Interner::new();
@@ -1982,7 +1958,6 @@ fn ssa_multiple_contexts_independent() {
 
 // -- From lib.rs -----------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_extern_param_write_rejected() {
     let i = Interner::new();
@@ -2005,7 +1980,6 @@ fn migrated_integration_range_expression() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_integration_list_destructure() {
     let i = Interner::new();
@@ -2017,7 +1991,6 @@ fn migrated_integration_list_destructure() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_integration_pipe_with_lambda() {
     let i = Interner::new();
@@ -2030,7 +2003,6 @@ fn migrated_integration_pipe_with_lambda() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_projection_chained_field_access() {
     let i = Interner::new();
@@ -2048,7 +2020,6 @@ fn migrated_projection_chained_field_access() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_pipe_extern_fn_ok() {
     let i = Interner::new();
@@ -2077,7 +2048,6 @@ fn migrated_pipe_extern_fn_ok() {
 
 // -- From typeck.rs --------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_builtin_to_string() {
     let i = Interner::new();
@@ -2085,7 +2055,6 @@ fn migrated_typeck_builtin_to_string() {
     compile_to_ir(&i, "{{ @count | to_string }}", &context).unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_lambda_captures_outer_variable() {
     let i = Interner::new();
@@ -2104,7 +2073,6 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_lambda_type_check() {
     let i = Interner::new();
@@ -2117,7 +2085,6 @@ fn migrated_typeck_lambda_type_check() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_lambda_no_capture_local_params() {
     let i = Interner::new();
@@ -2130,7 +2097,6 @@ fn migrated_typeck_lambda_no_capture_local_params() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_list_pattern_matching() {
     let i = Interner::new();
@@ -2143,7 +2109,6 @@ fn migrated_typeck_list_pattern_matching() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_nested_lambda_captures() {
     let i = Interner::new();
@@ -2159,7 +2124,6 @@ fn migrated_typeck_nested_lambda_captures() {
     .unwrap();
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_typeck_some_unifies_with_option_context() {
     let i = Interner::new();
@@ -2174,7 +2138,6 @@ fn migrated_typeck_some_unifies_with_option_context() {
 
 // -- From printer.rs -------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_print_arithmetic() {
     let i = Interner::new();
@@ -2188,7 +2151,6 @@ fn migrated_print_arithmetic() {
     assert!(ir.contains("+"), "should contain + operator in IR: {ir}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_print_closure() {
     let i = Interner::new();
@@ -2232,7 +2194,6 @@ fn migrated_ssa_iter_no_write_no_phi() {
 
 // -- Iterator values are move-only through combinators ---------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_map_reuse_rejected() {
     // iter(list) | map(f) is an Iterator; reusing it is a use-after-move.
@@ -2252,7 +2213,6 @@ fn iter_map_reuse_rejected() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_map_single_use_ok() {
     // Single use of an iterator compiles.
@@ -2272,7 +2232,6 @@ fn iter_map_single_use_ok() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_chain_reuse_rejected() {
     // map | filter is still one Iterator value; reusing it is rejected.
@@ -2296,7 +2255,6 @@ fn iter_chain_reuse_rejected() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_chain_single_use_ok() {
     // Single use of a chained iterator compiles.
@@ -2320,7 +2278,6 @@ fn iter_chain_single_use_ok() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_pure_map_reuse_rejected() {
     // A pure map does not make an Iterator copyable.
@@ -2337,7 +2294,6 @@ fn iter_pure_map_reuse_rejected() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_reuse_after_collect_rejected() {
     // collect consumes the iterator variable; a second collect is a use-after-move.
@@ -2361,7 +2317,6 @@ fn iter_reuse_after_collect_rejected() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn iter_collect_result_is_reusable() {
     // The List produced by collect is freely reusable.
@@ -2388,6 +2343,7 @@ fn iter_int_ty(interner: &Interner) -> Ty {
         id: QualifiedRef::root(interner.intern("Iterator")),
         type_args: vec![Ty::Int],
         effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        identity_args: vec![],
     }
 }
 
@@ -2397,7 +2353,6 @@ fn has_use_after_move(err: &str) -> bool {
 
 // -- Soundness: should REJECT --
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_iter_reuse() {
     let i = Interner::new();
@@ -2417,7 +2372,6 @@ fn migrated_move_reject_iter_reuse() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_var_double_load() {
     let i = Interner::new();
@@ -2434,7 +2388,6 @@ fn migrated_move_reject_var_double_load() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_iter_pipe_reuse() {
     let i = Interner::new();
@@ -2456,7 +2409,6 @@ fn migrated_move_reject_iter_pipe_reuse() {
 
 // -- Completeness: should ACCEPT --
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_pure_iter_reuse() {
     let i = Interner::new();
@@ -2472,7 +2424,6 @@ fn migrated_move_reject_pure_iter_reuse() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_iter_single_use() {
     let i = Interner::new();
@@ -2491,7 +2442,6 @@ fn migrated_move_accept_iter_single_use() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_collect_then_reuse() {
     let i = Interner::new();
@@ -2510,7 +2460,6 @@ fn migrated_move_accept_collect_then_reuse() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_var_reassign() {
     let i = Interner::new();
@@ -2529,7 +2478,6 @@ fn migrated_move_accept_var_reassign() {
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_iter_pipe_chain() {
     let i = Interner::new();
@@ -2548,7 +2496,6 @@ fn migrated_move_accept_iter_pipe_chain() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_fn_multiple_calls() {
     let i = Interner::new();
@@ -2593,7 +2540,6 @@ fn migrated_move_reject_option_iter_reuse() {
     assert!(result.is_err(), "Option<Iterator> should be move-only");
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_branch_move_then_use() {
     let i = Interner::new();
@@ -2616,7 +2562,6 @@ fn migrated_move_reject_branch_move_then_use() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_both_branches_move_then_use() {
     let i = Interner::new();
@@ -2632,7 +2577,6 @@ fn migrated_move_reject_both_branches_move_then_use() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_branch_move_no_use_after() {
     let i = Interner::new();
@@ -2651,7 +2595,6 @@ fn migrated_move_accept_branch_move_no_use_after() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_fnonce_double_call() {
     let i = Interner::new();
@@ -2671,7 +2614,6 @@ fn migrated_move_reject_fnonce_double_call() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_pure_capture_fn_multi_call() {
     let i = Interner::new();
@@ -2687,7 +2629,6 @@ fn migrated_move_accept_pure_capture_fn_multi_call() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_fnonce_single_call() {
     let i = Interner::new();
@@ -2703,7 +2644,6 @@ fn migrated_move_accept_fnonce_single_call() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_lambda_return_deque_as_iterator() {
     let i = Interner::new();
@@ -2719,7 +2659,6 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_lambda_return_scalar() {
     let i = Interner::new();
@@ -2731,7 +2670,6 @@ fn migrated_move_accept_lambda_return_scalar() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_nested_flat_map_deque_return() {
     let i = Interner::new();
@@ -2747,7 +2685,6 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_fnonce_passed_to_map() {
     let i = Interner::new();
@@ -2763,7 +2700,6 @@ fn migrated_move_accept_fnonce_passed_to_map() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let i = Interner::new();
@@ -2779,7 +2715,6 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_fnonce_local_capture_double() {
     let i = Interner::new();
@@ -2795,7 +2730,6 @@ fn migrated_move_reject_fnonce_local_capture_double() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_iter_without_purify() {
     let i = Interner::new();
@@ -2811,7 +2745,6 @@ fn migrated_move_reject_iter_without_purify() {
     );
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn migrated_move_reject_iter_var_without_purify() {
     let i = Interner::new();
@@ -2834,7 +2767,6 @@ fn migrated_move_reject_iter_var_without_purify() {
 // -- Completeness: valid programs accepted ---------------------------
 
 /// Variable whole read/write: `x = 42; x` - SSA promotion eliminates Ref/Load/Store.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_var_whole_read_write() {
     let i = Interner::new();
@@ -2853,7 +2785,6 @@ fn projection_var_whole_read_write() {
 }
 
 /// Variable read after multiple writes: `x = 1; x = 2; x` -> SSA sees last def.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_var_multiple_writes() {
     let i = Interner::new();
@@ -2865,7 +2796,6 @@ fn projection_var_multiple_writes() {
 }
 
 /// Context whole read: `@ctx` - volatile context preserves Ref+Load.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_context_whole_read() {
     let i = Interner::new();
@@ -2877,7 +2807,6 @@ fn projection_context_whole_read() {
 }
 
 /// Context field read: `@obj.name` - 1-depth Ref with field.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_context_field_read() {
     let i = Interner::new();
@@ -2888,7 +2817,6 @@ fn projection_context_field_read() {
 }
 
 /// Context field write: `@obj = { name: "test" }` - whole context store.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_context_whole_write() {
     let i = Interner::new();
@@ -2902,7 +2830,6 @@ fn projection_context_whole_write() {
 }
 
 /// Chained field access: `@obj.a.b` - Ref(@obj, "a") + Load + FieldGet("b").
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_chained_field_access_2depth() {
     let i = Interner::new();
@@ -2915,7 +2842,6 @@ fn projection_chained_field_access_2depth() {
 }
 
 /// Variable used in arithmetic after assignment: `x = @val; x + 1`.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_var_in_arithmetic() {
     let i = Interner::new();
@@ -2927,7 +2853,6 @@ fn projection_var_in_arithmetic() {
 }
 
 /// Lambda captures variable: `x = @data; |y| -> x + y`.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_lambda_capture() {
     let i = Interner::new();
@@ -2938,7 +2863,6 @@ fn projection_lambda_capture() {
 }
 
 /// ExternParam read: `$param` - should compile (immutable, Ref+Load).
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_param_read() {
     let i = Interner::new();
@@ -2954,7 +2878,6 @@ fn projection_param_read() {
 // -- Soundness: invalid programs rejected ----------------------------
 
 /// Store non-materializable (Fn) to context -> must be rejected.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_fn_in_context() {
     let i = Interner::new();
@@ -2970,7 +2893,6 @@ fn projection_soundness_reject_fn_in_context() {
 }
 
 /// Store non-materializable (List<Fn>) to context -> must be rejected.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_list_fn_in_context() {
     let i = Interner::new();
@@ -2986,7 +2908,6 @@ fn projection_soundness_reject_list_fn_in_context() {
 }
 
 /// Write to ExternParam -> must be rejected (typeck catches this).
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_param_write() {
     let i = Interner::new();
@@ -3001,7 +2922,6 @@ fn projection_soundness_reject_param_write() {
 // -- SSA correctness: promotion & volatile ---------------------------
 
 /// Non-volatile variable: SSA promotion eliminates Ref/Load/Store.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_ssa_var_promoted() {
     let i = Interner::new();
@@ -3018,7 +2938,6 @@ fn projection_ssa_var_promoted() {
 }
 
 /// Context read-then-write: SSA should preserve context Store (write-back).
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_ssa_context_write_back() {
     let i = Interner::new();
@@ -3032,7 +2951,6 @@ fn projection_ssa_context_write_back() {
 }
 
 /// Move-only value through variable: single use accepted.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_move_single_use() {
     let i = Interner::new();
@@ -3050,7 +2968,6 @@ fn projection_move_single_use() {
 }
 
 /// Move-only value through variable: reassignment revives.
-#[ignore = "pending identity integration"]
 #[test]
 fn projection_move_var_reassign_revives() {
     let i = Interner::new();
@@ -3151,7 +3068,6 @@ fn sroa_soundness_context_write_back_preserved() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_soundness_reject_fn_in_context() {
     let i = Interner::new();
@@ -3271,7 +3187,6 @@ fn destructure_projection_shadowing() {
 
 // -- Uninit check ----------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn uninit_field_load_rejected() {
     let i = Interner::new();

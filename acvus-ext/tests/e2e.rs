@@ -160,6 +160,7 @@ fn infer_value_ty(interner: &Interner, v: &Value) -> Ty {
             id: o.type_name.qref(interner),
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         },
         _ => Ty::Unit,
     }
@@ -169,7 +170,6 @@ fn infer_value_ty(interner: &Interner, v: &Value) -> Ty {
 //  Regex
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn regex_match_true() {
     let i = Interner::new();
@@ -184,7 +184,6 @@ async fn regex_match_true() {
     assert_eq!(result, Value::Bool(true));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn regex_match_false() {
     let i = Interner::new();
@@ -198,7 +197,6 @@ async fn regex_match_false() {
     assert_eq!(result, Value::Bool(false));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn regex_find_all_collect() {
     let i = Interner::new();
@@ -219,7 +217,6 @@ async fn regex_find_all_collect() {
     assert_eq!(items[2], Value::string("333"));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn regex_replace() {
     let i = Interner::new();
@@ -233,7 +230,6 @@ async fn regex_replace() {
     assert_eq!(result, Value::string("hello world"));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn regex_split_collect() {
     let i = Interner::new();
@@ -258,7 +254,6 @@ async fn regex_split_collect() {
 //  Encoding
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn base64_roundtrip() {
     let i = Interner::new();
@@ -272,7 +267,6 @@ async fn base64_roundtrip() {
     assert_eq!(result, Value::string("hello world"));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn url_roundtrip() {
     let i = Interner::new();
@@ -290,7 +284,6 @@ async fn url_roundtrip() {
 //  DateTime
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn datetime_format_from_timestamp() {
     let i = Interner::new();
@@ -305,7 +298,6 @@ async fn datetime_format_from_timestamp() {
     assert_eq!(result, Value::string("2024-01-01"));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn datetime_timestamp_roundtrip() {
     let i = Interner::new();
@@ -319,7 +311,6 @@ async fn datetime_timestamp_roundtrip() {
     assert_eq!(result, Value::Int(1704067200));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn datetime_add_days() {
     let i = Interner::new();
@@ -333,7 +324,6 @@ async fn datetime_add_days() {
     assert_eq!(result, Value::string("2024-01-02"));
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn datetime_parse_and_format() {
     let i = Interner::new();
@@ -350,7 +340,6 @@ async fn datetime_parse_and_format() {
 //  Multiple registries
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn mixed_regex_and_encoding() {
     let i = Interner::new();
@@ -397,7 +386,6 @@ fn extern_cast_registry() -> ExternRegistry<AcvusRuntime> {
     }
 }
 
-#[ignore = "pending identity integration"]
 #[tokio::test]
 async fn extern_cast_auto_coercion() {
     let i = Interner::new();

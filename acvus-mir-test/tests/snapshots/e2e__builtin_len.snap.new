@@ -1,0 +1,24 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1548
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     1 |   r0 = ref @items
+     2 |   r1 = load r0
+     3 |   r2 = call #0(r1)
+     4 |   r3 = call #1(r2)
+     5 |   r4 = call #2(r3)
+     6 |   r5 = T0 + r4
+     7 |   return r5
+
+    ; r0 (@items) : Ref<Array<Int, 3>>
+    ; r1 (v3) : Array<Int, 3>
+    ; r2 (v4) : List<Int>
+    ; r3 (len(...)) : Int
+    ; r4 (to_string(...)) : String
+    ; r5 (v7) : String
+    ; r6 (v1) : String

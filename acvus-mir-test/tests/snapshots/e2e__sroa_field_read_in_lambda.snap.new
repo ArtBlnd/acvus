@@ -1,0 +1,47 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 3057
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = ","
+
+=== main ===
+     1 |   r0 = ref @users
+     2 |   r1 = load r0
+     3 |   r2 = call #0(r1)
+     4 |   r3 = call #1(r2)
+     5 |   r4 = closure L0 []
+     6 |   r5 = call #2(r3, r4)
+     7 |   r6 = call #3(r5)
+     8 |   r7 = call #1(r6)
+    10 |   r8 = call #4(r7, T1)
+    11 |   r9 = T0 + r8
+    12 |   return r9
+
+    ; r0 (@users) : Ref<Array<{name: String}, 3>>
+    ; r1 (v3) : Array<{name: String}, 3>
+    ; r2 (v4) : List<{name: String}>
+    ; r3 (iter(...)) : Iterator<{name: String}, Opaque, #IdentityId(2)>
+    ; r4 (v6) : Fn({name: String}) -> String with Opaque
+    ; r5 (map(...)) : Iterator<String, Opaque, #IdentityId(2)>
+    ; r6 (collect(...)) : List<String>
+    ; r7 (v9) : Iterator<String, Opaque, #IdentityId(3)>
+    ; r8 (join(...)) : String
+    ; r9 (v12) : String
+    ; r10 (v10) : String
+    ; r11 (v1) : String
+
+=== closure L0 (ValueId(0)) ===
+     0 |   r0 = undef
+     1 |   r1 = r2.name
+     2 |   return r1
+
+    ; r0 (v8) : {name: String}
+    ; r1 (v5) : String
+    ; r2 (v1) : {name: String}
+    ; r3 (v3) : Ref<{name: String}>
+    ; r4 (v7) : {name: String}
+    ; r5 (v6) : Ref<{name: String}>
+    ; r6 (u.name) : Ref<String>

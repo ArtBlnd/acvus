@@ -1,7 +1,8 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, ExternType, Interner, Pure, Runtime, extern_fn, extern_registry,
+    ExternError, ExternRegistry, ExternType, IdentityVar, Interner, Pure, Runtime, extern_fn,
+    extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -27,8 +28,9 @@ fn regex_find(_: &Interner, re: Regex, text: String) -> Option<String> {
 }
 
 #[extern_fn(effect = pure)]
-fn regex_find_all<Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, Rt>
+fn regex_find_all<I, Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
 where
+    I: IdentityVar,
     Rt: Runtime,
 {
     let mut start = 0;
@@ -45,8 +47,9 @@ fn regex_replace(_: &Interner, text: String, re: Regex, replacement: String) -> 
 }
 
 #[extern_fn(effect = pure)]
-fn regex_split<Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, Rt>
+fn regex_split<I, Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
 where
+    I: IdentityVar,
     Rt: Runtime,
 {
     let mut last_end = 0;
@@ -71,8 +74,9 @@ where
 
 /// Capture group 1 of every match.
 #[extern_fn(effect = pure)]
-fn regex_extract<Rt>(_: &Interner, text: String, re: Regex) -> Iter<String, Pure, Rt>
+fn regex_extract<I, Rt>(_: &Interner, text: String, re: Regex) -> Iter<String, Pure, I, Rt>
 where
+    I: IdentityVar,
     Rt: Runtime,
 {
     let mut start = 0;

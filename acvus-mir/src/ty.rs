@@ -14,6 +14,9 @@ pub struct UserDefinedDecl {
     pub qref: QualifiedRef,
     pub type_params: Vec<TyVarBound>,
     pub effect_params: usize,
+    /// Identity parameters, at most one: a value of a type with one is a
+    /// distinct source, and the type is move-only.
+    pub identity_params: usize,
 }
 
 /// What a declaration says about one of its type variables. The solver
@@ -141,23 +144,29 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
                     id,
                     type_args,
                     effect_args,
+                    identity_args,
                 },
                 TyTerm::UserDefined {
                     id: pid,
                     type_args: pargs,
                     effect_args: peffects,
+                    identity_args: pidentities,
                 },
             ) => {
                 id == pid
                     && type_args.len() == pargs.len()
                     && effect_args.len() == peffects.len()
+                    && identity_args.len() == pidentities.len()
                     && effect_args
                         .iter()
                         .zip(peffects)
                         .all(|(a, b)| effect_matches(a, b))
+                    && identity_args.iter().zip(pidentities).all(|(a, b)| match b {
+                        IdentityTerm::Known(k) => *a == IdentityTerm::Known(*k),
+                        IdentityTerm::Var(_) => true,
+                    })
                     && type_args.iter().zip(pargs).all(|(a, b)| go(a, b, seen))
             }
-            (Ty::Identity(a), TyTerm::Identity(b)) => a == b,
             (
                 Ty::Enum { name, variants },
                 TyTerm::Enum {
@@ -225,7 +234,6 @@ enum TyHead {
     Option,
     Enum,
     Handle,
-    Identity,
     Ref,
     UserDefined(QualifiedRef),
     Error,
@@ -246,7 +254,6 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::Option(_) => TyHead::Option,
         TyTerm::Enum { .. } => TyHead::Enum,
         TyTerm::Handle(..) => TyHead::Handle,
-        TyTerm::Identity(..) => TyHead::Identity,
         TyTerm::Ref(..) => TyHead::Ref,
         TyTerm::UserDefined { id, .. } => TyHead::UserDefined(*id),
         TyTerm::Error(_) => TyHead::Error,
@@ -264,6 +271,10 @@ impl TypeRegistry {
     /// Register a declaration. Panics on duplicate qref.
     pub fn register(&mut self, decl: UserDefinedDecl) {
         let qref = decl.qref;
+        assert!(
+            decl.identity_params <= 1,
+            "{qref:?}: a type has at most one identity parameter; a value is one source"
+        );
         let prev = self.decls.insert(qref, decl);
         assert!(prev.is_none(), "duplicate UserDefined type: {qref:?}");
     }
@@ -497,6 +508,46 @@ impl LenTerm<Concrete> {
 
 acvus_utils::declare_local_id!(pub IdentityId);
 
+/// An identity argument of a user-defined type: the source a value came
+/// from. Two values unify only when their identities are the same, so a
+/// value from one source never mixes with a value from another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IdentityTerm<V: Phase> {
+    Known(IdentityId),
+    Var(V::IdentityVar),
+}
+
+impl<V: Phase> IdentityTerm<V> {
+    pub fn map<W: Phase>(
+        &self,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
+    ) -> IdentityTerm<W> {
+        match self {
+            IdentityTerm::Known(id) => IdentityTerm::Known(*id),
+            IdentityTerm::Var(v) => on_identity(*v),
+        }
+    }
+
+    pub fn try_map<W: Phase, E>(
+        &self,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
+    ) -> Result<IdentityTerm<W>, E> {
+        match self {
+            IdentityTerm::Known(id) => Ok(IdentityTerm::Known(*id)),
+            IdentityTerm::Var(v) => on_identity(*v),
+        }
+    }
+}
+
+impl IdentityTerm<Concrete> {
+    pub fn get(&self) -> IdentityId {
+        match self {
+            IdentityTerm::Known(id) => *id,
+            IdentityTerm::Var(v) => match *v {},
+        }
+    }
+}
+
 impl std::fmt::Display for IdentityId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Identity({self:?})")
@@ -545,7 +596,6 @@ impl TyTerm<Concrete> {
             | Ty::Option(_)
             | Ty::Enum { .. } => Materiality::Composite,
             Ty::UserDefined { .. } => Materiality::Ephemeral,
-            Ty::Identity(_) => Materiality::Concrete,
             Ty::Ref(..) => Materiality::Ephemeral,
             Ty::Error(_) => Materiality::Ephemeral,
             Ty::Var(v) => match *v {},
@@ -568,7 +618,6 @@ impl TyTerm<Concrete> {
                 captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
             }
             Ty::UserDefined { .. } | Ty::Ref(..) | Ty::Error(_) => false,
-            Ty::Identity(_) => true,
             Ty::Var(v) => match *v {},
         }
     }
@@ -587,7 +636,6 @@ impl TyTerm<Concrete> {
             Ty::Handle(..)
             | Ty::Fn { .. }
             | Ty::UserDefined { .. }
-            | Ty::Identity(_)
             | Ty::Ref(..)
             | Ty::Error(_) => false,
             Ty::Var(v) => match *v {},
@@ -665,16 +713,16 @@ impl<'a> fmt::Display for TyDisplay<'a> {
             Ty::Handle(inner) => {
                 write!(f, "Handle<{}>", inner.display(self.interner))
             }
-            Ty::Identity(id) => write!(f, "{id}"),
             Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
             Ty::UserDefined {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => {
                 let name = self.interner.resolve(id.name);
                 write!(f, "{name}")?;
-                if !type_args.is_empty() || !effect_args.is_empty() {
+                if !type_args.is_empty() || !effect_args.is_empty() || !identity_args.is_empty() {
                     write!(f, "<")?;
                     let mut first = true;
                     for arg in type_args {
@@ -690,6 +738,13 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                         }
                         first = false;
                         write!(f, "{:?}", arg.get())?;
+                    }
+                    for arg in identity_args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                        write!(f, "#{:?}", arg.get())?;
                     }
                     write!(f, ">")?;
                 }
@@ -764,6 +819,8 @@ pub trait Phase: 'static + Clone {
     type EffectVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
     /// Array length inference variable. `Infallible` for concrete (uninhabitable).
     type LenVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
+    /// Identity inference variable. `Infallible` for concrete (uninhabitable).
+    type IdentityVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
 }
 
 /// Post-inference phase - all types fully resolved.
@@ -775,6 +832,7 @@ impl Phase for Concrete {
     type TyVar = Infallible;
     type EffectVar = Infallible;
     type LenVar = Infallible;
+    type IdentityVar = Infallible;
 }
 
 /// Polymorphic declaration phase - type templates stored in the graph.
@@ -787,6 +845,7 @@ impl Phase for Poly {
     type TyVar = u32;
     type EffectVar = u32;
     type LenVar = u32;
+    type IdentityVar = u32;
 }
 
 /// During-inference phase - types may contain unresolved variables.
@@ -798,6 +857,7 @@ impl Phase for Infer {
     type TyVar = TypeBoundId;
     type EffectVar = EffectVarId;
     type LenVar = LenVarId;
+    type IdentityVar = IdentityVarId;
 }
 
 /// Polymorphic type - template with positional placeholders.
@@ -818,6 +878,10 @@ pub struct EffectVarId(pub u32);
 /// Index into `Solver::len_vars`. Identifies an array length inference variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LenVarId(pub u32);
+
+/// Index into `Solver::identity_vars`. Identifies an identity inference variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IdentityVarId(pub u32);
 
 // Re-export solver types - these were historically in ty.rs.
 pub use crate::solver::{FreezeError, Solver, SolverSnapshot, TypeBound};
@@ -855,6 +919,7 @@ pub enum TyTerm<V: Phase> {
         id: QualifiedRef,
         type_args: Vec<TyTerm<V>>,
         effect_args: Vec<EffectTerm<V>>,
+        identity_args: Vec<IdentityTerm<V>>,
     },
     Enum {
         name: Astr,
@@ -862,7 +927,6 @@ pub enum TyTerm<V: Phase> {
     },
     // Resources
     Handle(Box<TyTerm<V>>),
-    Identity(IdentityId),
     Ref(Box<TyTerm<V>>, bool),
     // Special
     Error(ErrorToken),
@@ -898,7 +962,7 @@ impl<V: Phase> TyTerm<V> {
     pub fn map<W: Phase>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
-        on_identity: &mut impl FnMut(IdentityId) -> TyTerm<W>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
     ) -> TyTerm<W> {
@@ -951,6 +1015,7 @@ impl<V: Phase> TyTerm<V> {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => TyTerm::UserDefined {
                 id: *id,
                 type_args: type_args
@@ -958,6 +1023,7 @@ impl<V: Phase> TyTerm<V> {
                     .map(|t| t.map(on_var, on_identity, on_effect, on_len))
                     .collect(),
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
+                identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
             },
             TyTerm::Enum { name, variants } => TyTerm::Enum {
                 name: *name,
@@ -976,7 +1042,6 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Handle(inner) => {
                 TyTerm::Handle(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
-            TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => TyTerm::Ref(
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
                 *volatile,
@@ -990,7 +1055,7 @@ impl<V: Phase> TyTerm<V> {
     pub fn try_map<W: Phase, E>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
-        on_identity: &mut impl FnMut(IdentityId) -> Result<TyTerm<W>, E>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
     ) -> Result<TyTerm<W>, E> {
@@ -1051,6 +1116,7 @@ impl<V: Phase> TyTerm<V> {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => Ok(TyTerm::UserDefined {
                 id: *id,
                 type_args: type_args
@@ -1060,6 +1126,10 @@ impl<V: Phase> TyTerm<V> {
                 effect_args: effect_args
                     .iter()
                     .map(|e| e.try_map(on_effect))
+                    .collect::<Result<_, _>>()?,
+                identity_args: identity_args
+                    .iter()
+                    .map(|i| i.try_map(on_identity))
                     .collect::<Result<_, _>>()?,
             }),
             TyTerm::Enum { name, variants } => {
@@ -1089,7 +1159,6 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
             )?))),
-            TyTerm::Identity(id) => on_identity(*id),
             TyTerm::Ref(inner, volatile) => Ok(TyTerm::Ref(
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
                 *volatile,
@@ -1107,7 +1176,7 @@ impl<V: Phase> TyTerm<V> {
 pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
     ty.map(
         &mut |v: Infallible| match v {},
-        &mut |id| TyTerm::Identity(id),
+        &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
     )
@@ -1123,7 +1192,7 @@ pub fn lift_to_poly(ty: &Ty) -> PolyTy {
 pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
     ty.try_map(
         &mut |_: u32| Err(()),
-        &mut |id| Ok(TyTerm::Identity(id)),
+        &mut |_: u32| Err(()),
         &mut |_: u32| Err(()),
         &mut |_: u32| Err(()),
     )
@@ -1138,6 +1207,7 @@ pub struct PolyBuilder {
     next_ty: u32,
     next_effect: u32,
     next_len: u32,
+    next_identity: u32,
 }
 
 impl PolyBuilder {
@@ -1146,6 +1216,7 @@ impl PolyBuilder {
             next_ty: 0,
             next_effect: 0,
             next_len: 0,
+            next_identity: 0,
         }
     }
 
@@ -1168,11 +1239,10 @@ impl PolyBuilder {
         TyTerm::Var(id)
     }
 
-    pub fn alloc_identity(
-        &mut self,
-        factory: &mut acvus_utils::LocalFactory<IdentityId>,
-    ) -> PolyTy {
-        TyTerm::Identity(factory.next())
+    pub fn fresh_identity_var(&mut self) -> IdentityTerm<Poly> {
+        let id = self.next_identity;
+        self.next_identity += 1;
+        IdentityTerm::Var(id)
     }
 }
 
@@ -1212,6 +1282,7 @@ mod tests {
             id: fresh_qref(),
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         }
     }
 
@@ -1390,19 +1461,6 @@ mod tests {
         assert_ne!(o1, o3);
     }
 
-    #[test]
-    fn snapshot_rollback_preserves_identity_counter() {
-        let mut s = Solver::new();
-        let registry = TypeRegistry::new();
-        let _id1 = s.alloc_identity();
-        let snap = s.snapshot();
-        let id2 = s.alloc_identity();
-        s.rollback(snap);
-        let id_after = s.alloc_identity();
-        // After rollback, next_identity should be restored, so id_after == id2.
-        assert_eq!(id_after, id2, "rollback should restore identity counter");
-    }
-
     // -- Polarity-based subtyping tests --
 
     #[test]
@@ -1518,6 +1576,7 @@ mod tests {
             id,
             type_args,
             effect_args: vec![],
+            identity_args: vec![],
         }
     }
 
@@ -1661,6 +1720,7 @@ mod tests {
             qref: id,
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
+            identity_params: 0,
         });
         let decl = reg.get(id);
         assert_eq!(decl.qref, id);
@@ -1676,11 +1736,13 @@ mod tests {
             qref: id,
             type_params: vec![],
             effect_params: 0,
+            identity_params: 0,
         });
         reg.register(UserDefinedDecl {
             qref: id,
             type_params: vec![],
             effect_params: 0,
+            identity_params: 0,
         });
     }
 
@@ -1713,6 +1775,7 @@ mod tests {
             id,
             type_args: params.clone(),
             effect_args: vec![],
+            identity_args: vec![],
         };
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
@@ -1720,6 +1783,7 @@ mod tests {
             qref: id,
             type_params: vec![TyVarBound::Any; type_param_count],
             effect_params: 0,
+            identity_params: 0,
         });
         reg.register_cast(CastRule {
             from,
@@ -1742,6 +1806,7 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
+            identity_args: vec![],
         };
         let to = arr(TyTerm::Int, 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
@@ -1757,6 +1822,7 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
+            identity_args: vec![],
         };
         let consumer_param = s.fresh_ty_var();
         let to = arr(consumer_param.clone(), 3);
@@ -1774,6 +1840,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         };
         assert!(
             s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
@@ -1793,6 +1860,7 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
+            identity_args: vec![],
         };
         assert!(
             s.unify_ty(&from, &TyTerm::String, Covariant, &registry)
@@ -1812,6 +1880,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         };
         assert!(
             s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
@@ -1829,6 +1898,7 @@ mod tests {
             id,
             type_args: vec![],
             effect_args: vec![],
+            identity_args: vec![],
         };
         assert!(
             s.unify_ty(&from, &TyTerm::Int, Invariant, &registry)
@@ -1857,6 +1927,7 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -1867,6 +1938,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -1878,6 +1950,7 @@ mod tests {
             qref: id,
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
+            identity_params: 0,
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
@@ -1886,6 +1959,7 @@ mod tests {
             id,
             type_args: vec![TyTerm::Int],
             effect_args: vec![],
+            identity_args: vec![],
         };
         assert!(
             s.unify_ty(&from, &arr(TyTerm::Int, 3), Covariant, &reg)
@@ -1911,12 +1985,14 @@ mod tests {
             qref: id,
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
+            identity_params: 0,
         });
         reg.register_cast(CastRule {
             from: TyTerm::UserDefined {
                 id,
                 type_args: vec![t.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: arr(t.clone(), 3),
             fn_ref: fn_id_a,
@@ -1929,6 +2005,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -1948,6 +2025,7 @@ mod tests {
             qref: id,
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
+            identity_params: 0,
         });
         let mut builder1 = PolyBuilder::new();
         let t1 = builder1.fresh_ty_var();
@@ -1956,6 +2034,7 @@ mod tests {
                 id,
                 type_args: vec![t1.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -1968,6 +2047,7 @@ mod tests {
                 id,
                 type_args: vec![t2.clone()],
                 effect_args: vec![],
+                identity_args: vec![],
             },
             to: TyTerm::Option(Box::new(t2)),
             fn_ref: fn_id_b,

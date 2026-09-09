@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, LenTerm, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -37,13 +37,6 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
         namespace: r.namespace.as_ref().map(|ns| interner.intern(ns)),
         name: interner.intern(&r.name),
     }
-}
-
-/// Serializable mirror of [`IdentityId`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SerIdentity {
-    pub id: u32,
 }
 
 /// Serializable mirror of [`Ty`].
@@ -76,6 +69,7 @@ pub enum SerTy {
         id: SerQualifiedRef,
         type_args: Vec<SerTy>,
         effect_args: Vec<Effect>,
+        identity_args: Vec<u32>,
     },
     Option {
         inner: Box<SerTy>,
@@ -84,7 +78,6 @@ pub enum SerTy {
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
     },
-    Identity(SerIdentity),
 }
 
 impl Ty {
@@ -125,10 +118,15 @@ impl Ty {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| e.get()).collect(),
+                identity_args: identity_args
+                    .iter()
+                    .map(|i| i.get().to_raw() as u32)
+                    .collect(),
             },
             Ty::Option(inner) => SerTy::Option {
                 inner: Box::new(inner.to_ser(interner)),
@@ -145,9 +143,6 @@ impl Ty {
                     })
                     .collect(),
             },
-            Ty::Identity(id) => SerTy::Identity(SerIdentity {
-                id: id.to_raw() as u32,
-            }),
             Ty::Handle(..) => todo!("Handle serialization not yet implemented"),
             Ty::Ref(..) => todo!("Ref serialization not yet implemented"),
             Ty::Var(v) => match *v {},
@@ -193,10 +188,15 @@ impl SerTy {
                 id,
                 type_args,
                 effect_args,
+                identity_args,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
                 effect_args: effect_args.iter().map(|e| EffectTerm::Known(*e)).collect(),
+                identity_args: identity_args
+                    .iter()
+                    .map(|i| IdentityTerm::Known(IdentityId::from_raw(*i as usize)))
+                    .collect(),
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
             SerTy::Enum { name, variants } => Ty::Enum {
@@ -211,7 +211,6 @@ impl SerTy {
                     })
                     .collect(),
             },
-            SerTy::Identity(ser_id) => Ty::Identity(IdentityId::from_raw(ser_id.id as usize)),
         }
     }
 }
@@ -239,6 +238,7 @@ mod tests {
             id: QualifiedRef::root(i.intern("Iterator")),
             type_args: vec![Ty::Int],
             effect_args: vec![Effect::Opaque.into()],
+            identity_args: vec![],
         };
         assert_eq!(ud.to_ser(&i).to_ty(&i), ud);
     }

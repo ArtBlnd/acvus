@@ -12,6 +12,7 @@ pub enum VarKind {
     Ty,
     Effect,
     Len,
+    Identity,
     /// The runtime parameter: at most one, bounded by `Runtime`.
     Runtime,
 }
@@ -89,12 +90,12 @@ fn mono_members<'a>(
 impl Vars {
     pub fn from_generics(generics: &Generics) -> syn::Result<Self> {
         let mut vars = Vec::new();
-        let mut counts = [0usize; 4];
+        let mut counts = [0usize; 5];
         for param in &generics.params {
             let GenericParam::Type(tp) = param else {
                 return Err(syn::Error::new(
                     span_of(param),
-                    "only type parameters bounded by TyVar, EffectVar, LenVar, or Runtime are allowed",
+                    "only type parameters bounded by TyVar, EffectVar, LenVar, IdentityVar, Monomorphize, or Runtime are allowed",
                 ));
             };
             let kinds: Vec<VarKind> = bounds_of(generics, tp)
@@ -103,6 +104,7 @@ impl Vars {
                     "TyVar" => Some(VarKind::Ty),
                     "EffectVar" => Some(VarKind::Effect),
                     "LenVar" => Some(VarKind::Len),
+                    "IdentityVar" => Some(VarKind::Identity),
                     "Runtime" => Some(VarKind::Runtime),
                     _ => None,
                 })
@@ -114,7 +116,7 @@ impl Vars {
                 _ => {
                     return Err(syn::Error::new(
                         tp.ident.span(),
-                        "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, Runtime, Monomorphize",
+                        "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, IdentityVar, Runtime, Monomorphize",
                     ));
                 }
             };
@@ -155,13 +157,27 @@ impl Vars {
             .map(|v| (v.kind, v.index))
     }
 
-    pub fn counts(&self) -> (usize, usize, usize) {
+    /// `VarCounts { .. }` for this declaration, as an expression.
+    pub fn counts_expr(&self) -> TokenStream {
         let count = |k| self.0.iter().filter(|v| v.kind == k).count();
-        (
+        let (tys, effects, lens, identities) = (
             count(VarKind::Ty),
             count(VarKind::Effect),
             count(VarKind::Len),
-        )
+            count(VarKind::Identity),
+        );
+        quote! {
+            ::acvus_extern::VarCounts {
+                tys: #tys,
+                effects: #effects,
+                lens: #lens,
+                identities: #identities,
+            }
+        }
+    }
+
+    pub fn count(&self, kind: VarKind) -> usize {
+        self.0.iter().filter(|v| v.kind == kind).count()
     }
 
     pub fn has_len_vars(&self) -> bool {
@@ -198,6 +214,7 @@ impl Vars {
             VarKind::Ty => syn::parse_quote! { ::acvus_extern::Typeck<#k> },
             VarKind::Effect => syn::parse_quote! { ::acvus_extern::Eff<#k> },
             VarKind::Len => syn::parse_quote! { ::acvus_extern::Len<#k> },
+            VarKind::Identity => syn::parse_quote! { ::acvus_extern::Idn<#k> },
             VarKind::Runtime => syn::parse_quote! { __R },
         }
     }
@@ -205,7 +222,7 @@ impl Vars {
     fn runtime_stand_in(v: &Var) -> Type {
         match v.kind {
             VarKind::Ty => syn::parse_quote! { <__R as ::acvus_extern::Runtime>::Value },
-            VarKind::Effect | VarKind::Len => syn::parse_quote! { () },
+            VarKind::Effect | VarKind::Len | VarKind::Identity => syn::parse_quote! { () },
             VarKind::Runtime => syn::parse_quote! { __R },
         }
     }
@@ -292,6 +309,7 @@ impl Vars {
                 VarKind::Ty => quote! { #ident: ::acvus_extern::TyArg + ::acvus_extern::TyVar },
                 VarKind::Effect => quote! { #ident: ::acvus_extern::EffectArg },
                 VarKind::Len => quote! { #ident: ::acvus_extern::LenArg },
+                VarKind::Identity => quote! { #ident: ::acvus_extern::IdentityArg },
                 VarKind::Runtime => quote! { #ident: ::acvus_extern::Runtime },
             }
         });
@@ -305,6 +323,17 @@ impl Vars {
             .map(|v| {
                 let ident = &v.ident;
                 quote! { <#ident as ::acvus_extern::TyArg>::poly_ty(__i, __vars) }
+            })
+            .collect()
+    }
+
+    pub fn identity_arg_exprs(&self) -> Vec<TokenStream> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Identity)
+            .map(|v| {
+                let ident = &v.ident;
+                quote! { <#ident as ::acvus_extern::IdentityArg>::poly_identity(__vars) }
             })
             .collect()
     }

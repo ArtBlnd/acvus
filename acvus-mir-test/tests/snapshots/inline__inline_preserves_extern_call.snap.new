@@ -1,0 +1,11 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 165
+expression: ir
+---
+=== main ===
+     1 |   r0 = call #0(42 (r1))
+     2 |   return r0
+
+    ; r0 (to_string(...)) : String
+    ; r1 (v1) : Int
