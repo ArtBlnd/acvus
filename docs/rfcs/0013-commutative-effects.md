@@ -32,7 +32,13 @@ axis, as before.
 
 The declaration is the author's fact about the outside world, like purity.
 The compiler does not verify it, and a wrong declaration is a wrong
-library.
+library. An executor may look for a counterexample the way RFC-0007
+allows for a block: run a run's calls in more than one order, issue an
+Idempotent call twice, and compare what the program observes. Two
+outcomes are compared up to a renaming of fresh sources, which identity
+already marks, so two fresh values in swapped positions are not a
+difference. What lies outside the program is compared only where the
+test supplies a world it can reset.
 
 ## Rationale
 
