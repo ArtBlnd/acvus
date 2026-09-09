@@ -56,7 +56,10 @@ impl Parse for ExternFnAttr {
             } else if key == "effect" {
                 out.effect = Some(input.parse()?);
             } else {
-                return Err(syn::Error::new(key.span(), "expected `name`, `ns`, or `effect`"));
+                return Err(syn::Error::new(
+                    key.span(),
+                    "expected `name`, `ns`, or `effect`",
+                ));
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
@@ -79,7 +82,10 @@ struct ExternReturn {
     is_result: bool,
 }
 
-fn generate_extern_fn(attr: ExternFnAttr, func: &mut ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+fn generate_extern_fn(
+    attr: ExternFnAttr,
+    func: &mut ItemFn,
+) -> syn::Result<proc_macro2::TokenStream> {
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
@@ -223,7 +229,10 @@ fn parse_params(func: &ItemFn, is_async: bool) -> syn::Result<Vec<ExternParam>> 
     let mut params = Vec::new();
     for (i, arg) in inputs.enumerate() {
         let FnArg::Typed(pat_type) = arg else {
-            return Err(syn::Error::new_spanned(arg, "an extern_fn has no self parameter"));
+            return Err(syn::Error::new_spanned(
+                arg,
+                "an extern_fn has no self parameter",
+            ));
         };
         let name = match pat_type.pat.as_ref() {
             Pat::Ident(p) => p.ident.to_string(),
@@ -239,10 +248,17 @@ fn parse_params(func: &ItemFn, is_async: bool) -> syn::Result<Vec<ExternParam>> 
 
 fn check_interner_param(arg: &FnArg, is_async: bool) -> syn::Result<()> {
     let FnArg::Typed(pat_type) = arg else {
-        return Err(syn::Error::new_spanned(arg, "an extern_fn has no self parameter"));
+        return Err(syn::Error::new_spanned(
+            arg,
+            "an extern_fn has no self parameter",
+        ));
     };
     let is_interner_path = |ty: &Type| match ty {
-        Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "Interner"),
+        Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "Interner"),
         _ => false,
     };
     let ok = match (pat_type.ty.as_ref(), is_async) {
@@ -367,7 +383,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let syn::Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new(ident.span(), "ExternType is derived on a struct"));
+        return Err(syn::Error::new(
+            ident.span(),
+            "ExternType is derived on a struct",
+        ));
     };
     let syn::Fields::Unnamed(fields) = &data.fields else {
         return Err(syn::Error::new(
@@ -377,13 +396,20 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
     let mut field_iter = fields.unnamed.iter();
     let Some(payload) = field_iter.next() else {
-        return Err(syn::Error::new(ident.span(), "an extension type has a payload field"));
+        return Err(syn::Error::new(
+            ident.span(),
+            "an extension type has a payload field",
+        ));
     };
     let payload_ty = &payload.ty;
     let mut phantoms = 0usize;
     for extra in field_iter {
         let is_phantom = match &extra.ty {
-            Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "PhantomData"),
+            Type::Path(p) => p
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "PhantomData"),
             _ => false,
         };
         if !is_phantom {
@@ -508,10 +534,16 @@ pub fn derive_ty_arg(input: TokenStream) -> TokenStream {
 fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     if !input.generics.params.is_empty() {
-        return Err(syn::Error::new(ident.span(), "a structural object has no generic parameters"));
+        return Err(syn::Error::new(
+            ident.span(),
+            "a structural object has no generic parameters",
+        ));
     }
     let syn::Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new(ident.span(), "TyArg is derived on a struct"));
+        return Err(syn::Error::new(
+            ident.span(),
+            "TyArg is derived on a struct",
+        ));
     };
     let syn::Fields::Named(fields) = &data.fields else {
         return Err(syn::Error::new(
@@ -519,7 +551,11 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             "TyArg is derived on a struct with named fields, one per object field",
         ));
     };
-    let field_idents: Vec<&Ident> = fields.named.iter().map(|f| f.ident.as_ref().expect("named")).collect();
+    let field_idents: Vec<&Ident> = fields
+        .named
+        .iter()
+        .map(|f| f.ident.as_ref().expect("named"))
+        .collect();
     let field_names: Vec<String> = field_idents.iter().map(|f| f.to_string()).collect();
     let field_tys: Vec<&Type> = fields.named.iter().map(|f| &f.ty).collect();
 
@@ -598,10 +634,12 @@ impl Parse for RegistryInput {
             let content;
             syn::bracketed!(content in input);
             if key == "types" {
-                let list: Punctuated<Type, Token![,]> = content.parse_terminated(Type::parse, Token![,])?;
+                let list: Punctuated<Type, Token![,]> =
+                    content.parse_terminated(Type::parse, Token![,])?;
                 types.extend(list);
             } else if key == "fns" {
-                let list: Punctuated<Path, Token![,]> = content.parse_terminated(Path::parse, Token![,])?;
+                let list: Punctuated<Path, Token![,]> =
+                    content.parse_terminated(Path::parse, Token![,])?;
                 fns.extend(list);
             } else {
                 return Err(syn::Error::new(key.span(), "expected `types` or `fns`"));

@@ -1,9 +1,14 @@
 //! Type conversions. All pure.
 
-use acvus_extern::{ExternRegistry, Interner, RuntimeError, TyVar, Value, ValueKind, extern_fn, extern_registry};
+use acvus_extern::{
+    ExternRegistry, Interner, RuntimeError, TyVar, Value, ValueKind, extern_fn, extern_registry,
+};
 
 #[extern_fn(effect = pure)]
-fn to_string<T: TyVar>(i: &Interner, val: T) -> String {
+fn to_string<T>(i: &Interner, val: T) -> String
+where
+    T: TyVar,
+{
     match val.into_value(i) {
         Value::Int(n) => n.to_string(),
         Value::Float(f) => f.to_string(),
@@ -16,7 +21,10 @@ fn to_string<T: TyVar>(i: &Interner, val: T) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn to_int<T: TyVar>(i: &Interner, val: T) -> Result<i64, RuntimeError> {
+fn to_int<T>(i: &Interner, val: T) -> Result<i64, RuntimeError>
+where
+    T: TyVar,
+{
     let val = val.into_value(i);
     match &val {
         Value::Int(n) => Ok(*n),
@@ -27,7 +35,12 @@ fn to_int<T: TyVar>(i: &Interner, val: T) -> Result<i64, RuntimeError> {
         Value::Bool(b) => Ok(i64::from(*b)),
         _ => Err(RuntimeError::unexpected_type(
             "to_int",
-            &[ValueKind::Int, ValueKind::Float, ValueKind::String, ValueKind::Bool],
+            &[
+                ValueKind::Int,
+                ValueKind::Float,
+                ValueKind::String,
+                ValueKind::Bool,
+            ],
             val.kind(),
         )),
     }
@@ -48,11 +61,15 @@ fn char_to_int(_: &Interner, s: String) -> Result<i64, RuntimeError> {
 
 #[extern_fn(effect = pure)]
 fn int_to_char(_: &Interner, n: i64) -> Result<String, RuntimeError> {
-    let code = u32::try_from(n)
-        .map_err(|_| RuntimeError::extern_call("int_to_char", format!("{n} is not a code point")))?;
+    let code = u32::try_from(n).map_err(|_| {
+        RuntimeError::extern_call("int_to_char", format!("{n} is not a code point"))
+    })?;
     match char::from_u32(code) {
         Some(c) => Ok(c.to_string()),
-        None => Err(RuntimeError::extern_call("int_to_char", format!("{n} is not a code point"))),
+        None => Err(RuntimeError::extern_call(
+            "int_to_char",
+            format!("{n} is not a code point"),
+        )),
     }
 }
 

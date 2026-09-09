@@ -3,12 +3,18 @@
 use acvus_extern::{ExternRegistry, Interner, RuntimeError, TyVar, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
-fn unwrap<T: TyVar>(_: &Interner, val: Option<T>) -> Result<T, RuntimeError> {
+fn unwrap<T>(_: &Interner, val: Option<T>) -> Result<T, RuntimeError>
+where
+    T: TyVar,
+{
     val.ok_or_else(|| RuntimeError::extern_call("unwrap", "called on None"))
 }
 
 #[extern_fn(effect = pure)]
-fn unwrap_or<T: TyVar>(_: &Interner, val: Option<T>, default: T) -> T {
+fn unwrap_or<T>(_: &Interner, val: Option<T>, default: T) -> T
+where
+    T: TyVar,
+{
     val.unwrap_or(default)
 }
 

@@ -19,7 +19,7 @@ pub trait LenArg: 'static {
 
 pub trait LenVar: 'static {}
 
-impl<N: LenArg> LenVar for N {}
+impl<N> LenVar for N where N: LenArg {}
 impl LenVar for () {}
 
 /// The K-th length variable of a declaration. Uninhabited.
@@ -32,21 +32,36 @@ impl<const K: usize> LenArg for Len<K> {
 }
 
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
-pub struct Arr<T: TyVar, N: LenVar>(pub Vec<T>, PhantomData<N>);
+pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
+where
+    T: TyVar,
+    N: LenVar;
 
-impl<T: TyVar, N: LenVar> Arr<T, N> {
+impl<T, N> Arr<T, N>
+where
+    T: TyVar,
+    N: LenVar,
+{
     pub fn new(items: Vec<T>) -> Self {
         Self(items, PhantomData)
     }
 }
 
-impl<T: TyArg + TyVar, N: LenArg> TyArg for Arr<T, N> {
+impl<T, N> TyArg for Arr<T, N>
+where
+    T: TyArg + TyVar,
+    N: LenArg,
+{
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), N::poly_len(vars))
     }
 }
 
-impl<T: TyVar, N: LenVar> FromValue for Arr<T, N> {
+impl<T, N> FromValue for Arr<T, N>
+where
+    T: TyVar,
+    N: LenVar,
+{
     fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
         match value {
             Value::Array(items) => {
@@ -66,7 +81,11 @@ impl<T: TyVar, N: LenVar> FromValue for Arr<T, N> {
     }
 }
 
-impl<T: TyVar, N: LenVar> IntoValue for Arr<T, N> {
+impl<T, N> IntoValue for Arr<T, N>
+where
+    T: TyVar,
+    N: LenVar,
+{
     fn into_value(self, interner: &Interner) -> Value {
         Value::array(self.0.into_iter().map(|v| v.into_value(interner)).collect())
     }

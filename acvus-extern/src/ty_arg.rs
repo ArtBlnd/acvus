@@ -44,7 +44,7 @@ pub trait TyArg: 'static {
 /// runtime.
 pub trait TyVar: FromValue + IntoValue + 'static {}
 
-impl<T: FromValue + IntoValue + 'static> TyVar for T {}
+impl<T> TyVar for T where T: FromValue + IntoValue + 'static {}
 
 /// Compile-time stand-in for the N-th type variable of a declaration.
 /// Uninhabited: it names a type and is never a value.
@@ -58,7 +58,9 @@ impl<const N: usize> TyArg for Typeck<N> {
 
 impl<const N: usize> FromValue for Typeck<N> {
     fn from_value(_: Value, _: &Interner) -> Result<Self, RuntimeError> {
-        Err(RuntimeError::internal("Typeck is a compile-time stand-in, never a runtime value"))
+        Err(RuntimeError::internal(
+            "Typeck is a compile-time stand-in, never a runtime value",
+        ))
     }
 }
 
@@ -85,13 +87,19 @@ impl_scalar_ty_arg!(bool, Bool);
 impl_scalar_ty_arg!(u8, Byte);
 impl_scalar_ty_arg!((), Unit);
 
-impl<T: TyArg, const N: usize> TyArg for [T; N] {
+impl<T, const N: usize> TyArg for [T; N]
+where
+    T: TyArg,
+{
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), LenTerm::Known(N))
     }
 }
 
-impl<T: TyArg> TyArg for Option<T> {
+impl<T> TyArg for Option<T>
+where
+    T: TyArg,
+{
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Option(Box::new(T::poly_ty(i, vars)))
     }
@@ -99,7 +107,10 @@ impl<T: TyArg> TyArg for Option<T> {
 
 macro_rules! impl_tuple_ty_arg {
     ($($T:ident),+) => {
-        impl<$($T: TyArg),+> TyArg for ($($T,)+) {
+        impl<$($T),+> TyArg for ($($T,)+)
+        where
+            $($T: TyArg,)+
+        {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::Tuple(vec![$($T::poly_ty(i, vars)),+])
             }

@@ -4,8 +4,8 @@
 //! `EffectVar` is the bound of a generic parameter that is an effect
 //! variable; `()` fills it at runtime.
 
-use acvus_mir::ty::{Effect, EffectTerm, Poly};
 use crate::ty_arg::PolyVars;
+use acvus_mir::ty::{Effect, EffectTerm, Poly};
 
 pub trait EffectArg: 'static {
     fn poly_effect(vars: &PolyVars) -> EffectTerm<Poly>;
@@ -13,7 +13,7 @@ pub trait EffectArg: 'static {
 
 pub trait EffectVar: 'static {}
 
-impl<E: EffectArg> EffectVar for E {}
+impl<E> EffectVar for E where E: EffectArg {}
 impl EffectVar for () {}
 
 /// The K-th effect variable of a declaration. Uninhabited.

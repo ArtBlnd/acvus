@@ -8,7 +8,9 @@ use acvus_interpreter::{
     into_sync_extern_handler,
 };
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyTy, TypeRegistry, UserDefinedDecl};
+use acvus_mir::ty::{
+    CastRule, Effect, EffectTerm, ParamTerm, Poly, PolyTy, TypeRegistry, UserDefinedDecl,
+};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -83,11 +85,21 @@ impl ExternRegistry {
 }
 
 fn cast_rule(f: &ExternFn) -> CastRule {
-    let PolyTy::Fn { params, ret, effect, .. } = &f.ty else {
+    let PolyTy::Fn {
+        params,
+        ret,
+        effect,
+        ..
+    } = &f.ty
+    else {
         panic!("cast {:?}: type is not a function", f.qref);
     };
     let [param] = params.as_slice() else {
-        panic!("cast {:?}: expected exactly one parameter, got {}", f.qref, params.len());
+        panic!(
+            "cast {:?}: expected exactly one parameter, got {}",
+            f.qref,
+            params.len()
+        );
     };
     assert_eq!(
         *effect,
@@ -186,7 +198,10 @@ impl_handlers!(A: a, B: b, C: c, D: d);
 impl ExternFn {
     /// A concrete, stateful ExternFn from a synchronous closure. The effect
     /// is set afterwards with `with_effect`; undeclared is Opaque.
-    pub fn sync<Args, F: SyncHandler<Args>>(interner: &Interner, name: &str, f: F) -> Self {
+    pub fn sync<Args, F>(interner: &Interner, name: &str, f: F) -> Self
+    where
+        F: SyncHandler<Args>,
+    {
         Self {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: F::signature(interner),

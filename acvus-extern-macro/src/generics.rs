@@ -2,7 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{GenericParam, Generics, Ident, Type};
+use syn::{GenericParam, Generics, Ident, Type, TypeParam, TypeParamBound, WherePredicate};
 
 use crate::{bound_ident, span_of, subst};
 
@@ -22,6 +22,27 @@ pub struct Var {
 
 pub struct Vars(Vec<Var>);
 
+/// The bounds on `tp`, written inline or in the where clause.
+fn bounds_of<'a>(
+    generics: &'a Generics,
+    tp: &'a TypeParam,
+) -> impl Iterator<Item = &'a TypeParamBound> {
+    let from_where = generics
+        .where_clause
+        .iter()
+        .flat_map(|w| w.predicates.iter())
+        .filter_map(|p| match p {
+            WherePredicate::Type(pt) => Some(pt),
+            _ => None,
+        })
+        .filter(move |pt| match &pt.bounded_ty {
+            Type::Path(path) => path.qself.is_none() && path.path.is_ident(&tp.ident),
+            _ => false,
+        })
+        .flat_map(|pt| pt.bounds.iter());
+    tp.bounds.iter().chain(from_where)
+}
+
 impl Vars {
     pub fn from_generics(generics: &Generics) -> syn::Result<Self> {
         let mut vars = Vec::new();
@@ -33,9 +54,7 @@ impl Vars {
                     "only type parameters bounded by TyVar, EffectVar, or LenVar are allowed",
                 ));
             };
-            let kinds: Vec<VarKind> = tp
-                .bounds
-                .iter()
+            let kinds: Vec<VarKind> = bounds_of(generics, tp)
                 .filter_map(bound_ident)
                 .filter_map(|b| match b.to_string().as_str() {
                     "TyVar" => Some(VarKind::Ty),
@@ -62,12 +81,19 @@ impl Vars {
     }
 
     pub fn lookup(&self, ident: &Ident) -> Option<(VarKind, usize)> {
-        self.0.iter().find(|v| v.ident == *ident).map(|v| (v.kind, v.index))
+        self.0
+            .iter()
+            .find(|v| v.ident == *ident)
+            .map(|v| (v.kind, v.index))
     }
 
     pub fn counts(&self) -> (usize, usize, usize) {
         let count = |k| self.0.iter().filter(|v| v.kind == k).count();
-        (count(VarKind::Ty), count(VarKind::Effect), count(VarKind::Len))
+        (
+            count(VarKind::Ty),
+            count(VarKind::Effect),
+            count(VarKind::Len),
+        )
     }
 
     pub fn has_len_vars(&self) -> bool {
@@ -92,13 +118,19 @@ impl Vars {
 
     pub fn to_compile_time(&self, ty: &Type) -> Type {
         subst::substitute(ty, &|ident| {
-            self.0.iter().find(|v| v.ident == *ident).map(Self::compile_time_stand_in)
+            self.0
+                .iter()
+                .find(|v| v.ident == *ident)
+                .map(Self::compile_time_stand_in)
         })
     }
 
     pub fn to_runtime(&self, ty: &Type) -> Type {
         subst::substitute(ty, &|ident| {
-            self.0.iter().find(|v| v.ident == *ident).map(Self::runtime_stand_in)
+            self.0
+                .iter()
+                .find(|v| v.ident == *ident)
+                .map(Self::runtime_stand_in)
         })
     }
 

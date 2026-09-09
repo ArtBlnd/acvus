@@ -7,8 +7,8 @@
 //!   find, reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, EffectVar, ExternRegistry, Fn1, Fn2, FromValue, Interner, LenVar, RuntimeError,
-    TyVar, extern_fn, extern_registry,
+    Arr, EffectVar, ExternRegistry, Fn1, Fn2, FromValue, Interner, LenVar, RuntimeError, TyVar,
+    extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::{Iter, IterHandle, exec_next};
@@ -20,56 +20,99 @@ fn count(name: &'static str, n: i64) -> Result<usize, RuntimeError> {
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter<T: TyVar, E: EffectVar>(i: &Interner, items: List<T>) -> Iter<T, E> {
+fn iter<T, E>(i: &Interner, items: List<T>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let values = items.0.into_iter().map(|v| v.into_value(i)).collect();
     Iter::new(IterHandle::from_list(values))
 }
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter_array<T: TyVar, N: LenVar, E: EffectVar>(i: &Interner, items: Arr<T, N>) -> Iter<T, E> {
+fn iter_array<T, N, E>(i: &Interner, items: Arr<T, N>) -> Iter<T, E>
+where
+    T: TyVar,
+    N: LenVar,
+    E: EffectVar,
+{
     let values = items.0.into_iter().map(|v| v.into_value(i)).collect();
     Iter::new(IterHandle::from_list(values))
 }
 
 #[extern_fn(effect = pure)]
-fn rev_iter<T: TyVar, E: EffectVar>(i: &Interner, items: List<T>) -> Iter<T, E> {
+fn rev_iter<T, E>(i: &Interner, items: List<T>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let values = items.0.into_iter().rev().map(|v| v.into_value(i)).collect();
     Iter::new(IterHandle::from_list(values))
 }
 
 #[extern_fn(effect = pure)]
-fn map<T: TyVar, U: TyVar, E: EffectVar>(_: &Interner, it: Iter<T, E>, f: Fn1<T, U, E>) -> Iter<U, E> {
+fn map<T, U, E>(_: &Interner, it: Iter<T, E>, f: Fn1<T, U, E>) -> Iter<U, E>
+where
+    T: TyVar,
+    U: TyVar,
+    E: EffectVar,
+{
     Iter::new(it.0.map(f.0))
 }
 
 #[extern_fn(effect = pure)]
-fn pmap<T: TyVar, U: TyVar, E: EffectVar>(_: &Interner, it: Iter<T, E>, f: Fn1<T, U, E>) -> Iter<U, E> {
+fn pmap<T, U, E>(_: &Interner, it: Iter<T, E>, f: Fn1<T, U, E>) -> Iter<U, E>
+where
+    T: TyVar,
+    U: TyVar,
+    E: EffectVar,
+{
     Iter::new(it.0.map(f.0))
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T: TyVar, E: EffectVar>(_: &Interner, it: Iter<T, E>, f: Fn1<T, bool, E>) -> Iter<T, E> {
+fn filter<T, E>(_: &Interner, it: Iter<T, E>, f: Fn1<T, bool, E>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     Iter::new(it.0.filter(f.0))
 }
 
 #[extern_fn(effect = pure)]
-fn take<T: TyVar, E: EffectVar>(_: &Interner, it: Iter<T, E>, n: i64) -> Result<Iter<T, E>, RuntimeError> {
+fn take<T, E>(_: &Interner, it: Iter<T, E>, n: i64) -> Result<Iter<T, E>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     Ok(Iter::new(it.0.take(count("take", n)?)))
 }
 
 #[extern_fn(effect = pure)]
-fn skip<T: TyVar, E: EffectVar>(_: &Interner, it: Iter<T, E>, n: i64) -> Result<Iter<T, E>, RuntimeError> {
+fn skip<T, E>(_: &Interner, it: Iter<T, E>, n: i64) -> Result<Iter<T, E>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     Ok(Iter::new(it.0.skip(count("skip", n)?)))
 }
 
 #[extern_fn(effect = pure)]
-fn chain<T: TyVar, E: EffectVar>(_: &Interner, a: Iter<T, E>, b: Iter<T, E>) -> Iter<T, E> {
+fn chain<T, E>(_: &Interner, a: Iter<T, E>, b: Iter<T, E>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     Iter::new(a.0.chain(b.0))
 }
 
 #[extern_fn(effect = pure)]
-fn pchain<T: TyVar, E: EffectVar>(_: &Interner, parts: List<Iter<T, E>>) -> Iter<T, E> {
+fn pchain<T, E>(_: &Interner, parts: List<Iter<T, E>>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let mut chained = IterHandle::done();
     for part in parts.0 {
         chained = chained.chain(part.0);
@@ -78,26 +121,40 @@ fn pchain<T: TyVar, E: EffectVar>(_: &Interner, parts: List<Iter<T, E>>) -> Iter
 }
 
 #[extern_fn(effect = pure)]
-fn flatten<T: TyVar, E: EffectVar>(_: &Interner, it: Iter<List<T>, E>) -> Iter<T, E> {
+fn flatten<T, E>(_: &Interner, it: Iter<List<T>, E>) -> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     Iter::new(it.0.flatten())
 }
 
 #[extern_fn(effect = pure)]
-fn flatten_arrays<T: TyVar, N: LenVar, E: EffectVar>(_: &Interner, it: Iter<Arr<T, N>, E>) -> Iter<T, E> {
+fn flatten_arrays<T, N, E>(_: &Interner, it: Iter<Arr<T, N>, E>) -> Iter<T, E>
+where
+    T: TyVar,
+    N: LenVar,
+    E: EffectVar,
+{
     Iter::new(it.0.flatten())
 }
 
 #[extern_fn(effect = pure)]
-fn flat_map<T: TyVar, U: TyVar, E: EffectVar>(
-    _: &Interner,
-    it: Iter<T, E>,
-    f: Fn1<T, Iter<U, E>, E>,
-) -> Iter<U, E> {
+fn flat_map<T, U, E>(_: &Interner, it: Iter<T, E>, f: Fn1<T, Iter<U, E>, E>) -> Iter<U, E>
+where
+    T: TyVar,
+    U: TyVar,
+    E: EffectVar,
+{
     Iter::new(it.0.flat_map(f.0))
 }
 
 #[extern_fn(effect = E)]
-async fn collect<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Result<List<T>, RuntimeError> {
+async fn collect<T, E>(i: Interner, mut it: Iter<T, E>) -> Result<List<T>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let mut items = Vec::new();
     while let Some(val) = exec_next(&mut it.0).await? {
         items.push(T::from_value(val, &i)?);
@@ -106,7 +163,10 @@ async fn collect<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Res
 }
 
 #[extern_fn(effect = E)]
-async fn join<E: EffectVar>(i: Interner, mut it: Iter<String, E>, sep: String) -> Result<String, RuntimeError> {
+async fn join<E>(i: Interner, mut it: Iter<String, E>, sep: String) -> Result<String, RuntimeError>
+where
+    E: EffectVar,
+{
     let mut parts = Vec::new();
     while let Some(val) = exec_next(&mut it.0).await? {
         parts.push(String::from_value(val, &i)?);
@@ -115,7 +175,11 @@ async fn join<E: EffectVar>(i: Interner, mut it: Iter<String, E>, sep: String) -
 }
 
 #[extern_fn(effect = E)]
-async fn first<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Result<Option<T>, RuntimeError> {
+async fn first<T, E>(i: Interner, mut it: Iter<T, E>) -> Result<Option<T>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     match exec_next(&mut it.0).await? {
         Some(val) => Ok(Some(T::from_value(val, &i)?)),
         None => Ok(None),
@@ -123,7 +187,11 @@ async fn first<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Resul
 }
 
 #[extern_fn(effect = E)]
-async fn last<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Result<Option<T>, RuntimeError> {
+async fn last<T, E>(i: Interner, mut it: Iter<T, E>) -> Result<Option<T>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let mut last = None;
     while let Some(val) = exec_next(&mut it.0).await? {
         last = Some(val);
@@ -135,7 +203,11 @@ async fn last<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>) -> Result
 }
 
 #[extern_fn(effect = E)]
-async fn contains<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, needle: T) -> Result<bool, RuntimeError> {
+async fn contains<T, E>(i: Interner, mut it: Iter<T, E>, needle: T) -> Result<bool, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let needle = needle.into_value(&i);
     while let Some(val) = exec_next(&mut it.0).await? {
         if val.structural_eq(&needle) {
@@ -146,10 +218,14 @@ async fn contains<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, needl
 }
 
 #[extern_fn(effect = E)]
-async fn next<T: TyVar, E: EffectVar>(
+async fn next<T, E>(
     i: Interner,
     mut it: Iter<T, E>,
-) -> Result<Option<(T, Iter<T, E>)>, RuntimeError> {
+) -> Result<Option<(T, Iter<T, E>)>, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     match exec_next(&mut it.0).await? {
         Some(val) => Ok(Some((T::from_value(val, &i)?, it))),
         None => Ok(None),
@@ -157,19 +233,35 @@ async fn next<T: TyVar, E: EffectVar>(
 }
 
 #[extern_fn(effect = E)]
-async fn find<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn1<T, bool, E>) -> Result<T, RuntimeError> {
+async fn find<T, E>(i: Interner, mut it: Iter<T, E>, f: Fn1<T, bool, E>) -> Result<T, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     while let Some(val) = exec_next(&mut it.0).await? {
         if f.call(&i, T::from_value(val.clone(), &i)?).await? {
             return Ok(T::from_value(val, &i)?);
         }
     }
-    Err(RuntimeError::empty_collection(acvus_interpreter::error::CollectionOp::Find))
+    Err(RuntimeError::empty_collection(
+        acvus_interpreter::error::CollectionOp::Find,
+    ))
 }
 
 #[extern_fn(effect = E)]
-async fn reduce<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn2<T, T, T, E>) -> Result<T, RuntimeError> {
+async fn reduce<T, E>(
+    i: Interner,
+    mut it: Iter<T, E>,
+    f: Fn2<T, T, T, E>,
+) -> Result<T, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     let Some(first) = exec_next(&mut it.0).await? else {
-        return Err(RuntimeError::empty_collection(acvus_interpreter::error::CollectionOp::Reduce));
+        return Err(RuntimeError::empty_collection(
+            acvus_interpreter::error::CollectionOp::Reduce,
+        ));
     };
     let mut acc = T::from_value(first, &i)?;
     while let Some(val) = exec_next(&mut it.0).await? {
@@ -179,12 +271,17 @@ async fn reduce<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn2<
 }
 
 #[extern_fn(effect = E)]
-async fn fold<T: TyVar, U: TyVar, E: EffectVar>(
+async fn fold<T, U, E>(
     i: Interner,
     mut it: Iter<T, E>,
     init: U,
     f: Fn2<U, T, U, E>,
-) -> Result<U, RuntimeError> {
+) -> Result<U, RuntimeError>
+where
+    T: TyVar,
+    U: TyVar,
+    E: EffectVar,
+{
     let mut acc = init;
     while let Some(val) = exec_next(&mut it.0).await? {
         acc = f.call(&i, acc, T::from_value(val, &i)?).await?;
@@ -193,7 +290,15 @@ async fn fold<T: TyVar, U: TyVar, E: EffectVar>(
 }
 
 #[extern_fn(effect = E)]
-async fn any<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn1<T, bool, E>) -> Result<bool, RuntimeError> {
+async fn any<T, E>(
+    i: Interner,
+    mut it: Iter<T, E>,
+    f: Fn1<T, bool, E>,
+) -> Result<bool, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     while let Some(val) = exec_next(&mut it.0).await? {
         if f.call(&i, T::from_value(val, &i)?).await? {
             return Ok(true);
@@ -203,7 +308,15 @@ async fn any<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn1<T, 
 }
 
 #[extern_fn(effect = E)]
-async fn all<T: TyVar, E: EffectVar>(i: Interner, mut it: Iter<T, E>, f: Fn1<T, bool, E>) -> Result<bool, RuntimeError> {
+async fn all<T, E>(
+    i: Interner,
+    mut it: Iter<T, E>,
+    f: Fn1<T, bool, E>,
+) -> Result<bool, RuntimeError>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     while let Some(val) = exec_next(&mut it.0).await? {
         if !f.call(&i, T::from_value(val, &i)?).await? {
             return Ok(false);

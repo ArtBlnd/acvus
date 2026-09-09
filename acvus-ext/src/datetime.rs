@@ -1,6 +1,8 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
-use acvus_extern::{ExternRegistry, ExternType, Interner, RuntimeError, extern_fn, extern_registry};
+use acvus_extern::{
+    ExternRegistry, ExternType, Interner, RuntimeError, extern_fn, extern_registry,
+};
 
 #[derive(ExternType)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
@@ -21,7 +23,10 @@ fn parse_date(_: &Interner, s: String, fmt: String) -> Result<DateTime, RuntimeE
     chrono::NaiveDateTime::parse_from_str(&s, &fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
         .map_err(|e| {
-            RuntimeError::extern_call("parse_date", format!("invalid input '{s}' with format '{fmt}': {e}"))
+            RuntimeError::extern_call(
+                "parse_date",
+                format!("invalid input '{s}' with format '{fmt}': {e}"),
+            )
         })
 }
 
@@ -35,7 +40,9 @@ fn timestamp(_: &Interner, dt: DateTime) -> i64 {
 fn from_timestamp(_: &Interner, epoch: i64) -> Result<DateTime, RuntimeError> {
     chrono::DateTime::from_timestamp(epoch, 0)
         .map(DateTime)
-        .ok_or_else(|| RuntimeError::extern_call("from_timestamp", format!("invalid epoch {epoch}")))
+        .ok_or_else(|| {
+            RuntimeError::extern_call("from_timestamp", format!("invalid epoch {epoch}"))
+        })
 }
 
 #[extern_fn(effect = pure)]

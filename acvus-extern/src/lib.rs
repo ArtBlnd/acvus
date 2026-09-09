@@ -13,8 +13,8 @@ pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use func::{Fn0, Fn1, Fn2};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use registry::{
-    AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl,
-    Registered, SyncHandler,
+    AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl, Registered,
+    SyncHandler,
 };
 pub use ty_arg::{PolyVars, TyArg, TyVar, Typeck};
 

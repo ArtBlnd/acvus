@@ -139,7 +139,10 @@ fn infer_value_ty(interner: &Interner, v: &Value) -> Ty {
         Value::Unit => Ty::Unit,
         Value::Byte(_) => Ty::Byte,
         Value::Array(items) => {
-            let elem = items.first().map(|v| infer_value_ty(interner, v)).unwrap_or(Ty::Int);
+            let elem = items
+                .first()
+                .map(|v| infer_value_ty(interner, v))
+                .unwrap_or(Ty::Int);
             Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
         }
         Value::Object(fields) => Ty::Object(

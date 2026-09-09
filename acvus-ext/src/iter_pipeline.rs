@@ -10,9 +10,16 @@ use sync_wrapper::SyncWrapper;
 /// `Iterator<T, E>`: elements of type T, pulled with effect E.
 #[derive(ExternType)]
 #[extern_type(name = "Iterator", move_only)]
-pub struct Iter<T: TyVar, E: EffectVar>(pub IterHandle, PhantomData<(T, E)>);
+pub struct Iter<T, E>(pub IterHandle, PhantomData<(T, E)>)
+where
+    T: TyVar,
+    E: EffectVar;
 
-impl<T: TyVar, E: EffectVar> Iter<T, E> {
+impl<T, E> Iter<T, E>
+where
+    T: TyVar,
+    E: EffectVar,
+{
     pub fn new(handle: IterHandle) -> Self {
         Self(handle, PhantomData)
     }
