@@ -6,14 +6,14 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     2 │   r1 = ref @name
-     3 │   r2 = load r1
-     4 │   r3 = object {name: r2}
-     6 │   r4 = T0 + T0
-     7 │   r5 = r3.name
-     8 │   r6 = r4 + r5
-     9 │   return r6
+     0 |   r0 = undef
+     2 |   r1 = ref @name
+     3 |   r2 = load r1
+     4 |   r3 = object {name: r2}
+     6 |   r4 = T0 + T0
+     7 |   r5 = r3.name
+     8 |   r6 = r4 + r5
+     9 |   return r6
 
     ; r0 (v14) : {name: String}
     ; r1 (@name) : Ref<String>

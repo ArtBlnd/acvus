@@ -8,23 +8,23 @@ expression: ir
   T2 = "no"
 
 === main ===
-     0 │   r0 = undef
-     4 │   r1 = T0 + T0
-     5 │   r2 = ref @role
-     6 │   r3 = load r2
-     7 │ L2:
-     8 │   r4 = test r3 == "admin"
-     9 │   jump_if r4 then L3 else L1
-    10 │ L3:
-    14 │   r5 = T0 + T0
-    15 │   jump L0(r5, T1)
-    16 │ L1:
-    20 │   r6 = T0 + T0
-    21 │   jump L0(r6, T2)
-    22 │ L0(r7: String, r8: String):  ; merge_of L2
-    23 │   r9 = r1 + r7
-    24 │   r10 = r9 + r8
-    25 │   return r10
+     0 |   r0 = undef
+     4 |   r1 = T0 + T0
+     5 |   r2 = ref @role
+     6 |   r3 = load r2
+     7 | L2:
+     8 |   r4 = test r3 == "admin"
+     9 |   jump_if r4 then L3 else L1
+    10 | L3:
+    14 |   r5 = T0 + T0
+    15 |   jump L0(r5, T1)
+    16 | L1:
+    20 |   r6 = T0 + T0
+    21 |   jump L0(r6, T2)
+    22 | L0(r7: String, r8: String):  ; merge_of L2
+    23 |   r9 = r1 + r7
+    24 |   r10 = r9 + r8
+    25 |   return r10
 
     ; r0 (v25) : String
     ; r1 (v6) : String

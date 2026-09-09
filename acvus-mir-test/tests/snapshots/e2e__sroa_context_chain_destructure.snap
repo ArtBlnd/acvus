@@ -3,17 +3,17 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @b
-     1 │   r1 = load r0
-     2 │   r2 = r1.a
-     3 │   r3 = ref @a
-     4 │   store r3 = r2
-     5 │   r4 = ref @a
-     6 │   r5 = r2.val
-     7 │   r6 = ref @c
-     8 │   store r6 = r5
-     9 │   r7 = ref @c
-    10 │   return r5
+     0 |   r0 = ref @b
+     1 |   r1 = load r0
+     2 |   r2 = r1.a
+     3 |   r3 = ref @a
+     4 |   store r3 = r2
+     5 |   r4 = ref @a
+     6 |   r5 = r2.val
+     7 |   r6 = ref @c
+     8 |   store r6 = r5
+     9 |   r7 = ref @c
+    10 |   return r5
 
     ; r0 (v9) : Ref<{a: {val: Int}}>
     ; r1 (v10) : {a: {val: Int}}

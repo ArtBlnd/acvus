@@ -6,28 +6,28 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @user
-     4 │   r3 = load r2
-     5 │ L2:
-     7 │   r4 = test has_key(r3, "name")
-     8 │   r5 = r3.name
-    10 │   r6 = true (r7) && true (r8)
-    11 │   r9 = test has_key(r3, "age")
-    12 │   r10 = r3.age
-    14 │   r11 = r6 && true (r12)
-    15 │   jump_if r11 then L3 else L1
-    16 │ L3:
-    17 │   r13 = r3.name
-    18 │   r14 = r3.age
-    20 │   r15 = T0 + r13
-    21 │   jump L0(r15, r13, r14)
-    22 │ L1:
-    24 │   jump L0(T0, r0, r1)
-    25 │ L0(r16: String, r17: String, r18: Int):  ; merge_of L2
-    26 │   r19 = T0 + r16
-    27 │   return r19
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @user
+     4 |   r3 = load r2
+     5 | L2:
+     7 |   r4 = test has_key(r3, "name")
+     8 |   r5 = r3.name
+    10 |   r6 = true (r7) && true (r8)
+    11 |   r9 = test has_key(r3, "age")
+    12 |   r10 = r3.age
+    14 |   r11 = r6 && true (r12)
+    15 |   jump_if r11 then L3 else L1
+    16 | L3:
+    17 |   r13 = r3.name
+    18 |   r14 = r3.age
+    20 |   r15 = T0 + r13
+    21 |   jump L0(r15, r13, r14)
+    22 | L1:
+    24 |   jump L0(T0, r0, r1)
+    25 | L0(r16: String, r17: String, r18: Int):  ; merge_of L2
+    26 |   r19 = T0 + r16
+    27 |   return r19
 
     ; r0 (v26) : String
     ; r1 (v27) : Int

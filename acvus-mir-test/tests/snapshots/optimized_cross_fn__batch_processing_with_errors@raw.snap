@@ -2,90 +2,90 @@
 source: acvus-mir-test/tests/optimized_cross_fn.rs
 expression: raw
 ---
-── main ──
+-- main --
 === literals ===
   T0 = "bad:"
 
 === main ===
-     0 │   r0 = ref @items
-     1 │   r1 = load r0
-     3 │   jump L0(0 (r2))
-     4 │ L0(r3: Int):
-     5 │   list_step r4, r5 = r1[r3] else L1()
-     6 │ L2:
-     7 │   r6 = ref item
-     8 │   store r6 = r4
-     9 │   r7 = ref item.value
-    10 │   r8 = load r7
-    11 │   r9 = ref v
-    12 │   store r9 = r8
-    13 │   r10 = ref v
-    14 │   r11 = load r10
-    15 │   r12 = ref @min_val
-    16 │   r13 = load r12
-    17 │   r14 = ref @max_val
-    18 │   r15 = load r14
-    19 │   r16 = call #0(r11, r13, r15)
-    20 │   r17 = ref ok
-    21 │   store r17 = r16
-    22 │   r18 = ref ok
-    23 │   r19 = load r18
-    25 │   r20 = r19 > 0 (r21)
-    26 │   r22 = test r20 == true
-    27 │   jump_if r22 then L3 else L4
-    28 │ L3:
-    29 │   r23 = ref v
-    30 │   r24 = load r23
-    31 │   r25 = ref @multiplier
-    32 │   r26 = load r25
-    33 │   r27 = call #1(r24, r26)
-    34 │   r28 = ref transformed
-    35 │   store r28 = r27
-    36 │   r29 = ref @sum
-    37 │   r30 = load r29
-    38 │   r31 = ref transformed
-    39 │   r32 = load r31
-    40 │   r33 = r30 + r32
-    41 │   r34 = ref @sum
-    42 │   store r34 = r33
-    43 │   r35 = ref @ok_count
-    44 │   r36 = load r35
-    46 │   r37 = r36 + 1 (r38)
-    47 │   r39 = ref @ok_count
-    48 │   store r39 = r37
-    49 │   jump L4
-    50 │ L4:
-    51 │   r40 = ref ok
-    52 │   r41 = load r40
-    54 │   r42 = r41 == 0 (r43)
-    55 │   r44 = test r42 == true
-    56 │   jump_if r44 then L5 else L6
-    57 │ L5:
-    58 │   r45 = ref @err_count
-    59 │   r46 = load r45
-    61 │   r47 = r46 + 1 (r48)
-    62 │   r49 = ref @err_count
-    63 │   store r49 = r47
-    65 │   r50 = ref v
-    66 │   r51 = load r50
-    67 │   r52 = call #2(r51)
-    68 │   r53 = T0 + r52
-    69 │   r54 = ref @last_err
-    70 │   store r54 = r53
-    71 │   jump L6
-    72 │ L6:
-    73 │   jump L0(r5)
-    74 │ L1:
-    75 │   r55 = ref @sum
-    76 │   r56 = load r55
-    77 │   r57 = ref @ok_count
-    78 │   r58 = load r57
-    79 │   r59 = ref @err_count
-    80 │   r60 = load r59
-    81 │   r61 = call #3(r56, r58, r60)
-    82 │   r62 = ref @sum
-    83 │   r63 = load r62
-    84 │   return r63
+     0 |   r0 = ref @items
+     1 |   r1 = load r0
+     3 |   jump L0(0 (r2))
+     4 | L0(r3: Int):
+     5 |   list_step r4, r5 = r1[r3] else L1()
+     6 | L2:
+     7 |   r6 = ref item
+     8 |   store r6 = r4
+     9 |   r7 = ref item.value
+    10 |   r8 = load r7
+    11 |   r9 = ref v
+    12 |   store r9 = r8
+    13 |   r10 = ref v
+    14 |   r11 = load r10
+    15 |   r12 = ref @min_val
+    16 |   r13 = load r12
+    17 |   r14 = ref @max_val
+    18 |   r15 = load r14
+    19 |   r16 = call #0(r11, r13, r15)
+    20 |   r17 = ref ok
+    21 |   store r17 = r16
+    22 |   r18 = ref ok
+    23 |   r19 = load r18
+    25 |   r20 = r19 > 0 (r21)
+    26 |   r22 = test r20 == true
+    27 |   jump_if r22 then L3 else L4
+    28 | L3:
+    29 |   r23 = ref v
+    30 |   r24 = load r23
+    31 |   r25 = ref @multiplier
+    32 |   r26 = load r25
+    33 |   r27 = call #1(r24, r26)
+    34 |   r28 = ref transformed
+    35 |   store r28 = r27
+    36 |   r29 = ref @sum
+    37 |   r30 = load r29
+    38 |   r31 = ref transformed
+    39 |   r32 = load r31
+    40 |   r33 = r30 + r32
+    41 |   r34 = ref @sum
+    42 |   store r34 = r33
+    43 |   r35 = ref @ok_count
+    44 |   r36 = load r35
+    46 |   r37 = r36 + 1 (r38)
+    47 |   r39 = ref @ok_count
+    48 |   store r39 = r37
+    49 |   jump L4
+    50 | L4:
+    51 |   r40 = ref ok
+    52 |   r41 = load r40
+    54 |   r42 = r41 == 0 (r43)
+    55 |   r44 = test r42 == true
+    56 |   jump_if r44 then L5 else L6
+    57 | L5:
+    58 |   r45 = ref @err_count
+    59 |   r46 = load r45
+    61 |   r47 = r46 + 1 (r48)
+    62 |   r49 = ref @err_count
+    63 |   store r49 = r47
+    65 |   r50 = ref v
+    66 |   r51 = load r50
+    67 |   r52 = call #2(r51)
+    68 |   r53 = T0 + r52
+    69 |   r54 = ref @last_err
+    70 |   store r54 = r53
+    71 |   jump L6
+    72 | L6:
+    73 |   jump L0(r5)
+    74 | L1:
+    75 |   r55 = ref @sum
+    76 |   r56 = load r55
+    77 |   r57 = ref @ok_count
+    78 |   r58 = load r57
+    79 |   r59 = ref @err_count
+    80 |   r60 = load r59
+    81 |   r61 = call #3(r56, r58, r60)
+    82 |   r62 = ref @sum
+    83 |   r63 = load r62
+    84 |   return r63
 
     ; r0 (@items) : Ref<List<{value: Int}>>
     ; r1 (v2) : List<{value: Int}>
@@ -153,18 +153,18 @@ expression: raw
     ; r63 (v69) : Int
     ; r64 (v55) : String
 
-── transform_value ──
+-- transform_value --
 === main ===
-     0 │   r0 = ref $v1
-     1 │   r1 = load r0
-     2 │   r2 = ref $v2
-     3 │   r3 = load r2
-     4 │   r4 = r1 * r3
-     5 │   r5 = ref $v1
-     6 │   r6 = load r5
-     8 │   r7 = r6 / 2 (r8)
-     9 │   r9 = r4 + r7
-    10 │   return r9
+     0 |   r0 = ref $v1
+     1 |   r1 = load r0
+     2 |   r2 = ref $v2
+     3 |   r3 = load r2
+     4 |   r4 = r1 * r3
+     5 |   r5 = ref $v1
+     6 |   r6 = load r5
+     8 |   r7 = r6 / 2 (r8)
+     9 |   r9 = r4 + r7
+    10 |   return r9
 
     ; r0 (v3) : Ref<Int>
     ; r1 ($val) : Int
@@ -179,35 +179,35 @@ expression: raw
     ; r10 (v2) : Int
     ; r11 (v1) : Int
 
-── validate_item ──
+-- validate_item --
 === main ===
-     1 │   r0 = ref r
-     2 │   store r0 = 0 (r1)
-     3 │   r2 = ref $v1
-     4 │   r3 = load r2
-     5 │   r4 = ref $v2
-     6 │   r5 = load r4
-     7 │   r6 = r3 >= r5
-     8 │   r7 = test r6 == true
-     9 │   jump_if r7 then L0 else L1
-    10 │ L0:
-    11 │   r8 = ref $v1
-    12 │   r9 = load r8
-    13 │   r10 = ref $v3
-    14 │   r11 = load r10
-    15 │   r12 = r9 <= r11
-    16 │   r13 = test r12 == true
-    17 │   jump_if r13 then L2 else L3
-    18 │ L2:
-    20 │   r14 = ref r
-    21 │   store r14 = 1 (r15)
-    22 │   jump L3
-    23 │ L3:
-    24 │   jump L1
-    25 │ L1:
-    26 │   r16 = ref r
-    27 │   r17 = load r16
-    28 │   return r17
+     1 |   r0 = ref r
+     2 |   store r0 = 0 (r1)
+     3 |   r2 = ref $v1
+     4 |   r3 = load r2
+     5 |   r4 = ref $v2
+     6 |   r5 = load r4
+     7 |   r6 = r3 >= r5
+     8 |   r7 = test r6 == true
+     9 |   jump_if r7 then L0 else L1
+    10 | L0:
+    11 |   r8 = ref $v1
+    12 |   r9 = load r8
+    13 |   r10 = ref $v3
+    14 |   r11 = load r10
+    15 |   r12 = r9 <= r11
+    16 |   r13 = test r12 == true
+    17 |   jump_if r13 then L2 else L3
+    18 | L2:
+    20 |   r14 = ref r
+    21 |   store r14 = 1 (r15)
+    22 |   jump L3
+    23 | L3:
+    24 |   jump L1
+    25 | L1:
+    26 |   r16 = ref r
+    27 |   r17 = load r16
+    28 |   return r17
 
     ; r0 (v6) : Ref<Int>
     ; r1 (v4) : Int

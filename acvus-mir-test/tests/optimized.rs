@@ -72,7 +72,6 @@ fn nested_loop_conditional_accum() {
 //     - SSA: branch phi on context after conditional write
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn field_read_modify_write_branch() {
     let i = Interner::new();
@@ -110,7 +109,6 @@ fn field_read_modify_write_branch() {
 //     - SROA: @output whole write
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn multi_context_dataflow() {
     let i = Interner::new();
@@ -141,7 +139,6 @@ fn multi_context_dataflow() {
 //     - RegColor: many intermediate values
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn object_construct_from_fields() {
     let i = Interner::new();
@@ -174,7 +171,6 @@ fn object_construct_from_fields() {
 //     - Multiple contexts mutated conditionally
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn diamond_divergent_context_mutations() {
     let i = Interner::new();
@@ -244,7 +240,6 @@ fn loop_search_with_accumulator() {
 //     - RegColor: high register pressure from SROA expansion
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn chained_field_mutations() {
     let i = Interner::new();
@@ -282,7 +277,6 @@ fn chained_field_mutations() {
 //     - String concat chain
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn destructure_multi_branch_classify() {
     let i = Interner::new();

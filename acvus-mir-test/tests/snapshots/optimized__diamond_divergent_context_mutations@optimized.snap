@@ -3,38 +3,38 @@ source: acvus-mir-test/tests/optimized.rs
 expression: opt
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = ref @output
-     4 │   r4 = ref @low
-     5 │   r5 = ref @high
-     6 │   r6 = ref @high
-     8 │   r7 = load r6
-     9 │   r8 = r7 > 1 (r9)
-    10 │   r10 = test r8 == true
-    11 │   r6 = ref @high
-    14 │   r11 = r7 * 1 (r12)
-    16 │   r8 = r7 <= 1 (r12)
-    17 │   r13 = test r8 == true
-    18 │   r14 = ref @low
-    21 │   r15 = r7 + 10 (r16)
-    22 │   jump_if r10 then L0 else L1(r0, r2)
-    23 │ L0:
-    24 │   r0 = load r6
-    25 │   r2 = r0 + 1 (r9)
-    26 │   jump L1(r11, r2)
-    27 │ L1(r0: Int, r2: Int):
-    28 │   store r5 = r2
-    29 │   jump_if r13 then L2 else L3(r0, r1)
-    30 │ L2:
-    31 │   r0 = load r14
-    32 │   r1 = r0 + 1 (r12)
-    33 │   jump L3(r15, r1)
-    34 │ L3(r0: Int, r1: Int):
-    35 │   store r4 = r1
-    36 │   store r3 = r0
-    37 │   return r0
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = ref @output
+     4 |   r4 = ref @low
+     5 |   r5 = ref @high
+     6 |   r6 = ref @high
+     8 |   r7 = load r6
+     9 |   r8 = r7 > 1 (r9)
+    10 |   r10 = test r8 == true
+    11 |   r6 = ref @high
+    14 |   r11 = r7 * 1 (r12)
+    16 |   r8 = r7 <= 1 (r12)
+    17 |   r13 = test r8 == true
+    18 |   r14 = ref @low
+    21 |   r15 = r7 + 10 (r16)
+    22 |   jump_if r10 then L0 else L1(r0, r2)
+    23 | L0:
+    24 |   r0 = load r6
+    25 |   r2 = r0 + 1 (r9)
+    26 |   jump L1(r11, r2)
+    27 | L1(r0: Int, r2: Int):
+    28 |   store r5 = r2
+    29 |   jump_if r13 then L2 else L3(r0, r1)
+    30 | L2:
+    31 |   r0 = load r14
+    32 |   r1 = r0 + 1 (r12)
+    33 |   jump L3(r15, r1)
+    34 | L3(r0: Int, r1: Int):
+    35 |   store r4 = r1
+    36 |   store r3 = r0
+    37 |   return r0
 
     ; r0 (@low) : Int
     ; r1 (v2) : Int

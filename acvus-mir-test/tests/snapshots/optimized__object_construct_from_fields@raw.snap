@@ -7,40 +7,40 @@ expression: raw
   T1 = ")"
 
 === main ===
-     0 │   r0 = ref @user.age
-     1 │   r1 = load r0
-     3 │   r2 = r1 * 2 (r3)
-     4 │   r4 = ref score
-     5 │   store r4 = r2
-     6 │   r5 = ref @user.name
-     7 │   r6 = load r5
-     9 │   r7 = r6 + T0
-    10 │   r8 = ref score
-    11 │   r9 = load r8
-    12 │   r10 = call #0(r9)
-    13 │   r11 = r7 + r10
-    15 │   r12 = r11 + T1
-    16 │   r13 = ref label
-    17 │   store r13 = r12
-    18 │   r14 = ref score
-    19 │   r15 = load r14
-    20 │   r16 = ref @min_score
-    21 │   r17 = load r16
-    22 │   r18 = r15 > r17
-    23 │   r19 = ref eligible
-    24 │   store r19 = r18
-    25 │   r20 = ref label
-    26 │   r21 = load r20
-    27 │   r22 = ref score
-    28 │   r23 = load r22
-    29 │   r24 = ref eligible
-    30 │   r25 = load r24
-    31 │   r26 = object {label: r21, score: r23, eligible: r25}
-    32 │   r27 = ref @output
-    33 │   store r27 = r26
-    34 │   r28 = ref @output
-    35 │   r29 = load r28
-    36 │   return r29
+     0 |   r0 = ref @user.age
+     1 |   r1 = load r0
+     3 |   r2 = r1 * 2 (r3)
+     4 |   r4 = ref score
+     5 |   store r4 = r2
+     6 |   r5 = ref @user.name
+     7 |   r6 = load r5
+     9 |   r7 = r6 + T0
+    10 |   r8 = ref score
+    11 |   r9 = load r8
+    12 |   r10 = call #0(r9)
+    13 |   r11 = r7 + r10
+    15 |   r12 = r11 + T1
+    16 |   r13 = ref label
+    17 |   store r13 = r12
+    18 |   r14 = ref score
+    19 |   r15 = load r14
+    20 |   r16 = ref @min_score
+    21 |   r17 = load r16
+    22 |   r18 = r15 > r17
+    23 |   r19 = ref eligible
+    24 |   store r19 = r18
+    25 |   r20 = ref label
+    26 |   r21 = load r20
+    27 |   r22 = ref score
+    28 |   r23 = load r22
+    29 |   r24 = ref eligible
+    30 |   r25 = load r24
+    31 |   r26 = object {label: r21, score: r23, eligible: r25}
+    32 |   r27 = ref @output
+    33 |   store r27 = r26
+    34 |   r28 = ref @output
+    35 |   r29 = load r28
+    36 |   return r29
 
     ; r0 (@user.age) : Ref<Int>
     ; r1 (v2) : Int

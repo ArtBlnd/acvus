@@ -7,8 +7,8 @@ expression: ir
   T1 = "hello world"
 
 === main ===
-     2 │   r0 = T0 + T1
-     3 │   return r0
+     2 |   r0 = T0 + T1
+     3 |   return r0
 
     ; r0 (v3) : String
     ; r1 (v2) : String

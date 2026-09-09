@@ -3,49 +3,49 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @input
-     1 │   r1 = load r0
-     2 │   r2 = ref x
-     3 │   store r2 = r1
-     4 │   r3 = ref x
-     5 │   r4 = load r3
-     7 │   r5 = r4 > 100 (r6)
-     8 │   r7 = test r5 == true
-     9 │   jump_if r7 then L0 else L1
-    10 │ L0:
-    11 │   r8 = ref @high
-    12 │   r9 = load r8
-    14 │   r10 = r9 + 1 (r11)
-    15 │   r12 = ref @high
-    16 │   store r12 = r10
-    17 │   r13 = ref x
-    18 │   r14 = load r13
-    20 │   r15 = r14 * 2 (r16)
-    21 │   r17 = ref @output
-    22 │   store r17 = r15
-    23 │   jump L1
-    24 │ L1:
-    25 │   r18 = ref x
-    26 │   r19 = load r18
-    28 │   r20 = r19 <= 100 (r21)
-    29 │   r22 = test r20 == true
-    30 │   jump_if r22 then L2 else L3
-    31 │ L2:
-    32 │   r23 = ref @low
-    33 │   r24 = load r23
-    35 │   r25 = r24 + 1 (r26)
-    36 │   r27 = ref @low
-    37 │   store r27 = r25
-    38 │   r28 = ref x
-    39 │   r29 = load r28
-    41 │   r30 = r29 + 10 (r31)
-    42 │   r32 = ref @output
-    43 │   store r32 = r30
-    44 │   jump L3
-    45 │ L3:
-    46 │   r33 = ref @output
-    47 │   r34 = load r33
-    48 │   return r34
+     0 |   r0 = ref @input
+     1 |   r1 = load r0
+     2 |   r2 = ref x
+     3 |   store r2 = r1
+     4 |   r3 = ref x
+     5 |   r4 = load r3
+     7 |   r5 = r4 > 100 (r6)
+     8 |   r7 = test r5 == true
+     9 |   jump_if r7 then L0 else L1
+    10 | L0:
+    11 |   r8 = ref @high
+    12 |   r9 = load r8
+    14 |   r10 = r9 + 1 (r11)
+    15 |   r12 = ref @high
+    16 |   store r12 = r10
+    17 |   r13 = ref x
+    18 |   r14 = load r13
+    20 |   r15 = r14 * 2 (r16)
+    21 |   r17 = ref @output
+    22 |   store r17 = r15
+    23 |   jump L1
+    24 | L1:
+    25 |   r18 = ref x
+    26 |   r19 = load r18
+    28 |   r20 = r19 <= 100 (r21)
+    29 |   r22 = test r20 == true
+    30 |   jump_if r22 then L2 else L3
+    31 | L2:
+    32 |   r23 = ref @low
+    33 |   r24 = load r23
+    35 |   r25 = r24 + 1 (r26)
+    36 |   r27 = ref @low
+    37 |   store r27 = r25
+    38 |   r28 = ref x
+    39 |   r29 = load r28
+    41 |   r30 = r29 + 10 (r31)
+    42 |   r32 = ref @output
+    43 |   store r32 = r30
+    44 |   jump L3
+    45 | L3:
+    46 |   r33 = ref @output
+    47 |   r34 = load r33
+    48 |   return r34
 
     ; r0 (@input) : Ref<Int>
     ; r1 (v2) : Int

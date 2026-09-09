@@ -3,11 +3,11 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   var_store $var = 42 (r0)
-     2 │   r1 = var_load $var
-     3 │   r2 = context_load @other
-     4 │   r3 = context_call @node { var: r1, other: r2 }
-     5 │   yield r3
+     1 |   var_store $var = 42 (r0)
+     2 |   r1 = var_load $var
+     3 |   r2 = context_load @other
+     4 |   r3 = context_call @node { var: r1, other: r2 }
+     5 |   yield r3
 
     ; r0 (v0) : Int
     ; r1 ($var) : Int

@@ -3,20 +3,20 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     3 │   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 │   r4 = cast DequeToList r0
-     5 │   r5 = ref $v5
-     6 │   r6 = load r5
-     7 │   r7 = call #0(r6)
-     8 │   r8 = closure L0 []
-     9 │   r9 = call #1(r7, r8)
-    10 │   r10 = call #2(r9)
-    11 │   r11 = ref $collect(...)
-    12 │   r12 = load r11
-    13 │   r13 = call #0(r12)
-    15 │   r14 = closure L0 []
-    16 │   r15 = call #3(r13, 0 (r16), r14)
-    17 │   return r15
+     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     4 |   r4 = cast DequeToList r0
+     5 |   r5 = ref $v5
+     6 |   r6 = load r5
+     7 |   r7 = call #0(r6)
+     8 |   r8 = closure L0 []
+     9 |   r9 = call #1(r7, r8)
+    10 |   r10 = call #2(r9)
+    11 |   r11 = ref $collect(...)
+    12 |   r12 = load r11
+    13 |   r13 = call #0(r12)
+    15 |   r14 = closure L0 []
+    16 |   r15 = call #3(r13, 0 (r16), r14)
+    17 |   return r15
 
     ; r0 (v4) : Deque<Int, Identity(IdentityId(0))>
     ; r1 (v1) : Int

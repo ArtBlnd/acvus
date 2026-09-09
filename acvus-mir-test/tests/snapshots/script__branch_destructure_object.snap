@@ -3,17 +3,17 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = ref @user
-     3 │   r3 = load r2
-     4 │   r4 = r3.name
-     5 │   r5 = ref @user
-     6 │   r6 = r3.age
-     7 │   r7 = ref @out
-     8 │   store r7 = r4
-     9 │   r8 = ref @out
-    10 │   return r4
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = ref @user
+     3 |   r3 = load r2
+     4 |   r4 = r3.name
+     5 |   r5 = ref @user
+     6 |   r6 = r3.age
+     7 |   r7 = ref @out
+     8 |   store r7 = r4
+     9 |   r8 = ref @out
+    10 |   return r4
 
     ; r0 (v16) : String
     ; r1 (v17) : Int

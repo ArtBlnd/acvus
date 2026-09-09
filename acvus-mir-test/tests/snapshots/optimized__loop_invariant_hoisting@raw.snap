@@ -3,36 +3,36 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @config.base_rate
-     1 │   r1 = load r0
-     2 │   r2 = ref @config.multiplier
-     3 │   r3 = load r2
-     4 │   r4 = r1 * r3
-     5 │   r5 = ref factor
-     6 │   store r5 = r4
-     7 │   r6 = ref @items
-     8 │   r7 = load r6
-    10 │   jump L0(0 (r8))
-    11 │ L0(r9: Int):
-    12 │   list_step r10, r11 = r7[r9] else L1()
-    13 │ L2:
-    14 │   r12 = ref x
-    15 │   store r12 = r10
-    16 │   r13 = ref @result
-    17 │   r14 = load r13
-    18 │   r15 = ref x
-    19 │   r16 = load r15
-    20 │   r17 = ref factor
-    21 │   r18 = load r17
-    22 │   r19 = r16 * r18
-    23 │   r20 = r14 + r19
-    24 │   r21 = ref @result
-    25 │   store r21 = r20
-    26 │   jump L0(r11)
-    27 │ L1:
-    28 │   r22 = ref @result
-    29 │   r23 = load r22
-    30 │   return r23
+     0 |   r0 = ref @config.base_rate
+     1 |   r1 = load r0
+     2 |   r2 = ref @config.multiplier
+     3 |   r3 = load r2
+     4 |   r4 = r1 * r3
+     5 |   r5 = ref factor
+     6 |   store r5 = r4
+     7 |   r6 = ref @items
+     8 |   r7 = load r6
+    10 |   jump L0(0 (r8))
+    11 | L0(r9: Int):
+    12 |   list_step r10, r11 = r7[r9] else L1()
+    13 | L2:
+    14 |   r12 = ref x
+    15 |   store r12 = r10
+    16 |   r13 = ref @result
+    17 |   r14 = load r13
+    18 |   r15 = ref x
+    19 |   r16 = load r15
+    20 |   r17 = ref factor
+    21 |   r18 = load r17
+    22 |   r19 = r16 * r18
+    23 |   r20 = r14 + r19
+    24 |   r21 = ref @result
+    25 |   store r21 = r20
+    26 |   jump L0(r11)
+    27 | L1:
+    28 |   r22 = ref @result
+    29 |   r23 = load r22
+    30 |   return r23
 
     ; r0 (@config.base_rate) : Ref<Int>
     ; r1 (v2) : Int

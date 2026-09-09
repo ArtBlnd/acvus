@@ -9,32 +9,32 @@ expression: ir
   T3 = "guest"
 
 === main ===
-     1 │   r0 = ref @role
-     2 │   r1 = load r0
-     3 │ L2:
-     4 │   r2 = test r1 == "admin"
-     5 │   jump_if r2 then L3 else L1
-     6 │ L3:
-     8 │   r3 = ref @level
-     9 │   r4 = load r3
-    10 │ L6:
-    11 │   r5 = test r4 in 1..10
-    12 │   jump_if r5 then L7 else L5
-    13 │ L7:
-    16 │   r6 = T0 + T1
-    17 │   jump L4(r6)
-    18 │ L5:
-    21 │   r7 = T0 + T2
-    22 │   jump L4(r7)
-    23 │ L4(r8: String):  ; merge_of L6
-    24 │   r9 = T0 + r8
-    25 │   jump L0(r9)
-    26 │ L1:
-    29 │   r10 = T0 + T3
-    30 │   jump L0(r10)
-    31 │ L0(r11: String):  ; merge_of L2
-    32 │   r12 = T0 + r11
-    33 │   return r12
+     1 |   r0 = ref @role
+     2 |   r1 = load r0
+     3 | L2:
+     4 |   r2 = test r1 == "admin"
+     5 |   jump_if r2 then L3 else L1
+     6 | L3:
+     8 |   r3 = ref @level
+     9 |   r4 = load r3
+    10 | L6:
+    11 |   r5 = test r4 in 1..10
+    12 |   jump_if r5 then L7 else L5
+    13 | L7:
+    16 |   r6 = T0 + T1
+    17 |   jump L4(r6)
+    18 | L5:
+    21 |   r7 = T0 + T2
+    22 |   jump L4(r7)
+    23 | L4(r8: String):  ; merge_of L6
+    24 |   r9 = T0 + r8
+    25 |   jump L0(r9)
+    26 | L1:
+    29 |   r10 = T0 + T3
+    30 |   jump L0(r10)
+    31 | L0(r11: String):  ; merge_of L2
+    32 |   r12 = T0 + r11
+    33 |   return r12
 
     ; r0 (@role) : Ref<String>
     ; r1 (v3) : String

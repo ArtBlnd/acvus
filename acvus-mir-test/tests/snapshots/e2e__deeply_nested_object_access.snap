@@ -6,11 +6,11 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 │   r0 = ref @data
-     2 │   r1 = load r0
-     3 │   r2 = r1.user.address.city
-     4 │   r3 = T0 + r2
-     5 │   return r3
+     1 |   r0 = ref @data
+     2 |   r1 = load r0
+     3 |   r2 = r1.user.address.city
+     4 |   r3 = T0 + r2
+     5 |   return r3
 
     ; r0 (v5) : Ref<{user: {address: {city: String}}}>
     ; r1 (v6) : {user: {address: {city: String}}}

@@ -8,12 +8,12 @@ expression: ir
   T2 = "!"
 
 === main ===
-     2 │   r0 = T0 + T1
-     3 │   r1 = ref @name
-     4 │   r2 = load r1
-     5 │   r3 = r0 + r2
-     7 │   r4 = r3 + T2
-     8 │   return r4
+     2 |   r0 = T0 + T1
+     3 |   r1 = ref @name
+     4 |   r2 = load r1
+     5 |   r3 = r0 + r2
+     7 |   r4 = r3 + T2
+     8 |   return r4
 
     ; r0 (v3) : String
     ; r1 (@name) : Ref<String>

@@ -3,28 +3,28 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @state.step
-     1 │   r1 = load r0
-     3 │   r2 = r1 + 1 (r3)
-     4 │   r4 = ref @state.step
-     5 │   store r4 = r2
-     6 │   r5 = ref @state.value
-     7 │   r6 = load r5
-     8 │   r7 = ref @state.multiplier
-     9 │   r8 = load r7
-    10 │   r9 = r6 * r8
-    11 │   r10 = ref @state.value
-    12 │   store r10 = r9
-    13 │   r11 = ref @state.step
-    14 │   r12 = load r11
-    15 │   r13 = ref @state.max_steps
-    16 │   r14 = load r13
-    17 │   r15 = r12 >= r14
-    18 │   r16 = ref @state.done
-    19 │   store r16 = r15
-    20 │   r17 = ref @state
-    21 │   r18 = load r17
-    22 │   return r18
+     0 |   r0 = ref @state.step
+     1 |   r1 = load r0
+     3 |   r2 = r1 + 1 (r3)
+     4 |   r4 = ref @state.step
+     5 |   store r4 = r2
+     6 |   r5 = ref @state.value
+     7 |   r6 = load r5
+     8 |   r7 = ref @state.multiplier
+     9 |   r8 = load r7
+    10 |   r9 = r6 * r8
+    11 |   r10 = ref @state.value
+    12 |   store r10 = r9
+    13 |   r11 = ref @state.step
+    14 |   r12 = load r11
+    15 |   r13 = ref @state.max_steps
+    16 |   r14 = load r13
+    17 |   r15 = r12 >= r14
+    18 |   r16 = ref @state.done
+    19 |   store r16 = r15
+    20 |   r17 = ref @state
+    21 |   r18 = load r17
+    22 |   return r18
 
     ; r0 (@state.step) : Ref<Int>
     ; r1 (v2) : Int

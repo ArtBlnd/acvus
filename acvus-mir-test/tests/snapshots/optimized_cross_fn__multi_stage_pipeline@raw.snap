@@ -2,18 +2,18 @@
 source: acvus-mir-test/tests/optimized_cross_fn.rs
 expression: raw
 ---
-── enrich ──
+-- enrich --
 === main ===
-     0 │   r0 = ref $v1
-     1 │   r1 = load r0
-     2 │   r2 = ref $v2
-     3 │   r3 = load r2
-     4 │   r4 = r1 + r3
-     5 │   r5 = ref $v1
-     6 │   r6 = load r5
-     8 │   r7 = r6 / 10 (r8)
-     9 │   r9 = r4 + r7
-    10 │   return r9
+     0 |   r0 = ref $v1
+     1 |   r1 = load r0
+     2 |   r2 = ref $v2
+     3 |   r3 = load r2
+     4 |   r4 = r1 + r3
+     5 |   r5 = ref $v1
+     6 |   r6 = load r5
+     8 |   r7 = r6 / 10 (r8)
+     9 |   r9 = r4 + r7
+    10 |   return r9
 
     ; r0 (v3) : Ref<Int>
     ; r1 ($val) : Int
@@ -28,17 +28,17 @@ expression: raw
     ; r10 (v2) : Int
     ; r11 (v1) : Int
 
-── finalize ──
+-- finalize --
 === main ===
-     0 │   r0 = ref $v1
-     1 │   r1 = load r0
-     2 │   r2 = ref $v2
-     3 │   r3 = load r2
-     4 │   r4 = r1 / r3
-     5 │   r5 = ref $v2
-     6 │   r6 = load r5
-     7 │   r7 = r4 * r6
-     8 │   return r7
+     0 |   r0 = ref $v1
+     1 |   r1 = load r0
+     2 |   r2 = ref $v2
+     3 |   r3 = load r2
+     4 |   r4 = r1 / r3
+     5 |   r5 = ref $v2
+     6 |   r6 = load r5
+     7 |   r7 = r4 * r6
+     8 |   return r7
 
     ; r0 (v3) : Ref<Int>
     ; r1 ($val) : Int
@@ -51,56 +51,56 @@ expression: raw
     ; r8 (v2) : Int
     ; r9 (v1) : Int
 
-── main ──
+-- main --
 === main ===
-     0 │   r0 = ref @source_id
-     1 │   r1 = load r0
-     2 │   r2 = call #0(r1)
-     3 │   r3 = ref raw
-     4 │   store r3 = r2
-     5 │   r4 = ref raw
-     6 │   r5 = load r4
-     7 │   r6 = ref @scale
-     8 │   r7 = load r6
-     9 │   r8 = call #1(r5, r7)
-    10 │   r9 = ref s1
-    11 │   store r9 = r8
-    12 │   r10 = ref s1
-    13 │   r11 = load r10
-    14 │   r12 = ref @stage1
-    15 │   store r12 = r11
-    16 │   r13 = ref s1
-    17 │   r14 = load r13
-    18 │   r15 = ref @offset
-    19 │   r16 = load r15
-    20 │   r17 = call #2(r14, r16)
-    21 │   r18 = ref s2
-    22 │   store r18 = r17
-    23 │   r19 = ref s2
-    24 │   r20 = load r19
-    25 │   r21 = ref @stage2
-    26 │   store r21 = r20
-    27 │   r22 = ref s2
-    28 │   r23 = load r22
-    29 │   r24 = ref @precision
-    30 │   r25 = load r24
-    31 │   r26 = call #3(r23, r25)
-    32 │   r27 = ref s3
-    33 │   store r27 = r26
-    34 │   r28 = ref s3
-    35 │   r29 = load r28
-    36 │   r30 = ref @stage3
-    37 │   store r30 = r29
-    38 │   r31 = ref s1
-    39 │   r32 = load r31
-    40 │   r33 = ref s2
-    41 │   r34 = load r33
-    42 │   r35 = ref s3
-    43 │   r36 = load r35
-    44 │   r37 = call #4(r32, r34, r36)
-    45 │   r38 = ref s3
-    46 │   r39 = load r38
-    47 │   return r39
+     0 |   r0 = ref @source_id
+     1 |   r1 = load r0
+     2 |   r2 = call #0(r1)
+     3 |   r3 = ref raw
+     4 |   store r3 = r2
+     5 |   r4 = ref raw
+     6 |   r5 = load r4
+     7 |   r6 = ref @scale
+     8 |   r7 = load r6
+     9 |   r8 = call #1(r5, r7)
+    10 |   r9 = ref s1
+    11 |   store r9 = r8
+    12 |   r10 = ref s1
+    13 |   r11 = load r10
+    14 |   r12 = ref @stage1
+    15 |   store r12 = r11
+    16 |   r13 = ref s1
+    17 |   r14 = load r13
+    18 |   r15 = ref @offset
+    19 |   r16 = load r15
+    20 |   r17 = call #2(r14, r16)
+    21 |   r18 = ref s2
+    22 |   store r18 = r17
+    23 |   r19 = ref s2
+    24 |   r20 = load r19
+    25 |   r21 = ref @stage2
+    26 |   store r21 = r20
+    27 |   r22 = ref s2
+    28 |   r23 = load r22
+    29 |   r24 = ref @precision
+    30 |   r25 = load r24
+    31 |   r26 = call #3(r23, r25)
+    32 |   r27 = ref s3
+    33 |   store r27 = r26
+    34 |   r28 = ref s3
+    35 |   r29 = load r28
+    36 |   r30 = ref @stage3
+    37 |   store r30 = r29
+    38 |   r31 = ref s1
+    39 |   r32 = load r31
+    40 |   r33 = ref s2
+    41 |   r34 = load r33
+    42 |   r35 = ref s3
+    43 |   r36 = load r35
+    44 |   r37 = call #4(r32, r34, r36)
+    45 |   r38 = ref s3
+    46 |   r39 = load r38
+    47 |   return r39
 
     ; r0 (@source_id) : Ref<Int>
     ; r1 (v2) : Int
@@ -143,15 +143,15 @@ expression: raw
     ; r38 (v43) : Ref<Int>
     ; r39 (s3) : Int
 
-── normalize ──
+-- normalize --
 === main ===
-     0 │   r0 = ref $v1
-     1 │   r1 = load r0
-     2 │   r2 = ref $v2
-     3 │   r3 = load r2
-     4 │   r4 = r1 * r3
-     6 │   r5 = r4 / 1000 (r6)
-     7 │   return r5
+     0 |   r0 = ref $v1
+     1 |   r1 = load r0
+     2 |   r2 = ref $v2
+     3 |   r3 = load r2
+     4 |   r4 = r1 * r3
+     6 |   r5 = r4 / 1000 (r6)
+     7 |   return r5
 
     ; r0 (v3) : Ref<Int>
     ; r1 ($val) : Int

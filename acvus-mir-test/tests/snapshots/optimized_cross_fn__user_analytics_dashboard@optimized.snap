@@ -11,87 +11,87 @@ expression: opt
   T5 = " | "
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = undef
-     4 │   r4 = undef
-     5 │   r5 = undef
-     6 │   r6 = undef
-     7 │   r7 = ref @adult_count
-     8 │   r8 = ref @minor_count
-     9 │   r9 = ref @name_list
-    10 │   r10 = ref @total_age
-    11 │   r11 = ref @senior_count
-    12 │   r12 = ref @users
-    31 │   r13 = ref @output
-    32 │   r14 = load r12
-    33 │   jump L0(0 (r15), r0, r1, r2, r3, r4, r5, r6)
-    34 │ L0(r0: Int, r1: Int, r3: Int, r2: String, r4: Int, r6: Int, r5: {age: Int, name: String}, r15: Int):
-    35 │   r16 = r6 + 1 (r17)
-    36 │   r18 = r1 + 1 (r19)
-    37 │   r20 = r3 + 1 (r21)
-    38 │   r22 = call #0(r6)
-    39 │   r23 = T1 + r22
-    40 │   r22 = r23 + T2
-    41 │   r23 = call #0(r1)
-    42 │   r24 = r22 + r23
-    43 │   r22 = r24 + T3
-    44 │   r23 = call #0(r3)
-    45 │   r24 = r22 + r23
-    46 │   r22 = r24 + T4
-    47 │   r23 = call #0(r4)
-    48 │   r24 = r22 + r23
-    49 │   r22 = r24 + T5
-    50 │   r23 = r22 + r2
-    51 │   store r11 = r6
-    52 │   store r7 = r1
-    53 │   store r8 = r3
-    54 │   store r9 = r2
-    55 │   store r10 = r4
-    56 │   list_step r25, r26 = r14[r0] else L1()
-    57 │ L2:
-    58 │   r0 = r25.age
-    59 │   r27 = r0 >= 65 (r28)
-    60 │   r29 = test r27 == true
-    61 │   r27 = r0 >= 18 (r30)
-    62 │   r31 = test r27 == true
-    63 │   r0 = r25.age
-    64 │   r15 = r4 + r0
-    65 │   r22 = r25.name
-    66 │   r23 = r2 + r22
-    67 │   r2 = r23 + T0
-    68 │   jump_if r29 then L9 else L10(0 (r32))
-    69 │ L9:
-    70 │   jump L10(2 (r33))
-    71 │ L10(r0: Int):
-    72 │   jump_if r31 then L11 else L12(r0)
-    73 │ L11:
-    74 │   jump L12(1 (r34))
-    75 │ L12(r0: Int):
-    76 │   r27 = r0 > 1 (r35)
-    77 │   r29 = test r27 == true
-    78 │   r27 = r0 == 1 (r36)
-    79 │   r31 = test r27 == true
-    80 │   r27 = r0 == 0 (r37)
-    81 │   r38 = test r27 == true
-    82 │   jump_if r29 then L3 else L4(r6)
-    83 │ L3:
-    84 │   jump L4(r16)
-    85 │ L4(r0: Int):
-    86 │   jump_if r31 then L5 else L6(r1)
-    87 │ L5:
-    88 │   jump L6(r18)
-    89 │ L6(r1: Int):
-    90 │   jump_if r38 then L7 else L8(r3)
-    91 │ L7:
-    92 │   jump L8(r20)
-    93 │ L8(r3: Int):
-    94 │   jump L0(r26, r1, r3, r2, 0 (r15), r0, r25, r0)
-    95 │ L1:
-    96 │   r0 = call #1(r23)
-    97 │   store r13 = r23
-    98 │   return r23
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = undef
+     4 |   r4 = undef
+     5 |   r5 = undef
+     6 |   r6 = undef
+     7 |   r7 = ref @adult_count
+     8 |   r8 = ref @minor_count
+     9 |   r9 = ref @name_list
+    10 |   r10 = ref @total_age
+    11 |   r11 = ref @senior_count
+    12 |   r12 = ref @users
+    31 |   r13 = ref @output
+    32 |   r14 = load r12
+    33 |   jump L0(0 (r15), r0, r1, r2, r3, r4, r5, r6)
+    34 | L0(r0: Int, r1: Int, r3: Int, r2: String, r4: Int, r6: Int, r5: {age: Int, name: String}, r15: Int):
+    35 |   r16 = r6 + 1 (r17)
+    36 |   r18 = r1 + 1 (r19)
+    37 |   r20 = r3 + 1 (r21)
+    38 |   r22 = call #0(r6)
+    39 |   r23 = T1 + r22
+    40 |   r22 = r23 + T2
+    41 |   r23 = call #0(r1)
+    42 |   r24 = r22 + r23
+    43 |   r22 = r24 + T3
+    44 |   r23 = call #0(r3)
+    45 |   r24 = r22 + r23
+    46 |   r22 = r24 + T4
+    47 |   r23 = call #0(r4)
+    48 |   r24 = r22 + r23
+    49 |   r22 = r24 + T5
+    50 |   r23 = r22 + r2
+    51 |   store r11 = r6
+    52 |   store r7 = r1
+    53 |   store r8 = r3
+    54 |   store r9 = r2
+    55 |   store r10 = r4
+    56 |   list_step r25, r26 = r14[r0] else L1()
+    57 | L2:
+    58 |   r0 = r25.age
+    59 |   r27 = r0 >= 65 (r28)
+    60 |   r29 = test r27 == true
+    61 |   r27 = r0 >= 18 (r30)
+    62 |   r31 = test r27 == true
+    63 |   r0 = r25.age
+    64 |   r15 = r4 + r0
+    65 |   r22 = r25.name
+    66 |   r23 = r2 + r22
+    67 |   r2 = r23 + T0
+    68 |   jump_if r29 then L9 else L10(0 (r32))
+    69 | L9:
+    70 |   jump L10(2 (r33))
+    71 | L10(r0: Int):
+    72 |   jump_if r31 then L11 else L12(r0)
+    73 | L11:
+    74 |   jump L12(1 (r34))
+    75 | L12(r0: Int):
+    76 |   r27 = r0 > 1 (r35)
+    77 |   r29 = test r27 == true
+    78 |   r27 = r0 == 1 (r36)
+    79 |   r31 = test r27 == true
+    80 |   r27 = r0 == 0 (r37)
+    81 |   r38 = test r27 == true
+    82 |   jump_if r29 then L3 else L4(r6)
+    83 | L3:
+    84 |   jump L4(r16)
+    85 | L4(r0: Int):
+    86 |   jump_if r31 then L5 else L6(r1)
+    87 | L5:
+    88 |   jump L6(r18)
+    89 | L6(r1: Int):
+    90 |   jump_if r38 then L7 else L8(r3)
+    91 | L7:
+    92 |   jump L8(r20)
+    93 | L8(r3: Int):
+    94 |   jump L0(r26, r1, r3, r2, 0 (r15), r0, r25, r0)
+    95 | L1:
+    96 |   r0 = call #1(r23)
+    97 |   store r13 = r23
+    98 |   return r23
 
     ; r0 (send_report(...)) : Int
     ; r1 (v2) : Int

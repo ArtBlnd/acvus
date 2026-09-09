@@ -143,7 +143,6 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
 
 // -- Text & literals ----------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn text_only() {
     let i = Interner::new();
@@ -151,7 +150,6 @@ fn text_only() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn string_emit() {
     let i = Interner::new();
@@ -159,7 +157,6 @@ fn string_emit() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn string_concat() {
     let i = Interner::new();
@@ -167,7 +164,6 @@ fn string_concat() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn mixed_text_and_expr() {
     let i = Interner::new();
@@ -178,7 +174,6 @@ fn mixed_text_and_expr() {
 
 // -- Context / Variables ------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn context_read() {
     let i = Interner::new();
@@ -187,7 +182,6 @@ fn context_read() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_write() {
     let i = Interner::new();
@@ -195,7 +189,6 @@ fn variable_write() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn context_field_access() {
     let i = Interner::new();
@@ -205,7 +198,6 @@ fn context_field_access() {
 
 // -- Arithmetic ---------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn arithmetic_to_string() {
     let i = Interner::new();
@@ -216,7 +208,6 @@ fn arithmetic_to_string() {
 
 // -- Match blocks -------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn simple_match_binding() {
     let i = Interner::new();
@@ -226,7 +217,6 @@ fn simple_match_binding() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn match_literal_filter() {
     let i = Interner::new();
@@ -240,7 +230,6 @@ fn match_literal_filter() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn multi_arm_match() {
     let i = Interner::new();
@@ -315,7 +304,6 @@ fn list_destructure_head() {
 
 // -- Object patterns ----------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn object_pattern() {
     let i = Interner::new();
@@ -378,7 +366,6 @@ fn pipe_filter_map() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn pipe_to_string() {
     let i = Interner::new();
@@ -405,7 +392,6 @@ fn lambda_in_filter() {
 
 // -- Extern functions ---------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn extern_async_call() {
     let i = Interner::new();
@@ -431,7 +417,6 @@ fn extern_async_call() {
 
 // -- Tuple --------------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn tuple_expression() {
     let i = Interner::new();
@@ -445,7 +430,6 @@ fn tuple_expression() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn tuple_pattern_binding() {
     let i = Interner::new();
@@ -454,7 +438,6 @@ fn tuple_pattern_binding() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn tuple_pattern_wildcard() {
     let i = Interner::new();
@@ -463,7 +446,6 @@ fn tuple_pattern_wildcard() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn tuple_pattern_literal_match() {
     let i = Interner::new();
@@ -477,7 +459,6 @@ fn tuple_pattern_literal_match() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn tuple_nested_destructure() {
     let i = Interner::new();
@@ -628,7 +609,6 @@ fn error_iter_not_iterable() {
 
 // -- Edge case: new variable ref binding -------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_new_ref_binding() {
     let i = Interner::new();
@@ -638,7 +618,6 @@ fn variable_new_ref_binding() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_new_ref_in_match_arm() {
     let i = Interner::new();
@@ -720,7 +699,6 @@ fn tuple_with_list_element() {
 
 // -- Edge case: object expression & matching ---------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn object_literal_field_access() {
     let i = Interner::new();
@@ -736,7 +714,6 @@ fn object_literal_field_access() {
 
 // -- Edge case: comparison / boolean / unary ----------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn comparison_operators() {
     let i = Interner::new();
@@ -750,7 +727,6 @@ fn comparison_operators() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn unary_negation() {
     let i = Interner::new();
@@ -764,7 +740,6 @@ fn unary_negation() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn boolean_not() {
     let i = Interner::new();
@@ -780,7 +755,6 @@ fn boolean_not() {
 
 // -- Edge case: to_float / to_int conversion ---------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn to_float_conversion() {
     let i = Interner::new();
@@ -794,7 +768,6 @@ fn to_float_conversion() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn to_int_conversion() {
     let i = Interner::new();
@@ -840,7 +813,6 @@ fn list_destructure_tail() {
 
 // -- Edge case: variable write then read -------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_write_then_read() {
     let i = Interner::new();
@@ -879,7 +851,6 @@ fn range_inclusive_iteration() {
 
 // -- Edge case: deeply nested object -----------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn deeply_nested_object_access() {
     let i = Interner::new();
@@ -1032,7 +1003,6 @@ fn list_destructure_head_and_tail() {
 
 // -- Edge case: nested tuple pattern -----------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn nested_tuple_pattern() {
     let i = Interner::new();
@@ -1054,7 +1024,6 @@ fn nested_tuple_pattern() {
 
 // -- Edge case: variable write of computed value -----------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_write_computed() {
     let i = Interner::new();
@@ -1070,7 +1039,6 @@ fn variable_write_computed() {
 
 // -- Edge case: match block with binding pattern + body ----------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn match_binding_with_body() {
     let i = Interner::new();
@@ -1086,7 +1054,6 @@ fn match_binding_with_body() {
 
 // -- Edge case: variable shadowing across scopes -----------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variable_shadowing() {
     let i = Interner::new();
@@ -1118,7 +1085,6 @@ fn nested_match_blocks() {
 
 // -- Edge case: catch-all with nested binding --------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn catch_all_with_binding() {
     let i = Interner::new();
@@ -1165,7 +1131,6 @@ fn variable_write_in_iteration() {
 
 // -- Edge case: field access on destructured variable ------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn field_access_on_destructured() {
     let i = Interner::new();
@@ -1182,7 +1147,6 @@ fn field_access_on_destructured() {
 
 // -- Edge case: boolean operators in match ------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn equality_as_match_source() {
     let i = Interner::new();
@@ -1231,7 +1195,6 @@ fn lambda_not_param() {
 
 // -- Edge case: object pattern on match source (non-list) --------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn object_destructure_match() {
     let i = Interner::new();
@@ -1481,7 +1444,6 @@ fn lambda_float_arithmetic() {
 
 // -- Edge case: bool literal as match source ---------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn match_bool_literal() {
     let i = Interner::new();
@@ -1649,7 +1611,6 @@ fn builtin_all() {
 
 // -- Variant (Option) --------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_some_expr() {
     let i = Interner::new();
@@ -1657,7 +1618,6 @@ fn variant_some_expr() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_none_expr() {
     let i = Interner::new();
@@ -1665,7 +1625,6 @@ fn variant_none_expr() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_some_pattern() {
     let i = Interner::new();
@@ -1679,7 +1638,6 @@ fn variant_some_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn variant_none_pattern() {
     let i = Interner::new();
@@ -1918,7 +1876,6 @@ fn pruned_context_keys_in_dead_catch_all() {
 
 // -- SSA chain tests (script mode) -------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_context_read_write() {
     let i = Interner::new();
@@ -1943,7 +1900,6 @@ fn ssa_context_branch_phi() {
     }
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_multiple_contexts_independent() {
     let i = Interner::new();
@@ -2989,7 +2945,6 @@ fn projection_move_var_reassign_revives() {
 
 // -- Completeness: valid field access patterns -----------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_field_read_1depth() {
     let i = Interner::new();
@@ -2998,7 +2953,6 @@ fn sroa_context_field_read_1depth() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_field_read_2depth() {
     let i = Interner::new();
@@ -3008,7 +2962,6 @@ fn sroa_context_field_read_2depth() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_field_read_3depth() {
     let i = Interner::new();
@@ -3019,7 +2972,6 @@ fn sroa_context_field_read_3depth() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_field_read_arithmetic() {
     let i = Interner::new();
@@ -3028,7 +2980,6 @@ fn sroa_field_read_arithmetic() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_multiple_field_reads_same_object() {
     let i = Interner::new();
@@ -3059,7 +3010,6 @@ fn sroa_field_read_in_lambda() {
 
 // -- Soundness -------------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_soundness_context_write_back_preserved() {
     let i = Interner::new();
@@ -3087,7 +3037,6 @@ fn sroa_soundness_reject_fn_in_context() {
 
 // -- Context destructure chain ---------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_destructure_field_to_context() {
     let i = Interner::new();
@@ -3096,7 +3045,6 @@ fn sroa_context_destructure_field_to_context() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_chain_destructure() {
     let i = Interner::new();
@@ -3113,7 +3061,6 @@ fn sroa_context_chain_destructure() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn sroa_context_destructure_then_overwrite() {
     let i = Interner::new();
@@ -3124,7 +3071,6 @@ fn sroa_context_destructure_then_overwrite() {
 
 // -- Projection store ------------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn context_projection_store_1depth() {
     let i = Interner::new();
@@ -3133,7 +3079,6 @@ fn context_projection_store_1depth() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn context_projection_store_2depth() {
     let i = Interner::new();
@@ -3143,7 +3088,6 @@ fn context_projection_store_2depth() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn var_field_store_1depth() {
     let i = Interner::new();
@@ -3154,7 +3098,6 @@ fn var_field_store_1depth() {
 
 // -- Destructure projection ------------------------------------------
 
-#[ignore = "pending identity integration"]
 #[test]
 fn destructure_projection_read() {
     let i = Interner::new();
@@ -3163,7 +3106,6 @@ fn destructure_projection_read() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn destructure_projection_write() {
     let i = Interner::new();
@@ -3172,7 +3114,6 @@ fn destructure_projection_write() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn destructure_projection_shadowing() {
     let i = Interner::new();
@@ -3198,7 +3139,6 @@ fn uninit_field_load_rejected() {
     assert!(err.contains("UninitError"), "error should be UninitError: {}", err);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn init_field_load_passes() {
     let i = Interner::new();
@@ -3208,7 +3148,6 @@ fn init_field_load_passes() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn field_store_then_load_passes() {
     let i = Interner::new();
@@ -3227,7 +3166,6 @@ fn script_mode_ctx(i: &Interner, source: &str, ctx: &FxHashMap<Astr, Ty>) -> Str
     compile_script_mode_raw(i, source, ctx).unwrap()
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_let_bind() {
     let i = Interner::new();
@@ -3235,7 +3173,6 @@ fn script_let_bind() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_let_assign() {
     let i = Interner::new();
@@ -3243,7 +3180,6 @@ fn script_let_assign() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_let_shadowing() {
     let i = Interner::new();
@@ -3251,7 +3187,6 @@ fn script_let_shadowing() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_if_expr() {
     let i = Interner::new();
@@ -3259,7 +3194,6 @@ fn script_if_expr() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_if_else_if() {
     let i = Interner::new();
@@ -3267,7 +3201,6 @@ fn script_if_else_if() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_if_no_else() {
     let i = Interner::new();
@@ -3285,7 +3218,6 @@ fn script_for_loop() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_while_loop() {
     let i = Interner::new();
@@ -3294,7 +3226,6 @@ fn script_while_loop() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_while_let() {
     let i = Interner::new();
@@ -3310,7 +3241,6 @@ fn script_while_let() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn script_if_let_expr() {
     let i = Interner::new();

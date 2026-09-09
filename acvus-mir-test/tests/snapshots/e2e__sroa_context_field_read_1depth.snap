@@ -3,10 +3,10 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @obj
-     1 │   r1 = load r0
-     2 │   r2 = r1.name
-     3 │   return r2
+     0 |   r0 = ref @obj
+     1 |   r1 = load r0
+     2 |   r2 = r1.name
+     3 |   return r2
 
     ; r0 (v3) : Ref<{name: String}>
     ; r1 (v4) : {name: String}

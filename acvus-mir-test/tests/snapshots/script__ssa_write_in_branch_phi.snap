@@ -3,18 +3,18 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = ref @x
-     2 │   r2 = ref @cond
-     3 │   r3 = load r2
-     4 │   r4 = test r3 == 42
-     5 │   jump_if r4 then L0 else L1(r0)
-     6 │ L0:
-     8 │   jump L1(1 (r5))
-     9 │ L1(r6: Int):
-    10 │   store r1 = r6
-    11 │   r7 = ref @x
-    12 │   return r6
+     0 |   r0 = undef
+     1 |   r1 = ref @x
+     2 |   r2 = ref @cond
+     3 |   r3 = load r2
+     4 |   r4 = test r3 == 42
+     5 |   jump_if r4 then L0 else L1(r0)
+     6 | L0:
+     8 |   jump L1(1 (r5))
+     9 | L1(r6: Int):
+    10 |   store r1 = r6
+    11 |   r7 = ref @x
+    12 |   return r6
 
     ; r0 (v8) : Int
     ; r1 (v10) : Ref<Int>

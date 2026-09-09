@@ -6,33 +6,33 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     4 │   r3 = ref @data
-     5 │   r4 = load r3
-     6 │ L2:
-     8 │   r5 = r4.0
-    10 │   r6 = r5.0
-    12 │   r7 = true (r8) && true (r9)
-    13 │   r10 = r5.1
-    15 │   r11 = r7 && true (r12)
-    16 │   r13 = true (r14) && r11
-    17 │   r15 = r4.1
-    19 │   r16 = r13 && true (r17)
-    20 │   jump_if r16 then L3 else L1
-    21 │ L3:
-    22 │   r18 = r4.0
-    23 │   r19 = r18.0
-    24 │   r20 = r18.1
-    25 │   r21 = r4.1
-    27 │   r22 = T0 + r21
-    28 │   jump L0(r22, r19, r20, r21)
-    29 │ L1:
-    31 │   jump L0(T0, r0, r1, r2)
-    32 │ L0(r23: String, r24: Int, r25: Int, r26: String):  ; merge_of L2
-    33 │   r27 = T0 + r23
-    34 │   return r27
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     4 |   r3 = ref @data
+     5 |   r4 = load r3
+     6 | L2:
+     8 |   r5 = r4.0
+    10 |   r6 = r5.0
+    12 |   r7 = true (r8) && true (r9)
+    13 |   r10 = r5.1
+    15 |   r11 = r7 && true (r12)
+    16 |   r13 = true (r14) && r11
+    17 |   r15 = r4.1
+    19 |   r16 = r13 && true (r17)
+    20 |   jump_if r16 then L3 else L1
+    21 | L3:
+    22 |   r18 = r4.0
+    23 |   r19 = r18.0
+    24 |   r20 = r18.1
+    25 |   r21 = r4.1
+    27 |   r22 = T0 + r21
+    28 |   jump L0(r22, r19, r20, r21)
+    29 | L1:
+    31 |   jump L0(T0, r0, r1, r2)
+    32 | L0(r23: String, r24: Int, r25: Int, r26: String):  ; merge_of L2
+    33 |   r27 = T0 + r23
+    34 |   return r27
 
     ; r0 (v34) : Int
     ; r1 (v35) : Int

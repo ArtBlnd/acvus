@@ -11,40 +11,40 @@ expression: opt
   T5 = ")"
 
 === main ===
-     0 │   r0 = ref @output
-     1 │   r1 = ref @user
-     2 │   r2 = load r1
-     3 │   r3 = r2.age
-     6 │   r4 = r3 >= 18 (r5)
-     7 │   r6 = test r4 == true
-    10 │   r4 = r3 >= 18 (r5)
-    11 │   r7 = test r4 == true
-    14 │   r4 = r3 < 18 (r5)
-    15 │   r8 = test r4 == true
-    17 │   r9 = ref @output
-    18 │   r10 = r2.name
-    20 │   r11 = T5 + T4
-    21 │   r12 = ref @output
-    23 │   r13 = ref @output
-    24 │   jump_if r6 then L0 else L1(T0)
-    25 │ L0:
-    26 │   jump L1(T1)
-    27 │ L1(r14: String):
-    28 │   jump_if r7 then L2 else L3(T0)
-    29 │ L2:
-    30 │   jump L3(T2)
-    31 │ L3(r14: String):
-    32 │   store r0 = T0
-    33 │   jump_if r8 then L4 else L5
-    34 │ L4:
-    35 │   store r9 = T3
-    36 │   jump L5
-    37 │ L5:
-    38 │   r14 = load r12
-    39 │   r15 = r11 + T0
-    40 │   r14 = T1 + T5
-    41 │   store r13 = T0
-    42 │   return T0
+     0 |   r0 = ref @output
+     1 |   r1 = ref @user
+     2 |   r2 = load r1
+     3 |   r3 = r2.age
+     6 |   r4 = r3 >= 18 (r5)
+     7 |   r6 = test r4 == true
+    10 |   r4 = r3 >= 18 (r5)
+    11 |   r7 = test r4 == true
+    14 |   r4 = r3 < 18 (r5)
+    15 |   r8 = test r4 == true
+    17 |   r9 = ref @output
+    18 |   r10 = r2.name
+    20 |   r11 = T5 + T4
+    21 |   r12 = ref @output
+    23 |   r13 = ref @output
+    24 |   jump_if r6 then L0 else L1(T0)
+    25 | L0:
+    26 |   jump L1(T1)
+    27 | L1(r14: String):
+    28 |   jump_if r7 then L2 else L3(T0)
+    29 | L2:
+    30 |   jump L3(T2)
+    31 | L3(r14: String):
+    32 |   store r0 = T0
+    33 |   jump_if r8 then L4 else L5
+    34 | L4:
+    35 |   store r9 = T3
+    36 |   jump L5
+    37 | L5:
+    38 |   r14 = load r12
+    39 |   r15 = r11 + T0
+    40 |   r14 = T1 + T5
+    41 |   store r13 = T0
+    42 |   return T0
 
     ; r0 (@output) : Ref<String>
     ; r1 (@user) : Ref<{age: Int, name: String}>

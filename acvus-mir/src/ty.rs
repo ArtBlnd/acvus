@@ -1796,7 +1796,6 @@ mod tests {
 
     // -- Completeness: valid ExternCast coercions --
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_basic_coercion() {
         // UserDefined(A, [T]) -> List<T>
@@ -1812,7 +1811,6 @@ mod tests {
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_with_param_resolution() {
         // UserDefined(A, [T]) -> List<T>, where T is a fresh param on the consumer side
@@ -1830,7 +1828,6 @@ mod tests {
         assert_eq!(s.resolve_ty(&consumer_param), TyTerm::Int);
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_no_type_params() {
         // UserDefined(A, []) -> Int
@@ -1850,7 +1847,6 @@ mod tests {
 
     // -- Soundness: invalid ExternCast --
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_wrong_target_fails() {
         // Rule: A -> List<T>, but expected String
@@ -1868,7 +1864,6 @@ mod tests {
         );
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_no_rule_fails() {
         // No cast rules registered
@@ -1888,7 +1883,6 @@ mod tests {
         );
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_invariant_not_attempted() {
         // ExternCast only works in covariant/contravariant, not invariant
@@ -1908,7 +1902,6 @@ mod tests {
 
     // -- Ambiguity --
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_ambiguity_rejected() {
         // Bypass TypeRegistry duplicate check - inject two rules with same to head
@@ -1969,7 +1962,6 @@ mod tests {
 
     // -- TypeRegistry cast rules --
 
-    #[ignore = "pending identity integration"]
     #[test]
     #[should_panic(expected = "duplicate")]
     fn cast_registry_duplicate_panics() {
@@ -2012,7 +2004,6 @@ mod tests {
         });
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn cast_registry_different_to_head_ok() {
         let i = acvus_utils::Interner::new();

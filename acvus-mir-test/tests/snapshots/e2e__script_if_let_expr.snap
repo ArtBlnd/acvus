@@ -3,31 +3,31 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = variant Some(42 (r1))
-     2 │   r2 = test r0 is Some
-     3 │   jump_if r2 then L0 else L1
-     4 │ L0:
-     5 │   r3 = unwrap r0
-     7 │   jump L2(true (r4))
-     8 │ L1:
-    10 │   jump L2(false (r5))
-    11 │ L2(r6: Bool):
-    12 │   jump_if r6 then L3 else L5
-    13 │ L3:
-    14 │   r7 = unwrap r0
-    15 │   r8 = ref v
-    16 │   store r8 = r7
-    17 │   r9 = ref v
-    18 │   r10 = load r9
-    19 │   jump L4(r10)
-    20 │ L5:
-    22 │   jump L4(0 (r11))
-    23 │ L4(r12: Int):
-    24 │   r13 = ref x
-    25 │   store r13 = r12
-    26 │   r14 = ref x
-    27 │   r15 = load r14
-    28 │   return r15
+     1 |   r0 = variant Some(42 (r1))
+     2 |   r2 = test r0 is Some
+     3 |   jump_if r2 then L0 else L1
+     4 | L0:
+     5 |   r3 = unwrap r0
+     7 |   jump L2(true (r4))
+     8 | L1:
+    10 |   jump L2(false (r5))
+    11 | L2(r6: Bool):
+    12 |   jump_if r6 then L3 else L5
+    13 | L3:
+    14 |   r7 = unwrap r0
+    15 |   r8 = ref v
+    16 |   store r8 = r7
+    17 |   r9 = ref v
+    18 |   r10 = load r9
+    19 |   jump L4(r10)
+    20 | L5:
+    22 |   jump L4(0 (r11))
+    23 | L4(r12: Int):
+    24 |   r13 = ref x
+    25 |   store r13 = r12
+    26 |   r14 = ref x
+    27 |   r15 = load r14
+    28 |   return r15
 
     ; r0 (v2) : Option<Int>
     ; r1 (v1) : Int

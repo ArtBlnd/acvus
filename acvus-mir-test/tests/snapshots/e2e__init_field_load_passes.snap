@@ -3,12 +3,12 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   r1 = object {x: 42 (r0)}
-     2 │   r2 = ref @a
-     3 │   store r2 = r1
-     4 │   r3 = ref @a
-     5 │   r4 = r1.x
-     6 │   return r4
+     1 |   r1 = object {x: 42 (r0)}
+     2 |   r2 = ref @a
+     3 |   store r2 = r1
+     4 |   r3 = ref @a
+     5 |   r4 = r1.x
+     6 |   return r4
 
     ; r0 (v1) : Int
     ; r1 (v2) : {x: Int}

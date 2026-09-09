@@ -3,30 +3,30 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @a
-     1 │   r1 = load r0
-     2 │   r2 = ref @b
-     3 │   r3 = load r2
-     4 │   r4 = r1 + r3
-     5 │   r5 = ref sum
-     6 │   store r5 = r4
-     7 │   r6 = ref sum
-     8 │   r7 = load r6
-     9 │   r8 = ref @scale
-    10 │   r9 = load r8
-    11 │   r10 = r7 * r9
-    12 │   r11 = ref scaled
-    13 │   store r11 = r10
-    14 │   r12 = ref scaled
-    15 │   r13 = load r12
-    16 │   r14 = ref @a
-    17 │   r15 = load r14
-    18 │   r16 = r13 + r15
-    19 │   r17 = ref @output
-    20 │   store r17 = r16
-    21 │   r18 = ref @output
-    22 │   r19 = load r18
-    23 │   return r19
+     0 |   r0 = ref @a
+     1 |   r1 = load r0
+     2 |   r2 = ref @b
+     3 |   r3 = load r2
+     4 |   r4 = r1 + r3
+     5 |   r5 = ref sum
+     6 |   store r5 = r4
+     7 |   r6 = ref sum
+     8 |   r7 = load r6
+     9 |   r8 = ref @scale
+    10 |   r9 = load r8
+    11 |   r10 = r7 * r9
+    12 |   r11 = ref scaled
+    13 |   store r11 = r10
+    14 |   r12 = ref scaled
+    15 |   r13 = load r12
+    16 |   r14 = ref @a
+    17 |   r15 = load r14
+    18 |   r16 = r13 + r15
+    19 |   r17 = ref @output
+    20 |   store r17 = r16
+    21 |   r18 = ref @output
+    22 |   r19 = load r18
+    23 |   return r19
 
     ; r0 (@a) : Ref<Int>
     ; r1 (v2) : Int

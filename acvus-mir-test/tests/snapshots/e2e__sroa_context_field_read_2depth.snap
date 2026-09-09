@@ -3,11 +3,11 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @obj
-     1 │   r1 = load r0
-     2 │   r2 = r1.a.b
-     3 │   r3 = call #0(r2)
-     4 │   return r3
+     0 |   r0 = ref @obj
+     1 |   r1 = load r0
+     2 |   r2 = r1.a.b
+     3 |   r3 = call #0(r2)
+     4 |   return r3
 
     ; r0 (v4) : Ref<{a: {b: Int}}>
     ; r1 (v5) : {a: {b: Int}}

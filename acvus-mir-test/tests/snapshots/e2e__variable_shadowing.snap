@@ -7,13 +7,13 @@ expression: ir
   T1 = "outer"
 
 === main ===
-     0 │   r0 = undef
-     4 │   r1 = T0 + T0
-     5 │   r2 = ref @name
-     6 │   r3 = load r2
-     8 │   r4 = r1 + T0
-     9 │   r5 = r4 + r3
-    10 │   return r5
+     0 |   r0 = undef
+     4 |   r1 = T0 + T0
+     5 |   r2 = ref @name
+     6 |   r3 = load r2
+     8 |   r4 = r1 + T0
+     9 |   r5 = r4 + r3
+    10 |   return r5
 
     ; r0 (v15) : String
     ; r1 (v6) : String

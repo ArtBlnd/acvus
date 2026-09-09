@@ -3,15 +3,15 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     2 │   r0 = list [1 (r1), 2 (r2)]
-     3 │   r3 = cast DequeToList r0
-     4 │   r4 = ref $v4
-     5 │   r5 = load r4
-     6 │   r6 = call #0(r5)
-     7 │   r7 = closure L0 []
-     8 │   r8 = call #1(r6, r7)
-     9 │   r9 = call #2(r8)
-    10 │   return r9
+     2 |   r0 = list [1 (r1), 2 (r2)]
+     3 |   r3 = cast DequeToList r0
+     4 |   r4 = ref $v4
+     5 |   r5 = load r4
+     6 |   r6 = call #0(r5)
+     7 |   r7 = closure L0 []
+     8 |   r8 = call #1(r6, r7)
+     9 |   r9 = call #2(r8)
+    10 |   return r9
 
     ; r0 (v3) : Deque<Int, Identity(IdentityId(0))>
     ; r1 (v1) : Int

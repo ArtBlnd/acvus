@@ -6,19 +6,19 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 │   r0 = ref @items
-     2 │   r1 = load r0
-     3 │   r2 = call #0(r1)
-     5 │   r3 = closure L0 []
-     6 │   r4 = call #1(r2, 0 (r5), r3)
-     7 │   r6 = call #2(r4)
-     8 │   r7 = T0 + r6
-     9 │   return r7
+     1 |   r0 = ref @items
+     2 |   r1 = load r0
+     3 |   r2 = call #0(r1)
+     5 |   r3 = closure L0 []
+     6 |   r4 = call #1(r2, 0 (r5), r3)
+     7 |   r6 = call #2(r4)
+     8 |   r7 = T0 + r6
+     9 |   return r7
 
-    ; r0 (@items) : Ref<List<Int>>
-    ; r1 (v3) : List<Int>
-    ; r2 (v4) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r3 (v6) : Fn(Int, Int) -> Int
+    ; r0 (@items) : Ref<Array<Int, 3>>
+    ; r1 (v3) : Array<Int, 3>
+    ; r2 (v4) : Iterator<Int, Opaque, #IdentityId(1)>
+    ; r3 (v6) : Fn(Int, Int) -> Int with Opaque
     ; r4 (fold(...)) : Int
     ; r5 (v5) : Int
     ; r6 (to_string(...)) : String
@@ -26,10 +26,10 @@ expression: ir
     ; r8 (v1) : String
 
 === closure L0 (ValueId(0), ValueId(1)) ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = r3 + r4
-     3 │   return r2
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = r3 + r4
+     3 |   return r2
 
     ; r0 (v12) : Int
     ; r1 (v13) : Int

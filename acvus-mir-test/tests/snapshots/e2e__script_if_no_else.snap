@@ -3,17 +3,17 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref x
-     2 │   store r0 = 0 (r1)
-     4 │   jump_if true (r2) then L0 else L1
-     5 │ L0:
-     7 │   r3 = ref x
-     8 │   store r3 = 1 (r4)
-     9 │   jump L1
-    10 │ L1:
-    12 │   r5 = ref x
-    13 │   r6 = load r5
-    14 │   return r6
+     1 |   r0 = ref x
+     2 |   store r0 = 0 (r1)
+     4 |   jump_if true (r2) then L0 else L1
+     5 | L0:
+     7 |   r3 = ref x
+     8 |   store r3 = 1 (r4)
+     9 |   jump L1
+    10 | L1:
+    12 |   r5 = ref x
+    13 |   r6 = load r5
+    14 |   return r6
 
     ; r0 (v3) : Ref<Int>
     ; r1 (v1) : Int

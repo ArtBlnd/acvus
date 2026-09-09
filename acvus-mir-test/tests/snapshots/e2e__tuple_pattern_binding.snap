@@ -6,26 +6,26 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @pair
-     4 │   r3 = load r2
-     5 │ L2:
-     7 │   r4 = r3.0
-     9 │   r5 = true (r6) && true (r7)
-    10 │   r8 = r3.1
-    12 │   r9 = r5 && true (r10)
-    13 │   jump_if r9 then L3 else L1
-    14 │ L3:
-    15 │   r11 = r3.0
-    16 │   r12 = r3.1
-    18 │   r13 = T0 + r11
-    19 │   jump L0(r13, r11, r12)
-    20 │ L1:
-    22 │   jump L0(T0, r0, r1)
-    23 │ L0(r14: String, r15: String, r16: Int):  ; merge_of L2
-    24 │   r17 = T0 + r14
-    25 │   return r17
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @pair
+     4 |   r3 = load r2
+     5 | L2:
+     7 |   r4 = r3.0
+     9 |   r5 = true (r6) && true (r7)
+    10 |   r8 = r3.1
+    12 |   r9 = r5 && true (r10)
+    13 |   jump_if r9 then L3 else L1
+    14 | L3:
+    15 |   r11 = r3.0
+    16 |   r12 = r3.1
+    18 |   r13 = T0 + r11
+    19 |   jump L0(r13, r11, r12)
+    20 | L1:
+    22 |   jump L0(T0, r0, r1)
+    23 | L0(r14: String, r15: String, r16: Int):  ; merge_of L2
+    24 |   r17 = T0 + r14
+    25 |   return r17
 
     ; r0 (v24) : String
     ; r1 (v25) : Int

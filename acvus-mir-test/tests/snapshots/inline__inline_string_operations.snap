@@ -7,10 +7,10 @@ expression: ir
   T1 = "Hello "
 
 === main ===
-     2 │   r0 = ref $v1
-     3 │   r1 = load r0
-     4 │   r2 = T1 + r1
-     5 │   return r2
+     2 |   r0 = ref $v1
+     3 |   r1 = load r0
+     4 |   r2 = T1 + r1
+     5 |   return r2
 
     ; r0 (v5) : Ref<String>
     ; r1 ($name) : String

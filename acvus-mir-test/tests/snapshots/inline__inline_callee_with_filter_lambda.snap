@@ -3,16 +3,16 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     2 │   r0 = -2 (r1)
-     4 │   r2 = list [1 (r3), r0, 3 (r4)]
-     5 │   r5 = cast DequeToList r2
-     6 │   r6 = ref $v6
-     7 │   r7 = load r6
-     8 │   r8 = call #0(r7)
-     9 │   r9 = closure L0 []
-    10 │   r10 = call #1(r8, r9)
-    11 │   r11 = call #2(r10)
-    12 │   return r11
+     2 |   r0 = -2 (r1)
+     4 |   r2 = list [1 (r3), r0, 3 (r4)]
+     5 |   r5 = cast DequeToList r2
+     6 |   r6 = ref $v6
+     7 |   r7 = load r6
+     8 |   r8 = call #0(r7)
+     9 |   r9 = closure L0 []
+    10 |   r10 = call #1(r8, r9)
+    11 |   r11 = call #2(r10)
+    12 |   return r11
 
     ; r0 (v3) : Int
     ; r1 (v2) : Int

@@ -7,12 +7,12 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     2 │   r1 = variant None
-     3 │   r2 = ref x
-     4 │   store r2 = r1
-     6 │   r3 = T0 + T0
-     7 │   return r3
+     0 |   r0 = undef
+     2 |   r1 = variant None
+     3 |   r2 = ref x
+     4 |   store r2 = r1
+     6 |   r3 = T0 + T0
+     7 |   return r3
 
     ; r0 (v7) : <error>
     ; r1 (v2) : <error>

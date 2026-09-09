@@ -3,13 +3,13 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = ref @b
-     1 │   r1 = load r0
-     2 │   r2 = r1.x
-     3 │   r3 = ref @a
-     4 │   store r3 = r2
-     5 │   r4 = ref @a
-     6 │   return r2
+     0 |   r0 = ref @b
+     1 |   r1 = load r0
+     2 |   r2 = r1.x
+     3 |   r3 = ref @a
+     4 |   store r3 = r2
+     5 |   r4 = ref @a
+     6 |   return r2
 
     ; r0 (v6) : Ref<{x: Int}>
     ; r1 (v7) : {x: Int}

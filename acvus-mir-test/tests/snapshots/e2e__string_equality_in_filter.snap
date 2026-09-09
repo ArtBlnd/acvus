@@ -8,37 +8,39 @@ expression: ir
   T2 = "admin"
 
 === main ===
-     0 │   r0 = undef
-     2 │   r1 = ref @names
-     3 │   r2 = load r1
-     4 │   r3 = call #0(r2)
-     5 │   r4 = closure L0 []
-     6 │   r5 = call #1(r3, r4)
-     8 │   r6 = T0 + T0
-    10 │   r7 = call #2(r5, T1)
-    11 │   r8 = r6 + r7
-    12 │   return r8
+     0 |   r0 = undef
+     2 |   r1 = ref @names
+     3 |   r2 = load r1
+     4 |   r3 = call #0(r2)
+     5 |   r4 = call #1(r3)
+     6 |   r5 = closure L0 []
+     7 |   r6 = call #2(r4, r5)
+     9 |   r7 = T0 + T0
+    11 |   r8 = call #3(r6, T1)
+    12 |   r9 = r7 + r8
+    13 |   return r9
 
-    ; r0 (v16) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r1 (@names) : Ref<List<String>>
-    ; r2 (v3) : List<String>
-    ; r3 (iter(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r4 (v5) : Fn(String) -> Bool
-    ; r5 (filter(...)) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r6 (v10) : String
-    ; r7 (join(...)) : String
-    ; r8 (v15) : String
-    ; r9 (v11) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
-    ; r10 (v9) : String
-    ; r11 (v1) : String
-    ; r12 (x) : Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r13 (v13) : String
-    ; r14 (v8) : Ref<Iterator<String, Resolved(EffectSet { reads: {}, writes: {} })>>
+    ; r0 (v17) : Iterator<String, Opaque, #IdentityId(0)>
+    ; r1 (@names) : Ref<Array<String, 3>>
+    ; r2 (v3) : Array<String, 3>
+    ; r3 (v4) : List<String>
+    ; r4 (iter(...)) : Iterator<String, Opaque, #IdentityId(0)>
+    ; r5 (v6) : Fn(String) -> Bool with Opaque
+    ; r6 (filter(...)) : Iterator<String, Opaque, #IdentityId(0)>
+    ; r7 (v11) : String
+    ; r8 (join(...)) : String
+    ; r9 (v16) : String
+    ; r10 (v14) : String
+    ; r11 (v9) : Ref<Iterator<String, Opaque, #IdentityId(0)>>
+    ; r12 (v1) : String
+    ; r13 (v12) : Ref<Iterator<String, Opaque, #IdentityId(0)>>
+    ; r14 (v10) : String
+    ; r15 (x) : Iterator<String, Opaque, #IdentityId(0)>
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = undef
-     2 │   r1 = r2 != T2
-     3 │   return r1
+     0 |   r0 = undef
+     2 |   r1 = r2 != T2
+     3 |   return r1
 
     ; r0 (v8) : String
     ; r1 (v7) : Bool

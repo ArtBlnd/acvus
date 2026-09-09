@@ -6,8 +6,8 @@ expression: ir
   T0 = "value"
 
 === main ===
-     1 │   r1 = context_call @node { key: T0 }
-     2 │   yield r1
+     1 |   r1 = context_call @node { key: T0 }
+     2 |   yield r1
 
     ; r0 (v0) : String
     ; r1 (@node) : String

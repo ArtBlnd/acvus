@@ -6,11 +6,11 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     3 │   r1 = call #0(1 (r2))
-     5 │   r3 = T0 + T0
-     6 │   r4 = r3 + r1
-     7 │   return r4
+     0 |   r0 = undef
+     3 |   r1 = call #0(1 (r2))
+     5 |   r3 = T0 + T0
+     6 |   r4 = r3 + r1
+     7 |   return r4
 
     ; r0 (v11) : String
     ; r1 (fetch_user(...)) : String

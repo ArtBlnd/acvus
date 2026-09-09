@@ -2,18 +2,18 @@
 source: acvus-mir-test/tests/optimized_cross_fn.rs
 expression: raw
 ---
-── compute_score ──
+-- compute_score --
 === main ===
-     0 │   r0 = ref $v1
-     1 │   r1 = load r0
-     2 │   r2 = ref $v2
-     3 │   r3 = load r2
-     4 │   r4 = r1 + r3
-     5 │   r5 = ref $v3
-     6 │   r6 = load r5
-     7 │   r7 = r4 * r6
-     9 │   r8 = r7 / 100 (r9)
-    10 │   return r8
+     0 |   r0 = ref $v1
+     1 |   r1 = load r0
+     2 |   r2 = ref $v2
+     3 |   r3 = load r2
+     4 |   r4 = r1 + r3
+     5 |   r5 = ref $v3
+     6 |   r6 = load r5
+     7 |   r7 = r4 * r6
+     9 |   r8 = r7 / 100 (r9)
+    10 |   return r8
 
     ; r0 (v4) : Ref<Int>
     ; r1 ($profile) : Int
@@ -29,24 +29,24 @@ expression: raw
     ; r11 (v2) : Int
     ; r12 (v1) : Int
 
-── format_label ──
+-- format_label --
 === literals ===
   T0 = "User("
   T1 = " score:"
   T2 = ")"
 
 === main ===
-     1 │   r0 = ref $v1
-     2 │   r1 = load r0
-     3 │   r2 = call #0(r1)
-     4 │   r3 = T0 + r2
-     6 │   r4 = r3 + T1
-     7 │   r5 = ref $v2
-     8 │   r6 = load r5
-     9 │   r7 = call #0(r6)
-    10 │   r8 = r4 + r7
-    12 │   r9 = r8 + T2
-    13 │   return r9
+     1 |   r0 = ref $v1
+     2 |   r1 = load r0
+     3 |   r2 = call #0(r1)
+     4 |   r3 = T0 + r2
+     6 |   r4 = r3 + T1
+     7 |   r5 = ref $v2
+     8 |   r6 = load r5
+     9 |   r7 = call #0(r6)
+    10 |   r8 = r4 + r7
+    12 |   r9 = r8 + T2
+    13 |   return r9
 
     ; r0 (v4) : Ref<Int>
     ; r1 ($profile) : Int
@@ -64,65 +64,65 @@ expression: raw
     ; r13 (v2) : Int
     ; r14 (v8) : String
 
-── main ──
+-- main --
 === main ===
-     0 │   r0 = ref @user_id
-     1 │   r1 = load r0
-     2 │   r2 = call #0(r1)
-     3 │   r3 = ref profile
-     4 │   store r3 = r2
-     5 │   r4 = ref @user_id
-     6 │   r5 = load r4
-     7 │   r6 = call #1(r5)
-     8 │   r7 = ref history
-     9 │   store r7 = r6
-    10 │   r8 = ref profile
-    11 │   r9 = load r8
-    12 │   r10 = ref history
-    13 │   r11 = load r10
-    14 │   r12 = ref @weight
-    15 │   r13 = load r12
-    16 │   r14 = call #2(r9, r11, r13)
-    17 │   r15 = ref score
-    18 │   store r15 = r14
-    19 │   r16 = ref profile
-    20 │   r17 = load r16
-    21 │   r18 = ref score
-    22 │   r19 = load r18
-    23 │   r20 = call #3(r17, r19)
-    24 │   r21 = ref label
-    25 │   store r21 = r20
-    26 │   r22 = ref score
-    27 │   r23 = load r22
-    28 │   r24 = ref @threshold
-    29 │   r25 = load r24
-    30 │   r26 = r23 > r25
-    31 │   r27 = test r26 == true
-    32 │   jump_if r27 then L0 else L1
-    33 │ L0:
-    34 │   r28 = ref @user_id
-    35 │   r29 = load r28
-    36 │   r30 = ref score
-    37 │   r31 = load r30
-    38 │   r32 = call #4(r29, r31)
-    39 │   r33 = ref @alert_count
-    40 │   r34 = load r33
-    42 │   r35 = r34 + 1 (r36)
-    43 │   r37 = ref @alert_count
-    44 │   store r37 = r35
-    45 │   jump L1
-    46 │ L1:
-    47 │   r38 = ref label
-    48 │   r39 = load r38
-    49 │   r40 = ref @result_label
-    50 │   store r40 = r39
-    51 │   r41 = ref score
-    52 │   r42 = load r41
-    53 │   r43 = ref @result_score
-    54 │   store r43 = r42
-    55 │   r44 = ref score
-    56 │   r45 = load r44
-    57 │   return r45
+     0 |   r0 = ref @user_id
+     1 |   r1 = load r0
+     2 |   r2 = call #0(r1)
+     3 |   r3 = ref profile
+     4 |   store r3 = r2
+     5 |   r4 = ref @user_id
+     6 |   r5 = load r4
+     7 |   r6 = call #1(r5)
+     8 |   r7 = ref history
+     9 |   store r7 = r6
+    10 |   r8 = ref profile
+    11 |   r9 = load r8
+    12 |   r10 = ref history
+    13 |   r11 = load r10
+    14 |   r12 = ref @weight
+    15 |   r13 = load r12
+    16 |   r14 = call #2(r9, r11, r13)
+    17 |   r15 = ref score
+    18 |   store r15 = r14
+    19 |   r16 = ref profile
+    20 |   r17 = load r16
+    21 |   r18 = ref score
+    22 |   r19 = load r18
+    23 |   r20 = call #3(r17, r19)
+    24 |   r21 = ref label
+    25 |   store r21 = r20
+    26 |   r22 = ref score
+    27 |   r23 = load r22
+    28 |   r24 = ref @threshold
+    29 |   r25 = load r24
+    30 |   r26 = r23 > r25
+    31 |   r27 = test r26 == true
+    32 |   jump_if r27 then L0 else L1
+    33 | L0:
+    34 |   r28 = ref @user_id
+    35 |   r29 = load r28
+    36 |   r30 = ref score
+    37 |   r31 = load r30
+    38 |   r32 = call #4(r29, r31)
+    39 |   r33 = ref @alert_count
+    40 |   r34 = load r33
+    42 |   r35 = r34 + 1 (r36)
+    43 |   r37 = ref @alert_count
+    44 |   store r37 = r35
+    45 |   jump L1
+    46 | L1:
+    47 |   r38 = ref label
+    48 |   r39 = load r38
+    49 |   r40 = ref @result_label
+    50 |   store r40 = r39
+    51 |   r41 = ref score
+    52 |   r42 = load r41
+    53 |   r43 = ref @result_score
+    54 |   store r43 = r42
+    55 |   r44 = ref score
+    56 |   r45 = load r44
+    57 |   return r45
 
     ; r0 (@user_id) : Ref<Int>
     ; r1 (v2) : Int

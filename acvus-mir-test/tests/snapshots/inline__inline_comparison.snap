@@ -3,10 +3,10 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref $v1
-     2 │   r1 = load r0
-     4 │   r2 = r1 > 0 (r3)
-     5 │   return r2
+     1 |   r0 = ref $v1
+     2 |   r1 = load r0
+     4 |   r2 = r1 > 0 (r3)
+     5 |   return r2
 
     ; r0 (v4) : Ref<Int>
     ; r1 ($x) : Int

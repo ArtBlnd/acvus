@@ -6,30 +6,30 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @data
-     4 │   r3 = load r2
-     5 │ L2:
-     7 │   r4 = r3.0
-     9 │   r5 = true (r6) && true (r7)
-    10 │   r8 = r3.1
-    12 │   r9 = test has_key(r8, "x")
-    13 │   r10 = r8.x
-    15 │   r11 = true (r12) && true (r13)
-    16 │   r14 = r5 && r11
-    17 │   jump_if r14 then L3 else L1
-    18 │ L3:
-    19 │   r15 = r3.0
-    20 │   r16 = r3.1
-    21 │   r17 = r16.x
-    23 │   r18 = T0 + r15
-    24 │   jump L0(r18, r15, r17)
-    25 │ L1:
-    27 │   jump L0(T0, r0, r1)
-    28 │ L0(r19: String, r20: String, r21: Int):  ; merge_of L2
-    29 │   r22 = T0 + r19
-    30 │   return r22
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @data
+     4 |   r3 = load r2
+     5 | L2:
+     7 |   r4 = r3.0
+     9 |   r5 = true (r6) && true (r7)
+    10 |   r8 = r3.1
+    12 |   r9 = test has_key(r8, "x")
+    13 |   r10 = r8.x
+    15 |   r11 = true (r12) && true (r13)
+    16 |   r14 = r5 && r11
+    17 |   jump_if r14 then L3 else L1
+    18 | L3:
+    19 |   r15 = r3.0
+    20 |   r16 = r3.1
+    21 |   r17 = r16.x
+    23 |   r18 = T0 + r15
+    24 |   jump L0(r18, r15, r17)
+    25 | L1:
+    27 |   jump L0(T0, r0, r1)
+    28 | L0(r19: String, r20: String, r21: Int):  ; merge_of L2
+    29 |   r22 = T0 + r19
+    30 |   return r22
 
     ; r0 (v29) : String
     ; r1 (v30) : Int

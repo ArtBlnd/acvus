@@ -3,22 +3,22 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = ref @acc
-     3 │   r3 = ref @items
-     4 │   r4 = load r3
-     6 │   jump L0(0 (r5), r0, r1)
-     7 │ L0(r6: Int, r7: Int, r8: Int):
-     8 │   store r2 = r7
-     9 │   list_step r9, r10 = r4[r6] else L1()
-    10 │ L2:
-    11 │   r11 = ref @acc
-    12 │   r12 = r7 + r9
-    13 │   jump L0(r10, r12, r9)
-    14 │ L1:
-    15 │   r13 = ref @acc
-    16 │   return r7
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = ref @acc
+     3 |   r3 = ref @items
+     4 |   r4 = load r3
+     6 |   jump L0(0 (r5), r0, r1)
+     7 | L0(r6: Int, r7: Int, r8: Int):
+     8 |   store r2 = r7
+     9 |   list_step r9, r10 = r4[r6] else L1()
+    10 | L2:
+    11 |   r11 = ref @acc
+    12 |   r12 = r7 + r9
+    13 |   jump L0(r10, r12, r9)
+    14 | L1:
+    15 |   r13 = ref @acc
+    16 |   return r7
 
     ; r0 (v17) : Int
     ; r1 (v18) : Int

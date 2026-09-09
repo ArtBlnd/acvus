@@ -3,30 +3,30 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = ref @total
-     4 │   r4 = ref @outer
-     5 │   r5 = load r4
-     7 │   jump L0(0 (r6), r0, r1, r2)
-     8 │ L0(r7: Int, r8: Int, r9: List<Int>, r10: Int):
-     9 │   store r3 = r8
-    10 │   list_step r11, r12 = r5[r7] else L1()
-    11 │ L2:
-    13 │   jump L3(0 (r13), r8, r10)
-    14 │ L3(r14: Int, r15: Int, r16: Int):
-    15 │   store r3 = r15
-    16 │   list_step r17, r18 = r11[r14] else L4()
-    17 │ L5:
-    18 │   r19 = ref @total
-    19 │   r20 = r15 + r17
-    20 │   jump L3(r18, r20, r17)
-    21 │ L4:
-    22 │   jump L0(r12, r15, r11, r16)
-    23 │ L1:
-    24 │   r21 = ref @total
-    25 │   return r8
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = ref @total
+     4 |   r4 = ref @outer
+     5 |   r5 = load r4
+     7 |   jump L0(0 (r6), r0, r1, r2)
+     8 | L0(r7: Int, r8: Int, r9: List<Int>, r10: Int):
+     9 |   store r3 = r8
+    10 |   list_step r11, r12 = r5[r7] else L1()
+    11 | L2:
+    13 |   jump L3(0 (r13), r8, r10)
+    14 | L3(r14: Int, r15: Int, r16: Int):
+    15 |   store r3 = r15
+    16 |   list_step r17, r18 = r11[r14] else L4()
+    17 | L5:
+    18 |   r19 = ref @total
+    19 |   r20 = r15 + r17
+    20 |   jump L3(r18, r20, r17)
+    21 | L4:
+    22 |   jump L0(r12, r15, r11, r16)
+    23 | L1:
+    24 |   r21 = ref @total
+    25 |   return r8
 
     ; r0 (v25) : Int
     ; r1 (v26) : List<Int>

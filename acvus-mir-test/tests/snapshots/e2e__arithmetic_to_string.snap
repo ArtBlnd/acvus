@@ -6,14 +6,14 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 │   r0 = ref @a
-     2 │   r1 = load r0
-     3 │   r2 = ref @b
-     4 │   r3 = load r2
-     5 │   r4 = r1 + r3
-     6 │   r5 = call #0(r4)
-     7 │   r6 = T0 + r5
-     8 │   return r6
+     1 |   r0 = ref @a
+     2 |   r1 = load r0
+     3 |   r2 = ref @b
+     4 |   r3 = load r2
+     5 |   r4 = r1 + r3
+     6 |   r5 = call #0(r4)
+     7 |   r6 = T0 + r5
+     8 |   return r6
 
     ; r0 (@a) : Ref<Int>
     ; r1 (v3) : Int

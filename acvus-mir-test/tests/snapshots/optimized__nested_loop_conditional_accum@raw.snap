@@ -3,62 +3,62 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 │   r0 = ref @matrix
-     1 │   r1 = load r0
-     3 │   jump L0(0 (r2))
-     4 │ L0(r3: Int):
-     5 │   list_step r4, r5 = r1[r3] else L1()
-     6 │ L2:
-     7 │   r6 = ref row
-     8 │   store r6 = r4
-     9 │   r7 = ref row
-    10 │   r8 = load r7
-    12 │   jump L3(0 (r9))
-    13 │ L3(r10: Int):
-    14 │   list_step r11, r12 = r8[r10] else L4()
-    15 │ L5:
-    16 │   r13 = ref y
-    17 │   store r13 = r11
-    18 │   r14 = ref y
-    19 │   r15 = load r14
-    21 │   r16 = r15 > 0 (r17)
-    22 │   r18 = test r16 == true
-    23 │   jump_if r18 then L6 else L7
-    24 │ L6:
-    25 │   r19 = ref @pos_sum
-    26 │   r20 = load r19
-    27 │   r21 = ref y
-    28 │   r22 = load r21
-    29 │   r23 = r20 + r22
-    30 │   r24 = ref @pos_sum
-    31 │   store r24 = r23
-    32 │   jump L7
-    33 │ L7:
-    34 │   r25 = ref y
-    35 │   r26 = load r25
-    37 │   r27 = r26 < 0 (r28)
-    38 │   r29 = test r27 == true
-    39 │   jump_if r29 then L8 else L9
-    40 │ L8:
-    41 │   r30 = ref @neg_sum
-    42 │   r31 = load r30
-    43 │   r32 = ref y
-    44 │   r33 = load r32
-    45 │   r34 = r31 + r33
-    46 │   r35 = ref @neg_sum
-    47 │   store r35 = r34
-    48 │   jump L9
-    49 │ L9:
-    50 │   jump L3(r12)
-    51 │ L4:
-    52 │   jump L0(r5)
-    53 │ L1:
-    54 │   r36 = ref @pos_sum
-    55 │   r37 = load r36
-    56 │   r38 = ref @neg_sum
-    57 │   r39 = load r38
-    58 │   r40 = object {pos: r37, neg: r39}
-    59 │   return r40
+     0 |   r0 = ref @matrix
+     1 |   r1 = load r0
+     3 |   jump L0(0 (r2))
+     4 | L0(r3: Int):
+     5 |   list_step r4, r5 = r1[r3] else L1()
+     6 | L2:
+     7 |   r6 = ref row
+     8 |   store r6 = r4
+     9 |   r7 = ref row
+    10 |   r8 = load r7
+    12 |   jump L3(0 (r9))
+    13 | L3(r10: Int):
+    14 |   list_step r11, r12 = r8[r10] else L4()
+    15 | L5:
+    16 |   r13 = ref y
+    17 |   store r13 = r11
+    18 |   r14 = ref y
+    19 |   r15 = load r14
+    21 |   r16 = r15 > 0 (r17)
+    22 |   r18 = test r16 == true
+    23 |   jump_if r18 then L6 else L7
+    24 | L6:
+    25 |   r19 = ref @pos_sum
+    26 |   r20 = load r19
+    27 |   r21 = ref y
+    28 |   r22 = load r21
+    29 |   r23 = r20 + r22
+    30 |   r24 = ref @pos_sum
+    31 |   store r24 = r23
+    32 |   jump L7
+    33 | L7:
+    34 |   r25 = ref y
+    35 |   r26 = load r25
+    37 |   r27 = r26 < 0 (r28)
+    38 |   r29 = test r27 == true
+    39 |   jump_if r29 then L8 else L9
+    40 | L8:
+    41 |   r30 = ref @neg_sum
+    42 |   r31 = load r30
+    43 |   r32 = ref y
+    44 |   r33 = load r32
+    45 |   r34 = r31 + r33
+    46 |   r35 = ref @neg_sum
+    47 |   store r35 = r34
+    48 |   jump L9
+    49 | L9:
+    50 |   jump L3(r12)
+    51 | L4:
+    52 |   jump L0(r5)
+    53 | L1:
+    54 |   r36 = ref @pos_sum
+    55 |   r37 = load r36
+    56 |   r38 = ref @neg_sum
+    57 |   r39 = load r38
+    58 |   r40 = object {pos: r37, neg: r39}
+    59 |   return r40
 
     ; r0 (@matrix) : Ref<List<List<Int>>>
     ; r1 (v2) : List<List<Int>>

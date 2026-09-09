@@ -3,23 +3,23 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   jump_if false (r0) then L0 else L2
-     2 │ L0:
-     4 │   jump L1(1 (r1))
-     5 │ L2:
-     7 │   jump_if true (r2) then L3 else L5
-     8 │ L3:
-    10 │   jump L4(2 (r3))
-    11 │ L5:
-    13 │   jump L4(3 (r4))
-    14 │ L4(r5: Int):
-    15 │   jump L1(r5)
-    16 │ L1(r6: Int):
-    17 │   r7 = ref x
-    18 │   store r7 = r6
-    19 │   r8 = ref x
-    20 │   r9 = load r8
-    21 │   return r9
+     1 |   jump_if false (r0) then L0 else L2
+     2 | L0:
+     4 |   jump L1(1 (r1))
+     5 | L2:
+     7 |   jump_if true (r2) then L3 else L5
+     8 | L3:
+    10 |   jump L4(2 (r3))
+    11 | L5:
+    13 |   jump L4(3 (r4))
+    14 | L4(r5: Int):
+    15 |   jump L1(r5)
+    16 | L1(r6: Int):
+    17 |   r7 = ref x
+    18 |   store r7 = r6
+    19 |   r8 = ref x
+    20 |   r9 = load r8
+    21 |   return r9
 
     ; r0 (v1) : Bool
     ; r1 (v2) : Int

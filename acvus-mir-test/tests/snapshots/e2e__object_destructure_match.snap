@@ -7,31 +7,31 @@ expression: ir
   T1 = "none"
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @user
-     4 │   r3 = load r2
-     5 │ L2:
-     7 │   r4 = test has_key(r3, "name")
-     8 │   r5 = r3.name
-    10 │   r6 = true (r7) && true (r8)
-    11 │   r9 = test has_key(r3, "age")
-    12 │   r10 = r3.age
-    14 │   r11 = r6 && true (r12)
-    15 │   jump_if r11 then L3 else L1
-    16 │ L3:
-    17 │   r13 = r3.name
-    18 │   r14 = r3.age
-    20 │   r15 = T0 + r13
-    21 │   r16 = call #0(r14)
-    22 │   r17 = r15 + r16
-    23 │   jump L0(r17, r13, r14)
-    24 │ L1:
-    27 │   r18 = T0 + T1
-    28 │   jump L0(r18, r0, r1)
-    29 │ L0(r19: String, r20: String, r21: Int):  ; merge_of L2
-    30 │   r22 = T0 + r19
-    31 │   return r22
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @user
+     4 |   r3 = load r2
+     5 | L2:
+     7 |   r4 = test has_key(r3, "name")
+     8 |   r5 = r3.name
+    10 |   r6 = true (r7) && true (r8)
+    11 |   r9 = test has_key(r3, "age")
+    12 |   r10 = r3.age
+    14 |   r11 = r6 && true (r12)
+    15 |   jump_if r11 then L3 else L1
+    16 | L3:
+    17 |   r13 = r3.name
+    18 |   r14 = r3.age
+    20 |   r15 = T0 + r13
+    21 |   r16 = call #0(r14)
+    22 |   r17 = r15 + r16
+    23 |   jump L0(r17, r13, r14)
+    24 | L1:
+    27 |   r18 = T0 + T1
+    28 |   jump L0(r18, r0, r1)
+    29 | L0(r19: String, r20: String, r21: Int):  ; merge_of L2
+    30 |   r22 = T0 + r19
+    31 |   return r22
 
     ; r0 (v32) : String
     ; r1 (v33) : Int

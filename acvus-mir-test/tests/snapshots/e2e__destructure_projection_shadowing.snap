@@ -3,15 +3,15 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref @x
-     2 │   store r0 = 99 (r1)
-     4 │   r2 = ref @a
-     5 │   r3 = load r2
-     6 │   r4 = field_set r3.x = 42 (r5)
-     7 │   r6 = ref @a
-     8 │   store r6 = r4
-     9 │   r7 = ref @x
-    10 │   return 99 (r1)
+     1 |   r0 = ref @x
+     2 |   store r0 = 99 (r1)
+     4 |   r2 = ref @a
+     5 |   r3 = load r2
+     6 |   r4 = field_set r3.x = 42 (r5)
+     7 |   r6 = ref @a
+     8 |   store r6 = r4
+     9 |   r7 = ref @x
+    10 |   return 99 (r1)
 
     ; r0 (@x) : Ref<Int>
     ; r1 (v1) : Int

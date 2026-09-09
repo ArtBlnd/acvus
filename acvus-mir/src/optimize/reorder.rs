@@ -250,7 +250,6 @@ mod tests {
 
     // -- Basic: Spawn moves before Eval ------------------------------
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn two_independent_spawns_before_evals() {
         // Before: spawn_a, eval_a, spawn_b, eval_b, add, return
@@ -337,7 +336,6 @@ mod tests {
 
     // -- Dependency: Eval must wait for its Spawn --------------------
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn eval_after_its_spawn() {
         let i = Interner::new();
@@ -370,7 +368,6 @@ mod tests {
 
     // -- Independent work fills Spawn-Eval gap -----------------------
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn independent_work_between_spawn_and_eval() {
         // spawn, const, const, eval, add, return

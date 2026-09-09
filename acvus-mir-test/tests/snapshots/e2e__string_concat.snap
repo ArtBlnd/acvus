@@ -9,10 +9,10 @@ expression: ir
   T3 = "world"
 
 === main ===
-     3 │   r0 = T1 + T2
-     5 │   r1 = r0 + T3
-     6 │   r2 = T0 + r1
-     7 │   return r2
+     3 |   r0 = T1 + T2
+     5 |   r1 = r0 + T3
+     6 |   r2 = T0 + r1
+     7 |   return r2
 
     ; r0 (v4) : String
     ; r1 (v6) : String

@@ -748,7 +748,6 @@ mod tests {
         assert!(eval_idx > merge_idx, "eval must stay in merge block");
     }
 
-    #[ignore = "pending identity integration"]
     #[test]
     fn token_conflict_prevents_hoist() {
         let i = Interner::new();

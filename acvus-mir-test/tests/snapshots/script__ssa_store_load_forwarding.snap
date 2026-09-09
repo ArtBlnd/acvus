@@ -3,10 +3,10 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref @x
-     2 │   store r0 = 42 (r1)
-     3 │   r2 = ref @x
-     4 │   return 42 (r1)
+     1 |   r0 = ref @x
+     2 |   store r0 = 42 (r1)
+     3 |   r2 = ref @x
+     4 |   return 42 (r1)
 
     ; r0 (@x) : Ref<Int>
     ; r1 (v1) : Int

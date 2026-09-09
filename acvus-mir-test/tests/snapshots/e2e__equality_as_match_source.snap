@@ -8,23 +8,23 @@ expression: ir
   T2 = "not equal"
 
 === main ===
-     1 │   r0 = ref @a
-     2 │   r1 = load r0
-     3 │   r2 = ref @b
-     4 │   r3 = load r2
-     5 │   r4 = r1 == r3
-     6 │ L2:
-     7 │   r5 = test r4 == true
-     8 │   jump_if r5 then L3 else L1
-     9 │ L3:
-    12 │   r6 = T0 + T1
-    13 │   jump L0(r6)
-    14 │ L1:
-    17 │   r7 = T0 + T2
-    18 │   jump L0(r7)
-    19 │ L0(r8: String):  ; merge_of L2
-    20 │   r9 = T0 + r8
-    21 │   return r9
+     1 |   r0 = ref @a
+     2 |   r1 = load r0
+     3 |   r2 = ref @b
+     4 |   r3 = load r2
+     5 |   r4 = r1 == r3
+     6 | L2:
+     7 |   r5 = test r4 == true
+     8 |   jump_if r5 then L3 else L1
+     9 | L3:
+    12 |   r6 = T0 + T1
+    13 |   jump L0(r6)
+    14 | L1:
+    17 |   r7 = T0 + T2
+    18 |   jump L0(r7)
+    19 | L0(r8: String):  ; merge_of L2
+    20 |   r9 = T0 + r8
+    21 |   return r9
 
     ; r0 (@a) : Ref<Int>
     ; r1 (v3) : Int

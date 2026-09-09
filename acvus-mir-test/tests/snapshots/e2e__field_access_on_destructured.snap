@@ -6,23 +6,23 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     2 │   r1 = ref @pair
-     3 │   r2 = load r1
-     4 │ L2:
-     6 │   r3 = r2.0
-     8 │   r4 = true (r5) && true (r6)
-     9 │   jump_if r4 then L3 else L1
-    10 │ L3:
-    11 │   r7 = r2.0
-    13 │   r8 = r7.name
-    14 │   r9 = T0 + r8
-    15 │   jump L0(r9, r7)
-    16 │ L1:
-    18 │   jump L0(T0, r0)
-    19 │ L0(r10: String, r11: {name: String}):  ; merge_of L2
-    20 │   r12 = T0 + r10
-    21 │   return r12
+     0 |   r0 = undef
+     2 |   r1 = ref @pair
+     3 |   r2 = load r1
+     4 | L2:
+     6 |   r3 = r2.0
+     8 |   r4 = true (r5) && true (r6)
+     9 |   jump_if r4 then L3 else L1
+    10 | L3:
+    11 |   r7 = r2.0
+    13 |   r8 = r7.name
+    14 |   r9 = T0 + r8
+    15 |   jump L0(r9, r7)
+    16 | L1:
+    18 |   jump L0(T0, r0)
+    19 | L0(r10: String, r11: {name: String}):  ; merge_of L2
+    20 |   r12 = T0 + r10
+    21 |   return r12
 
     ; r0 (v20) : {name: String}
     ; r1 (@pair) : Ref<({name: String}, Int)>

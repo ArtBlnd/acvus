@@ -97,7 +97,6 @@ fn loop_range_iteration() {
 //  2. Branch (match-bind / if-let)
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn branch_simple_bind() {
     // Irrefutable: x = @data { body } - no branching needed
@@ -107,7 +106,6 @@ fn branch_simple_bind() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn branch_refutable_literal() {
     // Refutable: literal match - needs test + branch
@@ -117,7 +115,6 @@ fn branch_refutable_literal() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn branch_destructure_object() {
     let i = Interner::new();
@@ -130,7 +127,6 @@ fn branch_destructure_object() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn branch_nested_match() {
     let i = Interner::new();
@@ -139,7 +135,6 @@ fn branch_nested_match() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn branch_context_write_in_refutable() {
     // Context write inside refutable branch - needs PHI at merge
@@ -153,7 +148,6 @@ fn branch_context_write_in_refutable() {
 //  3. SSA
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_store_load_forwarding() {
     // Context write then read - SSA should forward the stored value
@@ -163,7 +157,6 @@ fn ssa_store_load_forwarding() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_write_in_branch_phi() {
     // Context write in one branch - PHI at merge point
@@ -186,7 +179,6 @@ fn ssa_write_in_loop_phi() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_multiple_contexts() {
     // Independent SSA chains for different contexts
@@ -196,7 +188,6 @@ fn ssa_multiple_contexts() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn ssa_sequential_writes() {
     // Multiple writes to same context - only last value visible
@@ -236,7 +227,6 @@ fn func_pipe_chain() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn func_to_string_in_bind() {
     let i = Interner::new();

@@ -6,36 +6,36 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     4 │   r3 = ref @users
-     5 │   r4 = load r3
-     8 │   jump L0(0 (r5), T0, r0, r1, r2)
-     9 │ L0(r6: Int, r7: String, r8: String, r9: List<{title: String}>, r10: String):
-    10 │   list_step r11, r12 = r4[r6] else L1(r7)
-    11 │ L3:
-    12 │   r13 = r11.name
-    13 │   r14 = r11.posts
-    17 │   jump L4(0 (r15), T0, r10)
-    18 │ L4(r16: Int, r17: String, r18: String):
-    19 │   list_step r19, r20 = r14[r16] else L5(r17)
-    20 │ L7:
-    21 │   r21 = r19.title
-    23 │   r22 = T0 + r21
-    24 │   r23 = r17 + r22
-    25 │   jump L4(r20, r23, r21)
-    26 │ L5(r24: String):
-    27 │   jump L6(r24)
-    28 │ L6(r25: String):
-    29 │   r26 = T0 + r25
-    30 │   r27 = r7 + r26
-    31 │   jump L0(r12, r27, r13, r14, r18)
-    32 │ L1(r28: String):
-    33 │   jump L2(r28)
-    34 │ L2(r29: String):
-    35 │   r30 = T0 + r29
-    36 │   return r30
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     4 |   r3 = ref @users
+     5 |   r4 = load r3
+     8 |   jump L0(0 (r5), T0, r0, r1, r2)
+     9 | L0(r6: Int, r7: String, r8: String, r9: List<{title: String}>, r10: String):
+    10 |   list_step r11, r12 = r4[r6] else L1(r7)
+    11 | L3:
+    12 |   r13 = r11.name
+    13 |   r14 = r11.posts
+    17 |   jump L4(0 (r15), T0, r10)
+    18 | L4(r16: Int, r17: String, r18: String):
+    19 |   list_step r19, r20 = r14[r16] else L5(r17)
+    20 | L7:
+    21 |   r21 = r19.title
+    23 |   r22 = T0 + r21
+    24 |   r23 = r17 + r22
+    25 |   jump L4(r20, r23, r21)
+    26 | L5(r24: String):
+    27 |   jump L6(r24)
+    28 | L6(r25: String):
+    29 |   r26 = T0 + r25
+    30 |   r27 = r7 + r26
+    31 |   jump L0(r12, r27, r13, r14, r18)
+    32 | L1(r28: String):
+    33 |   jump L2(r28)
+    34 | L2(r29: String):
+    35 |   r30 = T0 + r29
+    36 |   return r30
 
     ; r0 (v40) : String
     ; r1 (v41) : List<{title: String}>

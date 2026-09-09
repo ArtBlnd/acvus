@@ -6,33 +6,33 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @matrix
-     4 │   r3 = load r2
-     7 │   jump L0(0 (r4), T0, r0, r1)
-     8 │ L0(r5: Int, r6: String, r7: List<Int>, r8: Int):
-     9 │   list_step r9, r10 = r3[r5] else L1(r6)
-    10 │ L3:
-    14 │   jump L4(0 (r11), T0, r8)
-    15 │ L4(r12: Int, r13: String, r14: Int):
-    16 │   list_step r15, r16 = r9[r12] else L5(r13)
-    17 │ L7:
-    19 │   r17 = call #0(r15)
-    20 │   r18 = T0 + r17
-    21 │   r19 = r13 + r18
-    22 │   jump L4(r16, r19, r15)
-    23 │ L5(r20: String):
-    24 │   jump L6(r20)
-    25 │ L6(r21: String):
-    26 │   r22 = T0 + r21
-    27 │   r23 = r6 + r22
-    28 │   jump L0(r10, r23, r9, r14)
-    29 │ L1(r24: String):
-    30 │   jump L2(r24)
-    31 │ L2(r25: String):
-    32 │   r26 = T0 + r25
-    33 │   return r26
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @matrix
+     4 |   r3 = load r2
+     7 |   jump L0(0 (r4), T0, r0, r1)
+     8 | L0(r5: Int, r6: String, r7: List<Int>, r8: Int):
+     9 |   list_step r9, r10 = r3[r5] else L1(r6)
+    10 | L3:
+    14 |   jump L4(0 (r11), T0, r8)
+    15 | L4(r12: Int, r13: String, r14: Int):
+    16 |   list_step r15, r16 = r9[r12] else L5(r13)
+    17 | L7:
+    19 |   r17 = call #0(r15)
+    20 |   r18 = T0 + r17
+    21 |   r19 = r13 + r18
+    22 |   jump L4(r16, r19, r15)
+    23 | L5(r20: String):
+    24 |   jump L6(r20)
+    25 | L6(r21: String):
+    26 |   r22 = T0 + r21
+    27 |   r23 = r6 + r22
+    28 |   jump L0(r10, r23, r9, r14)
+    29 | L1(r24: String):
+    30 |   jump L2(r24)
+    31 | L2(r25: String):
+    32 |   r26 = T0 + r25
+    33 |   return r26
 
     ; r0 (v36) : List<Int>
     ; r1 (v37) : Int

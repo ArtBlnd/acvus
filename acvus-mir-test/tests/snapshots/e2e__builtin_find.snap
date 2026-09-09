@@ -6,28 +6,28 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 │   r0 = ref @items
-     2 │   r1 = load r0
-     3 │   r2 = call #0(r1)
-     4 │   r3 = closure L0 []
-     5 │   r4 = call #1(r2, r3)
-     6 │   r5 = call #2(r4)
-     7 │   r6 = T0 + r5
-     8 │   return r6
+     1 |   r0 = ref @items
+     2 |   r1 = load r0
+     3 |   r2 = call #0(r1)
+     4 |   r3 = closure L0 []
+     5 |   r4 = call #1(r2, r3)
+     6 |   r5 = call #2(r4)
+     7 |   r6 = T0 + r5
+     8 |   return r6
 
-    ; r0 (@items) : Ref<List<Int>>
-    ; r1 (v3) : List<Int>
-    ; r2 (v4) : Iterator<Int, Resolved(EffectSet { reads: {}, writes: {} })>
-    ; r3 (v5) : Fn(Int) -> Bool
+    ; r0 (@items) : Ref<Array<Int, 3>>
+    ; r1 (v3) : Array<Int, 3>
+    ; r2 (v4) : Iterator<Int, Opaque, #IdentityId(1)>
+    ; r3 (v5) : Fn(Int) -> Bool with Opaque
     ; r4 (find(...)) : Int
     ; r5 (to_string(...)) : String
     ; r6 (v8) : String
     ; r7 (v1) : String
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = undef
-     2 │   r1 = r2 > 10 (r3)
-     3 │   return r1
+     0 |   r0 = undef
+     2 |   r1 = r2 > 10 (r3)
+     3 |   return r1
 
     ; r0 (v8) : Int
     ; r1 (v7) : Bool

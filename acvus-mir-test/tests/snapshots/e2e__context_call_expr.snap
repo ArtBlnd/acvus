@@ -3,10 +3,10 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = context_load @items
-     1 │   r1 = call len(r0)
-     2 │   r2 = context_call @node { count: r1 }
-     3 │   yield r2
+     0 |   r0 = context_load @items
+     1 |   r1 = call len(r0)
+     2 |   r2 = context_call @node { count: r1 }
+     3 |   yield r2
 
     ; r0 (@items) : List<Int>
     ; r1 (len(...)) : Int

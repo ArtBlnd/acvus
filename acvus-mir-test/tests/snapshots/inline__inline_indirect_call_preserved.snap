@@ -3,11 +3,11 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = closure L0 []
-     3 │   r2 = undef
-     5 │   r3 = r4 + 1 (r5)
-     6 │   return r3
+     0 |   r0 = undef
+     1 |   r1 = closure L0 []
+     3 |   r2 = undef
+     5 |   r3 = r4 + 1 (r5)
+     6 |   return r3
 
     ; r0 (v4) : Fn(Int) -> Int
     ; r1 (v0) : Fn(Int) -> Int
@@ -21,9 +21,9 @@ expression: ir
     ; r9 (v1) : Int
 
 === closure L0 (ValueId(0)) ===
-     0 │   r0 = undef
-     2 │   r1 = r2 + 1 (r3)
-     3 │   return r1
+     0 |   r0 = undef
+     2 |   r1 = r2 + 1 (r3)
+     3 |   return r1
 
     ; r0 (v4) : Int
     ; r1 (v3) : Int

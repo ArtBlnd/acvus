@@ -3,34 +3,34 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = ref @sum
-     4 │   r4 = ref @a
-     5 │   r5 = load r4
-     7 │   jump L0(0 (r6), r0, r1)
-     8 │ L0(r7: Int, r8: Int, r9: Int):
-     9 │   store r3 = r8
-    10 │   list_step r10, r11 = r5[r7] else L1()
-    11 │ L2:
-    12 │   r12 = ref @sum
-    13 │   r13 = r8 + r10
-    14 │   jump L0(r11, r13, r10)
-    15 │ L1:
-    16 │   r14 = ref @b
-    17 │   r15 = load r14
-    19 │   jump L3(0 (r16), r8, r2)
-    20 │ L3(r17: Int, r18: Int, r19: Int):
-    21 │   store r3 = r18
-    22 │   list_step r20, r21 = r15[r17] else L4()
-    23 │ L5:
-    24 │   r22 = ref @sum
-    25 │   r23 = r18 + r20
-    26 │   jump L3(r21, r23, r20)
-    27 │ L4:
-    28 │   r24 = ref @sum
-    29 │   return r18
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = ref @sum
+     4 |   r4 = ref @a
+     5 |   r5 = load r4
+     7 |   jump L0(0 (r6), r0, r1)
+     8 | L0(r7: Int, r8: Int, r9: Int):
+     9 |   store r3 = r8
+    10 |   list_step r10, r11 = r5[r7] else L1()
+    11 | L2:
+    12 |   r12 = ref @sum
+    13 |   r13 = r8 + r10
+    14 |   jump L0(r11, r13, r10)
+    15 | L1:
+    16 |   r14 = ref @b
+    17 |   r15 = load r14
+    19 |   jump L3(0 (r16), r8, r2)
+    20 | L3(r17: Int, r18: Int, r19: Int):
+    21 |   store r3 = r18
+    22 |   list_step r20, r21 = r15[r17] else L4()
+    23 | L5:
+    24 |   r22 = ref @sum
+    25 |   r23 = r18 + r20
+    26 |   jump L3(r21, r23, r20)
+    27 | L4:
+    28 |   r24 = ref @sum
+    29 |   return r18
 
     ; r0 (v31) : Int
     ; r1 (v32) : Int

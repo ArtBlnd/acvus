@@ -29,7 +29,6 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
 //  1. Basic inline - local function calls become flat IR
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_simple_call() {
     // double(x) = x + x; main calls double(5)
@@ -44,7 +43,6 @@ fn inline_simple_call() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_multi_arg() {
     // add(a, b) = a + b; main calls add(3, 4)
@@ -59,7 +57,6 @@ fn inline_multi_arg() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_chain() {
     // inc(x) = x + 1; double(x) = x + x; main = double(inc(3))
@@ -77,7 +74,6 @@ fn inline_chain() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_multiple_calls() {
     // inc(x) = x + 1; main = inc(1) + inc(2)
@@ -92,7 +88,6 @@ fn inline_multiple_calls() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_return_used_in_binop() {
     // square(x) = x * x; main = square(3) + square(4)
@@ -107,7 +102,6 @@ fn inline_return_used_in_binop() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_no_arg_function() {
     // get_five() = 5; main = get_five()
@@ -122,7 +116,6 @@ fn inline_no_arg_function() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_pipe_syntax() {
     // double(x) = x + x; main = 5 | double
@@ -137,7 +130,6 @@ fn inline_pipe_syntax() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_pipe_with_extra_args() {
     // add(a, b) = a + b; main = 3 | add(4)
@@ -156,7 +148,6 @@ fn inline_pipe_with_extra_args() {
 //  2. ExternFn preservation - extern calls must NOT be inlined
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_preserves_extern_call() {
     // main calls to_string (ExternFn) - should remain as FunctionCall
@@ -165,7 +156,6 @@ fn inline_preserves_extern_call() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_local_around_extern() {
     // wrap(x) = x | to_string; main = wrap(42)
@@ -181,7 +171,6 @@ fn inline_local_around_extern() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_extern_chain_preserved() {
     // process(s) = s | len_str | to_string; main = process("hello")
@@ -201,7 +190,6 @@ fn inline_extern_chain_preserved() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_mixed_local_extern() {
     // double(x) = x + x; main = double(3) | to_string
@@ -221,7 +209,6 @@ fn inline_mixed_local_extern() {
 //  3. Context propagation - inline + context read/write
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_reads_context() {
     // get_count() = @count; main = get_count()
@@ -236,7 +223,6 @@ fn inline_callee_reads_context() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_writes_context() {
     // set_count(x) = { @count = x; x }; main = set_count(42)
@@ -251,7 +237,6 @@ fn inline_callee_writes_context() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_caller_and_callee_read_same_context() {
     // add_count(x) = x + @count; main = @count + add_count(1)
@@ -266,7 +251,6 @@ fn inline_caller_and_callee_read_same_context() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_writes_caller_reads() {
     // bump() = { @count = @count + 1; @count }; main = { x = bump(); x + @count }
@@ -281,7 +265,6 @@ fn inline_callee_writes_caller_reads() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_multiple_context_writes() {
     // init() = { @a = 1; @b = 2; @a + @b }; main = init()
@@ -410,7 +393,6 @@ fn inline_chain_with_lambda() {
 //  5. IO and context propagation through inlining
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_pure_function() {
     // add(a,b)=a+b; main=add(1,2)
@@ -425,7 +407,6 @@ fn inline_pure_function() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_io_extern_inside() {
     // fetch(x) is an IO ExternFn; wrapper calls it.
@@ -453,7 +434,6 @@ fn inline_io_extern_inside() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_context_write_propagation() {
     // Callee writes context. After inline, the write is visible in caller.
@@ -491,7 +471,6 @@ fn inline_devirt_known_closure() {
 //  7. Complex / realistic scenarios
 // =======================================================================
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_nested_three_levels() {
     // a(x) = x + 1; b(x) = a(x) + a(x); c(x) = b(x) * 2; main = c(10)
@@ -510,7 +489,6 @@ fn inline_nested_three_levels() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_string_operations() {
     // greet(name) = "Hello " + name; main = greet("world")
@@ -529,7 +507,6 @@ fn inline_string_operations() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_boolean_logic() {
     // both(a, b) = a && b; main = both(true, false)
@@ -548,7 +525,6 @@ fn inline_boolean_logic() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_comparison() {
     // is_positive(x) = x > 0; main = is_positive(42)
@@ -563,7 +539,6 @@ fn inline_comparison() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_with_local_binding() {
     // compute(x) = { y = x * 2; y + 1 }; main = compute(5)
@@ -578,7 +553,6 @@ fn inline_with_local_binding() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_result_unused_intermediate() {
     // get_a() = 1; get_b() = 2; main = get_a() + get_b()
@@ -593,7 +567,6 @@ fn inline_result_unused_intermediate() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_field_access_after_call() {
     // make_obj() = @user; main = make_obj().name
@@ -627,7 +600,6 @@ fn inline_list_collect_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-#[ignore = "pending identity integration"]
 #[test]
 fn inline_multiple_context_different_callees() {
     // read_a() = @a; read_b() = @b; main = read_a() + read_b()

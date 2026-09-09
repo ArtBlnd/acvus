@@ -3,29 +3,29 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = ref @sum
-     4 │   r4 = ref @product
-     5 │   r5 = ref @items
-     6 │   r6 = load r5
-     8 │   jump L0(0 (r7), r0, r1, r2)
-     9 │ L0(r8: Int, r9: Int, r10: Int, r11: Int):
-    10 │   store r3 = r9
-    11 │   store r4 = r10
-    12 │   list_step r12, r13 = r6[r8] else L1()
-    13 │ L2:
-    14 │   r14 = ref @sum
-    15 │   r15 = r9 + r12
-    16 │   r16 = ref @product
-    17 │   r17 = r10 * r12
-    18 │   jump L0(r13, r15, r17, r12)
-    19 │ L1:
-    20 │   r18 = ref @sum
-    21 │   r19 = ref @product
-    22 │   r20 = r9 + r10
-    23 │   return r20
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = ref @sum
+     4 |   r4 = ref @product
+     5 |   r5 = ref @items
+     6 |   r6 = load r5
+     8 |   jump L0(0 (r7), r0, r1, r2)
+     9 | L0(r8: Int, r9: Int, r10: Int, r11: Int):
+    10 |   store r3 = r9
+    11 |   store r4 = r10
+    12 |   list_step r12, r13 = r6[r8] else L1()
+    13 | L2:
+    14 |   r14 = ref @sum
+    15 |   r15 = r9 + r12
+    16 |   r16 = ref @product
+    17 |   r17 = r10 * r12
+    18 |   jump L0(r13, r15, r17, r12)
+    19 | L1:
+    20 |   r18 = ref @sum
+    21 |   r19 = ref @product
+    22 |   r20 = r9 + r10
+    23 |   return r20
 
     ; r0 (v26) : Int
     ; r1 (v27) : Int

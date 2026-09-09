@@ -8,41 +8,41 @@ expression: opt
   T2 = ")"
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = ref @alert_count
-     2 │   r2 = ref @alert_count
-     3 │   r3 = load r2
-     4 │   r4 = call #0(r3)
-     5 │   r5 = call #1(r3)
-     6 │   r2 = ref @alert_count
-     7 │   r6 = 1 (r4) + 100 (r5)
-     8 │   r5 = load r2
-     9 │   r7 = r6 * 100 (r5)
-    11 │   r6 = r7 / 100 (r5)
-    13 │   r8 = call #2(1 (r4))
-    14 │   r9 = T2 + r8
-    16 │   r8 = r9 + T2
-    17 │   r10 = call #2(r6)
-    18 │   r9 = r8 + T2
-    20 │   r8 = r9 + T2
-    21 │   r2 = ref @alert_count
-    22 │   r4 = load r2
-    23 │   r11 = r6 > 1 (r4)
-    24 │   r12 = test r11 == true
-    25 │   r2 = ref @alert_count
-    27 │   r13 = ref @result_label
-    28 │   r14 = ref @result_score
-    29 │   jump_if r12 then L0 else L1(r0)
-    30 │ L0:
-    31 │   r0 = call #3(r3, r6)
-    32 │   r0 = load r2
-    33 │   r3 = r0 + 1 (r4)
-    34 │   jump L1(r3)
-    35 │ L1(r0: Int):
-    36 │   store r14 = r6
-    37 │   store r1 = r0
-    38 │   store r13 = r8
-    39 │   return r6
+     0 |   r0 = undef
+     1 |   r1 = ref @alert_count
+     2 |   r2 = ref @alert_count
+     3 |   r3 = load r2
+     4 |   r4 = call #0(r3)
+     5 |   r5 = call #1(r3)
+     6 |   r2 = ref @alert_count
+     7 |   r6 = 1 (r4) + 100 (r5)
+     8 |   r5 = load r2
+     9 |   r7 = r6 * 100 (r5)
+    11 |   r6 = r7 / 100 (r5)
+    13 |   r8 = call #2(1 (r4))
+    14 |   r9 = T2 + r8
+    16 |   r8 = r9 + T2
+    17 |   r10 = call #2(r6)
+    18 |   r9 = r8 + T2
+    20 |   r8 = r9 + T2
+    21 |   r2 = ref @alert_count
+    22 |   r4 = load r2
+    23 |   r11 = r6 > 1 (r4)
+    24 |   r12 = test r11 == true
+    25 |   r2 = ref @alert_count
+    27 |   r13 = ref @result_label
+    28 |   r14 = ref @result_score
+    29 |   jump_if r12 then L0 else L1(r0)
+    30 | L0:
+    31 |   r0 = call #3(r3, r6)
+    32 |   r0 = load r2
+    33 |   r3 = r0 + 1 (r4)
+    34 |   jump L1(r3)
+    35 | L1(r0: Int):
+    36 |   store r14 = r6
+    37 |   store r1 = r0
+    38 |   store r13 = r8
+    39 |   return r6
 
     ; r0 (@alert_count) : Int
     ; r1 (@alert_count) : Ref<Int>

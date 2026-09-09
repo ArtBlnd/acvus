@@ -6,31 +6,31 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     3 │   r2 = ref @a
-     4 │   r3 = load r2
-     5 │   r4 = ref @b
-     6 │   r5 = load r4
-     7 │   r6 = tuple (r3, r5)
-     8 │ L2:
-    10 │   r7 = r6.0
-    12 │   r8 = true (r9) && true (r10)
-    13 │   r11 = r6.1
-    15 │   r12 = r8 && true (r13)
-    16 │   jump_if r12 then L3 else L1
-    17 │ L3:
-    18 │   r14 = r6.0
-    19 │   r15 = r6.1
-    21 │   r16 = call #0(r14)
-    22 │   r17 = T0 + r16
-    23 │   r18 = r17 + r15
-    24 │   jump L0(r18, r14, r15)
-    25 │ L1:
-    27 │   jump L0(T0, r0, r1)
-    28 │ L0(r19: String, r20: Int, r21: String):  ; merge_of L2
-    29 │   r22 = T0 + r19
-    30 │   return r22
+     0 |   r0 = undef
+     1 |   r1 = undef
+     3 |   r2 = ref @a
+     4 |   r3 = load r2
+     5 |   r4 = ref @b
+     6 |   r5 = load r4
+     7 |   r6 = tuple (r3, r5)
+     8 | L2:
+    10 |   r7 = r6.0
+    12 |   r8 = true (r9) && true (r10)
+    13 |   r11 = r6.1
+    15 |   r12 = r8 && true (r13)
+    16 |   jump_if r12 then L3 else L1
+    17 | L3:
+    18 |   r14 = r6.0
+    19 |   r15 = r6.1
+    21 |   r16 = call #0(r14)
+    22 |   r17 = T0 + r16
+    23 |   r18 = r17 + r15
+    24 |   jump L0(r18, r14, r15)
+    25 | L1:
+    27 |   jump L0(T0, r0, r1)
+    28 | L0(r19: String, r20: Int, r21: String):  ; merge_of L2
+    29 |   r22 = T0 + r19
+    30 |   return r22
 
     ; r0 (v31) : Int
     ; r1 (v32) : String

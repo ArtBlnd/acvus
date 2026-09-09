@@ -3,26 +3,26 @@ source: acvus-mir-test/tests/optimized.rs
 expression: opt
 ---
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = ref @result
-     3 │   r3 = ref @config
-     4 │   r4 = load r3
-     5 │   r5 = r4.base_rate
-     6 │   r6 = r4.multiplier
-     7 │   r7 = 0 (r5) * r6
-     8 │   r8 = ref @items
-    10 │   r9 = load r8
-    11 │   jump L0(0 (r5), r0, r1)
-    12 │ L0(r0: Int, r1: Int, r5: Int):
-    13 │   store r2 = r1
-    14 │   list_step r6, r10 = r9[r0] else L1()
-    15 │ L2:
-    16 │   r0 = r6 * r7
-    17 │   r5 = r1 + r0
-    18 │   jump L0(r10, 0 (r5), r6)
-    19 │ L1:
-    20 │   return r1
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = ref @result
+     3 |   r3 = ref @config
+     4 |   r4 = load r3
+     5 |   r5 = r4.base_rate
+     6 |   r6 = r4.multiplier
+     7 |   r7 = 0 (r5) * r6
+     8 |   r8 = ref @items
+    10 |   r9 = load r8
+    11 |   jump L0(0 (r5), r0, r1)
+    12 | L0(r0: Int, r1: Int, r5: Int):
+    13 |   store r2 = r1
+    14 |   list_step r6, r10 = r9[r0] else L1()
+    15 | L2:
+    16 |   r0 = r6 * r7
+    17 |   r5 = r1 + r0
+    18 |   jump L0(r10, 0 (r5), r6)
+    19 | L1:
+    20 |   return r1
 
     ; r0 (v1) : Int
     ; r1 (v2) : Int

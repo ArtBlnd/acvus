@@ -3,14 +3,14 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref $v1
-     2 │   r1 = load r0
-     4 │   r2 = r1 + 1 (r3)
-     6 │   r4 = ref $v3
-     7 │   r5 = load r4
-     9 │   r6 = r5 + 1 (r7)
-    10 │   r8 = r2 + r6
-    11 │   return r8
+     1 |   r0 = ref $v1
+     2 |   r1 = load r0
+     4 |   r2 = r1 + 1 (r3)
+     6 |   r4 = ref $v3
+     7 |   r5 = load r4
+     9 |   r6 = r5 + 1 (r7)
+    10 |   r8 = r2 + r6
+    11 |   return r8
 
     ; r0 (v7) : Ref<Int>
     ; r1 ($x) : Int

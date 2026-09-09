@@ -6,71 +6,71 @@ expression: opt
   T0 = "bad:"
 
 === main ===
-     0 │   r0 = undef
-     1 │   r1 = undef
-     2 │   r2 = undef
-     3 │   r3 = undef
-     4 │   r4 = undef
-     5 │   r5 = undef
-     6 │   r6 = undef
-     7 │   r7 = undef
-     8 │   r8 = ref @err_count
-     9 │   r9 = ref @sum
-    10 │   r10 = ref @last_err
-    11 │   r11 = ref @ok_count
-    12 │   r12 = ref @items
-    14 │   r13 = ref @min_val
-    15 │   r14 = ref @max_val
-    19 │   r15 = ref @multiplier
-    25 │   r16 = load r12
-    26 │   jump L0(0 (r17), r0, r1, r2, r3, r4, r5, r6, r7)
-    27 │ L0(r0: Int, r1: Int, r3: Int, r2: String, r5: Int, r4: {value: Int}, r6: Int, r7: Int, r17: Int):
-    28 │   r18 = r5 + 1 (r19)
-    29 │   r20 = r1 + 1 (r21)
-    30 │   store r10 = r2
-    31 │   store r11 = r5
-    32 │   store r8 = r1
-    33 │   store r9 = r3
-    34 │   list_step r22, r23 = r16[r0] else L1()
-    35 │ L2:
-    36 │   r0 = r22.value
-    37 │   r6 = load r13
-    38 │   r7 = load r14
-    39 │   r24 = r0 >= r6
-    40 │   r25 = test r24 == true
-    41 │   r24 = r0 <= r7
-    42 │   r26 = test r24 == true
-    43 │   r6 = r0 / 2 (r27)
-    44 │   r28 = call #0(r0)
-    45 │   r29 = T0 + r28
-    46 │   jump_if r25 then L7 else L8(0 (r30))
-    47 │ L7:
-    48 │   jump_if r26 then L9 else L10(0 (r30))
-    49 │ L9:
-    50 │   jump L10(1 (r31))
-    51 │ L10(r7: Int):
-    52 │   jump L8(r7)
-    53 │ L8(r7: Int):
-    54 │   r24 = r7 > 0 (r32)
-    55 │   r25 = test r24 == true
-    56 │   r24 = r7 == 0 (r33)
-    57 │   r26 = test r24 == true
-    58 │   jump_if r25 then L3 else L4(r3, r5, 0 (r17))
-    59 │ L3:
-    60 │   r5 = load r15
-    61 │   r7 = r0 * r5
-    62 │   r0 = r7 + r6
-    63 │   r5 = r3 + r0
-    64 │   jump L4(r5, r18, r0)
-    65 │ L4(r0: Int, r3: Int, r5: Int):
-    66 │   jump_if r26 then L5 else L6(r1, r2)
-    67 │ L5:
-    68 │   jump L6(r20, r29)
-    69 │ L6(r1: Int, r2: String):
-    70 │   jump L0(r23, r1, r0, r2, r3, r22, r0, r7, r5)
-    71 │ L1:
-    72 │   r0 = call #1(r3, r5, r1)
-    73 │   return r3
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = undef
+     4 |   r4 = undef
+     5 |   r5 = undef
+     6 |   r6 = undef
+     7 |   r7 = undef
+     8 |   r8 = ref @err_count
+     9 |   r9 = ref @sum
+    10 |   r10 = ref @last_err
+    11 |   r11 = ref @ok_count
+    12 |   r12 = ref @items
+    14 |   r13 = ref @min_val
+    15 |   r14 = ref @max_val
+    19 |   r15 = ref @multiplier
+    25 |   r16 = load r12
+    26 |   jump L0(0 (r17), r0, r1, r2, r3, r4, r5, r6, r7)
+    27 | L0(r0: Int, r1: Int, r3: Int, r2: String, r5: Int, r4: {value: Int}, r6: Int, r7: Int, r17: Int):
+    28 |   r18 = r5 + 1 (r19)
+    29 |   r20 = r1 + 1 (r21)
+    30 |   store r10 = r2
+    31 |   store r11 = r5
+    32 |   store r8 = r1
+    33 |   store r9 = r3
+    34 |   list_step r22, r23 = r16[r0] else L1()
+    35 | L2:
+    36 |   r0 = r22.value
+    37 |   r6 = load r13
+    38 |   r7 = load r14
+    39 |   r24 = r0 >= r6
+    40 |   r25 = test r24 == true
+    41 |   r24 = r0 <= r7
+    42 |   r26 = test r24 == true
+    43 |   r6 = r0 / 2 (r27)
+    44 |   r28 = call #0(r0)
+    45 |   r29 = T0 + r28
+    46 |   jump_if r25 then L7 else L8(0 (r30))
+    47 | L7:
+    48 |   jump_if r26 then L9 else L10(0 (r30))
+    49 | L9:
+    50 |   jump L10(1 (r31))
+    51 | L10(r7: Int):
+    52 |   jump L8(r7)
+    53 | L8(r7: Int):
+    54 |   r24 = r7 > 0 (r32)
+    55 |   r25 = test r24 == true
+    56 |   r24 = r7 == 0 (r33)
+    57 |   r26 = test r24 == true
+    58 |   jump_if r25 then L3 else L4(r3, r5, 0 (r17))
+    59 | L3:
+    60 |   r5 = load r15
+    61 |   r7 = r0 * r5
+    62 |   r0 = r7 + r6
+    63 |   r5 = r3 + r0
+    64 |   jump L4(r5, r18, r0)
+    65 | L4(r0: Int, r3: Int, r5: Int):
+    66 |   jump_if r26 then L5 else L6(r1, r2)
+    67 | L5:
+    68 |   jump L6(r20, r29)
+    69 | L6(r1: Int, r2: String):
+    70 |   jump L0(r23, r1, r0, r2, r3, r22, r0, r7, r5)
+    71 | L1:
+    72 |   r0 = call #1(r3, r5, r1)
+    73 |   return r3
 
     ; r0 (publish_results(...)) : Int
     ; r1 (v2) : Int

@@ -3,16 +3,16 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 │   r0 = ref @a
-     2 │   store r0 = 1 (r1)
-     4 │   r2 = ref @b
-     5 │   store r2 = 2 (r3)
-     6 │   r4 = ref @a
-     7 │   r5 = load r4
-     8 │   r6 = ref @b
-     9 │   r7 = load r6
-    10 │   r8 = r5 + r7
-    11 │   return r8
+     1 |   r0 = ref @a
+     2 |   store r0 = 1 (r1)
+     4 |   r2 = ref @b
+     5 |   store r2 = 2 (r3)
+     6 |   r4 = ref @a
+     7 |   r5 = load r4
+     8 |   r6 = ref @b
+     9 |   r7 = load r6
+    10 |   r8 = r5 + r7
+    11 |   return r8
 
     ; r0 (@a) : Ref<Int>
     ; r1 (v2) : Int

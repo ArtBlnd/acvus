@@ -6,14 +6,14 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 │   r0 = undef
-     2 │   r1 = ref @n
-     3 │   r2 = load r1
-     4 │   r3 = -r2
-     6 │   r4 = T0 + T0
-     7 │   r5 = call #0(r3)
-     8 │   r6 = r4 + r5
-     9 │   return r6
+     0 |   r0 = undef
+     2 |   r1 = ref @n
+     3 |   r2 = load r1
+     4 |   r3 = -r2
+     6 |   r4 = T0 + T0
+     7 |   r5 = call #0(r3)
+     8 |   r6 = r4 + r5
+     9 |   return r6
 
     ; r0 (v13) : Int
     ; r1 (@n) : Ref<Int>
