@@ -2666,13 +2666,13 @@ fn projection_var_multiple_writes() {
     );
 }
 
-/// Context whole read: `@ctx` - volatile context preserves Ref+Load.
+/// Context whole read: `@ctx`.
 #[test]
 fn projection_context_whole_read() {
     let i = Interner::new();
     let context = ctx(&i, &[("data", Ty::Int)]);
     let ir = compile_script_ir(&i, "@data", &context).unwrap();
-    // Non-volatile context: SSA should forward the entry load value.
+    // SSA forwards the entry load value.
     // Ref/Load from entry may remain or be forwarded - just verify it compiles + returns.
     assert!(ir.contains("return"), "should have return: {ir}");
 }
@@ -2796,9 +2796,9 @@ fn projection_soundness_reject_param_write() {
     assert!(result.is_err(), "writing to ExternParam should fail");
 }
 
-// -- SSA correctness: promotion & volatile ---------------------------
+// -- SSA correctness: promotion ---------------------------------------
 
-/// Non-volatile variable: SSA promotion eliminates Ref/Load/Store.
+/// Local variable: SSA promotion eliminates Ref/Load/Store.
 #[test]
 fn projection_ssa_var_promoted() {
     let i = Interner::new();

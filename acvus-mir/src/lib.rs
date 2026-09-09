@@ -385,7 +385,7 @@ mod tests {
         let i = Interner::new();
         let module = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap();
         let kinds = inst_kinds(&module);
-        // After SSA promotion, Ref/Load/Store for non-volatile vars are eliminated.
+        // After SSA promotion, Ref/Load/Store for local vars are eliminated.
         // The result should just be a Return of the SSA value.
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Return(_))));
     }
