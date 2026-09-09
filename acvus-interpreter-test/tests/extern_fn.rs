@@ -516,11 +516,14 @@ async fn io_in_iteration() {
             ("sum", Value::Int(0)),
         ],
     );
-    let result = run_script_with_externs(
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(io_registry());
+    let result = run_script_with_externs_and_types(
         &i,
         "@items | iter | map(|x| -> fetch_by(x)) | fold(@sum, |a, b| -> a + b)",
         c,
-        vec![io_registry()],
+        regs,
+        TypeRegistry::new(),
     )
     .await;
     assert_eq!(result.value, Value::Int(60));
