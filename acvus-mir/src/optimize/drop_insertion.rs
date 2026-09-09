@@ -331,7 +331,6 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
         Terminator::JumpIf { then_args, else_args, .. } => {
             then_args.contains(&val) || else_args.contains(&val)
         }
-        // ListStep: list and index_src are read, done_args are transferred.
         Terminator::Fallthrough => false,
     }
 }

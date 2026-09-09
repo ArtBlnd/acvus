@@ -60,12 +60,7 @@ impl<K: Eq + Hash + Copy, D: SemiLattice> DataflowState<K, D> {
 ///
 /// - `terminator_uses`: gen what the terminator reads. In backward analysis,
 ///   this contributes to block_exit (values that must be live at block exit).
-///   E.g., Return's value, JumpIf's condition, ListStep's list/index_src.
-///
-/// - `terminator_defs`: kill what the terminator defines. In backward analysis,
-///   this is applied after the block_exit snapshot, so defs are NOT live at exit
-///   but are removed before walking body instructions.
-///   E.g., ListStep's dst/index_dst.
+///   E.g., Return's value, JumpIf's condition.
 ///
 /// In forward analysis, both are called sequentially after body instructions.
 pub trait DataflowAnalysis {
@@ -86,17 +81,6 @@ pub trait DataflowAnalysis {
     ) {
     }
 
-    /// Kill what the terminator defines (writes).
-    ///
-    /// Backward: called after block_exit snapshot. Defs are NOT in block_exit
-    /// but are killed before walking body instructions backward.
-    /// Forward: called after terminator_uses, before block_exit.
-    fn terminator_defs(
-        &self,
-        _term: &Terminator,
-        _state: &mut DataflowState<Self::Key, Self::Domain>,
-    ) {
-    }
 
     /// (Forward only) Evaluate branch condition for dead-branch pruning.
     fn eval_branch_cond(
@@ -166,7 +150,6 @@ pub fn forward_analysis<A: DataflowAnalysis>(
             analysis.transfer_inst(inst, &mut state);
         }
         analysis.terminator_uses(&block.terminator, &mut state);
-        analysis.terminator_defs(&block.terminator, &mut state);
 
         block_exit[idx.0] = state;
 
@@ -232,9 +215,8 @@ pub fn backward_analysis<A: DataflowAnalysis>(
         // 3. Snapshot as block_exit.
         block_exit[idx.0] = exit_state;
 
-        // 4. Kill terminator defs, then walk instructions backward.
+        // 4. Walk instructions backward from the exit state.
         let mut state = block_exit[idx.0].clone();
-        analysis.terminator_defs(&block.terminator, &mut state);
         for inst in block.insts.iter().rev() {
             analysis.transfer_inst(inst, &mut state);
         }

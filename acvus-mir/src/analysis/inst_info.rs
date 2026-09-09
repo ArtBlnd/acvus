@@ -83,7 +83,6 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
         InstKind::ArrayGet { array: list, index, .. } => smallvec![*list, *index],
 
-        // TestListLen / TestRange
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 
         // Composite constructors

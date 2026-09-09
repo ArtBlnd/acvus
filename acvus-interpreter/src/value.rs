@@ -18,9 +18,9 @@ use crate::journal::{InMemoryContext, RuntimeContext};
 /// # Layout (16 bytes on 64-bit)
 ///
 /// - **Inline**: Int, Float, Bool, Unit, Byte — no heap allocation.
-/// - **Shared**: String, List, Object, Tuple, Deque, Variant — `Arc` wrapped,
+/// - **Shared**: String, Array, Object, Tuple, Variant — `Arc` wrapped,
 ///   clone = refcount bump. CoW via `Arc::make_mut` when mutation needed.
-/// - **Owned**: Fn, Iterator, Sequence, Handle — `Box` wrapped, move-only.
+/// - **Owned**: Fn, Handle — `Box` wrapped, move-only.
 ///   SSA guarantees single use; `take()` replaces with `Empty`.
 /// - **Extern**: extern boundary values.
 ///

@@ -27,8 +27,6 @@ enum DefLoc {
     Inst(usize, usize),
     /// Defined as a block parameter at (block, param_index).
     BlockParam(usize, usize),
-    /// Defined by a terminator (ListStep dst/index_dst).
-    Terminator(usize),
     /// Function parameter or capture — always live.
     EntryParam,
 }
@@ -186,10 +184,6 @@ pub fn run(cfg: &mut CfgBody) {
                         }
                     }
                 }
-            }
-            DefLoc::Terminator(_) => {
-                // ListStep dst/index_dst — terminator is always live,
-                // its uses are already seeded.
             }
             DefLoc::EntryParam => {
                 // Function param/capture — always live, nothing to trace.

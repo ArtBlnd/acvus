@@ -70,7 +70,6 @@ impl DataflowAnalysis for LivenessAnalysis {
         }
     }
 
-    fn terminator_defs(&self, _term: &Terminator, _state: &mut DataflowState<ValueId, Liveness>) {}
 
     fn propagate_forward(
         &self,

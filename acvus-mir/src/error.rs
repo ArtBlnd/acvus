@@ -22,9 +22,6 @@ pub enum MirErrorKind {
     EmitNotString {
         actual: Ty,
     },
-    RangeBoundsNotInt {
-        actual: Ty,
-    },
     HeterogeneousList {
         expected: Ty,
         got: Ty,
@@ -65,13 +62,6 @@ pub enum MirErrorKind {
     SourceNotIterable {
         actual: Ty,
     },
-
-    // Deque origin errors
-    OriginMismatch {
-        expected: Ty,
-        got: Ty,
-    },
-    DequeListCoercionForbidden,
 
     // Value errors
     NonPureContextLoad {
@@ -125,13 +115,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::EmitNotString { actual } => {
                 write!(f, "emit requires String, got {}", actual.display(interner))
-            }
-            MirErrorKind::RangeBoundsNotInt { actual } => {
-                write!(
-                    f,
-                    "range bounds must be Int, got {}",
-                    actual.display(interner)
-                )
             }
             MirErrorKind::HeterogeneousList { expected, got } => {
                 write!(
@@ -217,22 +200,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::SourceNotIterable { actual } => {
                 write!(
                     f,
-                    "source type `{}` is not iterable (expected List or Range)",
+                    "source type `{}` is not iterable",
                     actual.display(interner)
-                )
-            }
-            MirErrorKind::OriginMismatch { expected, got } => {
-                write!(
-                    f,
-                    "deque origin mismatch: expected {}, got {}",
-                    expected.display(interner),
-                    got.display(interner)
-                )
-            }
-            MirErrorKind::DequeListCoercionForbidden => {
-                write!(
-                    f,
-                    "cannot convert List to Deque: only Deque → List coercion is allowed"
                 )
             }
             MirErrorKind::ArityMismatch {

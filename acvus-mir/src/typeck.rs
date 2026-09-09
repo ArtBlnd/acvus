@@ -1965,27 +1965,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
             },
         }
     }
-
-    fn check_pattern_is_int(&mut self, pat: &Pattern, span: Span) {
-        match pat {
-            Pattern::Literal {
-                value: Literal::Int(_),
-                ..
-            } => {}
-            Pattern::Literal { value, .. } => {
-                let ty = self.literal_ty(value);
-                self.error(MirErrorKind::RangeBoundsNotInt { actual: self.freeze_or_error(&ty) }, span);
-            }
-            _ => {
-                self.error(
-                    MirErrorKind::RangeBoundsNotInt {
-                        actual: Ty::error(),
-                    },
-                    span,
-                );
-            }
-        }
-    }
 }
 
 fn op_str(op: BinOp) -> &'static str {

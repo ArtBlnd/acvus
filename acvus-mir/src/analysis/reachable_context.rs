@@ -633,7 +633,6 @@ mod tests {
         assert!(!needed.contains(&id2));
     }
 
-    /// Range test with known value.
     /// Multi-arm match -- chained tests, middle arm matched.
     #[test]
     fn multi_arm_match_middle() {

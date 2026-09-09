@@ -189,9 +189,6 @@ fn compute_coloring(
         }
 
         // Terminator.
-        for d in terminator_defs(&block.terminator) {
-            live.define(&mut coloring, d, cfg.val_types.get(&d));
-        }
         for u in terminator_uses(&block.terminator) {
             if last_use.dies_at(bi, u, UsePoint::Terminator) {
                 live.kill(&coloring, u);
@@ -315,12 +312,6 @@ fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
         }
         Terminator::Return(val) => smallvec::smallvec![*val],
         Terminator::Fallthrough => smallvec::SmallVec::new(),
-    }
-}
-
-fn terminator_defs(term: &Terminator) -> smallvec::SmallVec<[ValueId; 2]> {
-    match term {
-        _ => smallvec::SmallVec::new(),
     }
 }
 

@@ -401,7 +401,7 @@ impl CheckCtx {
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
                             inst_name: "MakeArray".to_string(),
-                            expected_constructor: "Deque".to_string(),
+                            expected_constructor: "Array".to_string(),
                             actual: dst_ty.clone(),
                         },
                     });
@@ -728,8 +728,7 @@ impl CheckCtx {
                 dst, object, field, rest,
             } => {
                 let obj_ty = ty!(*object);
-                // Try direct type first, then unwrap one container level
-                // (lowerer may record List/Deque type for pattern-match iteration)
+                // Try direct type first, then unwrap one container level.
                 let obj_ty = if matches!(obj_ty, Ty::Object(_) | Ty::Error(_)) {
                     obj_ty
                 } else {
@@ -982,8 +981,6 @@ impl CheckCtx {
                     }
                 }
             }
-
-            // === ListStep ===
 
             // === Calls ===
             InstKind::LoadFunction { dst, .. } => {

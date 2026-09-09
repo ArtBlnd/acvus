@@ -196,7 +196,7 @@ impl ErrorToken {
 
 /// Polarity for subtyping direction in unification.
 ///
-/// - `Covariant`: `a ≤ b` — `a` may be a subtype of `b` (e.g. Deque → List).
+/// - `Covariant`: `a ≤ b` — `a` may be a subtype of `b`.
 /// - `Contravariant`: `b ≤ a` — reversed direction (e.g. function parameters).
 /// - `Invariant`: `a = b` — no subtyping allowed, must be exactly equal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1210,7 +1210,7 @@ mod tests {
     // ================================================================
 
     // ================================================================
-    // Regression: Deque with same identity must not trigger demotion
+    // Regression: same identity must not trigger demotion
     // ================================================================
 
     // ── Sequence identity tracking ─────────────────────────────────

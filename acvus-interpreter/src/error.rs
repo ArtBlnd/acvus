@@ -73,7 +73,6 @@ impl fmt::Display for CollectionOp {
 
 /// Runtime error during template/script execution.
 ///
-/// Propagated through the coroutine as `Stepped::Error`.
 /// NOT recoverable by retry — indicates a bug or invalid data.
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
