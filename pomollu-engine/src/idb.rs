@@ -6,14 +6,14 @@ use web_sys::{IdbDatabase, IdbObjectStore, IdbRequest, IdbTransaction, IdbTransa
 
 use crate::fetch::UnsafeSend;
 
-// ── Constants ──────────────────────────────────────────────────────
+// -- Constants ------------------------------------------------------
 
 const DB_NAME: &str = "blob_storage";
 const DB_VERSION: u32 = 1;
 const BLOBS_STORE: &str = "blobs";
 const REFS_STORE: &str = "refs";
 
-// ── IdbBlobStore ───────────────────────────────────────────────────
+// -- IdbBlobStore ---------------------------------------------------
 
 pub struct IdbBlobStore {
     db: IdbDatabase,
@@ -25,7 +25,7 @@ pub struct IdbBlobStore {
 unsafe impl Send for IdbBlobStore {}
 unsafe impl Sync for IdbBlobStore {}
 
-// ── Helpers ────────────────────────────────────────────────────────
+// -- Helpers --------------------------------------------------------
 
 /// Wrap an `IdbRequest` into a `Promise` and await it via `JsFuture`.
 async fn idb_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
@@ -90,7 +90,7 @@ fn hex_nibble(c: u8) -> u8 {
     }
 }
 
-// ── Construction ───────────────────────────────────────────────────
+// -- Construction ---------------------------------------------------
 
 impl IdbBlobStore {
     /// Open (or create) the IndexedDB database and return a ready store.
@@ -135,7 +135,7 @@ impl IdbBlobStore {
         Self { db, session_id }
     }
 
-    // ── Internal helpers ───────────────────────────────────────────
+    // -- Internal helpers -------------------------------------------
 
     fn blob_store(&self, mode: IdbTransactionMode) -> (IdbTransaction, IdbObjectStore) {
         let tx = self
@@ -160,7 +160,7 @@ impl IdbBlobStore {
     }
 }
 
-// ── BlobStore impl ─────────────────────────────────────────────────
+// -- BlobStore impl -------------------------------------------------
 
 impl BlobStore for IdbBlobStore {
     async fn put(&mut self, data: Vec<u8>) -> BlobHash {
@@ -361,7 +361,7 @@ impl BlobStore for IdbBlobStore {
     }
 }
 
-// ── IdbAssetStore ─────────────────────────────────────────────────
+// -- IdbAssetStore -------------------------------------------------
 
 const ASSETS_STORE: &str = "assets";
 const META_STORE: &str = "meta";

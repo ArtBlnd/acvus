@@ -35,7 +35,7 @@ pub enum Stmt {
     ContextStore {
         id: AstId,
         name: QualifiedRef,
-        /// Field path for projection store: `@a.x.y = 0;` → path = [x, y].
+        /// Field path for projection store: `@a.x.y = 0;` -> path = [x, y].
         /// Empty = identity store: `@a = 0;`.
         path: Vec<Astr>,
         expr: Expr,
@@ -59,36 +59,36 @@ pub enum Stmt {
         span: Span,
     },
 
-    // ── Script mode statements ──────────────────────────────────────
+    // -- Script mode statements --------------------------------------
 
-    /// `let x = expr;` — new binding (Script mode).
+    /// `let x = expr;` - new binding (Script mode).
     LetBind {
         id: AstId,
         name: Astr,
         expr: Expr,
         span: Span,
     },
-    /// `let x;` — uninitialized binding (Script mode).
+    /// `let x;` - uninitialized binding (Script mode).
     LetUninit {
         id: AstId,
         name: Astr,
         span: Span,
     },
-    /// `x = expr;` — reassignment to existing binding (Script mode).
+    /// `x = expr;` - reassignment to existing binding (Script mode).
     Assign {
         id: AstId,
         name: Astr,
         expr: Expr,
         span: Span,
     },
-    /// `while cond { body }` — conditional loop (Script mode).
+    /// `while cond { body }` - conditional loop (Script mode).
     While {
         id: AstId,
         cond: Expr,
         body: Vec<Stmt>,
         span: Span,
     },
-    /// `while let pattern = source { body }` — pattern loop (Script mode).
+    /// `while let pattern = source { body }` - pattern loop (Script mode).
     WhileLet {
         id: AstId,
         pattern: Pattern,
@@ -246,7 +246,7 @@ pub enum Expr {
         fields: Vec<ObjectExprField>,
         span: Span,
     },
-    /// A tuple: `(a, b, c)` — 0 or 2+ elements.
+    /// A tuple: `(a, b, c)` - 0 or 2+ elements.
     /// Elements can be expressions or wildcards `_`.
     Tuple {
         id: AstId,
@@ -275,9 +275,9 @@ pub enum Expr {
         span: Span,
     },
 
-    // ── Script mode expressions ─────────────────────────────────────
+    // -- Script mode expressions -------------------------------------
 
-    /// `if cond { body; tail } else { ... }` — conditional expression (Script mode).
+    /// `if cond { body; tail } else { ... }` - conditional expression (Script mode).
     If {
         id: AstId,
         cond: Box<Expr>,
@@ -286,7 +286,7 @@ pub enum Expr {
         else_branch: Option<Box<ElseBranch>>,
         span: Span,
     },
-    /// `if let pattern = source { body; tail } else { ... }` — pattern match expression (Script mode).
+    /// `if let pattern = source { body; tail } else { ... }` - pattern match expression (Script mode).
     IfLet {
         id: AstId,
         pattern: Pattern,
@@ -301,9 +301,9 @@ pub enum Expr {
 /// An else branch in an `if` / `if let` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElseBranch {
-    /// `else if ...` or `else if let ...` — chains to another conditional.
+    /// `else if ...` or `else if let ...` - chains to another conditional.
     ElseIf(Expr),
-    /// `else { body; tail }` — terminal else block.
+    /// `else { body; tail }` - terminal else block.
     Else {
         body: Vec<Stmt>,
         tail: Option<Box<Expr>>,
@@ -375,9 +375,9 @@ pub struct LambdaParam {
 }
 
 /// A field in an object expression.
-/// Shorthand `{ name }` → key="name", value=Ident("name", Value).
-/// Shorthand `{ $name }` → key="name", value=Ident("name", Variable).
-/// Shorthand `{ @name }` → key="name", value=Ident("name", Context).
+/// Shorthand `{ name }` -> key="name", value=Ident("name", Value).
+/// Shorthand `{ $name }` -> key="name", value=Ident("name", Variable).
+/// Shorthand `{ @name }` -> key="name", value=Ident("name", Context).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectExprField {
     pub id: AstId,
@@ -541,7 +541,7 @@ pub enum Literal {
     Unit,
 }
 
-// ── AST walk: context reference extraction ──────────────────────────
+// -- AST walk: context reference extraction --------------------------
 
 /// Extract all `@name` context references from a Script AST.
 pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {

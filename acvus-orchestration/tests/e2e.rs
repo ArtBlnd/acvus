@@ -1,14 +1,14 @@
-//! End-to-end tests: Namespace spec → compiled MIR.
+//! End-to-end tests: Namespace spec -> compiled MIR.
 //!
 //! Tests type checking correctness and error location accuracy
-//! through the full pipeline: spec → lower → extract → infer → lower → MIR.
+//! through the full pipeline: spec -> lower -> extract -> infer -> lower -> MIR.
 
 use acvus_orchestration::spec::*;
 use acvus_orchestration::test_helpers::compile::compile_namespace;
 use acvus_utils::Interner;
 
 // ====================================================================
-// 1. Type check — Completeness (valid specs compile)
+// 1. Type check - Completeness (valid specs compile)
 // ====================================================================
 
 #[test]
@@ -69,7 +69,7 @@ fn display_static_compiles() {
 fn display_iterator_with_history_and_live_compiles() {
     let i = Interner::new();
     // Need contexts for @history and @stream
-    // But contexts aren't declared → will be Incomplete.
+    // But contexts aren't declared -> will be Incomplete.
     // This tests that all 3 functions are generated (even if Incomplete).
     let ns = Namespace {
         defaults: vec![],
@@ -87,7 +87,7 @@ fn display_iterator_with_history_and_live_compiles() {
     assert!(!result.has_field_errors());
     // Template function should compile (no context refs)
     assert!(result.is_complete(&i, "__msgs_tpl"));
-    // history/live reference undeclared contexts → Incomplete
+    // history/live reference undeclared contexts -> Incomplete
     assert!(!result.is_complete(&i, "msgs_history"));
     assert!(!result.is_complete(&i, "msgs_live"));
 }
@@ -133,7 +133,7 @@ fn llm_with_ref_messages_compiles() {
     assert!(!result.has_field_errors());
     assert!(result.is_complete(&i, "sys"));
     assert!(result.is_complete(&i, "usr"));
-    // chat calls sys() and usr() — but google_llm ExternFn not provided → type error
+    // chat calls sys() and usr() - but google_llm ExternFn not provided -> type error
     // This is expected: the ExternFn must be injected
     // (testing that Blocks at least compile)
 }
@@ -170,7 +170,7 @@ fn multiple_items_mixed_namespace() {
 }
 
 // ====================================================================
-// 2. Type check — Soundness (invalid specs rejected)
+// 2. Type check - Soundness (invalid specs rejected)
 // ====================================================================
 
 #[test]
@@ -187,10 +187,10 @@ fn block_undeclared_context_is_complete_if_type_resolves() {
     };
     let result = compile_namespace(&i, &ns, &[]);
 
-    assert!(!result.has_field_errors(), "valid syntax → no field errors");
+    assert!(!result.has_field_errors(), "valid syntax -> no field errors");
     assert!(
         result.is_complete(&i, "greet"),
-        "undeclared context with resolvable type → Complete"
+        "undeclared context with resolvable type -> Complete"
     );
 }
 
@@ -283,10 +283,10 @@ fn llm_ref_to_nonexistent_block_type_error() {
 
     // No field errors (Ref is glue code, syntax is fine)
     assert!(!result.has_field_errors());
-    // But Incomplete — undefined function "nonexistent"
+    // But Incomplete - undefined function "nonexistent"
     assert!(
         !result.is_complete(&i, "chat"),
-        "ref to nonexistent block → type error → Incomplete"
+        "ref to nonexistent block -> type error -> Incomplete"
     );
 }
 
@@ -381,7 +381,7 @@ fn llm_inline_span_map_points_to_correct_fields() {
                     },
                     GoogleMessage {
                         role: GoogleRole::Model,
-                        content: Content::Ref("cached".into()), // Ref → no span entry
+                        content: Content::Ref("cached".into()), // Ref -> no span entry
                     },
                 ],
             }),

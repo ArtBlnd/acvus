@@ -105,9 +105,9 @@ fn identities_match(a: &Ty, b: &Ty) -> bool {
 /// `Ty::Var(Infallible)` is uninhabitable for concrete types.
 fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
-        // Poison — accept anything.
+        // Poison - accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        // Uninhabitable — concrete types never have Var.
+        // Uninhabitable - concrete types never have Var.
         (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
 
         // Primitives
@@ -147,10 +147,10 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
                 && types_match(r1, r2)
         }
 
-        // Enum — same name is sufficient (variants are open/unified elsewhere)
+        // Enum - same name is sufficient (variants are open/unified elsewhere)
         (Ty::Enum { name: n1, .. }, Ty::Enum { name: n2, .. }) => n1 == n2,
 
-        // UserDefined — same id
+        // UserDefined - same id
         (Ty::UserDefined { id: a, .. }, Ty::UserDefined { id: b, .. }) => a == b,
 
         _ => false,
@@ -200,7 +200,7 @@ fn binop_returns_bool(op: BinOp) -> bool {
     )
 }
 
-/// Returns `true` if the BinOp is a logical op (Bool × Bool → Bool).
+/// Returns `true` if the BinOp is a logical op (Bool x Bool -> Bool).
 fn binop_is_logical(op: BinOp) -> bool {
     matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
 }
@@ -211,7 +211,7 @@ fn binop_is_logical(op: BinOp) -> bool {
 
 struct CheckCtx {
     scope_name: String,
-    /// label → index in `insts` (for Jump target block param lookup)
+    /// label -> index in `insts` (for Jump target block param lookup)
     label_map: FxHashMap<Label, usize>,
 }
 
@@ -232,7 +232,7 @@ impl CheckCtx {
             }
         }
 
-        // Build ref_target map: Ref dst → RefTarget.
+        // Build ref_target map: Ref dst -> RefTarget.
         let mut ref_target: FxHashMap<ValueId, crate::ir::RefTarget> = FxHashMap::default();
         for inst in &body.insts {
             if let InstKind::Ref { dst, target, .. } = &inst.kind {
@@ -350,7 +350,7 @@ impl CheckCtx {
             InstKind::Clone { dst, src } => {
                 let src_ty = ty!(*src);
                 let dst_ty = ty!(*dst);
-                self.assert_match(pc, span, "Clone", "dst ≡ src", src_ty, dst_ty, errors);
+                self.assert_match(pc, span, "Clone", "dst == src", src_ty, dst_ty, errors);
             }
             InstKind::Drop { src } => {
                 // Just validate src exists and has a type.
@@ -561,7 +561,7 @@ impl CheckCtx {
                             }
                         }
                     }
-                    // Tag not found in type — open enum, skip
+                    // Tag not found in type - open enum, skip
                 } else if let Ty::Option(inner) = dst_ty {
                     // Option is represented as enum with Some/None tags
                     if let Some(val) = payload {
@@ -615,15 +615,15 @@ impl CheckCtx {
                         pc,
                         span,
                         "BinOp(cmp)",
-                        "left ≡ right",
+                        "left == right",
                         left_ty,
                         right_ty,
                         errors,
                     );
                     self.assert_match(pc, span, "BinOp(cmp)", "dst", &Ty::Bool, dst_ty, errors);
                 } else {
-                    self.assert_match(pc, span, "BinOp", "left ≡ right", left_ty, right_ty, errors);
-                    self.assert_match(pc, span, "BinOp", "left ≡ dst", left_ty, dst_ty, errors);
+                    self.assert_match(pc, span, "BinOp", "left == right", left_ty, right_ty, errors);
+                    self.assert_match(pc, span, "BinOp", "left == dst", left_ty, dst_ty, errors);
                 }
             }
 
@@ -657,7 +657,7 @@ impl CheckCtx {
                             pc,
                             span,
                             "UnaryOp(Neg)",
-                            "operand ≡ dst",
+                            "operand == dst",
                             operand_ty,
                             dst_ty,
                             errors,
@@ -793,7 +793,7 @@ impl CheckCtx {
                         self.assert_match(pc, span, "FieldSet", "value", &resolved, val_ty, errors);
                     }
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "FieldSet", "dst ≡ object", obj_ty, dst_ty, errors);
+                    self.assert_match(pc, span, "FieldSet", "dst == object", obj_ty, dst_ty, errors);
                 } else if !obj_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
@@ -1037,7 +1037,7 @@ impl CheckCtx {
                                 errors,
                             );
                         }
-                        // Fn type might be Error/Var — skip
+                        // Fn type might be Error/Var - skip
                     }
                 }
             }
@@ -1112,7 +1112,7 @@ impl CheckCtx {
                                 errors,
                             );
                         }
-                        // Fn type might be Error/Var — skip
+                        // Fn type might be Error/Var - skip
                     }
                 }
             }

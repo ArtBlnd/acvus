@@ -3,7 +3,7 @@ use acvus_interpreter_test::*;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-// ── Text only ────────────────────────────────────────────────────
+// -- Text only ----------------------------------------------------
 
 #[tokio::test]
 async fn text_only() {
@@ -15,7 +15,7 @@ async fn text_with_spaces() {
     assert_eq!(run_simple("  spaces  ").await, "  spaces  ");
 }
 
-// ── Inline expressions ──────────────────────────────────────────
+// -- Inline expressions ------------------------------------------
 
 #[tokio::test]
 async fn inline_string() {
@@ -29,7 +29,7 @@ async fn inline_int_to_string() {
     assert_eq!(run_simple(r#"{{ "a" + "b" }}"#).await, "ab");
 }
 
-// ── Context read ─────────────────────────────────────────────────
+// -- Context read -------------------------------------------------
 
 #[tokio::test]
 async fn context_read_string() {
@@ -46,7 +46,7 @@ async fn context_read_int() {
     assert_eq!(result, "42");
 }
 
-// ── String concat ────────────────────────────────────────────────
+// -- String concat ------------------------------------------------
 
 #[tokio::test]
 async fn string_concat() {
@@ -56,7 +56,7 @@ async fn string_concat() {
     );
 }
 
-// ── Template text + expression ───────────────────────────────────
+// -- Template text + expression -----------------------------------
 
 #[tokio::test]
 async fn text_and_expr() {

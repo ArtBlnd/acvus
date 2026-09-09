@@ -14,7 +14,7 @@ use crate::ty::{EffectTerm, Infer, InferTy, Param, PolyTy, Solver, Ty, TyTerm, T
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
 
-// ── Phase 1 output ──────────────────────────────────────────────────
+// -- Phase 1 output --------------------------------------------------
 
 /// Inferred metadata for a single function.
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ impl FnInferOutcome {
 }
 
 /// Phase 1 output: inferred context parameters and function types.
-/// All type information is frozen — immutable after inference.
+/// All type information is frozen - immutable after inference.
 #[derive(Debug)]
 pub struct InferResult {
     /// Per-function inference outcome (Complete or Incomplete).
@@ -118,7 +118,7 @@ impl InferResult {
     }
 }
 
-// ── Call graph + SCC ─────────────────────────────────────────────────
+// -- Call graph + SCC -------------------------------------------------
 
 /// Extract call edges for a single function from its parsed AST.
 /// Returns the list of QualifiedRefs that this function references.
@@ -337,7 +337,7 @@ fn collect_value_refs_else_branch(eb: &acvus_ast::ElseBranch, refs: &mut Vec<Ast
 }
 
 /// Tarjan's SCC algorithm. Returns SCCs in reverse topological order
-/// (leaf SCCs first — dependencies before dependents).
+/// (leaf SCCs first - dependencies before dependents).
 pub fn tarjan_scc(
     ids: &[QualifiedRef],
     edges: &FxHashMap<QualifiedRef, Vec<QualifiedRef>>,
@@ -422,14 +422,14 @@ pub fn tarjan_scc(
     result
 }
 
-// ── Per-SCC inference ────────────────────────────────────────────────
+// -- Per-SCC inference ------------------------------------------------
 
 /// Result of inferring a single SCC.
 #[derive(Debug, Clone)]
 pub struct SccInferResult {
     /// Per-function metadata (type, params).
     pub fn_metas: FxHashMap<QualifiedRef, FunctionMeta>,
-    /// QualifiedRef → resolved Ty::Fn (for passing to next SCC).
+    /// QualifiedRef -> resolved Ty::Fn (for passing to next SCC).
     pub resolved_types: FxHashMap<QualifiedRef, Ty>,
     /// Per-function type errors from typechecker.
     pub errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>>,
@@ -467,7 +467,7 @@ pub fn infer_scc(
     for &fid in scc {
         let func = fn_by_id[&fid];
 
-        // Destructure func.ty — must be Fn for local functions.
+        // Destructure func.ty - must be Fn for local functions.
         let TyTerm::Fn {
             params: ref fn_params,
             ret: ref fn_ret,
@@ -570,7 +570,7 @@ pub fn infer_scc(
         }
     }
 
-    // Resolve all functions in this SCC — freeze InferTy → Ty at the boundary.
+    // Resolve all functions in this SCC - freeze InferTy -> Ty at the boundary.
     let mut resolved_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
     let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
 
@@ -610,16 +610,16 @@ pub fn infer_scc(
     }
 }
 
-// ── Batch inference ─────────────────────────────────────────────────
+// -- Batch inference -------------------------------------------------
 
 /// Run Phase 1 inference with SCC-based processing.
 ///
 /// 1. Build call graph from AST references.
-/// 2. Compute SCCs (Tarjan) — reverse topological order.
+/// 2. Compute SCCs (Tarjan) - reverse topological order.
 /// 3. Process each SCC:
 ///    - Within an SCC: shared Solver, no instantiation of intra-SCC calls.
-///    - After an SCC is done: resolve ret vars → concrete Ty::Fn.
-///    - Next SCC sees concrete types → instantiation is safe.
+///    - After an SCC is done: resolve ret vars -> concrete Ty::Fn.
+///    - Next SCC sees concrete types -> instantiation is safe.
 pub fn infer(
     interner: &Interner,
     graph: &CompilationGraph,
@@ -642,7 +642,7 @@ pub fn infer(
     let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = Default::default();
     let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
 
-    // ── Setup ────────────────────────────────────────────────────────
+    // -- Setup --------------------------------------------------------
 
     // Extern function types are always known upfront (their PolyTy is fully concrete).
     for func in graph.functions.iter() {
@@ -653,8 +653,8 @@ pub fn infer(
 
     // Known context types: graph declarations + user-provided.
     // Internally work with InferTy; freeze to Ty at the output boundary.
-    // If ctx.ty is fully concrete → instantiate_poly gives a concrete InferTy.
-    // If ctx.ty contains Var placeholders → instantiate_poly maps each Var to a fresh solver var.
+    // If ctx.ty is fully concrete -> instantiate_poly gives a concrete InferTy.
+    // If ctx.ty contains Var placeholders -> instantiate_poly maps each Var to a fresh solver var.
     let mut known_ctx: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     for ctx in graph.contexts.iter() {
         known_ctx.insert(ctx.qref, solver.instantiate_poly(&ctx.ty));
@@ -668,7 +668,7 @@ pub fn infer(
         .map(|f| (f.qref, f))
         .collect();
 
-    // ── STEP 1: Call graph + SCCs ────────────────────────────────────
+    // -- STEP 1: Call graph + SCCs ------------------------------------
 
     let call_graph = build_call_graph(graph, extract);
     let local_ids: Vec<QualifiedRef> = graph
@@ -679,7 +679,7 @@ pub fn infer(
         .collect();
     let sccs = tarjan_scc(&local_ids, &call_graph);
 
-    // ── STEP 2: Typecheck + resolve per SCC ─────────────────────────
+    // -- STEP 2: Typecheck + resolve per SCC -------------------------
 
     for scc in &sccs {
         // 2a. Build PolyTy::Fn templates for SCC members.
@@ -691,7 +691,7 @@ pub fn infer(
         for &fid in scc {
             let func = fn_by_id[&fid];
 
-            // Destructure func.ty — must be Fn for local functions.
+            // Destructure func.ty - must be Fn for local functions.
             let TyTerm::Fn {
                 params: ref fn_params,
                 ret: ref fn_ret,
@@ -703,8 +703,8 @@ pub fn infer(
             };
 
             // Solver vars for unification (InferTy).
-            // If ret is concrete (no Poly Vars) → instantiate_poly gives concrete InferTy.
-            // If ret has Vars → instantiate_poly maps each Var to a fresh solver var.
+            // If ret is concrete (no Poly Vars) -> instantiate_poly gives concrete InferTy.
+            // If ret has Vars -> instantiate_poly maps each Var to a fresh solver var.
             let ret_var: InferTy = solver.instantiate_poly(fn_ret);
             scc_ret_vars.insert(fid, ret_var.clone());
             scc_effect_vars.insert(fid, solver.fresh_effect_var());
@@ -749,7 +749,7 @@ pub fn infer(
             };
 
             // For expected_tail: if ret is fully concrete (no Poly Vars), freeze to Ty.
-            // If ret has Vars (inferred), freeze fails → None → typechecker infers freely.
+            // If ret has Vars (inferred), freeze fails -> None -> typechecker infers freely.
             let expected_tail_ty: Option<Ty> = {
                 let infer = solver.instantiate_poly(fn_ret);
                 solver.freeze_ty(&infer).ok()
@@ -799,7 +799,7 @@ pub fn infer(
             }
         }
 
-        // 2c. Resolve SCC: freeze InferTy → Ty, build resolved fn types + fn_metas.
+        // 2c. Resolve SCC: freeze InferTy -> Ty, build resolved fn types + fn_metas.
         for &fid in scc {
             let ret = scc_ret_vars
                 .get(&fid)
@@ -829,7 +829,7 @@ pub fn infer(
         }
     }
 
-    // ── STEP 3: outcomes ────────────────────────────────────────────
+    // -- STEP 3: outcomes --------------------------------------------
 
     let mut outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = FxHashMap::default();
 
@@ -879,9 +879,9 @@ pub fn infer(
         );
     }
 
-    // ── STEP 5: Build result ────────────────────────────────────────
+    // -- STEP 5: Build result ----------------------------------------
 
-    // Freeze InferTy → Ty for context types at the output boundary.
+    // Freeze InferTy -> Ty for context types at the output boundary.
     let context_types: FxHashMap<QualifiedRef, Ty> = known_ctx
         .iter()
         .map(|(&k, v)| {
@@ -1013,10 +1013,10 @@ mod tests {
     }
 
     // ================================================================
-    // Migrated from resolve.rs — inter-function, soundness, edge cases
+    // Migrated from resolve.rs - inter-function, soundness, edge cases
     // ================================================================
 
-    // ── Helpers (resolve-style: builtins + named params + output constraint) ──
+    // -- Helpers (resolve-style: builtins + named params + output constraint) --
 
     fn make_graph_with_ctx_and_builtins(
         interner: &Interner,
@@ -1223,7 +1223,7 @@ mod tests {
         }
     }
 
-    // ── Completeness: valid single-function programs ──────────────────
+    // -- Completeness: valid single-function programs ------------------
 
     #[test]
     fn resolve_simple_arithmetic() {
@@ -1383,7 +1383,7 @@ mod tests {
         assert_eq!(*result.context_type(&ctx_ref).unwrap(), Ty::Int);
     }
 
-    // ── Completeness: valid inter-function calls ──────────────────────
+    // -- Completeness: valid inter-function calls ----------------------
 
     /// C1: A calls B with matching concrete types.
     #[test]
@@ -1449,7 +1449,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// C4: Chain of calls — A calls B, B calls C.
+    /// C4: Chain of calls - A calls B, B calls C.
     #[test]
     fn inter_fn_chain_call() {
         let i = Interner::new();
@@ -1537,7 +1537,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// C8: Pipe syntax — value | fn.
+    /// C8: Pipe syntax - value | fn.
     #[test]
     fn inter_fn_pipe_call() {
         let i = Interner::new();
@@ -1632,7 +1632,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Bool);
     }
 
-    /// C13: Deep call chain — A → B → C → D.
+    /// C13: Deep call chain - A -> B -> C -> D.
     #[test]
     fn inter_fn_deep_chain() {
         let i = Interner::new();
@@ -1677,7 +1677,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// C16: Mutual recursion — A calls B, B calls A.
+    /// C16: Mutual recursion - A calls B, B calls A.
     #[test]
     fn inter_fn_mutual_recursion() {
         let i = Interner::new();
@@ -1752,7 +1752,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Float);
     }
 
-    // ── Soundness: invalid calls should be rejected ─────────────────
+    // -- Soundness: invalid calls should be rejected -----------------
 
     /// S1: Wrong argument type.
     #[test]
@@ -1865,7 +1865,7 @@ mod tests {
         }
     }
 
-    /// S7: Mutual recursion without declared types — must not stack overflow.
+    /// S7: Mutual recursion without declared types - must not stack overflow.
     #[test]
     fn inter_fn_mutual_recursion_no_declared_types() {
         let i = Interner::new();
@@ -1887,7 +1887,7 @@ mod tests {
             ],
             &[],
         );
-        // We don't assert success or failure — just that it terminates.
+        // We don't assert success or failure - just that it terminates.
         let _ = result;
     }
 
@@ -1947,7 +1947,7 @@ mod tests {
         assert!(result.has_errors(), "should reject wrong arity call");
     }
 
-    /// S11: Return type of called function used in list — type must be consistent.
+    /// S11: Return type of called function used in list - type must be consistent.
     #[test]
     fn inter_fn_reject_heterogeneous_via_calls() {
         let i = Interner::new();
@@ -1995,9 +1995,9 @@ mod tests {
         );
     }
 
-    // ── Edge cases ──────────────────────────────────────────────────
+    // -- Edge cases --------------------------------------------------
 
-    /// E1: Function with no parameters, no context — pure constant.
+    /// E1: Function with no parameters, no context - pure constant.
     #[test]
     fn inter_fn_zero_arg_constant() {
         let i = Interner::new();
@@ -2015,7 +2015,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// E2: Same name as builtin — local should shadow or coexist?
+    /// E2: Same name as builtin - local should shadow or coexist?
     #[test]
     fn inter_fn_name_shadows_builtin() {
         let i = Interner::new();
@@ -2096,7 +2096,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// E6: Diamond dependency — A calls B and C, both call D.
+    /// E6: Diamond dependency - A calls B and C, both call D.
     #[test]
     fn inter_fn_diamond_dependency() {
         let i = Interner::new();
@@ -2162,7 +2162,7 @@ mod tests {
         assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
     }
 
-    /// E11: All local functions are callers — no inter-function calls.
+    /// E11: All local functions are callers - no inter-function calls.
     #[test]
     fn inter_fn_independent_functions() {
         let i = Interner::new();
@@ -2246,7 +2246,7 @@ mod tests {
         );
     }
 
-    /// B3: Mutual recursion with Inferred output — should NOT silently succeed.
+    /// B3: Mutual recursion with Inferred output - should NOT silently succeed.
     #[test]
     fn boundary_mutual_recursion_inferred_must_not_succeed_silently() {
         let i = Interner::new();
@@ -2322,7 +2322,7 @@ mod tests {
         }
     }
 
-    /// B9: Param in output but not in input — must not silently succeed.
+    /// B9: Param in output but not in input - must not silently succeed.
     #[test]
     fn boundary_orphan_param_in_output() {
         let i = Interner::new();
@@ -2342,7 +2342,7 @@ mod tests {
         }
     }
 
-    // ── Extern function tests ─────────────────────────────────────
+    // -- Extern function tests -------------------------------------
 
     /// Extern function should be callable from local functions.
     #[test]
@@ -2422,7 +2422,7 @@ mod tests {
 
     // -- Completeness: contexts correctly extracted and typed --
 
-    /// Single context read — type inferred from usage.
+    /// Single context read - type inferred from usage.
     #[test]
     fn context_extract_single_read() {
         let i = Interner::new();
@@ -2456,7 +2456,7 @@ mod tests {
 
     }
 
-    /// Context inside nested block — still extracted.
+    /// Context inside nested block - still extracted.
     #[test]
     fn context_extract_nested_block() {
         let i = Interner::new();
@@ -2477,7 +2477,7 @@ mod tests {
 
     // -- Complete/Incomplete boundary --
 
-    /// Declared Exact context → Complete.
+    /// Declared Exact context -> Complete.
     #[test]
     fn context_declared_exact_is_complete() {
         let i = Interner::new();
@@ -2499,7 +2499,7 @@ mod tests {
         );
     }
 
-    /// Declared Inferred context → Complete (type inferred via fresh var).
+    /// Declared Inferred context -> Complete (type inferred via fresh var).
     #[test]
     fn context_declared_inferred_is_complete() {
         let i = Interner::new();
@@ -2544,7 +2544,7 @@ mod tests {
         assert_eq!(*result.context_type(&qref).unwrap(), Ty::Int);
     }
 
-    /// Undeclared context — typechecker creates fresh infer var in analysis mode.
+    /// Undeclared context - typechecker creates fresh infer var in analysis mode.
     /// FnRefs removed: undeclared contexts no longer cause Incomplete via fn_params;
     /// they are handled by the typechecker's infer_vars and may resolve.
     #[test]
@@ -2569,7 +2569,7 @@ mod tests {
         );
     }
 
-    /// User-provided context type → Complete.
+    /// User-provided context type -> Complete.
     #[test]
     fn context_user_provided_is_complete() {
         let i = Interner::new();
@@ -2595,7 +2595,7 @@ mod tests {
 
     // -- Soundness: type mismatch detected --
 
-    /// Declared context type conflicts with usage → Incomplete.
+    /// Declared context type conflicts with usage -> Incomplete.
     #[test]
     fn context_type_mismatch_is_incomplete() {
         let i = Interner::new();
@@ -2622,7 +2622,7 @@ mod tests {
     // Param extraction tests
     // ================================================================
 
-    /// Single $param — discovered in extern_params.
+    /// Single $param - discovered in extern_params.
     #[test]
     fn param_extract_single() {
         let i = Interner::new();
@@ -2684,7 +2684,7 @@ mod tests {
         assert_eq!(meta.params[0].ty, Ty::Int);
     }
 
-    /// Param used in string concat → inferred as String.
+    /// Param used in string concat -> inferred as String.
     #[test]
     fn param_type_inferred_string() {
         let i = Interner::new();
@@ -2707,7 +2707,7 @@ mod tests {
     // Type constraint tests
     // ================================================================
 
-    /// Exact output constraint satisfied → Complete.
+    /// Exact output constraint satisfied -> Complete.
     #[test]
     fn type_constraint_exact_satisfied() {
         let i = Interner::new();
@@ -2723,7 +2723,7 @@ mod tests {
         );
     }
 
-    /// Exact output constraint violated → Incomplete.
+    /// Exact output constraint violated -> Incomplete.
     #[test]
     fn type_constraint_exact_violated() {
         let i = Interner::new();
@@ -2744,7 +2744,7 @@ mod tests {
         );
     }
 
-    /// Inferred output → always Complete (no constraint to violate).
+    /// Inferred output -> always Complete (no constraint to violate).
     #[test]
     fn type_constraint_inferred_always_complete() {
         let i = Interner::new();
@@ -2757,7 +2757,7 @@ mod tests {
         assert!(result.outcomes[&fid].is_complete());
     }
 
-    // ── read_only policy tests ──────────────────────────────────────
+    // -- read_only policy tests --------------------------------------
 
     /// Helper: infer a single function with context policies.
     fn infer_with_policies(

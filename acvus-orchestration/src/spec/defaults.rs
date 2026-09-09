@@ -1,5 +1,5 @@
 /// A named set of default values for context fields.
-/// Users pick one set — each field is a (name, expr) pair.
+/// Users pick one set - each field is a (name, expr) pair.
 /// The expr must be isolated and materializable.
 pub struct Defaults {
     pub name: String,

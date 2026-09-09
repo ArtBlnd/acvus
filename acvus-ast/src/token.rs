@@ -31,7 +31,7 @@ fn parse_string_literal(lex: &mut logos::Lexer<'_, Token>) -> Option<String> {
 #[logos(skip r"[ \t\n\r]+")]
 #[logos(extras = Interner)]
 pub enum Token {
-    // ── Keywords (exact match, higher priority than ident regex) ──
+    // -- Keywords (exact match, higher priority than ident regex) --
     #[token("true")]
     True,
     #[token("false")]
@@ -43,7 +43,7 @@ pub enum Token {
     #[token("None", priority = 3)]
     None,
 
-    // ── Script mode keywords ──
+    // -- Script mode keywords --
     #[token("let", priority = 3)]
     Let,
     #[token("if", priority = 3)]
@@ -53,19 +53,19 @@ pub enum Token {
     #[token("while", priority = 3)]
     While,
 
-    // ── Identifiers ──
+    // -- Identifiers --
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
     Ident(Astr),
 
-    // ── Extern parameter: $name ──
+    // -- Extern parameter: $name --
     #[regex(r"\$[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(&lex.slice()[1..]))]
     ParamRef(Astr),
 
-    // ── Context reference: @name ──
+    // -- Context reference: @name --
     #[regex(r"@[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(&lex.slice()[1..]))]
     ContextRef(Astr),
 
-    // ── Literals ──
+    // -- Literals --
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
     FloatLit(f64),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
@@ -73,7 +73,7 @@ pub enum Token {
     #[regex(r#""([^"\\]|\\.)*""#, parse_string_literal)]
     StringLit(String),
 
-    // ── Two-char operators ──
+    // -- Two-char operators --
     #[token("::")]
     DoubleColon,
     #[token("&&")]
@@ -93,7 +93,7 @@ pub enum Token {
     #[token("..")]
     DotDot,
 
-    // ── Single-char operators ──
+    // -- Single-char operators --
     #[token("+")]
     Plus,
     #[token("-")]
@@ -117,7 +117,7 @@ pub enum Token {
     #[token("|")]
     Pipe,
 
-    // ── Delimiters ──
+    // -- Delimiters --
     #[token("(")]
     LParen,
     #[token(")")]
@@ -137,7 +137,7 @@ pub enum Token {
     #[token(";")]
     Semicolon,
 
-    // ── Format string segments (emitted by ExprTokenizer, not by logos) ──
+    // -- Format string segments (emitted by ExprTokenizer, not by logos) --
     FmtStringStart(String),
     FmtStringMid(String),
     FmtStringEnd(String),

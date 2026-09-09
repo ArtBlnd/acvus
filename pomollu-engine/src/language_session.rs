@@ -12,7 +12,7 @@ use crate::schema::*;
 use crate::{asset_context_types, build_registry, convert_context_types, try_extract_known};
 
 // ---------------------------------------------------------------------------
-// WASM LanguageSession — exposes full LSP document-centric API
+// WASM LanguageSession - exposes full LSP document-centric API
 // ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
@@ -171,7 +171,7 @@ impl LanguageSession {
     // Node-level rebuild
     // -----------------------------------------------------------------------
 
-    /// Full node-level rebuild — typecheck all nodes.
+    /// Full node-level rebuild - typecheck all nodes.
     pub fn rebuild_nodes(
         &mut self,
         options: Ts<TypecheckNodesOptions>,
@@ -281,7 +281,7 @@ impl LanguageSession {
         interner: &acvus_utils::Interner,
         input: &WasmKnownValues,
     ) -> FxHashMap<acvus_utils::Astr, KnownValue> {
-        // We need a registry for try_extract_known — use an empty one.
+        // We need a registry for try_extract_known - use an empty one.
         // Known values are simple constants, they don't need context types.
         let empty_reg = PartialContextTypeRegistry::new(
             FxHashMap::default(),
@@ -305,16 +305,16 @@ impl LanguageSession {
 // WASM input/output types
 // ---------------------------------------------------------------------------
 
-/// Scope for a document — the types visible in that document's context.
+/// Scope for a document - the types visible in that document's context.
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmScope {
-    /// Provided types — engine-provided, NOT user params.
-    /// Goes into system/scoped tier → context_keys excludes these.
+    /// Provided types - engine-provided, NOT user params.
+    /// Goes into system/scoped tier -> context_keys excludes these.
     #[serde(default)]
     pub provided: FxHashMap<String, TypeDesc>,
-    /// User-declared types — param types declared by the user.
-    /// Goes into user tier → context_keys includes these.
+    /// User-declared types - param types declared by the user.
+    /// Goes into user tier -> context_keys includes these.
     #[serde(default)]
     pub user: FxHashMap<String, TypeDesc>,
 }
@@ -323,7 +323,7 @@ pub struct WasmScope {
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmKnownValues {
-    /// Map of param name → static script source.
+    /// Map of param name -> static script source.
     #[serde(default)]
     pub values: FxHashMap<String, String>,
 }

@@ -1,11 +1,11 @@
 //! Full optimization pipeline E2E tests.
 //!
 //! Each test compiles a complex, real-world script through the **full** pipeline:
-//! extract → infer → lower → SROA → SSA → Inline → SpawnSplit → CodeMotion → Reorder → SSA → RegColor → Validate
+//! extract -> infer -> lower -> SROA -> SSA -> Inline -> SpawnSplit -> CodeMotion -> Reorder -> SSA -> RegColor -> Validate
 //!
 //! Two snapshots per test:
-//! - `{name}@raw` — unoptimized, raw lowered MIR
-//! - `{name}@optimized` — after full optimization pipeline
+//! - `{name}@raw` - unoptimized, raw lowered MIR
+//! - `{name}@optimized` - after full optimization pipeline
 
 use acvus_mir::ty::Ty;
 use acvus_mir_test::{compile_script_optimized, compile_script_raw};
@@ -36,7 +36,7 @@ fn snap_both(i: &Interner, source: &str, c: &FxHashMap<acvus_utils::Astr, Ty>) -
 
 // =======================================================================
 //  1. Nested loop with conditional accumulator
-//     - SSA: loop phi × 2 (pos_sum, neg_sum), branch phi within inner loop
+//     - SSA: loop phi x 2 (pos_sum, neg_sum), branch phi within inner loop
 //     - Reorder: context store ordering
 // =======================================================================
 
@@ -170,7 +170,7 @@ fn object_construct_from_fields() {
 
 // =======================================================================
 //  5. Diamond control flow with divergent context mutations
-//     - SSA: @high, @low writes in separate branches → phi at join
+//     - SSA: @high, @low writes in separate branches -> phi at join
 //     - Multiple contexts mutated conditionally
 // =======================================================================
 
@@ -207,7 +207,7 @@ fn diamond_divergent_context_mutations() {
 // =======================================================================
 //  6. Loop with search pattern + accumulator
 //     - SSA: found, idx both loop phi + branch phi within loop body
-//     - Complex phi nesting: loop × branch
+//     - Complex phi nesting: loop x branch
 // =======================================================================
 
 #[ignore = "pending identity integration"]
@@ -239,7 +239,7 @@ fn loop_search_with_accumulator() {
 
 // =======================================================================
 //  7. Chained field mutations on same object
-//     - SROA: 4 field projections on @state → decompose each
+//     - SROA: 4 field projections on @state -> decompose each
 //     - SSA: sequential writes, no phi but many SROA temporaries
 //     - RegColor: high register pressure from SROA expansion
 // =======================================================================
@@ -278,7 +278,7 @@ fn chained_field_mutations() {
 // =======================================================================
 //  8. Object destructure + multi-branch classification
 //     - SROA: @user.name, @user.age field reads
-//     - SSA: category vars from each branch → sequential, no phi (each branch independent)
+//     - SSA: category vars from each branch -> sequential, no phi (each branch independent)
 //     - String concat chain
 // =======================================================================
 
@@ -313,8 +313,8 @@ fn destructure_multi_branch_classify() {
 // =======================================================================
 //  9. Iteration with stateful accumulation + conditional side-effects
 //     - SROA: x.amount, x.id field reads on loop variable
-//     - SSA: @balance, @overdraft_count, @last_overdraft — loop phi + branch phi
-//     - Most complex phi pattern: loop × branch × multiple contexts
+//     - SSA: @balance, @overdraft_count, @last_overdraft - loop phi + branch phi
+//     - Most complex phi pattern: loop x branch x multiple contexts
 // =======================================================================
 
 #[ignore = "pending identity integration"]
@@ -349,7 +349,7 @@ fn iter_stateful_accum_with_side_effects() {
 // =======================================================================
 // 10. Pure computation with loop-invariant hoisting
 //     - SROA: @config.base_rate, @config.multiplier field reads
-//     - CodeMotion: `factor` computation is loop-invariant → hoist
+//     - CodeMotion: `factor` computation is loop-invariant -> hoist
 //     - SSA: @result loop phi
 // =======================================================================
 

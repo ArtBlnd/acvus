@@ -85,7 +85,7 @@ pub fn run_body(body: &mut MirBody, context_types: &FxHashMap<QualifiedRef, Ty>)
         let whole_ty = match whole_types.get(&target) {
             Some(ty) => ty.clone(),
             None => {
-                // Can't determine whole type — leave as-is.
+                // Can't determine whole type - leave as-is.
                 new_insts.push(body.insts[i].clone());
                 i += 1;
                 continue;
@@ -415,7 +415,7 @@ mod tests {
         );
     }
 
-    /// No field Refs → SROA is a no-op.
+    /// No field Refs -> SROA is a no-op.
     #[test]
     fn sroa_noop_when_no_field_refs() {
         let mut val_types = FxHashMap::default();
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(
             body.insts.len(),
             inst_count_before,
-            "no field Refs → SROA should be no-op"
+            "no field Refs -> SROA should be no-op"
         );
     }
 }

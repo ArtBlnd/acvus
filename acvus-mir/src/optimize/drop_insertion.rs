@@ -1,4 +1,4 @@
-//! Drop Insertion — insert `Drop` instructions for non-Copy values.
+//! Drop Insertion - insert `Drop` instructions for non-Copy values.
 //!
 //! Runs after all optimizations (DCE, SROA, etc.). Inserts `InstKind::Drop`
 //! at the point where a non-Copy value's live range ends.
@@ -9,14 +9,14 @@
 //!
 //! Two phases:
 //!
-//! **Phase 1 — Within-block drops**: Walk each block forward. When a value's last
+//! **Phase 1 - Within-block drops**: Walk each block forward. When a value's last
 //! use within the block is found and the value is NOT live-out, insert Drop after
 //! that instruction.
 //!
-//! **Phase 2 — Edge drops**: At branch points, a value may be forwarded to one
-//! successor but not another. For each edge A→B, if a value is live-out of A but
+//! **Phase 2 - Edge drops**: At branch points, a value may be forwarded to one
+//! successor but not another. For each edge A->B, if a value is live-out of A but
 //! NOT forwarded to B and NOT live-in to B, insert Drop at the start of B.
-//! Example: `if cond → then(v0), else()` — v0 needs Drop at start of else.
+//! Example: `if cond -> then(v0), else()` - v0 needs Drop at start of else.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -30,7 +30,7 @@ use crate::validate::move_check::is_move_only;
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     let liveness = liveness::analyze(cfg);
 
-    // Build label → block index mapping.
+    // Build label -> block index mapping.
     let label_to_block: FxHashMap<Label, usize> = cfg
         .blocks
         .iter()
@@ -38,7 +38,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         .map(|(i, b)| (b.label, i))
         .collect();
 
-    // ── Phase 1: within-block drops ────────────────────────────────
+    // -- Phase 1: within-block drops --------------------------------
 
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
@@ -82,7 +82,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 let consumed_by_term = is_consumed_by_terminator(&block.terminator, v);
 
                 if consumed_by_inst || consumed_by_term {
-                    // Ownership transferred — no Drop needed.
+                    // Ownership transferred - no Drop needed.
                     continue;
                 }
 
@@ -94,7 +94,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 }
 
                 if !is_used_in_block(block, v) {
-                    // Unused def — insert drop right after definition.
+                    // Unused def - insert drop right after definition.
                     let idx = block
                         .insts
                         .iter()
@@ -120,7 +120,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         }
     }
 
-    // ── Phase 2: edge drops (branch-point) ─────────────────────────
+    // -- Phase 2: edge drops (branch-point) -------------------------
 
     // For each block, examine the terminator's outgoing edges.
     // If a value is live-out of the block but NOT forwarded to a successor
@@ -313,7 +313,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Poison { .. }
         | InstKind::Nop => false,
 
-        // Control flow — handled by terminator, not here.
+        // Control flow - handled by terminator, not here.
         InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return(_) => false,
@@ -415,7 +415,7 @@ mod tests {
             .collect()
     }
 
-    // ── Copy types: no Drop ─────────────────────────────────────────
+    // -- Copy types: no Drop -----------------------------------------
 
     #[test]
     fn no_drop_for_copy_types() {
@@ -434,12 +434,12 @@ mod tests {
         assert_eq!(count_drops(&cfg), 0);
     }
 
-    // ── Simple linear: move-only value used then dropped ─────────────
+    // -- Simple linear: move-only value used then dropped -------------
 
     #[test]
     fn drop_after_last_use() {
         // v0 = UserDefined (move-only)
-        // v1 = FieldGet(v0, "x")  → v0's last use
+        // v1 = FieldGet(v0, "x")  -> v0's last use
         // return v1
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
@@ -463,7 +463,7 @@ mod tests {
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
 
-    // ── Value returned: no Drop ──────────────────────────────────────
+    // -- Value returned: no Drop --------------------------------------
 
     #[test]
     fn no_drop_for_returned_value() {
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(count_drops(&cfg), 0);
     }
 
-    // ── Unused move-only value: dropped immediately ──────────────────
+    // -- Unused move-only value: dropped immediately ------------------
 
     #[test]
     fn drop_unused_move_only() {
@@ -506,17 +506,17 @@ mod tests {
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
 
-    // ── Branch: value used in one arm, dropped in the other ──────────
+    // -- Branch: value used in one arm, dropped in the other ----------
 
     #[test]
     fn drop_in_branch_where_not_used() {
         // v0 = UserDefined
         // v1 = Bool (cond)
         // v2 = Int
-        // if v1 → then(v0), else()
+        // if v1 -> then(v0), else()
         // then: v3 = v0, return v3
         // else: return v2
-        // → v0 should be dropped in else branch (Phase 2 edge drop).
+        // -> v0 should be dropped in else branch (Phase 2 edge drop).
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -577,12 +577,12 @@ mod tests {
         );
     }
 
-    // ── Both branches get the value: no edge drop ────────────────────
+    // -- Both branches get the value: no edge drop --------------------
 
     #[test]
     fn no_edge_drop_when_forwarded_to_both() {
         // v0 = UserDefined, forwarded to both branches
-        // if cond → then(v0), else(v0)
+        // if cond -> then(v0), else(v0)
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -622,12 +622,12 @@ mod tests {
         );
 
         insert_drops(&mut cfg, &val_types);
-        // v0 is forwarded to both branches → no edge drops.
-        // v2, v3 are returned → no drops.
+        // v0 is forwarded to both branches -> no edge drops.
+        // v2, v3 are returned -> no drops.
         assert_eq!(count_drops(&cfg), 0);
     }
 
-    // ── Multiple move-only values, different lifetimes ───────────────
+    // -- Multiple move-only values, different lifetimes ---------------
 
     #[test]
     fn multiple_move_only_different_lifetimes() {
@@ -677,13 +677,13 @@ mod tests {
         assert!(targets.contains(&v(1)));
     }
 
-    // ── Value used multiple times then dropped ──────────────────────
+    // -- Value used multiple times then dropped ----------------------
 
     #[test]
     fn drop_after_multiple_uses() {
         // v0 = UserDefined
-        // v1 = FieldGet(v0, "x")  — first use
-        // v2 = FieldGet(v0, "y")  — last use → drop here
+        // v1 = FieldGet(v0, "x")  - first use
+        // v2 = FieldGet(v0, "y")  - last use -> drop here
         // return v2
         let i = Interner::new();
         let (mut cfg, val_types) = make_cfg_with_types(
@@ -720,7 +720,7 @@ mod tests {
         assert!(targets.contains(&v(0)));
     }
 
-    // ── Container with move-only element: needs drop ────────────────
+    // -- Container with move-only element: needs drop ----------------
 
     #[test]
     fn container_with_move_only_needs_drop() {
@@ -747,7 +747,7 @@ mod tests {
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
 
-    // ── Container with copy element: no drop ────────────────────────
+    // -- Container with copy element: no drop ------------------------
 
     #[test]
     fn container_with_copy_no_drop() {
@@ -773,14 +773,14 @@ mod tests {
         assert_eq!(count_drops(&cfg), 0);
     }
 
-    // ── Both branches drop different values ──────────────────────────
+    // -- Both branches drop different values --------------------------
 
     #[test]
     fn both_branches_drop_different_values() {
         // v0 = MoveOnly, v1 = MoveOnly
-        // if cond → then(v0), else(v1)
-        // then: return v0 → v1 needs drop in then
-        // else: return v1 → v0 needs drop in else
+        // if cond -> then(v0), else(v1)
+        // then: return v0 -> v1 needs drop in then
+        // else: return v1 -> v0 needs drop in else
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -835,11 +835,11 @@ mod tests {
         assert_eq!(count_drops(&cfg), 2);
     }
 
-    // ── No double drop: value used and dropped only once ─────────────
+    // -- No double drop: value used and dropped only once -------------
 
     #[test]
     fn no_double_drop() {
-        // v0 = MoveOnly, used once → exactly 1 Drop.
+        // v0 = MoveOnly, used once -> exactly 1 Drop.
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {

@@ -1,4 +1,4 @@
-//! Liveness analysis — backward dataflow over the CFG.
+//! Liveness analysis - backward dataflow over the CFG.
 //!
 //! Computes which ValueIds are live at each program point.
 //! A ValueId is live at a point if there exists a path from that point
@@ -16,7 +16,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, ValueId};
 
-// ── Domain ──────────────────────────────────────────────────────────
+// -- Domain ----------------------------------------------------------
 
 /// Liveness domain: a ValueId is either Live or Dead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,7 @@ impl SemiLattice for Liveness {
     }
 }
 
-// ── Transfer function ───────────────────────────────────────────────
+// -- Transfer function -----------------------------------------------
 
 /// Backward liveness: kill defs, gen uses.
 struct LivenessAnalysis;
@@ -92,7 +92,7 @@ impl DataflowAnalysis for LivenessAnalysis {
     }
 }
 
-// ── Result ──────────────────────────────────────────────────────────
+// -- Result ----------------------------------------------------------
 
 /// Per-block liveness: live-in set (values live at block entry).
 pub struct LivenessResult {
@@ -181,7 +181,7 @@ mod tests {
         })
     }
 
-    // ── Single block ────────────────────────────────────────────────
+    // -- Single block ------------------------------------------------
 
     #[test]
     fn simple_linear() {
@@ -204,7 +204,7 @@ mod tests {
         ]);
 
         let result = analyze(&cfg);
-        // v(0), v(1) are defined in block 0 → not live-in.
+        // v(0), v(1) are defined in block 0 -> not live-in.
         assert!(!result.is_live_in(BlockIdx(0), v(0)));
         assert!(!result.is_live_in(BlockIdx(0), v(1)));
     }
@@ -227,7 +227,7 @@ mod tests {
         assert!(!result.is_live_out(BlockIdx(0), v(0)));
     }
 
-    // ── Multi-block ────────────────────────────────────────────────
+    // -- Multi-block ------------------------------------------------
 
     #[test]
     fn branch_both_arms_use_value() {
@@ -296,7 +296,7 @@ mod tests {
         assert!(result.is_live_in(BlockIdx(1), v(0)));
     }
 
-    // ── Loop ───────────────────────────────────────────────────────
+    // -- Loop -------------------------------------------------------
 
     #[test]
     fn loop_keeps_value_live() {

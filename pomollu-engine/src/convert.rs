@@ -222,10 +222,10 @@ impl WebNode {
                     output: Some(max_tokens.output),
                 };
 
-                // Fallback to OpenAI when unset — variant is only used at runtime
+                // Fallback to OpenAI when unset - variant is only used at runtime
                 // for LLM calls, not during typechecking. Allows nodes with no
                 // provider to still participate in type analysis.
-                // Endpoint/api_key are empty — resolved at session creation time.
+                // Endpoint/api_key are empty - resolved at session creation time.
                 match api.as_ref().map(|a| a).unwrap_or(&WebApiKind::OpenAI) {
                     WebApiKind::OpenAI => NodeKind::OpenAICompatible(OpenAICompatibleSpec {
                         endpoint: String::new(),

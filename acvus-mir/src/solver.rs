@@ -1,4 +1,4 @@
-//! Type inference solver — manages type inference variables.
+//! Type inference solver - manages type inference variables.
 //!
 //! Core types: `Solver`, `TypeBound`, `FreezeError`.
 //! The solver is purely internal to type inference; graph-level types
@@ -14,7 +14,7 @@ use crate::ty::{
     TypeBoundId,
 };
 
-// ── Solver types ────────────────────────────────────────────────────
+// -- Solver types ----------------------------------------------------
 
 /// Capability that a type may or may not possess.
 /// Used in `TypeBound::Unresolved` to constrain what a type variable can resolve to.
@@ -31,7 +31,7 @@ pub enum TypeBound {
     /// Resolved to a (possibly partially-known) type.
     /// Inner `InferTy` may still contain `Var` references to other bounds.
     Resolved(InferTy),
-    /// Not yet resolved — constrained by capabilities and allowed types.
+    /// Not yet resolved - constrained by capabilities and allowed types.
     /// `caps`: required capabilities (e.g. Cloneable).
     /// `allowed`: concrete types this variable may resolve to (lazy, checked at freeze).
     ///   Empty = unconstrained.
@@ -64,7 +64,7 @@ pub enum LenBound {
     Forward(LenVarId),
 }
 
-// ── Solver ──────────────────────────────────────────────────────────
+// -- Solver ----------------------------------------------------------
 
 /// Snapshot for solver rollback during overload resolution.
 pub struct SolverSnapshot {
@@ -77,7 +77,7 @@ pub struct SolverSnapshot {
 /// Pure type inference solver.
 ///
 /// Manages type inference variables. All constraint/resolution
-/// state lives here — no inference state leaks into `Ty`.
+/// state lives here - no inference state leaks into `Ty`.
 pub struct Solver {
     pub(crate) ty_bounds: Vec<TypeBound>,
     pub(crate) effect_vars: Vec<EffectBound>,
@@ -95,7 +95,7 @@ impl Solver {
         }
     }
 
-    // ── Length variables ────────────────────────────────────────────
+    // -- Length variables --------------------------------------------
 
     pub fn fresh_len_var(&mut self) -> LenTerm<Infer> {
         LenTerm::Var(Self::alloc_len_var(&mut self.len_vars))
@@ -148,7 +148,7 @@ impl Solver {
         }
     }
 
-    // ── Effect variables ────────────────────────────────────────────
+    // -- Effect variables --------------------------------------------
 
     pub fn fresh_effect_var(&mut self) -> EffectTerm<Infer> {
         let id = EffectVarId(self.effect_vars.len() as u32);
@@ -349,7 +349,7 @@ impl Solver {
         self.identity_factory = snap.identity_factory;
     }
 
-    // ── Resolution ──────────────────────────────────────────────────
+    // -- Resolution --------------------------------------------------
 
     /// Follow forwarding pointers to find the root bound for a type variable.
     pub fn find_ty_root(&self, id: TypeBoundId) -> TypeBoundId {
@@ -380,7 +380,7 @@ impl Solver {
         )
     }
 
-    // ── Resolve ─────────────────────────────────────────────────────
+    // -- Resolve -----------------------------------------------------
 
     /// Shallow-resolve: follow Var chains but don't recurse into structure.
     pub fn shallow_resolve_ty(&self, ty: &InferTy) -> InferTy {
@@ -412,7 +412,7 @@ impl Solver {
         )
     }
 
-    // ── Occurs check ────────────────────────────────────────────────
+    // -- Occurs check ------------------------------------------------
 
     /// Returns true if the type variable `id` appears in `ty`.
     fn occurs_in(&self, id: TypeBoundId, ty: &InferTy) -> bool {
@@ -448,7 +448,7 @@ impl Solver {
         }
     }
 
-    /// Find the leaf Var in an InferTy — the deepest Var in a binding chain
+    /// Find the leaf Var in an InferTy - the deepest Var in a binding chain
     /// that is bound to a concrete (non-Var) type. Returns None if not a Var.
     pub fn find_leaf_var(&self, ty: &InferTy) -> Option<TypeBoundId> {
         match ty {
@@ -466,7 +466,7 @@ impl Solver {
         }
     }
 
-    // ── Bind helpers ────────────────────────────────────────────────
+    // -- Bind helpers ------------------------------------------------
 
     /// Bind a type variable to a resolved InferTy.
     pub fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy) {
@@ -483,7 +483,7 @@ impl Solver {
         }
     }
 
-    // ── Type unification ────────────────────────────────────────────
+    // -- Type unification --------------------------------------------
 
     /// Unify two InferTy with polarity-based subtyping.
     /// Returns `Ok(Some(fn_ref))` when an ExternCast coercion was used.
@@ -599,7 +599,7 @@ impl Solver {
                             inter
                         };
                         let merged_caps = caps1 | caps2;
-                        // Forward id → id2, update id2's bounds.
+                        // Forward id -> id2, update id2's bounds.
                         self.ty_bounds[root2.0 as usize] = TypeBound::Unresolved {
                             caps: merged_caps,
                             allowed: merged_allowed,
@@ -763,7 +763,7 @@ impl Solver {
         }
     }
 
-    // ── LUB ─────────────────────────────────────────────────────────
+    // -- LUB ---------------------------------------------------------
 
     fn try_lub_infer(&mut self, a: &InferTy, b: &InferTy, registry: &TypeRegistry) -> Option<InferTy> {
         match (a, b) {
@@ -874,7 +874,7 @@ impl Solver {
         Ok(None)
     }
 
-    // ── Coercion ────────────────────────────────────────────────────
+    // -- Coercion ----------------------------------------------------
 
     /// Try subtype coercion on InferTy. Returns Ok(Some(qref)) if ExternCast used.
     fn try_coerce_infer(
@@ -927,7 +927,7 @@ impl Solver {
         Ok(Some(fn_ref))
     }
 
-    // ── Instantiate ─────────────────────────────────────────────────
+    // -- Instantiate -------------------------------------------------
 
     /// Instantiate a polymorphic InferTy: replace all Var
     /// and Identity with fresh values.
@@ -1044,7 +1044,7 @@ pub enum FreezeError {
     UnresolvedLen(LenVarId),
 }
 
-// ── Poly → Infer instantiation (in Solver) ──────────────────────────
+// -- Poly -> Infer instantiation (in Solver) --------------------------
 
 impl Solver {
     /// Instantiate a PolyTy template into InferTy, replacing each positional

@@ -1,7 +1,7 @@
 //! Per-instruction def/use extraction.
 //!
-//! `defs(inst)` — ValueIds defined (written) by this instruction.
-//! `uses(inst)` — ValueIds used (read) by this instruction.
+//! `defs(inst)` - ValueIds defined (written) by this instruction.
+//! `uses(inst)` - ValueIds used (read) by this instruction.
 //!
 //! These are the building blocks for use-def analysis, DCE, reordering, etc.
 

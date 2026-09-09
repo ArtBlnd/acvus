@@ -17,23 +17,23 @@ pub struct Lowerer<'a> {
     body: MirBody,
     /// Interner for string interning.
     interner: &'a Interner,
-    /// Stack of scopes: variable name → type (for validity, capture, and Ref+Load typing).
+    /// Stack of scopes: variable name -> type (for validity, capture, and Ref+Load typing).
     scopes: Vec<FxHashMap<Astr, Ty>>,
-    /// Variable name → storage slot ValueId.
+    /// Variable name -> storage slot ValueId.
     /// Each variable gets a unique slot (like LLVM's alloca).
     var_slots: FxHashMap<Astr, ValueId>,
     /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
     resolution: Freeze<TypeResolution>,
-    /// Coercion map from type checker (expr AstId → CastKind).
+    /// Coercion map from type checker (expr AstId -> CastKind).
     coercion_lookup: FxHashMap<AstId, CastKind>,
     /// Closures produced during lowering.
     closures: FxHashMap<Label, MirBody>,
-    /// Global closure label counter — shared across nesting levels to prevent
+    /// Global closure label counter - shared across nesting levels to prevent
     /// label collisions when nested closures each allocate from a sub-body.
     closure_label_count: u32,
     /// External constraints on contexts (volatile, read_only, etc.).
     policies: FxHashMap<QualifiedRef, ContextPolicy>,
-    /// Context projection alias stack: @x → (@a, [x]) means @x is an alias for @a.x.
+    /// Context projection alias stack: @x -> (@a, [x]) means @x is an alias for @a.x.
     /// Pushed/popped around match-bind bodies for destructure projection.
     context_aliases: Vec<FxHashMap<QualifiedRef, (QualifiedRef, Vec<Astr>)>>,
 }
@@ -174,7 +174,7 @@ impl<'a> Lowerer<'a> {
             Stmt::ContextStore {
                 name, path, expr, span, ..
             } => {
-                // Resolve alias: if @x → @a.x, then @x.y = v becomes @a.x.y = v
+                // Resolve alias: if @x -> @a.x, then @x.y = v becomes @a.x.y = v
                 if let Some((real_ctx, alias_path)) = self.resolve_context_alias(name) {
                     let mut full_path = alias_path;
                     full_path.extend_from_slice(path);
@@ -201,7 +201,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_stmt_match_bind(pattern, source, body, *span);
             }
 
-            // ── Script mode statements ──────────────────────────────
+            // -- Script mode statements ------------------------------
 
             Stmt::LetBind {
                 name, expr, span, ..
@@ -225,14 +225,14 @@ impl<'a> Lowerer<'a> {
                 let ty = self.type_of_id(*id);
                 self.set_val_type(slot, ty.clone());
                 self.define_var(*name, ty);
-                // No store — init_check tracks this as uninit.
+                // No store - init_check tracks this as uninit.
             }
             Stmt::Assign {
                 name, expr, span, ..
             } => {
                 let val = self.lower_expr(expr);
                 let slot = self.lookup_var_slot(*name)
-                    .expect("Assign to undefined variable — should have been caught by typeck");
+                    .expect("Assign to undefined variable - should have been caught by typeck");
                 self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
             }
             Stmt::While {
@@ -313,7 +313,7 @@ impl<'a> Lowerer<'a> {
         );
 
         if is_irrefutable {
-            // No branching needed — just bind and execute body.
+            // No branching needed - just bind and execute body.
             self.push_scope();
             self.lower_pattern_bind(pattern, source_reg, span);
             for s in body {
@@ -321,7 +321,7 @@ impl<'a> Lowerer<'a> {
             }
             self.pop_scope();
         } else {
-            // Refutable: test → branch → bind + body → merge.
+            // Refutable: test -> branch -> bind + body -> merge.
             let body_label = self.alloc_label();
             let end_label = self.alloc_label();
 
@@ -392,7 +392,7 @@ impl<'a> Lowerer<'a> {
     /// loop_label:
     ///   src = lower(source)
     ///   matched = test(pattern, src)
-    ///   JumpIf matched → body_label, end_label
+    ///   JumpIf matched -> body_label, end_label
     /// body_label:
     ///   bind(pattern, src)
     ///   body...
@@ -675,7 +675,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn context_policy(&self, ctx: &QualifiedRef) -> ContextPolicy {
-        // Resolve alias first: if @x → @a.x, use @a's policy.
+        // Resolve alias first: if @x -> @a.x, use @a's policy.
         if let Some((real_ctx, _)) = self.resolve_context_alias(ctx) {
             return self.policies.get(&real_ctx).copied().unwrap_or_default();
         }
@@ -854,10 +854,10 @@ impl<'a> Lowerer<'a> {
             // Variables defined only in inner scope do NOT propagate out.
             for (name, ty) in &inner {
                 if outer.contains_key(name) {
-                    // Already in outer — update type (inner may have re-bound with different value).
+                    // Already in outer - update type (inner may have re-bound with different value).
                     outer.insert(*name, ty.clone());
                 }
-                // else: inner-only definition — does not escape.
+                // else: inner-only definition - does not escape.
             }
         }
     }
@@ -1142,7 +1142,7 @@ impl<'a> Lowerer<'a> {
         if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
             match &kind {
                 CastKind::Extern { fn_ref, callee_ty } => {
-                    // ExternCast → lower as FunctionCall (pure, 1 arg, no context).
+                    // ExternCast -> lower as FunctionCall (pure, 1 arg, no context).
                     // Derive ret_ty from callee_ty.
                     let ret_ty = match callee_ty {
                         Ty::Fn { ret, .. } => *ret.clone(),
@@ -1196,7 +1196,7 @@ impl<'a> Lowerer<'a> {
                 name: qref,
                 span,
             } => {
-                // Resolve alias: @x → @a.x becomes Ref { target: Context(a), path: [x] }
+                // Resolve alias: @x -> @a.x becomes Ref { target: Context(a), path: [x] }
                 let (real_ctx, path) = if let Some((real, path)) = self.resolve_context_alias(qref) {
                     (real, path)
                 } else {
@@ -1243,7 +1243,7 @@ impl<'a> Lowerer<'a> {
                         self.set_origin(dst, ValOrigin::Named(name.name));
                         dst
                     } else {
-                        // Not found — emit poison (should be caught by typeck).
+                        // Not found - emit poison (should be caught by typeck).
                         let dst = self.alloc_val();
                         self.set_val_type(dst, ty);
                         self.emit_inst(*span, InstKind::Poison { dst });
@@ -1252,7 +1252,7 @@ impl<'a> Lowerer<'a> {
                 }
                 RefKind::Value => {
                     if !self.is_defined(name.name) {
-                        // Undefined variable — emit Unit (dead code).
+                        // Undefined variable - emit Unit (dead code).
                         // TODO: this should be an error, not silent Unit.
                         let dst = self.alloc_val();
                         self.set_val_type(dst, Ty::Unit);
@@ -1393,7 +1393,7 @@ impl<'a> Lowerer<'a> {
                             );
                             dst
                         } else if self.is_defined(name.name) {
-                            // Captured param — treat as local variable.
+                            // Captured param - treat as local variable.
                             let slot = self.var_slot(name.name);
                             let dst = self.alloc_val();
                             self.set_val_type(dst, Ty::Ref(Box::new(field_ty), false));
@@ -1461,7 +1461,7 @@ impl<'a> Lowerer<'a> {
                 right,
                 span,
             } => {
-                // Desugar: `a | f(b, c)` → `f(a, b, c)`, `a | f` → `f(a)`
+                // Desugar: `a | f(b, c)` -> `f(a, b, c)`, `a | f` -> `f(a)`
                 match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
                         self.lower_func_call(func, args, Some(left), *id, *span)
@@ -1802,11 +1802,11 @@ impl<'a> Lowerer<'a> {
         } = func
         {
             match ref_kind {
-                // fn_name(args) — named call
+                // fn_name(args) - named call
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    // 1. Direct call — typeck resolved this callee to a named function.
+                    // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
                         let callee_ty = self.type_of_id(func.id());
                         self.emit_inst(
@@ -1821,7 +1821,7 @@ impl<'a> Lowerer<'a> {
                         return dst;
                     }
 
-                    // 2. Local variable (closure/lambda — Indirect call)
+                    // 2. Local variable (closure/lambda - Indirect call)
                     if self.is_defined(name.name) {
                         let closure_ty = self.var_type(name.name);
                         let slot = self.var_slot(name.name);
@@ -2112,7 +2112,7 @@ impl<'a> Lowerer<'a> {
 
 
             Pattern::Tuple { elements, .. } => {
-                // Tuple length is guaranteed by the type system — always matches.
+                // Tuple length is guaranteed by the type system - always matches.
                 // Test each sub-pattern element.
                 let mut all_ok = self.emit_const_bool(span, true);
 
@@ -2151,11 +2151,11 @@ impl<'a> Lowerer<'a> {
                 );
 
                 let Some(inner_pat) = payload else {
-                    // No payload (e.g. None) — tag test is the final result.
+                    // No payload (e.g. None) - tag test is the final result.
                     return tag_ok;
                 };
 
-                // Has payload — short-circuit: if tag fails, skip inner test.
+                // Has payload - short-circuit: if tag fails, skip inner test.
                 let check_inner_label = self.alloc_label();
                 let fail_label = self.alloc_label();
 
@@ -2387,7 +2387,7 @@ impl<'a> Lowerer<'a> {
                     free.push((name.name, *id, *span));
                 }
             }
-            // Context refs resolve globally — no capture needed.
+            // Context refs resolve globally - no capture needed.
             Expr::ContextRef { .. } => {}
             Expr::BinaryOp { left, right, .. } => {
                 self.collect_free_vars(left, bound, free, seen);
@@ -2584,7 +2584,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires Phase 2: builtin → graph Function migration"]
+    #[ignore = "requires Phase 2: builtin -> graph Function migration"]
     fn lower_builtin_call() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);

@@ -10,7 +10,7 @@
 //!
 //! 2. **SSA builder** (`run_ssa_builder`): insert PHI nodes at merge points via
 //!    the standard SSA construction algorithm. Produces `var_subst` (VarLoad/ParamLoad
-//!    → SSA value) and `phi_insertions` (block params + jump args + write-back stores).
+//!    -> SSA value) and `phi_insertions` (block params + jump args + write-back stores).
 //!
 //! 3. **Forward context values** (`forward_context_values`): dominator-tree-scoped
 //!    store-load forwarding for context variables. Eliminates redundant ContextLoads
@@ -24,7 +24,7 @@
 //! ## Write-back model (context only)
 //!
 //! Branch-internal ContextStores are removed; a single write-back ContextStore is
-//! inserted after each merge block. Local variables do NOT need write-back — they
+//! inserted after each merge block. Local variables do NOT need write-back - they
 //! exist only in SSA form.
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -46,7 +46,7 @@ pub fn run(cfg: &mut CfgBody) {
     }
     let ssa_info = collect_ssa_info(cfg);
 
-    // Step 1: SSA construction — phi insertion + variable promotion.
+    // Step 1: SSA construction - phi insertion + variable promotion.
     let has_work = !ssa_info.written_contexts.is_empty()
         || !ssa_info.written_vars.is_empty()
         || !ssa_info.read_vars.is_empty()
@@ -101,13 +101,13 @@ pub fn run(cfg: &mut CfgBody) {
 ///
 /// Walks blocks in dominator-tree preorder (DFS), inheriting the context
 /// forwarding state from the dominator parent. At merge points (>1 predecessor),
-/// written contexts are cleared — the SSA builder inserted PHIs for those.
+/// written contexts are cleared - the SSA builder inserted PHIs for those.
 /// Unwritten (immutable) contexts are safe to forward across all blocks.
 ///
 /// Two phases:
-///   1. **Collect** — read `cfg.blocks`, allocate new ValueIds via `val_factory`,
+///   1. **Collect** - read `cfg.blocks`, allocate new ValueIds via `val_factory`,
 ///      produce substitution map + removal set + call patches.
-///   2. **Apply** — mutate `cfg.blocks` with the collected results.
+///   2. **Apply** - mutate `cfg.blocks` with the collected results.
 fn forward_context_values(
     cfg: &mut CfgBody,
     written_contexts: &BTreeSet<QualifiedRef>,
@@ -125,9 +125,9 @@ fn forward_context_values(
     // and mutable allocation of new ValueIds during the collect phase.
     let mut val_factory = std::mem::replace(&mut cfg.val_factory, acvus_utils::LocalFactory::new());
 
-    // ── Collect phase: walk dominator tree, gather forwarding results ──
+    // -- Collect phase: walk dominator tree, gather forwarding results --
 
-    // Global state: projection ValueId → QualifiedRef (accumulated across all blocks).
+    // Global state: projection ValueId -> QualifiedRef (accumulated across all blocks).
     let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     // Collected results.
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
@@ -169,7 +169,7 @@ fn forward_context_values(
 
         // At merge points, refine ctx_state using predecessor exit states.
         // For each written context: keep if ALL predecessors agree on the same value.
-        // If any predecessor is unvisited (back edge) or disagrees → clear.
+        // If any predecessor is unvisited (back edge) or disagrees -> clear.
         let is_merge = st.preds.get(&BlockIdx(bi)).is_some_and(|p| p.len() > 1);
         if is_merge {
             if let Some(preds) = st.preds.get(&BlockIdx(bi)) {
@@ -194,7 +194,7 @@ fn forward_context_values(
                                 }
                             },
                             None => {
-                                // Unvisited predecessor (back edge) — conservative.
+                                // Unvisited predecessor (back edge) - conservative.
                                 all_agree = false;
                                 break;
                             }
@@ -215,7 +215,7 @@ fn forward_context_values(
         let block = &st.blocks[bi];
         for (ii, inst) in block.insts.iter().enumerate() {
             match &inst.kind {
-                // Identity Ref to context → register in val_to_ctx for forwarding.
+                // Identity Ref to context -> register in val_to_ctx for forwarding.
                 InstKind::Ref {
                     dst,
                     target: crate::ir::RefTarget::Context(ctx),
@@ -224,7 +224,7 @@ fn forward_context_values(
                     st.val_to_ctx.insert(*dst, *ctx);
                 }
 
-                // Load from context Ref → context forwarding.
+                // Load from context Ref -> context forwarding.
                 InstKind::Load { dst, src, volatile } => {
                     // Volatile loads must not be forwarded.
                     if *volatile {
@@ -233,20 +233,20 @@ fn forward_context_values(
                     let src_resolved = st.subst.get(src).copied().unwrap_or(*src);
                     if let Some(&ctx_id) = st.val_to_ctx.get(&src_resolved) {
                         if let Some(&known_val) = ctx_state.get(&ctx_id) {
-                            // Known value — substitute and mark for removal.
+                            // Known value - substitute and mark for removal.
                             st.subst.insert(*dst, known_val);
                             st.remove.insert((bi, ii));
-                            // Don't remove the Ref here — it might be used by other
+                            // Don't remove the Ref here - it might be used by other
                             // instructions (canonical Ref reuse). DCE will clean up
                             // orphaned Refs after all passes complete.
                         } else {
-                            // First load of this context in this dom-tree path — record it.
+                            // First load of this context in this dom-tree path - record it.
                             ctx_state.insert(ctx_id, *dst);
                         }
                     }
                 }
 
-                // Store to context Ref → update forwarding state.
+                // Store to context Ref -> update forwarding state.
                 InstKind::Store {
                     dst,
                     value,
@@ -302,7 +302,7 @@ fn forward_context_values(
         return subst;
     }
 
-    // ── Apply phase: mutate cfg.blocks with collected results ──
+    // -- Apply phase: mutate cfg.blocks with collected results --
 
     for (bi, block) in cfg.blocks.iter_mut().enumerate() {
         let old_insts = std::mem::take(&mut block.insts);
@@ -440,7 +440,7 @@ fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, Valu
     }
 }
 
-// ── Step 1: SSA info collection ──────────────────────────────────────
+// -- Step 1: SSA info collection --------------------------------------
 
 /// A single SSA-relevant operation, recorded in instruction order.
 #[derive(Debug, Clone)]
@@ -475,32 +475,32 @@ struct BlockOps {
 
 /// Aggregated SSA info for both context and local variables.
 struct SsaInfo {
-    // ── Context fields ──
+    // -- Context fields --
     written_contexts: BTreeSet<QualifiedRef>,
-    /// ctx → root type (from ContextProject instructions).
+    /// ctx -> root type (from ContextProject instructions).
     ctx_types: FxHashMap<QualifiedRef, Ty>,
-    /// ctx → initial loaded value (from entry region ContextLoad).
+    /// ctx -> initial loaded value (from entry region ContextLoad).
     entry_ctx_defs: BTreeMap<QualifiedRef, ValueId>,
 
-    // ── Local variable fields ──
+    // -- Local variable fields --
     written_vars: BTreeSet<ValueId>,
-    /// All vars that are read (VarLoad) — for ensuring entry defines.
+    /// All vars that are read (VarLoad) - for ensuring entry defines.
     read_vars: BTreeSet<ValueId>,
-    /// var slot → type (from VarStore/VarLoad).
+    /// var slot -> type (from VarStore/VarLoad).
     var_types: FxHashMap<ValueId, Ty>,
-    /// param/capture slot → initial loaded value (from entry region ParamLoad).
+    /// param/capture slot -> initial loaded value (from entry region ParamLoad).
     entry_param_defs: BTreeMap<ValueId, ValueId>,
 
-    // ── Block ops (instruction-ordered) ──
+    // -- Block ops (instruction-ordered) --
     block_ops: FxHashMap<BlockIdx, BlockOps>,
 }
 
 fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
     use crate::ir::RefTarget;
 
-    // Maps Ref dst → its RefTarget (for Load/Store to look up).
+    // Maps Ref dst -> its RefTarget (for Load/Store to look up).
     let mut ref_target: FxHashMap<ValueId, RefTarget> = FxHashMap::default();
-    // Variables that have field Refs — non-promotable (SROA not run or incomplete).
+    // Variables that have field Refs - non-promotable (SROA not run or incomplete).
     let mut non_promotable_vars: std::collections::BTreeSet<ValueId> =
         std::collections::BTreeSet::new();
     let mut non_promotable_contexts: std::collections::BTreeSet<QualifiedRef> =
@@ -539,7 +539,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
             if let InstKind::Ref { dst, target, path } = &inst.kind {
                 ref_target.insert(*dst, target.clone());
                 if !path.is_empty() {
-                    // Field Ref present → this storage is non-promotable.
+                    // Field Ref present -> this storage is non-promotable.
                     match target {
                         RefTarget::Var(slot) | RefTarget::Param(slot) => {
                             non_promotable_vars.insert(*slot);
@@ -560,7 +560,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
 
         for (ii, inst) in block.insts.iter().enumerate() {
             match &inst.kind {
-                // Identity Ref → register for ctx_types.
+                // Identity Ref -> register for ctx_types.
                 InstKind::Ref {
                     dst,
                     target: RefTarget::Context(ctx),
@@ -573,7 +573,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     }
                 }
 
-                // Load from identity Ref → entry defs or SsaOp.
+                // Load from identity Ref -> entry defs or SsaOp.
                 InstKind::Load {
                     dst,
                     src,
@@ -606,11 +606,11 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                                 slot: *slot,
                             });
                         }
-                        _ => {} // volatile, field Ref, or unknown → skip
+                        _ => {} // volatile, field Ref, or unknown -> skip
                     }
                 }
 
-                // Store to identity Ref → SsaOp.
+                // Store to identity Ref -> SsaOp.
                 InstKind::Store {
                     dst,
                     value,
@@ -657,7 +657,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
     }
 }
 
-// ── Step 2: SSABuilder execution ────────────────────────────────────
+// -- Step 2: SSABuilder execution ------------------------------------
 
 /// Allocate a typed ValueId. This is the ONLY way to create new ValueIds
 /// in the SSA pass. val_factory.next() must never be called directly.
@@ -705,7 +705,7 @@ fn run_ssa_builder(
         blocks[bi.0].label
     };
 
-    // ── Detect loop headers (backedge target: succ index <= current index) ──
+    // -- Detect loop headers (backedge target: succ index <= current index) --
     let mut loop_headers: BTreeSet<BlockIdx> = BTreeSet::default();
     for (bi, _) in blocks.iter().enumerate() {
         for &succ in &all_successors[bi] {
@@ -715,7 +715,7 @@ fn run_ssa_builder(
         }
     }
 
-    // ── Register predecessors ──
+    // -- Register predecessors --
     for (block_idx, block_preds) in preds {
         let label = block_label(*block_idx);
         for pred in block_preds {
@@ -723,7 +723,7 @@ fn run_ssa_builder(
         }
     }
 
-    // ── Define initial values in entry block ──
+    // -- Define initial values in entry block --
     let mut undef_defs: Vec<ValueId> = Vec::new();
 
     // Context entry defs (from ContextLoad in entry region).
@@ -760,7 +760,7 @@ fn run_ssa_builder(
         }
     }
 
-    // Typed alloc closure for SSA builder — every ValueId gets a type at birth.
+    // Typed alloc closure for SSA builder - every ValueId gets a type at birth.
     let mut typed_alloc = |var: SsaVar| -> ValueId {
         alloc_var_val(val_factory, val_types, var, ssa_info)
     };
@@ -770,11 +770,11 @@ fn run_ssa_builder(
         ssa.seal_block(ENTRY_BLOCK, &mut typed_alloc);
     }
 
-    // ── Single-pass: define and use in program order (Braun algorithm) ──
+    // -- Single-pass: define and use in program order (Braun algorithm) --
     //
     // For each block, process ops in instruction order:
-    //   - VarStore/CtxStore → ssa.define() (updates current_defs)
-    //   - VarLoad/ParamLoad → ssa.use_var() (reads current_defs or predecessor)
+    //   - VarStore/CtxStore -> ssa.define() (updates current_defs)
+    //   - VarLoad/ParamLoad -> ssa.use_var() (reads current_defs or predecessor)
     //
     // This ensures a VarLoad BEFORE a VarStore for the same slot gets the
     // predecessor's value (not the Store's value), because define() hasn't
@@ -816,12 +816,12 @@ fn run_ssa_builder(
         }
     }
 
-    // ── Seal loop headers (deferred: backedge predecessors processed above) ──
+    // -- Seal loop headers (deferred: backedge predecessors processed above) --
     for &header in &loop_headers {
         ssa.seal_block(block_label(header), &mut typed_alloc);
     }
 
-    // ── Trigger PHIs at merge points ──
+    // -- Trigger PHIs at merge points --
     //
     // Explicitly request the merged value for every written variable at each
     // merge block. This ensures PHI nodes exist even when the variable is not
@@ -856,7 +856,7 @@ fn run_ssa_builder(
     (phi_insertions, var_subst, undef_defs)
 }
 
-// ── Step 3: Patch instructions ──────────────────────────────────────
+// -- Step 3: Patch instructions --------------------------------------
 
 fn patch_instructions(
     cfg: &mut CfgBody,
@@ -1042,12 +1042,12 @@ fn patch_instructions(
     }
 }
 
-// ── Step 4: Apply var substitutions + remove VarLoad/VarStore/ParamLoad ──
+// -- Step 4: Apply var substitutions + remove VarLoad/VarStore/ParamLoad --
 
 fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, ssa_info: &SsaInfo) {
     use crate::ir::RefTarget;
 
-    // Collect the set of substituted Load dsts — these Loads are dead.
+    // Collect the set of substituted Load dsts - these Loads are dead.
     let substituted_loads: FxHashSet<ValueId> = var_subst.keys().copied().collect();
 
     // Collect all users of each Ref dst: which Load/Store instructions reference it.
@@ -1127,7 +1127,7 @@ fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, s
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// -- Tests -----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1155,7 +1155,7 @@ mod tests {
             .count()
     }
 
-    // ── Completeness: PHI inserted when needed ──
+    // -- Completeness: PHI inserted when needed --
 
     #[test]
     fn match_one_arm_write_phi() {
@@ -1192,7 +1192,7 @@ mod tests {
         assert!(count_phi_blocks(&cfg_body) >= 1);
     }
 
-    // ── Soundness: PHI NOT inserted when not needed ──
+    // -- Soundness: PHI NOT inserted when not needed --
 
     #[test]
     fn match_no_write_no_phi() {
@@ -1219,9 +1219,9 @@ mod tests {
         assert_eq!(count_context_stores(&cfg_body), stores_before);
     }
 
-    // ── Script regression: entry loads + nested loops ──
+    // -- Script regression: entry loads + nested loops --
 
-    // ── Volatile context: forwarding must be skipped ──
+    // -- Volatile context: forwarding must be skipped --
 
     fn count_context_loads(cfg_body: &CfgBody) -> usize {
         cfg_body
@@ -1232,7 +1232,7 @@ mod tests {
             .count()
     }
 
-    /// Build a minimal CfgBody with: Ref → Store → Load → Return.
+    /// Build a minimal CfgBody with: Ref -> Store -> Load -> Return.
     /// When volatile=false, SSA should forward the store value and eliminate the load.
     /// When volatile=true, SSA must preserve the load.
     fn make_store_then_load(volatile: bool) -> CfgBody {
@@ -1314,7 +1314,7 @@ mod tests {
         let loads_before = count_context_loads(&cfg);
         run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
-        // Non-volatile: SSA should forward the store → load is eliminated.
+        // Non-volatile: SSA should forward the store -> load is eliminated.
         assert!(
             loads_after < loads_before,
             "non-volatile context load should be forwarded (before={}, after={})",
@@ -1329,7 +1329,7 @@ mod tests {
         let loads_before = count_context_loads(&cfg);
         run(&mut cfg);
         let loads_after = count_context_loads(&cfg);
-        // Volatile: SSA must NOT forward — load is preserved.
+        // Volatile: SSA must NOT forward - load is preserved.
         assert_eq!(
             loads_before, loads_after,
             "volatile context load must not be forwarded (before={}, after={})",

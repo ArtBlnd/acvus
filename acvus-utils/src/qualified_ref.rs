@@ -3,8 +3,8 @@ use crate::Astr;
 /// A namespace-qualified reference. Used as the identity for contexts
 /// and for qualified function/context access.
 ///
-/// - `QualifiedRef::root(name)` → unqualified (root namespace)
-/// - `QualifiedRef::qualified(ns, name)` → specific namespace
+/// - `QualifiedRef::root(name)` -> unqualified (root namespace)
+/// - `QualifiedRef::qualified(ns, name)` -> specific namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QualifiedRef {
     /// Namespace name. `None` = root.

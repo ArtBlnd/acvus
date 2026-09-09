@@ -13,7 +13,7 @@
 //!
 //! # Dependency constraints (soundness)
 //!
-//! - SSA use-def: B uses value from A → A before B.
+//! - SSA use-def: B uses value from A -> A before B.
 //! - ContextStore ordering: stores to the same context preserve original order.
 //!
 //! These constraints are edges in a dependency graph. The scheduler picks from
@@ -38,7 +38,7 @@ pub fn run(cfg: &mut CfgBody) {
 ///
 /// Spawn goes first (fire-and-forget, maximizes async overlap).
 /// Normal instructions keep their original order.
-/// Eval is placed just before the first use of its result —
+/// Eval is placed just before the first use of its result -
 /// not at the end of the block, so independent Evals don't
 /// block each other's consumers.
 ///
@@ -47,7 +47,7 @@ pub fn run(cfg: &mut CfgBody) {
 /// right before the instruction that consumes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Priority {
-    /// Spawn — schedule as early as possible.
+    /// Spawn - schedule as early as possible.
     Spawn,
     /// Scheduled at a position. (desired_position, 0=eval-before / 1=normal).
     Scheduled(usize, u8),
@@ -69,7 +69,7 @@ fn reorder_block(
     *insts = priority_topo_sort(insts, &deps, &priorities);
 }
 
-// ── Dependency graph ───────────────────────────────────────────────
+// -- Dependency graph -----------------------------------------------
 
 /// Build dependency edges: `deps[i]` = instructions that must execute before `i`.
 fn build_dependency_graph(
@@ -78,7 +78,7 @@ fn build_dependency_graph(
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
 
-    // def_map: ValueId → defining instruction index in this block.
+    // def_map: ValueId -> defining instruction index in this block.
     let mut def_map: FxHashMap<ValueId, usize> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
         for d in inst_info::defs(&inst.kind) {
@@ -86,7 +86,7 @@ fn build_dependency_graph(
         }
     }
 
-    // SSA use-def: if B uses a value defined by A, then A → B.
+    // SSA use-def: if B uses a value defined by A, then A -> B.
     for (i, inst) in insts.iter().enumerate() {
         for u in inst_info::uses(&inst.kind) {
             if let Some(&def_idx) = def_map.get(&u)
@@ -119,7 +119,7 @@ fn build_dependency_graph(
     deps
 }
 
-// ── Priority assignment ────────────────────────────────────────────
+// -- Priority assignment --------------------------------------------
 
 /// Assign scheduling priority to each instruction.
 fn compute_priorities(insts: &[Inst]) -> Vec<Priority> {
@@ -145,7 +145,7 @@ fn compute_priorities(insts: &[Inst]) -> Vec<Priority> {
         .collect()
 }
 
-// ── Topological sort ───────────────────────────────────────────────
+// -- Topological sort -----------------------------------------------
 
 /// Priority-driven topological sort. Picks the highest-priority ready
 /// instruction (lowest Priority value) at each step.
@@ -253,7 +253,7 @@ mod tests {
         all_insts(cfg).iter().position(|i| pred(&i.kind))
     }
 
-    // ── Basic: Spawn moves before Eval ──────────────────────────────
+    // -- Basic: Spawn moves before Eval ------------------------------
 
     #[ignore = "pending identity integration"]
     #[test]
@@ -350,7 +350,7 @@ mod tests {
         );
     }
 
-    // ── Dependency: Eval must wait for its Spawn ────────────────────
+    // -- Dependency: Eval must wait for its Spawn --------------------
 
     #[ignore = "pending identity integration"]
     #[test]
@@ -388,7 +388,7 @@ mod tests {
         assert!(spawn_idx < eval_idx);
     }
 
-    // ── Independent work fills Spawn-Eval gap ───────────────────────
+    // -- Independent work fills Spawn-Eval gap -----------------------
 
     #[ignore = "pending identity integration"]
     #[test]
@@ -445,7 +445,7 @@ mod tests {
         assert!(spawn_idx < eval_idx);
     }
 
-    // ── No-op: no spawns, no change ─────────────────────────────────
+    // -- No-op: no spawns, no change ---------------------------------
 
     #[test]
     fn no_spawns_preserves_order() {
@@ -480,10 +480,10 @@ mod tests {
             .map(|i| std::mem::discriminant(&i.kind))
             .collect();
 
-        assert_eq!(original, after, "no spawns → order unchanged");
+        assert_eq!(original, after, "no spawns -> order unchanged");
     }
 
-    // ── Use-def chain prevents wrong reorder ────────────────────────
+    // -- Use-def chain prevents wrong reorder ------------------------
 
     #[test]
     fn use_def_prevents_reorder() {

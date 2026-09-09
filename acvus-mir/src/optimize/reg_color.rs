@@ -1,11 +1,11 @@
-//! Register coloring — compact ValueId allocation via SSA-aware greedy coloring.
+//! Register coloring - compact ValueId allocation via SSA-aware greedy coloring.
 //!
 //! After SSA, every value is defined exactly once. The interference graph of
 //! an SSA program is chordal, so greedy coloring in definition order is optimal.
 //!
 //! # Algorithm
 //!
-//! 1. **Liveness**: backward dataflow → live_in/live_out per block.
+//! 1. **Liveness**: backward dataflow -> live_in/live_out per block.
 //! 2. **Last-use**: for each value, where in its block is the final use?
 //!    Values in live_out die in a later block and are excluded.
 //! 3. **Greedy coloring**: walk blocks in order, maintaining a set of
@@ -17,7 +17,7 @@
 //! # Kill order
 //!
 //! Within one instruction, the sequence is:
-//!   **color defs → kill dying uses → kill dead defs**
+//!   **color defs -> kill dying uses -> kill dead defs**
 //!
 //! Defs are colored while uses are still live, so a def never steals
 //! a color from its own operand. Uses die after the instruction completes.
@@ -31,14 +31,14 @@ use crate::ty::Ty;
 use acvus_utils::LocalFactory;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-// ── Public API ─────────────────────────────────────────────────────
+// -- Public API -----------------------------------------------------
 
-/// Color with type-compatible slot reuse (default — typed interpreter).
+/// Color with type-compatible slot reuse (default - typed interpreter).
 pub fn color_body(cfg: &mut CfgBody) {
     color_body_inner(cfg, false);
 }
 
-/// Color with untyped scalar slot reuse (kovac — all scalars share slots).
+/// Color with untyped scalar slot reuse (kovac - all scalars share slots).
 pub fn color_body_untyped(cfg: &mut CfgBody) {
     color_body_inner(cfg, true);
 }
@@ -65,13 +65,13 @@ fn is_scalar_ty(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Bool | Ty::Float | Ty::Unit)
 }
 
-// ── Coloring ───────────────────────────────────────────────────────
+// -- Coloring -------------------------------------------------------
 
 /// Color assignment state: which slot (color) each ValueId is mapped to.
 struct Coloring {
-    /// ValueId → slot number.
+    /// ValueId -> slot number.
     color_of: FxHashMap<ValueId, u32>,
-    /// slot number → type constraint. Same-type values share slots.
+    /// slot number -> type constraint. Same-type values share slots.
     slot_types: Vec<Option<Ty>>,
 }
 
@@ -107,7 +107,7 @@ impl Coloring {
                         }
                     }
                     Some(None) => ty.is_none(),
-                    None => true, // New slot — any type.
+                    None => true, // New slot - any type.
                 }
             })
             .unwrap();
@@ -148,7 +148,7 @@ fn compute_coloring(
 ) -> Coloring {
     let mut coloring = Coloring::new();
 
-    // Params and captures are live simultaneously at entry — color them first.
+    // Params and captures are live simultaneously at entry - color them first.
     let mut entry_live = FxHashSet::default();
     for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
         let c = coloring.assign(&entry_live, v, cfg.val_types.get(&v), untyped_scalars);
@@ -199,7 +199,7 @@ fn compute_coloring(
     coloring
 }
 
-// ── LiveColors ─────────────────────────────────────────────────────
+// -- LiveColors -----------------------------------------------------
 
 /// Set of colors (slots) currently occupied by live values.
 struct LiveColors {
@@ -238,7 +238,7 @@ impl LiveColors {
     }
 }
 
-// ── Last-use analysis ──────────────────────────────────────────────
+// -- Last-use analysis ----------------------------------------------
 
 /// Where a value is last used within a block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,7 +293,7 @@ impl LastUseMap {
     }
 }
 
-// ── Terminator value access ────────────────────────────────────────
+// -- Terminator value access ----------------------------------------
 
 fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
     match term {
@@ -315,7 +315,7 @@ fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
     }
 }
 
-// ── Rewrite ────────────────────────────────────────────────────────
+// -- Rewrite --------------------------------------------------------
 
 fn apply_coloring(cfg: &mut CfgBody, coloring: &Coloring) {
     let mut new_factory = LocalFactory::<ValueId>::new();
@@ -350,9 +350,9 @@ fn apply_coloring(cfg: &mut CfgBody, coloring: &Coloring) {
         *v = remap(*v);
     }
 
-    // Migrate types — colored values only.
+    // Migrate types - colored values only.
     // After DCE, all values referenced by instructions are colored.
-    // Uncolored values are dead — their types are discarded.
+    // Uncolored values are dead - their types are discarded.
     let old_types = std::mem::take(&mut cfg.val_types);
     for (vid, ty) in old_types {
         if coloring.is_colored(&vid) {
@@ -360,7 +360,7 @@ fn apply_coloring(cfg: &mut CfgBody, coloring: &Coloring) {
         }
     }
 
-    // Reconstruct debug info from the final CFG — no remap needed.
+    // Reconstruct debug info from the final CFG - no remap needed.
     // This is authoritative: each ValueId's origin is determined by the
     // instruction that defines it in the final IR.
     cfg.debug = reconstruct_debug(cfg);
@@ -375,7 +375,7 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
 
     let mut debug = DebugInfo::new();
 
-    // Build slot → name lookup from params and captures.
+    // Build slot -> name lookup from params and captures.
     let mut slot_name: FxHashMap<ValueId, (acvus_utils::Astr, bool)> = FxHashMap::default();
     for (name, reg) in &cfg.params {
         slot_name.insert(*reg, (*name, true)); // true = param
@@ -633,7 +633,7 @@ fn rewrite_terminator(term: &mut Terminator, remap: &impl Fn(ValueId) -> ValueId
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
+// -- Tests ----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -696,7 +696,7 @@ mod tests {
         set
     }
 
-    // ── Soundness: interfering values must NOT share slots ──────────
+    // -- Soundness: interfering values must NOT share slots ----------
 
     #[test]
     fn overlapping_values_get_distinct_slots() {
@@ -986,7 +986,7 @@ mod tests {
         }
     }
 
-    // ── Completeness: non-interfering values SHOULD share ──────────
+    // -- Completeness: non-interfering values SHOULD share ----------
 
     #[test]
     fn non_overlapping_same_type_share_slot() {
@@ -1052,7 +1052,7 @@ mod tests {
         assert_eq!(consts[0], consts[1], "dead value slot should be reused");
     }
 
-    // ── Edge cases ─────────────────────────────────────────────────
+    // -- Edge cases -------------------------------------------------
 
     #[test]
     fn empty_body_no_panic() {

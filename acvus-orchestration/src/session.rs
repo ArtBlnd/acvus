@@ -1,7 +1,7 @@
-//! Session — the orchestration runtime.
+//! Session - the orchestration runtime.
 //!
 //! Manages namespace specs, incremental compilation, and turn execution.
-//! Stateless with respect to conversation history — caller provides
+//! Stateless with respect to conversation history - caller provides
 //! journal entries for each operation.
 //!
 //! Uses `IncrementalGraph` from acvus-mir for incremental compilation.
@@ -16,14 +16,14 @@ use rustc_hash::FxHashMap;
 use crate::lower::{self, FieldError, SpanMap};
 use crate::spec::Namespace;
 
-// ── Turn result ────────────────────────────────────────────────────
+// -- Turn result ----------------------------------------------------
 
 /// Result of executing a single turn.
 pub struct TurnResult {
     // TODO: response value, tool calls, etc.
 }
 
-// ── Session ────────────────────────────────────────────────────────
+// -- Session --------------------------------------------------------
 
 pub struct Session {
     interner: Interner,
@@ -31,9 +31,9 @@ pub struct Session {
     graph: IncrementalGraph,
     /// Spec-level field errors from lowering (not from typeck).
     field_errors: Vec<FieldError>,
-    /// Span mapping for type error → spec field resolution.
+    /// Span mapping for type error -> spec field resolution.
     span_map: SpanMap,
-    /// Mapping from spec item name → QualifiedRef(s) in the graph.
+    /// Mapping from spec item name -> QualifiedRef(s) in the graph.
     item_functions: FxHashMap<String, Vec<QualifiedRef>>,
 }
 
@@ -71,7 +71,7 @@ impl Session {
         &self.interner
     }
 
-    // ── Spec management ────────────────────────────────────────────
+    // -- Spec management --------------------------------------------
 
     /// Add a namespace spec. Lowers all items and registers them in the graph.
     pub fn add_namespace(&mut self, ns: &Namespace) {
@@ -105,14 +105,14 @@ impl Session {
         }
     }
 
-    // ── Error queries ──────────────────────────────────────────────
+    // -- Error queries ----------------------------------------------
 
     /// Get field-level parse errors from lowering.
     pub fn field_errors(&self) -> &[FieldError] {
         &self.field_errors
     }
 
-    /// Get the span map for type error → spec field resolution.
+    /// Get the span map for type error -> spec field resolution.
     pub fn span_map(&self) -> &SpanMap {
         &self.span_map
     }

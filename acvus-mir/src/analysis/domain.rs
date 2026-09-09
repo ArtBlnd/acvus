@@ -13,9 +13,9 @@
 //!  Bottom            "unreachable / no value"
 //! ```
 //!
-//! `Finite` wraps a `FiniteSet` — a bounded collection of concrete values.
+//! `Finite` wraps a `FiniteSet` - a bounded collection of concrete values.
 //! When the set grows beyond `MAX_SET_SIZE`, the value widens to `Top`.
-//! This guarantees termination: every chain Bottom → Finite → Top is finite.
+//! This guarantees termination: every chain Bottom -> Finite -> Top is finite.
 //!
 //! # FiniteSet variants
 //!
@@ -28,7 +28,7 @@
 //! | `Tuple`      | per-element abstract val  | element-wise join |
 //!
 //! Int gets its own variant (`Intervals`) because interval arithmetic enables
-//! graduated widening — merging closest pairs instead of jumping to Top.
+//! graduated widening - merging closest pairs instead of jumping to Top.
 //! All other scalar types use `Literals` (flat set, no arithmetic).
 
 use acvus_ast::Literal;
@@ -37,7 +37,7 @@ use smallvec::SmallVec;
 
 use crate::analysis::reachable_context::KnownValue;
 
-// ── SemiLattice ────────────────────────────────────────────────────
+// -- SemiLattice ----------------------------------------------------
 
 /// Join-semilattice with bottom. The algebra that dataflow fixpoints require.
 ///
@@ -54,7 +54,7 @@ pub trait SemiLattice: Clone + PartialEq {
     fn join_mut(&mut self, other: &Self) -> bool;
 }
 
-// ── Interval ───────────────────────────────────────────────────────
+// -- Interval -------------------------------------------------------
 
 /// Closed integer interval [lo, hi]. A point value is `Interval { lo: n, hi: n }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -94,7 +94,7 @@ impl Interval {
     }
 }
 
-// ── AbstractValue / FiniteSet ──────────────────────────────────────
+// -- AbstractValue / FiniteSet --------------------------------------
 
 /// Maximum number of elements in a FiniteSet before widening to Top.
 ///
@@ -119,7 +119,7 @@ pub enum FiniteSet {
     Tuple(Vec<AbstractValue>),
 }
 
-// ── SemiLattice for AbstractValue ──────────────────────────────────
+// -- SemiLattice for AbstractValue ----------------------------------
 
 impl SemiLattice for AbstractValue {
     fn bottom() -> Self {
@@ -151,7 +151,7 @@ impl SemiLattice for AbstractValue {
     }
 }
 
-// ── FiniteSet join ─────────────────────────────────────────────────
+// -- FiniteSet join -------------------------------------------------
 
 fn join_finite_sets(a: &FiniteSet, b: &FiniteSet) -> AbstractValue {
     match (a, b) {
@@ -189,7 +189,7 @@ fn join_finite_sets(a: &FiniteSet, b: &FiniteSet) -> AbstractValue {
             }
             AbstractValue::Finite(FiniteSet::Tuple(elems))
         }
-        // Different FiniteSet kinds → incompatible types → Top.
+        // Different FiniteSet kinds -> incompatible types -> Top.
         _ => AbstractValue::Top,
     }
 }
@@ -267,7 +267,7 @@ fn literal_eq(a: &Literal, b: &Literal) -> bool {
     }
 }
 
-// ── AbstractValue constructors ─────────────────────────────────────
+// -- AbstractValue constructors -------------------------------------
 
 impl AbstractValue {
     pub fn from_literal(lit: &Literal) -> Self {
@@ -277,7 +277,7 @@ impl AbstractValue {
                 1,
             ))),
             Literal::Bool(b) => AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(*b, 1))),
-            // Float, Byte, String, List — no arithmetic structure, store as literal.
+            // Float, Byte, String, List - no arithmetic structure, store as literal.
             Literal::Float(_) | Literal::Byte(_) | Literal::String(_) | Literal::List(_) => {
                 AbstractValue::Finite(FiniteSet::Literals(SmallVec::from_elem(lit.clone(), 1)))
             }
@@ -313,7 +313,7 @@ impl AbstractValue {
     }
 }
 
-// ── AbstractValue queries (branch pruning) ─────────────────────────
+// -- AbstractValue queries (branch pruning) -------------------------
 
 impl AbstractValue {
     /// If this is a definite single boolean, return it.
@@ -397,14 +397,14 @@ impl AbstractValue {
     }
 }
 
-// ── Boolean abstract operations ────────────────────────────────────
+// -- Boolean abstract operations ------------------------------------
 
 /// A single known boolean value.
 fn definite_bool(v: bool) -> AbstractValue {
     AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_elem(v, 1)))
 }
 
-/// Unknown boolean — could be true or false.
+/// Unknown boolean - could be true or false.
 fn bool_unknown() -> AbstractValue {
     AbstractValue::Finite(FiniteSet::Bools(SmallVec::from_buf([false, true])))
 }
@@ -450,7 +450,7 @@ pub fn abstract_not(val: &AbstractValue) -> AbstractValue {
     }
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
+// -- Tests ----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

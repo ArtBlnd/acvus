@@ -1,7 +1,7 @@
 //! Type definitions for the compilation graph.
 //!
 //! Functions and Contexts are identified by `QualifiedRef` (namespace + name).
-//! No opaque IDs — the name IS the identity.
+//! No opaque IDs - the name IS the identity.
 //!
 //! MIR receives **parsed ASTs**, not source strings. Parsing happens outside.
 
@@ -9,7 +9,7 @@ use acvus_utils::Freeze;
 
 use crate::ty::PolyTy;
 
-// ── Identifiers ─────────────────────────────────────────────────────
+// -- Identifiers -----------------------------------------------------
 
 acvus_utils::declare_id!(pub VersionId);
 acvus_utils::declare_id!(pub ScopeId);
@@ -17,7 +17,7 @@ acvus_utils::declare_id!(pub ScopeId);
 // Re-export from acvus-utils.
 pub use acvus_utils::QualifiedRef;
 
-// ── Function ────────────────────────────────────────────────────────
+// -- Function --------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub enum FnKind {
@@ -36,7 +36,7 @@ pub enum ParsedAst {
 
 /// An executable entity in the graph. Identified by `QualifiedRef`.
 ///
-/// `ty` is a `PolyTy` — typically `TyTerm::Fn { params, ret, captures, effect }`.
+/// `ty` is a `PolyTy` - typically `TyTerm::Fn { params, ret, captures, effect }`.
 /// Unresolved parts use `Var(n)` placeholders (inferred by the solver).
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -48,7 +48,7 @@ pub struct Function {
     pub ty: PolyTy,
 }
 
-// ── Context ──────────────────────────────────────────────────────────
+// -- Context ----------------------------------------------------------
 
 /// A loadable value in the graph. Injected externally or derived from a function.
 /// Identified by `QualifiedRef` (namespace + name).
@@ -62,7 +62,7 @@ pub struct Context {
     pub ty: PolyTy,
 }
 
-// ── Context policy ──────────────────────────────────────────────────
+// -- Context policy --------------------------------------------------
 
 /// External constraints on a context, injected by the orchestration layer.
 ///
@@ -75,7 +75,7 @@ pub struct ContextPolicy {
     pub read_only: bool,
 }
 
-// ── Compilation graph ───────────────────────────────────────────────
+// -- Compilation graph -----------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct CompilationGraph {

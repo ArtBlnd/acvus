@@ -7,7 +7,7 @@
 //! 1. Create SSABuilder
 //! 2. As lowerer emits code:
 //!    - `define(block, var, val)` when writing a variable
-//!    - `use_var(block, var)` when reading a variable → returns ValueId
+//!    - `use_var(block, var)` when reading a variable -> returns ValueId
 //! 3. When all predecessors of a block are known, `seal_block(block)`
 //! 4. `finish()` returns the PHI insertions to apply
 
@@ -36,7 +36,7 @@ struct PendingPhi {
 #[derive(Debug)]
 pub struct SSABuilder {
     /// Current definition of each variable per block.
-    /// (block, var) → ValueId
+    /// (block, var) -> ValueId
     current_defs: FxHashMap<(Label, SsaVar), ValueId>,
 
     /// Predecessors of each block.
@@ -53,7 +53,7 @@ pub struct SSABuilder {
     /// Completed PHI insertions.
     phi_results: Vec<PhiInsertion>,
 
-    /// Substitutions from trivial phi elimination: trivial_phi_val → resolved_val.
+    /// Substitutions from trivial phi elimination: trivial_phi_val -> resolved_val.
     trivial_subst: FxHashMap<ValueId, ValueId>,
 }
 
@@ -70,7 +70,7 @@ pub struct PhiInsertion {
     pub incoming: Vec<(Label, ValueId)>,
 }
 
-/// Entry block label constant — used by Lowerer to identify the implicit entry block.
+/// Entry block label constant - used by Lowerer to identify the implicit entry block.
 pub const ENTRY_BLOCK: Label = Label(u32::MAX);
 
 impl Default for SSABuilder {
@@ -123,7 +123,7 @@ impl SSABuilder {
             return self.use_var_sealed(block, var, alloc_val);
         }
 
-        // Not sealed — place a pending PHI.
+        // Not sealed - place a pending PHI.
         let phi_val = alloc_val(var);
         self.pending_phis
             .entry(block)
@@ -165,7 +165,7 @@ impl SSABuilder {
         if !self.trivial_subst.is_empty() {
             for phi in &mut self.phi_results {
                 for (_, val) in &mut phi.incoming {
-                    // Walk the substitution chain (A→B→C if B was also trivial).
+                    // Walk the substitution chain (A->B->C if B was also trivial).
                     let mut resolved = *val;
                     while let Some(&next) = self.trivial_subst.get(&resolved) {
                         resolved = next;
@@ -177,7 +177,7 @@ impl SSABuilder {
         (self.phi_results, self.trivial_subst)
     }
 
-    // ── Internal ────────────────────────────────────────────────────
+    // -- Internal ----------------------------------------------------
 
     fn use_var_sealed(
         &mut self,
@@ -195,13 +195,13 @@ impl SSABuilder {
         }
 
         if preds.len() == 1 {
-            // Single predecessor — just look up recursively.
+            // Single predecessor - just look up recursively.
             let val = self.use_var(preds[0], var, alloc_val);
             self.current_defs.insert((block, var), val);
             return val;
         }
 
-        // Multiple predecessors — need PHI.
+        // Multiple predecessors - need PHI.
         let phi_val = alloc_val(var);
         // Define before resolving to break cycles (loop back edges).
         self.current_defs.insert((block, var), phi_val);
@@ -234,7 +234,7 @@ impl SSABuilder {
             .collect();
 
         if unique.len() == 1 {
-            // Trivial — all predecessors provide the same value.
+            // Trivial - all predecessors provide the same value.
             let single = *unique.iter().next().unwrap();
             self.current_defs.insert((block, var), single);
             // Record substitution so finish() can resolve references to this phi.
@@ -276,9 +276,9 @@ mod tests {
         SsaVar::Context(QualifiedRef::root(interner.intern(name)))
     }
 
-    // ── Completeness: correct PHI insertion ──
+    // -- Completeness: correct PHI insertion --
 
-    /// Single block, define then use — no PHI needed.
+    /// Single block, define then use - no PHI needed.
     #[test]
     fn single_block_no_phi() {
         let i = Interner::new();
@@ -294,7 +294,7 @@ mod tests {
         assert!(ssa.finish().0.is_empty(), "no PHI needed");
     }
 
-    /// Linear blocks: define in block 0, use in block 1 — no PHI.
+    /// Linear blocks: define in block 0, use in block 1 - no PHI.
     #[test]
     fn linear_blocks_no_phi() {
         let i = Interner::new();
@@ -312,7 +312,7 @@ mod tests {
         assert!(ssa.finish().0.is_empty(), "single predecessor, no PHI");
     }
 
-    /// Diamond: block 0 → block 1 (write), block 0 → block 2 (no write), merge at block 3.
+    /// Diamond: block 0 -> block 1 (write), block 0 -> block 2 (no write), merge at block 3.
     #[test]
     fn diamond_phi_inserted() {
         let i = Interner::new();
@@ -334,7 +334,7 @@ mod tests {
         ssa.add_predecessor(label(2), label(0));
         ssa.seal_block(label(2), &mut alloc);
 
-        // block 3: merge — two predecessors with different definitions
+        // block 3: merge - two predecessors with different definitions
         ssa.add_predecessor(label(3), label(1));
         ssa.add_predecessor(label(3), label(2));
         ssa.seal_block(label(3), &mut alloc);
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(phis[0].incoming.len(), 2);
     }
 
-    /// Diamond where both sides write — PHI with two different values.
+    /// Diamond where both sides write - PHI with two different values.
     #[test]
     fn diamond_both_write_phi() {
         let i = Interner::new();
@@ -400,17 +400,17 @@ mod tests {
         let v0 = alloc(ctx);
         ssa.define(label(0), ctx, v0);
 
-        // block 1: outer then → inner branch
+        // block 1: outer then -> inner branch
         ssa.add_predecessor(label(1), label(0));
         ssa.seal_block(label(1), &mut alloc);
 
-        // block 2: inner then — write
+        // block 2: inner then - write
         ssa.add_predecessor(label(2), label(1));
         ssa.seal_block(label(2), &mut alloc);
         let v_inner = alloc(ctx);
         ssa.define(label(2), ctx, v_inner);
 
-        // block 3: inner else — no write
+        // block 3: inner else - no write
         ssa.add_predecessor(label(3), label(1));
         ssa.seal_block(label(3), &mut alloc);
 
@@ -419,7 +419,7 @@ mod tests {
         ssa.add_predecessor(label(4), label(3));
         ssa.seal_block(label(4), &mut alloc);
 
-        // block 5: outer else — write
+        // block 5: outer else - write
         ssa.add_predecessor(label(5), label(0));
         ssa.seal_block(label(5), &mut alloc);
         let v_outer = alloc(ctx);
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(result, outer_phi.result);
     }
 
-    /// Loop: block 0 → block 1 (loop header) → block 2 (body, writes) → back to block 1.
+    /// Loop: block 0 -> block 1 (loop header) -> block 2 (body, writes) -> back to block 1.
     #[test]
     fn loop_back_edge_phi() {
         let i = Interner::new();
@@ -467,20 +467,20 @@ mod tests {
         let v0 = alloc(ctx);
         ssa.define(label(0), ctx, v0);
 
-        // block 1: loop header — NOT sealed yet (back edge pending)
+        // block 1: loop header - NOT sealed yet (back edge pending)
         ssa.add_predecessor(label(1), label(0));
-        // Use ctx in loop header — this triggers PHI creation when sealed.
+        // Use ctx in loop header - this triggers PHI creation when sealed.
         let _v_header = ssa.use_var(label(1), ctx, &mut alloc);
 
-        // block 2: loop body — writes
+        // block 2: loop body - writes
         ssa.add_predecessor(label(2), label(1));
         ssa.seal_block(label(2), &mut alloc);
         let v_body = alloc(ctx);
         ssa.define(label(2), ctx, v_body);
 
-        // Back edge: block 2 → block 1
+        // Back edge: block 2 -> block 1
         ssa.add_predecessor(label(1), label(2));
-        // NOW seal block 1 — both predecessors known
+        // NOW seal block 1 - both predecessors known
         ssa.seal_block(label(1), &mut alloc);
 
         let (phis, _) = ssa.finish();
@@ -499,9 +499,9 @@ mod tests {
         );
     }
 
-    // ── Soundness: trivial PHI elimination ──
+    // -- Soundness: trivial PHI elimination --
 
-    /// Diamond where neither side writes — no PHI needed (both use same value).
+    /// Diamond where neither side writes - no PHI needed (both use same value).
     #[test]
     fn diamond_no_write_no_phi() {
         let i = Interner::new();
@@ -525,12 +525,12 @@ mod tests {
         let result = ssa.use_var(label(3), ctx, &mut alloc);
         assert_eq!(
             result, v0,
-            "should be the same value — trivial PHI eliminated"
+            "should be the same value - trivial PHI eliminated"
         );
         assert!(ssa.finish().0.is_empty(), "trivial PHI should be eliminated");
     }
 
-    /// Multiple contexts — independent PHIs.
+    /// Multiple contexts - independent PHIs.
     #[test]
     fn multiple_contexts_independent() {
         let i = Interner::new();
@@ -564,7 +564,7 @@ mod tests {
 
         let (phis, _) = ssa.finish();
         // ctx_a should have PHI (different values from two sides)
-        // ctx_b should NOT have PHI (same value from both sides — trivial)
+        // ctx_b should NOT have PHI (same value from both sides - trivial)
         let phi_vars: Vec<SsaVar> = phis.iter().map(|p| p.var).collect();
         assert!(phi_vars.contains(&ctx_a), "ctx_a needs PHI");
         assert!(

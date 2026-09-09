@@ -107,7 +107,7 @@ fn fmt_unaryop(op: UnaryOp) -> &'static str {
 struct PrintCtx<'a> {
     interner: &'a Interner,
     lit_to_tidx: &'a FxHashMap<String, usize>,
-    /// FunctionId → canonical index (order of first appearance across all bodies).
+    /// FunctionId -> canonical index (order of first appearance across all bodies).
     fn_id_map: FxHashMap<crate::graph::QualifiedRef, usize>,
 }
 
@@ -180,7 +180,7 @@ fn write_body(
 ) -> fmt::Result {
     let mut vn = ValNormalizer::new();
 
-    // Build QualifiedRef → name mapping from Ref(Context) instructions + debug info.
+    // Build QualifiedRef -> name mapping from Ref(Context) instructions + debug info.
     let mut ctx_ref_to_name: FxHashMap<crate::graph::QualifiedRef, String> = FxHashMap::default();
     for inst in &body.insts {
         if let InstKind::Ref {
@@ -235,9 +235,9 @@ fn write_body(
         let is_label = matches!(&inst.kind, InstKind::BlockLabel { .. });
         // Fixed-width index column, then content indent for non-labels.
         if is_label {
-            write!(f, "{indent}{i:>4} │ ")?;
+            write!(f, "{indent}{i:>4} | ")?;
         } else {
-            write!(f, "{indent}{i:>4} │   ")?;
+            write!(f, "{indent}{i:>4} |   ")?;
         }
 
         match &inst.kind {

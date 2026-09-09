@@ -103,13 +103,13 @@ pub struct EvaluateResult {
 }
 
 // ---------------------------------------------------------------------------
-// Param config — lifetime for dynamic parameters
+// Param config - lifetime for dynamic parameters
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Clone, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamConfig {
-    /// Maps param name → lifetime for dynamic params.
+    /// Maps param name -> lifetime for dynamic params.
     #[serde(default)]
     pub params: FxHashMap<String, ParamLifetime>,
 }
@@ -155,7 +155,7 @@ pub struct TreeView {
 }
 
 // ---------------------------------------------------------------------------
-// JsConcreteValue — Tsify wrapper for acvus_interpreter::ConcreteValue
+// JsConcreteValue - Tsify wrapper for acvus_interpreter::ConcreteValue
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
@@ -279,7 +279,7 @@ impl From<JsConcreteValue> for acvus_interpreter::ConcreteValue {
 }
 
 // ---------------------------------------------------------------------------
-// TypeDesc — bridging Ty ↔ JS
+// TypeDesc - bridging Ty <-> JS
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Tsify)]
@@ -363,7 +363,7 @@ pub struct TypeDescVariant {
 }
 
 // ---------------------------------------------------------------------------
-// TypeDesc ↔ Ty conversion
+// TypeDesc <-> Ty conversion
 // ---------------------------------------------------------------------------
 
 fn effect_to_desc(effect: &acvus_mir::ty::Effect) -> TypeDescEffect {

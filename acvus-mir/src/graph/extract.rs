@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use super::types::*;
 
-// ── Phase 0 output ──────────────────────────────────────────────────
+// -- Phase 0 output --------------------------------------------------
 
 /// Phase 0 output: parsed ASTs for all local functions.
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub enum ParsedSource {
     Template(acvus_ast::Template),
 }
 
-// ── Extraction ─────────────────────────────────────────────────────
+// -- Extraction -----------------------------------------------------
 
 /// Run Phase 0: parse and cache ASTs for all local functions.
 pub fn extract(interner: &Interner, graph: &CompilationGraph) -> ExtractResult {

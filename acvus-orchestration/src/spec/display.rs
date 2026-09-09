@@ -1,4 +1,4 @@
-/// Display spec — the mandatory output root of a pipeline.
+/// Display spec - the mandatory output root of a pipeline.
 pub enum DisplaySpec {
     /// Renders a single value.
     Static { name: String, source: String },

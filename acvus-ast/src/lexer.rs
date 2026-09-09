@@ -8,7 +8,7 @@ use crate::error::{ParseError, ParseErrorKind};
 use crate::span::Span;
 use crate::token::Token;
 
-// ── Phase 1: Template Scanner ──────────────────────────────────────────
+// -- Phase 1: Template Scanner ------------------------------------------
 
 /// A segment produced by the template scanner.
 #[derive(Debug, Clone, PartialEq)]
@@ -252,7 +252,7 @@ fn apply_whitespace_trimming(segments: &mut Vec<Segment>, trims: &[(bool, bool)]
     segments.retain(|seg| !matches!(seg, Segment::Text { value, .. } if value.is_empty()));
 }
 
-// ── Phase 2: Expression Tokenizer (logos-backed) ───────────────────────
+// -- Phase 2: Expression Tokenizer (logos-backed) -----------------------
 
 /// Tokenizer for expression content within `{{ }}` tags.
 /// Wraps a logos lexer and produces `(start, Token, end)` triples for LALRPOP.
@@ -320,16 +320,16 @@ impl<'input> Iterator for ExprTokenizer<'input> {
 /// ## Algorithm
 ///
 /// 1. Split `content` by `{{ }}` pairs into alternating text/expr segments.
-///    Result is always `[text, expr, text, expr, …, text]` (starts and ends with text).
+///    Result is always `[text, expr, text, expr, ..., text]` (starts and ends with text).
 ///
 /// 2. Emit tokens:
-///    `FmtStringStart(text₀)  <expr₀ tokens>  FmtStringMid(text₁)  <expr₁ tokens>  …  FmtStringEnd(textₙ)`
+///    `FmtStringStart(text0)  <expr0 tokens>  FmtStringMid(text1)  <expr1 tokens>  ...  FmtStringEnd(textn)`
 ///
 /// ## `}}` matching
 ///
 /// - Brace depth tracked: `{` increments, `}` at depth>0 decrements.
 /// - `}}` at depth==0 closes the interpolation.
-/// - Quoted strings (`"…"`) inside expressions are skipped (with `\"` escape handling).
+/// - Quoted strings (`"..."`) inside expressions are skipped (with `\"` escape handling).
 fn expand_format_string(
     content: &str,
     base_start: usize,
@@ -338,7 +338,7 @@ fn expand_format_string(
 ) -> VecDeque<Result<(usize, Token, usize), ParseError>> {
     let err_span = Span::new(base_start, base_end);
 
-    // ── Phase 1: split into [text, expr, text, expr, …, text] ──
+    // -- Phase 1: split into [text, expr, text, expr, ..., text] --
 
     let mut texts: Vec<String> = Vec::new();
     let mut exprs: Vec<String> = Vec::new();
@@ -402,8 +402,8 @@ fn expand_format_string(
     texts.push(content[text_start..].to_string());
     // Invariant: texts.len() == exprs.len() + 1
 
-    // ── Phase 2: emit tokens ──
-    // Pattern: Start(text₀) <expr₀> Mid(text₁) <expr₁> … End(textₙ)
+    // -- Phase 2: emit tokens --
+    // Pattern: Start(text0) <expr0> Mid(text1) <expr1> ... End(textn)
 
     let mut out = VecDeque::new();
     let last_text_idx = texts.len() - 1;
@@ -414,7 +414,7 @@ fn expand_format_string(
     // Text/expr boundaries were tracked in phase 1 via `pos`.
     //
     // Rebuild positions: walk the content structure to assign correct offsets.
-    // The content layout is: text₀ {{ expr₀ }} text₁ {{ expr₁ }} … textₙ
+    // The content layout is: text0 {{ expr0 }} text1 {{ expr1 }} ... textn
     let quote_offset = 1; // opening `"`
     let mut cursor = base_start + quote_offset;
 
@@ -494,7 +494,7 @@ fn parse_close_block(trimmed: &str) -> Option<((), Option<IndentModifier>)> {
 mod tests {
     use super::*;
 
-    // ── Scanner Tests ──
+    // -- Scanner Tests --
 
     #[test]
     fn scan_literal_text() {
@@ -613,7 +613,7 @@ mod tests {
         ));
     }
 
-    // ── Trim Helper Tests ──
+    // -- Trim Helper Tests --
 
     #[test]
     fn trim_trailing_newline() {
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(trim_leading("\t\t\nhello"), "hello");
     }
 
-    // ── Whitespace Trimming Scanner Tests ──
+    // -- Whitespace Trimming Scanner Tests --
 
     #[test]
     fn scan_trim_left() {
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn scan_trim_removes_empty_text() {
-        // "\n{-{ x }-}\n" — newlines are consumed, leaving empty texts that get removed
+        // "\n{-{ x }-}\n" - newlines are consumed, leaving empty texts that get removed
         let segs = scan_template("\n{-{ x }-}\n").unwrap();
         assert_eq!(segs.len(), 1);
         assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == "x"));
@@ -752,7 +752,7 @@ mod tests {
         assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "world"));
     }
 
-    // ── Tokenizer Tests ──
+    // -- Tokenizer Tests --
 
     #[test]
     fn tokenize_ident() {
@@ -872,12 +872,12 @@ mod tests {
         assert_eq!(tokens[0].2, 12); // end
     }
 
-    // ── Format String Tokenizer Tests ──
+    // -- Format String Tokenizer Tests --
 
     #[test]
     fn tokenize_fmt_simple() {
         let interner = Interner::new();
-        // "hello {{ name }}!" → FmtStringStart("hello "), Ident("name"), FmtStringEnd("!")
+        // "hello {{ name }}!" -> FmtStringStart("hello "), Ident("name"), FmtStringEnd("!")
         let tokens: Vec<_> = ExprTokenizer::new(r#""hello {{ name }}!""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn tokenize_fmt_multiple_interpolations() {
         let interner = Interner::new();
-        // "{{ a }}, {{ b }}" → FmtStringStart(""), Ident(a), FmtStringMid(", "), Ident(b), FmtStringEnd("")
+        // "{{ a }}, {{ b }}" -> FmtStringStart(""), Ident(a), FmtStringMid(", "), Ident(b), FmtStringEnd("")
         let tokens: Vec<_> = ExprTokenizer::new(r#""{{ a }}, {{ b }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
@@ -905,7 +905,7 @@ mod tests {
     #[test]
     fn tokenize_fmt_expr_with_pipe() {
         let interner = Interner::new();
-        // "age: {{ age | to_string }}" → FmtStringStart("age: "), Ident(age), Pipe, Ident(to_string), FmtStringEnd("")
+        // "age: {{ age | to_string }}" -> FmtStringStart("age: "), Ident(age), Pipe, Ident(to_string), FmtStringEnd("")
         let tokens: Vec<_> = ExprTokenizer::new(r#""age: {{ age | to_string }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn tokenize_fmt_no_interpolation_passthrough() {
         let interner = Interner::new();
-        // "hello world" without {{ }} → plain StringLit
+        // "hello world" without {{ }} -> plain StringLit
         let tokens: Vec<_> = ExprTokenizer::new(r#""hello world""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();
@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn tokenize_fmt_expr_with_add() {
         let interner = Interner::new();
-        // "result: {{ a + b }}" → FmtStringStart("result: "), Ident(a), Plus, Ident(b), FmtStringEnd("")
+        // "result: {{ a + b }}" -> FmtStringStart("result: "), Ident(a), Plus, Ident(b), FmtStringEnd("")
         let tokens: Vec<_> = ExprTokenizer::new(r#""result: {{ a + b }}""#, 0, &interner)
             .collect::<Result<_, _>>()
             .unwrap();

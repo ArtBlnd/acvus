@@ -1,10 +1,10 @@
-//! LSP session — thin wrapper over `IncrementalGraph`.
+//! LSP session - thin wrapper over `IncrementalGraph`.
 //!
 //! Each document maps to a `Function` in the graph.
 //! Namespace scoping, caching, and incremental recompilation are all
 //! handled by `IncrementalGraph`. This layer only provides:
-//! - DocId ↔ FunctionId mapping
-//! - MirError → LspError conversion
+//! - DocId <-> FunctionId mapping
+//! - MirError -> LspError conversion
 //! - Completion logic (context, pipe, keyword)
 
 use acvus_mir::error::MirError;
@@ -14,7 +14,7 @@ use acvus_mir::ty::{PolyBuilder, PolyTy, TyTerm};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-// ── Public types ────────────────────────────────────────────────────
+// -- Public types ----------------------------------------------------
 
 /// Opaque document identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,7 +57,7 @@ pub enum CompletionKind {
     Keyword,
 }
 
-// ── LspSession ──────────────────────────────────────────────────────
+// -- LspSession ------------------------------------------------------
 
 pub struct LspSession {
     graph: IncrementalGraph,
@@ -90,7 +90,7 @@ impl LspSession {
         &mut self.graph
     }
 
-    // ── Namespace management (delegate) ─────────────────────────────
+    // -- Namespace management (delegate) -----------------------------
 
     pub fn add_namespace(&mut self, name: &str) -> Astr {
         self.graph.interner().intern(name)
@@ -116,7 +116,7 @@ impl LspSession {
         self.graph.remove_namespace(ns_name);
     }
 
-    // ── Context management (delegate) ───────────────────────────────
+    // -- Context management (delegate) -------------------------------
 
     pub fn add_context(
         &mut self,
@@ -137,7 +137,7 @@ impl LspSession {
         self.graph.remove_context(qref);
     }
 
-    // ── Document lifecycle ──────────────────────────────────────────
+    // -- Document lifecycle ------------------------------------------
 
     /// Open a document. Creates a Function in the graph.
     pub fn open(&mut self, name: &str, source: &str, namespace: Option<Astr>) -> DocId {
@@ -197,7 +197,7 @@ impl LspSession {
         self.doc_to_fn.get(&id).copied()
     }
 
-    // ── Queries ─────────────────────────────────────────────────────
+    // -- Queries -----------------------------------------------------
 
     /// Diagnostics for a document.
     pub fn diagnostics(&self, id: DocId) -> Vec<LspError> {
@@ -240,7 +240,7 @@ impl LspSession {
         }
     }
 
-    // ── Completion helpers ──────────────────────────────────────────
+    // -- Completion helpers ------------------------------------------
 
     fn context_completions(
         &self,
@@ -290,7 +290,7 @@ impl LspSession {
     }
 }
 
-// ── Trigger detection ───────────────────────────────────────────────
+// -- Trigger detection -----------------------------------------------
 
 enum Trigger {
     Context { prefix: String },
@@ -345,7 +345,7 @@ fn keyword_completions(prefix: &str) -> Vec<CompletionItem> {
         .collect()
 }
 
-// ── MirError → LspError ────────────────────────────────────────────
+// -- MirError -> LspError --------------------------------------------
 
 fn mir_error_to_lsp(error: &MirError, interner: &Interner) -> LspError {
     LspError {

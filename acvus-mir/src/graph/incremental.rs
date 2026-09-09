@@ -1,7 +1,7 @@
 //! Incremental compilation graph.
 //!
 //! Manages per-function extract/infer caches with dirty tracking.
-//! On source change: re-extract → diff call edges → re-SCC if needed →
+//! On source change: re-extract -> diff call edges -> re-SCC if needed ->
 //! re-infer dirty SCCs (with early cutoff).
 
 use acvus_utils::{Astr, Freeze, Interner};
@@ -14,13 +14,13 @@ use super::extract::{ExtractResult, ParsedSource, extract_one};
 use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
 use super::types::*;
 
-// ── Cached entries ──────────────────────────────────────────────────
+// -- Cached entries --------------------------------------------------
 
 struct ExtractEntry {
     parsed: ParsedSource,
 }
 
-// ── Context info (public output) ────────────────────────────────────
+// -- Context info (public output) ------------------------------------
 
 /// Information about a context/param that must be injected externally.
 #[derive(Debug, Clone)]
@@ -29,28 +29,28 @@ pub struct ContextInfo {
     pub ty: Ty,
 }
 
-// ── IncrementalGraph ────────────────────────────────────────────────
+// -- IncrementalGraph ------------------------------------------------
 
 pub struct IncrementalGraph {
     interner: Interner,
 
-    // ── Source data ──
+    // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
     contexts: FxHashMap<QualifiedRef, Context>,
 
-    // ── Phase 0: Extract cache ──
+    // -- Phase 0: Extract cache --
     extract_cache: FxHashMap<QualifiedRef, ExtractEntry>,
 
-    // ── Call graph ──
+    // -- Call graph --
     call_edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>>,
     reverse_edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>>,
     scc_order: Vec<Vec<QualifiedRef>>,
     fn_to_scc: FxHashMap<QualifiedRef, usize>,
 
-    // ── Phase 1: Infer cache (per SCC index) ──
+    // -- Phase 1: Infer cache (per SCC index) --
     infer_cache: Vec<Option<SccInferResult>>,
 
-    // ── Diagnostics ──
+    // -- Diagnostics --
     diagnostics: FxHashMap<QualifiedRef, Vec<MirError>>,
 }
 
@@ -70,7 +70,7 @@ impl IncrementalGraph {
         }
     }
 
-    // ── Namespace management ─────────────────────────────────────────
+    // -- Namespace management -----------------------------------------
 
     pub fn remove_namespace(&mut self, ns_name: Astr) {
         // Remove all functions and contexts in this namespace.
@@ -94,7 +94,7 @@ impl IncrementalGraph {
         }
     }
 
-    // ── Registration ────────────────────────────────────────────────
+    // -- Registration ------------------------------------------------
 
     pub fn add_function(&mut self, func: Function) {
         let qref = func.qref;
@@ -116,7 +116,7 @@ impl IncrementalGraph {
     pub fn add_context(&mut self, ctx: Context) {
         let qref = ctx.qref;
         self.contexts.insert(qref, ctx);
-        // Context change can affect all infer — full rebuild.
+        // Context change can affect all infer - full rebuild.
         self.invalidate_all_infer();
         self.run_infer();
     }
@@ -128,7 +128,7 @@ impl IncrementalGraph {
         }
     }
 
-    // ── Source update (main incremental entry point) ────────────────
+    // -- Source update (main incremental entry point) ----------------
 
     pub fn update_ast(&mut self, qref: QualifiedRef, ast: ParsedAst) {
         let Some(func) = self.functions.get_mut(&qref) else {
@@ -148,15 +148,15 @@ impl IncrementalGraph {
         let edges_changed = old_edges.as_ref() != new_edges;
 
         if edges_changed {
-            // SCC structure may have changed — full rebuild.
+            // SCC structure may have changed - full rebuild.
             self.rebuild_graph();
         } else {
-            // SCC unchanged — only re-infer the affected SCC + propagate.
+            // SCC unchanged - only re-infer the affected SCC + propagate.
             self.dirty_propagate(qref);
         }
     }
 
-    // ── Queries ─────────────────────────────────────────────────────
+    // -- Queries -----------------------------------------------------
 
     pub fn diagnostics(&self, qref: QualifiedRef) -> &[MirError] {
         self.diagnostics
@@ -173,7 +173,7 @@ impl IncrementalGraph {
 
     /// Get context/param info that must be injected externally for a function.
     pub fn context_info(&self, _qref: QualifiedRef) -> Vec<ContextInfo> {
-        // TODO: context param inference removed — reconstruct from fn_metas if needed.
+        // TODO: context param inference removed - reconstruct from fn_metas if needed.
         vec![]
     }
 
@@ -192,11 +192,11 @@ impl IncrementalGraph {
         &self.interner
     }
 
-    // ── Resolution ───────────────────────────────────────────────────
+    // -- Resolution ---------------------------------------------------
 
     /// Resolve a function name.
-    /// - `qualifier = None` → unqualified, root only.
-    /// - `qualifier = Some(ns_name)` → qualified, specific namespace only.
+    /// - `qualifier = None` -> unqualified, root only.
+    /// - `qualifier = Some(ns_name)` -> qualified, specific namespace only.
     pub fn resolve_fn(&self, qualifier: Option<Astr>, name: Astr) -> Option<QualifiedRef> {
         let qref = match qualifier {
             None => QualifiedRef::root(name),
@@ -210,8 +210,8 @@ impl IncrementalGraph {
     }
 
     /// Resolve a context name to its QualifiedRef.
-    /// - `qualifier = None` → unqualified, root only.
-    /// - `qualifier = Some(ns_name)` → qualified, specific namespace only.
+    /// - `qualifier = None` -> unqualified, root only.
+    /// - `qualifier = Some(ns_name)` -> qualified, specific namespace only.
     pub fn resolve_ctx(&self, qualifier: Option<Astr>, name: Astr) -> Option<QualifiedRef> {
         let qref = match qualifier {
             None => QualifiedRef::root(name),
@@ -246,7 +246,7 @@ impl IncrementalGraph {
             .collect()
     }
 
-    // ── Internal: Extract ───────────────────────────────────────────
+    // -- Internal: Extract -------------------------------------------
 
     fn run_extract(&mut self, qref: QualifiedRef) {
         let Some(func) = self.functions.get(&qref) else {
@@ -273,7 +273,7 @@ impl IncrementalGraph {
 
             self.extract_cache.insert(qref, ExtractEntry { parsed });
         } else {
-            // Parse failed — clear caches.
+            // Parse failed - clear caches.
             self.extract_cache.remove(&qref);
             self.call_edges.remove(&qref);
             self.remove_reverse_edges(qref);
@@ -291,7 +291,7 @@ impl IncrementalGraph {
         }
     }
 
-    // ── Internal: Graph rebuild (SCC) ───────────────────────────────
+    // -- Internal: Graph rebuild (SCC) -------------------------------
 
     fn rebuild_graph(&mut self) {
         let local_qrefs: Vec<QualifiedRef> = self
@@ -316,7 +316,7 @@ impl IncrementalGraph {
         self.run_infer();
     }
 
-    // ── Internal: Infer ─────────────────────────────────────────────
+    // -- Internal: Infer ---------------------------------------------
 
     fn run_infer(&mut self) {
         let known_ctx = self.known_context_types();
@@ -417,7 +417,7 @@ impl IncrementalGraph {
 
         for scc_idx in start_scc..self.scc_order.len() {
             if !dirty_sccs.contains(&scc_idx) {
-                // Not dirty — use cached result.
+                // Not dirty - use cached result.
                 if let Some(ref cached) = self.infer_cache[scc_idx] {
                     resolved_fn_types.extend(cached.resolved_types.iter().map(|(&k, v)| (k, lift_to_poly(v))));
                 }
@@ -477,7 +477,7 @@ impl IncrementalGraph {
         }
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────
+    // -- Helpers -----------------------------------------------------
 
     fn known_context_types(&self) -> FxHashMap<QualifiedRef, PolyTy> {
         self.contexts
@@ -496,7 +496,7 @@ impl IncrementalGraph {
     /// Build a snapshot ExtractResult for compatibility with batch APIs.
     pub fn extract_result(&self) -> ExtractResult {
         let parsed = FxHashMap::default();
-        // ParsedSource is not Clone — we need to handle this.
+        // ParsedSource is not Clone - we need to handle this.
         // For now, skip parsed in snapshot (batch lower can re-extract if needed).
         ExtractResult { parsed }
     }
@@ -524,7 +524,7 @@ impl IncrementalGraph {
         super::infer::InferResult {
             outcomes,
             context_types: {
-                // PolyTy → InferTy (instantiate) → Ty (freeze) at the output boundary.
+                // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
                 let mut solver = crate::ty::Solver::new();
                 Freeze::new(
                     self.known_context_types()

@@ -1,4 +1,4 @@
-//! Dominator tree — Cooper, Harvey, Kennedy (2001) iterative algorithm.
+//! Dominator tree - Cooper, Harvey, Kennedy (2001) iterative algorithm.
 //!
 //! Block A **dominates** block B if every path from the entry to B passes
 //! through A. The immediate dominator (idom) is the closest strict dominator.
@@ -8,7 +8,7 @@
 //! # Unreachable blocks
 //!
 //! Blocks not reachable from the entry have `idom = UNREACHABLE`. All queries
-//! (`idom`, `dominates`, `depth`) handle this explicitly — no panics.
+//! (`idom`, `dominates`, `depth`) handle this explicitly - no panics.
 
 use crate::cfg::{BlockIdx, CfgBody};
 use smallvec::SmallVec;
@@ -38,7 +38,7 @@ impl DomTree {
             return Self { idom: vec![] };
         }
 
-        // ── Step 1: Reverse postorder ──────────────────────────────
+        // -- Step 1: Reverse postorder ------------------------------
         //
         // RPO gives a topological-ish ordering where dominators come
         // before dominated blocks. The fixpoint converges faster.
@@ -49,11 +49,11 @@ impl DomTree {
             rpo_order[block] = pos;
         }
 
-        // ── Step 2: Predecessors ───────────────────────────────────
+        // -- Step 2: Predecessors -----------------------------------
 
         let preds = cfg.predecessors();
 
-        // ── Step 3: Fixpoint iteration ─────────────────────────────
+        // -- Step 3: Fixpoint iteration -----------------------------
         //
         // Starting from "entry dominates itself, everything else undefined",
         // iterate until no idom changes. Each block's idom is the intersection
@@ -76,7 +76,7 @@ impl DomTree {
                 // Find first predecessor with a computed idom.
                 let Some(&first_processed) = pred_list.iter().find(|&&p| idom[p] != UNDEFINED)
                 else {
-                    continue; // All predecessors unreachable — skip.
+                    continue; // All predecessors unreachable - skip.
                 };
 
                 // Intersect with remaining processed predecessors.
@@ -158,7 +158,7 @@ impl DomTree {
     }
 }
 
-// ── Internal helpers ───────────────────────────────────────────────
+// -- Internal helpers -----------------------------------------------
 
 /// Nearest common dominator of `a` and `b` (the "intersect" function from CHK01).
 ///
@@ -204,7 +204,7 @@ fn reverse_postorder(cfg: &CfgBody, n: usize) -> Vec<usize> {
     postorder
 }
 
-// ── Post-dominator tree ─────────────────────────────────────────────
+// -- Post-dominator tree ---------------------------------------------
 //
 // Block A **post-dominates** block B if every path from B to any exit
 // passes through A. Computed by running the dominator algorithm on the
@@ -240,7 +240,7 @@ impl PostDomTree {
             .collect();
 
         if exits.is_empty() {
-            // No return — all blocks unreachable in reverse.
+            // No return - all blocks unreachable in reverse.
             return Self {
                 ipdom: vec![UNREACHABLE; n],
             };
@@ -248,8 +248,8 @@ impl PostDomTree {
 
         // Build reverse CFG: reverse_succs[b] = blocks that b is a successor of
         // = predecessors of b in forward CFG become successors of b in reverse.
-        // Actually: reverse edge (a→b) becomes (b→a).
-        // reverse_succs[b] = { a | a→b in forward CFG } = preds[b] in forward.
+        // Actually: reverse edge (a->b) becomes (b->a).
+        // reverse_succs[b] = { a | a->b in forward CFG } = preds[b] in forward.
         let fwd_preds = cfg.predecessors();
         let reverse_succs: Vec<SmallVec<[usize; 2]>> = (0..n)
             .map(|bi| {
@@ -273,12 +273,12 @@ impl PostDomTree {
                 reverse_succs.into_iter().collect();
             // Add virtual node.
             rev_succs_with_virtual.push(SmallVec::new());
-            // Each real exit → virtual exit in forward = virtual exit → each real exit in reverse.
+            // Each real exit -> virtual exit in forward = virtual exit -> each real exit in reverse.
             // So virtual node's successors = all real exits.
             // And each real exit's successors already include its reverse preds;
             // additionally, virtual exit has predecessor = each real exit, meaning
             // in reverse: each real exit's successor list gains virtual_exit.
-            // Actually: forward edge: exit→virtual_exit. Reverse: virtual_exit→exit.
+            // Actually: forward edge: exit->virtual_exit. Reverse: virtual_exit->exit.
             // So rev_succs_with_virtual[virtual_exit] = exits.
             rev_succs_with_virtual[virtual_exit] = exits.iter().map(|&e| e).collect();
 
@@ -405,7 +405,7 @@ fn compute_domtree_on_reverse(n: usize, entry: usize, succs: &[SmallVec<[usize; 
     idom
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
+// -- Tests ----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -145,7 +145,7 @@ fn template_with_placeholder() {
     assert!(!template.body.is_empty());
 }
 
-// ── Splice tests ─────────────────────────────────────────────────────
+// -- Splice tests -----------------------------------------------------
 
 fn int_expr(n: i64) -> acvus_ast::Expr {
     acvus_ast::Expr::Literal {
@@ -327,7 +327,7 @@ fn splice_empty_pipe() {
     let interner = acvus_utils::Interner::new();
     let empty: Vec<acvus_ast::Expr> = vec![];
 
-    // %a | *empty → just %a (no pipe, splice is empty)
+    // %a | *empty -> just %a (no pipe, splice is empty)
     let make = acvus_script!("%a | *transforms");
     let script = make(&interner, int_expr(42), empty);
     let tail = script.tail.as_ref().unwrap();

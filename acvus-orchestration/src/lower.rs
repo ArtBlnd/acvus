@@ -1,4 +1,4 @@
-//! Spec → CompilationGraph lowering.
+//! Spec -> CompilationGraph lowering.
 //!
 //! Converts orchestration specs (Block, LlmSpec, DisplaySpec) into a
 //! CompilationGraph that the acvus compiler pipeline can process.
@@ -7,7 +7,7 @@
 //! - **User content** (inline strings, expressions): parsed via `parse_expr`.
 //!   Parse errors are collected per-field. Type errors map back via SpanMap.
 //! - **Glue structure** (Object literals, List, FuncCall): AST directly constructed.
-//!   No parse errors possible. Type errors here = lowerer bug → panic.
+//!   No parse errors possible. Type errors here = lowerer bug -> panic.
 
 use acvus_ast::{AstId, Expr, Literal, ObjectExprField, RefKind, Script, Span};
 use acvus_mir::graph::{
@@ -18,7 +18,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 
 use crate::spec::{Block, BlockMode, Content, DisplaySpec, Item, LlmSpec, Namespace, Provider};
 
-// ── Error types ────────────────────────────────────────────────────
+// -- Error types ----------------------------------------------------
 
 /// A field-level error from lowering.
 #[derive(Debug)]
@@ -31,7 +31,7 @@ pub struct FieldError {
     pub error: acvus_ast::ParseError,
 }
 
-// ── SpanMap ────────────────────────────────────────────────────────
+// -- SpanMap --------------------------------------------------------
 
 /// Maps an AST Span (in a generated function) back to the spec field it came from.
 #[derive(Debug, Clone)]
@@ -65,7 +65,7 @@ impl SpanMap {
     }
 }
 
-// ── Lowerer output ─────────────────────────────────────────────────
+// -- Lowerer output -------------------------------------------------
 
 pub struct LowerOutput {
     pub graph: CompilationGraph,
@@ -120,10 +120,10 @@ pub fn lower_namespace(
     }
 }
 
-// ── AST construction helpers ───────────────────────────────────────
+// -- AST construction helpers ---------------------------------------
 
 /// Synthetic span for lowerer-generated AST nodes.
-/// All glue code uses this — if a type error hits this span, it's a lowerer bug.
+/// All glue code uses this - if a type error hits this span, it's a lowerer bug.
 const GLUE_SPAN: Span = Span::ZERO;
 
 /// Build a string literal expression.
@@ -228,7 +228,7 @@ fn bind(interner: &Interner, name: &str, expr: Expr) -> acvus_ast::Stmt {
     }
 }
 
-// ── Block lowering ─────────────────────────────────────────────────
+// -- Block lowering -------------------------------------------------
 
 struct BlockLowerResult {
     function: Function,
@@ -289,7 +289,7 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
     }
 }
 
-// ── LLM lowering ──────────────────────────────────────────────────
+// -- LLM lowering --------------------------------------------------
 
 struct LlmLowerResult {
     function: Function,
@@ -297,10 +297,10 @@ struct LlmLowerResult {
     field_errors: Vec<FieldError>,
 }
 
-/// LlmSpec → Script Function (LocalAst) that calls the pre-configured ExternFn.
+/// LlmSpec -> Script Function (LocalAst) that calls the pre-configured ExternFn.
 ///
 /// Each message becomes an Object literal `{ role: "...", content: ... }`.
-/// Content::Ref → function call, Content::Inline → parsed expression.
+/// Content::Ref -> function call, Content::Inline -> parsed expression.
 /// All messages are collected into a List and passed to the ExternFn.
 fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResult {
     let (extern_fn_name, messages) = match &llm.provider {
@@ -317,11 +317,11 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
     for (i, msg) in messages.iter().enumerate() {
         let content_expr = match &msg.content {
             MessageContent::Ref(block_name) => {
-                // block_name() — glue code, no parse error possible
+                // block_name() - glue code, no parse error possible
                 call0(interner, block_name)
             }
             MessageContent::Inline(text) => {
-                // Parse user content — errors collected per-field
+                // Parse user content - errors collected per-field
                 match acvus_ast::parse_expr(interner, text) {
                     Ok(expr) => {
                         // Record span for type error mapping
@@ -429,7 +429,7 @@ fn content_to_lower(content: &Content) -> MessageContent {
     }
 }
 
-// ── Display lowering ──────────────────────────────────────────────
+// -- Display lowering ----------------------------------------------
 
 struct DisplayLowerResult {
     functions: Vec<Function>,
@@ -437,13 +437,13 @@ struct DisplayLowerResult {
     field_errors: Vec<FieldError>,
 }
 
-/// DisplaySpec → Function(s).
+/// DisplaySpec -> Function(s).
 ///
 /// - Static: 1 Template function (source as-is).
 /// - Iterator: up to 3 functions:
 ///   - template function: `tpl(bind) -> String`
-///   - history function (if Some): `@source | map(tpl)` → Iterator<String>
-///   - live function (if Some): `@source | map(tpl)` → Iterator<String>
+///   - history function (if Some): `@source | map(tpl)` -> Iterator<String>
+///   - live function (if Some): `@source | map(tpl)` -> Iterator<String>
 fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> DisplayLowerResult {
     match display {
         DisplaySpec::Static { name, source } => {
@@ -632,7 +632,7 @@ mod tests {
     use super::*;
     use crate::spec::*;
 
-    // ── Block tests ────────────────────────────────────────────────
+    // -- Block tests ------------------------------------------------
 
     #[test]
     fn lower_template_block() {
@@ -679,7 +679,7 @@ mod tests {
         }
     }
 
-    // ── LLM tests ─────────────────────────────────────────────────
+    // -- LLM tests -------------------------------------------------
 
     #[test]
     fn lower_llm_ref_messages_produces_local_ast() {
@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(i.resolve(llm_func.qref.name), "chat");
         assert!(matches!(llm_func.kind, FnKind::Local(ParsedAst::Script(_))));
 
-        // Ref-only messages → no span entries, no field errors
+        // Ref-only messages -> no span entries, no field errors
         assert!(output.span_map.entries.is_empty());
         assert!(output.field_errors.is_empty());
     }
@@ -751,7 +751,7 @@ mod tests {
         };
         let output = lower_namespace(&i, &ns, &[]);
 
-        // Inline content → span entries for type error mapping
+        // Inline content -> span entries for type error mapping
         assert_eq!(output.span_map.entries.len(), 2);
         assert!(matches!(&output.span_map.entries[0].origin,
             SpecOrigin::LlmField { field, .. } if field == "messages[0].content"));
@@ -790,7 +790,7 @@ mod tests {
         assert_eq!(output.field_errors[0].field, "messages[0].content");
     }
 
-    // ── Display tests ─────────────────────────────────────────────
+    // -- Display tests ---------------------------------------------
 
     #[test]
     fn lower_display_static() {
@@ -892,11 +892,11 @@ mod tests {
         };
         let output = lower_namespace(&i, &ns, &[]);
 
-        // template only = 1 (and it'll fail typechecking — but that's valid)
+        // template only = 1 (and it'll fail typechecking - but that's valid)
         assert_eq!(output.graph.functions.len(), 1);
     }
 
-    // ── Extern fn injection ───────────────────────────────────────
+    // -- Extern fn injection ---------------------------------------
 
     #[test]
     fn extern_fns_included_in_graph() {
@@ -933,7 +933,7 @@ mod tests {
 
     // -- LLM parse errors --
 
-    /// Multiple inline parse errors → all collected, none swallowed.
+    /// Multiple inline parse errors -> all collected, none swallowed.
     #[test]
     fn llm_multiple_parse_errors_all_collected() {
         let i = Interner::new();
@@ -969,7 +969,7 @@ mod tests {
         assert_eq!(output.field_errors[1].field, "messages[1].content");
     }
 
-    /// Parse error in one message, valid in another → error collected, valid proceeds.
+    /// Parse error in one message, valid in another -> error collected, valid proceeds.
     #[test]
     fn llm_partial_error_valid_continues() {
         let i = Interner::new();
@@ -1000,7 +1000,7 @@ mod tests {
         assert_eq!(output.field_errors.len(), 1);
         assert_eq!(output.field_errors[0].field, "messages[1].content");
 
-        // Valid system message → span entry exists
+        // Valid system message -> span entry exists
         assert_eq!(output.span_map.entries.len(), 1);
         assert_eq!(
             output.span_map.entries[0].origin,
@@ -1050,7 +1050,7 @@ mod tests {
 
     // -- Display parse errors --
 
-    /// Invalid history source expression → field error.
+    /// Invalid history source expression -> field error.
     #[test]
     fn display_history_parse_error() {
         let i = Interner::new();
@@ -1075,7 +1075,7 @@ mod tests {
         assert_eq!(output.graph.functions.len(), 1); // only template
     }
 
-    /// Invalid live source expression → field error.
+    /// Invalid live source expression -> field error.
     #[test]
     fn display_live_parse_error() {
         let i = Interner::new();
@@ -1099,7 +1099,7 @@ mod tests {
         assert_eq!(output.graph.functions.len(), 2);
     }
 
-    /// Both history and live invalid → both errors collected.
+    /// Both history and live invalid -> both errors collected.
     #[test]
     fn display_both_parse_errors() {
         let i = Interner::new();

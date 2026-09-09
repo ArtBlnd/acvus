@@ -19,6 +19,7 @@ name = "acvus-ext"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-extern",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
@@ -37,6 +38,7 @@ name = "acvus-ext-llm"
 version = "0.1.0"
 dependencies = [
  "acvus-ext",
+ "acvus-extern",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
@@ -46,6 +48,27 @@ dependencies = [
  "serde_json",
  "tokio",
  "trait-variant",
+]
+
+[[package]]
+name = "acvus-extern"
+version = "0.1.0"
+dependencies = [
+ "acvus-extern-macro",
+ "acvus-interpreter",
+ "acvus-mir",
+ "acvus-utils",
+ "rustc-hash",
+ "tokio",
+]
+
+[[package]]
+name = "acvus-extern-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -77,6 +100,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-ext",
+ "acvus-extern",
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
@@ -133,25 +157,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "acvus-mir-host"
-version = "0.1.0"
-dependencies = [
- "acvus-mir",
- "acvus-mir-host-macro",
- "acvus-utils",
- "tokio",
-]
-
-[[package]]
-name = "acvus-mir-host-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]

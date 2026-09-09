@@ -1,12 +1,12 @@
-//! Dead Code Elimination (DCE) — mark-sweep on CfgBody.
+//! Dead Code Elimination (DCE) - mark-sweep on CfgBody.
 //!
 //! Removes instructions that don't contribute to observable behavior.
 //! Observable = Return value, context Store, IO (Eval), effectful FunctionCall.
 //!
 //! Algorithm:
 //! 1. **Root**: instructions with side effects are unconditionally live.
-//! 2. **Backward walk**: trace operands of live instructions → mark their
-//!    definitions as live → trace their operands → fixpoint.
+//! 2. **Backward walk**: trace operands of live instructions -> mark their
+//!    definitions as live -> trace their operands -> fixpoint.
 //! 3. **Sweep**: remove non-live instructions.
 //!
 //! Runs post-SSA, post-DSE. Catches: dead inline residue, unused Ref/Load,
@@ -18,7 +18,7 @@ use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, ValueId};
 use crate::analysis::inst_info;
 
-// ── Def location ────────────────────────────────────────────────────
+// -- Def location ----------------------------------------------------
 
 /// Where a ValueId is defined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,11 +27,11 @@ enum DefLoc {
     Inst(usize, usize),
     /// Defined as a block parameter at (block, param_index).
     BlockParam(usize, usize),
-    /// Function parameter or capture — always live.
+    /// Function parameter or capture - always live.
     EntryParam,
 }
 
-/// Build ValueId → DefLoc mapping.
+/// Build ValueId -> DefLoc mapping.
 fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
     let mut map = FxHashMap::default();
 
@@ -58,7 +58,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
     map
 }
 
-// ── Root identification ─────────────────────────────────────────────
+// -- Root identification ---------------------------------------------
 
 /// Is this instruction a root (has side effects, unconditionally live)?
 ///
@@ -66,10 +66,10 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 /// be removed. Only provably pure instructions can be dead.
 fn is_root(kind: &InstKind) -> bool {
     match kind {
-        // Context store — externally observable.
+        // Context store - externally observable.
         InstKind::Store { .. } => true,
 
-        // Eval — IO execution point.
+        // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
         // FunctionCall: conservatively root (pending identity-based purity).
@@ -84,7 +84,7 @@ fn is_root(kind: &InstKind) -> bool {
     }
 }
 
-// ── Mark phase ──────────────────────────────────────────────────────
+// -- Mark phase ------------------------------------------------------
 
 /// Collect all uses from a terminator.
 fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
@@ -106,7 +106,7 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     }
 }
 
-// ── Public API ──────────────────────────────────────────────────────
+// -- Public API ------------------------------------------------------
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
@@ -129,7 +129,7 @@ pub fn run(cfg: &mut CfgBody) {
             }
         }
 
-        // Terminators are always live — their uses are roots.
+        // Terminators are always live - their uses are roots.
         live_terminators.insert(bi);
         worklist.extend(terminator_uses(&block.terminator));
     }
@@ -149,12 +149,12 @@ pub fn run(cfg: &mut CfgBody) {
         match def_loc {
             DefLoc::Inst(bi, ii) => {
                 if live_insts.insert((bi, ii)) {
-                    // Newly live — trace its operands.
+                    // Newly live - trace its operands.
                     worklist.extend(inst_info::uses(&cfg.blocks[bi].insts[ii].kind));
                 }
             }
             DefLoc::BlockParam(bi, pi) => {
-                // Block param is live → trace corresponding jump args from predecessors.
+                // Block param is live -> trace corresponding jump args from predecessors.
                 let block_label = cfg.blocks[bi].label;
                 for pred_block in cfg.blocks.iter() {
                     let pred_args: Option<&[ValueId]> = match &pred_block.terminator {
@@ -186,12 +186,12 @@ pub fn run(cfg: &mut CfgBody) {
                 }
             }
             DefLoc::EntryParam => {
-                // Function param/capture — always live, nothing to trace.
+                // Function param/capture - always live, nothing to trace.
             }
         }
     }
 
-    // Phase 3: sweep — remove dead instructions.
+    // Phase 3: sweep - remove dead instructions.
     for (bi, block) in cfg.blocks.iter_mut().enumerate() {
         let mut ii = 0;
         block.insts.retain(|_| {

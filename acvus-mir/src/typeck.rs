@@ -22,12 +22,12 @@ pub type TypeMap = FxHashMap<AstId, Ty>;
 /// Produced by the type checker, consumed by the lowerer.
 pub type CoercionMap = Vec<(AstId, CastKind)>;
 
-/// Maps callee expression AstId → QualifiedRef for direct calls.
+/// Maps callee expression AstId -> QualifiedRef for direct calls.
 /// Present only when typeck resolved the callee to a named function.
 /// Absent = indirect call (local variable, closure, etc.).
 pub type DirectCallMap = FxHashMap<AstId, QualifiedRef>;
 
-// ── TypeResolution: boundary between TypeChecker and Lowerer ──────────
+// -- TypeResolution: boundary between TypeChecker and Lowerer ----------
 
 /// Result of type checking a single script or template.
 ///
@@ -38,7 +38,7 @@ pub type DirectCallMap = FxHashMap<AstId, QualifiedRef>;
 pub struct TypeResolution {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
-    /// Direct call resolution: callee AstId → QualifiedRef.
+    /// Direct call resolution: callee AstId -> QualifiedRef.
     /// Only contains entries for calls resolved to named functions.
     pub direct_calls: DirectCallMap,
     pub tail_ty: Ty,
@@ -102,15 +102,15 @@ pub struct TypeChecker<'a, 's> {
     /// Stack of scopes: each scope maps variable names to types.
     scopes: Vec<FxHashMap<Astr, InferTy>>,
     /// Extern parameter types (`$name`, inferred at first use).
-    /// SmallVec to preserve insertion order — iteration order must match Signature order.
+    /// SmallVec to preserve insertion order - iteration order must match Signature order.
     param_types: smallvec::SmallVec<[(Astr, InferTy); 4]>,
-    /// Solver state (borrowed — may be shared across compilations).
+    /// Solver state (borrowed - may be shared across compilations).
     solver: &'s mut Solver,
     /// Accumulated type map (internal, uses InferTy during inference).
     type_map: FxHashMap<AstId, InferTy>,
-    /// Accumulated coercion records (span → CastKind).
+    /// Accumulated coercion records (span -> CastKind).
     coercion_map: CoercionMap,
-    /// Direct call resolutions (callee AstId → QualifiedRef).
+    /// Direct call resolutions (callee AstId -> QualifiedRef).
     direct_calls: DirectCallMap,
     /// Accumulated errors.
     errors: Vec<MirError>,
@@ -120,7 +120,7 @@ pub struct TypeChecker<'a, 's> {
     /// Nested lambdas push onto this stack; lookups record captures in ALL
     /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
-    /// Maps lambda expression AstId → body expression AstId.
+    /// Maps lambda expression AstId -> body expression AstId.
     /// Used by `detect_fn_ret_coercion` to register coercions on the
     /// correct id (body, not lambda) so the lowerer's `maybe_cast`
     /// naturally inserts a Cast at the lambda return site.
@@ -323,7 +323,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     /// Unify `value_ty` with `expected_ty` in covariant position, recording
     /// any coercion needed at `span`. This is the single entry point for all
-    /// covariant unification — ensures coercion detection is consistent.
+    /// covariant unification - ensures coercion detection is consistent.
     fn unify_covariant(
         &mut self,
         value_ty: &InferTy,
@@ -610,7 +610,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.pop_scope();
             }
 
-            // ── Script mode statements ──────────────────────────────
+            // -- Script mode statements ------------------------------
 
             acvus_ast::Stmt::LetBind {
                 id,
@@ -872,7 +872,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     RefKind::Value => match self.lookup_var(name.name) {
                         Some(ty) => ty,
                         None => {
-                            // Undefined local variable — always an error.
+                            // Undefined local variable - always an error.
                             // Use $name for extern params, @name for context.
                             self.error(
                                 MirErrorKind::UndefinedVariable(
@@ -1113,8 +1113,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 right,
                 span,
             } => {
-                // Desugar: `a | f(b, c)` → `f(a, b, c)`
-                // `a | f` → `f(a)`
+                // Desugar: `a | f(b, c)` -> `f(a, b, c)`
+                // `a | f` -> `f(a)`
                 let pipe_left = Some(left.as_ref());
                 let ty = match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
@@ -1324,7 +1324,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                         }
                         VariantPayload::None => {}
                     }
-                    // Builtin Option → Ty::Option
+                    // Builtin Option -> Ty::Option
                     let inner = self.solver.resolve_ty(&type_params[0]);
                     let ty = TyTerm::Option(Box::new(inner));
                     return self.record_ret(*id, ty);
@@ -1497,7 +1497,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             ..
         } = func
         else {
-            // Not a simple name — evaluate the function expression.
+            // Not a simple name - evaluate the function expression.
             // allow_non_pure: function call position, non-pure types (extern fn) are OK.
             let ft = self.check_expr(true, func);
             let resolved = self.solver.resolve_ty(&ft);
@@ -1566,7 +1566,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         // Check local variable with function type (indirect call).
         if let Some(var_ty) = self.lookup_var(name.name) {
             let resolved = self.solver.resolve_ty(&var_ty);
-            // Record callee's Fn type on the callee's AstId (indirect — no direct_calls entry).
+            // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
             self.record(func.id(), resolved.clone());
             let pipe_left_span = pipe_left.map(|e| e.span());
             let pipe_left_id = pipe_left.map(|e| e.id());
@@ -1683,7 +1683,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                // Context write allowed — mutability will be enforced later.
+                // Context write allowed - mutability will be enforced later.
                 let ctx_ty = self
                     .env
                     .contexts
@@ -2052,7 +2052,7 @@ mod tests {
 
     #[test]
     fn arithmetic_int() {
-        // Int arithmetic result is Int, not String — emit should fail.
+        // Int arithmetic result is Int, not String - emit should fail.
         assert!(check("{{ 1 + 2 }}").is_err());
     }
 
@@ -2067,7 +2067,7 @@ mod tests {
 
     #[test]
     fn catch_all_optional() {
-        // Catch-all is optional — match blocks without {{_}} should type-check fine.
+        // Catch-all is optional - match blocks without {{_}} should type-check fine.
         let src = "{{ x = 42 }}hello{{/}}";
         let result = check(src);
         result.unwrap();
@@ -2149,7 +2149,7 @@ mod tests {
         check_with_interner(src, &context, &i).unwrap();
     }
 
-    // ── Variant (Option) ────────────────────────────────────────────
+    // -- Variant (Option) --------------------------------------------
 
     #[test]
     fn some_int_is_option_int() {
@@ -2188,7 +2188,7 @@ mod tests {
         assert!(check_with_interner(src, &context, &i).is_err());
     }
 
-    // ── Non-pure context type tests ──
+    // -- Non-pure context type tests --
 
     fn extern_fn_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
         FxHashMap::from_iter([
@@ -2208,7 +2208,7 @@ mod tests {
 
     #[test]
     fn extern_fn_call_ok() {
-        // @my_fn("hello") — calling an extern fn is allowed.
+        // @my_fn("hello") - calling an extern fn is allowed.
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = r#"{{ @my_fn("hello") }}"#;
@@ -2251,7 +2251,7 @@ mod tests {
 
     #[test]
     fn extern_fn_bare_ref_allowed() {
-        // f = @my_fn — Fn is Lazy tier, allowed in non-call position.
+        // f = @my_fn - Fn is Lazy tier, allowed in non-call position.
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ f = @my_fn }}{{_}}{{/}}";
@@ -2261,7 +2261,7 @@ mod tests {
 
     #[test]
     fn extern_fn_pipe_call_ok() {
-        // "hello" | @my_fn — pipe into extern fn is a call, should be allowed.
+        // "hello" | @my_fn - pipe into extern fn is a call, should be allowed.
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = r#"{{ "hello" | @my_fn }}"#;
@@ -2270,7 +2270,7 @@ mod tests {
 
     #[test]
     fn extern_fn_pipe_with_args_ok() {
-        // "hello" | @my_fn — pipe with additional args.
+        // "hello" | @my_fn - pipe with additional args.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("my_fn"),
@@ -2288,18 +2288,18 @@ mod tests {
 
     #[test]
     fn pure_context_ref_ok() {
-        // @name — bare reference to pure type (String) is fine.
+        // @name - bare reference to pure type (String) is fine.
         let i = Interner::new();
         let ctx = extern_fn_context(&i);
         let src = "{{ @name }}";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
-    // ── 3-tier purity: Lazy context load tests ──
+    // -- 3-tier purity: Lazy context load tests --
 
     #[test]
     fn lazy_list_context_load_ok() {
-        // @items : List<Int> — Lazy tier, allowed in non-call position.
+        // @items : List<Int> - Lazy tier, allowed in non-call position.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("items"), Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)))]);
         let src = "{{ x = @items }}{{_}}{{/}}";
@@ -2311,7 +2311,7 @@ mod tests {
 
     #[test]
     fn lazy_option_context_load_ok() {
-        // @opt : Option<Int> — Lazy tier, allowed.
+        // @opt : Option<Int> - Lazy tier, allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
         let src = "{{ x = @opt }}{{_}}{{/}}";
@@ -2320,7 +2320,7 @@ mod tests {
 
     #[test]
     fn lazy_tuple_context_load_ok() {
-        // @pair : (Int, String) — Lazy tier, allowed.
+        // @pair : (Int, String) - Lazy tier, allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String]))]);
         let src = "{{ x = @pair }}{{_}}{{/}}";
@@ -2329,7 +2329,7 @@ mod tests {
 
     #[test]
     fn lazy_object_context_load_ok() {
-        // @obj : {x: Int} — Lazy tier, allowed.
+        // @obj : {x: Int} - Lazy tier, allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("obj"),
@@ -2341,7 +2341,7 @@ mod tests {
 
     #[test]
     fn lazy_fn_context_load_and_call_ok() {
-        // f = @callback; f(42) — store Fn in variable, then call.
+        // f = @callback; f(42) - store Fn in variable, then call.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("callback"),
@@ -2359,7 +2359,7 @@ mod tests {
 
     #[test]
     fn lazy_list_of_fn_context_load_ok() {
-        // @fns : List<Fn(Int)->Int> — Lazy tier (List is Lazy), allowed.
+        // @fns : List<Fn(Int)->Int> - Lazy tier (List is Lazy), allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("fns"),
@@ -2375,11 +2375,11 @@ mod tests {
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
-    // ── Unpure context load tests (UserDefined — must be rejected) ──
+    // -- Unpure context load tests (UserDefined - must be rejected) --
 
     #[test]
     fn unpure_opaque_context_load_rejected() {
-        // @conn : UserDefined — Unpure tier, rejected in non-call position.
+        // @conn : UserDefined - Unpure tier, rejected in non-call position.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("conn"),
@@ -2401,7 +2401,7 @@ mod tests {
 
     #[test]
     fn unpure_opaque_in_argument_also_rejected() {
-        // @handler(@conn) — @conn is UserDefined, rejected even in argument position.
+        // @handler(@conn) - @conn is UserDefined, rejected even in argument position.
         // Arguments are checked with allow_non_pure=false.
         let i = Interner::new();
         let conn_ty = Ty::UserDefined {
@@ -2431,7 +2431,7 @@ mod tests {
         );
     }
 
-    // ── Pure context load tests (scalars — always ok) ──
+    // -- Pure context load tests (scalars - always ok) --
 
     #[test]
     fn pure_int_context_load_ok() {

@@ -64,8 +64,8 @@ pub fn build_list(
 }
 
 /// Convert a parsed expression (LHS of `->`) into a Lambda node.
-/// The params_expr is semantically validated: single Ident → 1 param,
-/// Group → multiple params, Paren(Ident) → 1 param.
+/// The params_expr is semantically validated: single Ident -> 1 param,
+/// Group -> multiple params, Paren(Ident) -> 1 param.
 pub fn expr_to_lambda(interner: &Interner, params_expr: Expr, body: Expr, span: Span) -> Expr {
     let params = match params_expr {
         Expr::Ident { name, span, .. } => vec![LambdaParam {

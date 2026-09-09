@@ -1,4 +1,4 @@
-//! Executor trait — controls how spawned computations are executed.
+//! Executor trait - controls how spawned computations are executed.
 //!
 //! Three spawn paths:
 //! - `spawn_interpreter`: deferred MIR execution (fork + run)
@@ -16,7 +16,7 @@ use crate::error::RuntimeError;
 use crate::interpreter::{ExecResult, Interpreter};
 use crate::value::HandleValue;
 
-// ── Trait ─────────────────────────────────────────────────────────────
+// -- Trait -------------------------------------------------------------
 
 /// Executor controls spawn/eval execution strategy.
 ///
@@ -42,7 +42,7 @@ pub trait Executor: Send + Sync {
     fn eval(&self, handle: HandleValue) -> BoxFuture<'_, Result<ExecResult, RuntimeError>>;
 }
 
-// ── SequentialExecutor ───────────────────────────────────────────────
+// -- SequentialExecutor -----------------------------------------------
 
 /// Tag types for HandleValue dispatch in SequentialExecutor.
 struct DeferredInterpreter(Interpreter);
@@ -51,7 +51,7 @@ struct DeferredAsync(
     SyncWrapper<Pin<Box<dyn Future<Output = Result<ExecResult, RuntimeError>> + Send>>>,
 );
 
-/// Simplest executor — spawn stores the computation, eval runs it immediately.
+/// Simplest executor - spawn stores the computation, eval runs it immediately.
 /// No parallelism. Good for testing and deterministic execution.
 pub struct SequentialExecutor;
 

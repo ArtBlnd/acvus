@@ -1,7 +1,7 @@
 //! Phase 3: Lower
 //!
 //! Takes InferResult (Complete outcomes) + cached ASTs and produces MirModule per function.
-//! Reuses the existing MIR lowerer — this is just the orchestration layer.
+//! Reuses the existing MIR lowerer - this is just the orchestration layer.
 
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -13,7 +13,7 @@ use super::extract::{ExtractResult, ParsedSource};
 use super::infer::InferResult;
 use super::types::*;
 
-// ── Phase 3 output ──────────────────────────────────────────────────
+// -- Phase 3 output --------------------------------------------------
 
 #[derive(Debug)]
 pub struct LowerError {
@@ -37,7 +37,7 @@ impl LowerResult {
     }
 }
 
-// ── Lowering ────────────────────────────────────────────────────────
+// -- Lowering --------------------------------------------------------
 
 /// Run Phase 3: lower each Complete function to MIR.
 ///

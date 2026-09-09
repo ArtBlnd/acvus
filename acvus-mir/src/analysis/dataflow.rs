@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::domain::SemiLattice;
 
-// ── DataflowState ──────────────────────────────────────────────────
+// -- DataflowState --------------------------------------------------
 
 /// Key-generic dataflow state. Maps keys to lattice domains.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +49,7 @@ impl<K: Eq + Hash + Copy, D: SemiLattice> DataflowState<K, D> {
     }
 }
 
-// ── DataflowAnalysis trait ─────────────────────────────────────────
+// -- DataflowAnalysis trait -----------------------------------------
 
 /// Dataflow analysis definition, generic over key and domain types.
 ///
@@ -92,7 +92,7 @@ pub trait DataflowAnalysis {
     }
 
     /// Propagate state across a forward edge.
-    /// `params`/`args`: target block params and jump args for param→arg mapping.
+    /// `params`/`args`: target block params and jump args for param->arg mapping.
     fn propagate_forward(
         &self,
         source_exit: &DataflowState<Self::Key, Self::Domain>,
@@ -112,14 +112,14 @@ pub trait DataflowAnalysis {
     );
 }
 
-// ── DataflowResult ─────────────────────────────────────────────────
+// -- DataflowResult -------------------------------------------------
 
 pub struct DataflowResult<K: Eq + Hash + Copy, D: SemiLattice> {
     pub block_entry: Vec<DataflowState<K, D>>,
     pub block_exit: Vec<DataflowState<K, D>>,
 }
 
-// ── Forward analysis ───────────────────────────────────────────────
+// -- Forward analysis -----------------------------------------------
 
 pub fn forward_analysis<A: DataflowAnalysis>(
     cfg: &CfgBody,
@@ -145,7 +145,7 @@ pub fn forward_analysis<A: DataflowAnalysis>(
         let block = &cfg.blocks[idx.0];
         let mut state = block_entry[idx.0].clone();
 
-        // Transfer: instructions → terminator uses → terminator defs.
+        // Transfer: instructions -> terminator uses -> terminator defs.
         for inst in &block.insts {
             analysis.transfer_inst(inst, &mut state);
         }
@@ -171,7 +171,7 @@ pub fn forward_analysis<A: DataflowAnalysis>(
     }
 }
 
-// ── Backward analysis ──────────────────────────────────────────────
+// -- Backward analysis ----------------------------------------------
 
 pub fn backward_analysis<A: DataflowAnalysis>(
     cfg: &CfgBody,
@@ -209,7 +209,7 @@ pub fn backward_analysis<A: DataflowAnalysis>(
             &mut exit_state,
         );
 
-        // 2. Gen terminator uses → included in block_exit.
+        // 2. Gen terminator uses -> included in block_exit.
         analysis.terminator_uses(&block.terminator, &mut exit_state);
 
         // 3. Snapshot as block_exit.
@@ -238,7 +238,7 @@ pub fn backward_analysis<A: DataflowAnalysis>(
     }
 }
 
-// ── Edge propagation helpers ───────────────────────────────────────
+// -- Edge propagation helpers ---------------------------------------
 
 /// Forward: propagate block_exit to each successor via the terminator's edges.
 fn propagate_to_successors<A: DataflowAnalysis>(
@@ -362,10 +362,10 @@ fn propagate_from_successors<A: DataflowAnalysis>(
     }
 }
 
-// ── ValueId propagation helpers ────────────────────────────────────
+// -- ValueId propagation helpers ------------------------------------
 
 /// Standard forward propagation for ValueId-keyed analyses:
-/// map args → params, then join flow-through values.
+/// map args -> params, then join flow-through values.
 pub fn value_propagate_forward<D: SemiLattice>(
     source_exit: &DataflowState<ValueId, D>,
     params: &[ValueId],
@@ -390,7 +390,7 @@ pub fn value_propagate_forward<D: SemiLattice>(
 }
 
 /// Standard backward propagation for ValueId-keyed analyses:
-/// map live params → args, then join flow-through values.
+/// map live params -> args, then join flow-through values.
 pub fn value_propagate_backward<D: SemiLattice>(
     succ_entry: &DataflowState<ValueId, D>,
     succ_params: &[ValueId],

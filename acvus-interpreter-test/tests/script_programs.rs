@@ -27,7 +27,7 @@ async fn collatz_start_6() {
     let c = ctx(&i, &[("start", Value::Int(6))]);
     let result = run_script_mode(&i, COLLATZ, c).await;
     eprintln!("collatz(6) max_val = {result:?}");
-    // 6 → 3 → 10 → 5 → 16 → 8 → 4 → 2 → 1
+    // 6 -> 3 -> 10 -> 5 -> 16 -> 8 -> 4 -> 2 -> 1
     assert_eq!(result, Value::Int(16));
 }
 
@@ -47,7 +47,7 @@ async fn collatz_start_1() {
     let c = ctx(&i, &[("start", Value::Int(1))]);
     let result = run_script_mode(&i, COLLATZ, c).await;
     eprintln!("collatz(1) max_val = {result:?}");
-    // Already at 1 — while body never executes
+    // Already at 1 - while body never executes
     assert_eq!(result, Value::Int(1));
 }
 

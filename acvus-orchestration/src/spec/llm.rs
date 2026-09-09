@@ -1,6 +1,6 @@
 use rust_decimal::Decimal;
 
-/// An LLM spec — provider-specific configuration and prompt.
+/// An LLM spec - provider-specific configuration and prompt.
 pub struct LlmSpec {
     pub name: String,
     pub provider: Provider,
@@ -45,6 +45,6 @@ pub enum Content {
     Inline(String),
     /// Reference to a Block by name.
     Ref(String),
-    /// Acvus expression yielding Iterator<T> — flattens into messages.
+    /// Acvus expression yielding Iterator<T> - flattens into messages.
     Iterator(String),
 }

@@ -183,7 +183,7 @@ impl<'a> TreeBuilder<'a> {
                         }
                         TagContent::Binding { lhs, rhs, .. } => {
                             let pattern = expr_to_pattern(&lhs)?;
-                            // Bare binding (variable or storage) → body-less (no {{/}})
+                            // Bare binding (variable or storage) -> body-less (no {{/}})
                             if matches!(
                                 &pattern,
                                 Pattern::Binding { .. } | Pattern::ContextBind { .. }
@@ -815,7 +815,7 @@ mod tests {
         }
     }
 
-    // ── Script parsing tests ──────────────────────────────────────────
+    // -- Script parsing tests ------------------------------------------
 
     #[test]
     fn script_single_expr() {
@@ -893,7 +893,7 @@ mod tests {
         }
     }
 
-    // ── ContextStore ──────────────────────────────────────────────
+    // -- ContextStore ----------------------------------------------
 
     #[test]
     fn script_context_store() {
@@ -929,7 +929,7 @@ mod tests {
         assert!(s.tail.is_some());
     }
 
-    // ── Variant (Option) ────────────────────────────────────────────
+    // -- Variant (Option) --------------------------------------------
 
     #[test]
     fn parse_some_expr() {

@@ -1,8 +1,8 @@
-//! Full optimization pipeline E2E tests — cross-function calls + IO.
+//! Full optimization pipeline E2E tests - cross-function calls + IO.
 //!
 //! Each test produces TWO snapshots:
-//! - `{name}@raw` — unoptimized, all modules printed (no inlining)
-//! - `{name}@optimized` — full pipeline: SROA → SSA → DSE → DCE → Inline → Pass2 → Validate
+//! - `{name}@raw` - unoptimized, all modules printed (no inlining)
+//! - `{name}@optimized` - full pipeline: SROA -> SSA -> DSE -> DCE -> Inline -> Pass2 -> Validate
 //!
 //! Tests exercise: inlining, Spawn/Eval splitting, code motion, DSE, DCE, phi insertion.
 
@@ -42,7 +42,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
 //     - Inline: 4 helpers flattened into main
 //     - SROA: multiple flat context reads
 //     - SSA: shipping branch phi, sequential computation chain
-//     - SpawnSplit: send_email → Spawn + Eval
+//     - SpawnSplit: send_email -> Spawn + Eval
 //     - CodeMotion: Spawn hoisted before Eval
 //     - DSE: context write-backs after phi
 // =======================================================================
@@ -177,12 +177,12 @@ fn order_processing_pipeline() {
 }
 
 // =======================================================================
-// 12. User Analytics — loop + classify + context accumulation + IO report
+// 12. User Analytics - loop + classify + context accumulation + IO report
 //     4 functions (main + 2 helper + 1 IO extern)
 //     - Loop: user iteration, 5 context writes per iteration
 //     - Inline: classify_age (nested branches), build_summary (string chain)
 //     - SSA: 5+ loop phi + branch phi inside loop
-//     - SpawnSplit: send_report → Spawn + Eval
+//     - SpawnSplit: send_report -> Spawn + Eval
 //     - DSE: loop header phi write-backs
 // =======================================================================
 
@@ -268,9 +268,9 @@ fn user_analytics_dashboard() {
 }
 
 // =======================================================================
-// 13. Data Enrichment — two independent IO fetches + conditional third IO
+// 13. Data Enrichment - two independent IO fetches + conditional third IO
 //     5 functions (main + 2 helper + 3 IO extern)
-//     - SpawnSplit: fetch_profile + fetch_history → two parallel Spawns
+//     - SpawnSplit: fetch_profile + fetch_history -> two parallel Spawns
 //     - CodeMotion: both Spawns hoisted to function start
 //     - Inline: compute_score, format_label
 //     - SSA: alert_count branch phi
@@ -341,12 +341,12 @@ fn data_enrichment_multi_io() {
 }
 
 // =======================================================================
-// 14. Batch Processing — loop + validate/transform helpers + error accumulation + IO
+// 14. Batch Processing - loop + validate/transform helpers + error accumulation + IO
 //     4 functions (main + 2 helper + 1 IO extern)
 //     - Loop: item iteration with branch (valid/invalid)
 //     - Inline: validate_item (nested compare), transform_value (arithmetic)
-//     - SSA: 4 context loop phi × branch phi — most complex phi pattern
-//     - SpawnSplit: publish_results → Spawn + Eval
+//     - SSA: 4 context loop phi x branch phi - most complex phi pattern
+//     - SpawnSplit: publish_results -> Spawn + Eval
 //     - DSE: loop header dead write-backs
 // =======================================================================
 
@@ -424,9 +424,9 @@ fn batch_processing_with_errors() {
 }
 
 // =======================================================================
-// 15. Multi-Stage Pipeline — cascading helpers + two IO calls
+// 15. Multi-Stage Pipeline - cascading helpers + two IO calls
 //     5 functions (main + 3 helper + 2 IO extern)
-//     - Inline: 3 sequential helpers → flat computation chain
+//     - Inline: 3 sequential helpers -> flat computation chain
 //     - SpawnSplit: fetch_data (start) + log_pipeline (end)
 //     - CodeMotion: fetch_data Spawn at start, log_pipeline Spawn after stage3
 //     - SSA: sequential (no branches)

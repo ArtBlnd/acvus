@@ -1,10 +1,10 @@
 use std::marker::PhantomData;
 
-// ── Global unique Id ─────────────────────────────────────────────────
+// -- Global unique Id -------------------------------------------------
 
 /// Declares a globally-unique, opaque Id type with its own atomic counter.
 ///
-/// `Id::new()` is the only way to create a valid Id — guaranteed unique
+/// `Id::new()` is the only way to create a valid Id - guaranteed unique
 /// within the process lifetime. No way to extract or forge the inner value.
 ///
 /// Internally stores index + 1 as `NonZero<usize>` for niche optimization
@@ -47,11 +47,11 @@ macro_rules! declare_id {
     };
 }
 
-// ── Local indexed Id ─────────────────────────────────────────────────
+// -- Local indexed Id -------------------------------------------------
 
 /// Declares a local, sequential Id type usable as an index.
 ///
-/// Unlike `declare_id!`, these Ids are not globally unique — they are
+/// Unlike `declare_id!`, these Ids are not globally unique - they are
 /// sequential within a single `LocalFactory` instance. The factory is
 /// consumed to produce a `LocalVec` that can only be indexed by this Id type.
 ///
@@ -93,7 +93,7 @@ macro_rules! declare_local_id {
 
 /// Sealed trait for local id types. Only implementable via `declare_local_id!`.
 ///
-/// These methods are intentionally not meant for direct use — use
+/// These methods are intentionally not meant for direct use - use
 /// `LocalFactory` and `LocalVec` instead.
 pub trait LocalIdOps: Copy + Eq + std::hash::Hash + std::fmt::Debug {
     #[doc(hidden)]

@@ -1,4 +1,4 @@
-//! Context — runtime context storage for the interpreter.
+//! Context - runtime context storage for the interpreter.
 //!
 //! `Context` is a single snapshot of context state. Read/write via `&self`
 //! (interior mutability via RwLock). Projection-aware: `set_field` writes to
@@ -14,7 +14,7 @@ use acvus_utils::Interner;
 
 use crate::value::Value;
 
-// ── ContextWrite ─────────────────────────────────────────────────────
+// -- ContextWrite -----------------------------------------------------
 
 /// A single context mutation recorded during execution.
 #[derive(Debug)]
@@ -29,7 +29,7 @@ pub enum ContextWrite {
     },
 }
 
-// ── Context trait ───────────────────────────────────────────────────
+// -- Context trait ---------------------------------------------------
 
 /// Single snapshot of context state. Read/write via `&self`.
 ///
@@ -46,7 +46,7 @@ pub trait RuntimeContext: Send + Sync + Sized {
     fn into_writes(self) -> Vec<ContextWrite>;
 }
 
-// ── InMemoryContext ─────────────────────────────────────────────────
+// -- InMemoryContext -------------------------------------------------
 
 /// In-memory Context backed by RwLock<HashMap>. No persistence.
 /// Suitable for tests and the sequential executor.
@@ -118,7 +118,7 @@ impl RuntimeContext for InMemoryContext {
     }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
+// -- Helpers ---------------------------------------------------------
 
 /// Navigate into a nested field of a Value.
 fn navigate_field<'a>(interner: &Interner, root: &'a Value, path: &[&str]) -> Option<&'a Value> {
@@ -162,7 +162,7 @@ fn deep_set_field(interner: &Interner, root: Value, path: &[&str], value: Value)
     value
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// -- Tests -----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -179,7 +179,7 @@ mod tests {
         InMemoryContext::new(data, i)
     }
 
-    // ── get / set ──────────────────────────────────────────────
+    // -- get / set ----------------------------------------------
 
     #[test]
     fn get_returns_stored_value() {
@@ -209,7 +209,7 @@ mod tests {
         assert!(matches!(&writes[0], ContextWrite::Set { key, .. } if key == "x"));
     }
 
-    // ── get_field / set_field ──────────────────────────────────
+    // -- get_field / set_field ----------------------------------
 
     #[test]
     fn get_field_navigates_object() {
@@ -301,11 +301,11 @@ mod tests {
         ctx.set_field("x", &[], Value::int(2));
         assert_eq!(ctx.get("x"), Some(Value::int(2)));
         let writes = ctx.into_writes();
-        // Empty path → ContextWrite::Set, not FieldPatch.
+        // Empty path -> ContextWrite::Set, not FieldPatch.
         assert!(matches!(&writes[0], ContextWrite::Set { .. }));
     }
 
-    // ── fork ───────────────────────────────────────────────────
+    // -- fork ---------------------------------------------------
 
     #[test]
     fn fork_creates_independent_copy() {
@@ -313,7 +313,7 @@ mod tests {
         let forked = ctx.fork();
         // Forked sees same value.
         assert_eq!(forked.get("x"), Some(Value::int(1)));
-        // Mutate forked — original unchanged.
+        // Mutate forked - original unchanged.
         forked.set("x", Value::int(2));
         assert_eq!(forked.get("x"), Some(Value::int(2)));
         assert_eq!(ctx.get("x"), Some(Value::int(1)));
@@ -328,7 +328,7 @@ mod tests {
         assert!(writes.is_empty(), "forked context should have empty writes");
     }
 
-    // ── concurrent read/write ──────────────────────────────────
+    // -- concurrent read/write ----------------------------------
 
     #[test]
     fn concurrent_read_write() {

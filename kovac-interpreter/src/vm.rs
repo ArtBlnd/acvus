@@ -6,11 +6,11 @@
 //! - Bank M (m0-m3): heap objects (String, Vec, etc.)
 //!
 //! Registers are local variables, not array elements.
-//! This is critical — LLVM promotes locals to physical registers.
+//! This is critical - LLVM promotes locals to physical registers.
 
 use crate::encoding::*;
 
-// ── Heap value ───────────────────────────────────────────────────
+// -- Heap value ---------------------------------------------------
 
 /// A heap-allocated value in Bank M.
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ impl Default for MValue {
     }
 }
 
-// ── VM state (exposed for testing) ───────────────────────────────
+// -- VM state (exposed for testing) -------------------------------
 
 #[derive(Debug)]
 pub struct VmState {
@@ -35,7 +35,7 @@ pub struct VmState {
     pub m: [MValue; 4],
 }
 
-// ── Read helpers ─────────────────────────────────────────────────
+// -- Read helpers -------------------------------------------------
 
 #[inline(always)]
 fn read_u16(code: &[u8], pc: usize) -> u16 {
@@ -55,7 +55,7 @@ fn read_u64(code: &[u8], pc: usize) -> u64 {
     ])
 }
 
-// ── Register access helpers ──────────────────────────────────────
+// -- Register access helpers --------------------------------------
 
 #[inline(always)]
 fn get_a(idx: u8, a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
@@ -73,7 +73,7 @@ macro_rules! set_reg {
     };
 }
 
-// ── Execute ──────────────────────────────────────────────────────
+// -- Execute ------------------------------------------------------
 
 /// Execute a bytecode program. Returns the final register state.
 pub fn execute(code: &[u8]) -> VmState {
@@ -104,7 +104,7 @@ pub fn execute(code: &[u8]) -> VmState {
         match base {
             HALT => break,
 
-            // ── Bank A: ALU ──────────────────────────────
+            // -- Bank A: ALU ------------------------------
             ADD_A => { let v = get_a(rs1, a0, a1, a2, a3).wrapping_add(get_a(rs2, a0, a1, a2, a3)); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             SUB_A => { let v = get_a(rs1, a0, a1, a2, a3).wrapping_sub(get_a(rs2, a0, a1, a2, a3)); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             MUL_A => { let v = get_a(rs1, a0, a1, a2, a3).wrapping_mul(get_a(rs2, a0, a1, a2, a3)); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
@@ -112,16 +112,16 @@ pub fn execute(code: &[u8]) -> VmState {
             MOD_A => { let v = get_a(rs1, a0, a1, a2, a3) % get_a(rs2, a0, a1, a2, a3); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             NEG_A => { let v = (get_a(rs1, a0, a1, a2, a3) as i64).wrapping_neg() as u64; set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
 
-            // ── Bank A: CMP ──────────────────────────────
+            // -- Bank A: CMP ------------------------------
             EQ_A => { let v = (get_a(rs1, a0, a1, a2, a3) == get_a(rs2, a0, a1, a2, a3)) as u64; set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             LT_A => { let v = (get_a(rs1, a0, a1, a2, a3) <  get_a(rs2, a0, a1, a2, a3)) as u64; set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             GT_A => { let v = (get_a(rs1, a0, a1, a2, a3) >  get_a(rs2, a0, a1, a2, a3)) as u64; set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
 
-            // ── Bank A: MOV/CONST ────────────────────────
+            // -- Bank A: MOV/CONST ------------------------
             MOV_A   => { let v = get_a(rs1, a0, a1, a2, a3); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
             CONST_A => { let v = read_u64(code, pc + 2); set_reg!(rd, v, a0, a1, a2, a3); pc += 10; }
 
-            // ── Bank B: ALU ──────────────────────────────
+            // -- Bank B: ALU ------------------------------
             ADD_B => { let v = get_b(rs1, b0, b1, b2, b3).wrapping_add(get_b(rs2, b0, b1, b2, b3)); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             SUB_B => { let v = get_b(rs1, b0, b1, b2, b3).wrapping_sub(get_b(rs2, b0, b1, b2, b3)); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             MUL_B => { let v = get_b(rs1, b0, b1, b2, b3).wrapping_mul(get_b(rs2, b0, b1, b2, b3)); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
@@ -129,20 +129,20 @@ pub fn execute(code: &[u8]) -> VmState {
             MOD_B => { let v = get_b(rs1, b0, b1, b2, b3) % get_b(rs2, b0, b1, b2, b3); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             NEG_B => { let v = (get_b(rs1, b0, b1, b2, b3) as i64).wrapping_neg() as u64; set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
 
-            // ── Bank B: CMP ──────────────────────────────
+            // -- Bank B: CMP ------------------------------
             EQ_B => { let v = (get_b(rs1, b0, b1, b2, b3) == get_b(rs2, b0, b1, b2, b3)) as u64; set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             LT_B => { let v = (get_b(rs1, b0, b1, b2, b3) <  get_b(rs2, b0, b1, b2, b3)) as u64; set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             GT_B => { let v = (get_b(rs1, b0, b1, b2, b3) >  get_b(rs2, b0, b1, b2, b3)) as u64; set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
 
-            // ── Bank B: MOV/CONST ────────────────────────
+            // -- Bank B: MOV/CONST ------------------------
             MOV_B   => { let v = get_b(rs1, b0, b1, b2, b3); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             CONST_B => { let v = read_u64(code, pc + 2); set_reg!(rd, v, b0, b1, b2, b3); pc += 10; }
 
-            // ── Cross-bank ───────────────────────────────
+            // -- Cross-bank -------------------------------
             MOV_A2B => { let v = get_a(rs1, a0, a1, a2, a3); set_reg!(rd, v, b0, b1, b2, b3); pc += 2; }
             MOV_B2A => { let v = get_b(rs1, b0, b1, b2, b3); set_reg!(rd, v, a0, a1, a2, a3); pc += 2; }
 
-            // ── Control flow ─────────────────────────────
+            // -- Control flow -----------------------------
             JUMP => { pc = read_u32(code, pc + 2) as usize; }
             JUMP_IF => {
                 if get_a(rs1, a0, a1, a2, a3) != 0 {
@@ -152,7 +152,7 @@ pub fn execute(code: &[u8]) -> VmState {
                 }
             }
 
-            // ── Bank M ──────────────────────────────────
+            // -- Bank M ----------------------------------
             MOV_M => {
                 let v = match rs1 { 0 => m0.clone(), 1 => m1.clone(), 2 => m2.clone(), 3 => m3.clone(), _ => unreachable!() };
                 match rd { 0 => m0 = v, 1 => m1 = v, 2 => m2 = v, 3 => m3 = v, _ => unreachable!() }

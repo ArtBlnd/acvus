@@ -3,9 +3,9 @@
 //! Determines which `@context` keys a MIR module actually needs at runtime,
 //! partitioned by confidence:
 //!
-//! - **eager**: on unconditionally reachable paths — safe to pre-fetch.
-//! - **lazy**: behind unknown branch conditions — resolve on-demand.
-//! - **pruned**: in dead branches (known-false conditions) — type-inject only.
+//! - **eager**: on unconditionally reachable paths - safe to pre-fetch.
+//! - **lazy**: behind unknown branch conditions - resolve on-demand.
+//! - **pruned**: in dead branches (known-false conditions) - type-inject only.
 //!
 //! # Algorithm (two-pass forward analysis)
 //!
@@ -33,18 +33,18 @@ use acvus_ast::Literal;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-// ── Public types ───────────────────────────────────────────────────
+// -- Public types ---------------------------------------------------
 
 /// Context keys partitioned by reachability confidence.
 #[derive(Debug, Clone, Default)]
 pub struct ContextKeyPartition {
-    /// Keys on unconditionally reachable paths — safe to pre-fetch.
+    /// Keys on unconditionally reachable paths - safe to pre-fetch.
     pub eager: FxHashSet<QualifiedRef>,
-    /// Keys behind unknown branch conditions — resolve on-demand.
+    /// Keys behind unknown branch conditions - resolve on-demand.
     pub lazy: FxHashSet<QualifiedRef>,
     /// Known keys on reachable paths (already resolved, tracked for UI discovery).
     pub reachable_known: FxHashSet<QualifiedRef>,
-    /// Keys in dead branches — type-inject but don't fetch.
+    /// Keys in dead branches - type-inject but don't fetch.
     pub pruned: FxHashSet<QualifiedRef>,
 }
 
@@ -58,9 +58,9 @@ pub enum KnownValue {
     },
 }
 
-// ── Public API ─────────────────────────────────────────────────────
+// -- Public API -----------------------------------------------------
 
-/// All context keys needed at runtime (eager ∪ lazy).
+/// All context keys needed at runtime (eager  union  lazy).
 pub fn reachable_context_keys(
     module: &MirModule,
     known: &FxHashMap<QualifiedRef, KnownValue>,
@@ -104,7 +104,7 @@ pub fn partition_context_keys(
     partition
 }
 
-// ── Reachability level ─────────────────────────────────────────────
+// -- Reachability level ---------------------------------------------
 
 /// How confidently a block is reachable from the entry.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -117,7 +117,7 @@ enum Reach {
     Definite,
 }
 
-// ── Core analysis ──────────────────────────────────────────────────
+// -- Core analysis --------------------------------------------------
 
 fn analyze_body(
     body: &crate::ir::MirBody,
@@ -129,7 +129,7 @@ fn analyze_body(
         return;
     }
 
-    // Pass 1: Value domain — evaluate branch conditions.
+    // Pass 1: Value domain - evaluate branch conditions.
     let value_result = {
         let transfer = ValueDomainTransfer {
             val_types: &cfg.val_types,
@@ -138,7 +138,7 @@ fn analyze_body(
         forward_analysis(&cfg, &transfer, DataflowState::new())
     };
 
-    // Pass 2: Reachability — propagate Reach levels using branch verdicts.
+    // Pass 2: Reachability - propagate Reach levels using branch verdicts.
     let reach = compute_reach(&cfg, &value_result);
 
     // Collect: classify context keys by their block's reach level.
@@ -148,8 +148,8 @@ fn analyze_body(
 /// Forward BFS: propagate `Reach` levels through CFG edges.
 ///
 /// Uses `value_result.block_exit` to evaluate JumpIf conditions:
-/// - Definite true/false → follow only the taken branch (same reach).
-/// - Unknown → follow both branches (downgrade to Conditional).
+/// - Definite true/false -> follow only the taken branch (same reach).
+/// - Unknown -> follow both branches (downgrade to Conditional).
 fn compute_reach(
     cfg: &CfgBody,
     value_result: &DataflowResult<ValueId, AbstractValue>,
@@ -237,7 +237,7 @@ fn propagate_to(
     }
 }
 
-// ── Context key collection ─────────────────────────────────────────
+// -- Context key collection -----------------------------------------
 
 /// Walk all blocks, classify each Ref(Context) by its block's reach level.
 fn collect_context_keys(

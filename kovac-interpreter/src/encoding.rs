@@ -10,10 +10,10 @@
 //!
 //! ```text
 //! 15        6  5  4  3  2  1  0
-//! ┌─────────┬─────┬─────┬─────┐
-//! │ opcode  │ rd  │ rs1 │ rs2 │
-//! │ (10bit) │(2b) │(2b) │(2b) │
-//! └─────────┴─────┴─────┴─────┘
+//! +---------+-----+-----+-----+
+//! | opcode  | rd  | rs1 | rs2 |
+//! | (10bit) |(2b) |(2b) |(2b) |
+//! +---------+-----+-----+-----+
 //! ```
 //!
 //! - `rd`: destination register (0-3)
@@ -33,15 +33,15 @@
 //! single u16 dispatch.
 //!
 //! ```text
-//! ┌──────────────────┬──────────────────┐
-//! │  instruction 1   │  instruction 2   │
-//! │     (2 bytes)    │     (2 bytes)    │
-//! └──────────────────┴──────────────────┘
+//! +------------------+------------------+
+//! |  instruction 1   |  instruction 2   |
+//! |     (2 bytes)    |     (2 bytes)    |
+//! +------------------+------------------+
 //! ```
 //!
 //! Example: `ADD_A a0,a1,a2` followed by `MOV_A2B a0->b1` can be fused.
 
-// ── Opcode bases (upper 10 bits, shifted left by 6) ──────────────
+// -- Opcode bases (upper 10 bits, shifted left by 6) --------------
 
 // Bank A arithmetic
 pub const ADD_A: u16 = 0x01 << 6;
@@ -94,7 +94,7 @@ pub const JUMP_IF: u16 = 0x3F << 6; // if a[rs1] != 0: pc = next_u32, else pc +=
 pub const HALT: u16 = 0x00 << 6; // stop execution
 pub const NOP: u16 = 0x3FF << 6; // no operation (all 1s in opcode)
 
-// ── Register encoding helpers ────────────────────────────────────
+// -- Register encoding helpers ------------------------------------
 
 /// Encode a 2-byte instruction: opcode_base | (rd << 4) | (rs1 << 2) | rs2
 #[inline(always)]
@@ -114,7 +114,7 @@ pub const fn encode1(opcode: u16, rd: u8) -> u16 {
     encode(opcode, rd, 0, 0)
 }
 
-// ── Decode helpers ───────────────────────────────────────────────
+// -- Decode helpers -----------------------------------------------
 
 #[inline(always)]
 pub const fn decode_opcode(inst: u16) -> u16 {
@@ -136,7 +136,7 @@ pub const fn decode_rs2(inst: u16) -> u8 {
     (inst & 0x3) as u8
 }
 
-// ── Program builder ──────────────────────────────────────────────
+// -- Program builder ----------------------------------------------
 
 /// Builder for assembling bytecode programs.
 pub struct ProgramBuilder {

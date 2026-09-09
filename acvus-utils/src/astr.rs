@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 static NEXT_INTERNER_ID: AtomicU32 = AtomicU32::new(1);
 
 // ---------------------------------------------------------------------------
-// Astr — interned string handle (8 bytes, Copy)
+// Astr - interned string handle (8 bytes, Copy)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -62,7 +62,7 @@ impl Hash for Astr {
 }
 
 impl Astr {
-    /// Explicit display wrapper — requires an interner reference.
+    /// Explicit display wrapper - requires an interner reference.
     pub fn display<'a>(&self, interner: &'a Interner) -> AstrDisplay<'a> {
         AstrDisplay {
             astr: *self,
@@ -96,7 +96,7 @@ impl std::fmt::Debug for Astr {
 }
 
 // ---------------------------------------------------------------------------
-// Shard — single partition of the interner
+// Shard - single partition of the interner
 // ---------------------------------------------------------------------------
 
 const SHARD_COUNT: usize = 64;
@@ -159,7 +159,7 @@ impl ShardedInner {
 }
 
 // ---------------------------------------------------------------------------
-// Interner — Arc-based, cloneable, Send + Sync
+// Interner - Arc-based, cloneable, Send + Sync
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]

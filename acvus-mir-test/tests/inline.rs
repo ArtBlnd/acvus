@@ -26,7 +26,7 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
 }
 
 // =======================================================================
-//  1. Basic inline — local function calls become flat IR
+//  1. Basic inline - local function calls become flat IR
 // =======================================================================
 
 #[ignore = "pending identity integration"]
@@ -153,13 +153,13 @@ fn inline_pipe_with_extra_args() {
 }
 
 // =======================================================================
-//  2. ExternFn preservation — extern calls must NOT be inlined
+//  2. ExternFn preservation - extern calls must NOT be inlined
 // =======================================================================
 
 #[ignore = "pending identity integration"]
 #[test]
 fn inline_preserves_extern_call() {
-    // main calls to_string (ExternFn) — should remain as FunctionCall
+    // main calls to_string (ExternFn) - should remain as FunctionCall
     let i = Interner::new();
     let ir = compile_inline_ir(&i, ("main", "42 | to_string"), &[], &[]).unwrap();
     insta::assert_snapshot!(ir);
@@ -218,7 +218,7 @@ fn inline_mixed_local_extern() {
 }
 
 // =======================================================================
-//  3. Context propagation — inline + context read/write
+//  3. Context propagation - inline + context read/write
 // =======================================================================
 
 #[ignore = "pending identity integration"]
@@ -297,7 +297,7 @@ fn inline_multiple_context_writes() {
 }
 
 // =======================================================================
-//  4. Closure / Lambda — capture remap, lambda as argument
+//  4. Closure / Lambda - capture remap, lambda as argument
 // =======================================================================
 
 #[ignore = "pending identity integration"]
@@ -322,7 +322,7 @@ fn inline_callee_returns_closure_result() {
 #[ignore = "pending identity integration"]
 #[test]
 fn inline_callee_takes_lambda_arg() {
-    // apply(f, x) = f(x) — but f is indirect, so it won't inline further
+    // apply(f, x) = f(x) - but f is indirect, so it won't inline further
     // Hmm, f would be Indirect. Let's do: transform(xs) = xs | map(|x| -> x * 2)
     // main = transform([1, 2])
     let i = Interner::new();
@@ -474,7 +474,7 @@ fn inline_context_write_propagation() {
 }
 
 // =======================================================================
-//  6. Soundness rejection — things that must NOT be inlined
+//  6. Soundness rejection - things that must NOT be inlined
 // =======================================================================
 
 #[ignore = "pending identity integration"]

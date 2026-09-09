@@ -1,6 +1,6 @@
 use rustc_hash::FxHashMap;
 
-// ── BlobHash ────────────────────────────────────────────────────────
+// -- BlobHash --------------------------------------------------------
 
 /// 32-byte content hash (blake3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,7 +40,7 @@ impl std::fmt::Display for BlobHash {
     }
 }
 
-// ── BlobStore trait ─────────────────────────────────────────────────
+// -- BlobStore trait -------------------------------------------------
 
 /// Content-addressed blob store with named refs and CAS.
 ///
@@ -48,11 +48,11 @@ impl std::fmt::Display for BlobHash {
 /// - **Blobs**: immutable, addressed by content hash. `put` is idempotent.
 /// - **Refs**: mutable named pointers to blob hashes. `ref_cas` is atomic.
 ///
-/// The store does NOT enforce referential integrity — a ref may point to
+/// The store does NOT enforce referential integrity - a ref may point to
 /// a removed blob. Integrity is the caller's responsibility.
 #[trait_variant::make(Send)]
 pub trait BlobStore: Sync {
-    // ── Blob operations (content-addressed) ──
+    // -- Blob operations (content-addressed) --
 
     /// Store a blob. Returns its content hash. Idempotent: same content = same hash.
     async fn put(&mut self, data: Vec<u8>) -> BlobHash;
@@ -63,15 +63,15 @@ pub trait BlobStore: Sync {
     /// Remove a blob by hash. No-op if not found.
     async fn remove(&mut self, hash: &BlobHash);
 
-    // ── Ref operations (named pointers with CAS) ──
+    // -- Ref operations (named pointers with CAS) --
 
     /// Get the current hash that a named ref points to.
     async fn ref_get(&self, name: &str) -> Option<BlobHash>;
 
     /// Atomic compare-and-swap on a named ref.
     ///
-    /// - `expected = None`: create — fails if ref already exists.
-    /// - `expected = Some(h)`: update — fails if current hash ≠ `h`.
+    /// - `expected = None`: create - fails if ref already exists.
+    /// - `expected = Some(h)`: update - fails if current hash != `h`.
     ///
     /// Returns `Ok(())` on success.
     /// Returns `Err(actual)` on conflict, where `actual` is the current value.
@@ -85,7 +85,7 @@ pub trait BlobStore: Sync {
     /// Remove a named ref. No-op if not found.
     async fn ref_remove(&mut self, name: &str);
 
-    // ── Batch operations ──
+    // -- Batch operations --
 
     /// Batch put. Returns hashes in the same order as input.
     async fn batch_put(&mut self, blobs: Vec<Vec<u8>>) -> Vec<BlobHash>;
@@ -97,7 +97,7 @@ pub trait BlobStore: Sync {
     async fn batch_remove(&mut self, hashes: Vec<BlobHash>);
 }
 
-// ── MemBlobStore ────────────────────────────────────────────────────
+// -- MemBlobStore ----------------------------------------------------
 
 /// In-memory blob store for testing.
 #[derive(Debug, Default)]
@@ -187,13 +187,13 @@ impl BlobStore for MemBlobStore {
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// -- Tests -----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── Blob: basic put/get/remove ──
+    // -- Blob: basic put/get/remove --
 
     #[tokio::test]
     async fn put_and_get() {
@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(s.get(&hash).await, Some(data));
     }
 
-    // ── Blob: hash determinism ──
+    // -- Blob: hash determinism --
 
     #[test]
     fn hash_deterministic() {
@@ -288,7 +288,7 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
-    // ── Ref: basic operations ──
+    // -- Ref: basic operations --
 
     #[tokio::test]
     async fn ref_get_missing_returns_none() {
@@ -320,7 +320,7 @@ mod tests {
         let h1 = s.put(b"v1".to_vec()).await;
         let h2 = s.put(b"v2".to_vec()).await;
         s.ref_cas("head", None, h1).await.unwrap();
-        // Try to create again — should fail
+        // Try to create again - should fail
         let err = s.ref_cas("head", None, h2).await.unwrap_err();
         assert_eq!(err, Some(h1));
         // Original untouched
@@ -334,7 +334,7 @@ mod tests {
         let h2 = s.put(b"v2".to_vec()).await;
         let h3 = s.put(b"v3".to_vec()).await;
         s.ref_cas("head", None, h1).await.unwrap();
-        // expected h2, actual h1 → conflict
+        // expected h2, actual h1 -> conflict
         let err = s.ref_cas("head", Some(h2), h3).await.unwrap_err();
         assert_eq!(err, Some(h1));
         assert_eq!(s.ref_get("head").await, Some(h1));
@@ -345,7 +345,7 @@ mod tests {
         let mut s = MemBlobStore::new();
         let h1 = s.put(b"v1".to_vec()).await;
         let h2 = s.put(b"v2".to_vec()).await;
-        // expected Some(h1) but ref doesn't exist → conflict
+        // expected Some(h1) but ref doesn't exist -> conflict
         let err = s.ref_cas("head", Some(h1), h2).await.unwrap_err();
         assert_eq!(err, None);
     }
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(s.ref_get("head").await, Some(h2));
     }
 
-    // ── Ref: multiple independent refs ──
+    // -- Ref: multiple independent refs --
 
     #[tokio::test]
     async fn multiple_refs_independent() {
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(s.ref_get("branch").await, Some(h2));
     }
 
-    // ── Ref: two refs can point to same hash ──
+    // -- Ref: two refs can point to same hash --
 
     #[tokio::test]
     async fn two_refs_same_hash() {
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(s.ref_get("b").await, Some(hash));
     }
 
-    // ── Cross-concern: blob and ref independence ──
+    // -- Cross-concern: blob and ref independence --
 
     #[tokio::test]
     async fn removing_blob_does_not_remove_ref() {
@@ -427,7 +427,7 @@ mod tests {
         let hash = s.put(b"data".to_vec()).await;
         s.ref_cas("head", None, hash).await.unwrap();
         s.remove(&hash).await;
-        // Ref still exists (dangling — that's fine, GC is caller's job)
+        // Ref still exists (dangling - that's fine, GC is caller's job)
         assert_eq!(s.ref_get("head").await, Some(hash));
         // But blob is gone
         assert_eq!(s.get(&hash).await, None);
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(s.get(&hash).await, Some(b"data".to_vec()));
     }
 
-    // ── Batch: put ──
+    // -- Batch: put --
 
     #[tokio::test]
     async fn batch_put_multiple() {
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(s.blob_count(), 0);
     }
 
-    // ── Batch: get ──
+    // -- Batch: get --
 
     #[tokio::test]
     async fn batch_get_multiple() {
@@ -506,7 +506,7 @@ mod tests {
         assert!(results.is_empty());
     }
 
-    // ── Batch: remove ──
+    // -- Batch: remove --
 
     #[tokio::test]
     async fn batch_remove_multiple() {
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(s.blob_count(), 0);
     }
 
-    // ── BlobHash: Display / Debug ──
+    // -- BlobHash: Display / Debug --
 
     #[test]
     fn hash_display_is_64_hex_chars() {
@@ -555,7 +555,7 @@ mod tests {
         assert!(debug.ends_with("..)"));
     }
 
-    // ── BlobHash: from_bytes round-trip ──
+    // -- BlobHash: from_bytes round-trip --
 
     #[test]
     fn hash_from_bytes_round_trip() {
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(h, h2);
     }
 
-    // ── Stress: many keys don't collide ──
+    // -- Stress: many keys don't collide --
 
     #[tokio::test]
     async fn many_unique_blobs() {
@@ -586,7 +586,7 @@ mod tests {
         }
     }
 
-    // ── Concurrent CAS pattern: simulate two writers ──
+    // -- Concurrent CAS pattern: simulate two writers --
 
     #[tokio::test]
     async fn cas_serializes_concurrent_writers() {
@@ -602,7 +602,7 @@ mod tests {
         // Writer A wins
         assert!(s.ref_cas("head", writer_a_sees, v1).await.is_ok());
 
-        // Writer B fails — stale expected
+        // Writer B fails - stale expected
         let err = s.ref_cas("head", writer_b_sees, v2).await.unwrap_err();
         assert_eq!(err, Some(v1));
 

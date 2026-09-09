@@ -430,7 +430,7 @@ impl ChatSession {
 }
 
 // ---------------------------------------------------------------------------
-// Resolver helpers — shared between start_evaluate and evaluate_next
+// Resolver helpers - shared between start_evaluate and evaluate_next
 // ---------------------------------------------------------------------------
 
 /// Build a merged context type map from the public accessors of `ContextTypeRegistry`.

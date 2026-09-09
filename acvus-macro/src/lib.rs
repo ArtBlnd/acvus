@@ -8,7 +8,7 @@ struct Placeholder {
     /// Byte offset range in the original source.
     start: usize,
     end: usize,
-    /// Whether this is a splice placeholder (`*ident` → `Vec<Expr>`).
+    /// Whether this is a splice placeholder (`*ident` -> `Vec<Expr>`).
     is_splice: bool,
 }
 
@@ -114,8 +114,8 @@ fn validate_template(source: &str, placeholders: &[Placeholder]) -> Result<(), S
 /// Validates acvus script syntax at compile time.
 /// Returns a closure that takes `(&Interner, placeholder_exprs...)` and returns a `Script`.
 ///
-/// - `%ident` — single placeholder, closure parameter is `Expr`
-/// - `*ident` — splice placeholder, closure parameter is `Vec<Expr>`
+/// - `%ident` - single placeholder, closure parameter is `Expr`
+/// - `*ident` - splice placeholder, closure parameter is `Vec<Expr>`
 ///
 /// Splice placeholders can only appear in sequence contexts:
 /// list elements, function arguments, tuple elements, pipe chains, or binary op chains.

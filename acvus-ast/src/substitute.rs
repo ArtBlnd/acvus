@@ -82,7 +82,7 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
         },
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } => expr,
 
-        // Binary chains: flatten same-op chain → splice → re-fold (left-associative).
+        // Binary chains: flatten same-op chain -> splice -> re-fold (left-associative).
         Expr::BinaryOp {
             left,
             op,
@@ -131,7 +131,7 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             span,
         },
 
-        // Pipe chains: flatten → splice → re-fold (left-associative).
+        // Pipe chains: flatten -> splice -> re-fold (left-associative).
         Expr::Pipe {
             left, right, span, ..
         } => {
@@ -285,11 +285,11 @@ fn sub_else_branch(eb: ElseBranch, subs: &FxHashMap<Astr, SubstValue>) -> ElseBr
     }
 }
 
-// ── Flatten / fold helpers ───────────────────────────────────────────
+// -- Flatten / fold helpers -------------------------------------------
 
 /// Flatten a left-associative pipe chain into a sequence of stages.
 ///
-/// `Pipe(Pipe(a, b), c)` → `[a, b, c]`
+/// `Pipe(Pipe(a, b), c)` -> `[a, b, c]`
 fn flatten_pipe(left: Expr, right: Expr) -> Vec<Expr> {
     let mut stages = match left {
         Expr::Pipe { left, right, .. } => flatten_pipe(*left, *right),
@@ -315,7 +315,7 @@ fn fold_pipe(stages: Vec<Expr>, span: Span) -> Expr {
 
 /// Flatten a left-associative binary op chain (same operator) into a sequence of operands.
 ///
-/// `Add(Add(a, b), c)` → `[a, b, c]`
+/// `Add(Add(a, b), c)` -> `[a, b, c]`
 ///
 /// Only flattens nodes with the same operator; different-op nodes are preserved as-is.
 fn flatten_binop(left: Expr, right: Expr, target_op: BinOp) -> Vec<Expr> {
@@ -347,7 +347,7 @@ fn fold_binop(parts: Vec<Expr>, op: BinOp, span: Span) -> Expr {
         .unwrap()
 }
 
-// ── Statement / node substitution ────────────────────────────────────
+// -- Statement / node substitution ------------------------------------
 
 fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
     match stmt {
@@ -469,7 +469,7 @@ fn sub_node(node: Node, subs: &FxHashMap<Astr, SubstValue>) -> Node {
     }
 }
 
-// ── Compile-time splice position validation ──────────────────────────
+// -- Compile-time splice position validation --------------------------
 //
 // Validates that splice placeholder idents only appear in sequence contexts
 // (list elements, function args, tuple elements, pipe/binary op chains).

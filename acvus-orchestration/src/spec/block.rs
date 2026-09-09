@@ -4,7 +4,7 @@ pub enum BlockMode {
     Template,
 }
 
-/// A named acvus source block — referenced by other specs.
+/// A named acvus source block - referenced by other specs.
 pub struct Block {
     pub name: String,
     pub source: String,

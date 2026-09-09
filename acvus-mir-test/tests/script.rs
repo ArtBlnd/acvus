@@ -1,6 +1,6 @@
 //! E2E tests for script-mode IR: loops, branches, SSA, function calls.
 //!
-//! Each test compiles a script source → MIR and snapshots the printed IR.
+//! Each test compiles a script source -> MIR and snapshots the printed IR.
 //! Tests are grouped by category with both soundness and completeness direction.
 
 use acvus_mir::ty::{Param, Ty};
@@ -100,7 +100,7 @@ fn loop_range_iteration() {
 #[ignore = "pending identity integration"]
 #[test]
 fn branch_simple_bind() {
-    // Irrefutable: x = @data { body } — no branching needed
+    // Irrefutable: x = @data { body } - no branching needed
     let i = Interner::new();
     let c = ctx(&i, &[("data", Ty::Int), ("out", Ty::Int)]);
     let ir = compile_script_ir(&i, "x = @data { @out = x + 1; }; @out", &c).unwrap();
@@ -110,7 +110,7 @@ fn branch_simple_bind() {
 #[ignore = "pending identity integration"]
 #[test]
 fn branch_refutable_literal() {
-    // Refutable: literal match — needs test + branch
+    // Refutable: literal match - needs test + branch
     let i = Interner::new();
     let c = ctx(&i, &[("val", Ty::Int), ("out", Ty::Int)]);
     let ir = compile_script_ir(&i, "42 = @val { @out = 1; }; @out", &c).unwrap();
@@ -142,7 +142,7 @@ fn branch_nested_match() {
 #[ignore = "pending identity integration"]
 #[test]
 fn branch_context_write_in_refutable() {
-    // Context write inside refutable branch — needs PHI at merge
+    // Context write inside refutable branch - needs PHI at merge
     let i = Interner::new();
     let c = ctx(&i, &[("val", Ty::Int), ("out", Ty::Int)]);
     let ir = compile_script_ir(&i, "42 = @val { @out = 99; }; @out", &c).unwrap();
@@ -156,7 +156,7 @@ fn branch_context_write_in_refutable() {
 #[ignore = "pending identity integration"]
 #[test]
 fn ssa_store_load_forwarding() {
-    // Context write then read — SSA should forward the stored value
+    // Context write then read - SSA should forward the stored value
     let i = Interner::new();
     let c = ctx(&i, &[("x", Ty::Int)]);
     let ir = compile_script_ir(&i, "@x = 42; @x", &c).unwrap();
@@ -166,7 +166,7 @@ fn ssa_store_load_forwarding() {
 #[ignore = "pending identity integration"]
 #[test]
 fn ssa_write_in_branch_phi() {
-    // Context write in one branch — PHI at merge point
+    // Context write in one branch - PHI at merge point
     let i = Interner::new();
     let c = ctx(&i, &[("cond", Ty::Int), ("x", Ty::Int)]);
     let ir = compile_script_ir(&i, "42 = @cond { @x = 1; }; @x", &c).unwrap();
@@ -176,7 +176,7 @@ fn ssa_write_in_branch_phi() {
 #[ignore = "pending identity integration"]
 #[test]
 fn ssa_write_in_loop_phi() {
-    // Context write in loop — loop-carried PHI
+    // Context write in loop - loop-carried PHI
     let i = Interner::new();
     let c = ctx(
         &i,
@@ -199,7 +199,7 @@ fn ssa_multiple_contexts() {
 #[ignore = "pending identity integration"]
 #[test]
 fn ssa_sequential_writes() {
-    // Multiple writes to same context — only last value visible
+    // Multiple writes to same context - only last value visible
     let i = Interner::new();
     let c = ctx(&i, &[("x", Ty::Int)]);
     let ir = compile_script_ir(&i, "@x = 1; @x = 2; @x = 3; @x", &c).unwrap();
@@ -359,7 +359,7 @@ fn combined_multiple_loops_sequential() {
 }
 
 // =======================================================================
-//  6. Soundness — reject invalid programs
+//  6. Soundness - reject invalid programs
 // =======================================================================
 
 #[ignore = "pending identity integration"]

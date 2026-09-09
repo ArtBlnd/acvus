@@ -1,10 +1,10 @@
-//! CFG — basic-block-based IR representation.
+//! CFG - basic-block-based IR representation.
 //!
 //! The single CFG representation used by all analysis and optimization passes.
 //! MirBody (flat Vec<Inst>) is promoted to CfgBody where each basic block owns
 //! its instructions, eliminating index arithmetic entirely.
 //!
-//! Lifecycle: MirBody → promote → CfgBody → (passes) → demote → MirBody
+//! Lifecycle: MirBody -> promote -> CfgBody -> (passes) -> demote -> MirBody
 
 use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,12 +13,12 @@ use smallvec::SmallVec;
 use crate::ir::{DebugInfo, Inst, InstKind, Label, MirBody, ValueId};
 use crate::ty::Ty;
 
-// ── BlockIdx ──────────────────────────────────────────────────────
+// -- BlockIdx ------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockIdx(pub usize);
 
-// ── Block ─────────────────────────────────────────────────────────
+// -- Block ---------------------------------------------------------
 
 /// Sentinel label for the entry block (no BlockLabel instruction in MirBody).
 pub const ENTRY_LABEL: Label = Label(u32::MAX);
@@ -38,9 +38,9 @@ pub struct Block {
     pub merge_of: Option<Label>,
 }
 
-// ── Terminator ────────────────────────────────────────────────────
+// -- Terminator ----------------------------------------------------
 
-/// Block terminator — extracted from InstKind control flow variants.
+/// Block terminator - extracted from InstKind control flow variants.
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Jump {
@@ -59,7 +59,7 @@ pub enum Terminator {
     Fallthrough,
 }
 
-// ── CfgBody ───────────────────────────────────────────────────────
+// -- CfgBody -------------------------------------------------------
 
 /// Basic-block-based IR body for analysis and optimization passes.
 #[derive(Debug, Clone)]
@@ -122,7 +122,7 @@ impl CfgBody {
     }
 }
 
-// ── Promote: MirBody → CfgBody ───────────────────────────────────
+// -- Promote: MirBody -> CfgBody -----------------------------------
 
 pub fn promote(body: MirBody) -> CfgBody {
     let mut blocks: Vec<Block> = Vec::new();
@@ -134,7 +134,7 @@ pub fn promote(body: MirBody) -> CfgBody {
     let mut label_to_block: FxHashMap<Label, BlockIdx> = FxHashMap::default();
     label_to_block.insert(ENTRY_LABEL, BlockIdx(0));
 
-    // Synthetic label counter for blocks without BlockLabel (should be rare —
+    // Synthetic label counter for blocks without BlockLabel (should be rare -
     // the lowerer emits BlockLabel for all non-entry blocks).
     let mut next_label = body.label_count;
 
@@ -180,7 +180,7 @@ pub fn promote(body: MirBody) -> CfgBody {
     // Invariant: every block has a unique label.
     // Entry block (bi=0) has ENTRY_LABEL. All others should have a label from
     // BlockLabel. If any non-entry block has ENTRY_LABEL, it means MirBody had
-    // a block boundary without BlockLabel — assign a synthetic label.
+    // a block boundary without BlockLabel - assign a synthetic label.
     for bi in 1..blocks.len() {
         if blocks[bi].label == ENTRY_LABEL {
             let label = Label(next_label);
@@ -247,7 +247,7 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
     Terminator::Fallthrough
 }
 
-// ── Demote: CfgBody → MirBody ────────────────────────────────────
+// -- Demote: CfgBody -> MirBody ------------------------------------
 
 pub fn demote(cfg: CfgBody) -> MirBody {
     let mut insts: Vec<Inst> = Vec::new();
@@ -301,7 +301,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 });
             }
             Terminator::Fallthrough => {
-                // No instruction — implicit fallthrough.
+                // No instruction - implicit fallthrough.
             }
         }
     }
@@ -337,7 +337,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────
+// -- Tests ---------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -532,10 +532,10 @@ mod tests {
         ]);
 
         let cfg = promote(body);
-        // B0 → B1, B2
+        // B0 -> B1, B2
         let b0_succs = cfg.successors(BlockIdx(0));
         assert_eq!(b0_succs.len(), 2);
-        // B1 → B3, B2 → B3
+        // B1 -> B3, B2 -> B3
         let b1_succs = cfg.successors(BlockIdx(1));
         assert_eq!(b1_succs.len(), 1);
         assert_eq!(b1_succs[0], BlockIdx(3));

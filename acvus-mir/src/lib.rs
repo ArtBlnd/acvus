@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 use crate::graph::QualifiedRef;
 use crate::ty::Ty;
 
-/// Build a QualifiedRef→Ty mapping from a simple name→Ty context map.
+/// Build a QualifiedRef->Ty mapping from a simple name->Ty context map.
 pub fn build_context_ids(
     context: &FxHashMap<Astr, Ty>,
 ) -> acvus_utils::Freeze<FxHashMap<QualifiedRef, Ty>> {
@@ -42,7 +42,7 @@ mod tests {
     use acvus_utils::Interner;
     use rustc_hash::{FxHashMap, FxHashSet};
 
-    // ── Template integration tests ──────────────────────────────────
+    // -- Template integration tests ----------------------------------
 
     #[test]
     fn integration_text_only() {
@@ -160,7 +160,7 @@ mod tests {
         assert!(compile_template(&i, "{{ true }}", &[]).is_err());
     }
 
-    // ── Script tests ────────────────────────────────────────────────
+    // -- Script tests ------------------------------------------------
 
     #[test]
     fn script_single_expr() {
@@ -208,7 +208,7 @@ mod tests {
         );
     }
 
-    // ── Extern fn tests ─────────────────────────────────────────────
+    // -- Extern fn tests ---------------------------------------------
 
     fn extern_fn_ctx(i: &Interner) -> Vec<(&'static str, Ty)> {
         vec![
@@ -274,7 +274,7 @@ mod tests {
         compile_script(&i, "@items | @mapper", &ctx).unwrap();
     }
 
-    // ── Context store tests ─────────────────────────────────────────
+    // -- Context store tests -----------------------------------------
 
     #[test]
     fn context_store_compiles() {
@@ -306,7 +306,7 @@ mod tests {
         .unwrap();
     }
 
-    // ── Projection IR structure tests ───────────────────────────────
+    // -- Projection IR structure tests -------------------------------
 
     fn inst_kinds(module: &MirModule) -> Vec<&InstKind> {
         module.main.insts.iter().map(|i| &i.kind).collect()
@@ -456,12 +456,12 @@ mod tests {
         }
     }
 
-    // ── Materiality: context store validation ─────────────────────────
+    // -- Materiality: context store validation -------------------------
     //
     // Soundness: non-materializable types must be rejected.
     // Completeness: materializable types must be accepted.
 
-    // ── Completeness: materializable types accepted ──
+    // -- Completeness: materializable types accepted --
 
     #[test]
     fn materiality_store_int() {
@@ -491,7 +491,7 @@ mod tests {
         assert!(compile_script(&i, "@x = true; @x", &[("x", Ty::Bool)]).is_ok());
     }
 
-    // ── Soundness: non-materializable types rejected ──
+    // -- Soundness: non-materializable types rejected --
 
     #[test]
     fn materiality_reject_fn_in_context() {
@@ -510,7 +510,7 @@ mod tests {
     // materiality_reject_iterator_in_context: migrated to acvus-mir-test
     // (Iterator is now UserDefined, requires TypeRegistry + Interner).
 
-    // ── Soundness: nested non-materializable rejected ──
+    // -- Soundness: nested non-materializable rejected --
 
     #[test]
     fn materiality_reject_list_of_fn() {

@@ -1,6 +1,6 @@
 use super::{Block, Defaults, DisplaySpec, LlmSpec};
 
-/// A top-level container. Not an Item itself — contains Items.
+/// A top-level container. Not an Item itself - contains Items.
 /// Order matters: items defined above can be referenced by items below.
 pub struct Namespace {
     pub name: String,

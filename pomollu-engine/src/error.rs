@@ -94,7 +94,7 @@ impl EngineError {
                 )]
             }
             _ => {
-                // Config/DAG/structural errors → Type category
+                // Config/DAG/structural errors -> Type category
                 vec![Self::general(
                     ErrorCategory::Type,
                     e.display(interner).to_string(),

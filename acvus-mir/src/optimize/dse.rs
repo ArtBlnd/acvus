@@ -17,9 +17,9 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{InstKind, RefTarget, ValueId};
 
-// ── ref_to_ctx: ValueId → QualifiedRef mapping ─────────────────────
+// -- ref_to_ctx: ValueId -> QualifiedRef mapping ---------------------
 
-/// Build a map from Ref dst ValueId → QualifiedRef for all identity context Refs.
+/// Build a map from Ref dst ValueId -> QualifiedRef for all identity context Refs.
 fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
     let mut map = FxHashMap::default();
     for block in &cfg.blocks {
@@ -38,7 +38,7 @@ fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
     map
 }
 
-// ── Per-block context gen/kill sets ─────────────────────────────────
+// -- Per-block context gen/kill sets ---------------------------------
 
 /// For each block, which contexts are read (gen) and which are written (kill)
 /// before being read within the block.
@@ -73,7 +73,7 @@ fn analyze_block(
     // Walk instructions backwards.
     for inst in block.insts.iter().rev() {
         match &inst.kind {
-            // Load from context Ref → read.
+            // Load from context Ref -> read.
             InstKind::Load {
                 src, volatile: false, ..
             } => {
@@ -85,7 +85,7 @@ fn analyze_block(
                 }
             }
 
-            // Store to context Ref → write (kill).
+            // Store to context Ref -> write (kill).
             InstKind::Store {
                 dst,
                 volatile: false,
@@ -115,15 +115,15 @@ fn analyze_block(
     }
 }
 
-// ── Backward context liveness ───────────────────────────────────────
+// -- Backward context liveness ---------------------------------------
 
 /// Compute per-block context liveness: which contexts are "live" at the
 /// entry/exit of each block. A context is live if it may be read before
 /// being written on some path from this point.
 ///
 /// Standard backward dataflow:
-///   live_out[B] = ∪ live_in[S] for all successors S of B
-///   live_in[B]  = reads[B] ∪ (live_out[B] − kills[B])
+///   live_out[B] =  union  live_in[S] for all successors S of B
+///   live_in[B]  = reads[B]  union  (live_out[B] - kills[B])
 fn compute_context_liveness(
     cfg: &CfgBody,
     block_infos: &[BlockContextInfo],
@@ -146,7 +146,7 @@ fn compute_context_liveness(
                 }
             }
 
-            // live_in = reads ∪ (live_out − kills)
+            // live_in = reads  union  (live_out - kills)
             let info = &block_infos[bi];
             let mut new_in = info.reads.clone();
             for qref in &new_out {
@@ -166,12 +166,12 @@ fn compute_context_liveness(
     live_out
 }
 
-// ── DSE pass ────────────────────────────────────────────────────────
+// -- DSE pass --------------------------------------------------------
 
 /// Run Dead Store Elimination on a CfgBody.
 ///
 /// Removes context Store instructions (and their preceding Ref) that are
-/// dead — the stored value is guaranteed to be overwritten before being read.
+/// dead - the stored value is guaranteed to be overwritten before being read.
 pub fn run(cfg: &mut CfgBody) {
     let ref_to_ctx = build_ref_to_ctx(cfg);
     if ref_to_ctx.is_empty() {
@@ -239,7 +239,7 @@ pub fn run(cfg: &mut CfgBody) {
                 } => {
                     if let Some(&qref) = ref_to_ctx.get(dst) {
                         if !live.contains(&qref) {
-                            // Dead store — context will be overwritten before read.
+                            // Dead store - context will be overwritten before read.
                             dead_insts.insert((bi, ii));
                             // Also mark the Ref instruction if it immediately precedes.
                             if ii > 0 {
@@ -379,7 +379,7 @@ mod tests {
     }
 
     /// Consecutive stores to the same context: first is dead.
-    /// Ref @x → Store @x = v1 → Ref @x → Store @x = v2 → Return v2
+    /// Ref @x -> Store @x = v1 -> Ref @x -> Store @x = v2 -> Return v2
     /// After DSE: first Ref+Store removed.
     #[test]
     fn consecutive_stores_first_dead() {
@@ -430,7 +430,7 @@ mod tests {
     }
 
     /// Store followed by Load: store is live (needed by load).
-    /// Ref @x → Store @x = v1 → Ref @x → Load @x → Return loaded
+    /// Ref @x -> Store @x = v1 -> Ref @x -> Load @x -> Return loaded
     /// After DSE: nothing removed.
     #[test]
     fn store_then_load_is_live() {
@@ -587,7 +587,7 @@ mod tests {
     }
 
     /// Store to context before return is live (externally observable).
-    /// Ref @x → Store @x = v1 → Return v2
+    /// Ref @x -> Store @x = v1 -> Return v2
     /// Store is live because return exposes context state.
     #[test]
     fn store_before_return_is_live() {
@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    /// No context stores → DSE is a no-op.
+    /// No context stores -> DSE is a no-op.
     #[test]
     fn no_context_stores_noop() {
         let mut val_types = FxHashMap::default();

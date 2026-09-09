@@ -1,6 +1,6 @@
-//! Test helpers for compiling source → MIR via the graph pipeline.
+//! Test helpers for compiling source -> MIR via the graph pipeline.
 //!
-//! These are convenience wrappers around extract → infer → lower.
+//! These are convenience wrappers around extract -> infer -> lower.
 //! Real callers should use the graph phases directly.
 
 use acvus_utils::{Freeze, Interner};
@@ -104,7 +104,7 @@ fn run_pipeline(
         .map(|(_, m)| m)
         .ok_or_else(|| "no module produced for target".to_string())?;
 
-    // SROA → SSA → DCE.
+    // SROA -> SSA -> DCE.
     crate::optimize::sroa::run_body(&mut module.main, &inf.context_types);
     for closure in module.closures.values_mut() {
         crate::optimize::sroa::run_body(closure, &inf.context_types);

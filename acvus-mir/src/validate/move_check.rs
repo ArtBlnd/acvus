@@ -5,9 +5,9 @@
 //! detect use-after-move violations.
 //!
 //! Design:
-//! - `Ty::Error` → skip (analysis mode).
-//! - `Fn` with move-only captures → FnOnce (transitive).
-//! - Join at merge points: `Alive ⊔ Moved = Moved` (conservative).
+//! - `Ty::Error` -> skip (analysis mode).
+//! - `Fn` with move-only captures -> FnOnce (transitive).
+//! - Join at merge points: `Alive  lub  Moved = Moved` (conservative).
 //! - $variables: tracked by name. `Store` (via Ref) revives, `Load` of move-only consumes.
 
 use std::collections::VecDeque;
@@ -29,21 +29,21 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// Determine whether a type requires move semantics.
 ///
 /// Returns `Some(true)` for move-only, `Some(false)` for copyable,
-/// `None` for unknown (skip — analysis mode).
+/// `None` for unknown (skip - analysis mode).
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        // Primitives — always Copy
+        // Primitives - always Copy
         Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
             Some(false)
         }
 
-        // Handle — always move-only (deferred computation, must be consumed exactly once)
+        // Handle - always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
 
-        // UserDefined — always move-only
+        // UserDefined - always move-only
         Ty::UserDefined { .. } => Some(true),
 
-        // Containers — transitive
+        // Containers - transitive
         Ty::Array(inner, _) | Ty::Option(inner) => is_move_only(inner),
         Ty::Tuple(elems) => {
             let mut any_move = false;
@@ -79,7 +79,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
             Some(any_move)
         }
 
-        // Fn — move-only if any capture is move-only (FnOnce)
+        // Fn - move-only if any capture is move-only (FnOnce)
         Ty::Fn { captures, .. } => {
             let mut any_move = false;
             for c in captures {
@@ -92,13 +92,13 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
             Some(any_move)
         }
 
-        // Identity — always copyable (just an id)
+        // Identity - always copyable (just an id)
         Ty::Identity(_) => Some(false),
 
-        // Ref — ephemeral, always immediately consumed. Skip (not subject to move analysis).
+        // Ref - ephemeral, always immediately consumed. Skip (not subject to move analysis).
         Ty::Ref(..) => None,
 
-        // Unknown — skip
+        // Unknown - skip
         Ty::Error(_) => None,
 
         // Post-inference: no type variables remain.
@@ -222,7 +222,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
         return;
     }
 
-    // Build ref_target map: Ref dst → RefTarget.
+    // Build ref_target map: Ref dst -> RefTarget.
     let mut ref_target: FxHashMap<ValueId, crate::ir::RefTarget> = FxHashMap::default();
     for block in &cfg.blocks {
         for inst in &block.insts {
@@ -326,7 +326,7 @@ fn propagate_args(
     _errors: &mut Vec<ValidationError>,
     target_entry: &mut MoveState,
 ) {
-    // Map arg liveness → param liveness.
+    // Map arg liveness -> param liveness.
     // If an arg is move-only and moved, the param inherits Moved.
     for (arg, param) in args.iter().zip(params.iter()) {
         let arg_liveness = source.get_value(*arg).unwrap_or(Liveness::Alive);
@@ -407,10 +407,10 @@ fn process_inst(
             let _ = target;
             state.set_value(*dst, Liveness::Alive);
         }
-        // Load: src is a Ref (not consumed as move-only — Refs are ephemeral).
+        // Load: src is a Ref (not consumed as move-only - Refs are ephemeral).
         // Define dst. Track variable liveness by name.
         InstKind::Load { dst, src, .. } => {
-            // Note: do NOT try_consume_value on src — it's a Ref type which
+            // Note: do NOT try_consume_value on src - it's a Ref type which
             // is ephemeral and not subject to move checking.
             // Variable name tracking: if src points to a Var/Param, check var liveness.
             if let Some(target) = ref_target.get(src) {
@@ -435,7 +435,7 @@ fn process_inst(
                             },
                         });
                     }
-                    // Loading move-only → var is now moved
+                    // Loading move-only -> var is now moved
                     if let Some(ty) = val_types.get(dst)
                         && is_move_only(ty) == Some(true)
                     {
@@ -447,7 +447,7 @@ fn process_inst(
         }
         // Store: dst is a Ref (ephemeral, not move-checked). Consume value. Revive variable.
         InstKind::Store { dst, value, .. } => {
-            // Note: do NOT try_consume_value on dst — it's a Ref type.
+            // Note: do NOT try_consume_value on dst - it's a Ref type.
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
             // Variable name tracking: Store revives the variable.
             if let Some(target) = ref_target.get(dst)
@@ -468,7 +468,7 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *v, val_types, state, errors);
         }
         InstKind::Clone { dst, src, .. } => {
-            // Clone reads src (not consumed — it's being cloned)
+            // Clone reads src (not consumed - it's being cloned)
             // src remains alive after clone
             state.set_value(*dst, Liveness::Alive);
             let _ = src;
@@ -481,7 +481,7 @@ fn process_inst(
         InstKind::LoadFunction { dst, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        // Calls — all args are consumed; indirect callee is also consumed
+        // Calls - all args are consumed; indirect callee is also consumed
         InstKind::FunctionCall {
             dst,
             callee,
@@ -497,7 +497,7 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
 
-        // Constructors — elements are consumed
+        // Constructors - elements are consumed
         InstKind::MakeArray { dst, elements } => {
             for e in elements {
                 try_consume_value(scope, inst_idx, span, *e, val_types, state, errors);
@@ -563,7 +563,7 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
 
-        // Pattern tests — read-only, always produce Bool
+        // Pattern tests - read-only, always produce Bool
         InstKind::TestLiteral { dst, src: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
@@ -574,7 +574,7 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
 
-        // Arithmetic — operands are always pure scalars, no move
+        // Arithmetic - operands are always pure scalars, no move
         InstKind::BinOp {
             dst,
             left: _,
@@ -589,7 +589,7 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
 
-        // Spawn — consumes args (and indirect callee), defines dst
+        // Spawn - consumes args (and indirect callee), defines dst
         InstKind::Spawn {
             dst, callee, args, ..
         } => {
@@ -601,13 +601,13 @@ fn process_inst(
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        // Eval — consumes Handle (move-only), defines dst
+        // Eval - consumes Handle (move-only), defines dst
         InstKind::Eval { dst, src, .. } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
 
-        // Control flow — handled at block level
+        // Control flow - handled at block level
         InstKind::Jump { .. } | InstKind::JumpIf { .. } => {}
     }
 }
@@ -713,7 +713,7 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let v2 = vf.next();
-        // v0 = UserDefined (move-only), used twice → ERROR
+        // v0 = UserDefined (move-only), used twice -> ERROR
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
         val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
@@ -750,7 +750,7 @@ mod tests {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
-        // v0 = UserDefined, used once → OK
+        // v0 = UserDefined, used once -> OK
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, test_user_defined());
         val_types.insert(v1, Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)));
@@ -783,7 +783,7 @@ mod tests {
         let r2 = vf.next(); // ref for second Store
         let r3 = vf.next(); // ref for second Load
         let a = vf.next(); // storage slot for variable "a"
-        // $a = move-only (v0), Load (v1) → moved, $a = new value (v2) → alive, Load (v3) → OK
+        // $a = move-only (v0), Load (v1) -> moved, $a = new value (v2) -> alive, Load (v3) -> OK
         let mut val_types = FxHashMap::default();
         let move_ty = test_user_defined();
         val_types.insert(v0, move_ty.clone());
@@ -806,7 +806,7 @@ mod tests {
                     value: v0,
                     volatile: false,
                 }),
-                // v1 = $a → moves $a
+                // v1 = $a -> moves $a
                 inst(InstKind::Ref {
                     dst: r1,
                     target: RefTarget::Var(a),
@@ -824,7 +824,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v1],
                 }),
-                // $a = v2 (new value) → revives $a
+                // $a = v2 (new value) -> revives $a
                 inst(InstKind::Ref {
                     dst: r2,
                     target: RefTarget::Var(a),
@@ -835,7 +835,7 @@ mod tests {
                     value: v2,
                     volatile: false,
                 }),
-                // v3 = $a → OK (new value)
+                // v3 = $a -> OK (new value)
                 inst(InstKind::Ref {
                     dst: r3,
                     target: RefTarget::Var(a),
@@ -876,7 +876,7 @@ mod tests {
         let r1 = vf.next(); // ref for first Load
         let r2 = vf.next(); // ref for second Load
         let a = vf.next(); // storage slot for variable "a"
-        // $a = move-only, Load → moved, Load again → ERROR
+        // $a = move-only, Load -> moved, Load again -> ERROR
         let mut val_types = FxHashMap::default();
         let move_ty = test_user_defined();
         val_types.insert(v0, move_ty.clone());
@@ -913,7 +913,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v1],
                 }),
-                // Second load — $a already moved
+                // Second load - $a already moved
                 inst(InstKind::Ref {
                     dst: r2,
                     target: RefTarget::Var(a),
@@ -942,7 +942,7 @@ mod tests {
     fn ty_param_skipped() {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
-        // v0 = Ty::Error (unresolved), used twice → no error (analysis mode)
+        // v0 = Ty::Error (unresolved), used twice -> no error (analysis mode)
         let mut val_types = FxHashMap::default();
         val_types.insert(v0, Ty::error());
 

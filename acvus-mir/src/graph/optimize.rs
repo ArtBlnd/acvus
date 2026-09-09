@@ -2,8 +2,8 @@
 //!
 //! Runs the full optimization pipeline on lowered MIR modules.
 //!
-//! Pass 1 (cross-module): SSA → Inline
-//! Pass 2 (per-module):   SpawnSplit → CodeMotion → Reorder → SSA → RegColor → Validate
+//! Pass 1 (cross-module): SSA -> Inline
+//! Pass 2 (per-module):   SpawnSplit -> CodeMotion -> Reorder -> SSA -> RegColor -> Validate
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -48,7 +48,7 @@ fn optimize_inner(
     recursive_fns: &FxHashSet<QualifiedRef>,
     untyped_scalars: bool,
 ) -> OptimizeResult {
-    // ── Pass 1: SROA → SSA (per-module) → Inline (cross-module) ─────
+    // -- Pass 1: SROA -> SSA (per-module) -> Inline (cross-module) -----
 
     let mut ssa_modules = modules;
     for module in ssa_modules.values_mut() {
@@ -60,7 +60,7 @@ fn optimize_inner(
 
     let inlined = inliner::inline(&ssa_modules, recursive_fns);
 
-    // ── Pass 2: Optimize + Validate (per-module, direct calls) ──────
+    // -- Pass 2: Optimize + Validate (per-module, direct calls) ------
 
     let mut result_modules = FxHashMap::default();
     let mut all_errors = Vec::new();
@@ -85,7 +85,7 @@ fn optimize_inner(
     }
 }
 
-/// Pass 1: SROA → SSA → DSE → DCE on a single body.
+/// Pass 1: SROA -> SSA -> DSE -> DCE on a single body.
 fn run_pass1_body(
     body: &mut crate::ir::MirBody,
     context_types: &FxHashMap<QualifiedRef, Ty>,
@@ -138,7 +138,7 @@ fn debug_validate(cfg: &CfgBody) {
 
     let mut errors: Vec<String> = Vec::new();
 
-    // ── Build def set and def locations ──
+    // -- Build def set and def locations --
     let mut defs: FxHashSet<ValueId> = FxHashSet::default();
     let mut def_loc: FxHashMap<ValueId, (usize, usize)> = FxHashMap::default();
 
@@ -164,7 +164,7 @@ fn debug_validate(cfg: &CfgBody) {
     let domtree = DomTree::build(cfg);
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
-        // ── Check instructions ──
+        // -- Check instructions --
         for (ii, inst) in block.insts.iter().enumerate() {
             // Type coverage: every def and use must have a type.
             for d in crate::analysis::inst_info::defs(&inst.kind) {
@@ -200,7 +200,7 @@ fn debug_validate(cfg: &CfgBody) {
             }
         }
 
-        // ── Check terminator uses ──
+        // -- Check terminator uses --
         let term_uses = match &block.terminator {
             crate::cfg::Terminator::Return(v) => vec![*v],
             crate::cfg::Terminator::Jump { args, .. } => args.clone(),

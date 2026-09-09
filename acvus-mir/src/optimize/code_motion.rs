@@ -12,7 +12,7 @@
 //!    **highest ancestor** where all operands are available and no token conflict.
 //!    This eliminates the need for multi-iteration fixpoint on deep merge chains.
 //! 3. `def_block` is updated after each hoist decision, so later instructions
-//!    in the same block see their dependencies' new locations — operand chains
+//!    in the same block see their dependencies' new locations - operand chains
 //!    are resolved in a single pass.
 //! 4. Repeat until no more instructions can be hoisted (fixpoint for cross-block
 //!    chains, but typically converges in 1 iteration).
@@ -35,21 +35,21 @@ use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
 
-// ── Entry point ────────────────────────────────────────────────────
+// -- Entry point ----------------------------------------------------
 
 pub fn run(cfg: &mut CfgBody) {
-    // Phase 1: Hoist — move Spawn and pure instructions UP.
+    // Phase 1: Hoist - move Spawn and pure instructions UP.
     loop {
         if !hoist_pass(cfg) {
             break;
         }
     }
 
-    // Phase 2: Sink — move Eval and blocking instructions DOWN.
+    // Phase 2: Sink - move Eval and blocking instructions DOWN.
     sink_pass(cfg);
 }
 
-// ── Single hoist pass ──────────────────────────────────────────────
+// -- Single hoist pass ----------------------------------------------
 
 /// One iteration: find hoistable instructions, move them to the highest
 /// valid dominator. Returns true if anything moved.
@@ -61,7 +61,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let mut def_block = build_def_block(cfg);
 
-    // ── Collect hoists ─────────────────────────────────────────────
+    // -- Collect hoists ---------------------------------------------
     //
     // For each instruction, find the highest dominator ancestor where
     // all operands are available and no token conflicts exist.
@@ -103,7 +103,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
         return false;
     }
 
-    // ── Apply hoists ───────────────────────────────────────────────
+    // -- Apply hoists -----------------------------------------------
 
     let mut to_move: FxHashMap<usize, Vec<Inst>> = FxHashMap::default();
     for &(src_bi, inst_i, tgt_bi) in &hoists {
@@ -126,9 +126,9 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     true
 }
 
-// ── Def-block map ──────────────────────────────────────────────────
+// -- Def-block map --------------------------------------------------
 
-/// Build ValueId → BlockIdx mapping: where each value is defined.
+/// Build ValueId -> BlockIdx mapping: where each value is defined.
 fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
     let mut def_block = FxHashMap::default();
 
@@ -151,7 +151,7 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
     def_block
 }
 
-// ── Target finding ─────────────────────────────────────────────────
+// -- Target finding -------------------------------------------------
 
 /// Walk up the dominator chain from `block_idx` to find the highest ancestor
 /// where all operands are available (before the ancestor's terminator) and
@@ -190,7 +190,7 @@ fn find_highest_target(
     best
 }
 
-// ── Hoistability (allowlist) ───────────────────────────────────────
+// -- Hoistability (allowlist) ---------------------------------------
 
 /// Can this instruction be safely hoisted to a dominator block?
 ///
@@ -233,7 +233,7 @@ fn is_hoistable(kind: &InstKind) -> bool {
     }
 }
 
-// ── Terminator helpers ─────────────────────────────────────────────
+// -- Terminator helpers ---------------------------------------------
 
 fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
     match term {
@@ -241,9 +241,9 @@ fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
     }
 }
 
-// ── Sink pass ─────────────────────────────────────────────────────
+// -- Sink pass -----------------------------------------------------
 //
-// Moves Eval (and non-volatile Load) as late as possible — just before
+// Moves Eval (and non-volatile Load) as late as possible - just before
 // their result is first needed. This maximizes the distance between
 // Spawn (hoisted up) and Eval (sunk down).
 //
@@ -269,9 +269,9 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
     }
 }
 
-// ── Sink infrastructure ─────────────────────────────────────────────
+// -- Sink infrastructure ---------------------------------------------
 
-/// Build ref_to_ctx: ValueId (Ref dst) → QualifiedRef (context).
+/// Build ref_to_ctx: ValueId (Ref dst) -> QualifiedRef (context).
 fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
     let mut map = FxHashMap::default();
     for block in &cfg.blocks {
@@ -305,7 +305,7 @@ fn context_of_store(kind: &InstKind, ref_to_ctx: &FxHashMap<ValueId, QualifiedRe
     }
 }
 
-/// Run the sink pass — move Eval, non-volatile Load, and non-volatile Store
+/// Run the sink pass - move Eval, non-volatile Load, and non-volatile Store
 /// as late as possible within their block.
 ///
 /// Processes ONE sinkable instruction per iteration, then re-scans.
@@ -456,7 +456,7 @@ fn is_call(kind: &InstKind) -> bool {
     )
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
+// -- Tests ----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn multi_level_hoist() {
-        // B0 → diamond → B3 → diamond → B6
+        // B0 -> diamond -> B3 -> diamond -> B6
         // The pure op in B6 hoists directly to B0 in one pass.
         let mut cfg = make_cfg(
             vec![
@@ -981,7 +981,7 @@ mod tests {
         );
     }
 
-    // ── Sink tests ──────────────────────────────────────────────────
+    // -- Sink tests --------------------------------------------------
 
     /// Eval is sunk past pure computation to just before its result is used.
     ///
@@ -993,9 +993,9 @@ mod tests {
         let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
 
         // v0 = Spawn fetch
-        // v1 = Eval v0              ← should sink
-        // v2 = BinOp(v3, v3)       ← independent of eval result
-        // v4 = BinOp(v1, v2)       ← uses eval result
+        // v1 = Eval v0              <- should sink
+        // v2 = BinOp(v3, v3)       <- independent of eval result
+        // v4 = BinOp(v1, v2)       <- uses eval result
         // Return v4
         let mut cfg = make_cfg(
             vec![
@@ -1157,11 +1157,11 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // v0 = Ref @x
-        // v1 = Load v0          ← should sink past v2 but not past v4 (store to @x)
-        // v2 = BinOp(v5, v5)   ← independent
+        // v1 = Load v0          <- should sink past v2 but not past v4 (store to @x)
+        // v2 = BinOp(v5, v5)   <- independent
         // v3 = Ref @x
-        // v4 = Store v3 = v5   ← writes @x — barrier for load
-        // v6 = BinOp(v1, v2)   ← uses load result
+        // v4 = Store v3 = v5   <- writes @x - barrier for load
+        // v6 = BinOp(v1, v2)   <- uses load result
         // Return v6
         let mut cfg = make_cfg(
             vec![
@@ -1236,10 +1236,10 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // v0 = Ref @x
-        // v1 = Store v0 = v5       ← should sink past v2 but not past v4 (load @x)
-        // v2 = BinOp(v5, v5)       ← independent
+        // v1 = Store v0 = v5       <- should sink past v2 but not past v4 (load @x)
+        // v2 = BinOp(v5, v5)       <- independent
         // v3 = Ref @x
-        // v4 = Load v3             ← reads @x — barrier for store
+        // v4 = Load v3             <- reads @x - barrier for store
         // v6 = BinOp(v4, v2)
         // Return v6
         let mut cfg = make_cfg(

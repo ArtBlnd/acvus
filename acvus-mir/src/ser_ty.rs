@@ -6,8 +6,8 @@
 //! serialization without an interner.
 //!
 //! Conversion:
-//! - `Ty::to_ser(interner) -> SerTy` — resolve all Astr to String.
-//! - `SerTy::to_ty(interner) -> Ty` — re-intern all String to Astr.
+//! - `Ty::to_ser(interner) -> SerTy` - resolve all Astr to String.
+//! - `SerTy::to_ty(interner) -> Ty` - re-intern all String to Astr.
 
 use std::collections::BTreeMap;
 

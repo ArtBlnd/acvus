@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
-// Config deserialization (JSON from JS → ChatSession.create)
+// Config deserialization (JSON from JS -> ChatSession.create)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -30,7 +30,7 @@ pub(crate) struct ProviderConfigJson {
     pub api_key: String,
 }
 
-/// Provider API kind — local to pomollu-engine for deserializing config.
+/// Provider API kind - local to pomollu-engine for deserializing config.
 /// Used to dispatch which NodeKind variant to create.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -210,7 +210,7 @@ pub(crate) enum ExecutionConfig {
 }
 
 // ---------------------------------------------------------------------------
-// NodeConfig → NodeSpec conversion
+// NodeConfig -> NodeSpec conversion
 // ---------------------------------------------------------------------------
 
 pub(crate) fn convert_node(

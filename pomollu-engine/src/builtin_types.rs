@@ -1,6 +1,6 @@
 //! Pomollu-specific builtin type definitions.
 //!
-//! These types are pomollu application concepts — NOT generic LSP types.
+//! These types are pomollu application concepts - NOT generic LSP types.
 //! The LSP layer (acvus-lsp) knows nothing about these.
 
 use acvus_mir::ty::Ty;
@@ -44,7 +44,7 @@ fn context_custom_entry_type(interner: &Interner) -> Ty {
     Ty::Object(fields)
 }
 
-/// Type of `@context` — the canonical definition.
+/// Type of `@context` - the canonical definition.
 ///
 /// ```text
 /// {
@@ -80,7 +80,7 @@ pub fn context_type(interner: &Interner) -> Ty {
     Ty::Object(fields)
 }
 
-/// Type of `@history` — `List<{content, content_type, role}>`.
+/// Type of `@history` - `List<{content, content_type, role}>`.
 pub fn history_entry_type(interner: &Interner) -> Ty {
     let mut fields = FxHashMap::default();
     fields.insert(interner.intern("content"), Ty::String);
@@ -89,7 +89,7 @@ pub fn history_entry_type(interner: &Interner) -> Ty {
     Ty::Array(Box::new(Ty::Object(fields)), acvus_mir::ty::LenTerm::Known(3))
 }
 
-/// Builtin context refs — automatically injected, NOT user-defined params.
+/// Builtin context refs - automatically injected, NOT user-defined params.
 ///
 /// - `turn_index`: engine internal
 /// - `raw`/`self`/`content`: node-internal variables

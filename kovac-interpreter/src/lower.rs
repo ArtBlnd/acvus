@@ -1,14 +1,14 @@
-//! MIR → kovac bytecode lowering.
+//! MIR -> kovac bytecode lowering.
 //!
 //! Linear lowerer: walks MIR instructions in order, assigns ValueIds to
 //! kovac registers based on type, emits bytecode.
 //!
 //! Bank assignment by type:
-//! - Int, Bool, Float → A bank (primary) or B bank (overflow)
-//! - String, Object, List, Tuple, Variant, etc. → M bank
+//! - Int, Bool, Float -> A bank (primary) or B bank (overflow)
+//! - String, Object, List, Tuple, Variant, etc. -> M bank
 //!
 //! Register allocation: simple linear scan with LRU eviction.
-//! Not optimal — good enough to get real programs running and measure.
+//! Not optimal - good enough to get real programs running and measure.
 
 use acvus_mir::ir::{InstKind, MirBody, ValueId};
 use acvus_mir::ty::Ty;
@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 
 use crate::encoding::*;
 
-// ── Bank classification ──────────────────────────────────────────
+// -- Bank classification ------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bank {
@@ -34,7 +34,7 @@ fn classify_ty(ty: &Ty) -> Bank {
     }
 }
 
-// ── Register allocator ───────────────────────────────────────────
+// -- Register allocator -------------------------------------------
 
 /// Tracks which kovac register a ValueId lives in.
 #[derive(Debug, Clone, Copy)]
@@ -96,28 +96,28 @@ impl BankAlloc {
     }
 }
 
-// ── Lowerer state ────────────────────────────────────────────────
+// -- Lowerer state ------------------------------------------------
 
 struct Lowerer<'a> {
     body: &'a MirBody,
-    /// ValueId → (bank, register index)
+    /// ValueId -> (bank, register index)
     reg_map: FxHashMap<ValueId, (Bank, u8)>,
     /// Next scalar register to assign (0-3 = A, 4-7 = B).
     scalar_count: usize,
     /// Next M register to assign (0-3).
     m_count: usize,
     pb: ProgramBuilder,
-    /// Label → bytecode offset.
+    /// Label -> bytecode offset.
     label_offsets: FxHashMap<u32, u32>,
     /// Pending jump patches: (bytecode offset of the u32 target, label id).
     jump_patches: Vec<(u32, u32)>,
-    /// Label → block params (pre-scanned from MIR).
+    /// Label -> block params (pre-scanned from MIR).
     block_params: FxHashMap<u32, Vec<ValueId>>,
 }
 
 impl<'a> Lowerer<'a> {
     fn new(body: &'a MirBody) -> Self {
-        // Pre-scan: collect BlockLabel → params.
+        // Pre-scan: collect BlockLabel -> params.
         let mut block_params = FxHashMap::default();
         for inst in &body.insts {
             if let InstKind::BlockLabel { label, params, .. } = &inst.kind {
@@ -140,8 +140,8 @@ impl<'a> Lowerer<'a> {
     /// Map a ValueId to a kovac register.
     ///
     /// After reg_color, ValueIds are compact (0, 1, 2, ...).
-    /// Scalar types: ids 0-3 → A bank, 4-7 → B bank.
-    /// M types: ids 0-3 → M bank (tracked separately).
+    /// Scalar types: ids 0-3 -> A bank, 4-7 -> B bank.
+    /// M types: ids 0-3 -> M bank (tracked separately).
     fn reg(&mut self, val: ValueId) -> (Bank, u8) {
         if let Some(&r) = self.reg_map.get(&val) {
             return r;
@@ -155,9 +155,9 @@ impl<'a> Lowerer<'a> {
 
     /// Assign a register based on ValueId and bank.
     ///
-    /// After reg_color, ValueIds are reused via liveness analysis —
+    /// After reg_color, ValueIds are reused via liveness analysis -
     /// the raw ValueId.0 IS the physical slot index.
-    /// Scalar: slot 0-3 → A bank, 4-7 → B bank.
+    /// Scalar: slot 0-3 -> A bank, 4-7 -> B bank.
     /// M: separate counter.
     fn assign_reg(&mut self, val: ValueId, bank: Bank) -> (Bank, u8) {
         match bank {
@@ -169,7 +169,7 @@ impl<'a> Lowerer<'a> {
                     (Bank::B, (slot - 4) as u8)
                 } else {
                     // reg_color should keep slot count low, but if not,
-                    // wrap around. This may clobber — better than panic for now.
+                    // wrap around. This may clobber - better than panic for now.
                     let wrapped = slot % 8;
                     if wrapped < 4 {
                         (Bank::A, wrapped as u8)
@@ -233,7 +233,7 @@ impl<'a> Lowerer<'a> {
     /// Lower all instructions in the body.
     fn lower(&mut self) {
         for inst in &self.body.insts {
-            // (time tracking removed — using direct ValueId→register mapping)
+            // (time tracking removed - using direct ValueId->register mapping)
             match &inst.kind {
                 InstKind::Const { dst, value } => {
                     self.lower_const(*dst, value);
@@ -271,7 +271,7 @@ impl<'a> Lowerer<'a> {
                 InstKind::Return(val) => {
                     // For now, just ensure the return value is somewhere accessible.
                     let _ = self.reg(*val);
-                    // Emit HALT — single function, no call stack yet.
+                    // Emit HALT - single function, no call stack yet.
                     self.pb.emit(encode(HALT, 0, 0, 0));
                 }
                 InstKind::FieldGet {
@@ -373,7 +373,7 @@ impl<'a> Lowerer<'a> {
                 let target = d_bank;
                 let l_reg = if l_bank != target {
                     self.emit_cross_move(l_bank, l_reg, target, d_reg);
-                    d_reg // temporary reuse — not perfect but works for simple cases
+                    d_reg // temporary reuse - not perfect but works for simple cases
                 } else {
                     l_reg
                 };
@@ -424,7 +424,7 @@ impl<'a> Lowerer<'a> {
                 (Bank::B, Bank::B) => { self.pb.emit(encode2(MOV_B, p_reg, a_reg)); }
                 (Bank::A, Bank::B) => { self.pb.emit(encode2(MOV_A2B, p_reg, a_reg)); }
                 (Bank::B, Bank::A) => { self.pb.emit(encode2(MOV_B2A, p_reg, a_reg)); }
-                _ => {} // M bank moves — todo
+                _ => {} // M bank moves - todo
             }
         }
     }
@@ -479,7 +479,7 @@ impl<'a> Lowerer<'a> {
     ) {
         let cond_reg = self.ensure_a(cond);
 
-        // JUMP_IF → then_trampoline (where then-args MOVs live)
+        // JUMP_IF -> then_trampoline (where then-args MOVs live)
         let then_tramp_patch = self.pb.offset() + 2;
         self.pb.emit_jump(encode2(JUMP_IF, 0, cond_reg), 0);
 
@@ -496,7 +496,7 @@ impl<'a> Lowerer<'a> {
         self.pb.emit_jump(encode(JUMP, 0, 0, 0), 0);
         self.jump_patches.push((then_patch, then_label.0));
 
-        // Patch JUMP_IF target → then_trampoline.
+        // Patch JUMP_IF target -> then_trampoline.
         let code = self.pb.code_mut();
         let off = then_tramp_patch as usize;
         code[off..off + 4].copy_from_slice(&(then_tramp_offset as u32).to_le_bytes());
@@ -514,7 +514,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-// ── Public API ───────────────────────────────────────────────────
+// -- Public API ---------------------------------------------------
 
 /// Result of lowering a MIR body to kovac bytecode.
 pub struct LowerResult {

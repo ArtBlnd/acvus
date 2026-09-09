@@ -1,4 +1,4 @@
-//! Definite-assignment analysis — field-level uninit check.
+//! Definite-assignment analysis - field-level uninit check.
 //!
 //! Runs on CfgBody (pre-SSA). Tracks which fields of each named storage
 //! (Var, Context, Param) are definitely initialized at each program point.
@@ -18,12 +18,12 @@ use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use acvus_ast::Span;
 use crate::ty::Ty;
 
-// ── Domain ──────────────────────────────────────────────────────────
+// -- Domain ----------------------------------------------------------
 
 /// Per-field init domain.
 ///
-/// Lattice: Init (bottom) → Uninit (top).
-/// join(Init, Uninit) = Uninit — if ANY path leaves a field uninit,
+/// Lattice: Init (bottom) -> Uninit (top).
+/// join(Init, Uninit) = Uninit - if ANY path leaves a field uninit,
 /// it is possibly uninit at the merge point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldInit {
@@ -48,7 +48,7 @@ impl SemiLattice for FieldInit {
     }
 }
 
-// ── Error ───────────────────────────────────────────────────────────
+// -- Error -----------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct UninitError {
@@ -57,12 +57,12 @@ pub struct UninitError {
     pub uninit_fields: Vec<Astr>,
 }
 
-// ── Pre-pass data ───────────────────────────────────────────────────
+// -- Pre-pass data ---------------------------------------------------
 
-/// Maps Ref dst ValueId → (target, path).
+/// Maps Ref dst ValueId -> (target, path).
 type RefMap = FxHashMap<ValueId, (RefTarget, Vec<Astr>)>;
 
-/// Maps ValueId → set of field names that the value definitely contains.
+/// Maps ValueId -> set of field names that the value definitely contains.
 type ValueFields = FxHashMap<ValueId, FxHashSet<Astr>>;
 
 fn build_prepass(cfg: &CfgBody) -> (RefMap, ValueFields) {
@@ -105,7 +105,7 @@ fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, F
 
     for (val, (target, path)) in ref_map {
         if path.is_empty() {
-            // Identity ref — extract fields from Ref<T>'s T.
+            // Identity ref - extract fields from Ref<T>'s T.
             if let Some(Ty::Ref(inner, _)) = cfg.val_types.get(val) {
                 if let Ty::Object(fields) = inner.as_ref() {
                     target_fields
@@ -115,7 +115,7 @@ fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, F
                 }
             }
         } else if let Some(field) = path.first() {
-            // Field ref — this path proves the field exists on the target.
+            // Field ref - this path proves the field exists on the target.
             target_fields
                 .entry(*target)
                 .or_default()
@@ -126,12 +126,12 @@ fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, F
     target_fields
 }
 
-// ── Analysis ────────────────────────────────────────────────────────
+// -- Analysis --------------------------------------------------------
 
 struct InitCheckAnalysis {
     ref_map: RefMap,
     value_fields: ValueFields,
-    /// val_types from CfgBody — for fallback field lookup.
+    /// val_types from CfgBody - for fallback field lookup.
     val_types: FxHashMap<ValueId, Ty>,
 }
 
@@ -149,10 +149,10 @@ impl DataflowAnalysis for InitCheckAnalysis {
                 if path.is_empty() {
                     // Identity store: determine which fields the value actually has.
                     let fields: Option<Vec<Astr>> = if let Some(known) = self.value_fields.get(value) {
-                        // MakeObject/FieldSet — known exact fields.
+                        // MakeObject/FieldSet - known exact fields.
                         Some(known.iter().copied().collect())
                     } else if let Some(ty) = self.val_types.get(value) {
-                        // Fallback: use type's fields (function return, Load, etc. — assume complete).
+                        // Fallback: use type's fields (function return, Load, etc. - assume complete).
                         extract_object_fields(ty)
                     } else {
                         None
@@ -177,7 +177,7 @@ impl DataflowAnalysis for InitCheckAnalysis {
         _args: &[ValueId],
         target_entry: &mut DataflowState<(RefTarget, Astr), FieldInit>,
     ) -> bool {
-        // Storage init state is not SSA — no param/arg mapping. Pure join.
+        // Storage init state is not SSA - no param/arg mapping. Pure join.
         target_entry.join_from(source_exit)
     }
 
@@ -192,11 +192,11 @@ impl DataflowAnalysis for InitCheckAnalysis {
     }
 }
 
-// ── Public API ──────────────────────────────────────────────────────
+// -- Public API ------------------------------------------------------
 
 /// Run field-level definite-assignment check on a CfgBody.
 ///
-/// `external_contexts`: contexts provided by the host — these start as Init.
+/// `external_contexts`: contexts provided by the host - these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
 pub fn check_init(
     cfg: &CfgBody,
@@ -312,11 +312,11 @@ fn check_call_args(
         }
 
         // Trace arg back to its source storage.
-        // Pattern: Load { dst: arg, src: ref_val } where ref_val → (target, path)
+        // Pattern: Load { dst: arg, src: ref_val } where ref_val -> (target, path)
         let source_target = find_arg_source(arg, ref_map, cfg);
         let target = match source_target {
             Some(t) => t,
-            None => continue, // Can't trace — skip check (conservative).
+            None => continue, // Can't trace - skip check (conservative).
         };
 
         let mut uninit_fields = Vec::new();
@@ -370,7 +370,7 @@ fn find_arg_source(
     None
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// -- Tests -----------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

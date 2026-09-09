@@ -152,7 +152,7 @@ mod tests {
         assert!(matches!(insts[1].kind, InstKind::Spawn { .. }));
         assert!(matches!(insts[2].kind, InstKind::Eval { .. }));
 
-        // Verify Spawn dst → Eval src chain.
+        // Verify Spawn dst -> Eval src chain.
         if let (InstKind::Spawn { dst: handle, .. }, InstKind::Eval { src, dst, .. }) =
             (&insts[1].kind, &insts[2].kind)
         {
@@ -278,7 +278,7 @@ mod tests {
 
         run(&mut cfg);
 
-        // 2 calls → 2 Spawn + 2 Eval + BinOp = 5 (Return is terminator)
+        // 2 calls -> 2 Spawn + 2 Eval + BinOp = 5 (Return is terminator)
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 5);
 

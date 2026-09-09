@@ -8,7 +8,7 @@ use acvus_mir::ir::*;
 use acvus_utils::{Interner, LocalFactory};
 use rustc_hash::FxHashMap;
 
-// ── Helpers ─────────────────────────────────────────────────────────
+// -- Helpers ---------------------------------------------------------
 
 /// Allocate N sequential ValueIds from a factory.
 fn alloc_n(factory: &mut LocalFactory<ValueId>, n: usize) -> Vec<ValueId> {
@@ -34,11 +34,11 @@ fn make_context(
     InterpreterContext::new(interner, functions, executor)
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// -- Tests -----------------------------------------------------------
 
 /// Spawn a callee that returns arg + 1, eval it.
-/// Entry:  Spawn(callee, [arg]) → Eval(handle) → Return(result)
-/// Callee: param + 1 → Return
+/// Entry:  Spawn(callee, [arg]) -> Eval(handle) -> Return(result)
+/// Callee: param + 1 -> Return
 #[tokio::test]
 async fn spawn_eval_basic() {
     let interner = Interner::new();
@@ -46,7 +46,7 @@ async fn spawn_eval_basic() {
     let entry_id = QualifiedRef::root(interner.intern("entry"));
     let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-    // ── Callee module: receives one param, returns param + 1 ──
+    // -- Callee module: receives one param, returns param + 1 --
     let callee_module = {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=param, v1=const(1), v2=result
@@ -77,7 +77,7 @@ async fn spawn_eval_basic() {
         }
     };
 
-    // ── Entry module: spawn callee with arg=41, eval, return ──
+    // -- Entry module: spawn callee with arg=41, eval, return --
     let entry_module = {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=const(41), v1=handle, v2=result
@@ -124,7 +124,7 @@ async fn spawn_eval_basic() {
     assert_eq!(result.value, Value::Int(42));
 }
 
-/// Spawn with multiple args — callee receives two params and returns their sum.
+/// Spawn with multiple args - callee receives two params and returns their sum.
 #[tokio::test]
 async fn spawn_eval_multi_args() {
     let interner = Interner::new();
@@ -132,7 +132,7 @@ async fn spawn_eval_multi_args() {
     let entry_id = QualifiedRef::root(interner.intern("entry"));
     let callee_id = QualifiedRef::root(interner.intern("callee"));
 
-    // ── Callee: param0 + param1 ──
+    // -- Callee: param0 + param1 --
     let callee_module = {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 3); // v0=param0, v1=param1, v2=result
@@ -159,7 +159,7 @@ async fn spawn_eval_multi_args() {
         }
     };
 
-    // ── Entry: spawn(callee, [10, 32]) → eval → return ──
+    // -- Entry: spawn(callee, [10, 32]) -> eval -> return --
     let entry_module = {
         let mut f = LocalFactory::<ValueId>::new();
         let vids = alloc_n(&mut f, 4); // v0=10, v1=32, v2=handle, v3=result

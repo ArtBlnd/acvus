@@ -10,7 +10,7 @@
 //! What stays as a call:
 //! - `Callee::Indirect` (closures, function-valued variables)
 //! - `Callee::Direct` to extern/builtin functions (no body to inline)
-//! - Recursive calls (detected via SCC — self-referencing or mutual recursion)
+//! - Recursive calls (detected via SCC - self-referencing or mutual recursion)
 
 use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -87,7 +87,7 @@ fn inline_body(
         let mut new_insts = Vec::new();
         let mut val_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
-        // Build def_map for devirtualization: ValueId → instruction index.
+        // Build def_map for devirtualization: ValueId -> instruction index.
         let def_map: FxHashMap<ValueId, usize> = current
             .insts
             .iter()
@@ -113,7 +113,7 @@ fn inline_body(
                     Some((*dst, callee_body, args.clone(), Vec::new()))
                 }
 
-                // Indirect call — try devirtualization.
+                // Indirect call - try devirtualization.
                 InstKind::FunctionCall {
                     dst,
                     callee: Callee::Indirect(callee_val),
@@ -137,7 +137,7 @@ fn inline_body(
                     .map(|a| remap_one(*a, &val_remap))
                     .collect();
 
-                // Build ValueId remap: callee's ids → fresh ids in caller.
+                // Build ValueId remap: callee's ids -> fresh ids in caller.
                 let mut callee_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
                 for i in 0..callee_body.val_factory.len() {
                     let old_id = ValueId::from_raw(i);
@@ -145,7 +145,7 @@ fn inline_body(
                     callee_remap.insert(old_id, new_id);
                 }
 
-                // Build Label remap: callee's labels → fresh labels in caller.
+                // Build Label remap: callee's labels -> fresh labels in caller.
                 let label_offset = current.label_count;
                 current.label_count += callee_body.label_count;
 
@@ -164,7 +164,7 @@ fn inline_body(
                 }
 
                 // Copy callee's val_types (remapped).
-                // Skip types for substituted regs — caller already has types for those.
+                // Skip types for substituted regs - caller already has types for those.
                 for (&old_val, ty) in &callee_body.val_types {
                     if substituted_regs.contains(&old_val) {
                         continue;
@@ -660,7 +660,7 @@ mod tests {
         let caller_id = QualifiedRef::root(i.intern("caller"));
         let mut modules = FxHashMap::default();
         modules.insert(caller_id, make_module(caller_body));
-        // extern_id is NOT in modules → cannot be inlined.
+        // extern_id is NOT in modules -> cannot be inlined.
 
         let result = inline(&modules, &FxHashSet::default());
         let inlined = &result.modules[&caller_id];

@@ -18,10 +18,10 @@ pub struct Inst {
     pub kind: InstKind,
 }
 
-/// Type coercion kind — 1:1 with the subtyping rules in `try_coerce`.
+/// Type coercion kind - 1:1 with the subtyping rules in `try_coerce`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CastKind {
-    /// ExternCast — coercion performed by a registered pure ExternFn.
+    /// ExternCast - coercion performed by a registered pure ExternFn.
     /// `callee_ty` is the full Fn type of the cast function at this call site.
     Extern { fn_ref: QualifiedRef, callee_ty: Ty },
 }
@@ -29,7 +29,7 @@ pub enum CastKind {
 /// The kind of named storage a Ref points to.
 ///
 /// Var and Param are identified by a **storage ValueId** (like LLVM's alloca),
-/// not by name. This ensures uniqueness after inlining — different functions'
+/// not by name. This ensures uniqueness after inlining - different functions'
 /// local variables have different ValueIds even if they share the same name.
 /// Names are stored in DebugInfo for human readability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,8 +59,8 @@ pub enum InstKind {
         value: Literal,
     },
 
-    // ── Projection (memory world) ────────────────────────────────
-    /// Create a projection to named storage. No-op at runtime — produces a path.
+    // -- Projection (memory world) --------------------------------
+    /// Create a projection to named storage. No-op at runtime - produces a path.
     /// `path: vec![]` = identity (root of the storage).
     /// `path: vec![f]` = 1-depth field projection.
     /// `path: vec![a, b]` = multi-depth field projection (a.b).
@@ -84,7 +84,7 @@ pub enum InstKind {
         volatile: bool,
     },
 
-    // ── Scalar field access ──────────────────────────────────────
+    // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
     FieldGet {
         dst: ValueId,
@@ -129,7 +129,7 @@ pub enum InstKind {
         args: Vec<ValueId>,
     },
     /// Spawn a deferred computation. Creates a Handle<T> without executing.
-    /// Pure instruction — no side effects. The actual execution happens at Eval.
+    /// Pure instruction - no side effects. The actual execution happens at Eval.
     /// `dst` receives a Handle whose type carries the callee's return type.
     Spawn {
         dst: ValueId,
@@ -235,7 +235,7 @@ pub enum InstKind {
         else_args: Vec<ValueId>,
     },
     Return(ValueId),
-    /// Undefined value — valid to move/copy, UB to read as a concrete value.
+    /// Undefined value - valid to move/copy, UB to read as a concrete value.
     /// Used as initial value for SSA variables that are defined inside loops
     /// (iteration bindings, write-only contexts).
     Undef {
@@ -247,7 +247,7 @@ pub enum InstKind {
     ///
     /// Emitted for explicit `clone(x)` calls. The compiler statically verifies
     /// that `src`'s type is cloneable (Copy or has a registered clone function).
-    /// MoveOnly types → compile error, never reaches this instruction.
+    /// MoveOnly types -> compile error, never reaches this instruction.
     ///
     /// At runtime, the interpreter calls `TryClone::try_clone` on the value.
     /// For Copy types this is a bitwise copy; for UserDefined types it invokes
@@ -260,7 +260,7 @@ pub enum InstKind {
     /// Drop a value, releasing its resources.
     ///
     /// Inserted by the compiler at the end of a value's live range (last use
-    /// or scope exit). No `dst` — Drop only consumes, never produces.
+    /// or scope exit). No `dst` - Drop only consumes, never produces.
     ///
     /// At runtime, the interpreter calls the Owned vtable's drop function.
     /// Copy types (SBO) have a no-op drop. Boxed types invoke their destructor.

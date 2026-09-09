@@ -1,6 +1,6 @@
 //! Test helpers: end-to-end compilation of Namespace specs.
 //!
-//! Not a public API — will be replaced when the real API is designed.
+//! Not a public API - will be replaced when the real API is designed.
 
 pub mod compile {
     use acvus_mir::graph::infer::InferResult;
@@ -20,7 +20,7 @@ pub mod compile {
         pub modules: FxHashMap<QualifiedRef, MirModule>,
         /// Spec-level field errors (parse errors from inline content).
         pub field_errors: Vec<FieldError>,
-        /// Span mapping for type error → spec field resolution.
+        /// Span mapping for type error -> spec field resolution.
         pub span_map: SpanMap,
         /// Infer result (for inspecting Complete/Incomplete outcomes).
         pub infer_result: InferResult,
@@ -83,13 +83,13 @@ pub mod compile {
         }
     }
 
-    /// Compile a Namespace spec end-to-end: lower → extract → infer → lower to MIR.
+    /// Compile a Namespace spec end-to-end: lower -> extract -> infer -> lower to MIR.
     pub fn compile_namespace(
         interner: &Interner,
         ns: &Namespace,
         extern_fns: &[Function],
     ) -> CompileResult {
-        // Phase 0: Spec → CompilationGraph
+        // Phase 0: Spec -> CompilationGraph
         let lowered = lower::lower_namespace(interner, ns, extern_fns);
 
         // Phase 1: Extract
