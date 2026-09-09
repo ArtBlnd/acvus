@@ -2,7 +2,9 @@ use std::fmt;
 
 use acvus_ast::{BinOp, UnaryOp};
 
-// ── ValueKind — lightweight discriminant for error reporting ─────────
+use crate::value::ExternTypeName;
+
+// -- ValueKind - lightweight discriminant for error reporting ---------
 
 /// What kind of runtime value was encountered.
 ///
@@ -47,7 +49,7 @@ impl fmt::Display for ValueKind {
     }
 }
 
-// ── CollectionOp — which collection operation failed ────────────────
+// -- CollectionOp - which collection operation failed ----------------
 
 /// Which collection operation triggered an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,11 +71,11 @@ impl fmt::Display for CollectionOp {
     }
 }
 
-// ── RuntimeError ────────────────────────────────────────────────────
+// -- RuntimeError ----------------------------------------------------
 
 /// Runtime error during template/script execution.
 ///
-/// NOT recoverable by retry — indicates a bug or invalid data.
+/// NOT recoverable by retry - indicates a bug or invalid data.
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
@@ -125,11 +127,18 @@ pub enum RuntimeErrorKind {
     ToolCallLimitExceeded { limit: usize },
     /// Assert expression evaluated to false.
     AssertFailed,
+    /// An extension value of another type reached a handler.
+    UnexpectedExtern {
+        expected: ExternTypeName,
+        got: ExternTypeName,
+    },
+    /// A move-only extension value was still shared when a handler took it.
+    SharedMoveOnly { type_name: ExternTypeName },
     /// Internal interpreter error (compiler bug or invalid state).
     Internal { message: std::string::String },
 }
 
-// ── Constructors ────────────────────────────────────────────────────
+// -- Constructors ----------------------------------------------------
 
 impl RuntimeError {
     pub fn bin_op_mismatch(op: BinOp, left: ValueKind, right: ValueKind) -> Self {
@@ -222,6 +231,18 @@ impl RuntimeError {
         }
     }
 
+    pub fn unexpected_extern(expected: ExternTypeName, got: ExternTypeName) -> Self {
+        Self {
+            kind: RuntimeErrorKind::UnexpectedExtern { expected, got },
+        }
+    }
+
+    pub fn shared_move_only(type_name: ExternTypeName) -> Self {
+        Self {
+            kind: RuntimeErrorKind::SharedMoveOnly { type_name },
+        }
+    }
+
     pub fn internal(message: impl Into<std::string::String>) -> Self {
         Self {
             kind: RuntimeErrorKind::Internal {
@@ -231,7 +252,7 @@ impl RuntimeError {
     }
 }
 
-// ── Display ─────────────────────────────────────────────────────────
+// -- Display ---------------------------------------------------------
 
 fn fmt_expected(expected: &[ValueKind], f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match expected {
@@ -290,6 +311,12 @@ impl fmt::Display for RuntimeError {
                 write!(f, "tool call limit exceeded ({limit} rounds)")
             }
             RuntimeErrorKind::AssertFailed => write!(f, "assert failed"),
+            RuntimeErrorKind::UnexpectedExtern { expected, got } => {
+                write!(f, "expected extension type {expected}, got {got}")
+            }
+            RuntimeErrorKind::SharedMoveOnly { type_name } => {
+                write!(f, "move-only extension value of type {type_name} is still shared")
+            }
             RuntimeErrorKind::Internal { message } => write!(f, "internal: {message}"),
         }
     }

@@ -158,9 +158,9 @@ fn main() {
     let fn_qref = QualifiedRef::root(interner.intern("main"));
     let mut functions = Vec::new();
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(&interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(&interner);
+        let registered = registry.register(&interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let mut pb = PolyBuilder::new();
@@ -180,7 +180,7 @@ fn main() {
         contexts: Freeze::new(contexts),
     };
 
-    // Run pipeline: extract → infer → lower.
+    // Run pipeline: extract -> infer -> lower.
     let ext = extract::extract(&interner, &graph);
     let inf = infer::infer(
         &interner,

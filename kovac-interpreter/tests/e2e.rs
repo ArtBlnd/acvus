@@ -1,4 +1,4 @@
-//! End-to-end: Script source → MIR → optimize → kovac bytecode → execute → assert.
+//! End-to-end: Script source -> MIR -> optimize -> kovac bytecode -> execute -> assert.
 
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower, optimize};
@@ -28,9 +28,9 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     }];
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
 
@@ -65,13 +65,13 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
         }
     }
 
-    // Run optimization pipeline (SROA → SSA → Inline → RegColor → Validate).
+    // Run optimization pipeline (SROA -> SSA -> Inline -> RegColor -> Validate).
     let context_types = FxHashMap::default();
     let recursive_fns = FxHashSet::default();
 
     let opt = optimize::optimize_untyped(result.modules, &context_types, &recursive_fns);
     // In untyped mode, validate may report type mismatches from shared
-    // scalar slots — expected and safe for kovac (all scalars are u64).
+    // scalar slots - expected and safe for kovac (all scalars are u64).
     // Skip validate errors for now.
 
     opt.modules
@@ -190,7 +190,7 @@ fn if_else_false_branch() {
 #[ignore = "pending identity integration"]
 #[test]
 fn if_else_chain() {
-    // Grade calculation: score → grade
+    // Grade calculation: score -> grade
     let a = run_script(
         "let score = 75;
          if score > 90 { 4 }
@@ -198,7 +198,7 @@ fn if_else_chain() {
          else if score > 70 { 2 }
          else { 1 }"
     );
-    assert!(a.contains(&2), "score 75 → grade 2, got {:?}", a);
+    assert!(a.contains(&2), "score 75 -> grade 2, got {:?}", a);
 }
 
 #[ignore = "pending identity integration"]
@@ -211,7 +211,7 @@ fn if_else_chain_top() {
          else if score > 70 { 2 }
          else { 1 }"
     );
-    assert!(a.contains(&4), "score 95 → grade 4, got {:?}", a);
+    assert!(a.contains(&4), "score 95 -> grade 4, got {:?}", a);
 }
 
 #[ignore = "pending identity integration"]
@@ -224,7 +224,7 @@ fn if_else_chain_bottom() {
          else if score > 70 { 2 }
          else { 1 }"
     );
-    assert!(a.contains(&1), "score 50 → grade 1, got {:?}", a);
+    assert!(a.contains(&1), "score 50 -> grade 1, got {:?}", a);
 }
 
 #[ignore = "pending identity integration"]
@@ -287,7 +287,7 @@ fn while_factorial() {
 }
 
 #[test]
-#[ignore] // TODO: register pressure too high — needs smarter allocation
+#[ignore] // TODO: register pressure too high - needs smarter allocation
 fn while_fibonacci() {
     // fib(10) = 55
     let a = run_script(
@@ -312,7 +312,7 @@ fn while_fibonacci() {
 #[ignore = "pending identity integration"]
 #[test]
 fn collatz_steps() {
-    // Count Collatz steps from 6 to 1: 6→3→10→5→16→8→4→2→1 = 8 steps
+    // Count Collatz steps from 6 to 1: 6->3->10->5->16->8->4->2->1 = 8 steps
     let a = run_script(
         "let n = 6;
          let steps = 0;

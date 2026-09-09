@@ -1,14 +1,22 @@
-//! Lazy iterator pipeline.
+//! The `Iterator` extension type: a lazy, move-only pipeline.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 
-use acvus_interpreter::{FnValue, ExternValue, RuntimeError, Value};
-use acvus_mir::graph::QualifiedRef;
-use acvus_utils::Interner;
+use acvus_extern::{EffectVar, ExternType, FnValue, RuntimeError, TyVar, Value};
 use futures::future::BoxFuture;
 use sync_wrapper::SyncWrapper;
 
-// ── IterOp ───────────────────────────────────────────────────────────
+/// `Iterator<T, E>`: elements of type T, pulled with effect E.
+#[derive(ExternType)]
+#[extern_type(name = "Iterator", move_only)]
+pub struct Iter<T: TyVar, E: EffectVar>(pub IterHandle, PhantomData<(T, E)>);
+
+impl<T: TyVar, E: EffectVar> Iter<T, E> {
+    pub fn new(handle: IterHandle) -> Self {
+        Self(handle, PhantomData)
+    }
+}
 
 pub enum IterOp {
     Map(FnValue),
@@ -18,8 +26,6 @@ pub enum IterOp {
     Flatten,
     FlatMap(FnValue),
 }
-
-// ── IterSource ───────────────────────────────────────────────────────
 
 pub enum IterSource {
     Leaf(LeafSource),
@@ -53,8 +59,8 @@ impl LeafSource {
     }
 }
 
-// ── IterHandle ───────────────────────────────────────────────────────
-
+/// Items produced by one Flatten/FlatMap expansion, still to be fed to the
+/// ops after it.
 struct ExpansionFrame {
     next_op: usize,
     items: VecDeque<Value>,
@@ -155,28 +161,6 @@ impl std::fmt::Debug for IterHandle {
         )
     }
 }
-
-// ── Value bridge ─────────────────────────────────────────────────────
-
-pub fn iterator_qref(interner: &Interner) -> QualifiedRef {
-    QualifiedRef::root(interner.intern("Iterator"))
-}
-
-pub fn iter_value(interner: &Interner, handle: IterHandle) -> Value {
-    Value::extern_value(ExternValue::new(iterator_qref(interner), handle))
-}
-
-pub fn into_iter_handle(value: Value) -> IterHandle {
-    match value {
-        Value::Extern(o) => match o.into_owned::<IterHandle>() {
-            Ok(handle) => handle,
-            Err(o) => panic!("expected a uniquely owned Iterator, got {o:?}"),
-        },
-        other => panic!("expected Iterator, got {other:?}"),
-    }
-}
-
-// ── Pulling ──────────────────────────────────────────────────────────
 
 pub fn exec_next(iter: &mut IterHandle) -> BoxFuture<'_, Result<Option<Value>, RuntimeError>> {
     Box::pin(async move {

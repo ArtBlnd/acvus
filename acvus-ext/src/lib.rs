@@ -11,26 +11,22 @@ mod string;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
 pub use encoding::encoding_registry;
-pub use list::{List, list_poly_ty, list_qref, list_registry, list_ty, list_value, sequence_items};
+pub use iter_pipeline::{Iter, IterHandle};
+pub use iterator::iterator_registry;
+pub use list::{List, list_registry, list_ty, list_value, sequence_items};
 pub use option::option_registry;
 pub use regex::regex_registry;
 pub use string::string_registry;
 
-use acvus_interpreter::ExternRegistry;
-use acvus_mir::ty::TypeRegistry;
-use acvus_utils::Interner;
+use acvus_extern::ExternRegistry;
 
-/// Register all standard library ExternFn registries.
-/// Handles UserDefined type registration internally.
-pub fn std_registries(
-    interner: &Interner,
-    type_registry: &mut TypeRegistry,
-) -> Vec<ExternRegistry> {
+/// The standard registries. Each registers its own types when registered.
+pub fn std_registries() -> Vec<ExternRegistry> {
     vec![
-        string::string_registry(),
-        conversion::conversion_registry(),
-        list::list_registry(interner, type_registry),
-        option::option_registry(),
-        iterator::iterator_registry(interner, type_registry),
+        string_registry(),
+        conversion_registry(),
+        list_registry(),
+        option_registry(),
+        iterator_registry(),
     ]
 }

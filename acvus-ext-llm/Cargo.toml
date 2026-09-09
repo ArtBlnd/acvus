@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+acvus-extern = { path = "../acvus-extern" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-ext = { path = "../acvus-ext" }

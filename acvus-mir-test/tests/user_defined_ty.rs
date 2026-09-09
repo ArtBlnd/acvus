@@ -12,13 +12,13 @@ use acvus_utils::Interner;
 
 use Polarity::*;
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------
 
 /// Create an Interner and TypeRegistry with Iterator registered.
 fn setup() -> (Interner, TypeRegistry) {
     let interner = Interner::new();
     let mut type_registry = TypeRegistry::new();
-    let _std_regs = acvus_ext::std_registries(&interner, &mut type_registry);
+    let _std_regs = acvus_ext::std_registries();
     (interner, type_registry)
 }
 
@@ -84,7 +84,7 @@ fn iterator_type_param_resolves() {
 }
 
 // ================================================================
-// Materiality — UserDefined types are Ephemeral
+// Materiality - UserDefined types are Ephemeral
 // ================================================================
 
 #[ignore = "pending identity integration"]
@@ -113,7 +113,7 @@ fn list_of_iterator_not_materializable() {
 }
 
 // ================================================================
-// is_pureable — UserDefined types are not pureable
+// is_pureable - UserDefined types are not pureable
 // ================================================================
 
 #[ignore = "pending identity integration"]
@@ -124,7 +124,7 @@ fn iterator_not_pureable() {
 }
 
 // ================================================================
-// Move-only semantics — UserDefined is always move-only
+// Move-only semantics - UserDefined is always move-only
 // ================================================================
 
 #[ignore = "pending identity integration"]
@@ -144,7 +144,7 @@ fn iterator_is_move_only() {
 #[ignore = "pending identity integration"]
 #[test]
 fn instantiate_pair_shares_params() {
-    // CastRule: UserDefined(A, [T]) → List<T>
+    // CastRule: UserDefined(A, [T]) -> List<T>
     // instantiate_pair must map T in `from` and T in `to` to the same fresh Param.
     let (i, mut reg) = setup();
     let id = QualifiedRef::root(i.intern("TestType"));
@@ -165,7 +165,7 @@ fn instantiate_pair_shares_params() {
     let mut s = Solver::new();
     let (inst_from, inst_to) = s.instantiate_poly_pair(&from, &to);
 
-    // Unify inst_from with concrete → T resolves
+    // Unify inst_from with concrete -> T resolves
     let concrete_from = InferTy::UserDefined {
         id,
         type_args: vec![it(&Ty::Int)],
@@ -185,28 +185,28 @@ fn instantiate_pair_shares_params() {
 #[ignore = "pending identity integration"]
 #[test]
 fn coerce_list_to_iterator_completeness() {
-    // List<Int> ≤ Iterator<Int> via CastRule
+    // List<Int> <= Iterator<Int> via CastRule
     let (i, reg) = setup();
     let mut s = Solver::new();
     let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
     let iter = iter_ity(&i, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Covariant, &reg).is_ok(),
-        "List → Iterator coercion should succeed"
+        "List -> Iterator coercion should succeed"
     );
 }
 
 #[ignore = "pending identity integration"]
 #[test]
 fn coerce_iterator_to_list_soundness_rejected() {
-    // Iterator → List is NOT valid (can't materialize lazy into eager implicitly)
+    // Iterator -> List is NOT valid (can't materialize lazy into eager implicitly)
     let (i, reg) = setup();
     let mut s = Solver::new();
     let iter = iter_ity(&i, it(&Ty::Int));
     let list = it(&Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)));
     assert!(
         s.unify_ty(&iter, &list, Covariant, &reg).is_err(),
-        "Iterator → List coercion must be rejected"
+        "Iterator -> List coercion must be rejected"
     );
 }
 
@@ -220,7 +220,7 @@ fn coerce_invariant_rejects_list_to_iterator() {
     let iter = iter_ity(&i, it(&Ty::Int));
     assert!(
         s.unify_ty(&list, &iter, Invariant, &reg).is_err(),
-        "Invariant should reject List → Iterator"
+        "Invariant should reject List -> Iterator"
     );
 }
 

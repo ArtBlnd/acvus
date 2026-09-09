@@ -1,19 +1,19 @@
-//! OpenAI provider — ExternFn handler for chat completions.
+//! OpenAI provider - ExternFn handler for chat completions.
 
 pub mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
-use acvus_mir::ty::{ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
-use acvus_utils::{Astr, Interner};
-use rustc_hash::FxHashMap;
+use acvus_ext::List;
+use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
 
-use crate::extract::{obj_get_decimal, obj_get_str, obj_get_u32, values_to_messages};
+use crate::extract::input_messages;
 use crate::http::{Fetch, HttpRequest, RequestError};
-use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, Usage};
+use crate::message::{
+    Content, ContentItem, InputMessage, Message, ModelResponse, OutputMessage, ToolCall, Usage,
+};
 
-// ── Message conversion ──────────────────────────────────────────────
+// -- Message conversion ----------------------------------------------
 
 fn convert_message(m: &Message) -> schema::RequestMessage {
     match m {
@@ -53,7 +53,7 @@ fn convert_message(m: &Message) -> schema::RequestMessage {
     }
 }
 
-// ── Response parsing ────────────────────────────────────────────────
+// -- Response parsing ------------------------------------------------
 
 fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
     let resp: schema::Response =
@@ -116,217 +116,102 @@ fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), Req
     ))
 }
 
-// ── Value extraction helpers ────────────────────────────────────────
+// -- Registry --------------------------------------------------------
 
-fn usage_to_value(usage: &Usage, input_tokens_key: Astr, output_tokens_key: Astr) -> Value {
-    let input = match usage.input_tokens {
-        Some(n) => Value::Int(n as i64),
-        None => Value::Unit,
-    };
-    let output = match usage.output_tokens {
-        Some(n) => Value::Int(n as i64),
-        None => Value::Unit,
-    };
-    Value::object(FxHashMap::from_iter([
-        (input_tokens_key, input),
-        (output_tokens_key, output),
-    ]))
+#[derive(Debug, Clone, TyArg)]
+pub struct OpenAiConfig {
+    pub endpoint: String,
+    pub api_key: String,
+    pub model: String,
 }
 
-/// Convert a ModelResponse + Usage into a Value::Object.
-fn response_to_value(resp: &ModelResponse, usage: &Usage, interner: &Interner) -> Value {
-    let role_key = interner.intern("role");
-    let content_key = interner.intern("content");
-    let content_type_key = interner.intern("content_type");
-    let tool_calls_key = interner.intern("tool_calls");
-    let usage_key = interner.intern("usage");
-    let input_tokens_key = interner.intern("input_tokens");
-    let output_tokens_key = interner.intern("output_tokens");
+#[derive(Debug, Clone, TyArg)]
+pub struct ToolCallValue {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
 
+#[derive(Debug, Clone, TyArg)]
+pub struct UsageValue {
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+}
+
+/// What `openai_chat` returns: content messages, or tool calls, with usage.
+#[derive(Debug, Clone, TyArg)]
+pub struct ChatResponse {
+    pub content: List<OutputMessage>,
+    pub tool_calls: List<ToolCallValue>,
+    pub usage: UsageValue,
+}
+
+fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
+    let usage = UsageValue {
+        input_tokens: usage.input_tokens.map(i64::from),
+        output_tokens: usage.output_tokens.map(i64::from),
+    };
     match resp {
-        ModelResponse::Content(parts) => {
-            let items: Vec<Value> = parts
-                .iter()
-                .map(|item| {
-                    let text = match &item.content {
-                        Content::Text(t) => t.clone(),
-                        Content::Blob { data, .. } => data.clone(),
-                    };
-                    Value::object(FxHashMap::from_iter([
-                        (role_key, Value::string(item.role.clone())),
-                        (content_key, Value::string(text)),
-                        (content_type_key, Value::string("text")),
-                    ]))
-                })
-                .collect();
-
-            let usage_obj = usage_to_value(usage, input_tokens_key, output_tokens_key);
-
-            Value::object(FxHashMap::from_iter([
-                (content_key, acvus_ext::list_value(&interner, items)),
-                (tool_calls_key, acvus_ext::list_value(&interner, vec![])),
-                (usage_key, usage_obj),
-            ]))
-        }
-        ModelResponse::ToolCalls(calls) => {
-            let name_key = interner.intern("name");
-            let id_key = interner.intern("id");
-            let arguments_key = interner.intern("arguments");
-
-            let tc_values: Vec<Value> = calls
-                .iter()
-                .map(|tc| {
-                    Value::object(FxHashMap::from_iter([
-                        (id_key, Value::string(tc.id.clone())),
-                        (name_key, Value::string(tc.name.clone())),
-                        (arguments_key, Value::string(tc.arguments.to_string())),
-                    ]))
-                })
-                .collect();
-
-            let usage_obj = usage_to_value(usage, input_tokens_key, output_tokens_key);
-
-            Value::object(FxHashMap::from_iter([
-                (content_key, acvus_ext::list_value(&interner, vec![])),
-                (tool_calls_key, acvus_ext::list_value(&interner, tc_values)),
-                (usage_key, usage_obj),
-            ]))
-        }
+        ModelResponse::Content(parts) => ChatResponse {
+            content: List(parts.iter().map(OutputMessage::text).collect()),
+            tool_calls: List(vec![]),
+            usage,
+        },
+        ModelResponse::ToolCalls(calls) => ChatResponse {
+            content: List(vec![]),
+            tool_calls: List(
+                calls
+                    .into_iter()
+                    .map(|tc| ToolCallValue {
+                        id: tc.id,
+                        name: tc.name,
+                        arguments: tc.arguments.to_string(),
+                    })
+                    .collect(),
+            ),
+            usage,
+        },
     }
 }
 
-// ── Registry ────────────────────────────────────────────────────────
-
 /// Create an ExternRegistry for the OpenAI chat completion handler.
-///
-/// The registered function `openai_chat` takes `(messages: Value, config: Value)`
-/// and returns a Value (Object with content, tool_calls, usage fields).
 pub fn openai_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
     ExternRegistry::new(move |interner| {
-        let endpoint_key = interner.intern("endpoint");
-        let api_key_key = interner.intern("api_key");
-        let model_key = interner.intern("model");
-        let temperature_key = interner.intern("temperature");
-        let top_p_key = interner.intern("top_p");
-        let max_tokens_key = interner.intern("max_tokens");
+        let handler = move |_: Interner, messages: List<InputMessage>, config: OpenAiConfig| {
+            let fetch = Arc::clone(&fetch);
+            async move {
+                let messages = input_messages(messages.0);
+                let request_body = schema::Request {
+                    model: config.model,
+                    messages: messages.iter().map(convert_message).collect(),
+                    tools: None,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: None,
+                    reasoning_effort: None,
+                };
 
-        let fetch = Arc::clone(&fetch);
+                let http_request = HttpRequest {
+                    url: config.endpoint,
+                    headers: vec![
+                        ("Authorization".into(), format!("Bearer {}", config.api_key)),
+                        ("Content-Type".into(), "application/json".into()),
+                    ],
+                    body: serde_json::to_value(&request_body).map_err(|e| {
+                        RuntimeError::fetch(format!("openai_chat: serialization failed: {e}"))
+                    })?,
+                };
 
-        let input_msg_ty = Ty::Object(
-            [
-                (interner.intern("role"), Ty::String),
-                (interner.intern("content"), Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let config_ty = Ty::Object(
-            [
-                (interner.intern("endpoint"), Ty::String),
-                (interner.intern("api_key"), Ty::String),
-                (interner.intern("model"), Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let msg_elem_ty = Ty::Object(
-            [
-                (interner.intern("role"), Ty::String),
-                (interner.intern("content"), Ty::String),
-                (interner.intern("content_type"), Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let params = vec![acvus_ext::list_ty(interner, input_msg_ty), config_ty];
-        let ret = acvus_ext::list_ty(interner, msg_elem_ty);
-        let named: Vec<ParamTerm<Poly>> = params
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-            .collect();
-        let ty = TyTerm::Fn {
-            params: named,
-            ret: Box::new(lift_to_poly(&ret)),
-            captures: vec![],
-            effect: acvus_mir::ty::Effect::Opaque.into(),
+                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
+                let (response, usage) =
+                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                Ok(chat_response(response, usage))
+            }
         };
-
-        vec![
-            ExternFnBuilder::new("openai_chat", ty).handler_async(
-                move |interner: Interner,
-                      (messages_val, config_val): (Value, Value)| {
-                    let fetch = Arc::clone(&fetch);
-                    async move {
-                        let messages_owned = acvus_ext::sequence_items(messages_val.clone())?;
-                        let messages_list = messages_owned.as_slice();
-                        let messages = values_to_messages(messages_list, &interner, "openai_chat")?;
-
-                        // Extract config from Value::Object
-                        let config_obj = match &config_val {
-                            Value::Object(o) => o,
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "openai_chat: expected Object for config, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
-
-                        let endpoint = obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
-                            RuntimeError::fetch("openai_chat: missing 'endpoint' in config")
-                        })?;
-                        let api_key = obj_get_str(config_obj, api_key_key).ok_or_else(|| {
-                            RuntimeError::fetch("openai_chat: missing 'api_key' in config")
-                        })?;
-                        let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
-                            RuntimeError::fetch("openai_chat: missing 'model' in config")
-                        })?;
-                        let temperature = obj_get_decimal(config_obj, temperature_key);
-                        let top_p = obj_get_decimal(config_obj, top_p_key);
-                        let max_tokens = obj_get_u32(config_obj, max_tokens_key);
-
-                        // Build schema::Request
-                        let request_body = schema::Request {
-                            model,
-                            messages: messages.iter().map(convert_message).collect(),
-                            tools: None,
-                            temperature,
-                            top_p,
-                            max_tokens,
-                            reasoning_effort: None,
-                        };
-
-                        let http_request = HttpRequest {
-                            url: endpoint,
-                            headers: vec![
-                                ("Authorization".into(), format!("Bearer {api_key}")),
-                                ("Content-Type".into(), "application/json".into()),
-                            ],
-                            body: serde_json::to_value(&request_body).map_err(|e| {
-                                RuntimeError::fetch(format!(
-                                    "openai_chat: serialization failed: {e}"
-                                ))
-                            })?,
-                        };
-
-                        let response_json = fetch
-                            .fetch(&http_request)
-                            .await
-                            .map_err(RuntimeError::fetch)?;
-
-                        let (response, usage) = parse_response(response_json)
-                            .map_err(|e| RuntimeError::fetch(e.to_string()))?;
-
-                        let result = response_to_value(&response, &usage, &interner);
-                        Ok(result)
-                    }
-                },
-            ),
-        ]
+        ExternItems {
+            types: vec![],
+            fns: vec![ExternFn::r#async(interner, "openai_chat", handler)],
+        }
     })
 }
 
@@ -466,7 +351,7 @@ mod tests {
         });
         let interner = Interner::new();
         let registry = openai_registry(fetch);
-        let registered = registry.register(&interner);
+        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.executables.len(), 1);
 

@@ -9,7 +9,7 @@ use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
-/// Helper: compile a template source via the graph pipeline (extract → resolve → lower).
+/// Helper: compile a template source via the graph pipeline (extract -> resolve -> lower).
 /// Unknown @contexts are added as Inferred constraints.
 fn compile_analysis(
     interner: &Interner,
@@ -34,7 +34,7 @@ fn compile_analysis(
         })
         .collect();
 
-    // Discover context refs in source that aren't declared — add as Inferred.
+    // Discover context refs in source that aren't declared - add as Inferred.
     let template = acvus_ast::parse(interner, source).expect("parse failed");
     let declared: FxHashSet<Astr> = contexts.iter().map(|c| c.qref.name).collect();
     for ast_qref in acvus_ast::extract_template_context_refs(&template) {
@@ -62,9 +62,9 @@ fn compile_analysis(
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
 
@@ -141,7 +141,7 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
     )
 }
 
-// ── Text & literals ──────────────────────────────────────────────
+// -- Text & literals ----------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -176,7 +176,7 @@ fn mixed_text_and_expr() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Context / Variables ──────────────────────────────────────────
+// -- Context / Variables ------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -203,7 +203,7 @@ fn context_field_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Arithmetic ───────────────────────────────────────────────────
+// -- Arithmetic ---------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -214,14 +214,14 @@ fn arithmetic_to_string() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Match blocks ─────────────────────────────────────────────────
+// -- Match blocks -------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
 fn simple_match_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
-    // Variable binding is body-less — defines x in current scope.
+    // Variable binding is body-less - defines x in current scope.
     let ir = compile_to_ir(&i, r#"{{ x = @name }}{{ x }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -298,7 +298,7 @@ fn nested_match() {
     insta::assert_snapshot!(ir);
 }
 
-// ── List patterns ────────────────────────────────────────────────
+// -- List patterns ------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -313,7 +313,7 @@ fn list_destructure_head() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Object patterns ──────────────────────────────────────────────
+// -- Object patterns ----------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -328,7 +328,7 @@ fn object_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Range ────────────────────────────────────────────────────────
+// -- Range --------------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -362,7 +362,7 @@ fn range_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Pipe & builtins ──────────────────────────────────────────────
+// -- Pipe & builtins ----------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -387,7 +387,7 @@ fn pipe_to_string() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Lambda / closures ────────────────────────────────────────────
+// -- Lambda / closures --------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -403,7 +403,7 @@ fn lambda_in_filter() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Extern functions ─────────────────────────────────────────────
+// -- Extern functions ---------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -429,7 +429,7 @@ fn extern_async_call() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Tuple ────────────────────────────────────────────────────────
+// -- Tuple --------------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -511,7 +511,7 @@ fn error_tuple_arity_mismatch() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-// ── Error cases ──────────────────────────────────────────────────
+// -- Error cases --------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -523,7 +523,7 @@ fn error_emit_non_string() {
 }
 
 // FnRefs removed: undeclared contexts are now handled by the typechecker's infer vars
-// in analysis mode, so @unknown no longer causes an error — it gets a fresh type var
+// in analysis mode, so @unknown no longer causes an error - it gets a fresh type var
 // that may resolve during typechecking.
 #[ignore = "pending identity integration"]
 #[test]
@@ -562,7 +562,7 @@ fn error_range_float_bounds() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-// ── Iteration (`in`) ────────────────────────────────────────────
+// -- Iteration (`in`) --------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -633,13 +633,13 @@ fn error_iter_not_iterable() {
     assert!(result.is_err());
 }
 
-// ── Edge case: new variable ref binding ─────────────────────────
+// -- Edge case: new variable ref binding -------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
 fn variable_new_ref_binding() {
     let i = Interner::new();
-    // result is not in initial context — dynamically created via binding.
+    // result is not in initial context - dynamically created via binding.
     let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(&i, r#"{{ result = @name }}{{ result }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
@@ -660,7 +660,7 @@ fn variable_new_ref_in_match_arm() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: nested destructuring ─────────────────────────────
+// -- Edge case: nested destructuring -----------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -725,7 +725,7 @@ fn tuple_with_list_element() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: object expression & matching ─────────────────────
+// -- Edge case: object expression & matching ---------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -741,7 +741,7 @@ fn object_literal_field_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: comparison / boolean / unary ──────────────────────
+// -- Edge case: comparison / boolean / unary ----------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -785,7 +785,7 @@ fn boolean_not() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: to_float / to_int conversion ─────────────────────
+// -- Edge case: to_float / to_int conversion ---------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -815,7 +815,7 @@ fn to_int_conversion() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: pmap builtin ─────────────────────────────────────
+// -- Edge case: pmap builtin -------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -830,7 +830,7 @@ fn pmap_builtin() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: list tail destructure ────────────────────────────
+// -- Edge case: list tail destructure ----------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -845,7 +845,7 @@ fn list_destructure_tail() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: variable write then read ─────────────────────────
+// -- Edge case: variable write then read -------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -855,7 +855,7 @@ fn variable_write_then_read() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: nested iteration with binding ────────────────────
+// -- Edge case: nested iteration with binding --------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -874,7 +874,7 @@ fn nested_iteration_with_binding() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: range inclusive iteration ─────────────────────────
+// -- Edge case: range inclusive iteration -------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -884,7 +884,7 @@ fn range_inclusive_iteration() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: deeply nested object ─────────────────────────────
+// -- Edge case: deeply nested object -----------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -907,7 +907,7 @@ fn deeply_nested_object_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: closure capturing context ref ────────────────────
+// -- Edge case: closure capturing context ref --------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -929,7 +929,7 @@ fn closure_capture_context() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: multi-arm with different pattern types ───────────
+// -- Edge case: multi-arm with different pattern types -----------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -945,7 +945,7 @@ fn multi_arm_range_and_literal() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: list literal ─────────────────────────────────────
+// -- Edge case: list literal -------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -959,7 +959,7 @@ fn list_literal_expression() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: lambda with arithmetic ───────────────────────────
+// -- Edge case: lambda with arithmetic ---------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -989,7 +989,7 @@ fn lambda_filter_comparison() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: closure with captured local var ──────────────────
+// -- Edge case: closure with captured local var ------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1005,7 +1005,7 @@ fn closure_capture_local() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: list exact match (no rest) ───────────────────────
+// -- Edge case: list exact match (no rest) -----------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1021,13 +1021,13 @@ fn list_exact_match() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: list rest in middle ──────────────────────────────
+// -- Edge case: list rest in middle ------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
 fn list_destructure_head_and_tail() {
     let i = Interner::new();
-    // [a, .., z] pattern — head and tail extraction.
+    // [a, .., z] pattern - head and tail extraction.
     let ir = compile_to_ir(
         &i,
         r#"{{ [first, .., last] = @items }}{{ first | to_string }}{{_}}empty{{/}}"#,
@@ -1037,7 +1037,7 @@ fn list_destructure_head_and_tail() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: nested tuple pattern ─────────────────────────────
+// -- Edge case: nested tuple pattern -----------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1059,7 +1059,7 @@ fn nested_tuple_pattern() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: variable write of computed value ─────────────────
+// -- Edge case: variable write of computed value -----------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1075,7 +1075,7 @@ fn variable_write_computed() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: match block with binding pattern + body ──────────
+// -- Edge case: match block with binding pattern + body ----------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1091,7 +1091,7 @@ fn match_binding_with_body() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: variable shadowing across scopes ─────────────────
+// -- Edge case: variable shadowing across scopes -----------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1107,7 +1107,7 @@ fn variable_shadowing() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: match inside match (nested match blocks) ─────────
+// -- Edge case: match inside match (nested match blocks) ---------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1123,7 +1123,7 @@ fn nested_match_blocks() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: catch-all with nested binding ────────────────────
+// -- Edge case: catch-all with nested binding --------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1139,7 +1139,7 @@ fn catch_all_with_binding() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: multiple chained pipes ───────────────────────────
+// -- Edge case: multiple chained pipes ---------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1154,7 +1154,7 @@ fn triple_pipe_chain() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: variable write in iteration body ─────────────────
+// -- Edge case: variable write in iteration body -----------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1170,7 +1170,7 @@ fn variable_write_in_iteration() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: field access on destructured variable ────────────
+// -- Edge case: field access on destructured variable ------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1187,7 +1187,7 @@ fn field_access_on_destructured() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: boolean operators in match ────────────────────────
+// -- Edge case: boolean operators in match ------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1203,7 +1203,7 @@ fn equality_as_match_source() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: unary negation on lambda param (Ty::Var) ─────────
+// -- Edge case: unary negation on lambda param (Ty::Var) ---------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1219,7 +1219,7 @@ fn lambda_negate_param() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: unary not on lambda param (Ty::Var) ──────────────
+// -- Edge case: unary not on lambda param (Ty::Var) --------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1236,7 +1236,7 @@ fn lambda_not_param() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: object pattern on match source (non-list) ────────
+// -- Edge case: object pattern on match source (non-list) --------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1252,7 +1252,7 @@ fn object_destructure_match() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: multiple closures sharing captured var ────────────
+// -- Edge case: multiple closures sharing captured var ------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1271,7 +1271,7 @@ fn multiple_closures_same_capture() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: string comparison ─────────────────────────────────
+// -- Edge case: string comparison ---------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1287,7 +1287,7 @@ fn string_equality_in_filter() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: nested lambda (lambda returning lambda result) ────
+// -- Edge case: nested lambda (lambda returning lambda result) ----
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1310,7 +1310,7 @@ fn lambda_field_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: variable accumulation in loop ─────────────────────
+// -- Edge case: variable accumulation in loop ---------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1327,7 +1327,7 @@ fn variable_accumulate_in_loop() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: multi-level pipe with to_string in middle ────────
+// -- Edge case: multi-level pipe with to_string in middle --------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1342,13 +1342,13 @@ fn pipe_map_to_string_then_filter() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: local var captured in lambda ──────────────────────
+// -- Edge case: local var captured in lambda ----------------------
 
 #[ignore = "pending identity integration"]
 #[test]
 fn lambda_capture_local_var_ref() {
     let i = Interner::new();
-    // offset is NOT in initial context — created as local var.
+    // offset is NOT in initial context - created as local var.
     // Lambda must capture it correctly (not fall through to StorageLoad).
     let context = ctx(&i, &[("items", Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)))]);
     let ir = compile_to_ir(
@@ -1360,7 +1360,7 @@ fn lambda_capture_local_var_ref() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: multiple field accesses on same lambda param ─────
+// -- Edge case: multiple field accesses on same lambda param -----
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1383,7 +1383,7 @@ fn lambda_multiple_field_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: chained field access in lambda ───────────────────
+// -- Edge case: chained field access in lambda -------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1408,7 +1408,7 @@ fn lambda_chained_field_access() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: string concat in lambda ───────────────────────────
+// -- Edge case: string concat in lambda ---------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1425,7 +1425,7 @@ fn lambda_string_concat() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: filter then map with field access ────────────────
+// -- Edge case: filter then map with field access ----------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1447,7 +1447,7 @@ fn pipe_filter_then_map_field() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: error — field access on non-object ────────────────
+// -- Edge case: error - field access on non-object ----------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1459,7 +1459,7 @@ fn error_field_access_on_int() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-// ── Edge case: error — context write attempt ─────────────────────
+// -- Edge case: error - context write attempt ---------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1472,7 +1472,7 @@ fn error_variable_write_type_mismatch() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-// ── Edge case: float arithmetic in lambda ────────────────────────
+// -- Edge case: float arithmetic in lambda ------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1488,7 +1488,7 @@ fn lambda_float_arithmetic() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: bool literal as match source ─────────────────────
+// -- Edge case: bool literal as match source ---------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1499,7 +1499,7 @@ fn match_bool_literal() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: nested pipe with filter on object field ──────────
+// -- Edge case: nested pipe with filter on object field ----------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1524,7 +1524,7 @@ fn filter_object_field_equality() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Edge case: extern function with object return ───────────────
+// -- Edge case: extern function with object return ---------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1546,7 +1546,7 @@ fn extern_fn_object_return() {
     insta::assert_snapshot!(ir);
 }
 
-// ── New builtins ─────────────────────────────────────────────────
+// -- New builtins -------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1654,9 +1654,9 @@ fn builtin_all() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Context Call ────────────────────────────────────────────────
+// -- Context Call ------------------------------------------------
 
-// ── Variant (Option) ────────────────────────────────────────────
+// -- Variant (Option) --------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1708,7 +1708,7 @@ fn structural_enum_variant_merge() {
     assert!(ir.contains("C"), "variant C missing from IR:\n{ir}");
 }
 
-// ── Structural enum tests ──────────────────────────────────────
+// -- Structural enum tests --------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1836,7 +1836,7 @@ fn structural_enum_payload_type_propagates_through_context() {
     assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
 }
 
-// ── Variant unification inside Tuple/List patterns ─────────────
+// -- Variant unification inside Tuple/List patterns -------------
 // Regression: nested Variant patterns inside Tuple/List must merge
 // variant sets across match arms via the shared Var chain.
 
@@ -1895,7 +1895,7 @@ fn pruned_context_keys_in_dead_catch_all() {
     let ir = acvus_mir::printer::dump_with(&i, &module);
     eprintln!("=== PRUNED TEST IR ===\n{ir}\n=== END ===");
 
-    // Build name→QualifiedRef lookup from the compiled module's Ref(Context) instructions + debug info.
+    // Build name->QualifiedRef lookup from the compiled module's Ref(Context) instructions + debug info.
     let mut name_to_qref: FxHashMap<&str, QualifiedRef> = FxHashMap::default();
     for inst in &module.main.insts {
         if let InstKind::Ref {
@@ -1939,7 +1939,7 @@ fn pruned_context_keys_in_dead_catch_all() {
     );
 }
 
-// ── SSA chain tests (script mode) ───────────────────────────────
+// -- SSA chain tests (script mode) -------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -1980,7 +1980,7 @@ fn ssa_multiple_contexts_independent() {
 // Migrated from acvus-mir unit tests (ExternFn-dependent)
 // ====================================================================
 
-// ── From lib.rs ─────────────────────────────────────────────────────
+// -- From lib.rs -----------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -2075,7 +2075,7 @@ fn migrated_pipe_extern_fn_ok() {
     .unwrap();
 }
 
-// ── From typeck.rs ──────────────────────────────────────────────────
+// -- From typeck.rs --------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -2172,7 +2172,7 @@ fn migrated_typeck_some_unifies_with_option_context() {
     .unwrap();
 }
 
-// ── From printer.rs ─────────────────────────────────────────────────
+// -- From printer.rs -------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -2214,7 +2214,7 @@ fn migrated_print_closure() {
     );
 }
 
-// ── From ssa_pass.rs ────────────────────────────────────────────────
+// -- From ssa_pass.rs ------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -2230,7 +2230,7 @@ fn migrated_ssa_iter_no_write_no_phi() {
     );
 }
 
-// ── Iterator values are move-only through combinators ───────────────
+// -- Iterator values are move-only through combinators ---------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -2381,7 +2381,7 @@ fn iter_collect_result_is_reusable() {
     );
 }
 
-// ── From move_check.rs (e2e) ────────────────────────────────────────
+// -- From move_check.rs (e2e) ----------------------------------------
 
 fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
@@ -2831,9 +2831,9 @@ fn migrated_move_reject_iter_var_without_purify() {
 // Projection system: soundness & completeness
 // ======================================================================
 
-// ── Completeness: valid programs accepted ───────────────────────────
+// -- Completeness: valid programs accepted ---------------------------
 
-/// Variable whole read/write: `x = 42; x` — SSA promotion eliminates Ref/Load/Store.
+/// Variable whole read/write: `x = 42; x` - SSA promotion eliminates Ref/Load/Store.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_var_whole_read_write() {
@@ -2852,7 +2852,7 @@ fn projection_var_whole_read_write() {
     assert!(ir.contains("return"), "should have return: {ir}");
 }
 
-/// Variable read after multiple writes: `x = 1; x = 2; x` → SSA sees last def.
+/// Variable read after multiple writes: `x = 1; x = 2; x` -> SSA sees last def.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_var_multiple_writes() {
@@ -2864,7 +2864,7 @@ fn projection_var_multiple_writes() {
     );
 }
 
-/// Context whole read: `@ctx` — volatile context preserves Ref+Load.
+/// Context whole read: `@ctx` - volatile context preserves Ref+Load.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_context_whole_read() {
@@ -2872,11 +2872,11 @@ fn projection_context_whole_read() {
     let context = ctx(&i, &[("data", Ty::Int)]);
     let ir = compile_script_ir(&i, "@data", &context).unwrap();
     // Non-volatile context: SSA should forward the entry load value.
-    // Ref/Load from entry may remain or be forwarded — just verify it compiles + returns.
+    // Ref/Load from entry may remain or be forwarded - just verify it compiles + returns.
     assert!(ir.contains("return"), "should have return: {ir}");
 }
 
-/// Context field read: `@obj.name` — 1-depth Ref with field.
+/// Context field read: `@obj.name` - 1-depth Ref with field.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_context_field_read() {
@@ -2887,7 +2887,7 @@ fn projection_context_field_read() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-/// Context field write: `@obj = { name: "test" }` — whole context store.
+/// Context field write: `@obj = { name: "test" }` - whole context store.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_context_whole_write() {
@@ -2901,7 +2901,7 @@ fn projection_context_whole_write() {
     );
 }
 
-/// Chained field access: `@obj.a.b` — Ref(@obj, "a") + Load + FieldGet("b").
+/// Chained field access: `@obj.a.b` - Ref(@obj, "a") + Load + FieldGet("b").
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_chained_field_access_2depth() {
@@ -2921,7 +2921,7 @@ fn projection_var_in_arithmetic() {
     let i = Interner::new();
     let context = ctx(&i, &[("val", Ty::Int)]);
     let ir = compile_script_ir(&i, "x = @val; x + 1", &context).unwrap();
-    // SSA should promote x — no Ref for x should remain.
+    // SSA should promote x - no Ref for x should remain.
     assert!(ir.contains("+"), "should have addition: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
@@ -2937,7 +2937,7 @@ fn projection_lambda_capture() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-/// ExternParam read: `$param` — should compile (immutable, Ref+Load).
+/// ExternParam read: `$param` - should compile (immutable, Ref+Load).
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_param_read() {
@@ -2951,9 +2951,9 @@ fn projection_param_read() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-// ── Soundness: invalid programs rejected ────────────────────────────
+// -- Soundness: invalid programs rejected ----------------------------
 
-/// Store non-materializable (Fn) to context → must be rejected.
+/// Store non-materializable (Fn) to context -> must be rejected.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_fn_in_context() {
@@ -2969,7 +2969,7 @@ fn projection_soundness_reject_fn_in_context() {
     assert!(result.is_err(), "storing Fn to context should fail");
 }
 
-/// Store non-materializable (List<Fn>) to context → must be rejected.
+/// Store non-materializable (List<Fn>) to context -> must be rejected.
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_list_fn_in_context() {
@@ -2985,7 +2985,7 @@ fn projection_soundness_reject_list_fn_in_context() {
     assert!(result.is_err(), "storing List<Fn> to context should fail");
 }
 
-/// Write to ExternParam → must be rejected (typeck catches this).
+/// Write to ExternParam -> must be rejected (typeck catches this).
 #[ignore = "pending identity integration"]
 #[test]
 fn projection_soundness_reject_param_write() {
@@ -2998,7 +2998,7 @@ fn projection_soundness_reject_param_write() {
     assert!(result.is_err(), "writing to ExternParam should fail");
 }
 
-// ── SSA correctness: promotion & volatile ───────────────────────────
+// -- SSA correctness: promotion & volatile ---------------------------
 
 /// Non-volatile variable: SSA promotion eliminates Ref/Load/Store.
 #[ignore = "pending identity integration"]
@@ -3070,7 +3070,7 @@ fn projection_move_var_reassign_revives() {
 // SROA: field projection decomposition
 // ======================================================================
 
-// ── Completeness: valid field access patterns ───────────────────────
+// -- Completeness: valid field access patterns -----------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -3140,7 +3140,7 @@ fn sroa_field_read_in_lambda() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Soundness ───────────────────────────────────────────────────────
+// -- Soundness -------------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -3169,7 +3169,7 @@ fn sroa_soundness_reject_fn_in_context() {
     );
 }
 
-// ── Context destructure chain ───────────────────────────────────────
+// -- Context destructure chain ---------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -3206,7 +3206,7 @@ fn sroa_context_destructure_then_overwrite() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Projection store ────────────────────────────────────────────────
+// -- Projection store ------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -3236,7 +3236,7 @@ fn var_field_store_1depth() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Destructure projection ──────────────────────────────────────────
+// -- Destructure projection ------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
@@ -3269,14 +3269,14 @@ fn destructure_projection_shadowing() {
     insta::assert_snapshot!(ir);
 }
 
-// ── Uninit check ────────────────────────────────────────────────────
+// -- Uninit check ----------------------------------------------------
 
 #[ignore = "pending identity integration"]
 #[test]
 fn uninit_field_load_rejected() {
     let i = Interner::new();
     // @a is Inferred (not declared). Literal only has x, but .y access widens type.
-    // Value is missing field y → uninit error.
+    // Value is missing field y -> uninit error.
     let result = compile_script_ir(&i, "@a = { x: 0, }; @a.y | to_string", &FxHashMap::default());
     assert!(result.is_err(), "should catch uninit field access");
     let err = result.unwrap_err();
@@ -3288,7 +3288,7 @@ fn uninit_field_load_rejected() {
 fn init_field_load_passes() {
     let i = Interner::new();
     let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)]))]);
-    // All fields present — should compile fine.
+    // All fields present - should compile fine.
     let ir = compile_script_ir(&i, "@a = { x: 42, }; @a.x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -3297,12 +3297,12 @@ fn init_field_load_passes() {
 #[test]
 fn field_store_then_load_passes() {
     let i = Interner::new();
-    // @a is Inferred. Literal missing y, but field store fills it in → should pass.
+    // @a is Inferred. Literal missing y, but field store fills it in -> should pass.
     let ir = compile_script_ir(&i, "@a = { x: 0, }; @a.y = 1; @a.y | to_string", &FxHashMap::default()).unwrap();
     insta::assert_snapshot!(ir);
 }
 
-// ── Script mode tests ──────────────────────────────────────────────
+// -- Script mode tests ----------------------------------------------
 
 fn script_mode(i: &Interner, source: &str) -> String {
     compile_script_mode_raw(i, source, &FxHashMap::default()).unwrap()
@@ -3356,7 +3356,7 @@ fn script_if_else_if() {
 #[test]
 fn script_if_no_else() {
     let i = Interner::new();
-    // if without else → side effect only, used as statement
+    // if without else -> side effect only, used as statement
     let ir = script_mode(&i, "let x = 0; if true { x = 1; }; x");
     insta::assert_snapshot!(ir);
 }

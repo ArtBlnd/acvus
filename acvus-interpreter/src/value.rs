@@ -11,25 +11,25 @@ use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
 use crate::journal::{InMemoryContext, RuntimeContext};
 
-// ── Value ────────────────────────────────────────────────────────────
+// -- Value ------------------------------------------------------------
 
-/// Runtime value. Flat enum — no nested tiers.
+/// Runtime value. Flat enum - no nested tiers.
 ///
 /// # Layout (16 bytes on 64-bit)
 ///
-/// - **Inline**: Int, Float, Bool, Unit, Byte — no heap allocation.
-/// - **Shared**: String, Array, Object, Tuple, Variant — `Arc` wrapped,
+/// - **Inline**: Int, Float, Bool, Unit, Byte - no heap allocation.
+/// - **Shared**: String, Array, Object, Tuple, Variant - `Arc` wrapped,
 ///   clone = refcount bump. CoW via `Arc::make_mut` when mutation needed.
-/// - **Owned**: Fn, Handle — `Box` wrapped, move-only.
+/// - **Owned**: Fn, Handle - `Box` wrapped, move-only.
 ///   SSA guarantees single use; `take()` replaces with `Empty`.
 /// - **Extern**: extern boundary values.
 ///
 /// `Empty` is the moved-out sentinel. Accessing an `Empty` register is a
 /// programmer bug (SSA guarantees this cannot happen). Debug-asserted.
 pub enum Value {
-    // ── Inline (no allocation) ───────────────────────────────────
+    // -- Inline (no allocation) -----------------------------------
     Empty,
-    /// Undefined value — clone/move OK, read as concrete value = UB.
+    /// Undefined value - clone/move OK, read as concrete value = UB.
     /// Used as SSA initial value for variables defined inside loops.
     Undef,
     Int(i64),
@@ -38,22 +38,22 @@ pub enum Value {
     Unit,
     Byte(u8),
 
-    // ── Shared (Arc, clone = refcount bump) ──────────────────────
+    // -- Shared (Arc, clone = refcount bump) ----------------------
     String(Arc<String>),
     Array(Arc<Vec<Value>>),
     Object(Arc<FxHashMap<Astr, Value>>),
     Tuple(Arc<Vec<Value>>),
     Variant(Box<VariantValue>),
 
-    // ── Owned (move-only, Box) ───────────────────────────────────
+    // -- Owned (move-only, Box) -----------------------------------
     Fn(Box<FnValue>),
     Handle(Box<HandleValue>),
 
-    // ── Extern (extern boundary) ─────────────────────────────────
+    // -- Extern (extern boundary) ---------------------------------
     Extern(Box<ExternValue>),
 }
 
-// ── Satellite types ──────────────────────────────────────────────────
+// -- Satellite types --------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantValue {
@@ -64,7 +64,7 @@ pub struct VariantValue {
 /// A self-contained callable: execution context + body + captured values.
 ///
 /// Created at `MakeClosure` time with a fork of the current overlay.
-/// `call()` executes the body in an independent RunContext — no Interpreter needed.
+/// `call()` executes the body in an independent RunContext - no Interpreter needed.
 pub struct FnValue {
     pub shared: InterpreterContext,
     pub page: InMemoryContext,
@@ -90,7 +90,7 @@ impl fmt::Debug for FnValue {
 }
 
 impl FnValue {
-    /// Call this closure with a single argument. Self-contained — no Interpreter needed.
+    /// Call this closure with a single argument. Self-contained - no Interpreter needed.
     pub async fn call(&self, arg: Value) -> Result<Value, RuntimeError> {
         crate::interpreter::fn_value_call(self, vec![arg]).await
     }
@@ -139,14 +139,39 @@ impl std::fmt::Debug for HandleValue {
     }
 }
 
-/// A user-defined value from extern boundary.
-/// Identified by `QualifiedRef` (matching `Ty::UserDefined`).
+/// The static name of an extension type. Interned to a `QualifiedRef` when
+/// the compiler needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExternTypeName {
+    pub ns: Option<&'static str>,
+    pub name: &'static str,
+}
+
+impl ExternTypeName {
+    pub fn qref(self, interner: &Interner) -> QualifiedRef {
+        match self.ns {
+            Some(ns) => QualifiedRef::qualified(interner.intern(ns), interner.intern(self.name)),
+            None => QualifiedRef::root(interner.intern(self.name)),
+        }
+    }
+}
+
+impl fmt::Display for ExternTypeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.ns {
+            Some(ns) => write!(f, "{ns}::{}", self.name),
+            None => write!(f, "{}", self.name),
+        }
+    }
+}
+
+/// A value of an extension type, matching `Ty::UserDefined`.
 pub struct ExternValue {
-    pub type_id: QualifiedRef,
+    pub type_name: ExternTypeName,
     inner: Arc<dyn Any + Send + Sync>,
 }
 
-// ── Constructors ─────────────────────────────────────────────────────
+// -- Constructors -----------------------------------------------------
 
 impl Value {
     // Inline
@@ -211,7 +236,7 @@ impl Value {
     }
 }
 
-// ── Move / Clone ─────────────────────────────────────────────────────
+// -- Move / Clone -----------------------------------------------------
 
 impl Value {
     /// Take the value out, leaving `Empty` behind. For move-only semantics.
@@ -255,7 +280,7 @@ impl Value {
     }
 }
 
-// ── Extraction (borrow) ──────────────────────────────────────────────
+// -- Extraction (borrow) ----------------------------------------------
 
 impl Value {
     #[inline]
@@ -316,7 +341,7 @@ impl Value {
     }
 }
 
-// ── Extraction (owned — consumes the value) ──────────────────────────
+// -- Extraction (owned - consumes the value) --------------------------
 
 impl Value {
     #[inline]
@@ -349,7 +374,7 @@ impl Value {
     }
 }
 
-// ── Structural equality ──────────────────────────────────────────────
+// -- Structural equality ----------------------------------------------
 
 impl Value {
     /// Language-level `==` and pattern matching comparison.
@@ -389,7 +414,7 @@ fn slice_eq(a: &[Value], b: &[Value]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.structural_eq(y))
 }
 
-// ── Clone ────────────────────────────────────────────────────────────
+// -- Clone ------------------------------------------------------------
 
 impl Clone for Value {
     fn clone(&self) -> Self {
@@ -416,7 +441,7 @@ impl Clone for Value {
     }
 }
 
-// ── Debug / PartialEq ────────────────────────────────────────────────
+// -- Debug / PartialEq ------------------------------------------------
 
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -444,7 +469,7 @@ impl fmt::Debug for Value {
             },
             Value::Fn(fv) => write!(f, "Fn({} captures)", fv.captures.len()),
             Value::Handle(_) => write!(f, "Handle"),
-            Value::Extern(o) => write!(f, "UserDefined({:?})", o.type_id),
+            Value::Extern(o) => write!(f, "{}", o.type_name),
         }
     }
 }
@@ -461,21 +486,29 @@ impl PartialEq for FnValue {
     }
 }
 
-// ── ExternValue ──────────────────────────────────────────────────────
+// -- ExternValue ------------------------------------------------------
 
 impl Clone for ExternValue {
     fn clone(&self) -> Self {
         Self {
-            type_id: self.type_id,
+            type_name: self.type_name,
             inner: Arc::clone(&self.inner),
         }
     }
 }
 
+/// Why a payload could not be taken out of an `ExternValue`.
+pub enum PayloadMismatch {
+    /// The payload is another Rust type.
+    OtherType,
+    /// The payload is this type but still shared; the `Arc` is returned.
+    Shared(Arc<dyn Any + Send + Sync>),
+}
+
 impl ExternValue {
-    pub fn new<T: Any + Send + Sync>(type_id: QualifiedRef, value: T) -> Self {
+    pub fn new<T: Any + Send + Sync>(type_name: ExternTypeName, value: T) -> Self {
         Self {
-            type_id,
+            type_name,
             inner: Arc::new(value),
         }
     }
@@ -484,20 +517,26 @@ impl ExternValue {
         self.inner.downcast_ref()
     }
 
-    /// Take the value back out. Fails when the payload is a different type or
-    /// is still shared.
-    pub fn into_owned<T: Any + Send + Sync>(self) -> Result<T, Self> {
-        let type_id = self.type_id;
+    pub fn into_owned<T: Any + Send + Sync>(self) -> Result<T, PayloadMismatch> {
         match self.inner.downcast::<T>() {
-            Ok(arc) => Arc::try_unwrap(arc).map_err(|inner| Self { type_id, inner }),
-            Err(inner) => Err(Self { type_id, inner }),
+            Ok(arc) => Arc::try_unwrap(arc)
+                .map_err(|arc| PayloadMismatch::Shared(arc as Arc<dyn Any + Send + Sync>)),
+            Err(_) => Err(PayloadMismatch::OtherType),
+        }
+    }
+
+    /// Take the payload out, cloning it when it is still shared.
+    pub fn into_cloned<T: Any + Send + Sync + Clone>(self) -> Result<T, PayloadMismatch> {
+        match self.inner.downcast::<T>() {
+            Ok(arc) => Ok(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone())),
+            Err(_) => Err(PayloadMismatch::OtherType),
         }
     }
 }
 
 impl fmt::Debug for ExternValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "UserDefined({:?})", self.type_id)
+        write!(f, "{}", self.type_name)
     }
 }
 
@@ -507,103 +546,65 @@ impl PartialEq for ExternValue {
     }
 }
 
-// ── Value conversion traits ──────────────────────────────────────────
+// -- Value conversion traits ------------------------------------------
 
 /// Convert a `Value` into a concrete Rust type.
 pub trait FromValue: Sized {
-    fn from_value(value: Value) -> Result<Self, RuntimeError>;
+    fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError>;
 }
 
 /// Convert a concrete Rust type into a `Value`.
 pub trait IntoValue {
-    fn into_value(self) -> Value;
+    fn into_value(self, interner: &Interner) -> Value;
 }
 
-/// Convert a `Vec<Value>` into a tuple of concrete types.
+/// Convert call arguments into a tuple of concrete types.
 pub trait FromValues: Sized {
-    fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError>;
+    fn from_values(values: Vec<Value>, interner: &Interner) -> Result<Self, RuntimeError>;
 }
-
-/// Convert a tuple of concrete types into a `Vec<Value>`.
-pub trait IntoValues {
-    fn into_values(self) -> Vec<Value>;
-}
-
-// ── Identity impls ──────────────────────────────────────────────────
 
 impl FromValue for Value {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+    fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
         Ok(value)
     }
 }
 
 impl IntoValue for Value {
-    fn into_value(self) -> Value {
+    fn into_value(self, _: &Interner) -> Value {
         self
     }
 }
 
-// ── Primitive impls ─────────────────────────────────────────────────
-
-impl FromValue for i64 {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
-        match value {
-            Value::Int(n) => Ok(n),
-            other => Err(RuntimeError::unexpected_type(
-                "FromValue<i64>",
-                &[crate::error::ValueKind::Int],
-                other.kind(),
-            )),
+macro_rules! impl_scalar_value {
+    ($T:ty, $variant:ident, $kind:ident) => {
+        impl FromValue for $T {
+            fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
+                match value {
+                    Value::$variant(v) => Ok(v),
+                    other => Err(RuntimeError::unexpected_type(
+                        concat!("FromValue<", stringify!($T), ">"),
+                        &[crate::error::ValueKind::$kind],
+                        other.kind(),
+                    )),
+                }
+            }
         }
-    }
-}
 
-impl IntoValue for i64 {
-    fn into_value(self) -> Value {
-        Value::Int(self)
-    }
-}
-
-impl FromValue for f64 {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
-        match value {
-            Value::Float(f) => Ok(f),
-            other => Err(RuntimeError::unexpected_type(
-                "FromValue<f64>",
-                &[crate::error::ValueKind::Float],
-                other.kind(),
-            )),
+        impl IntoValue for $T {
+            fn into_value(self, _: &Interner) -> Value {
+                Value::$variant(self)
+            }
         }
-    }
+    };
 }
 
-impl IntoValue for f64 {
-    fn into_value(self) -> Value {
-        Value::Float(self)
-    }
-}
-
-impl FromValue for bool {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
-        match value {
-            Value::Bool(b) => Ok(b),
-            other => Err(RuntimeError::unexpected_type(
-                "FromValue<bool>",
-                &[crate::error::ValueKind::Bool],
-                other.kind(),
-            )),
-        }
-    }
-}
-
-impl IntoValue for bool {
-    fn into_value(self) -> Value {
-        Value::Bool(self)
-    }
-}
+impl_scalar_value!(i64, Int, Int);
+impl_scalar_value!(f64, Float, Float);
+impl_scalar_value!(bool, Bool, Bool);
+impl_scalar_value!(u8, Byte, Byte);
 
 impl FromValue for () {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+    fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
         match value {
             Value::Unit => Ok(()),
             other => Err(RuntimeError::unexpected_type(
@@ -616,34 +617,15 @@ impl FromValue for () {
 }
 
 impl IntoValue for () {
-    fn into_value(self) -> Value {
+    fn into_value(self, _: &Interner) -> Value {
         Value::Unit
     }
 }
 
-impl FromValue for u8 {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
-        match value {
-            Value::Byte(b) => Ok(b),
-            other => Err(RuntimeError::unexpected_type(
-                "FromValue<u8>",
-                &[crate::error::ValueKind::Byte],
-                other.kind(),
-            )),
-        }
-    }
-}
-
-impl IntoValue for u8 {
-    fn into_value(self) -> Value {
-        Value::Byte(self)
-    }
-}
-
 impl FromValue for String {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+    fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
         match value {
-            Value::String(s) => Ok(s.to_string()),
+            Value::String(s) => Ok(Arc::try_unwrap(s).unwrap_or_else(|arc| (*arc).clone())),
             other => Err(RuntimeError::unexpected_type(
                 "FromValue<String>",
                 &[crate::error::ValueKind::String],
@@ -654,13 +636,13 @@ impl FromValue for String {
 }
 
 impl IntoValue for String {
-    fn into_value(self) -> Value {
+    fn into_value(self, _: &Interner) -> Value {
         Value::string(self)
     }
 }
 
 impl FromValue for Arc<String> {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+    fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
         match value {
             Value::String(s) => Ok(s),
             other => Err(RuntimeError::unexpected_type(
@@ -673,17 +655,60 @@ impl FromValue for Arc<String> {
 }
 
 impl IntoValue for Arc<String> {
-    fn into_value(self) -> Value {
+    fn into_value(self, _: &Interner) -> Value {
         Value::String(self)
     }
 }
 
-impl FromValue for Vec<Value> {
-    fn from_value(value: Value) -> Result<Self, RuntimeError> {
+impl<T: FromValue> FromValue for Option<T> {
+    fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
         match value {
-            Value::Array(l) => Ok(Arc::try_unwrap(l).unwrap_or_else(|arc| (*arc).clone())),
+            Value::Variant(v) if v.tag == interner.intern("Some") => match v.payload {
+                Some(payload) => {
+                    let inner = Arc::try_unwrap(payload).unwrap_or_else(|arc| (*arc).clone());
+                    Ok(Some(T::from_value(inner, interner)?))
+                }
+                None => Err(RuntimeError::internal("Some without payload")),
+            },
+            Value::Variant(v) if v.tag == interner.intern("None") => Ok(None),
             other => Err(RuntimeError::unexpected_type(
-                "FromValue<Vec<Value>>",
+                "FromValue<Option>",
+                &[crate::error::ValueKind::Variant],
+                other.kind(),
+            )),
+        }
+    }
+}
+
+impl<T: IntoValue> IntoValue for Option<T> {
+    fn into_value(self, interner: &Interner) -> Value {
+        match self {
+            Some(v) => Value::some(interner, v.into_value(interner)),
+            None => Value::none(interner),
+        }
+    }
+}
+
+impl<T: FromValue, const N: usize> FromValue for [T; N] {
+    fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
+        match value {
+            Value::Array(items) => {
+                let items = Arc::try_unwrap(items).unwrap_or_else(|arc| (*arc).clone());
+                if items.len() != N {
+                    return Err(RuntimeError::internal(format!(
+                        "array of length {N} expected, got {}",
+                        items.len()
+                    )));
+                }
+                let mut out = Vec::with_capacity(N);
+                for item in items {
+                    out.push(T::from_value(item, interner)?);
+                }
+                out.try_into()
+                    .map_err(|_| RuntimeError::internal("array length changed during conversion"))
+            }
+            other => Err(RuntimeError::unexpected_type(
+                "FromValue<[T; N]>",
                 &[crate::error::ValueKind::Array],
                 other.kind(),
             )),
@@ -691,54 +716,76 @@ impl FromValue for Vec<Value> {
     }
 }
 
-impl IntoValue for Vec<Value> {
-    fn into_value(self) -> Value {
-        Value::array(self)
+impl<T: IntoValue, const N: usize> IntoValue for [T; N] {
+    fn into_value(self, interner: &Interner) -> Value {
+        Value::array(self.into_iter().map(|v| v.into_value(interner)).collect())
     }
 }
 
-// ── Tuple conversion macros ─────────────────────────────────────────
-
 impl FromValues for () {
-    fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError> {
-        debug_assert!(values.is_empty(), "expected 0 values, got {}", values.len());
+    fn from_values(values: Vec<Value>, _: &Interner) -> Result<Self, RuntimeError> {
+        if !values.is_empty() {
+            return Err(RuntimeError::internal(format!(
+                "expected 0 arguments, got {}",
+                values.len()
+            )));
+        }
         Ok(())
     }
 }
 
-impl IntoValues for () {
-    fn into_values(self) -> Vec<Value> {
-        vec![]
-    }
-}
-
 macro_rules! impl_tuple_values {
-    ($($T:ident : $idx:tt),+) => {
+    ($n:literal; $($T:ident : $idx:tt),+) => {
         impl<$($T: FromValue),+> FromValues for ($($T,)+) {
-            fn from_values(values: Vec<Value>) -> Result<Self, RuntimeError> {
+            fn from_values(values: Vec<Value>, interner: &Interner) -> Result<Self, RuntimeError> {
+                if values.len() != $n {
+                    return Err(RuntimeError::internal(format!(
+                        "expected {} arguments, got {}", $n, values.len()
+                    )));
+                }
                 let mut iter = values.into_iter();
-                Ok(($( $T::from_value(iter.next().expect(concat!(
-                    "FromValues: not enough values for tuple element ", stringify!($idx)
-                )))?, )+))
+                Ok(($( $T::from_value(iter.next().expect("length checked"), interner)?, )+))
             }
         }
 
-        impl<$($T: IntoValue),+> IntoValues for ($($T,)+) {
-            fn into_values(self) -> Vec<Value> {
-                vec![$(self.$idx.into_value(),)+]
+        impl<$($T: FromValue),+> FromValue for ($($T,)+) {
+            fn from_value(value: Value, interner: &Interner) -> Result<Self, RuntimeError> {
+                match value {
+                    Value::Tuple(items) => {
+                        let items = Arc::try_unwrap(items).unwrap_or_else(|arc| (*arc).clone());
+                        if items.len() != $n {
+                            return Err(RuntimeError::internal(format!(
+                                "tuple of arity {} expected, got {}", $n, items.len()
+                            )));
+                        }
+                        let mut iter = items.into_iter();
+                        Ok(($( $T::from_value(iter.next().expect("length checked"), interner)?, )+))
+                    }
+                    other => Err(RuntimeError::unexpected_type(
+                        "FromValue<tuple>",
+                        &[crate::error::ValueKind::Tuple],
+                        other.kind(),
+                    )),
+                }
+            }
+        }
+
+        impl<$($T: IntoValue),+> IntoValue for ($($T,)+) {
+            fn into_value(self, interner: &Interner) -> Value {
+                Value::tuple(vec![$(self.$idx.into_value(interner),)+])
             }
         }
     };
 }
 
-impl_tuple_values!(T0: 0);
-impl_tuple_values!(T0: 0, T1: 1);
-impl_tuple_values!(T0: 0, T1: 1, T2: 2);
-impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3);
-impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4);
-impl_tuple_values!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5);
+impl_tuple_values!(1; T0: 0);
+impl_tuple_values!(2; T0: 0, T1: 1);
+impl_tuple_values!(3; T0: 0, T1: 1, T2: 2);
+impl_tuple_values!(4; T0: 0, T1: 1, T2: 2, T3: 3);
+impl_tuple_values!(5; T0: 0, T1: 1, T2: 2, T3: 3, T4: 4);
+impl_tuple_values!(6; T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5);
 
-// ── Size assertion ───────────────────────────────────────────────────
+// -- Size assertion ---------------------------------------------------
 
 #[cfg(test)]
 mod tests {

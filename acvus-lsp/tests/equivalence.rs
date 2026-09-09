@@ -31,9 +31,9 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
         },
     }];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let graph = CompilationGraph {
@@ -71,9 +71,9 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
 fn register_std(session: &mut LspSession) {
     let interner = session.interner().clone();
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(&interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(&interner);
+        let registered = registry.register(&interner, &mut type_registry);
         for func in registered.functions {
             session.graph_mut().add_function(func);
         }
@@ -186,7 +186,7 @@ fn namespace_context_isolation() {
     );
 }
 
-// ── Completion tests ───────────────────────────────────────────────
+// -- Completion tests -----------------------------------------------
 
 #[test]
 fn completion_context_trigger() {
@@ -196,7 +196,7 @@ fn completion_context_trigger() {
     session.add_context("count", None, lift_to_poly(&Ty::Int));
 
     let doc = session.open("test", "{{ @n }}", None);
-    // Cursor after "@n" → context trigger with prefix "n"
+    // Cursor after "@n" -> context trigger with prefix "n"
     let items = session.completions(doc, 5); // "{{ @n" = 5 chars
     assert!(!items.is_empty(), "should get context completions");
     assert!(
@@ -232,7 +232,7 @@ fn completion_pipe_trigger() {
     });
 
     let doc = session.open("test", "{{ @name | helper }}", None);
-    // Cursor after "| " → pipe trigger (user is about to type after |)
+    // Cursor after "| " -> pipe trigger (user is about to type after |)
     let items = session.completions(doc, 10); // "{{ @name |" = 10 chars
     assert!(!items.is_empty(), "should get pipe completions (functions)");
     assert!(
@@ -247,7 +247,7 @@ fn completion_keyword_trigger() {
     let mut session = LspSession::new(&i);
 
     let doc = session.open("test", "{{ tr }}", None);
-    // Cursor after "tr" → keyword trigger
+    // Cursor after "tr" -> keyword trigger
     let items = session.completions(doc, 5); // "{{ tr" = 5 chars
     assert!(
         items.iter().any(|c| c.label == "true"),

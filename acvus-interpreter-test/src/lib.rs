@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use acvus_extern::ExternRegistry;
 use acvus_interpreter::{
-    ExecResult, Executable, ExternRegistry, InMemoryContext, Interpreter, InterpreterContext,
-    SequentialExecutor, Value,
+    ExecResult, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
+    Value,
 };
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
@@ -11,14 +12,13 @@ use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-// ── Core pipeline ───────────────────────────────────────────────
+// -- Core pipeline -----------------------------------------------
 
-/// Compile a template source → MirModule + context id mapping.
+/// Compile a template source -> MirModule + context id mapping.
 pub struct CompileResult {
     pub entry_qref: QualifiedRef,
     pub modules: FxHashMap<QualifiedRef, Executable>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
-    pub builtin_ids: FxHashMap<Astr, QualifiedRef>,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
 }
@@ -30,7 +30,7 @@ fn compile(
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    let std_regs = acvus_ext::std_registries();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -41,7 +41,7 @@ fn compile_script(
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    let std_regs = acvus_ext::std_registries();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -53,7 +53,7 @@ fn compile_script_mode(
     let ast =
         ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
     let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut tr);
+    let std_regs = acvus_ext::std_registries();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
 
@@ -62,7 +62,7 @@ pub fn compile_source_with_externs(
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
     extern_registries: Vec<ExternRegistry>,
-    type_registry: acvus_mir::ty::TypeRegistry,
+    mut type_registry: acvus_mir::ty::TypeRegistry,
 ) -> CompileResult {
     let contexts: Vec<Context> = context_types
         .iter()
@@ -90,10 +90,10 @@ pub fn compile_source_with_externs(
     let mut extern_executables: FxHashMap<QualifiedRef, Executable> = FxHashMap::default();
     let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
     for registry in extern_registries {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         for func in &registered.functions {
             // Extract concrete Ty from the function's polymorphic type.
-            // Polymorphic ExternFns (with Var placeholders) are skipped — only fully concrete ones get metadata.
+            // Polymorphic ExternFns (with Var placeholders) are skipped - only fully concrete ones get metadata.
             if let Some(ty) = try_freeze_poly(&func.ty) {
                 fn_types.insert(func.qref, ty);
             }
@@ -143,7 +143,7 @@ pub fn compile_source_with_externs(
         panic!("compile failed:\n  {}", all_errors.join("\n  "));
     }
 
-    // Run full optimization pipeline: SSA → Inline → SpawnSplit → Reorder → SSA → RegColor → Validate.
+    // Run full optimization pipeline: SSA -> Inline -> SpawnSplit -> Reorder -> SSA -> RegColor -> Validate.
     let opt_result = graph_optimize::optimize(result.modules.clone(), &inf.context_types, &FxHashSet::default());
 
     // Report validation errors from optimization.
@@ -164,25 +164,17 @@ pub fn compile_source_with_externs(
         .map(|(qref, module)| (qref, Executable::Module(module)))
         .collect();
 
-    // Build context qref → name mapping.
+    // Build context qref -> name mapping.
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
         .iter()
         .map(|ctx| (ctx.qref, ctx.qref.name))
         .collect();
 
-    // Build builtin name → qref mapping from the same graph functions.
-    let builtin_ids: FxHashMap<Astr, QualifiedRef> = graph
-        .functions
-        .iter()
-        .map(|f| (f.qref.name, f.qref))
-        .collect();
-
     CompileResult {
         entry_qref,
         modules,
         context_names,
-        builtin_ids,
         fn_types,
         extern_executables,
     }
@@ -207,13 +199,7 @@ pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Val
         }
     }
 
-    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
-
-    // Merge modules + builtins + externs into unified functions map.
     let mut functions = cr.modules;
-    for (id, handler) in builtin_handlers {
-        functions.insert(id, Executable::Builtin(handler));
-    }
     for (id, exec) in cr.extern_executables {
         functions.insert(id, exec);
     }
@@ -258,11 +244,7 @@ pub async fn run_script(
 
     let cr = compile_script(interner, source, &context_types);
 
-    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;
-    for (id, handler) in builtin_handlers {
-        functions.insert(id, Executable::Builtin(handler));
-    }
     for (id, exec) in cr.extern_executables {
         functions.insert(id, exec);
     }
@@ -294,11 +276,7 @@ pub async fn run_script_mode(
 
     let cr = compile_script_mode(interner, source, &context_types);
 
-    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;
-    for (id, handler) in builtin_handlers {
-        functions.insert(id, Executable::Builtin(handler));
-    }
     for (id, exec) in cr.extern_executables {
         functions.insert(id, exec);
     }
@@ -349,11 +327,7 @@ pub async fn run_script_with_externs_and_types(
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let cr = compile_source_with_externs(interner, ast, &context_types, extern_registries, type_registry);
 
-    let builtin_handlers = acvus_interpreter::builtins::build_builtins(&cr.builtin_ids, interner);
     let mut functions = cr.modules;
-    for (id, handler) in builtin_handlers {
-        functions.insert(id, Executable::Builtin(handler));
-    }
     for (id, exec) in cr.extern_executables {
         functions.insert(id, exec);
     }
@@ -373,7 +347,7 @@ pub async fn run_script_with_externs_and_types(
     interp.execute().await.expect("execution failed")
 }
 
-// ── JSON helpers ─────────────────────────────────────────────────
+// -- JSON helpers -------------------------------------------------
 
 pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
     match v {
@@ -420,7 +394,7 @@ fn infer_ty(v: &Value) -> Ty {
     }
 }
 
-// ── Context helpers ──────────────────────────────────────────────
+// -- Context helpers ----------------------------------------------
 
 pub fn int_context(interner: &Interner, name: &str, value: i64) -> FxHashMap<Astr, Value> {
     FxHashMap::from_iter([(interner.intern(name), Value::Int(value))])
@@ -441,7 +415,7 @@ pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Value> {
     )])
 }
 
-// ── Fixture runner ───────────────────────────────────────────────
+// -- Fixture runner -----------------------------------------------
 
 /// Run a single `.json` fixture file.
 pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {

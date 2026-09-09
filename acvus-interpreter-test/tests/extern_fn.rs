@@ -1,30 +1,20 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
 
-use acvus_interpreter::{Executable, ExternFnBuilder, ExternRegistry, ExternValue, RuntimeError, Value};
+use acvus_extern::{ExternFn, ExternItems, ExternRegistry, ExternType, extern_fn, extern_registry};
+use acvus_interpreter::{Executable, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
-use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{Effect, ParamTerm, Poly, PolyTy, Ty, TyTerm, TypeRegistry, UserDefinedDecl, lift_to_poly};
+use acvus_mir::ty::{Effect, Ty, TypeRegistry};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
-    sig_effect(interner, params, ret, Effect::Pure)
-}
-
-fn sig_effect(interner: &Interner, params: Vec<Ty>, ret: Ty, effect: Effect) -> PolyTy {
-    let named: Vec<ParamTerm<Poly>> = params
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-        .collect();
-    TyTerm::Fn {
-        params: named,
-        ret: Box::new(lift_to_poly(&ret)),
-        captures: vec![],
-        effect: effect.into(),
-    }
+/// A registry of stateless, concrete closures with one effect.
+fn closures(effect: Effect, fns: impl Fn(&Interner) -> Vec<ExternFn> + 'static) -> ExternRegistry {
+    ExternRegistry::new(move |i| ExternItems {
+        types: vec![],
+        fns: fns(i).into_iter().map(|f| f.with_effect(effect)).collect(),
+    })
 }
 
 fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, Value> {
@@ -43,15 +33,8 @@ fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, 
 async fn extern_pure_add() {
     let i = Interner::new();
 
-    let registry = ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new("ext_add", sig(interner, vec![Ty::Int, Ty::Int], Ty::Int))
-                .handler(
-                    |_interner: &Interner, (a, b): (i64, i64)| {
-                        Ok(a + b)
-                    },
-                ),
-        ]
+    let registry = closures(Effect::Pure, |i| {
+        vec![ExternFn::sync(i, "ext_add", |_: &Interner, a: i64, b: i64| Ok(a + b))]
     });
 
     let c = ctx(&i, &[]);
@@ -64,14 +47,8 @@ async fn extern_pure_add() {
 async fn extern_pure_string_transform() {
     let i = Interner::new();
 
-    let registry = ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new("shout", sig(interner, vec![Ty::String], Ty::String)).handler(
-                |_interner: &Interner, (s,): (String,)| {
-                    Ok(s.to_uppercase())
-                },
-            ),
-        ]
+    let registry = closures(Effect::Pure, |i| {
+        vec![ExternFn::sync(i, "shout", |_: &Interner, s: String| Ok(s.to_uppercase()))]
     });
 
     let c = ctx(&i, &[("msg", Value::string("hello"))]);
@@ -89,14 +66,8 @@ async fn extern_captures_environment() {
     let i = Interner::new();
     let secret = 7i64;
 
-    let registry = ExternRegistry::new(move |interner| {
-        vec![
-            ExternFnBuilder::new("multiply_secret", sig(interner, vec![Ty::Int], Ty::Int)).handler(
-                move |_interner: &Interner, (x,): (i64,)| {
-                    Ok(x * secret)
-                },
-            ),
-        ]
+    let registry = closures(Effect::Pure, move |i| {
+        vec![ExternFn::sync(i, "multiply_secret", move |_: &Interner, x: i64| Ok(x * secret))]
     });
 
     let c = ctx(&i, &[]);
@@ -113,8 +84,7 @@ async fn extern_captures_environment() {
 async fn regex_match_via_extern() {
     let i = Interner::new();
 
-    let mut tr = TypeRegistry::new();
-    let registry = acvus_ext::regex_registry(&i, &mut tr);
+    let registry = acvus_ext::regex_registry();
     let c = ctx(&i, &[("text", Value::string("hello world 42"))]);
     let result = run_script_with_externs(
         &i,
@@ -131,8 +101,7 @@ async fn regex_match_via_extern() {
 async fn regex_find_via_extern() {
     let i = Interner::new();
 
-    let mut tr = TypeRegistry::new();
-    let registry = acvus_ext::regex_registry(&i, &mut tr);
+    let registry = acvus_ext::regex_registry();
     let c = ctx(&i, &[("text", Value::string("price is 42 dollars"))]);
     let result = run_script_with_externs(
         &i,
@@ -163,12 +132,8 @@ async fn regex_find_via_extern() {
 fn ir_pure_function_call_no_context_bindings() {
     let i = Interner::new();
 
-    let registry = ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new("double", sig(interner, vec![Ty::Int], Ty::Int)).handler(
-                |_interner: &Interner, (x,): (i64,)| Ok(x * 2),
-            ),
-        ]
+    let registry = closures(Effect::Pure, |i| {
+        vec![ExternFn::sync(i, "double", |_: &Interner, x: i64| Ok(x * 2))]
     });
 
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = FxHashMap::default();
@@ -213,47 +178,45 @@ fn ir_pure_function_call_no_context_bindings() {
 }
 
 // =======================================================================
-//  IO ExternFn — Parallelization end-to-end
+//  IO ExternFn - Parallelization end-to-end
 // =======================================================================
 //
-// Tests verify that the full optimizer pipeline (SpawnSplit → CodeMotion →
-// Reorder → SSA → RegColor) produces correct MIR structure AND correct
+// Tests verify that the full optimizer pipeline (SpawnSplit -> CodeMotion ->
+// Reorder -> SSA -> RegColor) produces correct MIR structure AND correct
 // execution results for various IO parallelization patterns.
 //
 // Each test dumps the optimized MIR to stderr (--nocapture) for inspection.
 
-/// Registry with 4 independent IO functions (no args) + 1 parameterized.
+#[extern_fn]
+fn fetch_a(_: &Interner) -> i64 {
+    100
+}
+
+#[extern_fn]
+fn fetch_b(_: &Interner) -> i64 {
+    200
+}
+
+#[extern_fn]
+fn fetch_c(_: &Interner) -> i64 {
+    300
+}
+
+#[extern_fn]
+fn fetch_d(_: &Interner) -> i64 {
+    400
+}
+
+#[extern_fn]
+fn fetch_by(_: &Interner, x: i64) -> i64 {
+    x * 10
+}
+
+/// Four independent Opaque fetches and one parameterized.
 fn io_registry() -> ExternRegistry {
-    ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new(
-                "fetch_a",
-                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (): ()| Ok(100i64)),
-            ExternFnBuilder::new(
-                "fetch_b",
-                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (): ()| Ok(200i64)),
-            ExternFnBuilder::new(
-                "fetch_c",
-                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (): ()| Ok(300i64)),
-            ExternFnBuilder::new(
-                "fetch_d",
-                sig_effect(interner, vec![], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (): ()| Ok(400i64)),
-            // Parameterized: fetch_by(x) = x * 10
-            ExternFnBuilder::new(
-                "fetch_by",
-                sig_effect(interner, vec![Ty::Int], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (x,): (i64,)| Ok(x * 10)),
-        ]
-    })
+    extern_registry! {
+        fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by],
+    }
 }
 
 /// Compile a script with io_registry, return (CompileResult, entry MirModule ref).
@@ -272,11 +235,9 @@ fn compile_io_script_with_ctx(
         .collect();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
-    let mut tr = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(&i, &mut tr);
-    let mut regs = std_regs;
+    let mut regs = acvus_ext::std_registries();
     regs.push(io_registry());
-    let cr = compile_source_with_externs(&i, ast, &context_types, regs, tr);
+    let cr = compile_source_with_externs(&i, ast, &context_types, regs, TypeRegistry::new());
     (i, cr)
 }
 
@@ -322,9 +283,9 @@ fn dump_and_positions(label: &str, i: &Interner, cr: &CompileResult) -> (Vec<usi
     (spawns, evals)
 }
 
-// ── 1. Two independent IO calls ────────────────────────────────────
+// -- 1. Two independent IO calls ------------------------------------
 
-/// fetch_a() + fetch_b() → spawn both before eval either.
+/// fetch_a() + fetch_b() -> spawn both before eval either.
 #[ignore = "pending identity integration"]
 #[tokio::test]
 async fn io_two_independent() {
@@ -352,7 +313,7 @@ fn io_two_independent_mir() {
     );
 }
 
-// ── 2. Four-way independent IO ─────────────────────────────────────
+// -- 2. Four-way independent IO -------------------------------------
 
 /// Maximum parallelism: 4 independent IO calls.
 #[ignore = "pending identity integration"]
@@ -382,7 +343,7 @@ fn io_four_way_parallel_mir() {
     );
 }
 
-// ── 3. Dependent chain + independent IO ────────────────────────────
+// -- 3. Dependent chain + independent IO ----------------------------
 //
 // a = fetch_a()          // IO, independent
 // b = fetch_by(a)        // IO, depends on a
@@ -390,7 +351,7 @@ fn io_four_way_parallel_mir() {
 // b + c
 //
 // Optimal: spawn fetch_a + spawn fetch_c in parallel,
-//          eval fetch_a, spawn fetch_by(a), eval fetch_c, eval fetch_by → b+c
+//          eval fetch_a, spawn fetch_by(a), eval fetch_c, eval fetch_by -> b+c
 
 #[ignore = "pending identity integration"]
 #[tokio::test]
@@ -413,7 +374,7 @@ fn io_chain_with_independent_mir() {
     let (i, cr) = compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_c(); b + c");
     let (spawns, evals) = dump_and_positions("chain_with_independent", &i, &cr);
 
-    // 3 IO calls → 3 spawns, 3 evals.
+    // 3 IO calls -> 3 spawns, 3 evals.
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
     assert_eq!(evals.len(), 3, "expected 3 evals");
 
@@ -426,7 +387,7 @@ fn io_chain_with_independent_mir() {
     );
 }
 
-// ── 4. Diamond dependency ──────────────────────────────────────────
+// -- 4. Diamond dependency ------------------------------------------
 //
 // a = fetch_a()          // IO
 // b = fetch_by(a)        // IO, depends on a
@@ -469,18 +430,18 @@ fn io_diamond_dependency_mir() {
     );
 }
 
-// ── 5. Deep sequential chain ───────────────────────────────────────
+// -- 5. Deep sequential chain ---------------------------------------
 //
 // a = fetch_a(); b = fetch_by(a); c = fetch_by(b); d = fetch_by(c); d
 //
 // No parallelism possible: each depends on the previous.
-// spawn→eval→spawn→eval→spawn→eval→spawn→eval
+// spawn->eval->spawn->eval->spawn->eval->spawn->eval
 
 #[ignore = "pending identity integration"]
 #[tokio::test]
 async fn io_deep_chain() {
     let i = Interner::new();
-    // 100 → 1000 → 10000 → 100000
+    // 100 -> 1000 -> 10000 -> 100000
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_by(b); d = fetch_by(c); d",
@@ -511,10 +472,10 @@ fn io_deep_chain_mir() {
     }
 }
 
-// ── 6. Two independent chains ──────────────────────────────────────
+// -- 6. Two independent chains --------------------------------------
 //
-// a = fetch_a(); b = fetch_by(a);    // chain 1: a → b
-// c = fetch_c(); d = fetch_by(c);    // chain 2: c → d (independent of chain 1)
+// a = fetch_a(); b = fetch_by(a);    // chain 1: a -> b
+// c = fetch_c(); d = fetch_by(c);    // chain 2: c -> d (independent of chain 1)
 // b + d
 //
 // Optimal: spawn a + spawn c, eval a, spawn b, eval c, spawn d, eval b, eval d
@@ -523,7 +484,7 @@ fn io_deep_chain_mir() {
 #[tokio::test]
 async fn io_two_independent_chains() {
     let i = Interner::new();
-    // chain 1: 100 → 1000, chain 2: 300 → 3000
+    // chain 1: 100 -> 1000, chain 2: 300 -> 3000
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_c(); d = fetch_by(c); b + d",
@@ -551,7 +512,7 @@ fn io_two_independent_chains_mir() {
     );
 }
 
-// ── 7. IO in iteration ─────────────────────────────────────────────
+// -- 7. IO in iteration ---------------------------------------------
 //
 // Iterate over list, call IO per element, accumulate.
 // Within each iteration: spawn should precede eval.
@@ -560,7 +521,7 @@ fn io_two_independent_chains_mir() {
 #[tokio::test]
 async fn io_in_iteration() {
     let i = Interner::new();
-    // fetch_by(1)=10, fetch_by(2)=20, fetch_by(3)=30 → sum=60
+    // fetch_by(1)=10, fetch_by(2)=20, fetch_by(3)=30 -> sum=60
     let c = ctx(
         &i,
         &[
@@ -581,16 +542,16 @@ async fn io_in_iteration() {
     assert_eq!(result.value, Value::Int(60));
 }
 
-// ── 8. Compiler pipeline pattern ───────────────────────────────────
+// -- 8. Compiler pipeline pattern -----------------------------------
 //
 // Simulates: resolve_imports + parse_types (independent IO),
 // then dependent passes that use both results.
 //
-// imports = fetch_a()           // "resolve imports" — IO
-// types   = fetch_b()           // "parse types"     — IO, independent
-// refs    = fetch_by(imports)   // "resolve refs"    — depends on imports
-// checked = refs + types        // "type check"      — depends on refs + types
-// extra   = fetch_c()           // "lint"            — independent of everything
+// imports = fetch_a()           // "resolve imports" - IO
+// types   = fetch_b()           // "parse types"     - IO, independent
+// refs    = fetch_by(imports)   // "resolve refs"    - depends on imports
+// checked = refs + types        // "type check"      - depends on refs + types
+// extra   = fetch_c()           // "lint"            - independent of everything
 // checked + extra
 //
 // Optimal: spawn imports + spawn types + spawn extra (3-way parallel),
@@ -624,7 +585,7 @@ fn io_compiler_pipeline_mir() {
     assert_eq!(spawns.len(), 4, "expected 4 spawns");
     assert_eq!(evals.len(), 4, "expected 4 evals");
 
-    // fetch_a, fetch_b, fetch_c are independent — all 3 should be spawned before any eval.
+    // fetch_a, fetch_b, fetch_c are independent - all 3 should be spawned before any eval.
     // fetch_by depends on eval(fetch_a).
     // At minimum: 3 independent spawns before first eval.
     let spawns_before_first_eval = spawns.iter().filter(|&&s| s < evals[0]).count();
@@ -638,46 +599,34 @@ fn io_compiler_pipeline_mir() {
 //  Move-only opaque value through an IO ExternFn (Spawn + Eval path)
 // =======================================================================
 
+#[derive(ExternType)]
+#[extern_type(move_only)]
+struct Tok(i64);
+
+#[extern_fn(effect = pure)]
+fn mk_tok(_: &Interner) -> Tok {
+    Tok(7)
+}
+
+#[extern_fn]
+fn consume_tok(_: &Interner, tok: Tok) -> i64 {
+    tok.0
+}
+
 #[tokio::test]
 async fn io_extern_consumes_move_only_opaque() {
     let i = Interner::new();
-    let tok_qref = QualifiedRef::root(i.intern("Tok"));
-    let mut type_registry = TypeRegistry::new();
-    type_registry.register(UserDefinedDecl {
-        qref: tok_qref,
-        type_params: vec![],
-        effect_params: 0,
-    });
-    let tok_ty = Ty::UserDefined {
-        id: tok_qref,
-        type_args: vec![],
-        effect_args: vec![],
+    let registry = extern_registry! {
+        types: [Tok],
+        fns: [mk_tok, consume_tok],
     };
-
-    let registry = ExternRegistry::new(move |interner| {
-        vec![
-            ExternFnBuilder::new("mk_tok", sig(interner, vec![], tok_ty.clone())).handler(
-                move |_: &Interner, (): ()| Ok(Value::extern_value(ExternValue::new(tok_qref, 7i64))),
-            ),
-            ExternFnBuilder::new(
-                "consume_tok",
-                sig_effect(interner, vec![tok_ty.clone()], Ty::Int, Effect::Opaque),
-            )
-            .handler(|_: &Interner, (v,): (Value,)| match v {
-                Value::Extern(o) => o
-                    .into_owned::<i64>()
-                    .map_err(|_| RuntimeError::internal("Tok was shared, not moved")),
-                other => panic!("expected Tok, got {other:?}"),
-            }),
-        ]
-    });
 
     let result = run_script_with_externs_and_types(
         &i,
         "t = mk_tok(); consume_tok(t)",
         ctx(&i, &[]),
         vec![registry],
-        type_registry,
+        TypeRegistry::new(),
     )
     .await;
     assert_eq!(result.value, Value::Int(7));
@@ -690,15 +639,14 @@ async fn io_inside_iterator_pipeline() {
         &i,
         &[("items", Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))],
     );
-    let mut tr = TypeRegistry::new();
-    let mut regs = acvus_ext::std_registries(&i, &mut tr);
+    let mut regs = acvus_ext::std_registries();
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
         &i,
         "@items | iter | map(|x| -> fetch_by(x)) | collect",
         c,
         regs,
-        tr,
+        TypeRegistry::new(),
     )
     .await;
     let Value::Extern(list) = result.value else {

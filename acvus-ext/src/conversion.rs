@@ -1,148 +1,76 @@
-//! Type conversion operations as ExternFn. All pure.
+//! Type conversions. All pure.
 
-use std::sync::Arc;
+use acvus_extern::{ExternRegistry, Interner, RuntimeError, TyVar, Value, ValueKind, extern_fn, extern_registry};
 
-use acvus_interpreter::{
-    ExternFnBuilder, ExternRegistry, RuntimeError, Value, ValueKind,
-};
-use acvus_mir::ty::{ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_to_poly};
-use acvus_utils::Interner;
-
-// ── Handlers ────────────────────────────────────────────────────────
-
-fn h_to_string(
-    _: &Interner,
-    (val,): (Value,),
-) -> Result<Value, RuntimeError> {
-    let s = match &val {
+#[extern_fn(effect = pure)]
+fn to_string<T: TyVar>(i: &Interner, val: T) -> String {
+    match val.into_value(i) {
         Value::Int(n) => n.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::String(s) => return Ok(Value::String(Arc::clone(s))),
+        Value::String(s) => s.to_string(),
         Value::Byte(b) => format!("0x{b:02x}"),
         Value::Unit => "()".to_string(),
         other => format!("{other:?}"),
-    };
-    Ok(Value::string(s))
-}
-
-fn h_to_int(
-    _: &Interner,
-    (val,): (Value,),
-) -> Result<i64, RuntimeError> {
-    let n = match &val {
-        Value::Int(n) => *n,
-        Value::Float(f) => *f as i64,
-        Value::String(s) => s.parse::<i64>().map_err(|e| {
-            RuntimeError::extern_call("to_int", format!("cannot parse string: {e}"))
-        })?,
-        Value::Bool(b) => {
-            if *b {
-                1
-            } else {
-                0
-            }
-        }
-        _ => {
-            return Err(RuntimeError::unexpected_type(
-                "to_int",
-                &[
-                    ValueKind::Int,
-                    ValueKind::Float,
-                    ValueKind::String,
-                    ValueKind::Bool,
-                ],
-                val.kind(),
-            ));
-        }
-    };
-    Ok(n)
-}
-
-fn h_to_float(
-    _: &Interner,
-    (n,): (i64,),
-) -> Result<f64, RuntimeError> {
-    Ok(n as f64)
-}
-
-fn h_char_to_int(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<i64, RuntimeError> {
-    Ok(s.chars().next().unwrap_or('\0') as i64)
-}
-
-fn h_int_to_char(
-    _: &Interner,
-    (n,): (i64,),
-) -> Result<String, RuntimeError> {
-    let ch = char::from_u32(n as u32).unwrap_or('\u{FFFD}');
-    Ok(ch.to_string())
-}
-
-// ── Constraint builders ─────────────────────────────────────────────
-
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
-    let named: Vec<ParamTerm<Poly>> = params
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-        .collect();
-    TyTerm::Fn {
-        params: named,
-        ret: Box::new(lift_to_poly(&ret)),
-        captures: vec![],
-        effect: acvus_mir::ty::Effect::Pure.into(),
     }
 }
 
-fn sig_poly(interner: &Interner, params: Vec<PolyTy>, ret: PolyTy) -> PolyTy {
-    let named: Vec<ParamTerm<Poly>> = params
-        .into_iter()
-        .enumerate()
-        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), ty))
-        .collect();
-    TyTerm::Fn {
-        params: named,
-        ret: Box::new(ret),
-        captures: vec![],
-        effect: acvus_mir::ty::Effect::Pure.into(),
+#[extern_fn(effect = pure)]
+fn to_int<T: TyVar>(i: &Interner, val: T) -> Result<i64, RuntimeError> {
+    let val = val.into_value(i);
+    match &val {
+        Value::Int(n) => Ok(*n),
+        Value::Float(f) => Ok(*f as i64),
+        Value::String(s) => s
+            .parse::<i64>()
+            .map_err(|e| RuntimeError::extern_call("to_int", format!("cannot parse string: {e}"))),
+        Value::Bool(b) => Ok(i64::from(*b)),
+        _ => Err(RuntimeError::unexpected_type(
+            "to_int",
+            &[ValueKind::Int, ValueKind::Float, ValueKind::String, ValueKind::Bool],
+            val.kind(),
+        )),
     }
 }
 
-fn scalar_sig(interner: &Interner, ret: Ty) -> PolyTy {
-    let mut b = PolyBuilder::new();
-    let t = b.fresh_ty_var();
-    sig_poly(interner, vec![t], lift_to_poly(&ret))
+#[extern_fn(effect = pure)]
+fn to_float(_: &Interner, n: i64) -> f64 {
+    n as f64
 }
 
-// ── Registry ────────────────────────────────────────────────────────
+#[extern_fn(effect = pure)]
+fn char_to_int(_: &Interner, s: String) -> Result<i64, RuntimeError> {
+    match s.chars().next() {
+        Some(c) => Ok(c as i64),
+        None => Err(RuntimeError::extern_call("char_to_int", "empty string")),
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn int_to_char(_: &Interner, n: i64) -> Result<String, RuntimeError> {
+    let code = u32::try_from(n)
+        .map_err(|_| RuntimeError::extern_call("int_to_char", format!("{n} is not a code point")))?;
+    match char::from_u32(code) {
+        Some(c) => Ok(c.to_string()),
+        None => Err(RuntimeError::extern_call("int_to_char", format!("{n} is not a code point"))),
+    }
+}
 
 pub fn conversion_registry() -> ExternRegistry {
-    ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new("to_string", scalar_sig(interner, Ty::String))
-                .handler(h_to_string),
-            ExternFnBuilder::new("to_int", scalar_sig(interner, Ty::Int)).handler(h_to_int),
-            ExternFnBuilder::new("to_float", sig(interner, vec![Ty::Int], Ty::Float))
-                .handler(h_to_float),
-            ExternFnBuilder::new("char_to_int", sig(interner, vec![Ty::String], Ty::Int))
-                .handler(h_char_to_int),
-            ExternFnBuilder::new("int_to_char", sig(interner, vec![Ty::Int], Ty::String))
-                .handler(h_int_to_char),
-        ]
-    })
+    extern_registry! {
+        fns: [to_string, to_int, to_float, char_to_int, int_to_char],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acvus_extern::TypeRegistry;
 
     #[test]
     fn registry_produces_functions() {
-        let i = acvus_utils::Interner::new();
-        let reg = conversion_registry().register(&i);
+        let i = Interner::new();
+        let reg = conversion_registry().register(&i, &mut TypeRegistry::new());
         assert_eq!(reg.functions.len(), 5);
         assert_eq!(reg.executables.len(), 5);
     }

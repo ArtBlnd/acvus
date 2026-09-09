@@ -22,7 +22,7 @@ fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -
     }
 }
 
-/// Run extract → infer → lower, collecting errors from all passes.
+/// Run extract -> infer -> lower, collecting errors from all passes.
 fn run_pipeline(
     interner: &Interner,
     graph: &CompilationGraph,
@@ -171,9 +171,9 @@ pub fn compile_to_ir_with(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     functions.extend_from_slice(extern_fns);
@@ -243,9 +243,9 @@ pub fn compile_script_ir(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let graph = CompilationGraph {
@@ -256,7 +256,7 @@ pub fn compile_script_ir(
     Ok(dump_with(interner, &module))
 }
 
-/// Compile a **script** with **no optimization** — raw lowered MIR.
+/// Compile a **script** with **no optimization** - raw lowered MIR.
 pub fn compile_script_raw(
     interner: &Interner,
     source: &str,
@@ -280,9 +280,9 @@ pub fn compile_script_raw(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let graph = CompilationGraph {
@@ -347,9 +347,9 @@ pub fn compile_script_mode_raw(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let graph = CompilationGraph {
@@ -389,7 +389,7 @@ pub fn compile_script_mode_raw(
     Ok(dump_with(interner, module))
 }
 
-/// Compile a **script** with the **full optimization pipeline** (SROA → SSA → Inline → Pass2).
+/// Compile a **script** with the **full optimization pipeline** (SROA -> SSA -> Inline -> Pass2).
 /// Returns printed IR of the optimized module.
 pub fn compile_script_optimized(
     interner: &Interner,
@@ -414,9 +414,9 @@ pub fn compile_script_optimized(
         vec![],
     )];
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     let graph = CompilationGraph {
@@ -473,12 +473,12 @@ pub fn compile_script_optimized(
     Ok(dump_with(interner, module))
 }
 
-// ── Inline pipeline ─────────────────────────────────────────────────
+// -- Inline pipeline -------------------------------------------------
 
 /// Compile multiple local functions, inline, and return the printed IR for the target.
 ///
-/// `target`: (name, script_source) — the function whose inlined IR is returned.
-/// `helpers`: list of (name, script_source, signature) — local functions callable from target.
+/// `target`: (name, script_source) - the function whose inlined IR is returned.
+/// `helpers`: list of (name, script_source, signature) - local functions callable from target.
 /// `contexts`: context types available to all functions.
 pub fn compile_inline_ir(
     interner: &Interner,
@@ -527,9 +527,9 @@ pub fn compile_inline_ir_with(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     functions.extend_from_slice(extern_fns);
@@ -539,7 +539,7 @@ pub fn compile_inline_ir_with(
         contexts: Freeze::new(ctx_vec),
     };
 
-    // Run extract → infer → lower (full pipeline).
+    // Run extract -> infer -> lower (full pipeline).
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(
         interner,
@@ -578,7 +578,7 @@ pub fn compile_inline_ir_with(
         return Err(errors.join("\n"));
     }
 
-    // Inline (no recursive functions in tests — pass empty set).
+    // Inline (no recursive functions in tests - pass empty set).
     let inlined = acvus_mir::graph::inliner::inline(&result.modules, &FxHashSet::default());
 
     inlined
@@ -588,7 +588,7 @@ pub fn compile_inline_ir_with(
         .ok_or_else(|| "no inlined module for target".to_string())
 }
 
-/// Compile multiple local functions — **raw lower only**, no optimization.
+/// Compile multiple local functions - **raw lower only**, no optimization.
 /// Returns printed IR of ALL local modules (since no inlining happens).
 pub fn compile_multi_fn_raw(
     interner: &Interner,
@@ -627,9 +627,9 @@ pub fn compile_multi_fn_raw(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     functions.extend_from_slice(extern_fns);
@@ -676,7 +676,7 @@ pub fn compile_multi_fn_raw(
         if module.main.insts.is_empty() {
             continue;
         }
-        output.push_str(&format!("── {} ──\n", fn_name));
+        output.push_str(&format!("-- {} --\n", fn_name));
         output.push_str(&dump_with(interner, module));
         output.push('\n');
     }
@@ -685,10 +685,10 @@ pub fn compile_multi_fn_raw(
 }
 
 /// Compile multiple local functions through the **full optimization pipeline**.
-/// Includes: SROA → SSA → DSE → Inline → Pass2 (SpawnSplit → SSA → DSE → CodeMotion → Reorder → RegColor → Validate).
+/// Includes: SROA -> SSA -> DSE -> Inline -> Pass2 (SpawnSplit -> SSA -> DSE -> CodeMotion -> Reorder -> RegColor -> Validate).
 ///
-/// `target`: (name, script_source) — the function whose optimized IR is returned.
-/// `helpers`: (name, script_source, signature) — local functions callable from target.
+/// `target`: (name, script_source) - the function whose optimized IR is returned.
+/// `helpers`: (name, script_source, signature) - local functions callable from target.
 /// `contexts`: context types.
 /// `extern_fns`: additional extern function declarations.
 pub fn compile_multi_fn_optimized(
@@ -728,9 +728,9 @@ pub fn compile_multi_fn_optimized(
     }
 
     let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries(interner, &mut type_registry);
+    let std_regs = acvus_ext::std_registries();
     for registry in std_regs {
-        let registered = registry.register(interner);
+        let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
     functions.extend_from_slice(extern_fns);

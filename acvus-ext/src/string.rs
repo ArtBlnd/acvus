@@ -1,241 +1,116 @@
-//! String operations as ExternFn. All pure.
+//! String operations. All pure.
 
-use acvus_interpreter::{
-    ExternFnBuilder, ExternRegistry, RuntimeError, Value, ValueKind,
-};
-use acvus_mir::ty::{ParamTerm, Poly, PolyTy, Ty, TyTerm, lift_to_poly};
-use acvus_utils::Interner;
+use acvus_extern::{ExternRegistry, Interner, RuntimeError, extern_fn, extern_registry};
 
-use crate::list::{List, list_ty, list_value};
+use crate::list::List;
 
-// ── Handlers ────────────────────────────────────────────────────────
-
-fn h_len_str(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<i64, RuntimeError> {
-    Ok(s.len() as i64)
+#[extern_fn(effect = pure)]
+fn len_str(_: &Interner, s: String) -> i64 {
+    s.len() as i64
 }
 
-fn h_trim(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<String, RuntimeError> {
-    Ok(s.trim().to_owned())
+#[extern_fn(effect = pure)]
+fn trim(_: &Interner, s: String) -> String {
+    s.trim().to_owned()
 }
 
-fn h_trim_start(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<String, RuntimeError> {
-    Ok(s.trim_start().to_owned())
+#[extern_fn(effect = pure)]
+fn trim_start(_: &Interner, s: String) -> String {
+    s.trim_start().to_owned()
 }
 
-fn h_trim_end(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<String, RuntimeError> {
-    Ok(s.trim_end().to_owned())
+#[extern_fn(effect = pure)]
+fn trim_end(_: &Interner, s: String) -> String {
+    s.trim_end().to_owned()
 }
 
-fn h_upper(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<String, RuntimeError> {
-    Ok(s.to_uppercase())
+#[extern_fn(effect = pure)]
+fn upper(_: &Interner, s: String) -> String {
+    s.to_uppercase()
 }
 
-fn h_lower(
-    _: &Interner,
-    (s,): (String,),
-) -> Result<String, RuntimeError> {
-    Ok(s.to_lowercase())
+#[extern_fn(effect = pure)]
+fn lower(_: &Interner, s: String) -> String {
+    s.to_lowercase()
 }
 
-fn h_contains_str(
-    _: &Interner,
-    (s, pat): (String, String),
-) -> Result<bool, RuntimeError> {
-    Ok(s.contains(&*pat))
+#[extern_fn(effect = pure)]
+fn contains_str(_: &Interner, s: String, pat: String) -> bool {
+    s.contains(&*pat)
 }
 
-fn h_starts_with(
-    _: &Interner,
-    (s, pat): (String, String),
-) -> Result<bool, RuntimeError> {
-    Ok(s.starts_with(&*pat))
+#[extern_fn(effect = pure)]
+fn starts_with_str(_: &Interner, s: String, pat: String) -> bool {
+    s.starts_with(&*pat)
 }
 
-fn h_ends_with(
-    _: &Interner,
-    (s, pat): (String, String),
-) -> Result<bool, RuntimeError> {
-    Ok(s.ends_with(&*pat))
+#[extern_fn(effect = pure)]
+fn ends_with_str(_: &Interner, s: String, pat: String) -> bool {
+    s.ends_with(&*pat)
 }
 
-fn h_replace(
-    _: &Interner,
-    (s, from, to): (String, String, String),
-) -> Result<String, RuntimeError> {
-    Ok(s.replace(&*from, &to))
+#[extern_fn(effect = pure)]
+fn replace_str(_: &Interner, s: String, from: String, to: String) -> String {
+    s.replace(&*from, &to)
 }
 
-fn h_split(
-    interner: &Interner,
-    (s, sep): (String, String),
-) -> Result<Value, RuntimeError> {
-    let parts: Vec<Value> = s.split(&*sep).map(Value::string).collect();
-    Ok(list_value(interner, parts))
+#[extern_fn(effect = pure)]
+fn split_str(_: &Interner, s: String, sep: String) -> List<String> {
+    List(s.split(&*sep).map(str::to_owned).collect())
 }
 
-fn h_repeat(
-    _: &Interner,
-    (s, n): (String, i64),
-) -> Result<String, RuntimeError> {
-    Ok(s.repeat(n.max(0) as usize))
+#[extern_fn(effect = pure)]
+fn repeat_str(_: &Interner, s: String, n: i64) -> Result<String, RuntimeError> {
+    let n = usize::try_from(n)
+        .map_err(|_| RuntimeError::extern_call("repeat_str", format!("negative count {n}")))?;
+    Ok(s.repeat(n))
 }
 
-fn h_substring(
-    _: &Interner,
-    (s, start, end): (String, i64, i64),
-) -> Result<String, RuntimeError> {
+/// Byte range `[start, end)` clamped to the string; an inverted range is empty.
+#[extern_fn(effect = pure)]
+fn substring(_: &Interner, s: String, start: i64, end: i64) -> String {
     let start = start.max(0) as usize;
     let end = (end.max(0) as usize).min(s.len());
     let start = start.min(end);
-    Ok(s[start..end].to_owned())
+    s[start..end].to_owned()
 }
 
-fn h_to_bytes(
-    interner: &Interner,
-    (s,): (String,),
-) -> Result<Value, RuntimeError> {
-    let bytes: Vec<Value> = s.bytes().map(Value::byte).collect();
-    Ok(list_value(interner, bytes))
+#[extern_fn(effect = pure)]
+fn to_bytes(_: &Interner, s: String) -> List<u8> {
+    List(s.into_bytes())
 }
 
-fn h_to_utf8(
-    _: &Interner,
-    (bytes,): (List,),
-) -> Result<Value, RuntimeError> {
-    let raw: Vec<u8> = bytes.0.iter().map(|v| v.as_byte()).collect();
-    let s = String::from_utf8(raw).map_err(|_| {
-        RuntimeError::unexpected_type("to_utf8", &[ValueKind::Extern], ValueKind::Extern)
-    })?;
-    Ok(Value::string(s))
+#[extern_fn(effect = pure)]
+fn to_utf8(_: &Interner, bytes: List<u8>) -> Option<String> {
+    String::from_utf8(bytes.0).ok()
 }
 
-fn h_to_utf8_lossy(
-    _: &Interner,
-    (bytes,): (List,),
-) -> Result<String, RuntimeError> {
-    let raw: Vec<u8> = bytes.0.iter().map(|v| v.as_byte()).collect();
-    Ok(String::from_utf8_lossy(&raw).into_owned())
+#[extern_fn(effect = pure)]
+fn to_utf8_lossy(_: &Interner, bytes: List<u8>) -> String {
+    String::from_utf8_lossy(&bytes.0).into_owned()
 }
-
-// ── Constraint builders ─────────────────────────────────────────────
-
-fn sig(interner: &Interner, params: Vec<Ty>, ret: Ty) -> PolyTy {
-    let named: Vec<ParamTerm<Poly>> = params
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-        .collect();
-    TyTerm::Fn {
-        params: named,
-        ret: Box::new(lift_to_poly(&ret)),
-        captures: vec![],
-        effect: acvus_mir::ty::Effect::Pure.into(),
-    }
-}
-
-// ── Registry ────────────────────────────────────────────────────────
 
 pub fn string_registry() -> ExternRegistry {
-    ExternRegistry::new(|interner| {
-        vec![
-            ExternFnBuilder::new("len_str", sig(interner, vec![Ty::String], Ty::Int))
-                .handler(h_len_str),
-            ExternFnBuilder::new("trim", sig(interner, vec![Ty::String], Ty::String))
-                .handler(h_trim),
-            ExternFnBuilder::new("trim_start", sig(interner, vec![Ty::String], Ty::String))
-                .handler(h_trim_start),
-            ExternFnBuilder::new("trim_end", sig(interner, vec![Ty::String], Ty::String))
-                .handler(h_trim_end),
-            ExternFnBuilder::new("upper", sig(interner, vec![Ty::String], Ty::String))
-                .handler(h_upper),
-            ExternFnBuilder::new("lower", sig(interner, vec![Ty::String], Ty::String))
-                .handler(h_lower),
-            ExternFnBuilder::new(
-                "contains_str",
-                sig(interner, vec![Ty::String, Ty::String], Ty::Bool),
-            )
-            .handler(h_contains_str),
-            ExternFnBuilder::new(
-                "starts_with_str",
-                sig(interner, vec![Ty::String, Ty::String], Ty::Bool),
-            )
-            .handler(h_starts_with),
-            ExternFnBuilder::new(
-                "ends_with_str",
-                sig(interner, vec![Ty::String, Ty::String], Ty::Bool),
-            )
-            .handler(h_ends_with),
-            ExternFnBuilder::new(
-                "replace_str",
-                sig(
-                    interner,
-                    vec![Ty::String, Ty::String, Ty::String],
-                    Ty::String,
-                ),
-            )
-            .handler(h_replace),
-            ExternFnBuilder::new(
-                "split_str",
-                sig(
-                    interner,
-                    vec![Ty::String, Ty::String],
-                    list_ty(interner, Ty::String),
-                ),
-            )
-            .handler(h_split),
-            ExternFnBuilder::new(
-                "repeat_str",
-                sig(interner, vec![Ty::String, Ty::Int], Ty::String),
-            )
-            .handler(h_repeat),
-            ExternFnBuilder::new(
-                "substring",
-                sig(interner, vec![Ty::String, Ty::Int, Ty::Int], Ty::String),
-            )
-            .handler(h_substring),
-            ExternFnBuilder::new("to_bytes", sig(interner, vec![Ty::String], list_ty(interner, Ty::Byte)))
-                .handler(h_to_bytes),
-            ExternFnBuilder::new(
-                "to_utf8",
-                sig(
-                    interner,
-                    vec![list_ty(interner, Ty::Byte)],
-                    Ty::Option(Box::new(Ty::String)),
-                ),
-            )
-            .handler(h_to_utf8),
-            ExternFnBuilder::new(
-                "to_utf8_lossy",
-                sig(interner, vec![list_ty(interner, Ty::Byte)], Ty::String),
-            )
-            .handler(h_to_utf8_lossy),
-        ]
-    })
+    extern_registry! {
+        fns: [
+            len_str, trim, trim_start, trim_end, upper, lower, contains_str,
+            starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
+            substring, to_bytes, to_utf8, to_utf8_lossy,
+        ],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acvus_extern::TypeRegistry;
 
     #[test]
     fn registry_produces_functions() {
-        let i = acvus_utils::Interner::new();
-        let reg = string_registry().register(&i);
+        let i = Interner::new();
+        let mut tr = TypeRegistry::new();
+        crate::list::list_registry().register(&i, &mut tr);
+        let reg = string_registry().register(&i, &mut tr);
         assert_eq!(reg.functions.len(), 16);
         assert_eq!(reg.executables.len(), 16);
     }

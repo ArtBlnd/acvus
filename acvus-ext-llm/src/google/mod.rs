@@ -2,15 +2,14 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
-use acvus_mir::ty::{ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
-use acvus_utils::Interner;
+use acvus_ext::List;
+use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
 
-use crate::extract::{obj_get_decimal, obj_get_str, obj_get_u32, split_system, values_to_messages};
+use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, HttpRequest, RequestError};
 use crate::message::*;
 
-// ── Message conversion ──────────────────────────────────────────────
+// -- Message conversion ----------------------------------------------
 
 fn convert_message(m: &Message) -> schema::Content {
     match m {
@@ -59,7 +58,7 @@ fn convert_message(m: &Message) -> schema::Content {
     }
 }
 
-// ── Response parsing ────────────────────────────────────────────────
+// -- Response parsing ------------------------------------------------
 
 fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
     let resp: schema::Response =
@@ -122,207 +121,73 @@ fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), Req
     ))
 }
 
-// ── Value helpers ───────────────────────────────────────────────────
+// -- Registry --------------------------------------------------------
 
-/// Build the response `Value::Object` from a `ModelResponse`.
-fn response_to_value(resp: &ModelResponse, interner: &Interner) -> Value {
-    let role_key = interner.intern("role");
-    let content_key = interner.intern("content");
-    let content_type_key = interner.intern("content_type");
+#[derive(Debug, Clone, TyArg)]
+pub struct GoogleConfig {
+    pub endpoint: String,
+    pub api_key: String,
+    pub model: String,
+}
 
+fn first_message(resp: ModelResponse) -> Result<OutputMessage, RuntimeError> {
     match resp {
-        ModelResponse::Content(parts) => {
-            let first = parts.first().map(|item| {
-                let text = match &item.content {
-                    Content::Text(t) => t.clone(),
-                    Content::Blob { data, .. } => data.clone(),
-                };
-                Value::object(
-                    [
-                        (role_key, Value::string(item.role.clone())),
-                        (content_key, Value::string(text)),
-                        (content_type_key, Value::string("text")),
-                    ]
-                    .into_iter()
-                    .collect(),
-                )
-            });
-            first.unwrap_or_else(|| {
-                Value::object(
-                    [
-                        (role_key, Value::string("model")),
-                        (content_key, Value::string("")),
-                        (content_type_key, Value::string("text")),
-                    ]
-                    .into_iter()
-                    .collect(),
-                )
-            })
-        }
-        ModelResponse::ToolCalls(_) => Value::object(
-            [
-                (role_key, Value::string("model")),
-                (content_key, Value::string("")),
-                (content_type_key, Value::string("text")),
-            ]
-            .into_iter()
-            .collect(),
-        ),
+        ModelResponse::Content(parts) => parts
+            .first()
+            .map(OutputMessage::text)
+            .ok_or_else(|| RuntimeError::fetch("google_llm: response has no content parts")),
+        ModelResponse::ToolCalls(_) => Err(RuntimeError::fetch(
+            "google_llm: tool calls are not representable as a message",
+        )),
     }
 }
 
-// ── Registry ────────────────────────────────────────────────────────
-
 /// Create an `ExternRegistry` for the Google/Gemini chat completion handler.
-///
-/// The registered function `google_llm` takes `(messages, config)` where:
-/// - `messages`: list of objects with `{role, content, content_type}` fields
-/// - `config`: object with `{endpoint, api_key, model, temperature?, top_p?, top_k?, max_tokens?}`
 ///
 /// Gemini specifics:
 /// - API key goes in URL query param: `{endpoint}/models/{model}:generateContent?key={api_key}`
 /// - System messages are extracted into the `system_instruction` field (separate from `contents`)
 /// - Role `"assistant"` is mapped to `"model"` for the Gemini API
-/// - Returns `Value::Object` with `{role, content, content_type}` fields
 pub fn google_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
     ExternRegistry::new(move |interner| {
-        let role_key = interner.intern("role");
-        let content_key = interner.intern("content");
-        let content_type_key = interner.intern("content_type");
-        let endpoint_key = interner.intern("endpoint");
-        let api_key_key = interner.intern("api_key");
-        let model_key = interner.intern("model");
-        let temperature_key = interner.intern("temperature");
-        let top_p_key = interner.intern("top_p");
-        let top_k_key = interner.intern("top_k");
-        let max_tokens_key = interner.intern("max_tokens");
+        let handler = move |_: Interner, messages: List<InputMessage>, config: GoogleConfig| {
+            let fetch = Arc::clone(&fetch);
+            async move {
+                let msgs = input_messages(messages.0);
+                let (system, rest) = split_system(&msgs);
 
-        let msg_ty = Ty::Object(
-            [
-                (role_key, Ty::String),
-                (content_key, Ty::String),
-                (content_type_key, Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
+                let request_body = schema::Request {
+                    contents: rest.iter().map(|m| convert_message(m)).collect(),
+                    system_instruction: system.map(|s| schema::SystemInstruction {
+                        parts: vec![schema::TextPart { text: s }],
+                    }),
+                    tools: None,
+                    generation_config: None,
+                };
 
-        let config_ty = Ty::Object(
-            [
-                (endpoint_key, Ty::String),
-                (api_key_key, Ty::String),
-                (model_key, Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
+                let url = format!(
+                    "{}/models/{}:generateContent?key={}",
+                    config.endpoint, config.model, config.api_key
+                );
+                let body = serde_json::to_value(&request_body).map_err(|e| {
+                    RuntimeError::fetch(format!("google_llm: serialization failed: {e}"))
+                })?;
+                let http_request = HttpRequest {
+                    url,
+                    headers: vec![("Content-Type".into(), "application/json".into())],
+                    body,
+                };
 
-        let fetch = Arc::clone(&fetch);
-
-        let params = vec![
-            acvus_ext::list_ty(interner, Ty::Object(
-                [(role_key, Ty::String), (content_key, Ty::String)]
-                    .into_iter()
-                    .collect(),
-            )),
-            config_ty,
-        ];
-        let named: Vec<ParamTerm<Poly>> = params
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-            .collect();
-        let ty = TyTerm::Fn {
-            params: named,
-            ret: Box::new(lift_to_poly(&msg_ty)),
-            captures: vec![],
-            effect: acvus_mir::ty::Effect::Opaque.into(),
+                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
+                let (response, _usage) =
+                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                first_message(response)
+            }
         };
-
-        vec![
-            ExternFnBuilder::new("google_llm", ty).handler_async(
-                move |interner: Interner,
-                      (messages, config): (Value, Value)| {
-                    let fetch = Arc::clone(&fetch);
-                    async move {
-                        let messages_owned = acvus_ext::sequence_items(messages.clone())?;
-                        let messages_list = messages_owned.as_slice();
-                        let msgs = values_to_messages(messages_list, &interner, "google_llm")?;
-                        let (system, rest) = split_system(&msgs);
-
-                        let config_obj = match &config {
-                            Value::Object(o) => o,
-                            other => {
-                                return Err(RuntimeError::fetch(format!(
-                                    "google_llm: expected Object for config, got {:?}",
-                                    other.kind()
-                                )));
-                            }
-                        };
-
-                        let endpoint = obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
-                            RuntimeError::fetch("google_llm: missing 'endpoint' in config")
-                        })?;
-                        let api_key = obj_get_str(config_obj, api_key_key).ok_or_else(|| {
-                            RuntimeError::fetch("google_llm: missing 'api_key' in config")
-                        })?;
-                        let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
-                            RuntimeError::fetch("google_llm: missing 'model' in config")
-                        })?;
-                        let temperature = obj_get_decimal(config_obj, temperature_key);
-                        let top_p = obj_get_decimal(config_obj, top_p_key);
-                        let top_k = obj_get_u32(config_obj, top_k_key);
-                        let max_tokens = obj_get_u32(config_obj, max_tokens_key);
-
-                        // Build the Gemini request body.
-                        let request_body = schema::Request {
-                            contents: rest.iter().map(|m| convert_message(m)).collect(),
-                            system_instruction: system.map(|s| schema::SystemInstruction {
-                                parts: vec![schema::TextPart { text: s }],
-                            }),
-                            tools: None,
-                            generation_config: Some(schema::GenerationConfig {
-                                temperature,
-                                top_p,
-                                top_k,
-                                max_output_tokens: max_tokens,
-                                thinking_config: None,
-                            }),
-                        };
-
-                        // API key goes in URL query param (not in header).
-                        let url = format!(
-                            "{}/models/{}:generateContent?key={}",
-                            endpoint, model, api_key
-                        );
-
-                        let body = serde_json::to_value(&request_body).map_err(|e| {
-                            acvus_interpreter::RuntimeError::fetch(format!(
-                                "google_llm: serialization failed: {e}"
-                            ))
-                        })?;
-
-                        let http_request = HttpRequest {
-                            url,
-                            // Content-Type only — no auth header (key is in URL).
-                            headers: vec![("Content-Type".into(), "application/json".into())],
-                            body,
-                        };
-
-                        let response_json = fetch
-                            .fetch(&http_request)
-                            .await
-                            .map_err(acvus_interpreter::RuntimeError::fetch)?;
-
-                        let (response, _usage) = parse_response(response_json)
-                            .map_err(|e| acvus_interpreter::RuntimeError::fetch(e.to_string()))?;
-
-                        let result = response_to_value(&response, &interner);
-                        Ok(result)
-                    }
-                },
-            ),
-        ]
+        ExternItems {
+            types: vec![],
+            fns: vec![ExternFn::r#async(interner, "google_llm", handler)],
+        }
     })
 }
 
@@ -474,7 +339,7 @@ mod tests {
         });
         let interner = Interner::new();
         let registry = google_registry(fetch);
-        let registered = registry.register(&interner);
+        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.executables.len(), 1);
 

@@ -173,24 +173,10 @@ fn field_set_deep(
     }
 }
 
-// ── Builtin dispatch ─────────────────────────────────────────────────
-
-/// Args passed to builtin functions. Stack-allocated for ≤4 args.
+/// Call arguments. Stack-allocated for <=4 args.
 pub type Args = SmallVec<[Value; 4]>;
 
-/// Sync builtin — no future overhead.
-pub type SyncBuiltinFn = fn(Args, &Interner) -> Result<Value, RuntimeError>;
-
-/// Async builtin — standalone, no Interpreter needed.
-pub type AsyncBuiltinFn = fn(Args, Interner) -> BoxFuture<'static, Result<Value, RuntimeError>>;
-
-/// Builtin handler — sync or async.
-pub enum BuiltinHandler {
-    Sync(SyncBuiltinFn),
-    Async(AsyncBuiltinFn),
-}
-
-// ── Frame ────────────────────────────────────────────────────────────
+// -- Frame ------------------------------------------------------------
 
 /// Register file. Stores one `Value` per SSA ValueId.
 struct Frame {
@@ -278,7 +264,7 @@ impl Frame {
     }
 }
 
-// ── Label map ────────────────────────────────────────────────────────
+// -- Label map --------------------------------------------------------
 
 fn build_label_map(body: &MirBody) -> FxHashMap<Label, usize> {
     build_label_map_from_insts(&body.insts)
@@ -297,8 +283,6 @@ fn build_label_map_from_insts(insts: &[Inst]) -> FxHashMap<Label, usize> {
 
 enum SpawnKind {
     Extern(crate::extern_fn::ExternHandler),
-    BuiltinSync(SyncBuiltinFn),
-    BuiltinAsync(AsyncBuiltinFn),
     Module,
 }
 
@@ -311,18 +295,17 @@ enum Flow {
 
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 
-// ── Public types ────────────────────────────────────────────────────
+// -- Public types ----------------------------------------------------
 
-/// Result of execution — return value + context mutations.
+/// Result of execution - return value + context mutations.
 pub struct ExecResult {
     pub value: Value,
     pub writes: Vec<ContextWrite>,
 }
 
-/// A single executable unit — MIR module, builtin handler, or extern function.
+/// A single executable unit - MIR module or extern function.
 pub enum Executable {
     Module(MirModule),
-    Builtin(BuiltinHandler),
     Extern(crate::extern_fn::ExternHandler),
 }
 
@@ -330,13 +313,12 @@ impl Executable {
     fn variant_name(&self) -> &'static str {
         match self {
             Self::Module(_) => "Module",
-            Self::Builtin(_) => "Builtin",
             Self::Extern(_) => "Extern",
         }
     }
 }
 
-/// Readonly shared state — clone is cheap (Freeze/Arc internally).
+/// Readonly shared state - clone is cheap (Freeze/Arc internally).
 #[derive(Clone)]
 pub struct InterpreterContext {
     pub interner: Interner,
@@ -372,7 +354,7 @@ impl InterpreterContext {
     }
 }
 
-// ── RunContext — mutable state bundle for run_loop ───────────────────
+// -- RunContext - mutable state bundle for run_loop -------------------
 
 /// Per-execution mutable state passed through the run_loop call chain.
 struct RunContext {
@@ -381,7 +363,7 @@ struct RunContext {
     variables: FxHashMap<ValueId, Value>,
 }
 
-// ── Standalone helpers (extracted from Interpreter methods) ──────────
+// -- Standalone helpers (extracted from Interpreter methods) ----------
 
 fn resolve_context_key(
     shared: &InterpreterContext,
@@ -408,7 +390,7 @@ fn lookup_module<'a>(shared: &'a InterpreterContext, id: &QualifiedRef) -> &'a M
     }
 }
 
-// ── run_loop — standalone execution engine ──────────────────────────
+// -- run_loop - standalone execution engine --------------------------
 
 fn run_loop<'s>(
     ctx: &'s mut RunContext,
@@ -458,12 +440,12 @@ async fn execute_inst(
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> Result<Flow, RuntimeError> {
     match &insts[pc].kind {
-        // ── Constants ────────────────────────────────────
+        // -- Constants ------------------------------------
         InstKind::Const { dst, value } => {
             frame.set(*dst, literal_to_value(value));
         }
 
-        // ── Projection ──────────────────────────────────
+        // -- Projection ----------------------------------
         InstKind::Ref { dst, target, path } => {
             projection_map.insert(*dst, RuntimeRef::from_target(target, path.clone()));
             frame.set(*dst, Value::Unit);
@@ -485,7 +467,7 @@ async fn execute_inst(
             store_ref(&rt_ref, ctx, val);
         }
 
-        // ── Arithmetic / Logic ───────────────────────────
+        // -- Arithmetic / Logic ---------------------------
         InstKind::BinOp {
             dst,
             op,
@@ -500,7 +482,7 @@ async fn execute_inst(
             frame.set(*dst, result);
         }
 
-        // ── Field / Index access ─────────────────────────
+        // -- Field / Index access -------------------------
         InstKind::FieldGet {
             dst,
             object,
@@ -550,7 +532,7 @@ async fn execute_inst(
             frame.set(*dst, val);
         }
 
-        // ── Constructors ─────────────────────────────────
+        // -- Constructors ---------------------------------
         InstKind::MakeArray { dst, elements } => {
             let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
             frame.set(*dst, Value::array(items));
@@ -584,7 +566,7 @@ async fn execute_inst(
             );
         }
 
-        // ── Variant ──────────────────────────────────────
+        // -- Variant --------------------------------------
         InstKind::MakeVariant { dst, tag, payload } => {
             let p = payload.map(|v| frame.share(v));
             frame.set(*dst, Value::variant(*tag, p));
@@ -608,7 +590,7 @@ async fn execute_inst(
             frame.set(*dst, val);
         }
 
-        // ── Pattern testing ──────────────────────────────
+        // -- Pattern testing ------------------------------
         InstKind::TestLiteral { dst, src, value } => {
             let matches = match (frame.get(*src), value) {
                 (Value::Int(a), Literal::Int(b)) => *a == *b,
@@ -636,7 +618,7 @@ async fn execute_inst(
             let _ = frame.take(*src);
         }
 
-        // ── Control flow ─────────────────────────────────
+        // -- Control flow ---------------------------------
         InstKind::BlockLabel { .. } => {}
         InstKind::Jump { label, args } => {
             let target = frame.jump(insts, label, args);
@@ -668,7 +650,7 @@ async fn execute_inst(
             panic!("reached poison instruction");
         }
 
-        // ── Functions ─────────────────────────────────────
+        // -- Functions -------------------------------------
         InstKind::LoadFunction { dst: _, id: _ } => {
             todo!("LoadFunction: graph-level function references not yet supported at runtime");
         }
@@ -725,32 +707,10 @@ async fn execute_inst(
             };
             let spawn_kind = match lookup_function(&ctx.shared, &callee_id) {
                 Executable::Extern(h) => SpawnKind::Extern(h.clone()),
-                Executable::Builtin(BuiltinHandler::Sync(f)) => SpawnKind::BuiltinSync(*f),
-                Executable::Builtin(BuiltinHandler::Async(f)) => SpawnKind::BuiltinAsync(*f),
                 Executable::Module(_) => SpawnKind::Module,
             };
             let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a, val_types)).collect();
             let handle = match spawn_kind {
-                SpawnKind::BuiltinSync(f) => {
-                    let interner = ctx.shared.interner.clone();
-                    ctx.shared.executor.spawn_blocking(Box::new(move || {
-                        let value = f(spawn_args.into(), &interner)?;
-                        Ok(ExecResult {
-                            value,
-                            writes: Vec::new(),
-                        })
-                    }))
-                }
-                SpawnKind::BuiltinAsync(f) => {
-                    let interner = ctx.shared.interner.clone();
-                    ctx.shared.executor.spawn_async(Box::pin(async move {
-                        let value = f(spawn_args.into(), interner).await?;
-                        Ok(ExecResult {
-                            value,
-                            writes: Vec::new(),
-                        })
-                    }))
-                }
                 SpawnKind::Extern(handler) => {
                     let interner = ctx.shared.interner.clone();
                     match &handler {
@@ -809,7 +769,7 @@ async fn execute_inst(
             frame.set(*dst, result.value);
         }
 
-        // ── Object/List dynamic access ───────────────────
+        // -- Object/List dynamic access -------------------
         InstKind::ObjectGet { dst, object, key } => {
             let val = match frame.get(*object) {
                 Value::Object(obj) => obj
@@ -839,7 +799,7 @@ async fn execute_inst(
     Ok(Flow::Next)
 }
 
-// ── Function dispatch ───────────────────────────────────────────────
+// -- Function dispatch -----------------------------------------------
 
 async fn dispatch_call(
     ctx: &mut RunContext,
@@ -847,15 +807,6 @@ async fn dispatch_call(
     args: Args,
 ) -> Result<Value, RuntimeError> {
     match lookup_function(&ctx.shared, id) {
-        Executable::Builtin(BuiltinHandler::Sync(f)) => {
-            let f = *f;
-            f(args, &ctx.shared.interner)
-        }
-        Executable::Builtin(BuiltinHandler::Async(f)) => {
-            let f = *f;
-            let interner = ctx.shared.interner.clone();
-            f(args, interner).await
-        }
         Executable::Module(_) => {
             let arg_values: Vec<Value> = args.into_vec();
             execute_function(ctx, id, &arg_values).await
@@ -893,9 +844,9 @@ async fn execute_function(
     .await
 }
 
-// ── Closure calling ─────────────────────────────────────────────────
+// -- Closure calling -------------------------------------------------
 
-/// Execute a FnValue with the given arguments. Self-contained — uses the
+/// Execute a FnValue with the given arguments. Self-contained - uses the
 /// FnValue's own shared context and forked overlay.
 pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut closure_ctx = RunContext {
@@ -928,7 +879,7 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     .await
 }
 
-// ── Interpreter — thin entry point ──────────────────────────────────
+// -- Interpreter - thin entry point ----------------------------------
 
 pub struct Interpreter {
     shared: InterpreterContext,
@@ -980,7 +931,7 @@ impl Interpreter {
     }
 }
 
-// ── Literal → Value ──────────────────────────────────────────────────
+// -- Literal -> Value --------------------------------------------------
 
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
@@ -994,7 +945,7 @@ fn literal_to_value(lit: &Literal) -> Value {
     }
 }
 
-// ── BinOp ────────────────────────────────────────────────────────────
+// -- BinOp ------------------------------------------------------------
 
 fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
     match (left, right) {
@@ -1064,7 +1015,7 @@ fn eval_binop(op: BinOp, left: &Value, right: &Value) -> Result<Value, RuntimeEr
     }
 }
 
-// ── UnaryOp ──────────────────────────────────────────────────────────
+// -- UnaryOp ----------------------------------------------------------
 
 fn eval_unaryop(op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
     match (op, val) {

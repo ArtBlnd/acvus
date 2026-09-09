@@ -1,13 +1,44 @@
 //! Common message types shared across LLM providers.
 
-/// Message content — text or binary blob.
+use acvus_extern::TyArg;
+
+/// A message a script sends to a provider.
+#[derive(Debug, Clone, TyArg)]
+pub struct InputMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// A message a provider returns to a script.
+#[derive(Debug, Clone, TyArg)]
+pub struct OutputMessage {
+    pub role: String,
+    pub content: String,
+    pub content_type: String,
+}
+
+impl OutputMessage {
+    pub fn text(item: &ContentItem) -> Self {
+        let content = match &item.content {
+            Content::Text(t) => t.clone(),
+            Content::Blob { data, .. } => data.clone(),
+        };
+        Self {
+            role: item.role.clone(),
+            content,
+            content_type: "text".to_owned(),
+        }
+    }
+}
+
+/// Message content - text or binary blob.
 #[derive(Debug, Clone)]
 pub enum Content {
     Text(String),
     Blob { mime_type: String, data: String },
 }
 
-/// A chat message — explicit variants, no implicit fields.
+/// A chat message - explicit variants, no implicit fields.
 #[derive(Debug, Clone)]
 pub enum Message {
     Content { role: String, content: Content },

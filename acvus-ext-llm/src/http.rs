@@ -43,7 +43,7 @@ pub struct HttpRequest {
     pub body: serde_json::Value,
 }
 
-/// Raw HTTP fetch — implementors only handle transport.
+/// Raw HTTP fetch - implementors only handle transport.
 #[trait_variant::make(Send)]
 pub trait Fetch: Sync {
     async fn fetch(&self, request: &HttpRequest) -> Result<serde_json::Value, String>;

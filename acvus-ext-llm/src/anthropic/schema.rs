@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-// ── Request ─────────────────────────────────────────────────────────
+// -- Request ---------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct Request {
@@ -92,7 +92,7 @@ pub struct PropertySchema {
     pub description: Option<String>,
 }
 
-// ── Count Tokens Request ────────────────────────────────────────────
+// -- Count Tokens Request --------------------------------------------
 
 #[derive(Serialize)]
 pub struct CountTokensRequest {
@@ -102,7 +102,7 @@ pub struct CountTokensRequest {
     pub system: Option<String>,
 }
 
-// ── Response ────────────────────────────────────────────────────────
+// -- Response --------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct Response {
@@ -140,7 +140,7 @@ pub struct ResponseUsage {
     pub output_tokens: u32,
 }
 
-// ── Count Tokens Response ───────────────────────────────────────────
+// -- Count Tokens Response -------------------------------------------
 
 #[derive(Deserialize)]
 pub struct CountTokensResponse {

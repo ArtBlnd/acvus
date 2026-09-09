@@ -2,19 +2,17 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_interpreter::{ExternFnBuilder, ExternRegistry, RuntimeError, Value};
-use acvus_mir::ty::{ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
-use acvus_utils::Interner;
-use rustc_hash::FxHashMap;
+use acvus_ext::List;
+use acvus_extern::{ExternFn, ExternItems, ExternRegistry, Interner, RuntimeError, TyArg};
 
-use crate::extract::{obj_get_decimal, obj_get_str, obj_get_u32, split_system, values_to_messages};
+use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, HttpRequest, RequestError};
-use crate::message::{Content, ContentItem, Message, ModelResponse, ToolCall, Usage};
-
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+use crate::message::{
+    Content, ContentItem, InputMessage, Message, ModelResponse, OutputMessage, ToolCall, Usage,
+};
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 
-// ── Message conversion ──────────────────────────────────────────────
+// -- Message conversion ----------------------------------------------
 
 fn convert_message(m: &Message) -> schema::RequestMessage {
     match m {
@@ -57,7 +55,7 @@ fn convert_message(m: &Message) -> schema::RequestMessage {
     }
 }
 
-// ── Response parsing ────────────────────────────────────────────────
+// -- Response parsing ------------------------------------------------
 
 fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), RequestError> {
     let resp: schema::Response =
@@ -103,166 +101,70 @@ fn parse_response(json: serde_json::Value) -> Result<(ModelResponse, Usage), Req
     ))
 }
 
-// ── Value extraction helpers ────────────────────────────────────────
+// -- Registry --------------------------------------------------------
 
-/// Convert a ModelResponse into a Value (List of Objects with role/content/content_type).
-fn response_to_value(resp: &ModelResponse, interner: &Interner) -> Value {
-    let role_key = interner.intern("role");
-    let content_key = interner.intern("content");
-    let content_type_key = interner.intern("content_type");
+#[derive(Debug, Clone, TyArg)]
+pub struct AnthropicConfig {
+    pub endpoint: String,
+    pub api_key: String,
+    pub model: String,
+    pub max_tokens: i64,
+}
 
+fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, RuntimeError> {
     match resp {
-        ModelResponse::Content(parts) => {
-            let items: Vec<Value> = parts
-                .iter()
-                .map(|item| {
-                    let text = match &item.content {
-                        Content::Text(t) => t.clone(),
-                        Content::Blob { data, .. } => data.clone(),
-                    };
-                    Value::object(FxHashMap::from_iter([
-                        (role_key, Value::string(item.role.clone())),
-                        (content_key, Value::string(text)),
-                        (content_type_key, Value::string("text")),
-                    ]))
-                })
-                .collect();
-            acvus_ext::list_value(&interner, items)
-        }
-        ModelResponse::ToolCalls(_) => acvus_ext::list_value(&interner, vec![]),
+        ModelResponse::Content(parts) => Ok(List(parts.iter().map(OutputMessage::text).collect())),
+        ModelResponse::ToolCalls(_) => Err(RuntimeError::fetch(
+            "anthropic: tool calls are not representable as messages",
+        )),
     }
 }
 
-// ── Registry ────────────────────────────────────────────────────────
-
 pub fn anthropic_registry<F: Fetch + Send + Sync + 'static>(fetch: Arc<F>) -> ExternRegistry {
     ExternRegistry::new(move |interner| {
-        let endpoint_key = interner.intern("endpoint");
-        let api_key_key = interner.intern("api_key");
-        let model_key = interner.intern("model");
-        let max_tokens_key = interner.intern("max_tokens");
-        let temperature_key = interner.intern("temperature");
+        let handler = move |_: Interner, messages: List<InputMessage>, config: AnthropicConfig| {
+            let fetch = Arc::clone(&fetch);
+            async move {
+                let messages = input_messages(messages.0);
+                let (system, rest) = split_system(&messages);
+                let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
+                    RuntimeError::fetch(format!("anthropic: max_tokens {} out of range", config.max_tokens))
+                })?;
 
-        let msg_elem_ty = Ty::Object(
-            [
-                (interner.intern("role"), Ty::String),
-                (interner.intern("content"), Ty::String),
-                (interner.intern("content_type"), Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
+                let request_body = schema::Request {
+                    model: config.model,
+                    messages: rest.iter().map(|m| convert_message(m)).collect(),
+                    max_tokens,
+                    system,
+                    tools: None,
+                    temperature: None,
+                    top_p: None,
+                    top_k: None,
+                    thinking: None,
+                };
 
-        let config_ty = Ty::Object(
-            [
-                (interner.intern("endpoint"), Ty::String),
-                (interner.intern("api_key"), Ty::String),
-                (interner.intern("model"), Ty::String),
-                (interner.intern("max_tokens"), Ty::Int),
-            ]
-            .into_iter()
-            .collect(),
-        );
+                let http_request = HttpRequest {
+                    url: config.endpoint,
+                    headers: vec![
+                        ("x-api-key".into(), config.api_key),
+                        ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
+                        ("Content-Type".into(), "application/json".into()),
+                    ],
+                    body: serde_json::to_value(&request_body).map_err(|e| {
+                        RuntimeError::fetch(format!("anthropic: serialization failed: {e}"))
+                    })?,
+                };
 
-        let input_msg_ty = Ty::Object(
-            [
-                (interner.intern("role"), Ty::String),
-                (interner.intern("content"), Ty::String),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let fetch = Arc::clone(&fetch);
-
-        let params = vec![acvus_ext::list_ty(interner, input_msg_ty), config_ty];
-        let ret = acvus_ext::list_ty(interner, msg_elem_ty);
-        let named: Vec<ParamTerm<Poly>> = params
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| ParamTerm::<Poly>::new(interner.intern(&format!("_{i}")), lift_to_poly(ty)))
-            .collect();
-        let ty = TyTerm::Fn {
-            params: named,
-            ret: Box::new(lift_to_poly(&ret)),
-            captures: vec![],
-            effect: acvus_mir::ty::Effect::Opaque.into(),
+                let response_json = fetch.fetch(&http_request).await.map_err(RuntimeError::fetch)?;
+                let (response, _usage) =
+                    parse_response(response_json).map_err(|e| RuntimeError::fetch(e.to_string()))?;
+                response_messages(response)
+            }
         };
-
-        vec![ExternFnBuilder::new("anthropic", ty).handler_async(
-            move |interner: Interner,
-                  (messages_val, config_val): (Value, Value)| {
-                let fetch = Arc::clone(&fetch);
-                async move {
-                    let messages_owned = acvus_ext::sequence_items(messages_val.clone())?;
-                        let messages_list = messages_owned.as_slice();
-                    let messages = values_to_messages(messages_list, &interner, "anthropic")?;
-
-                    // Split system message (first "system" role -> system param)
-                    let (system, rest) = split_system(&messages);
-
-                    // Extract config from Value::Object
-                    let config_obj = match &config_val {
-                        Value::Object(o) => o,
-                        other => {
-                            return Err(RuntimeError::fetch(format!(
-                                "anthropic: expected Object for config, got {:?}",
-                                other.kind()
-                            )));
-                        }
-                    };
-
-                    let endpoint = obj_get_str(config_obj, endpoint_key).ok_or_else(|| {
-                        RuntimeError::fetch("anthropic: missing 'endpoint' in config")
-                    })?;
-                    let api_key = obj_get_str(config_obj, api_key_key).ok_or_else(|| {
-                        RuntimeError::fetch("anthropic: missing 'api_key' in config")
-                    })?;
-                    let model = obj_get_str(config_obj, model_key).ok_or_else(|| {
-                        RuntimeError::fetch("anthropic: missing 'model' in config")
-                    })?;
-                    let max_tokens =
-                        obj_get_u32(config_obj, max_tokens_key).unwrap_or(DEFAULT_MAX_TOKENS);
-                    let temperature = obj_get_decimal(config_obj, temperature_key);
-
-                    // Build schema::Request
-                    let request_body = schema::Request {
-                        model,
-                        messages: rest.iter().map(|m| convert_message(m)).collect(),
-                        max_tokens,
-                        system,
-                        tools: None,
-                        temperature,
-                        top_p: None,
-                        top_k: None,
-                        thinking: None,
-                    };
-
-                    let http_request = HttpRequest {
-                        url: endpoint,
-                        headers: vec![
-                            ("x-api-key".into(), api_key),
-                            ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
-                            ("Content-Type".into(), "application/json".into()),
-                        ],
-                        body: serde_json::to_value(&request_body).map_err(|e| {
-                            RuntimeError::fetch(format!("anthropic: serialization failed: {e}"))
-                        })?,
-                    };
-
-                    let response_json = fetch
-                        .fetch(&http_request)
-                        .await
-                        .map_err(RuntimeError::fetch)?;
-
-                    let (response, _usage) = parse_response(response_json)
-                        .map_err(|e| RuntimeError::fetch(e.to_string()))?;
-
-                    let result = response_to_value(&response, &interner);
-                    Ok(result)
-                }
-            },
-        )]
+        ExternItems {
+            types: vec![],
+            fns: vec![ExternFn::r#async(interner, "anthropic", handler)],
+        }
     })
 }
 
@@ -417,7 +319,7 @@ mod tests {
         });
         let interner = Interner::new();
         let registry = anthropic_registry(fetch);
-        let registered = registry.register(&interner);
+        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.executables.len(), 1);
 

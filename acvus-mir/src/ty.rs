@@ -5,9 +5,9 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 use crate::graph::types::QualifiedRef;
 
-// ── UserDefined type system ──────────────────────────────────────────
+// -- UserDefined type system ------------------------------------------
 
-/// Declaration of a user-defined type — the **single source of truth**
+/// Declaration of a user-defined type - the **single source of truth**
 /// for parameter count and constraints. Registered once, referenced by QualifiedRef everywhere.
 #[derive(Debug, Clone)]
 pub struct UserDefinedDecl {
@@ -22,7 +22,7 @@ pub struct UserDefinedDecl {
 ///
 /// Contains:
 /// - `decls`: UserDefined type declarations (source of truth for params/constraints).
-/// - `cast_rules`: ExternCast coercion rules (UserDefined → other type).
+/// - `cast_rules`: ExternCast coercion rules (UserDefined -> other type).
 #[derive(Debug, Clone, Default)]
 pub struct TypeRegistry {
     decls: FxHashMap<QualifiedRef, UserDefinedDecl>,
@@ -47,7 +47,7 @@ pub struct CastRule {
     pub fn_ref: QualifiedRef,
 }
 
-/// Head constructor of a type — used for duplicate cast rule detection.
+/// Head constructor of a type - used for duplicate cast rule detection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TyHead {
     Int,
@@ -97,7 +97,7 @@ impl TypeRegistry {
         Self::default()
     }
 
-    // ── Type declarations ───────────────────────────────────────────
+    // -- Type declarations -------------------------------------------
 
     /// Register a declaration. Panics on duplicate qref.
     pub fn register(&mut self, decl: UserDefinedDecl) {
@@ -106,7 +106,7 @@ impl TypeRegistry {
         assert!(prev.is_none(), "duplicate UserDefined type: {qref:?}");
     }
 
-    /// Look up a declaration by qref. Panics if not found — missing decl is a bug.
+    /// Look up a declaration by qref. Panics if not found - missing decl is a bug.
     pub fn get(&self, qref: QualifiedRef) -> &UserDefinedDecl {
         self.decls
             .get(&qref)
@@ -117,7 +117,7 @@ impl TypeRegistry {
         self.decls.iter()
     }
 
-    // ── Cast rules ──────────────────────────────────────────────────
+    // -- Cast rules --------------------------------------------------
 
     /// Register a cast rule. Indexes by `from`'s QualifiedRef (if UserDefined)
     /// and by `to`'s QualifiedRef (if UserDefined). At least one side must be UserDefined.
@@ -173,7 +173,7 @@ pub type Param = ParamTerm<Concrete>;
 
 /// Token for `Ty::Error` construction.
 ///
-/// `Ty::Error` is a **poison type** — it suppresses cascading errors by unifying
+/// `Ty::Error` is a **poison type** - it suppresses cascading errors by unifying
 /// with anything. Permitted uses:
 ///
 /// - **Type checker / compiler**: After reporting a type error, return `Ty::error()`
@@ -184,7 +184,7 @@ pub type Param = ParamTerm<Concrete>;
 ///
 /// - As a "don't know" placeholder (use the actual type instead).
 /// - As a default/fallback when you're too lazy to propagate the real type.
-/// - In runtime code paths — Error must never appear in a running program's types.
+/// - In runtime code paths - Error must never appear in a running program's types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ErrorToken(());
 
@@ -196,9 +196,9 @@ impl ErrorToken {
 
 /// Polarity for subtyping direction in unification.
 ///
-/// - `Covariant`: `a ≤ b` — `a` may be a subtype of `b`.
-/// - `Contravariant`: `b ≤ a` — reversed direction (e.g. function parameters).
-/// - `Invariant`: `a = b` — no subtyping allowed, must be exactly equal.
+/// - `Covariant`: `a <= b` - `a` may be a subtype of `b`.
+/// - `Contravariant`: `b <= a` - reversed direction (e.g. function parameters).
+/// - `Invariant`: `a = b` - no subtyping allowed, must be exactly equal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Polarity {
     Covariant,
@@ -207,7 +207,7 @@ pub enum Polarity {
 }
 
 impl Polarity {
-    /// Flip polarity: Covariant ↔ Contravariant, Invariant stays.
+    /// Flip polarity: Covariant <-> Contravariant, Invariant stays.
     pub fn flip(self) -> Self {
         match self {
             Polarity::Covariant => Polarity::Contravariant,
@@ -219,9 +219,9 @@ impl Polarity {
 
 /// 3-tier purity classification for types.
 ///
-/// `Concrete` — scalars that can cross context boundaries as-is.
-/// `Composite` — containers, closures, iterators — need deep inspection to determine pureability.
-/// `Ephemeral` — opaque types that can never be purified.
+/// `Concrete` - scalars that can cross context boundaries as-is.
+/// `Composite` - containers, closures, iterators - need deep inspection to determine pureability.
+/// `Ephemeral` - opaque types that can never be purified.
 ///
 /// `Ord` derive: `Concrete < Composite < Ephemeral`, so `max()` gives the least-pure tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -326,7 +326,7 @@ impl LenTerm<Concrete> {
     }
 }
 
-// ── Identity system ──────────────────────────────────────────────────
+// -- Identity system --------------------------------------------------
 
 acvus_utils::declare_local_id!(pub IdentityId);
 
@@ -336,7 +336,7 @@ impl std::fmt::Display for IdentityId {
     }
 }
 
-/// Concrete type — always fully resolved. `Var(Infallible)` is uninhabitable.
+/// Concrete type - always fully resolved. `Var(Infallible)` is uninhabitable.
 pub type Ty = TyTerm<Concrete>;
 
 impl TyTerm<Concrete> {
@@ -364,7 +364,7 @@ impl TyTerm<Concrete> {
         }
     }
 
-    /// Returns the purity tier of this type (shallow — does not recurse into containers).
+    /// Returns the purity tier of this type (shallow - does not recurse into containers).
     pub fn materiality(&self) -> Materiality {
         match self {
             Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
@@ -546,19 +546,19 @@ impl<'a> fmt::Debug for TyDisplay<'a> {
     }
 }
 
-// ── TypeEnv ──────────────────────────────────────────────────────────
+// -- TypeEnv ----------------------------------------------------------
 
 /// Unified type environment for the type checker.
 ///
 /// Replaces `ContextTypeRegistry` + internal `BuiltinRegistry`.
-/// The type checker receives this as its sole external input —
+/// The type checker receives this as its sole external input -
 /// it does not know whether a function is a builtin, extern, or user-defined.
-/// All keys are QualifiedRef — the canonical identifier.
+/// All keys are QualifiedRef - the canonical identifier.
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
-    /// Context variable types — may contain inference variables (Solver-scoped).
+    /// Context variable types - may contain inference variables (Solver-scoped).
     pub contexts: FxHashMap<QualifiedRef, InferTy>,
-    /// Function type templates — polymorphic, instantiated per call site.
+    /// Function type templates - polymorphic, instantiated per call site.
     pub functions: FxHashMap<QualifiedRef, PolyTy>,
 }
 
@@ -577,17 +577,17 @@ impl Default for TypeEnv {
     }
 }
 
-// ── Phase-parameterized type system ─────────────────────────────────
+// -- Phase-parameterized type system ---------------------------------
 //
 // `TyTerm<V>` is a type term parameterized over inference variables.
 // Two phases:
 //   - `Concrete`: no inference variables (Var = Infallible). Post-inference.
 //   - `Infer`:    may contain inference variables (Var = TypeBoundId). During inference.
 //
-// `type Ty = TyTerm<Concrete>` — always fully resolved. Compiler enforces this.
-// `type InferTy = TyTerm<Infer>` — may have holes. Solver fills them in.
+// `type Ty = TyTerm<Concrete>` - always fully resolved. Compiler enforces this.
+// `type InferTy = TyTerm<Infer>` - may have holes. Solver fills them in.
 
-/// Phase marker trait — determines what can appear in inference variable slots.
+/// Phase marker trait - determines what can appear in inference variable slots.
 pub trait Phase: 'static + Clone {
     /// Type inference variable. `Infallible` for concrete (uninhabitable).
     type TyVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
@@ -597,7 +597,7 @@ pub trait Phase: 'static + Clone {
     type LenVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
 }
 
-/// Post-inference phase — all types fully resolved.
+/// Post-inference phase - all types fully resolved.
 /// `TyVar = Infallible` makes `TyTerm::Var` uninhabitable at type level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Concrete;
@@ -608,7 +608,7 @@ impl Phase for Concrete {
     type LenVar = Infallible;
 }
 
-/// Polymorphic declaration phase — type templates stored in the graph.
+/// Polymorphic declaration phase - type templates stored in the graph.
 /// `TyVar = u32` is a positional placeholder, not tied to any Solver instance.
 /// Instantiated to `Infer` per call site during type checking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -620,7 +620,7 @@ impl Phase for Poly {
     type LenVar = u32;
 }
 
-/// During-inference phase — types may contain unresolved variables.
+/// During-inference phase - types may contain unresolved variables.
 /// `TyVar = TypeBoundId` is scoped to a specific `Solver` instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Infer;
@@ -631,12 +631,12 @@ impl Phase for Infer {
     type LenVar = LenVarId;
 }
 
-/// Polymorphic type — template with positional placeholders.
+/// Polymorphic type - template with positional placeholders.
 pub type PolyTy = TyTerm<Poly>;
 /// Polymorphic function parameter.
 pub type PolyParam = ParamTerm<Poly>;
 
-// ── Solver types ────────────────────────────────────────────────────
+// -- Solver types ----------------------------------------------------
 
 /// Index into `Solver::ty_bounds`. Identifies a type inference variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -650,15 +650,15 @@ pub struct EffectVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LenVarId(pub u32);
 
-// Re-export solver types — these were historically in ty.rs.
+// Re-export solver types - these were historically in ty.rs.
 pub use crate::solver::{Capability, TypeBound, Solver, SolverSnapshot, FreezeError};
 
-/// Type alias — always concrete, no inference variables.
+/// Type alias - always concrete, no inference variables.
 pub type InferTy = TyTerm<Infer>;
 
 /// A type term parameterized over inference phase.
 ///
-/// When `V = Concrete`: `Var(Infallible)` is uninhabitable — type is always concrete.
+/// When `V = Concrete`: `Var(Infallible)` is uninhabitable - type is always concrete.
 /// When `V = Infer`: `Var(TypeBoundId)` references the solver's bound table.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TyTerm<V: Phase> {
@@ -697,12 +697,12 @@ pub enum TyTerm<V: Phase> {
     Ref(Box<TyTerm<V>>, bool),
     // Special
     Error(ErrorToken),
-    /// Inference variable — only inhabitable when `V = Infer`.
+    /// Inference variable - only inhabitable when `V = Infer`.
     /// For `V = Concrete`, this is `Var(Infallible)` which cannot be constructed.
     Var(V::TyVar),
 }
 
-/// Named, typed function parameter — parameterized over phase.
+/// Named, typed function parameter - parameterized over phase.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamTerm<V: Phase> {
     pub name: Astr,
@@ -715,7 +715,7 @@ impl<V: Phase> ParamTerm<V> {
     }
 }
 
-// ── Generic phase traversal ────────────────────────────────────────
+// -- Generic phase traversal ----------------------------------------
 //
 // `map` and `try_map` provide the single recursive traversal over
 // `TyTerm<V>`. All phase-to-phase transformations (lift, freeze,
@@ -724,7 +724,7 @@ impl<V: Phase> ParamTerm<V> {
 impl<V: Phase> TyTerm<V> {
     /// Map this type term from phase `V` to phase `W`.
     ///
-    /// Structural recursion is automatic — only variable slots and
+    /// Structural recursion is automatic - only variable slots and
     /// identity slots need custom handling via the provided closures.
     pub fn map<W: Phase>(
         &self,
@@ -778,7 +778,7 @@ impl<V: Phase> TyTerm<V> {
         }
     }
 
-    /// Fallible version of `map` — short-circuits on first error.
+    /// Fallible version of `map` - short-circuits on first error.
     pub fn try_map<W: Phase, E>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
@@ -843,7 +843,7 @@ impl<V: Phase> TyTerm<V> {
     }
 }
 
-// ── Lift: Concrete → any Phase ──────────────────────────────────────
+// -- Lift: Concrete -> any Phase --------------------------------------
 
 /// Lift a concrete `Ty` into any phase (mechanical, zero information change).
 /// Infallible because `Concrete` has `TyVar = Infallible` (uninhabitable).
@@ -870,7 +870,7 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
     ).ok()
 }
 
-// ── PolyBuilder ─────────────────────────────────────────────────────
+// -- PolyBuilder -----------------------------------------------------
 
 /// Builder for polymorphic type templates. No Solver dependency.
 /// Creates positional placeholders (Var(0), Var(1), ...) for type variables.
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn unify_object_disjoint_via_var() {
-        // Var → {a} then Var → {b} should merge to {a, b}
+        // Var -> {a} then Var -> {b} should merge to {a, b}
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
         let i = Interner::new();
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[test]
     fn unify_object_overlapping_via_var() {
-        // Var → {a, b} then Var → {b, c} should merge to {a, b, c}
+        // Var -> {a, b} then Var -> {b, c} should merge to {a, b, c}
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
         let i = Interner::new();
@@ -1119,7 +1119,7 @@ mod tests {
     // -- Variance unsoundness edge case tests --
 
     // ================================================================
-    // Var chain + coercion 상호작용
+    // Var chain + coercion interaction
     // ================================================================
 
     // ================================================================
@@ -1141,7 +1141,7 @@ mod tests {
     // ================================================================
 
     // ================================================================
-    // Object merge + coercion 동시 발생
+    // Object merge + coercion at the same time
     // ================================================================
 
     // ================================================================
@@ -1149,7 +1149,7 @@ mod tests {
     // ================================================================
 
     // ================================================================
-    // Polarity symmetry / duality 검증
+    // Polarity symmetry / duality
     // ================================================================
 
     #[test]
@@ -1213,9 +1213,9 @@ mod tests {
     // Regression: same identity must not trigger demotion
     // ================================================================
 
-    // ── Sequence identity tracking ─────────────────────────────────
+    // -- Sequence identity tracking ---------------------------------
 
-    // ── UserDefined unification tests ───────────────────────────────
+    // -- UserDefined unification tests -------------------------------
 
     fn ud(id: QualifiedRef, type_args: Vec<InferTy>) -> InferTy {
         TyTerm::UserDefined {
@@ -1270,7 +1270,7 @@ mod tests {
 
     #[test]
     fn user_defined_nested_type_arg_unifies() {
-        // UserDefined<List<Param>> vs UserDefined<List<Int>> → resolves Param to Int
+        // UserDefined<List<Param>> vs UserDefined<List<Int>> -> resolves Param to Int
         let mut s = Solver::new();
         let registry = TypeRegistry::new();
         let id = fresh_qref();
@@ -1391,7 +1391,7 @@ mod tests {
         reg.get(id);
     }
 
-    // ── ExternCast tests ────────────────────────────────────────────
+    // -- ExternCast tests --------------------------------------------
 
     /// Helper: create a CastRule and a Solver with the rule registered.
     /// Returns (from_id, fn_id, solver, registry).
@@ -1434,7 +1434,7 @@ mod tests {
     #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_basic_coercion() {
-        // UserDefined(A, [T]) → List<T>
+        // UserDefined(A, [T]) -> List<T>
         let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
@@ -1450,7 +1450,7 @@ mod tests {
     #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_with_param_resolution() {
-        // UserDefined(A, [T]) → List<T>, where T is a fresh param on the consumer side
+        // UserDefined(A, [T]) -> List<T>, where T is a fresh param on the consumer side
         let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
@@ -1468,7 +1468,7 @@ mod tests {
     #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_no_type_params() {
-        // UserDefined(A, []) → Int
+        // UserDefined(A, []) -> Int
         let (id, _fn_id, mut s, registry) = make_cast_solver(0, |_| TyTerm::Int);
 
         let from = TyTerm::UserDefined {
@@ -1485,7 +1485,7 @@ mod tests {
     #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_wrong_target_fails() {
-        // Rule: A → List<T>, but expected String
+        // Rule: A -> List<T>, but expected String
         let (id, _fn_id, mut s, registry) = make_cast_solver(1, |p| arr(p[0].clone(), 3));
 
         let from = TyTerm::UserDefined {
@@ -1534,7 +1534,7 @@ mod tests {
     #[ignore = "pending identity integration"]
     #[test]
     fn extern_cast_ambiguity_rejected() {
-        // Bypass TypeRegistry duplicate check — inject two rules with same to head
+        // Bypass TypeRegistry duplicate check - inject two rules with same to head
         // directly into the type_registry to test try_extern_cast ambiguity detection.
         let i = acvus_utils::Interner::new();
         let id = fresh_qref();
@@ -1620,7 +1620,7 @@ mod tests {
             to: arr(t.clone(), 3),
             fn_ref: fn_id_a,
         });
-        // Same from_id + same to head (List) → panic
+        // Same from_id + same to head (List) -> panic
         let mut builder2 = PolyBuilder::new();
         let t2 = builder2.fresh_ty_var();
         reg.register_cast(CastRule {
@@ -1662,7 +1662,7 @@ mod tests {
             to: arr(t1, 3),
             fn_ref: fn_id_a,
         });
-        // Different to head (Option vs List) → ok
+        // Different to head (Option vs List) -> ok
         let mut builder2 = PolyBuilder::new();
         let t2 = builder2.fresh_ty_var();
         reg.register_cast(CastRule {
@@ -1678,7 +1678,7 @@ mod tests {
         assert_eq!(reg.rules_from(id).len(), 2);
     }
 
-    // ── Purity tier tests ──────────────────────────────────────────────
+    // -- Purity tier tests ----------------------------------------------
 
     #[test]
     fn purity_object_is_lazy() {
@@ -1728,7 +1728,7 @@ mod tests {
         );
     }
 
-    // ── is_pureable() transitive tests ─────────────────────────────────
+    // -- is_pureable() transitive tests ---------------------------------
 
     #[test]
     fn pureable_list_of_scalars() {
@@ -1744,7 +1744,7 @@ mod tests {
 
     #[test]
     fn pureable_nested_list_of_scalars() {
-        // List<List<Int>> — pureable
+        // List<List<Int>> - pureable
         let nested = arr(arr(Ty::Int, 3), 3);
         assert!(nested.is_pureable());
     }
@@ -1833,7 +1833,7 @@ mod tests {
 
     #[test]
     fn pureable_mixed_tuple_list_option() {
-        // (Int, List<String>, Option<Bool>) — all pureable
+        // (Int, List<String>, Option<Bool>) - all pureable
         let ty = Ty::Tuple(vec![
             Ty::Int,
             arr(Ty::String, 3),
@@ -1844,14 +1844,14 @@ mod tests {
 
     #[test]
     fn pureable_mixed_tuple_list_user_defined() {
-        // (Int, List<UserDefined>) — not pureable
+        // (Int, List<UserDefined>) - not pureable
         let ty = Ty::Tuple(vec![Ty::Int, arr(test_user_defined(), 3)]);
         assert!(!ty.is_pureable());
     }
 
     #[test]
     fn pureable_deeply_nested_containers() {
-        // List<Option<Tuple<(Int, List<String>)>>> — pureable
+        // List<Option<Tuple<(Int, List<String>)>>> - pureable
         let inner = Ty::Tuple(vec![Ty::Int, arr(Ty::String, 3)]);
         let ty = arr(Ty::Option(Box::new(inner)), 3);
         assert!(ty.is_pureable());
@@ -1859,7 +1859,7 @@ mod tests {
 
     #[test]
     fn pureable_deeply_nested_with_user_defined_leaf() {
-        // List<Option<Tuple<(Int, UserDefined)>>> — not pureable
+        // List<Option<Tuple<(Int, UserDefined)>>> - not pureable
         let inner = Ty::Tuple(vec![Ty::Int, test_user_defined()]);
         let ty = arr(Ty::Option(Box::new(inner)), 3);
         assert!(!ty.is_pureable());

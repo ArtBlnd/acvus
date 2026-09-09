@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-// ── Request ─────────────────────────────────────────────────────────
+// -- Request ---------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct Request {
@@ -157,7 +157,7 @@ pub struct ThinkingConfig {
     pub thinking_level: Option<String>,
 }
 
-// ── Cache Request ───────────────────────────────────────────────────
+// -- Cache Request ---------------------------------------------------
 
 #[derive(Serialize)]
 pub struct CacheRequest {
@@ -171,7 +171,7 @@ pub struct CacheRequest {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-// ── Count Tokens Request ────────────────────────────────────────────
+// -- Count Tokens Request --------------------------------------------
 
 #[derive(Serialize)]
 pub struct CountTokensRequest {
@@ -188,7 +188,7 @@ pub struct CountTokensInner {
     pub system_instruction: Option<SystemInstruction>,
 }
 
-// ── Response ────────────────────────────────────────────────────────
+// -- Response --------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct Response {
@@ -240,14 +240,14 @@ pub struct UsageMetadata {
     pub candidates_token_count: Option<u32>,
 }
 
-// ── Cache Response ──────────────────────────────────────────────────
+// -- Cache Response --------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct CacheResponse {
     pub name: Option<String>,
 }
 
-// ── Count Tokens Response ───────────────────────────────────────────
+// -- Count Tokens Response -------------------------------------------
 
 #[derive(Deserialize)]
 pub struct CountTokensResponse {

@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-// ── Request ─────────────────────────────────────────────────────────
+// -- Request ---------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct Request {
@@ -96,7 +96,7 @@ pub struct PropertySchema {
     pub description: Option<String>,
 }
 
-// ── Response ────────────────────────────────────────────────────────
+// -- Response --------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct Response {
