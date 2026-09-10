@@ -765,12 +765,20 @@ fn run_ssa_builder(
 
         if let Some(ops) = ssa_info.block_ops.get(&block_idx) {
             for op in &ops.ops {
+                // A stored value may itself be a promoted load; define the
+                // variable with the SSA value that load stands for, so no
+                // definition names a load the pass removes.
+                let stored = |value: &ValueId, var_subst: &FxHashMap<ValueId, ValueId>| {
+                    var_subst.get(value).copied().unwrap_or(*value)
+                };
                 match op {
                     SsaOp::CtxStore { ctx, value, .. } => {
-                        ssa.define(label, SsaVar::Context(*ctx), *value);
+                        let value = stored(value, &var_subst);
+                        ssa.define(label, SsaVar::Context(*ctx), value);
                     }
                     SsaOp::VarStore { slot, value, .. } => {
-                        ssa.define(label, SsaVar::Local(*slot), *value);
+                        let value = stored(value, &var_subst);
+                        ssa.define(label, SsaVar::Local(*slot), value);
                     }
                     SsaOp::VarLoad { dst, slot } | SsaOp::ParamLoad { dst, slot } => {
                         let ssa_val = ssa.use_var(label, SsaVar::Local(*slot), &mut typed_alloc);
@@ -1177,6 +1185,43 @@ mod tests {
             .flat_map(|b| &b.insts)
             .filter(|i| matches!(&i.kind, InstKind::Store { .. }))
             .count()
+    }
+
+    /// Every value an instruction or terminator uses is defined by an
+    /// instruction, a block param, or an entry definition.
+    fn every_use_is_defined(cfg_body: &CfgBody) -> bool {
+        let mut defs: FxHashSet<ValueId> = cfg_body.entry_defs().collect();
+        for b in &cfg_body.blocks {
+            defs.extend(b.params.iter().copied());
+            for i in &b.insts {
+                defs.extend(crate::analysis::inst_info::defs(&i.kind));
+            }
+        }
+        cfg_body.blocks.iter().all(|b| {
+            b.insts
+                .iter()
+                .flat_map(|i| crate::analysis::inst_info::uses(&i.kind))
+                .all(|u| defs.contains(&u))
+                && match &b.terminator {
+                    Terminator::Return { value, order } => {
+                        defs.contains(value) && order.is_none_or(|o| defs.contains(&o))
+                    }
+                    _ => true,
+                }
+        })
+    }
+
+    #[test]
+    fn a_stored_copy_of_a_promoted_load_defines_the_ssa_value() {
+        let i = Interner::new();
+        let module =
+            compile_script(&i, "x = 1; y = x; @out = y; @out", &[("out", Ty::Int)]).unwrap();
+        let mut cfg_body = cfg::promote(module.main);
+        run(&mut cfg_body);
+        assert!(
+            every_use_is_defined(&cfg_body),
+            "a copy through two promoted variables reaches the constant, not a removed load"
+        );
     }
 
     // -- Completeness: PHI inserted when needed --
