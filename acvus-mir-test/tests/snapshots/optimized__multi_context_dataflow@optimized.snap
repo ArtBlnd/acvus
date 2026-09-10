@@ -3,12 +3,12 @@ source: acvus-mir-test/tests/optimized.rs
 expression: opt
 ---
 === main ===
-     0 |   r0 = ref @output
+     0 |   r0 = ref @a
      1 |   r1 = ref @b
      2 |   r2 = load r1
      3 |   r3 = load r0
      4 |   r4 = r3 + r2
-     5 |   r0 = ref @output
+     5 |   r0 = ref @scale
      6 |   r2 = load r0
      7 |   r5 = r4 * r2
      8 |   r2 = r5 + r3

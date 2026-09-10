@@ -180,22 +180,6 @@ fn write_body(
 ) -> fmt::Result {
     let mut vn = ValNormalizer::new();
 
-    // Build QualifiedRef -> name mapping from Ref(Context) instructions + debug info.
-    let mut ctx_ref_to_name: FxHashMap<crate::graph::QualifiedRef, String> = FxHashMap::default();
-    for inst in &body.insts {
-        if let InstKind::Ref {
-            dst,
-            target: crate::ir::RefTarget::Context(qref),
-            ..
-        } = &inst.kind
-            && let Some(crate::ir::ValOrigin::Context(name)) = body.debug.get(*dst)
-        {
-            ctx_ref_to_name
-                .entry(*qref)
-                .or_insert_with(|| ctx.interner.resolve(*name).to_string());
-        }
-    }
-
     // A constant is shown at its use sites only while its ValueId names that
     // one definition; after register allocation an id is reused, and a use
     // of a reused id prints as the id.
@@ -264,11 +248,7 @@ fn write_body(
                         }
                     }
                     crate::ir::RefTarget::Context(qref) => {
-                        let name = ctx_ref_to_name
-                            .get(qref)
-                            .map(|s| s.as_str())
-                            .unwrap_or_else(|| ctx.interner.resolve(qref.name));
-                        format!("@{name}")
+                        format!("@{}", ctx.interner.resolve(qref.name))
                     }
                 };
                 if path.is_empty() {
