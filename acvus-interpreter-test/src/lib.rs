@@ -330,10 +330,21 @@ pub async fn run_script_with_externs_and_types(
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
 ) -> ExecResult {
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
+    run_parsed_with_externs(interner, ast, context, extern_registries, type_registry).await
+}
+
+/// Run an already parsed script against `context` with the given registries.
+pub async fn run_parsed_with_externs(
+    interner: &Interner,
+    ast: ParsedAst,
+    context: FxHashMap<Astr, Value>,
+    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
+    type_registry: acvus_mir::ty::TypeRegistry,
+) -> ExecResult {
     let context_types: FxHashMap<Astr, Ty> =
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
-    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let cr = compile_source_with_externs(
         interner,
         ast,

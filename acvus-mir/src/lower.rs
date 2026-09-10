@@ -39,6 +39,18 @@ pub struct Lowerer<'a> {
     /// (RFC-0007). `None` for a body whose effect is Pure. The SSA pass
     /// promotes the slot, so branches and loops join orders through phis.
     order_slot: Option<ValueId>,
+    /// The innermost `anyorder` block being lowered, if any.
+    anyorder: Option<AnyorderScope>,
+}
+
+/// An `anyorder` block while its body is lowered (RFC-0007): every
+/// effectful call inside takes `entry`, and `acc` accumulates a merge of
+/// what they yielded. A loop inside stores to `acc` on every iteration, so
+/// the SSA pass gives it a loop phi.
+#[derive(Clone, Copy)]
+struct AnyorderScope {
+    entry: ValueId,
+    acc: ValueId,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -133,6 +145,7 @@ impl<'a> Lowerer<'a> {
             closure_label_count: 0,
             context_aliases: vec![],
             order_slot: None,
+            anyorder: None,
         }
     }
 
@@ -161,6 +174,7 @@ impl<'a> Lowerer<'a> {
     /// Pure: an order parameter, stored into a fresh slot that every
     /// effectful call reads and advances.
     fn enter_body_order(&mut self, effect: Effect, span: Span) {
+        self.anyorder = None;
         if effect == Effect::PURE {
             self.order_slot = None;
             return;
@@ -201,7 +215,10 @@ impl<'a> Lowerer<'a> {
             let slot = self.order_slot.unwrap_or_else(|| {
                 panic!("effectful call lowered inside a body whose effect is Pure")
             });
-            let before = self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order);
+            let before = match self.anyorder {
+                Some(scope) => scope.entry,
+                None => self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order),
+            };
             let after = self.alloc_val();
             self.set_val_type(after, Ty::Order);
             Some(OrderEdge { before, after })
@@ -218,9 +235,60 @@ impl<'a> Lowerer<'a> {
                 order,
             },
         );
-        if let Some(edge) = order {
-            let slot = self.order_slot.expect("an order edge needs the slot");
-            self.emit_ref_store(span, RefTarget::Var(slot), vec![], edge.after);
+        let Some(edge) = order else {
+            return;
+        };
+        match self.anyorder {
+            Some(scope) => {
+                let acc = self.emit_ref_load(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
+                let merged = self.alloc_val();
+                self.set_val_type(merged, Ty::Order);
+                self.emit_inst(
+                    span,
+                    InstKind::Merge {
+                        dst: merged,
+                        orders: vec![acc, edge.after],
+                    },
+                );
+                self.emit_ref_store(span, RefTarget::Var(scope.acc), vec![], merged);
+            }
+            None => {
+                let slot = self.order_slot.expect("an order edge needs the slot");
+                self.emit_ref_store(span, RefTarget::Var(slot), vec![], edge.after);
+            }
+        }
+    }
+
+    /// Lower `anyorder { body }`. The block takes the current `Order` once;
+    /// every effectful call inside takes it, and the block yields a merge of
+    /// everything they yielded. Inside a block already open, nothing changes.
+    fn lower_anyorder(&mut self, body: &[Stmt], span: Span) {
+        let Some(slot) = self.order_slot else {
+            // A Pure body issues no effect; the block declares nothing.
+            self.push_scope();
+            for s in body {
+                self.lower_stmt(s);
+            }
+            self.pop_scope();
+            return;
+        };
+        let outer = self.anyorder;
+        if outer.is_none() {
+            let entry = self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order);
+            let acc = self.alloc_val();
+            self.set_origin(acc, ValOrigin::Named(self.interner.intern("$anyorder")));
+            self.emit_ref_store(span, RefTarget::Var(acc), vec![], entry);
+            self.anyorder = Some(AnyorderScope { entry, acc });
+        }
+        self.push_scope();
+        for s in body {
+            self.lower_stmt(s);
+        }
+        self.pop_scope();
+        if outer.is_none() {
+            let scope = self.anyorder.take().expect("the block opened above");
+            let exit = self.emit_ref_load(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
+            self.emit_ref_store(span, RefTarget::Var(slot), vec![], exit);
         }
     }
 
@@ -317,6 +385,9 @@ impl<'a> Lowerer<'a> {
                 cond, body, span, ..
             } => {
                 self.lower_while(cond, body, *span);
+            }
+            Stmt::Anyorder { body, span, .. } => {
+                self.lower_anyorder(body, *span);
             }
             Stmt::WhileLet {
                 pattern,
@@ -1665,6 +1736,7 @@ impl<'a> Lowerer<'a> {
                 let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
                 let saved_var_slots = std::mem::replace(&mut self.var_slots, FxHashMap::default());
                 let saved_order_slot = self.order_slot;
+                let saved_anyorder = self.anyorder;
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
 
@@ -1698,6 +1770,7 @@ impl<'a> Lowerer<'a> {
                 self.scopes = saved_scopes;
                 self.var_slots = saved_var_slots;
                 self.order_slot = saved_order_slot;
+                self.anyorder = saved_anyorder;
 
                 closure_body_mir.captures = free_vars
                     .iter()
@@ -2457,6 +2530,10 @@ impl<'a> Lowerer<'a> {
                 }
                 Stmt::While { cond, body, .. } => {
                     self.collect_free_vars(cond, bound, free, seen);
+                    let mut inner = bound.clone();
+                    self.collect_free_vars_stmts(body, &mut inner, free, seen);
+                }
+                Stmt::Anyorder { body, .. } => {
                     let mut inner = bound.clone();
                     self.collect_free_vars_stmts(body, &mut inner, free, seen);
                 }

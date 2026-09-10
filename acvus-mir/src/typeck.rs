@@ -783,6 +783,13 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 }
                 self.pop_scope();
             }
+            acvus_ast::Stmt::Anyorder { body, .. } => {
+                self.push_scope();
+                for s in body {
+                    self.check_stmt(s);
+                }
+                self.pop_scope();
+            }
             acvus_ast::Stmt::WhileLet {
                 pattern,
                 source,

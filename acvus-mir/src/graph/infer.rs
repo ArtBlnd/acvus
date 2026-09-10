@@ -197,6 +197,7 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(cond, refs);
                 collect_value_refs_stmts(body, refs);
             }
+            Stmt::Anyorder { body, .. } => collect_value_refs_stmts(body, refs),
         }
     }
 }

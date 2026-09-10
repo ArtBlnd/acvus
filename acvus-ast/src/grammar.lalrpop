@@ -29,6 +29,7 @@ extern {
         "if" => Token::If,
         "else" => Token::Else,
         "while" => Token::While,
+        "anyorder" => Token::Anyorder,
         "+" => Token::Plus,
         "-" => Token::Minus,
         "*" => Token::Star,
@@ -131,6 +132,9 @@ ScriptModeStmt: Stmt = {
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>
         Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) },
+    // anyorder { body }
+    <l:@L> "anyorder" "{" <body:ScriptModeStmt*> "}" <r:@R> =>
+        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
     // while let pattern = source { body }
     <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>?
         Ok(Stmt::WhileLet {

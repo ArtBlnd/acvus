@@ -429,6 +429,11 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             span,
         },
+        Stmt::Anyorder { body, span, .. } => Stmt::Anyorder {
+            id: AstId::alloc(),
+            body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
+            span,
+        },
         Stmt::WhileLet {
             pattern,
             source,
@@ -689,6 +694,11 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
         }
         Stmt::While { cond, body, .. } => {
             validate_splice_expr(cond, false, splice_names, errors);
+            for s in body {
+                validate_splice_stmt(s, splice_names, errors);
+            }
+        }
+        Stmt::Anyorder { body, .. } => {
             for s in body {
                 validate_splice_stmt(s, splice_names, errors);
             }

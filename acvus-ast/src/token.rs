@@ -52,6 +52,8 @@ pub enum Token {
     Else,
     #[token("while", priority = 3)]
     While,
+    #[token("anyorder", priority = 3)]
+    Anyorder,
 
     // -- Identifiers --
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
@@ -161,6 +163,7 @@ impl fmt::Display for Token {
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
+            Token::Anyorder => write!(f, "anyorder"),
             Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),

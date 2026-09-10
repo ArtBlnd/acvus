@@ -95,6 +95,13 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+    /// `anyorder { body }` - the order of effects inside is irrelevant
+    /// (RFC-0007). Script mode.
+    Anyorder {
+        id: AstId,
+        body: Vec<Stmt>,
+        span: Span,
+    },
 }
 
 /// A parsed template.
@@ -588,6 +595,7 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
                 walk_expr(cond, refs);
                 walk_stmts(body, refs);
             }
+            Stmt::Anyorder { body, .. } => walk_stmts(body, refs),
         }
     }
 }

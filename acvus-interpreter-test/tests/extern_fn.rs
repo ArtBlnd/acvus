@@ -249,16 +249,46 @@ fn compile_io_script_with_ctx(
     context: &[(&str, Value)],
 ) -> (Interner, CompileResult) {
     let i = Interner::new();
+    let ast =
+        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
+    let cr = compile_io_parsed(&i, ast, context);
+    (i, cr)
+}
+
+/// Script mode (`anyorder`, `while`, `let`) with io_registry.
+fn compile_io_script_mode(source: &str, context: &[(&str, Value)]) -> (Interner, CompileResult) {
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script_mode(&i, source).expect("parse"),
+    );
+    let cr = compile_io_parsed(&i, ast, context);
+    (i, cr)
+}
+
+fn compile_io_parsed(
+    i: &Interner,
+    ast: acvus_mir::graph::ParsedAst,
+    context: &[(&str, Value)],
+) -> CompileResult {
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = context
         .iter()
         .map(|(name, val)| (i.intern(name), infer_ty(val)))
         .collect();
-    let ast =
-        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
-    let cr = compile_source_with_externs(&i, ast, &context_types, regs, TypeRegistry::new());
-    (i, cr)
+    compile_source_with_externs(i, ast, &context_types, regs, TypeRegistry::new())
+}
+
+async fn run_io_script_mode(source: &str, context: &[(&str, Value)]) -> Value {
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script_mode(&i, source).expect("parse"),
+    );
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(io_registry());
+    run_parsed_with_externs(&i, ast, ctx(&i, context), regs, TypeRegistry::new())
+        .await
+        .value
 }
 
 fn infer_ty(v: &Value) -> Ty {
@@ -540,6 +570,76 @@ fn has_merge(cr: &CompileResult) -> bool {
         .insts
         .iter()
         .any(|i| matches!(i.kind, InstKind::Merge { .. }))
+}
+
+// -- anyorder (RFC-0007) --------------------------------------------
+//
+// Inside the block every effectful call takes the block's entry order and
+// the block yields a merge of what they yielded; outside it, source order
+// resumes. A loop inside accumulates through a loop phi.
+
+#[tokio::test]
+async fn anyorder_block_computes_the_same_value() {
+    let v = run_io_script_mode(
+        "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
+        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+    )
+    .await;
+    assert_eq!(v, Value::Int(300));
+}
+
+#[test]
+fn anyorder_block_issues_its_calls_together_mir() {
+    let (i, cr) = compile_io_script_mode(
+        "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
+        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+    );
+    let (spawns, evals) = dump_and_positions("anyorder", &i, &cr);
+    assert_eq!(spawns.len(), 2, "expected 2 spawns");
+    assert!(
+        spawns.iter().all(|&s| evals.iter().all(|&e| s < e)),
+        "both calls are issued before either is awaited"
+    );
+    assert!(has_merge(&cr), "the block yields a merge");
+}
+
+#[test]
+fn source_order_resumes_after_an_anyorder_block_mir() {
+    let (i, cr) = compile_io_script_mode(
+        "anyorder { @a = fetch_a(); @b = fetch_b(); } @c = fetch_c(); @a + @b + @c",
+        &[
+            ("a", Value::Int(0)),
+            ("b", Value::Int(0)),
+            ("c", Value::Int(0)),
+        ],
+    );
+    let (spawns, evals) = dump_and_positions("anyorder_then", &i, &cr);
+    assert_eq!(spawns.len(), 3, "expected 3 spawns");
+    assert!(
+        evals[0] < spawns[2] && evals[1] < spawns[2],
+        "fetch_c waits for both calls of the block"
+    );
+}
+
+#[tokio::test]
+async fn a_loop_inside_anyorder_accumulates() {
+    let v = run_io_script_mode(
+        "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
+        &[("n", Value::Int(3)), ("s", Value::Int(0))],
+    )
+    .await;
+    assert_eq!(v, Value::Int(300));
+}
+
+#[test]
+fn a_loop_inside_anyorder_merges_per_iteration_mir() {
+    let (i, cr) = compile_io_script_mode(
+        "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
+        &[("n", Value::Int(3)), ("s", Value::Int(0))],
+    );
+    let (spawns, _) = dump_and_positions("anyorder_loop", &i, &cr);
+    assert_eq!(spawns.len(), 1, "one call in the loop body");
+    assert!(has_merge(&cr), "each iteration merges into the accumulator");
 }
 
 // -- 7. IO in iteration ---------------------------------------------

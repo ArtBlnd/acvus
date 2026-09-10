@@ -238,8 +238,16 @@ fn debug_validate(cfg: &CfgBody) {
 
     if !errors.is_empty() {
         let msg = errors.join("\n  ");
+        let mut dump = String::new();
+        for (bi, block) in cfg.blocks.iter().enumerate() {
+            dump.push_str(&format!("B{bi} params={:?}\n", block.params));
+            for (ii, inst) in block.insts.iter().enumerate() {
+                dump.push_str(&format!("  {ii}: {:?}\n", inst.kind));
+            }
+            dump.push_str(&format!("  -> {:?}\n", block.terminator));
+        }
         panic!(
-            "CfgBody validation failed ({} errors):\n  {msg}",
+            "CfgBody validation failed ({} errors):\n  {msg}\n{dump}",
             errors.len()
         );
     }
