@@ -63,8 +63,14 @@ given, and only the type follows the value.
 ## Consequences
 
 - The Fn type carries read and write sets of contexts next to its effect;
-  the polymorphic phases carry them as terms with variables, unified and
-  joined like effects, and a variable left open closes to the empty set.
+  the polymorphic phases carry them as terms with variables. A summary
+  term unifies where and with the polarity the effect term does: where
+  two function values join, at a branch or a phi, the joined type's
+  summary is the union of both, and a variable left open closes to the
+  empty set. Every function value originates in a closure whose summary
+  the checker computed, or is relayed by an ExternFn; an ExternFn that
+  returns a function value relays a summary variable from a parameter,
+  and one that does not is rejected at registration.
 - A commutative run (RFC-0013) admits a call only when no load or store
   between it and its neighbour on the chain names a context in the
   call's summary as the ruling states.
