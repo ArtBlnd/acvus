@@ -3,23 +3,30 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = ref @x
-     2 |   store r0 = 99 (r1)
-     4 |   r2 = ref @a
-     5 |   r3 = load r2
-     6 |   r4 = field_set r3.x = 42 (r5)
-     7 |   r6 = ref @a
-     8 |   store r6 = r4
-     9 |   r7 = ref @x
-    10 |   return 99 (r1)
+     0 |   r0 = ref @x
+     1 |   r1 = load r0
+     2 |   r2 = ref @a
+     3 |   r3 = load r2
+     5 |   r4 = ref @x
+     6 |   store r4 = 99 (r5)
+     8 |   r6 = ref @a
+     9 |   r7 = field_set r3.x = 42 (r8)
+    10 |   r9 = ref @a
+    11 |   store r9 = r7
+    12 |   r10 = ref @x
+    13 |   return 99 (r5)
 
-    ; r0 (@x) : Ref<Int>
-    ; r1 (v1) : Int
-    ; r2 (v7) : Ref<{x: Int}>
-    ; r3 (v8) : {x: Int}
-    ; r4 (v9) : {x: Int}
-    ; r5 (v3) : Int
-    ; r6 (v10) : Ref<{x: Int}>
-    ; r7 (@x) : Ref<Int>
-    ; r8 (v6) : Int
-    ; r9 (@a) : Ref<Int>
+    ; r0 (v13) : Ref<Int>
+    ; r1 (v11) : Int
+    ; r2 (v14) : Ref<{x: Int}>
+    ; r3 (v12) : {x: Int}
+    ; r4 (@x) : Ref<Int>
+    ; r5 (v1) : Int
+    ; r6 (v7) : Ref<{x: Int}>
+    ; r7 (v9) : {x: Int}
+    ; r8 (v3) : Int
+    ; r9 (v10) : Ref<{x: Int}>
+    ; r10 (@x) : Ref<Int>
+    ; r11 (v6) : Int
+    ; r12 (v8) : {x: Int}
+    ; r13 (@a) : Ref<Int>

@@ -6,11 +6,13 @@
 //!
 //! 1. **Collect SSA info** (`collect_ssa_info`): scan all blocks for context ops
 //!    (ContextProject/ContextLoad/ContextStore) and local variable ops
-//!    (VarStore/VarLoad/ParamLoad). Records entry defs, written sets, and per-block ops.
+//!    (VarStore/VarLoad/ParamLoad). Records written sets, types, and per-block ops.
 //!
 //! 2. **SSA builder** (`run_ssa_builder`): insert PHI nodes at merge points via
 //!    the standard SSA construction algorithm. Produces `var_subst` (VarLoad/ParamLoad
-//!    -> SSA value) and `phi_insertions` (block params + jump args + write-back stores).
+//!    -> SSA value), `phi_insertions` (block params + jump args + write-back stores),
+//!    and the entry definitions: a local variable starts undefined, a written
+//!    context starts from a load of its value on entry.
 //!
 //! 3. **Forward context values** (`forward_context_values`): dominator-tree-scoped
 //!    store-load forwarding for context variables. Eliminates redundant ContextLoads
@@ -50,7 +52,6 @@ pub fn run(cfg: &mut CfgBody) {
     let has_work = !ssa_info.written_contexts.is_empty()
         || !ssa_info.written_vars.is_empty()
         || !ssa_info.read_vars.is_empty()
-        || !ssa_info.entry_ctx_defs.is_empty()
         || !ssa_info.entry_param_defs.is_empty();
     let var_subst = if has_work {
         let preds = cfg.predecessors();
@@ -452,8 +453,6 @@ struct SsaInfo {
     written_contexts: BTreeSet<QualifiedRef>,
     /// ctx -> root type (from ContextProject instructions).
     ctx_types: FxHashMap<QualifiedRef, Ty>,
-    /// ctx -> initial loaded value (from entry region ContextLoad).
-    entry_ctx_defs: BTreeMap<QualifiedRef, ValueId>,
 
     // -- Local variable fields --
     written_vars: BTreeSet<ValueId>,
@@ -481,7 +480,6 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
 
     let mut written_contexts = BTreeSet::default();
     let mut block_ops: FxHashMap<BlockIdx, BlockOps> = FxHashMap::default();
-    let mut entry_ctx_defs: BTreeMap<QualifiedRef, ValueId> = BTreeMap::default();
     let mut ctx_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
 
     let mut written_vars: BTreeSet<ValueId> = BTreeSet::default();
@@ -545,14 +543,10 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     }
                 }
 
-                // Load from identity Ref -> entry defs or SsaOp.
+                // Load from identity Ref -> SsaOp. A context load is not an
+                // op: it reads memory and store-load forwarding folds it.
                 InstKind::Load { dst, src } => {
                     match ref_target.get(src) {
-                        Some(RefTarget::Context(ctx)) if !non_promotable_contexts.contains(ctx) => {
-                            if bi == 0 {
-                                entry_ctx_defs.entry(*ctx).or_insert(*dst);
-                            }
-                        }
                         Some(RefTarget::Var(slot)) if !non_promotable_vars.contains(slot) => {
                             ops.ops.push(SsaOp::VarLoad {
                                 dst: *dst,
@@ -610,7 +604,6 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
     SsaInfo {
         written_contexts,
         ctx_types,
-        entry_ctx_defs,
         written_vars,
         read_vars,
         var_types,
@@ -682,16 +675,10 @@ fn run_ssa_builder(
     // -- Define initial values in entry block --
     let mut entry_defs = EntryDefs::default();
 
-    // Context entry defs (from ContextLoad in entry region).
-    for (&ctx_id, &val) in &ssa_info.entry_ctx_defs {
-        ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), val);
-    }
     for &ctx in &ssa_info.written_contexts {
-        if !ssa_info.entry_ctx_defs.contains_key(&ctx) {
-            let value = alloc_var_val(val_factory, val_types, SsaVar::Context(ctx), ssa_info);
-            ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx), value);
-            entry_defs.ctx_loads.push(EntryLoad { ctx, value });
-        }
+        let value = alloc_var_val(val_factory, val_types, SsaVar::Context(ctx), ssa_info);
+        ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx), value);
+        entry_defs.ctx_loads.push(EntryLoad { ctx, value });
     }
 
     // Param entry defs (from ParamLoad in entry region).
@@ -1233,13 +1220,27 @@ mod tests {
 
     // -- Volatile context: forwarding must be skipped --
 
-    fn count_context_loads(cfg_body: &CfgBody) -> usize {
+    fn returned_value(cfg_body: &CfgBody) -> ValueId {
+        cfg_body
+            .blocks
+            .iter()
+            .find_map(|b| match &b.terminator {
+                Terminator::Return(v) => Some(*v),
+                _ => None,
+            })
+            .expect("body returns")
+    }
+
+    fn const_dst(cfg_body: &CfgBody) -> ValueId {
         cfg_body
             .blocks
             .iter()
             .flat_map(|b| &b.insts)
-            .filter(|i| matches!(&i.kind, InstKind::Load { .. }))
-            .count()
+            .find_map(|i| match &i.kind {
+                InstKind::Const { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .expect("body has a Const")
     }
 
     /// Build a minimal CfgBody with: Ref -> Store -> Load -> Return.
@@ -1303,6 +1304,9 @@ mod tests {
         for &vid in &v {
             val_types.insert(vid, Ty::Int);
         }
+        for &r in &[v[1], v[2]] {
+            val_types.insert(r, Ty::Ref(Box::new(Ty::Int)));
+        }
         let body = MirBody {
             insts,
             val_types,
@@ -1318,14 +1322,16 @@ mod tests {
     #[test]
     fn context_store_is_forwarded_to_its_load() {
         let mut cfg = make_store_then_load();
-        let loads_before = count_context_loads(&cfg);
+        assert_ne!(
+            returned_value(&cfg),
+            const_dst(&cfg),
+            "the body returns the load, not the const"
+        );
         run(&mut cfg);
-        let loads_after = count_context_loads(&cfg);
-        assert!(
-            loads_after < loads_before,
-            "a context load after its store is forwarded (before={}, after={})",
-            loads_before,
-            loads_after
+        assert_eq!(
+            returned_value(&cfg),
+            const_dst(&cfg),
+            "a context load after its store is forwarded to the stored value"
         );
     }
 }
