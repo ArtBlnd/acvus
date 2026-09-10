@@ -54,3 +54,47 @@ async fn collatz_start_1() {
 // =======================================================================
 //  Control flow: Grade classifier
 // =======================================================================
+
+// =======================================================================
+//  Program: grade classifier (restored from the `for` cut in 69eac8d)
+// =======================================================================
+
+const GRADE_CLASSIFIER: &str = include_str!("scripts/grade_classifier.acvus");
+
+fn student(i: &Interner, name: &str, score: i64) -> Value {
+    Value::object(FxHashMap::from_iter([
+        (i.intern("name"), Value::string(name)),
+        (i.intern("score"), Value::Int(score)),
+    ]))
+}
+
+#[tokio::test]
+async fn grade_classifier_mixed() {
+    let i = Interner::new();
+    let students = Value::array(vec![
+        student(&i, "alice", 95),
+        student(&i, "bob", 72),
+        student(&i, "charlie", 45),
+        student(&i, "diana", 98),
+        student(&i, "eve", 55),
+    ]);
+    let c = ctx(&i, &[("students", students)]);
+    let result = run_script_mode(&i, GRADE_CLASSIFIER, c).await;
+    // honor: alice, diana; pass: bob; fail: charlie, eve.
+    // passing_total = 95 + 72 + 98 = 265; fail > 0 -> 265
+    assert_eq!(result, Value::Int(265));
+}
+
+#[tokio::test]
+async fn grade_classifier_all_passing() {
+    let i = Interner::new();
+    let students = Value::array(vec![
+        student(&i, "alice", 95),
+        student(&i, "bob", 80),
+        student(&i, "charlie", 70),
+    ]);
+    let c = ctx(&i, &[("students", students)]);
+    let result = run_script_mode(&i, GRADE_CLASSIFIER, c).await;
+    // passing_total = 245; fail == 0 -> 245 + best(95) = 340
+    assert_eq!(result, Value::Int(340));
+}

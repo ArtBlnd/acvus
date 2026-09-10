@@ -53,6 +53,22 @@ struct AnyorderScope {
     acc: ValueId,
 }
 
+/// A pattern that matches every value of its type: a binding, a context
+/// bind, or a tuple of such.
+fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::ContextBind { .. } => true,
+        Pattern::Tuple { elements, .. } => elements.iter().all(|e| match e {
+            TuplePatternElem::Pattern(p) => pattern_is_irrefutable(p),
+            TuplePatternElem::Wildcard(_) => true,
+        }),
+        Pattern::Literal { .. }
+        | Pattern::List { .. }
+        | Pattern::Object { .. }
+        | Pattern::Variant { .. } => false,
+    }
+}
+
 /// Adjust indentation of a text string according to an `IndentModifier`.
 /// All lines (including the first) are affected.
 fn adjust_text_indent(text: &str, modifier: &IndentModifier) -> String {
@@ -2338,6 +2354,11 @@ impl<'a> Lowerer<'a> {
                     // No payload (e.g. None) - tag test is the final result.
                     return tag_ok;
                 };
+                // An inner pattern that cannot fail adds no test, and unwrapping
+                // here would move the payload out before the bind path does.
+                if pattern_is_irrefutable(inner_pat) {
+                    return tag_ok;
+                }
 
                 // Has payload - short-circuit: if tag fails, skip inner test.
                 let check_inner_label = self.alloc_label();

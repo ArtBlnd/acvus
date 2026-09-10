@@ -210,14 +210,14 @@ fn is_hoistable(kind: &InstKind) -> bool {
         // Projection path (no-op, pure).
         InstKind::Ref { .. } => true,
 
-        // Field / element access (scalar, pure).
+        // Field / element access (scalar, pure). UnwrapVariant assumes the
+        // tag its test established and ArrayGet assumes an index in range,
+        // so neither may run on a path that has not checked; they stay.
         InstKind::FieldGet { .. }
         | InstKind::FieldSet { .. }
         | InstKind::ObjectGet { .. }
         | InstKind::ArrayIndex { .. }
-        | InstKind::ArrayGet { .. }
-        | InstKind::TupleIndex { .. }
-        | InstKind::UnwrapVariant { .. } => true,
+        | InstKind::TupleIndex { .. } => true,
 
         // Test predicates.
         InstKind::TestLiteral { .. }

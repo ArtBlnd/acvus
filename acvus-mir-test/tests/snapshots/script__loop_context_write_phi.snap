@@ -15,40 +15,29 @@ expression: ir
      9 |   r6 = load r5
     10 |   r7 = call #2(r6)
     11 |   r8 = test r7 is Some
-    12 |   jump_if r8 then L3 else L4
-    13 | L3:
+    12 |   jump_if r8 then L1 else L2
+    13 | L1:
     14 |   r9 = unwrap r7
-    16 |   r10 = r9.0
-    18 |   r11 = true (r12) && true (r13)
-    19 |   r14 = r9.1
-    21 |   r15 = r11 && true (r16)
-    22 |   jump L5(r15)
-    23 | L4:
-    25 |   jump L5(false (r17))
-    26 | L5(r18: Bool):
-    27 |   jump_if r18 then L1 else L2
-    28 | L1:
-    29 |   r19 = unwrap r7
-    30 |   r20 = r19.0
-    31 |   r21 = ref x
-    32 |   store r21 = r20
-    33 |   r22 = r19.1
-    34 |   r23 = ref rest
-    35 |   store r23 = r22
-    36 |   r24 = ref @count
-    37 |   r25 = load r24
-    39 |   r26 = r25 + 1 (r27)
-    40 |   r28 = ref @count
-    41 |   store r28 = r26
-    42 |   r29 = ref rest
-    43 |   r30 = load r29
-    44 |   r31 = ref it
-    45 |   store r31 = r30
-    46 |   jump L0
-    47 | L2:
-    48 |   r32 = ref @count
-    49 |   r33 = load r32
-    50 |   return r33
+    15 |   r10 = r9.0
+    16 |   r11 = ref x
+    17 |   store r11 = r10
+    18 |   r12 = r9.1
+    19 |   r13 = ref rest
+    20 |   store r13 = r12
+    21 |   r14 = ref @count
+    22 |   r15 = load r14
+    24 |   r16 = r15 + 1 (r17)
+    25 |   r18 = ref @count
+    26 |   store r18 = r16
+    27 |   r19 = ref rest
+    28 |   r20 = load r19
+    29 |   r21 = ref it
+    30 |   store r21 = r20
+    31 |   jump L0
+    32 | L2:
+    33 |   r22 = ref @count
+    34 |   r23 = load r22
+    35 |   return r23
 
     ; r0 (@items) : Ref<Array<Int, 3>>
     ; r1 (v2) : Array<Int, 3>
@@ -60,27 +49,17 @@ expression: ir
     ; r7 (next(...)) : Option<(Int, Iterator<Int, Pure, #IdentityId(0)>)>
     ; r8 (v10) : Bool
     ; r9 (v11) : (Int, Iterator<Int, Pure, #IdentityId(0)>)
-    ; r10 (v13) : Int
-    ; r11 (v15) : Bool
-    ; r12 (v12) : Bool
-    ; r13 (v14) : Bool
-    ; r14 (v16) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r15 (v18) : Bool
-    ; r16 (v17) : Bool
-    ; r17 (v20) : Bool
-    ; r18 (v19) : Bool
-    ; r19 (v21) : (Int, Iterator<Int, Pure, #IdentityId(0)>)
-    ; r20 (x) : Int
-    ; r21 (v24) : Ref<Int>
-    ; r22 (rest) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r23 (v27) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
-    ; r24 (@count) : Ref<Int>
-    ; r25 (v29) : Int
-    ; r26 (v31) : Int
-    ; r27 (v30) : Int
-    ; r28 (@count) : Ref<Int>
-    ; r29 (v33) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
-    ; r30 (rest) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r31 (v35) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
-    ; r32 (@count) : Ref<Int>
-    ; r33 (v37) : Int
+    ; r10 (x) : Int
+    ; r11 (v14) : Ref<Int>
+    ; r12 (rest) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r13 (v17) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
+    ; r14 (@count) : Ref<Int>
+    ; r15 (v19) : Int
+    ; r16 (v21) : Int
+    ; r17 (v20) : Int
+    ; r18 (@count) : Ref<Int>
+    ; r19 (v23) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
+    ; r20 (rest) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r21 (v25) : Ref<Iterator<Int, Pure, #IdentityId(0)>>
+    ; r22 (@count) : Ref<Int>
+    ; r23 (v27) : Int

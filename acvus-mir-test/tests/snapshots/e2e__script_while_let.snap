@@ -13,30 +13,23 @@ expression: ir
      9 |   r5 = ref x
     10 |   r6 = load r5
     11 |   r7 = test r6 is Some
-    12 |   jump_if r7 then L3 else L4
-    13 | L3:
+    12 |   jump_if r7 then L1 else L2
+    13 | L1:
     14 |   r8 = unwrap r6
-    16 |   jump L5(true (r9))
-    17 | L4:
-    19 |   jump L5(false (r10))
-    20 | L5(r11: Bool):
-    21 |   jump_if r11 then L1 else L2
-    22 | L1:
-    23 |   r12 = unwrap r6
-    24 |   r13 = ref v
-    25 |   store r13 = r12
-    26 |   r14 = ref v
-    27 |   r15 = load r14
-    28 |   r16 = ref result
-    29 |   store r16 = r15
-    30 |   r17 = variant None
-    31 |   r18 = ref x
-    32 |   store r18 = r17
-    33 |   jump L0
-    34 | L2:
-    35 |   r19 = ref result
-    36 |   r20 = load r19
-    37 |   return r20
+    15 |   r9 = ref v
+    16 |   store r9 = r8
+    17 |   r10 = ref v
+    18 |   r11 = load r10
+    19 |   r12 = ref result
+    20 |   store r12 = r11
+    21 |   r13 = variant None
+    22 |   r14 = ref x
+    23 |   store r14 = r13
+    24 |   jump L0
+    25 | L2:
+    26 |   r15 = ref result
+    27 |   r16 = load r15
+    28 |   return r16
 
     ; r0 (v2) : Option<Int>
     ; r1 (v1) : Int
@@ -46,16 +39,12 @@ expression: ir
     ; r5 (v8) : Ref<Option<Int>>
     ; r6 (x) : Option<Int>
     ; r7 (v10) : Bool
-    ; r8 (v11) : Int
-    ; r9 (v12) : Bool
-    ; r10 (v14) : Bool
-    ; r11 (v13) : Bool
-    ; r12 (v) : Int
-    ; r13 (v17) : Ref<Int>
-    ; r14 (v18) : Ref<Int>
-    ; r15 (v) : Int
-    ; r16 (v20) : Ref<Int>
-    ; r17 (v21) : Option<Int>
-    ; r18 (v22) : Ref<Option<Int>>
-    ; r19 (v23) : Ref<Int>
-    ; r20 (result) : Int
+    ; r8 (v) : Int
+    ; r9 (v13) : Ref<Int>
+    ; r10 (v14) : Ref<Int>
+    ; r11 (v) : Int
+    ; r12 (v16) : Ref<Int>
+    ; r13 (v17) : Option<Int>
+    ; r14 (v18) : Ref<Option<Int>>
+    ; r15 (v19) : Ref<Int>
+    ; r16 (result) : Int

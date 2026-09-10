@@ -67,3 +67,159 @@ async fn if_let_refutable_no_match() {
     let result = run_script(&i, "42 = @val { @out = 1; }; @out", c).await;
     assert_eq!(result, Value::Int(0)); // body not executed
 }
+
+// =======================================================================
+//  Iteration: the `while let Some((x, rest)) = next(it)` protocol
+//  (restored from the `for` tests cut in 69eac8d)
+// =======================================================================
+
+fn ints(xs: &[i64]) -> Value {
+    Value::array(xs.iter().map(|&x| Value::Int(x)).collect())
+}
+
+#[tokio::test]
+async fn iter_sum() {
+    let i = Interner::new();
+    let c = ctx(&i, &[("items", ints(&[1, 2, 3])), ("sum", Value::Int(0))]);
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(6));
+}
+
+#[tokio::test]
+async fn iter_count() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[("items", ints(&[10, 20, 30])), ("count", Value::Int(0))],
+    );
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { @count = @count + 1; it = rest; } @count",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(3));
+}
+
+#[tokio::test]
+async fn iter_nested() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[
+            ("matrix", Value::array(vec![ints(&[1, 2]), ints(&[3, 4])])),
+            ("sum", Value::Int(0)),
+        ],
+    );
+    let result = run_script_mode(
+        &i,
+        "let rows = iter(@matrix); while let Some((row, r1)) = next(rows) { let xs = iter(row); while let Some((x, r2)) = next(xs) { @sum = @sum + x; xs = r2; } rows = r1; } @sum",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(10));
+}
+
+#[tokio::test]
+async fn iter_empty_list() {
+    let i = Interner::new();
+    let c = ctx(&i, &[("items", ints(&[])), ("sum", Value::Int(99))]);
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(99));
+}
+
+#[tokio::test]
+async fn iter_sequential_loops() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[
+            ("a", ints(&[1, 2])),
+            ("b", ints(&[10, 20])),
+            ("sum", Value::Int(0)),
+        ],
+    );
+    let result = run_script_mode(
+        &i,
+        "let ia = iter(@a); while let Some((x, ra)) = next(ia) { @sum = @sum + x; ia = ra; } let ib = iter(@b); while let Some((y, rb)) = next(ib) { @sum = @sum + y; ib = rb; } @sum",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(33));
+}
+
+#[tokio::test]
+async fn iter_loop_with_conditional() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[("items", ints(&[0, 1, 0, 2])), ("count", Value::Int(0))],
+    );
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { if x == 0 { @count = @count + 1; }; it = rest; } @count",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(2));
+}
+
+#[tokio::test]
+async fn iter_accumulate_product() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[
+            ("items", ints(&[2, 3, 4])),
+            ("sum", Value::Int(0)),
+            ("product", Value::Int(1)),
+        ],
+    );
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; @product = @product * x; it = rest; } @sum + @product",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(33));
+}
+
+#[tokio::test]
+async fn iter_field_then_loop() {
+    let i = Interner::new();
+    let obj = Value::object(FxHashMap::from_iter([(i.intern("items"), ints(&[10, 20]))]));
+    let c = ctx(&i, &[("data", obj), ("sum", Value::Int(0))]);
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@data.items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(30));
+}
+
+#[tokio::test]
+async fn iter_with_to_string() {
+    let i = Interner::new();
+    let c = ctx(
+        &i,
+        &[("items", ints(&[1, 2, 3])), ("out", Value::string(""))],
+    );
+    let result = run_script_mode(
+        &i,
+        "let it = iter(@items); while let Some((x, rest)) = next(it) { @out = @out + to_string(x); it = rest; } @out",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::string("123"));
+}

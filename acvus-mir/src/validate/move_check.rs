@@ -574,7 +574,9 @@ fn process_inst(
         } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::UnwrapVariant { dst, src: _ } => {
+        // Unwrap moves the payload out of the variant: the variant is consumed.
+        InstKind::UnwrapVariant { dst, src } => {
+            try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
 

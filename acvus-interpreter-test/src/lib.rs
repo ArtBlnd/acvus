@@ -163,7 +163,14 @@ pub fn compile_source_with_externs(
         }
     }
     if !all_errors.is_empty() {
-        panic!("optimize validation failed:\n  {}", all_errors.join("\n  "));
+        let dump = match opt_result.modules.get(&entry_qref) {
+            Some(m) => acvus_mir::printer::dump_with(interner, m),
+            None => "no entry module".to_string(),
+        };
+        panic!(
+            "optimize validation failed:\n  {}\n{dump}",
+            all_errors.join("\n  ")
+        );
     }
 
     // Collect optimized modules as Executable::Module.

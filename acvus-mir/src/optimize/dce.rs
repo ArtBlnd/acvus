@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
-use crate::ir::{InstKind, ValueId};
+use crate::ir::{InstKind, Label, ValueId};
 use crate::ty::Effect;
 
 // -- Def location ----------------------------------------------------
@@ -89,6 +89,15 @@ fn is_root(kind: &InstKind) -> bool {
 
 // -- Mark phase ------------------------------------------------------
 
+/// The values a terminator needs regardless of any block param.
+fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
+    match term {
+        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
+        Terminator::JumpIf { cond, .. } => vec![*cond],
+        Terminator::Jump { .. } | Terminator::Fallthrough => vec![],
+    }
+}
+
 /// Collect all uses from a terminator.
 fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     match term {
@@ -132,9 +141,11 @@ pub fn run(cfg: &mut CfgBody) {
             }
         }
 
-        // Terminators are always live - their uses are roots.
+        // Terminators are always live. A returned value and a branch
+        // condition are roots; a jump argument is live only when the block
+        // param it feeds is, and BlockParam tracing pulls it in then.
         live_terminators.insert(bi);
-        worklist.extend(terminator_uses(&block.terminator));
+        worklist.extend(terminator_roots(&block.terminator));
     }
 
     // Phase 2: backward walk.
@@ -200,6 +211,69 @@ pub fn run(cfg: &mut CfgBody) {
             ii += 1;
             keep
         });
+    }
+
+    // Phase 4: sweep - remove dead block params and the jump args that
+    // fed them. A dead param is a phi nothing reads; left in place it
+    // would carry a second copy of a move-only value.
+    let dead_params: Vec<(Label, Vec<usize>)> = cfg
+        .blocks
+        .iter()
+        .map(|block| {
+            let dead = block
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !live_values.contains(p))
+                .map(|(pi, _)| pi)
+                .collect();
+            (block.label, dead)
+        })
+        .filter(|(_, dead): &(Label, Vec<usize>)| !dead.is_empty())
+        .collect();
+    if dead_params.is_empty() {
+        return;
+    }
+    let dead_of = |label: Label| -> Option<&Vec<usize>> {
+        dead_params
+            .iter()
+            .find(|(l, _)| *l == label)
+            .map(|(_, d)| d)
+    };
+    let prune = |args: &mut Vec<ValueId>, dead: &[usize]| {
+        let mut pi = 0;
+        args.retain(|_| {
+            let keep = !dead.contains(&pi);
+            pi += 1;
+            keep
+        });
+    };
+    for block in &mut cfg.blocks {
+        match &mut block.terminator {
+            Terminator::Jump { label, args } => {
+                if let Some(dead) = dead_of(*label) {
+                    prune(args, dead);
+                }
+            }
+            Terminator::JumpIf {
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
+            } => {
+                if let Some(dead) = dead_of(*then_label) {
+                    prune(then_args, dead);
+                }
+                if let Some(dead) = dead_of(*else_label) {
+                    prune(else_args, dead);
+                }
+            }
+            Terminator::Return { .. } | Terminator::Fallthrough => {}
+        }
+        if let Some(dead) = dead_of(block.label) {
+            prune(&mut block.params, dead);
+        }
     }
 }
 
