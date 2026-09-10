@@ -313,7 +313,7 @@ impl Solver {
     }
 
     /// An effect variable inference left open freezes to the join of what
-    /// is constrained below it, Pure when nothing is (RFC-0008). A body and
+    /// is constrained below it, Pure when nothing is (RFC-0014). A body and
     /// the calls inside it share variables, so one reading serves both.
     pub fn freeze_effect(&self, term: &EffectTerm<Infer>) -> Effect {
         match self.resolve_effect(term) {

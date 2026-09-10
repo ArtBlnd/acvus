@@ -52,7 +52,7 @@ system does the choosing.
 - No capability bounds (`Cloneable` and kin). Nothing declared or checked
   them; they are removed with the dead slot.
 - No bound on effect or length variables. Their solvers carry their own
-  ranges (RFC-0008, array lengths); nothing declares a finite set of either.
+  ranges (RFC-0014, array lengths); nothing declares a finite set of either.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # RFC-0008: Static context and resumable execution
 
-Status: Accepted
+Status: Superseded by RFC-0014
 Date: 2026-09-07
 Supersedes: none
 

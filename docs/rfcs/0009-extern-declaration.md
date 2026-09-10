@@ -25,7 +25,7 @@ The mapping from the Rust signature to the acvus type is fixed:
   `IntoValue`. A return type of `Result<R, RuntimeError>` means `R`.
 - The acvus name is the Rust identifier unless `name = "..."` overrides it.
 - The effect is `effect = pure | idempotent | <effect parameter>`; an
-  undeclared effect is Opaque (RFC-0008).
+  undeclared effect is Opaque (RFC-0014).
 
 Type-level variables are generic parameters of the Rust function, and each
 kind has one bound that names it:
@@ -116,7 +116,7 @@ that the type belongs to it.
   extension type by name.
 - No runtime instantiation other than `Value`; a monomorphizing bound over
   a set of concrete types is not part of this ruling.
-- No declaration of context reads or writes (RFC-0008).
+- No declaration of context reads or writes (RFC-0014).
 - No inference-time handler returning a system-checked value; that mechanism
   was removed with the effect rewrite and is not carried here.
 

@@ -9,7 +9,7 @@ Supersedes: none
 An ExternFn author may declare that the function's effect commutes: two
 calls of commutative functions, in either order, are the same program.
 Commutativity is a second axis of `Effect`, independent of the chain
-`Pure < Idempotent < Opaque` of RFC-0008. `Pure` commutes by definition;
+`Pure < Idempotent < Opaque` of RFC-0014. `Pure` commutes by definition;
 every other level may be declared commutative or not. The default is not.
 
     Effect = { reissue: Pure | Idempotent | Opaque, commutes: bool }
@@ -49,7 +49,7 @@ completion), a read of immutable content, a write into a store built to
 merge in any order. Their authors know this, and the script author does
 not need to repeat it at every use with an `anyorder` block.
 
-The chain of RFC-0008 was chosen because pure-but-not-suspendable is not a
+The chain of RFC-0014 was chosen because pure-but-not-suspendable is not a
 real combination. Commutativity is a real second axis: a counter increment
 commutes and is not re-issuable; a put to one key is re-issuable and does
 not commute; a fresh identifier is both. Each of the four combinations

@@ -407,7 +407,7 @@ pub enum Materiality {
     Ephemeral,
 }
 
-/// Whether a call may be suspended and issued again (RFC-0008). The
+/// Whether a call may be issued again (RFC-0014). The
 /// derived order is the chain `Pure < Idempotent < Opaque`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
