@@ -62,7 +62,6 @@ pub enum MirErrorKind {
         pattern_ty: Ty,
         source_ty: Ty,
     },
-    ContextWriteAttempt(String),
     ExternParamAssign(String),
     SourceNotIterable {
         actual: Ty,
@@ -253,9 +252,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     pattern_ty.display(interner),
                     source_ty.display(interner)
                 )
-            }
-            MirErrorKind::ContextWriteAttempt(name) => {
-                write!(f, "context `@{name}` is read-only and cannot be assigned")
             }
             MirErrorKind::ExternParamAssign(name) => {
                 write!(
